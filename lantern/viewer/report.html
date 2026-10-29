@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lantern report</title>
+<style>
+:root{
+  --bg:#F6F7F9; --panel:#FFFFFF; --ink:#0F1B2D; --body:#334155; --muted:#64748B; --line:#E2E8F0;
+  --soft:#F1F5F9; --accent:#0D9488; --accent-soft:#E6F6F4;
+  --l1:#4F46E5; --l1s:#EEF0FF; --l2:#C2410C; --l2s:#FFF3EA; --l3:#0D9488; --l3s:#E6F6F4;
+  --crit:#B42318; --crits:#FEF0EE; --high:#B54708; --highs:#FFF6E5; --med:#475467; --meds:#F2F4F7;
+  --low:#0D9488; --lows:#E6F6F4; --code:#0F1B2D; --codeink:#D7E0EC; --hl:#3B2F0E;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0B1220; --panel:#111A2B; --ink:#E6EDF6; --body:#C2CCDA; --muted:#8A97AB; --line:#22304A;
+    --soft:#17223A; --accent:#2DD4BF; --accent-soft:#0E2E2B;
+    --l1:#A5B4FC; --l1s:#1C2148; --l2:#FDBA74; --l2s:#33200F; --l3:#5EEAD4; --l3s:#0E2E2B;
+    --crit:#FDA29B; --crits:#3A1512; --high:#FEC84B; --highs:#33240B; --med:#CBD5E1; --meds:#1E293B;
+    --low:#5EEAD4; --lows:#0E2E2B; --code:#070D18; --hl:#3B2F0E;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--body);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+a{color:var(--accent)}
+header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px}
+.brand{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.brand b{font-size:15px;color:var(--ink);letter-spacing:-.01em}
+.brand .repo{font-family:var(--mono);font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60vw}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{font-size:11.5px;padding:2px 8px;border-radius:999px;background:var(--soft);color:var(--body);border:1px solid var(--line);white-space:nowrap}
+.chip.crit{background:var(--crits);color:var(--crit);border-color:transparent}
+.chip.high{background:var(--highs);color:var(--high);border-color:transparent}
+nav.tabs{display:flex;gap:4px;margin-top:10px}
+nav.tabs button{padding:6px 12px;border-radius:8px;font-weight:600;font-size:13px;color:var(--muted)}
+nav.tabs button.on{background:var(--ink);color:var(--panel)}
+main{display:grid;grid-template-columns:280px minmax(0,1fr) 420px;gap:0;min-height:calc(100vh - 110px)}
+aside.left{border-right:1px solid var(--line);background:var(--panel);padding:12px;overflow:auto;max-height:calc(100vh - 110px);position:sticky;top:110px}
+section.center{padding:14px 16px;overflow:auto;min-width:0}
+aside.right{border-left:1px solid var(--line);background:var(--panel);overflow:auto;max-height:calc(100vh - 110px);position:sticky;top:110px}
+input.search{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+.group{margin-top:12px}
+.group h4{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 4px}
+.ep{display:block;width:100%;text-align:left;padding:6px 8px;border-radius:7px;font-size:13px}
+.ep:hover{background:var(--soft)}
+.ep.on{background:var(--accent-soft);color:var(--ink)}
+.ep .d{display:block;font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.toolbar h2{margin:0;font-size:17px;color:var(--ink);letter-spacing:-.01em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{padding:5px 10px;font-size:12.5px;font-weight:600;color:var(--muted)}
+.seg button.on{background:var(--ink);color:var(--panel)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin:0 0 10px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.ln{display:inline-block;width:22px;border-top:2px solid var(--body)}
+.ln.observed{border-top-width:3.5px;border-color:var(--accent)} .ln.inferred{border-top-style:dashed} .ln.possible{border-top-style:dotted}
+.tree{font-size:13.5px}
+.row{display:flex;align-items:flex-start;gap:6px;padding:3px 0}
+.row .indent{flex:none;display:flex}
+.row .indent i{display:inline-block;width:18px;border-left:1px solid var(--line);height:26px}
+.tog{flex:none;width:20px;height:22px;color:var(--muted);font-size:11px}
+.conn{flex:none;width:18px;margin-top:11px}
+.node{flex:1;min-width:0;text-align:left;padding:3px 8px;border-radius:7px;border:1px solid transparent}
+.node:hover{background:var(--soft)}
+.node.on{background:var(--accent-soft);border-color:var(--accent)}
+.node .nm{font-family:var(--mono);font-size:12.5px;color:var(--ink);overflow-wrap:anywhere}
+.node .loc{font-size:11px;color:var(--muted)}
+.node .sum{display:block;font-size:12px;color:var(--body);margin-top:1px}
+.badge{display:inline-block;font-size:10.5px;font-weight:700;padding:0 6px;border-radius:999px;margin-left:4px;vertical-align:1px}
+.badge.critical{background:var(--crits);color:var(--crit)} .badge.high{background:var(--highs);color:var(--high)}
+.badge.medium{background:var(--meds);color:var(--med)} .badge.low{background:var(--lows);color:var(--low)}
+.badge.entry{background:var(--l1s);color:var(--l1)}
+.ext{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+.again{font-size:11.5px;color:var(--muted);font-style:italic}
+.empty{color:var(--muted);padding:30px 10px;text-align:center}
+#chart{width:100%;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+#chart svg text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
+.detail{padding:16px}
+.detail h3{margin:0;font-family:var(--mono);font-size:14px;color:var(--ink);overflow-wrap:anywhere}
+.detail .meta{font-size:12px;color:var(--muted);margin:4px 0 10px}
+.sig{font-family:var(--mono);font-size:12px;background:var(--soft);padding:6px 8px;border-radius:6px;overflow-wrap:anywhere;color:var(--ink)}
+.lenses{display:flex;gap:4px;margin:14px 0 8px}
+.lenses button{flex:1;padding:7px 4px;border-radius:8px;font-size:12.5px;font-weight:700;border:1px solid var(--line);color:var(--muted)}
+.lenses button.on[data-l="1"]{background:var(--l1s);color:var(--l1);border-color:transparent}
+.lenses button.on[data-l="2"]{background:var(--l2s);color:var(--l2);border-color:transparent}
+.lenses button.on[data-l="3"]{background:var(--l3s);color:var(--l3);border-color:transparent}
+.lens{border-radius:10px;padding:12px;font-size:13.5px}
+.lens.l1{background:var(--l1s)} .lens.l2{background:var(--l2s)} .lens.l3{background:var(--l3s)}
+.lens dl{margin:8px 0 0} .lens dt{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:8px} .lens dd{margin:2px 0 0}
+.lens .k{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);display:block;margin-top:10px}
+mark.p{background:transparent;border-bottom:2px solid var(--l3);color:var(--ink);cursor:pointer;padding:0 1px}
+mark.p.on{background:var(--l3);color:var(--panel);border-radius:3px}
+.pairs{margin-top:10px;border-top:1px dashed var(--line)}
+.pair{display:grid;grid-template-columns:1fr 18px 1.2fr;gap:4px;padding:6px 4px;border-bottom:1px dashed var(--line);font-size:12.5px;border-radius:6px;cursor:pointer}
+.pair .t{font-family:var(--mono);font-size:11.5px;color:var(--ink);overflow-wrap:anywhere}
+.pair .ar{color:var(--l3);font-weight:800;text-align:center}
+.pair .an{grid-column:3;font-size:10.5px;color:var(--muted)}
+.pair.on{background:var(--panel);outline:2px solid var(--l3)}
+.warn{background:var(--highs);color:var(--high);font-size:12px;padding:8px 10px;border-radius:8px;margin:8px 0}
+.note{font-size:12px;color:var(--muted)}
+pre.src{background:var(--code);color:var(--codeink);font:12px/1.5 var(--mono);padding:10px 0;border-radius:8px;overflow:auto;margin:10px 0}
+pre.src span{display:block;padding:0 10px;white-space:pre}
+pre.src span.f{background:#4A1F1A}
+pre.src span.h{background:var(--hl)}
+.links{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.links h5{margin:0 0 4px;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.links button{display:block;text-align:left;font-family:var(--mono);font-size:11.5px;color:var(--accent);padding:2px 0;overflow-wrap:anywhere}
+.fcard{border:1px solid var(--line);border-radius:10px;padding:12px;margin:0 0 10px;background:var(--panel)}
+.fcard .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fcard .rule{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.fcard h4{margin:6px 0 4px;font-size:14px;color:var(--ink)}
+.path{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-family:var(--mono);font-size:11.5px;margin-top:6px}
+.path button{color:var(--accent)}
+.kv{display:grid;grid-template-columns:160px 1fr;gap:4px 12px;font-size:13px}
+.kv div:nth-child(odd){color:var(--muted)}
+.about{max-width:760px}
+.about h3{color:var(--ink);font-size:15px;margin:18px 0 6px}
+.closebtn{display:none}
+@media (max-width: 1100px){
+  main{grid-template-columns:240px minmax(0,1fr)}
+  aside.right{position:fixed;right:0;top:0;bottom:0;width:min(440px,100vw);max-height:none;z-index:20;transform:translateX(100%);transition:transform .2s;box-shadow:-10px 0 30px rgba(0,0,0,.15)}
+  aside.right.open{transform:none}
+  .closebtn{display:inline-block;float:right;font-size:20px;color:var(--muted);padding:0 4px}
+}
+@media (max-width: 720px){
+  header{position:static}
+  main{display:block}
+  aside.left{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}
+  aside.left .groups{max-height:200px;overflow:auto}
+  aside.right{width:100vw;top:auto;height:85vh;transform:translateY(100%);border-radius:16px 16px 0 0}
+  aside.right.open{transform:none}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b>Lantern</b><span class="repo" id="repo"></span></div>
+  <div class="chips" id="chips"></div>
+  <nav class="tabs" id="tabs">
+    <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="about">About</button>
+  </nav>
+</header>
+<main id="main">
+  <aside class="left" id="left"></aside>
+  <section class="center" id="center"></section>
+  <aside class="right" id="right"><div class="empty">Select a function to see what it does.</div></aside>
+</main>
+<script>
+const DATA = /*__LANTERN_DATA__*/null;
+const G = DATA.graph, SEC = DATA.security || {findings: [], counts: {}}, EXP = (DATA.explanations || {}).explanations || {};
+const SRC = DATA.sources || {};
+const N = Object.fromEntries(G.nodes.map(n => [n.id, n]));
+const OUT = {}, IN = {};
+for (const e of G.edges) {
+  if (e.kind !== 'calls' && e.kind !== 'may_call') continue;
+  (OUT[e.src] ||= []).push(e); (IN[e.dst] ||= []).push(e);
+}
+const FIND_BY_NODE = {};
+for (const f of SEC.findings) if (f.node) (FIND_BY_NODE[f.node] ||= []).push(f);
+const RANK = {critical: 0, high: 1, medium: 2, low: 3};
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const short = q => { const p = (q || '').split('.'); return p.length > 2 ? p.slice(-2).join('.') : q; };
+const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', open: new Set(), q: '', pair: null};
+try { S.lens = +localStorage.getItem('lantern.lens') || 1; } catch (e) {}
+
+// ---------- header ----------
+document.getElementById('repo').textContent = G.repo_root;
+const st = DATA.stats || {};
+const chips = [
+  `${G.meta.files ?? '?'} files`, `${(st.nodes || {}).callable ?? 0} functions`, `${st.entry_points ?? 0} entry points`,
+  `${st.internal_call_edges ?? 0} internal calls`,
+];
+let chipHtml = chips.map(c => `<span class="chip">${esc(c)}</span>`).join('');
+if (SEC.counts.critical) chipHtml += `<span class="chip crit">${SEC.counts.critical} critical</span>`;
+if (SEC.counts.high) chipHtml += `<span class="chip high">${SEC.counts.high} high</span>`;
+const nexp = Object.keys(EXP).length;
+chipHtml += `<span class="chip">${nexp ? nexp + ' explained' : 'no explanations yet'}</span>`;
+document.getElementById('chips').innerHTML = chipHtml;
+document.getElementById('tabs').onclick = ev => {
+  const t = ev.target.closest('button'); if (!t) return;
+  S.tab = t.dataset.t;
+  for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b === t);
+  render();
+};
+
+// ---------- left: entry points ----------
+const ENTRY_LABEL = {route: 'Web routes', cli: 'Command-line commands', main: 'Program starts', script: 'Installed scripts', test: 'Tests'};
+function renderLeft() {
+  const el = document.getElementById('left');
+  if (S.tab !== 'map') { el.innerHTML = `<div class="note" style="padding:6px">${S.tab === 'findings' ? 'Findings are ranked by severity and by whether an entry point can reach them.' : 'How this report was made.'}</div>`; return; }
+  const eps = G.nodes.filter(n => n.entry);
+  const q = S.q.toLowerCase();
+  const groups = {};
+  for (const n of eps) (groups[n.entry.kind] ||= []).push(n);
+  let html = `<input class="search" id="q" placeholder="Search functions…" value="${esc(S.q)}">`;
+  html += '<div class="groups">';
+  if (q) {
+    const hits = G.nodes.filter(n => n.kind === 'callable' && n.qualname.toLowerCase().includes(q)).slice(0, 60);
+    html += `<div class="group"><h4>Matches (${hits.length})</h4>` + hits.map(n =>
+      `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(short(n.qualname))}<span class="d">${esc(n.file)}:${n.start_line}</span></button>`).join('') + '</div>';
+  } else {
+    if (!eps.length) html += '<div class="empty">No entry points detected. Use search to start from any function.</div>';
+    for (const k of ['route', 'cli', 'main', 'script', 'test']) {
+      const list = groups[k]; if (!list) continue;
+      list.sort((a, b) => (a.entry.detail || '').localeCompare(b.entry.detail || ''));
+      html += `<div class="group"><h4>${ENTRY_LABEL[k]} (${list.length})</h4>` + list.slice(0, 300).map(n =>
+        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(k === 'route' || k === 'script' ? n.entry.detail : short(n.qualname))}<span class="d">${esc(short(n.qualname))}</span></button>`).join('') + '</div>';
+    }
+  }
+  html += '</div>';
+  el.innerHTML = html;
+  const qi = document.getElementById('q');
+  qi.oninput = () => { S.q = qi.value; renderLeft(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
+  el.querySelectorAll('.ep').forEach(b => b.onclick = () => { S.entry = b.dataset.id; S.open = new Set([S.entry]); select(S.entry, false); render(); });
+}
+
+// ---------- center ----------
+function summaryOf(id) { const r = EXP[id]; return r && r.lens1 ? (S.lens === 2 && r.lens2 ? r.lens2.text : r.lens1.summary) : ''; }
+function worstRank(id) { const fs = FIND_BY_NODE[id] || []; let w = null; for (const f of fs) if (w === null || RANK[f.rank] < RANK[w]) w = f.rank; return w; }
+
+function renderTree() {
+  const root = S.entry;
+  const rows = [];
+  const walk = (id, depth, edge, path) => {
+    const n = N[id]; if (!n) return;
+    const kids = (OUT[id] || []).filter(e => !e.dst.startsWith('ext:')).sort((a, b) => (a.lines[0] || 0) - (b.lines[0] || 0));
+    const exts = (OUT[id] || []).filter(e => e.dst.startsWith('ext:'));
+    const loop = path.has(id);
+    rows.push({id, depth, edge, kids: kids.length, loop, exts});
+    if (loop || !S.open.has(id)) return;
+    const p2 = new Set(path); p2.add(id);
+    for (const e of kids) walk(e.dst, depth + 1, e, p2);
+  };
+  walk(root, 0, null, new Set());
+  return '<div class="tree">' + rows.map(r => {
+    const n = N[r.id], w = worstRank(r.id);
+    const indent = '<span class="indent">' + '<i></i>'.repeat(r.depth) + '</span>';
+    const tog = r.kids && !r.loop ? `<button class="tog" data-tog="${esc(r.id)}">${S.open.has(r.id) ? '▼' : '▶'}</button>` : '<span class="tog"></span>';
+    const conf = r.edge ? `<span class="conn ln ${r.edge.confidence}" title="${esc(r.edge.confidence)} (${esc(r.edge.via || '')})"></span>` : '';
+    const sum = summaryOf(r.id);
+    const ext = r.exts.length ? `<span class="ext"> → ${r.exts.slice(0, 4).map(e => esc(e.dst.slice(4))).join(', ')}${r.exts.length > 4 ? '…' : ''}</span>` : '';
+    return `<div class="row">${indent}${tog}${conf}<button class="node ${S.sel === r.id ? 'on' : ''}" data-id="${esc(r.id)}">
+      <span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? `<span class="badge ${w}">${w}</span>` : ''}
+      ${r.loop ? '<span class="again"> ↻ already on this path</span>' : ''}
+      <span class="loc"> ${esc(n.file)}:${n.start_line ?? ''}</span>${ext}
+      ${sum ? `<span class="sum">${esc(sum.length > 140 ? sum.slice(0, 140) + '…' : sum)}</span>` : ''}</button></div>`;
+  }).join('') + '</div>';
+}
+
+function renderChart() {
+  // layered layout of the entry's subgraph (BFS depth), limited for readability
+  const LIMIT = 60, MAXD = 6;
+  const depth = {[S.entry]: 0}, order = [S.entry], edges = [];
+  for (let i = 0; i < order.length && order.length < LIMIT; i++) {
+    const id = order[i];
+    if (depth[id] >= MAXD) continue;
+    for (const e of (OUT[id] || [])) {
+      if (e.dst.startsWith('ext:')) continue;
+      edges.push(e);
+      if (!(e.dst in depth) && order.length < LIMIT) { depth[e.dst] = depth[id] + 1; order.push(e.dst); }
+    }
+  }
+  const layers = [];
+  for (const id of order) (layers[depth[id]] ||= []).push(id);
+  // barycenter pass to reduce crossings
+  const pos = {};
+  layers.forEach(l => l.forEach((id, i) => pos[id] = i));
+  for (let d = 1; d < layers.length; d++) {
+    const bc = id => { const ps = edges.filter(e => e.dst === id && depth[e.src] === d - 1).map(e => pos[e.src]); return ps.length ? ps.reduce((a, b) => a + b) / ps.length : pos[id]; };
+    layers[d].sort((a, b) => bc(a) - bc(b)); layers[d].forEach((id, i) => pos[id] = i);
+  }
+  const W = 170, H = 34, GX = 24, GY = 54;
+  const widest = Math.max(...layers.map(l => l.length));
+  const width = Math.max(widest * (W + GX) + GX, 400), height = layers.length * (H + GY) + GY;
+  const xy = {};
+  layers.forEach((l, d) => { const off = (width - (l.length * (W + GX) - GX)) / 2; l.forEach((id, i) => xy[id] = [off + i * (W + GX), GY / 2 + d * (H + GY)]); });
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker></defs>`;
+  for (const e of edges) {
+    if (!(e.src in xy) || !(e.dst in xy)) continue;
+    const [x1, y1] = xy[e.src], [x2, y2] = xy[e.dst];
+    const sx = x1 + W / 2, sy = y1 + H, tx = x2 + W / 2, ty = y2;
+    const back = ty <= sy;
+    const d = back ? `M${sx} ${y1} C ${sx + 80} ${y1 - 40}, ${tx + 80} ${ty + H + 40}, ${tx + W / 2} ${ty + H / 2}`
+                   : `M${sx} ${sy} C ${sx} ${sy + GY / 2}, ${tx} ${ty - GY / 2}, ${tx} ${ty - 2}`;
+    const dash = e.confidence === 'inferred' ? '5 4' : e.confidence === 'possible' ? '1.5 3.5' : '';
+    const sw = e.confidence === 'observed' ? 2.6 : 1.3;
+    const col = e.confidence === 'observed' ? 'var(--accent)' : 'var(--muted)';
+    svg += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${sw}" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#ah)"/>`;
+  }
+  for (const id of order) {
+    const [x, y] = xy[id], n = N[id], w = worstRank(id), on = S.sel === id;
+    const stroke = w === 'critical' ? 'var(--crit)' : w === 'high' ? 'var(--high)' : on ? 'var(--accent)' : 'var(--line)';
+    const label = short(n.qualname); const t = label.length > 24 ? label.slice(0, 23) + '…' : label;
+    svg += `<g data-id="${esc(id)}" style="cursor:pointer"><rect x="${x}" y="${y}" width="${W}" height="${H}" rx="8" fill="${on ? 'var(--accent-soft)' : 'var(--panel)'}" stroke="${stroke}" stroke-width="${w || on ? 2 : 1}"/>
+      <text x="${x + 10}" y="${y + 21}">${esc(t)}</text><title>${esc(n.qualname)}</title></g>`;
+  }
+  svg += '</svg>';
+  const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use the tree view to go deeper.</div>` : '';
+  return `<div id="chart">${svg}</div>${more}`;
+}
+
+function renderMap() {
+  const el = document.getElementById('center');
+  if (!S.entry) {
+    const eps = G.nodes.filter(n => n.entry && n.entry.kind !== 'test');
+    el.innerHTML = `<div class="empty"><b>Pick a starting point.</b><br>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
+    return;
+  }
+  const n = N[S.entry];
+  const title = n.entry && (n.entry.kind === 'route' || n.entry.kind === 'script') ? n.entry.detail : short(n.qualname);
+  el.innerHTML = `<div class="toolbar"><h2>${esc(title)}</h2>
+    <div class="seg"><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button></div>
+    <button class="chip" id="expand">Expand all</button></div>
+    <div class="legend"><span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>
+    ${S.view === 'tree' ? renderTree() : renderChart()}`;
+  el.querySelectorAll('.seg button').forEach(b => b.onclick = () => { S.view = b.dataset.v; renderMap(); });
+  document.getElementById('expand').onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
+  el.querySelectorAll('[data-tog]').forEach(b => b.onclick = ev => { ev.stopPropagation(); const id = b.dataset.tog; S.open.has(id) ? S.open.delete(id) : S.open.add(id); renderMap(); });
+  el.querySelectorAll('.node, g[data-id]').forEach(b => b.onclick = () => { const id = b.dataset.id; if (!S.open.has(id)) S.open.add(id); select(id); renderMap(); });
+}
+
+function renderFindings() {
+  const el = document.getElementById('center');
+  const fs = SEC.findings;
+  if (!fs.length) { el.innerHTML = '<div class="empty">No findings from the scanners that ran. See About for which tools ran.</div>'; return; }
+  el.innerHTML = `<div class="toolbar"><h2>Security findings (${fs.length})</h2></div>` + fs.map(f => {
+    const path = f.reachable ? `<div class="path"><span class="note">Reachable from ${esc(f.reachable.kind)}:</span>${f.reachable.path.map((p, i) => `${i ? '<span class="note">→</span>' : ''}<button data-id="${esc(p)}">${esc(short((N[p] || {}).qualname || p))}</button>`).join('')}</div>`
+      : `<div class="note" style="margin-top:6px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
+    const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
+    return `<div class="fcard"><div class="top"><span class="badge ${f.rank}">${f.rank}</span><span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span></div>
+      <h4>${esc(f.title)}</h4><div class="note">${esc(f.file)}${f.line ? ':' + f.line : ''}${f.node && N[f.node] ? ' · in ' + esc(short(N[f.node].qualname)) : ''}</div>
+      ${path}
+      ${ex ? `<div class="lens l2" style="margin-top:8px"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}
+      ${f.node ? `<div style="margin-top:6px"><button class="chip" data-id="${esc(f.node)}">Open function</button></div>` : ''}</div>`;
+  }).join('');
+  el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
+}
+
+function renderAbout() {
+  const el = document.getElementById('center');
+  const tr = G.meta.trace;
+  const exStats = (DATA.explanations || {}).stats;
+  el.innerHTML = `<div class="about"><h2 style="color:var(--ink);margin:0 0 6px">About this report</h2>
+    <p class="note">Generated by Lantern ${esc(DATA.version)} on ${esc(DATA.generated_at)}. Schema ${esc(G.schema)}.</p>
+    <h3>Map</h3><div class="kv">
+      <div>Files / lines</div><div>${G.meta.files} / ${G.meta.lines}</div>
+      <div>Functions and methods</div><div>${(st.nodes || {}).callable ?? 0}</div>
+      <div>Call edges</div><div>${st.call_edges} (${st.internal_call_edges} inside the repo)</div>
+      <div>Confidence</div><div>${Object.entries(st.confidence || {}).map(([k, v]) => `${k}: ${v}`).join(' · ')}</div>
+      <div>Unresolved call sites</div><div>${st.unresolved_call_sites} (calls Lantern could not trace to a target; left out rather than guessed)</div>
+      <div>Analysis time</div><div>${DATA.timings ? Object.entries(DATA.timings).map(([k, v]) => `${k} ${v}s`).join(' · ') : '–'}</div>
+    </div>
+    ${tr ? `<h3>Runtime trace</h3><div class="kv"><div>Calls seen running</div><div>${tr.observed_edges}</div><div>Also found statically</div><div>${tr.static_found} (recall ${tr.recall})</div><div>Only seen at runtime</div><div>${tr.runtime_only}</div></div>` : ''}
+    <h3>Security tools</h3><div class="kv">${(SEC.tools || []).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${esc(t.status)}</div>`).join('')}</div>
+    ${exStats ? `<h3>Explanations</h3><div class="kv"><div>Model</div><div>${esc(exStats.model)}</div><div>Metaphor world</div><div>${esc(DATA.explanations.metaphor.world)}</div><div>Validated</div><div>${exStats.validated} of ${exStats.validated + exStats.failed} (${exStats.first_try} on first try)</div><div>Tokens</div><div>${exStats.usage.input_tokens} in · ${exStats.usage.output_tokens} out</div></div>` : ''}
+    <h3>Line styles</h3><p>Solid bold: seen while the program ran. Solid: confirmed by name resolution. Dashed: likely, based on types Lantern could infer. Dotted: one of several possible targets.</p>
+    <h3>What this report does not prove</h3><ul>
+      <li>Behavior that isn't exercised by detected entry points or tests.</li>
+      <li>Business-logic flaws. Scanners find known patterns, not wrong rules.</li>
+      <li>Calls through very dynamic code (getattr, plugins, monkey-patching) may be missing. They're counted above as unresolved.</li>
+      <li>Explanations are written by a model. Their technical anchors are checked; their wording is not proof.</li></ul></div>`;
+}
+
+// ---------- right: node detail ----------
+function select(id, open = true) {
+  S.sel = id; S.pair = null;
+  renderRight();
+  if (open) document.getElementById('right').classList.add('open');
+  if (S.tab === 'map' && S.entry) { /* tree re-render handled by caller */ }
+}
+
+function lensBody(r) {
+  if (!r) return `<div class="note" style="margin-top:12px">Not explained yet. Run <code>lantern explain</code> to add the three lenses for this function.</div>`;
+  if (r.error) return `<div class="warn">Explanation failed: ${esc(r.error)}</div>`;
+  const warn = r.validated ? '' : `<div class="warn">This explanation failed Lantern's checks and may be inaccurate:<br>${(r.validation_errors || []).map(esc).join('<br>')}</div>`;
+  const by = `<div class="note" style="margin-top:8px">Written by ${esc(r.model)} · metaphor: ${esc(r.metaphor_world)}</div>`;
+  if (S.lens === 1) {
+    const l = r.lens1 || {};
+    const list = a => (a && a.length) ? '<ul style="margin:2px 0 0;padding-left:18px">' + a.map(x => `<li>${esc(x)}</li>`).join('') + '</ul>' : '<span class="note">none noted</span>';
+    return warn + `<div class="lens l1">${esc(l.summary)}<dl><dt>Inputs</dt><dd>${list(l.inputs)}</dd><dt>Output</dt><dd>${esc(l.outputs) || '<span class="note">none noted</span>'}</dd>
+      <dt>Side effects</dt><dd>${list(l.side_effects)}</dd><dt>Errors</dt><dd>${list(l.errors)}</dd><dt>Role in the path</dt><dd>${esc(l.role)}</dd></dl></div>` + by;
+  }
+  if (S.lens === 2) {
+    const l = r.lens2 || {};
+    return warn + `<div class="lens l2">${esc(l.text)}<span class="k">Example</span>${esc(l.example)}<span class="k">Analogy</span>${esc(l.analogy)}</div>` + by;
+  }
+  const l = r.lens3 || {}, pairs = l.pairs || [];
+  let text = esc(l.text || '');
+  // mark each plain phrase (longest first so nested phrases don't collide)
+  const idx = pairs.map((p, i) => [i, p]).sort((a, b) => (b[1].plain || '').length - (a[1].plain || '').length);
+  const tokens = [];
+  for (const [i, p] of idx) {
+    const pl = esc(p.plain || ''); if (!pl) continue;
+    const at = text.toLowerCase().indexOf(pl.toLowerCase()); if (at < 0) continue;
+    const tok = `\u0000${tokens.length}\u0000`;
+    tokens.push(`<mark class="p ${S.pair === i ? 'on' : ''}" data-p="${i}">${text.slice(at, at + pl.length)}</mark>`);
+    text = text.slice(0, at) + tok + text.slice(at + pl.length);
+  }
+  text = text.replace(/\u0000(\d+)\u0000/g, (_, k) => tokens[+k]);
+  const anc = a => !a ? '' : a.type === 'symbol' ? `symbol · ${esc(short((N[a.id] || {}).qualname || a.id))}` : a.type === 'lines' ? `lines ${a.start}–${a.end}` : `term · ${esc(a.term)}`;
+  return warn + `<div class="lens l3">${text}<div class="pairs">${pairs.map((p, i) =>
+    `<div class="pair ${S.pair === i ? 'on' : ''}" data-p="${i}"><span>${esc(p.plain)}</span><span class="ar">↔</span><span class="t">${esc(p.technical)}</span><span class="an">${anc(p.anchor)}</span></div>`).join('')}</div></div>` + by;
+}
+
+function srcBlock(n) {
+  const s = SRC[n.id]; if (!s) return '';
+  const fl = new Set((FIND_BY_NODE[n.id] || []).map(f => f.line));
+  let hi = null;
+  const r = EXP[n.id];
+  if (S.lens === 3 && S.pair !== null && r && r.lens3) { const a = (r.lens3.pairs[S.pair] || {}).anchor; if (a && a.type === 'lines') hi = [a.start, a.end]; }
+  return `<pre class="src">${s.split('\n').map((ln, i) => { const no = n.start_line + i; const cls = fl.has(no) ? 'f' : (hi && no >= hi[0] && no <= hi[1]) ? 'h' : '';
+    return `<span class="${cls}">${String(no).padStart(4)}  ${esc(ln)}</span>`; }).join('')}</pre>`;
+}
+
+function renderRight() {
+  const el = document.getElementById('right');
+  const n = N[S.sel];
+  if (!n) { el.innerHTML = '<div class="empty">Select a function to see what it does.</div>'; return; }
+  const r = EXP[n.id];
+  const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
+  const callees = (OUT[n.id] || []).map(e => e.dst).filter(x => N[x]);
+  const fs = FIND_BY_NODE[n.id] || [];
+  el.innerHTML = `<div class="detail"><button class="closebtn" id="close">×</button>
+    <h3>${esc(n.qualname)}</h3>
+    <div class="meta">${esc(n.file)}:${n.start_line}–${n.end_line}${n.entry ? ` · <span class="badge entry">${esc(n.entry.kind)}</span> ${esc(n.entry.detail || '')}` : ''}</div>
+    <div class="sig">${esc(n.signature || n.kind)}</div>
+    <div class="lenses"><button data-l="1" class="${S.lens === 1 ? 'on' : ''}">1 · Technical</button><button data-l="2" class="${S.lens === 2 ? 'on' : ''}">2 · Everyday</button><button data-l="3" class="${S.lens === 3 ? 'on' : ''}">3 · Mapped</button></div>
+    ${lensBody(r)}
+    ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard" style="margin-top:10px"><div class="top"><span class="badge ${f.rank}">${f.rank}</span><span class="rule">${esc(f.rule)} · line ${f.line ?? '–'}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
+    ${srcBlock(n)}
+    <div class="links"><div><h5>Called by (${callers.length})</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
+      <div><h5>Calls (${callees.length})</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div></div>`;
+  el.querySelectorAll('.lenses button').forEach(b => b.onclick = () => { S.lens = +b.dataset.l; S.pair = null; try { localStorage.setItem('lantern.lens', S.lens); } catch (e) {} renderRight(); if (S.tab === 'map') renderMap(); });
+  el.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const i = +b.dataset.p; S.pair = S.pair === i ? null : i; renderRight(); });
+  el.querySelectorAll('.links [data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
+  const c = document.getElementById('close'); if (c) c.onclick = () => el.classList.remove('open');
+}
+
+function render() {
+  renderLeft();
+  if (S.tab === 'map') renderMap(); else if (S.tab === 'findings') renderFindings(); else renderAbout();
+  renderRight();
+}
+// default: first non-test entry point, preferring routes
+const firstEp = G.nodes.filter(n => n.entry && n.entry.kind !== 'test').sort((a, b) => ['route','cli','main','script'].indexOf(a.entry.kind) - ['route','cli','main','script'].indexOf(b.entry.kind))[0];
+if (firstEp) { S.entry = firstEp.id; S.open = new Set([firstEp.id]); }
+render();
+</script>
+</body>
+</html>

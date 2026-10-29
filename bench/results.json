@@ -1,0 +1,289 @@
+[
+ {
+  "name": "click",
+  "ref": "8.1.8",
+  "files": 70,
+  "lines": 17899,
+  "functions": 1238,
+  "entry_points": 396,
+  "entry_kinds": {
+   "cli": 54,
+   "test": 342
+  },
+  "internal_edges": 2374,
+  "confidence": {
+   "resolved": 2157,
+   "inferred": 512,
+   "possible": 142
+  },
+  "unresolved": 662,
+  "graph_s": 0.33,
+  "scan_s": 1.38,
+  "findings": {
+   "critical": 2,
+   "high": 0,
+   "medium": 0,
+   "low": 36,
+   "in_tests": 777
+  },
+  "trace_s": 1.4,
+  "trace": {
+   "observed_edges": 2519,
+   "static_found": 1899,
+   "runtime_only": 620,
+   "recall": 0.754,
+   "callers_executed": 726,
+   "static_edges_from_executed_callers": 2038,
+   "confirmed_static_edges": 1899,
+   "unmapped_pairs": 64,
+   "returncode": 0,
+   "precision_lower_bound": {
+    "resolved": 0.967,
+    "inferred": 0.904,
+    "possible": 0.61
+   },
+   "static_edges_checked": {
+    "resolved": 1479,
+    "inferred": 436,
+    "possible": 123
+   },
+   "precision_by_method": {
+    "name": "722/741",
+    "constructor": "301/313",
+    "decorator-closure": "305/313",
+    "fixture-type": "175/191",
+    "self-method": "94/111",
+    "unique-method-name": "78/87",
+    "local-type": "78/87",
+    "override": "45/72",
+    "method-name": "30/51",
+    "super": "37/37",
+    "with": "18/18",
+    "property": "7/8",
+    "self-attr-type": "7/7",
+    "ctor-result": "2/2"
+   }
+  }
+ },
+ {
+  "name": "flask",
+  "ref": "main",
+  "files": 83,
+  "lines": 18416,
+  "functions": 1432,
+  "entry_points": 427,
+  "entry_kinds": {
+   "route": 15,
+   "test": 405,
+   "cli": 4,
+   "main": 2,
+   "script": 1
+  },
+  "internal_edges": 1591,
+  "confidence": {
+   "resolved": 1135,
+   "inferred": 744,
+   "possible": 196
+  },
+  "unresolved": 1273,
+  "graph_s": 0.32,
+  "scan_s": 1.52,
+  "findings": {
+   "critical": 0,
+   "high": 1,
+   "medium": 1,
+   "low": 11,
+   "in_tests": 1070
+  },
+  "trace_s": 2.4,
+  "trace": {
+   "observed_edges": 2159,
+   "static_found": 1231,
+   "runtime_only": 928,
+   "recall": 0.57,
+   "callers_executed": 709,
+   "static_edges_from_executed_callers": 1373,
+   "confirmed_static_edges": 1231,
+   "unmapped_pairs": 55,
+   "returncode": 1,
+   "precision_lower_bound": {
+    "resolved": 0.955,
+    "possible": 0.487,
+    "inferred": 0.97
+   },
+   "static_edges_checked": {
+    "resolved": 557,
+    "possible": 191,
+    "inferred": 625
+   },
+   "precision_by_method": {
+    "unique-method-name": "239/253",
+    "name": "237/246",
+    "local-type": "175/175",
+    "decorator-closure": "174/174",
+    "method-name": "75/170",
+    "constructor": "167/170",
+    "self-method": "114/120",
+    "property": "18/28",
+    "override": "17/20",
+    "with": "8/8",
+    "super": "6/6",
+    "cls-constructor": "1/3"
+   }
+  }
+ },
+ {
+  "name": "rich",
+  "ref": "v13.9.4",
+  "files": 190,
+  "lines": 39533,
+  "functions": 1816,
+  "entry_points": 754,
+  "entry_kinds": {
+   "main": 67,
+   "cli": 1,
+   "test": 686
+  },
+  "internal_edges": 3911,
+  "confidence": {
+   "resolved": 3237,
+   "inferred": 1274,
+   "possible": 86
+  },
+  "unresolved": 1243,
+  "graph_s": 0.75,
+  "scan_s": 5.97,
+  "findings": {
+   "critical": 0,
+   "high": 0,
+   "medium": 0,
+   "low": 72,
+   "in_tests": 1292
+  },
+  "trace_s": 5.7,
+  "trace": {
+   "observed_edges": 3688,
+   "static_found": 2615,
+   "runtime_only": 1073,
+   "recall": 0.709,
+   "callers_executed": 1170,
+   "static_edges_from_executed_callers": 2724,
+   "confirmed_static_edges": 2615,
+   "unmapped_pairs": 126,
+   "returncode": 1,
+   "precision_lower_bound": {
+    "resolved": 0.966,
+    "inferred": 0.981,
+    "possible": 0.577
+   },
+   "static_edges_checked": {
+    "resolved": 1737,
+    "inferred": 911,
+    "possible": 78
+   },
+   "precision_by_method": {
+    "constructor": "824/836",
+    "name": "564/603",
+    "local-type": "563/565",
+    "unique-method-name": "159/169",
+    "self-method": "156/166",
+    "property": "157/159",
+    "method-name": "33/62",
+    "with": "62/62",
+    "cls-constructor": "26/26",
+    "ctor-result": "26/26",
+    "self-attr-type": "19/20",
+    "override": "12/16",
+    "super": "10/10",
+    "fixture-type": "4/4",
+    "decorator-closure": "2/2"
+   }
+  }
+ },
+ {
+  "name": "requests",
+  "ref": "v2.32.3",
+  "files": 36,
+  "lines": 11245,
+  "functions": 669,
+  "entry_points": 335,
+  "entry_kinds": {
+   "main": 2,
+   "test": 333
+  },
+  "internal_edges": 953,
+  "confidence": {
+   "resolved": 1012,
+   "inferred": 302,
+   "possible": 48
+  },
+  "unresolved": 568,
+  "graph_s": 0.21,
+  "scan_s": 1.65,
+  "findings": {
+   "critical": 0,
+   "high": 0,
+   "medium": 3,
+   "low": 11,
+   "in_tests": 665
+  }
+ },
+ {
+  "name": "httpie",
+  "ref": "3.2.4",
+  "files": 133,
+  "lines": 19135,
+  "functions": 1073,
+  "entry_points": 444,
+  "entry_kinds": {
+   "main": 13,
+   "script": 2,
+   "test": 429
+  },
+  "internal_edges": 1350,
+  "confidence": {
+   "resolved": 1669,
+   "inferred": 247,
+   "possible": 69
+  },
+  "unresolved": 971,
+  "graph_s": 0.33,
+  "scan_s": 1.44,
+  "findings": {
+   "critical": 0,
+   "high": 1,
+   "medium": 1,
+   "low": 56,
+   "in_tests": 753
+  }
+ },
+ {
+  "name": "fastapi-template",
+  "ref": "master",
+  "files": 43,
+  "lines": 2944,
+  "functions": 146,
+  "entry_points": 87,
+  "entry_kinds": {
+   "main": 3,
+   "route": 23,
+   "test": 58,
+   "cli": 3
+  },
+  "internal_edges": 246,
+  "confidence": {
+   "resolved": 417,
+   "inferred": 153
+  },
+  "unresolved": 140,
+  "graph_s": 0.07,
+  "scan_s": 0.6,
+  "findings": {
+   "critical": 0,
+   "high": 0,
+   "medium": 0,
+   "low": 5,
+   "in_tests": 172
+  }
+ }
+]

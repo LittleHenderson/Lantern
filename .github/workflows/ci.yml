@@ -1,0 +1,21 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[scan,dev]"
+      - run: python -m pytest -q
+      - name: Lantern audits itself (no critical, high, or medium findings)
+        run: |
+          lantern analyze . --out /tmp/self
+          python -c "import json,sys; c=json.load(open('/tmp/self/security.json'))['counts']; print(c); sys.exit(1 if c['critical']+c['high']+c['medium'] else 0)"
