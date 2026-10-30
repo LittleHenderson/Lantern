@@ -1,0 +1,15 @@
+import { useEffect, useState } from "react"
+import { Link } from "react-router-dom"
+import { listRecipes, type Recipe } from "../api"
+
+export default function RecipeList() {
+  const [recipes, setRecipes] = useState<Recipe[]>([])
+  useEffect(() => { listRecipes().then(setRecipes) }, [])
+  return (
+    <ul>
+      {recipes.map((r) => (
+        <li key={r.id}><Link to={`/recipes/${r.id}`}>{r.title}</Link> (serves {r.servings})</li>
+      ))}
+    </ul>
+  )
+}

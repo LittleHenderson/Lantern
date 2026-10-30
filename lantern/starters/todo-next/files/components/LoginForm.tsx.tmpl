@@ -1,0 +1,25 @@
+"use client"
+import { useState } from "react"
+import { supabase } from "@/lib/supabase"
+
+export default function LoginForm() {
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [message, setMessage] = useState("")
+
+  async function signIn() {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) return setMessage(error.message)
+    localStorage.setItem("auth_token", data.session.access_token)
+    setMessage("Signed in. Reload to see your todos.")
+  }
+
+  return (
+    <div>
+      <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <input placeholder="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+      <button onClick={signIn}>Sign in</button>
+      <p>{message}</p>
+    </div>
+  )
+}

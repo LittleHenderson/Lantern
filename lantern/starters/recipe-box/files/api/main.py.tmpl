@@ -1,0 +1,63 @@
+"""Recipe Box API: save recipes, import them from a web page, attach a photo."""
+import re
+from pathlib import Path
+
+import httpx
+from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from . import db
+
+app = FastAPI(title="Recipe Box")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"],
+                   allow_headers=["*"])
+db.init()
+PHOTOS = Path("photos")
+
+
+class NewRecipe(BaseModel):
+    title: str
+    servings: int = 2
+    instructions: str
+
+
+class ImportRequest(BaseModel):
+    url: str
+
+
+@app.get("/api/recipes")
+def list_recipes():
+    return db.all_recipes()
+
+
+@app.get("/api/recipes/{recipe_id}")
+def read_recipe(recipe_id: int):
+    recipe = db.get_recipe(recipe_id)
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="No such recipe")
+    return recipe
+
+
+@app.post("/api/recipes")
+def create_recipe(recipe: NewRecipe):
+    return {"id": db.add_recipe(recipe.title, recipe.servings, recipe.instructions)}
+
+
+@app.post("/api/recipes/import")
+def import_recipe(req: ImportRequest):
+    page = fetch_page(req.url)
+    title = re.search(r"<title>(.*?)</title>", page, re.S)
+    return {"id": db.add_recipe(title.group(1).strip() if title else req.url, 2, page[:5000])}
+
+
+@app.post("/api/recipes/{recipe_id}/photo")
+async def upload_photo(recipe_id: int, file: UploadFile):
+    PHOTOS.mkdir(exist_ok=True)
+    (PHOTOS / file.filename).write_bytes(await file.read())
+    db.set_photo(recipe_id, file.filename)
+    return {"ok": True}
+
+
+def fetch_page(url):
+    return httpx.get(url, follow_redirects=True, timeout=10).text

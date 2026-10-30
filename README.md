@@ -55,6 +55,31 @@ No key yet? Try the full flow with the offline demo model: `python tools/fake_mo
 
 From a clone instead: `git clone https://github.com/LittleHenderson/Lantern && cd Lantern && pip install -e ".[scan,dev]"`.
 
+## Learn by fixing a starter app
+
+New to Lantern, or to security? Open the **Learn** tab in the app (or run `lantern learn`). Each starter is a small,
+working app written the way an AI assistant often writes a first draft, with real problems in it. Lantern creates it
+in a folder, analyzes it, and a **Guide** walks you through every feature, step by step. Each step has a "Show me"
+button for the part of Lantern it teaches, a prompt you can paste into your AI assistant, and the fixed file if
+you get stuck. **Check my progress** re-analyzes your copy and ticks a step off only when the problem is really gone.
+
+| Starter | Stack | What you fix and learn |
+|---|---|---|
+| `notes-api` (start here) | Python, FastAPI, SQLite | MD5 passwords (critical: reachable + uses input), SQL injection, a shell call nobody reaches yet (reachability), hard-coded key, vulnerable pins (pip-audit), runtime tracing, explanations |
+| `todo-next` | TypeScript, Next.js, Supabase | a DELETE route with no login, the service-role key in `NEXT_PUBLIC_`, a table without row-level security, token in localStorage, an old Next.js (npm audit), security headers |
+| `recipe-box` | React + Vite and Python FastAPI | one map across two languages, `eval`, raw HTML (XSS), an OpenAI key in the browser, wildcard CORS, SSRF / upload / header protections, accepting a risk with a reason |
+| `link-shortener` | Node.js, Express, Postgres | SQL and shell commands built from input, TLS checks off, owner-only delete, rate limiting and helmet, accepting a public route, an old Express (npm audit) |
+
+```bash
+lantern learn                         # list the starters
+lantern learn notes-api ~/notes-api   # create one and analyze it (the "before" for the Evidence Report)
+lantern serve ~/notes-api             # open the Guide tab
+lantern learn --check ~/notes-api     # progress in the terminal
+lantern learn --show-fix app/db.py    # the fixed version of a file (run inside the app's folder)
+```
+
+Every step ends with the Evidence Report listing what you fixed, which is what you hand to an engineer.
+
 ## Auditing Lantern
 
 [`docs/audit/`](docs/audit/README.md) is a handoff package for an outside reviewer or another LLM: architecture,

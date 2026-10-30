@@ -1,6 +1,7 @@
 """lantern: map, explain, audit, and grade a full-stack app (Python + TypeScript/JavaScript).
 
   lantern serve [PATH ...]                                the local app in your browser (start here)
+  lantern learn [NAME [DIR]]                              create a starter app to learn Lantern step by step
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
   lantern trace PATH -- python -m pytest -q               record what actually runs
   lantern explain PATH --model anthropic/<model>          add Three-Lens explanations
@@ -259,6 +260,50 @@ def cmd_starter(a) -> int:
     return 0
 
 
+def cmd_learn(a) -> int:
+    from . import learn, pipeline
+    here = Path(a.dir or ".").resolve()
+    if a.show_fix:
+        sid = learn.starter_of(here)
+        text = learn.solution_text(sid, Path(a.show_fix).as_posix()) if sid else None
+        if text is None:
+            print(f"no fixed version of {a.show_fix}" + ("" if sid else " (this folder wasn't made by `lantern learn`)"),
+                  file=sys.stderr)
+            return 2
+        print(text, end="")
+        return 0
+    if a.check:
+        sid = learn.starter_of(here)
+        if not sid:
+            print("this folder wasn't made by `lantern learn`; run it in a starter app's folder", file=sys.stderr)
+            return 2
+        pr = learn.progress(sid, here)
+        marks = {"done": "[x]", "todo": "[ ]", "unknown": "[?]", "read": "[-]"}
+        print(f"{pr['title']}: {pr['done']} of {pr['total']} steps done")
+        for st in pr["steps"]:
+            print(f"  {marks[st['status']]} {st['n']}. {st['title']}" + (f"  ({st['why']})" if st["why"] else ""))
+        return 0
+    if not a.name:
+        print("Starter apps: build one, then fix it with Lantern step by step.\n")
+        for s in learn.catalog():
+            print(f"  {s['id']:<16} {s['title']}  [{s['stack']}, ~{s['minutes']} min]")
+            print(f"  {'':<16} teaches: {', '.join(s['teaches'])}\n")
+        print("Create one with: lantern learn NAME [FOLDER]   (then `lantern serve FOLDER` and open the Guide tab)")
+        return 0
+    dest = Path(a.dir or a.name).resolve()
+    try:
+        files = learn.scaffold(a.name, dest, solved=a.solved)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    print(f"created {dest} ({len(files)} files)")
+    # Analyze right away: this first run is the "before" that the Evidence Report compares your fixes with.
+    pipeline.analyze(dest, pipeline.out_dir(dest), offline=a.offline or None)
+    print(f"\nNext: lantern serve {dest}   and open the Guide tab (or read {dest / 'TUTORIAL.md'}).")
+    print(f"Check your progress any time with: lantern learn --check {dest}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     argv, trace_cmd = _split_cmd(argv)
@@ -320,6 +365,14 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--no-scan", action="store_true", help="the report was made with --no-scan (read from --report)")
     sp.add_argument("--offline", action="store_true", help="skip the dependency audits (read from --report)")
 
+    sp = sub.add_parser("learn", help="list starter apps, create one to learn Lantern, or check your progress")
+    sp.add_argument("name", nargs="?", help="starter to create (omit to list them)")
+    sp.add_argument("dir", nargs="?", help="folder to create it in (default ./NAME); with --check/--show-fix, the app's folder")
+    sp.add_argument("--check", action="store_true", help="show which steps are done in this starter app")
+    sp.add_argument("--show-fix", metavar="FILE", help="print the fixed version of FILE")
+    sp.add_argument("--solved", action="store_true", help="create it with every fix already applied")
+    sp.add_argument("--offline", action="store_true", help="skip the dependency audits in the first analysis")
+
     sp = sub.add_parser("serve", help="open the Lantern app in your browser (projects, map, findings, readiness)")
     sp.add_argument("paths", nargs="*", help="project folders to add (analyzed on first open)")
     sp.add_argument("--port", type=int, default=8765)
@@ -343,6 +396,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_evidence(a)
     if a.cmd == "verify":
         return cmd_verify(a, trace_cmd)
+    if a.cmd == "learn":
+        if (a.check or a.show_fix) and a.name and not a.dir:
+            a.dir, a.name = a.name, None   # `lantern learn --check FOLDER`
+        return cmd_learn(a)
     if a.cmd == "serve":
         from .server import serve
         return serve(a.paths, host=a.host, port=a.port, open_browser=not a.no_open)

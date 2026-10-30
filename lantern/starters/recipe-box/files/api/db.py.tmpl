@@ -1,0 +1,39 @@
+"""Recipes are stored in one SQLite file."""
+import os
+import sqlite3
+
+DB_PATH = os.environ.get("RECIPES_DB", "recipes.db")
+
+
+def connect():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init():
+    with connect() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS recipes (id INTEGER PRIMARY KEY, title TEXT, servings INTEGER, "
+                     "instructions TEXT, photo TEXT)")
+
+
+def all_recipes():
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT id, title, servings FROM recipes ORDER BY id DESC")]
+
+
+def get_recipe(recipe_id):
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def add_recipe(title, servings, instructions):
+    with connect() as conn:
+        return conn.execute("INSERT INTO recipes (title, servings, instructions) VALUES (?, ?, ?)",
+                            (title, servings, instructions)).lastrowid
+
+
+def set_photo(recipe_id, filename):
+    with connect() as conn:
+        conn.execute("UPDATE recipes SET photo = ? WHERE id = ?", (filename, recipe_id))

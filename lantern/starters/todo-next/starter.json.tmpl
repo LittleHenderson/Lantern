@@ -1,0 +1,110 @@
+{
+  "order": 2,
+  "title": "Todo list with Next.js and Supabase",
+  "stack": "TypeScript · Next.js · Supabase",
+  "level": "Full stack",
+  "minutes": 30,
+  "summary": "A to-do app where each person signs in and keeps their own list, the most common vibe-coded stack there is. The first draft lets anyone delete anyone's todos, ships a master database key to every browser, and runs a Next.js version with known holes. Lantern follows each click from the page to the database and shows you where it goes wrong.",
+  "teaches": ["Map: page to API to database", "Missing login checks", "Browser-exposed secrets", "Supabase row-level security", "npm dependency audit", "Protections", "Readiness", "Evidence Report"],
+  "run": [
+    "npm install",
+    "cp .env.example .env.local        # fill in the values from your Supabase project (Settings -> API)",
+    "# run supabase/migrations/*.sql in the Supabase SQL editor",
+    "npm run dev                       # http://localhost:3000"
+  ],
+  "steps": [
+    {
+      "id": "analyze", "title": "Create the app and analyze it", "feature": "findings",
+      "body": [
+        "Lantern wrote the app into the folder you chose and analyzed it. You don't need a Supabase account to follow this guide; Lantern reads the code without running it.",
+        "Expect a long list. Most entries are known vulnerabilities in the pinned Next.js version; the rest are mistakes in the app's own code."
+      ],
+      "check": {"kind": "analyzed"}
+    },
+    {
+      "id": "map", "title": "Follow the Delete button to the database", "feature": "atlas",
+      "body": [
+        "Open the **Atlas** and pick the `/` page. The path goes `Home` renders `TodoList`, then the Delete button's on-click goes to `remove`, which sends `HTTP DELETE /api/todos/{id}`.",
+        "That HTTP hop is Lantern's bridge: it matched the browser's `fetch` to the server's route handler by method and path. From there, the `DELETE` handler calls `deleteTodo` in `lib/db.ts`, which talks to the database.",
+        "Now compare it with the `PATCH` handler right next to it, which starts with `requireUser`. The delete handler doesn't."
+      ]
+    },
+    {
+      "id": "auth", "title": "Require a login to delete", "feature": "findings",
+      "body": [
+        "Lantern flagged `DELETE /api/todos/[id]`: it changes data, the app calls it, and no login check was found within three calls. Anyone who guesses an id (they're just 1, 2, 3...) can delete other people's todos with one request.",
+        "The fix has three parts: check the user at the top of the handler, delete only rows that belong to that user, and have the browser send its login with the request like the other calls do.",
+        "This check is a heuristic (it looks for names like `requireUser`, `auth`, `session`), so the viewer labels it that way. It's still right here."
+      ],
+      "prompt": "In app/api/todos/[id]/route.ts, make DELETE call requireUser like PATCH does and return 401 if there's no user; change deleteTodo in lib/db.ts to take the user id and only delete that user's row; send auth headers from remove() in TodoList.tsx.",
+      "fix_files": ["app/api/todos/[id]/route.ts", "lib/db.ts", "components/TodoList.tsx"],
+      "check": {"kind": "cleared", "rules": ["LW-AUTH-MISSING"]}
+    },
+    {
+      "id": "service-key", "title": "Keep the master key off the browser", "feature": "findings",
+      "body": [
+        "`NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY` is flagged twice. In Next.js, every variable starting with `NEXT_PUBLIC_` is copied into the JavaScript that visitors download, and the service-role key bypasses all database rules. Anyone could open the browser's dev tools and get full control of your database.",
+        "Rename it to `SUPABASE_SERVICE_ROLE_KEY` (no prefix) in `.env.example`, `.env.local` and `lib/db.ts`. Only server code can read it then. If you ever deployed with the old name, rotate the key in Supabase too."
+      ],
+      "prompt": "Rename NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY to SUPABASE_SERVICE_ROLE_KEY everywhere (lib/db.ts, .env.example) so it's server-only.",
+      "fix_files": [".env.example", "lib/db.ts"],
+      "check": {"kind": "cleared", "rules": ["LW-PUBLIC-SECRET", "LW-SERVICE-ROLE"]}
+    },
+    {
+      "id": "rls", "title": "Turn on row-level security", "feature": "findings",
+      "body": [
+        "The `todos` table was created without row-level security (RLS). The anon key in the browser is public by design, so without RLS anyone holding it can read every todo directly from Supabase, without going through your API at all.",
+        "Add a new migration that enables RLS and adds a policy: a row is visible and editable only when `auth.uid()` matches its `user_id`."
+      ],
+      "prompt": "Add supabase/migrations/002_todos_rls.sql that enables row level security on public.todos with a policy allowing all operations only when auth.uid() = user_id.",
+      "fix_files": ["supabase/migrations/002_todos_rls.sql"],
+      "check": {"kind": "cleared", "rules": ["LW-NO-RLS"]}
+    },
+    {
+      "id": "token", "title": "Stop copying the login token into localStorage", "feature": "findings",
+      "body": [
+        "`LoginForm` saves the access token in `localStorage` under `auth_token`. Any script that ever runs on your page (an XSS bug, a compromised package) can read it and act as that user.",
+        "This one is low, because nothing on the page injects scripts today. It's still an easy fix: Supabase already manages the session, so ask it for the token when you need it with `supabase.auth.getSession()`."
+      ],
+      "prompt": "Remove the localStorage token: LoginForm should only call signInWithPassword, and TodoList's authHeaders should be async and read the access token from supabase.auth.getSession().",
+      "fix_files": ["components/LoginForm.tsx", "components/TodoList.tsx"],
+      "check": {"kind": "cleared", "rules": ["LJ-TOKEN-STORAGE"]}
+    },
+    {
+      "id": "deps", "title": "Upgrade Next.js", "feature": "findings",
+      "body": [
+        "`next 14.1.0` has dozens of published advisories, including an authorization bypass in middleware. Lantern got them from `npm audit` reading `package-lock.json` (online; `--offline` skips it).",
+        "Upgrading across major versions changes a few things. In Next.js 15 and later, route `params` is a Promise, so you write `const { id } = await params`. The fixed route file from step 3 already does that.",
+        "If this step shows \"didn't run\", analyze again with internet access."
+      ],
+      "commands": ["npm install next@latest react@latest react-dom@latest @supabase/supabase-js@latest", "npm run build"],
+      "fix_files": ["package.json", "app/api/todos/[id]/route.ts"],
+      "check": {"kind": "deps_clean"}
+    },
+    {
+      "id": "headers", "title": "Add the protections Lantern suggests", "feature": "ready",
+      "body": [
+        "Under **Readiness**, the \"Protections to add\" list is different from findings: these aren't bugs, they're defenses a production app should have, and each one says why it applies to your code.",
+        "Add security headers in `next.config.js` (clickjacking and content-sniffing protection). Rate limiting stays on the list, which is honest: a serverless app needs a service like Upstash for it. Note it for later."
+      ],
+      "fix_files": ["next.config.js"],
+      "check": {"kind": "protection", "ids": ["security-headers"]}
+    },
+    {
+      "id": "ready", "title": "Get it ready to ship", "feature": "ready",
+      "body": [
+        "Look at the Readiness grade now. Write the starter files Lantern offers (a CI workflow, SECURITY.md) with the buttons, and read the deployment advice for a Next.js + Supabase app."
+      ],
+      "commands": ["lantern starter . --write SECURITY.md"],
+      "check": {"kind": "exists", "files": ["SECURITY.md"]}
+    },
+    {
+      "id": "evidence", "title": "Prove it with the Evidence Report", "feature": "evidence",
+      "body": [
+        "The **Evidence Report** lists every finding you fixed since the first analysis. Commit, analyze again, and share it; an engineer can run `lantern verify` to check the results weren't edited."
+      ],
+      "commands": ["git init && git add . && git commit -m \"Secure the todo app\"", "lantern analyze .", "lantern verify . --report .lantern/evidence.html"],
+      "check": {"kind": "fixed"}
+    }
+  ]
+}
