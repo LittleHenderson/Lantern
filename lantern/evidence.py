@@ -140,7 +140,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
     narratives = None
     nf = repo / NARRATIVES_FILE
     if nf.exists():
-        narratives = nf.read_text(errors="replace")[:20000]
+        narratives = nf.read_text(encoding="utf-8", errors="replace")[:20000]
     entries = [{"kind": (n.entry or {}).get("kind"), "detail": (n.entry or {}).get("detail"), "name": n.qualname,
                 "file": n.file} for n in g.entry_points() if (n.entry or {}).get("kind") != "test"]
     models = []
@@ -379,10 +379,10 @@ button.print{{float:right;font:inherit;font-size:12.5px;padding:6px 12px;border-
 
 def write(out_dir: Path, ev: dict) -> dict[str, Path]:
     paths = {"html": out_dir / "evidence.html", "json": out_dir / "evidence.json"}
-    paths["html"].write_text(render_html(ev))
-    paths["json"].write_text(json.dumps(ev, indent=1))
+    paths["html"].write_text(render_html(ev), encoding="utf-8")
+    paths["json"].write_text(json.dumps(ev, indent=1), encoding="utf-8")
     rd = ev["scorecard"]["readiness"]
     if rd:
         paths["badge"] = out_dir / "badge.svg"
-        paths["badge"].write_text(badge_svg(rd["score"], rd["grade"]))
+        paths["badge"].write_text(badge_svg(rd["score"], rd["grade"]), encoding="utf-8")
     return paths

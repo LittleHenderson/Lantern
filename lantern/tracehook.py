@@ -70,7 +70,7 @@ def _install(repo: str):
 
 def _dump(out: str):
     rows = [{"caller": list(a), "callee": list(b), "count": n} for (a, b), n in _pairs.items()]
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         json.dump({"pairs": rows}, f)
 
 

@@ -112,11 +112,11 @@ class Graph:
         }
 
     def save(self, path: str | Path) -> None:
-        Path(path).write_text(json.dumps(self.to_dict(), indent=1))
+        Path(path).write_text(json.dumps(self.to_dict(), indent=1), encoding="utf-8")
 
     @classmethod
     def load(cls, path: str | Path) -> "Graph":
-        d = json.loads(Path(path).read_text())
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
         g = cls(d["repo_root"])
         g.meta = d.get("meta", {})
         for n in d["nodes"]:

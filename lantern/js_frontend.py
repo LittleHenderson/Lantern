@@ -662,7 +662,7 @@ def _normalize_http(raw: str, method: str, scope: str, line: int, ui) -> HttpCal
 
 def _load_jsonc(p: Path) -> dict:
     try:
-        txt = p.read_text(errors="replace")
+        txt = p.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {}
     txt = re.sub(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', lambda m: m.group(1) or "", txt, flags=re.S)
@@ -707,7 +707,7 @@ class SpecResolver:
                 [base / ("index" + e) for e in RESOLVE_EXTS]
         for c in cands:
             try:
-                rel = str(c.resolve().relative_to(self.repo))
+                rel = c.resolve().relative_to(self.repo).as_posix()
             except ValueError:
                 continue
             if rel in self.files:
@@ -762,7 +762,7 @@ def _nearest_package(path: Path, repo: Path, cache: dict) -> dict:
         pj = cur / "package.json"
         if pj.exists():
             try:
-                data = json.loads(pj.read_text(errors="replace"))
+                data = json.loads(pj.read_text(encoding="utf-8", errors="replace"))
             except json.JSONDecodeError:
                 data = {}
             deps = {**(data.get("dependencies") or {}), **(data.get("devDependencies") or {})}
@@ -905,7 +905,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         return {"files": 0, "lines": 0}
     files = {}
     for p in paths:
-        rel = str(p.relative_to(repo))
+        rel = p.relative_to(repo).as_posix()
         files[rel] = re.sub(r"\.[cm]?[jt]sx?$", "", rel)
     spec = SpecResolver(repo, files)
     parsers = {ext: Parser(lang) for ext, lang in LANGS.items()}
@@ -913,7 +913,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     pkg_cache: dict = {}
     total = 0
     for p in paths:
-        rel = str(p.relative_to(repo))
+        rel = p.relative_to(repo).as_posix()
         try:
             src = p.read_bytes()
         except OSError:
@@ -989,7 +989,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     for m in mods.values():
         pkg = _nearest_package(m.path, repo, pkg_cache)
         is_next = "next" in pkg["deps"]
-        rel_pkg = str(m.path.relative_to(pkg["dir"])) if pkg["dir"] in m.path.parents else m.rel
+        rel_pkg = m.path.relative_to(pkg["dir"]).as_posix() if pkg["dir"] in m.path.parents else m.rel
         if m.is_test:
             g.nodes[nid(m.name)].entry = {"kind": "test", "detail": m.rel}
             continue

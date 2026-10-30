@@ -27,7 +27,7 @@ def run_trace(repo: str | Path, command: list[str], timeout: int = 900) -> dict:
     cmd = [sys.executable, "-m", "lantern.tracehook", out, repo, "--", *command]
     proc = subprocess.run(cmd, cwd=repo, env=env, timeout=timeout, capture_output=True, text=True)
     try:
-        data = json.loads(Path(out).read_text() or "{}")
+        data = json.loads(Path(out).read_text(encoding="utf-8") or "{}")
     except json.JSONDecodeError:
         data = {}
     finally:
@@ -61,7 +61,7 @@ def _node_for(entry: list, repo: str, idx) -> str | None:
     by_file_qual, module_of_file, mains = idx
     filename, _first, qual, line = entry
     try:
-        rel = os.path.relpath(os.path.realpath(filename), repo)
+        rel = Path(os.path.relpath(os.path.realpath(filename), repo)).as_posix()
     except ValueError:
         return None
     if qual == "<module>":

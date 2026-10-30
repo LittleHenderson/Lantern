@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -99,3 +100,12 @@ def test_symlinks_out_of_the_repo_are_not_read(tmp_path):
     assert not any(n.file == "creds.py" for n in g.nodes.values())
     assert not [f for f in scan(g)["findings"] if f["category"] == "secret"]
     assert "AKIA" not in "".join(collect_sources(g).values())
+
+
+def test_accepted_risks_need_a_real_reason(tmp_path):
+    from lantern.security import load_accepted, reason_ok
+    assert not reason_ok("x") and not reason_ok("aaaaaaaaaaaa") and not reason_ok("          ") and not reason_ok(None)
+    assert reason_ok("Only admins reach this; input is a fixed list")
+    (tmp_path / "lantern-accepted.json").write_text(json.dumps({"accepted": [
+        {"id": "a", "reason": "x"}, {"id": "b", "reason": "Test fixture only, never deployed"}]}))
+    assert set(load_accepted(tmp_path)) == {"b"}

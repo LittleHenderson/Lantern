@@ -33,7 +33,7 @@ def _out(repo: Path, out: str | None) -> Path:
 
 def _load(out: Path, name: str) -> dict | None:
     p = out / name
-    return json.loads(p.read_text()) if p.exists() else None
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
 def _split_cmd(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -83,7 +83,7 @@ def cmd_verify(a) -> int:
     from .security import scan
     want = a.digest
     if a.report:
-        m = re.search(r"sha256:[0-9a-f]{64}", Path(a.report).read_text(errors="replace"))
+        m = re.search(r"sha256:[0-9a-f]{64}", Path(a.report).read_text(encoding="utf-8", errors="replace"))
         want = m.group(0) if m else None
     if not want:
         print("give --digest sha256:... or --report evidence.html", file=sys.stderr)
@@ -102,7 +102,7 @@ def cmd_verify(a) -> int:
     print("DIFFERENT: check out the report's commit, install the same scanner versions (see Provenance), "
           "and make sure lantern-accepted.json matches.")
     if a.report and Path(a.report).with_suffix(".json").exists():
-        old = json.loads(Path(a.report).with_suffix(".json").read_text()).get("payload", {})
+        old = json.loads(Path(a.report).with_suffix(".json").read_text(encoding="utf-8")).get("payload", {})
         new = evidence.digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False))
         for k in new:
             if old.get(k) != new[k]:
@@ -175,7 +175,7 @@ def cmd_report(a) -> int:
 def cmd_accept(a) -> int:
     import datetime as dt
     import getpass
-    from .security import load_accepted, save_accepted
+    from .security import load_accepted, reason_ok, save_accepted
     repo = Path(a.path).resolve()
     out = _out(repo, a.out)
     accepted = load_accepted(repo)
@@ -191,8 +191,8 @@ def cmd_accept(a) -> int:
         print(f"no finding {a.finding} in the last scan; run `lantern analyze` and copy an id from Findings",
               file=sys.stderr)
         return 2
-    if not a.reason or len(a.reason.strip()) < 10:
-        print("give a real reason (--reason, at least 10 characters); it appears in the Evidence Report",
+    if not reason_ok(a.reason):
+        print("give a real reason (--reason, a sentence of at least 10 letters); it appears in the Evidence Report",
               file=sys.stderr)
         return 2
     accepted[f["id"]] = {"id": f["id"], "rule": f["rule"], "file": f["file"], "line": f["line"],
@@ -234,7 +234,7 @@ def cmd_starter(a) -> int:
             print(f"skip {name}: already exists, not overwritten")
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(f["content"])
+        dest.write_text(f["content"], encoding="utf-8")
         print(f"wrote {dest.relative_to(repo)}")
     return 0
 

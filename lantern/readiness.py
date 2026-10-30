@@ -90,7 +90,7 @@ class Repo:
     def text(self, rel: str) -> str:
         if rel not in self._text:
             try:
-                self._text[rel] = (self.root / rel).read_text(errors="replace")
+                self._text[rel] = (self.root / rel).read_text(encoding="utf-8", errors="replace")
             except OSError:
                 self._text[rel] = ""
         return self._text[rel]

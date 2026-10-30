@@ -73,6 +73,21 @@ EOF
 if [ "${1:-}" = "--browser" ]; then
   step "browser"
   check "viewer: no JS errors (desktop + phone)" node tools/viewer_smoke.js "$W/shop/report.html" "$W/shot"
+  H="$W/hostile"; mkdir -p "$H"
+  cat > "$H/main.py" <<'EOF'
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/<!--<script>")
+def broken():
+    """Ordinary docstring <!--<script> </script><img src=x onerror=alert(1)>"""
+    return 1
+EOF
+  lantern analyze "$H" >/dev/null 2>&1
+  check "viewer: hostile docstrings and routes can't blank or hijack the report" \
+    node tools/viewer_smoke.js "$H/.lantern/report.html" "$W/hshot"
 fi
 
 printf '\n%s\n' "$([ $FAILS -eq 0 ] && echo 'ALL PASS' || echo "$FAILS FAILED")  (work dir: $W)"

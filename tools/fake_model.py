@@ -14,7 +14,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-DEMO = json.loads((Path(__file__).parent.parent / "examples" / "shop_demo_explanations.json").read_text())
+DEMO = json.loads((Path(__file__).parent.parent / "examples" / "shop_demo_explanations.json").read_text(encoding="utf-8"))
 
 
 class H(BaseHTTPRequestHandler):
