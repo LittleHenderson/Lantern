@@ -54,7 +54,7 @@
       "body": [
         "`VITE_OPENAI_SECRET_KEY` is read in `web/src/api.ts`. Vite copies every `VITE_` variable into the JavaScript it serves, so every visitor gets your key and can run up your bill.",
         "Add a `/api/suggest` route to the Python API that calls OpenAI with a server-only `OPENAI_API_KEY`, and have the browser call that route. Then delete `web/.env.example`. The Atlas will show `suggestRecipe` going to your own backend instead of straight to OpenAI.",
-        "Lantern catches this one because the name contains SECRET. A key named plainly `VITE_OPENAI_API_KEY` is just as exposed, so treat any key that costs money or grants access as secret."
+        "Lantern flags a browser-exposed variable (VITE_, NEXT_PUBLIC_, REACT_APP_ and similar) whose name says secret, private, password, or API key, but not a key whose name says nothing. A key with a plainer name is just as exposed, so treat any key that costs money or grants access as secret."
       ],
       "prompt": "Move the OpenAI call to the backend: add POST /api/suggest in api/main.py using OPENAI_API_KEY from the environment and httpx, make suggestRecipe in web/src/api.ts call /api/suggest, and delete web/.env.example.",
       "fix_files": ["api/main.py", "web/src/api.ts", ".env.example"],
