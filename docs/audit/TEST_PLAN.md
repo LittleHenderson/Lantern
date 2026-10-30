@@ -55,6 +55,15 @@ CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every pu
 9. Phone width (browser dev tools, 390 px): Projects, Atlas list, detail sheet, Findings, and Evidence are usable.
 10. Stop the server, reload an opened report: the service worker serves the cached copy.
 
+3b. **An existing repository from a link.** On Projects, paste `https://github.com/fastapi/full-stack-fastapi-template`
+and press Add and analyze: the card appears at once with the clone log, then the analysis, then grade and findings.
+`lantern analyze https://github.com/pallets/flask --offline` does the same from a terminal (the clone lands in
+`~/.lantern/repos/github.com/pallets/flask`). A link with a token in it, an `http://` link, or a link to a user
+page must be refused with a message that says why. Measured 2026-10-30 on a 2-core container: the template clones
+and analyzes in 3 s; Django (2,984 files, 33,000 functions) in about 90 s plus the clone (graph 24 s, scanners
+56 s, readiness 2 s). Its report embeds every function's source and is 74 MB, so for a repository that size set
+privacy to "structure" (Settings, or `--privacy structure`).
+
 ## 4. Adversarial cases to try
 
 4.1 **XSS through the analyzed repo.** Create files and functions named `<img src=x onerror=alert(1)>` (valid as a

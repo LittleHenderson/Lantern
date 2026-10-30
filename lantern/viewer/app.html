@@ -150,14 +150,18 @@ function renderHome(el) {
       ${job && job.status === 'error' ? `<div class="note warn">${esc(job.error)}</div>` : ''}</div>`;
   }).join('');
   el.innerHTML = `<main><h1>Projects</h1><p class="muted">Lantern maps every path through your code, checks it for security problems, grades how ready it is to ship, and writes evidence you can hand to a reviewer. Everything runs on this computer.</p>
-    <div class="card"><label for="addpath" style="margin-top:0">Add a project folder</label>
-      <div class="row"><input type="text" id="addpath" placeholder="/path/to/your/app" style="flex:1;min-width:200px"><button class="btn primary" id="add">Add and analyze</button><button class="btn" id="browsebtn">Browse…</button></div>
+    <div class="card"><label for="addpath" style="margin-top:0">Add a project folder, or paste a GitHub link</label>
+      <div class="row"><input type="text" id="addpath" placeholder="/path/to/your/app  or  https://github.com/you/your-app" style="flex:1;min-width:200px"><button class="btn primary" id="add">Add and analyze</button><button class="btn" id="browsebtn">Browse…</button></div>
+      <div class="small muted">Any folder with a Python or TypeScript/JavaScript app works, including one you built long ago. A link is cloned into Lantern's own folder (<code>~/.lantern/repos</code>) and analyzed like a folder.</div>
       <div id="browse"></div><div id="adderr"></div></div>
     ${ps.length ? `<div class="grid">${cards}</div>` : '<div class="empty">No projects yet. Add a folder above.</div>'}</main>`;
   el.querySelector('#add').onclick = async () => {
     const path = el.querySelector('#addpath').value.trim();
-    try { const p = await api('/api/projects', {method: 'POST', body: {path}}); const j = await api(`/api/projects/${p.id}/analyze`, {method: 'POST'}); watch(j.id, p.id); await refresh(); }
-    catch (e) { el.querySelector('#adderr').innerHTML = `<div class="note warn">${esc(e.message)}</div>`; }
+    try {
+      const r = await api('/api/projects', {method: 'POST', body: {path}});
+      if (r.job) { watch(r.job.id, r.project.id); await refresh(); return; }   // a link: cloned, then analyzed, in one job
+      const j = await api(`/api/projects/${r.id}/analyze`, {method: 'POST'}); watch(j.id, r.id); await refresh();
+    } catch (e) { el.querySelector('#adderr').innerHTML = `<div class="note warn">${esc(e.message)}</div>`; }
   };
   el.querySelector('#browsebtn').onclick = () => browse(el.querySelector('#addpath').value || '');
   el.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => {
@@ -338,7 +342,7 @@ function renderSettings(el) {
 function renderHelp(el) {
   el.innerHTML = `<main><h1>How to use Lantern</h1><div class="card">
     <p>New to this? The <b>Learn</b> tab has starter apps with real problems in them and a guide that walks you through every feature.</p>
-    <ol><li><b>Add a project</b>: any folder with a Python or TypeScript/JavaScript app. Lantern reads the code; it never runs it.</li>
+    <ol><li><b>Add a project</b>: any folder with a Python or TypeScript/JavaScript app, new or years old, or a GitHub link to one (Lantern clones it into <code>~/.lantern/repos</code>). Lantern reads the code; it never runs it.</li>
     <li><b>Open the Atlas</b>: pick a page or API route on the left and follow the path, from button clicks through HTTP calls to the backend. Lines show how sure Lantern is about each link.</li>
     <li><b>Findings</b>: security problems ranked by how bad they are and whether a user can reach them. Fix them, or accept a risk with a written reason.</li>
     <li><b>Readiness</b>: a 0–100 grade across ten areas, with what to fix first and starter files (Dockerfile, CI, .env.example) you can write with one click.</li>
