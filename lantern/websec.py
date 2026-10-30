@@ -56,22 +56,26 @@ JS_RULES = [
      "LOW", "Stores a login token in localStorage, where any injected script can read it", 922),
 ]
 
-# Names of things that check who is calling: decorators, dependencies, callees, annotations. `getUser`/`get_user`
-# are deliberately absent (fetching a user record is a check only when the argument identifies the caller, below),
-# and so is a bare `session`: `Depends(get_session)` and `db.session` are database sessions.
-AUTH_NAME_RE = re.compile(r"current_?user|auth|login_required|require_?(?:user|session)|verify|token|permission|jwt|"
-                          r"is_?admin|superuser|guard|protect|clerk|getServerSession|getSession|useSession", re.I)
+# An auth word counts only as a whole segment of a name: `getToken`, `has_permission`, `OAuth2PasswordBearer` and
+# `protectedProcedure` are checks; `tokenize`, `load_permissions`, `protect_zone` and `author` are not. Names are split
+# on `_`, `.`, `$` and camelCase by `segments()` ("load permissions") and matched with word boundaries. `getUser`/
+# `get_user` are deliberately absent (fetching a user record is a check only when the argument identifies the caller,
+# below), and so is a bare `session`: `Depends(get_session)` and `db.session` are database sessions.
+AUTH_WORDS = re.compile(
+    r"\b(?:current (?:user|identity)|o?auth[nz]?|authenticat\w*|authoriz\w*|"
+    r"(?:login|permission|admin|staff|staff member|jwt|fresh jwt|token|auth|user|role|roles|scope|scopes|api key) required|"
+    r"require[sd]? (?:user|auth|login|session|admin|role|roles|permission|permissions|scope|scopes|api key)|"
+    r"has (?:role|roles|permission|permissions|scope|scopes)|check (?:permission|permissions|role|roles|scope|scopes)|"
+    r"is (?:admin|superuser|staff|logged in|signed in)|logged in|signed in|verify|(?<!csrf )token|permission|jwt|"
+    r"superuser|(?:^|\w+ )guard$|protected|clerk|bearer|principal)\b|^(?:protect|requires)$")
+# In JavaScript, `getSession`/`useSession`/`getServerSession` read the login (next-auth, Supabase); a Python
+# `get_session` is a database session and never counts.
+JS_AUTH_WORDS = re.compile(r"\b(?:get server session|get session|use session)\b")
+IDENT = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
 # Read from a handler's body. Shapes that are a check wherever they appear: the framework's view of the caller.
 BODY_AUTH_SHAPED = re.compile(r"request\.user|req\.user|locals\.user|session\.user|session\[.{0,20}user|"
                               r"\bin\s+session\s*[:)]|request\.state\.user|ctx\.state\.user|req\.session|"
                               r"request\.session", re.I)
-# Words that are a check only as a call or an attribute (`authorize(...)`, `user.is_admin`), never as a bare local
-# name, parameter or assignment target, which is usually data the caller sent (`permissions = payload.get(...)`).
-BODY_AUTH_WORDS = re.compile(r"current_?user|\bauth(?!or)|authenticat|authoriz|login_required|"
-                             r"require_?(?:user|auth|login|session)|permission|jwt|is_?admin|superuser|"
-                             r"getServerSession|getSession|useSession|verify_?token|check_?token|clerk|\bguard|"
-                             r"protect", re.I)
-BODY_AUTH = re.compile(BODY_AUTH_SHAPED.pattern + "|" + BODY_AUTH_WORDS.pattern, re.I)   # middleware windows
 # A parameter whose bare name means the caller (anything else named like an auth word is data: `permissions`)
 CALLER_PARAM = re.compile(r"(?:current|auth|authenticated|logged_?in|signed_?in|session)_?user|current_?identity|"
                           r"principal|caller|viewer", re.I)
@@ -262,6 +266,37 @@ def database_rules(repo: Path) -> list[dict]:
     return out
 
 
+def segments(ident: str) -> str:
+    """A name as whole lower-case words: `getServerSession` -> "get server session", `load_permissions` ->
+    "load permissions", `OAuth2PasswordBearer` -> "o auth 2 password bearer", `tokenize` -> "tokenize"."""
+    parts = []
+    for chunk in re.split(r"[^A-Za-z0-9]+", ident):
+        parts += re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+", chunk)
+    return " ".join(p.lower() for p in parts)
+
+
+def auth_word(ident: str, js: bool = False) -> str | None:
+    """The auth words `ident` is built from, matched as whole segments, or None: `get_token` -> "token", `tokenize`
+    -> None, `load_permissions` -> None (plural: a list of permissions, not a check), `has_permission` -> a match."""
+    words = segments(ident)
+    m = AUTH_WORDS.search(words) or (JS_AUTH_WORDS.search(words) if js else None)
+    return m.group(0) if m else None
+
+
+def auth_ident(text: str, js: bool = False) -> str | None:
+    """The first name in `text` (strings removed) built from an auth word: `Depends(get_current_user)` ->
+    `get_current_user`, `Annotated[User, Depends(get_session)]` -> None."""
+    for m in IDENT.finditer(_strip_strings(text)):
+        if auth_word(m.group(0), js):
+            return m.group(0)
+    return None
+
+
+def mentions_auth(code: str, js: bool = False) -> bool:
+    """Middleware windows: the framework's view of the caller, or any name built from an auth word."""
+    return bool(BODY_AUTH_SHAPED.search(code) or auth_ident(code, js))
+
+
 def _func_name(g: Graph, nid: str) -> str:
     """Just the function's own name (never its module path, which may contain words like 'auth')."""
     if nid.startswith("ext:"):
@@ -358,9 +393,9 @@ def signature_sign(signature: str) -> str | None:
     `user: CurrentUser`, `Security(...)`), or a name that can only mean the caller (`current_user`). A parameter
     merely named like an auth word (`permissions: list[str]`, `is_admin: bool`) is data the caller sent."""
     for name, annotation, default in _params(signature):
-        if default and (AUTH_NAME_RE.search(_strip_strings(default)) or re.search(r"\bSecurity\s*\(", default)):
+        if default and (auth_ident(default) or re.search(r"\bSecurity\s*\(", default)):
             return f"`{name}={default}`"[:70] + " in its parameters"
-        if annotation and AUTH_NAME_RE.search(_strip_strings(annotation)):
+        if annotation and auth_ident(annotation):
             return f"`{name}: {annotation}`"[:70] + " in its parameters"
         if CALLER_PARAM.fullmatch(name):
             return f"`{name}` in its parameters"
@@ -374,7 +409,7 @@ def _data_params(signature: str) -> set[str]:
     for name, annotation, default in _params(signature):
         if CARRIER.fullmatch(name) or CALLER_PARAM.fullmatch(name) or CALLER_ARG.search(name):
             continue
-        if AUTH_NAME_RE.search(_strip_strings(default + " " + annotation)) or INJECTED.search(default):
+        if auth_ident(default + " " + annotation) or INJECTED.search(default):
             continue
         for part in re.findall(r"[A-Za-z_$][\w$]*", name):   # `{ a, b }` destructuring too
             out.add(part)
@@ -391,12 +426,13 @@ def _blank_names(code: str, signature: str) -> str:
         if not m:
             continue
         rhs = m.group("rhs")
-        if "^" in rhs or any(re.search(rf"(?<![\w$.]){re.escape(t)}(?![\w$])", rhs) for t in names):
+        if "^" in rhs or names & set(re.findall(r"(?<![\w$.])[A-Za-z_$][\w$]*", rhs)):
             names.update(re.findall(r"[A-Za-z_$][\w$]*", re.sub(r":\s*[\w$]+", "", m.group("lhs"))))
     names -= {"const", "let", "var"}
-    for t in sorted(names, key=len, reverse=True):
-        code = re.sub(rf"(?<![\w$.]){re.escape(t)}(?![\w$])", lambda mm: "^" * len(mm.group(0)), code)
-    return code
+    if not names:
+        return code
+    held = re.compile(r"(?<![\w$.])(?:" + "|".join(re.escape(t) for t in sorted(names, key=len, reverse=True)) + r")(?![\w$])")
+    return held.sub(lambda mm: "^" * len(mm.group(0)), code)
 
 
 def _use_shape(code: str, s: int, e: int) -> tuple[str, str] | None:
@@ -443,7 +479,9 @@ def body_auth_sign(text: str, start_line: int, end_line: int, js: bool, signatur
     m = BODY_AUTH_SHAPED.search(code)
     if m:
         return "strong", f"handler mentions `{m.group(0).rstrip(':) ')}`"
-    for m in BODY_AUTH_WORDS.finditer(code):
+    for m in IDENT.finditer(code):   # a name built from an auth word, used as a call, attribute or decorator
+        if not auth_word(m.group(0), js):
+            continue
         shape = _use_shape(code, m.start(), m.end())
         if shape:
             kind, ident = shape
@@ -483,9 +521,9 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
 def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
     its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
+    js = n.id.startswith("js:")
     for d in n.decorators:
-        m = AUTH_NAME_RE.search(_strip_strings(d))
-        if m:
+        if auth_ident(d, js):
             return f"decorator @{d.split('(')[0]}"
     sig = signature_sign(n.signature or "")
     if sig:
@@ -498,7 +536,7 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
                 if v in seen:
                     continue
                 seen.add(v)
-                if AUTH_NAME_RE.search(_func_name(g, v)):
+                if auth_word(_func_name(g, v), v.startswith("js:")):
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt

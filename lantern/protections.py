@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 from .graph import Graph
-from .websec import BODY_AUTH, call_adjacency, code_only, is_public_route, login_check, mutating_route
+from .websec import call_adjacency, code_only, is_public_route, login_check, mentions_auth, mutating_route
 
 SENSITIVE_PATH = re.compile(r"(^|/)(login|log-in|signin|sign-in|signup|sign-up|register|auth|token|session|password|"
                             r"reset|forgot|otp|verify|magic-link|2fa|mfa|invite)(/|$|\b)", re.I)
@@ -209,11 +209,11 @@ def _global_auth_signs(repo) -> list[tuple[str, int, str]]:
         if re.search(r"before_request|@app\.middleware|function\s+middleware|const\s+middleware", text):
             # generic hooks count only when what follows looks at who is calling
             window = "\n".join(repo.text(f).splitlines()[ln - 1:ln + 20])
-            if not BODY_AUTH.search(code_only(window, js=not f.endswith(".py"))):
+            if not mentions_auth(code_only(window, js=not f.endswith(".py")), js=not f.endswith(".py")):
                 continue
         out.append((f, ln, text))
     for f in repo.project_files:   # Next.js middleware file
-        if re.fullmatch(r"(?:src/)?middleware\.[tj]sx?", f) and BODY_AUTH.search(code_only(repo.text(f), js=True)):
+        if re.fullmatch(r"(?:src/)?middleware\.[tj]sx?", f) and mentions_auth(code_only(repo.text(f), js=True), js=True):
             out.append((f, 1, "middleware file"))
     return out
 
