@@ -224,12 +224,15 @@ def test_public_secret_only_in_env_contexts(tmp_path):
         "src/a.ts": "const k = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY\n",               # yes
         "src/b.ts": "const u = import.meta.env.VITE_SUPABASE_ANON_KEY\n",                 # anon is public: no
         "src/c.svelte": "<script>import { PUBLIC_API_SECRET } from '$env/static/public'</script>\n",  # yes
+        "src/d.ts": "const o = import.meta.env.VITE_OPENAI_API_KEY\n",                     # a paid key: yes
+        "src/e.ts": ("const f = import.meta.env.VITE_FIREBASE_API_KEY\n"                   # browser keys: no
+                     "const m = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY\n"),
         ".env.local": "VITE_ADMIN_PASSWORD=hunter2\nVITE_APP_NAME=x\n",                   # yes, once
     })
     found = sorted((f["file"], f["snippet"]) for f in scan(build_graph(tmp_path))["findings"]
                    if f["rule"] == "LW-PUBLIC-SECRET")
     assert found == [(".env.local", "VITE_ADMIN_PASSWORD"), ("src/a.ts", "NEXT_PUBLIC_STRIPE_SECRET_KEY"),
-                     ("src/c.svelte", "PUBLIC_API_SECRET")]
+                     ("src/c.svelte", "PUBLIC_API_SECRET"), ("src/d.ts", "VITE_OPENAI_API_KEY")]
 
 
 def test_unreadable_http_verb_is_not_guessed_as_get(tmp_path):

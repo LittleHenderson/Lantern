@@ -16,7 +16,7 @@ bash tools/audit.sh --browser    # adds the Chromium viewer and app checks
 | Determinism | `lantern verify` on a temp git repo against its own report | MATCH, then DIFFERENT after a code change |
 | CLI surface | `lantern --help`, `starter`, `accept`, `evidence` | exit codes as documented |
 | Offline model end to end | `tools/fake_model.py` + `lantern explain --model openai-compatible/demo` | explanations validated for the demo units |
-| Browser (optional) | `node tools/viewer_smoke.js` | "no JS errors" at desktop and phone sizes |
+| Browser (optional) | `node tools/viewer_smoke.js` | "no JS errors" at desktop and phone sizes; also on a report whose every field carries an HTML payload (`tools/poison_report.py`): nothing lands as markup, the title never changes |
 
 CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every push (`.github/workflows/ci.yml`).
 

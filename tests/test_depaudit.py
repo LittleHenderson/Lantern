@@ -86,3 +86,23 @@ def test_npm_audit_findings_and_severity(tmp_path, monkeypatch):
 def test_other_lockfiles_say_why_they_are_skipped(tmp_path):
     _write(tmp_path, {"package.json": "{}", "pnpm-lock.yaml": "lockfileVersion: 9\n"})
     assert "pnpm audit" in depaudit.run_npm_audit(tmp_path, no_network=False)[1]["status"]
+
+
+def test_pip_audit_duplicate_and_aliased_advisories_merge(tmp_path, monkeypatch):
+    """pip-audit can list the same id twice, and the same CVE under a PYSEC and a GHSA id: one finding each."""
+    _write(tmp_path, {"requirements.txt": "python-multipart==0.0.6\n"})
+
+    def fake_run(cmd, **kw):
+        out = {"dependencies": [{"name": "python-multipart", "version": "0.0.6", "vulns": [
+            {"id": "PYSEC-2026-1851", "aliases": ["CVE-2026-24486", "GHSA-wp53"], "fix_versions": ["0.0.7"]},
+            {"id": "PYSEC-2024-38", "aliases": ["GHSA-2jv5", "CVE-2024-24762", "PYSEC-2026-1850"], "fix_versions": ["0.0.7"]},
+            {"id": "PYSEC-2026-1851", "aliases": ["GHSA-wp53", "CVE-2026-24486"], "fix_versions": ["0.0.7"]},
+            {"id": "PYSEC-2026-1850", "aliases": ["GHSA-2jv5", "CVE-2024-24762"], "fix_versions": ["0.0.7"]},
+        ]}]}
+        return subprocess.CompletedProcess(cmd, 1, json.dumps(out), "")
+    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(depaudit.subprocess, "run", fake_run)
+    f, _ = depaudit.run_pip_audit(tmp_path, no_network=False)
+    assert [x["rule"] for x in f] == ["PYSEC-2024-38", "PYSEC-2026-1851"]
+    assert "Also listed as CVE-2024-24762, GHSA-2jv5, PYSEC-2026-1850" in f[0]["more_info"]
+    assert len({x["id"] for x in f}) == 2

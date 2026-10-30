@@ -88,6 +88,9 @@ EOF
   lantern analyze "$H" >/dev/null 2>&1
   check "viewer: hostile docstrings and routes can't blank or hijack the report" \
     node tools/viewer_smoke.js "$H/.lantern/report.html" "$W/hshot"
+  # every string and number in the data carries an HTML payload: none of it may reach the page as markup
+  check "viewer: poisoned report data stays text (every field escaped, content policy holds)" \
+    bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison/report.html' && node tools/viewer_smoke.js '$W/poison/report.html' '$W/pshot'"
 fi
 
 printf '\n%s\n' "$([ $FAILS -eq 0 ] && echo 'ALL PASS' || echo "$FAILS FAILED")  (work dir: $W)"

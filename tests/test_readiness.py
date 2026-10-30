@@ -171,3 +171,30 @@ def test_unreadable_package_json_is_not_called_pinned(tmp_path):
     _write(tmp_path, {"package.json": "{ not json", "index.js": "console.log(1)\n"})
     c = _checks(assess(build_graph(tmp_path), EMPTY_SEC, {}))["deps-pinned"]
     assert c["status"] == "fail" and "could not be read" in c["evidence"]
+
+
+def test_library_dependency_bounds_are_checked(tmp_path):
+    """A library's pyproject declares dependencies too: bare names there are reported, with library wording
+    (bounds, not exact pins). With no dependency list at all, the check is skipped and says so."""
+    lib = {"lib/__init__.py": "def add(a, b):\n    return a + b\n", "README.md": "pip install lib",
+           "tests/test_add.py": "from lib import add\n\ndef test_add():\n    assert add(1, 2) == 3\n"}
+    _write(tmp_path, {**lib, "pyproject.toml": '[project]\nname = "lib"\nversion = "1"\n'
+                                                'dependencies = ["requests", "click>=8"]\n'})
+    r = assess(build_graph(tmp_path), EMPTY_SEC)
+    c = _checks(r)["deps-pinned"]
+    assert r["shape"] == "library"
+    assert c["status"] == "fail" and c["evidence"] == "pyproject.toml: requests" and "bounds, not exact pins" in c["fix"]
+    _write(tmp_path, {"pyproject.toml": '[project]\nname = "lib"\nversion = "1"\ndependencies = ["requests>=2.31", "click>=8"]\n'})
+    assert _checks(assess(build_graph(tmp_path), EMPTY_SEC))["deps-pinned"]["status"] == "pass"
+    _write(tmp_path, {"pyproject.toml": '[project]\nname = "lib"\nversion = "1"\n'})
+    c = _checks(assess(build_graph(tmp_path), EMPTY_SEC))["deps-pinned"]
+    assert c["status"] == "skip" and "declares none" in c["evidence"]
+
+
+def test_poetry_and_pipfile_dependencies_are_read(tmp_path):
+    _write(tmp_path, {"pyproject.toml": '[tool.poetry]\nname = "svc"\n[tool.poetry.dependencies]\npython = "^3.11"\n'
+                                        'flask = "*"\nhttpx = {version = "^0.27"}\n',
+                      "app.py": "import flask\n", "Pipfile": '[packages]\nrequests = "*"\nclick = ">=8"\n'})
+    c = _checks(assess(build_graph(tmp_path), EMPTY_SEC))["deps-pinned"]
+    assert c["status"] == "fail" and "pyproject.toml: flask" in c["evidence"] and "Pipfile: requests" in c["evidence"]
+    assert "httpx" not in c["evidence"] and "click" not in c["evidence"]

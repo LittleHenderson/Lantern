@@ -121,16 +121,65 @@ def _tool_version(cmd: list[str]) -> str | None:
 # ---------------------------------------------------------------------------- graph link
 
 REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|values|files|data|cookies|headers|"
-                          r"get_json|path_params|query_params)\b|\bsearchParams\b|\bformData\b|\bsys\.argv\b|"
-                          r"\binput\(|\bevent\[|\bctx\.(query|params|request)\b")
+                          r"get_json|path_params|query_params|POST|GET|FILES|META)\b|\bsearchParams\b|\bformData\b|"
+                          r"\bsys\.argv\b|\binput\(|\bevent\[|\bctx\.(query|params|request)\b")
+# `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
+ASSIGN = re.compile(r"^\s*(?:(?:const|let|var)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
+                    r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?:[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
+                    re.S)
+BINDS = [   # loops and context managers that bind a name to a value
+    re.compile(r"^\s*(?:async\s+)?for\s+(?P<lhs>[\w., ]+?)\s+in\s+(?P<rhs>.+?):", re.S),
+    re.compile(r"^\s*(?:async\s+)?with\s+(?P<rhs>.+?)\s+as\s+(?P<lhs>\w+)\s*:", re.S),
+    re.compile(r"^\s*for\s*\(\s*(?:const|let|var)\s+(?P<lhs>[\w{}\[\], $]+?)\s+(?:of|in)\s+(?P<rhs>[^)]+)\)", re.S),
+]
+_STRINGS = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
+
+
+def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple[int, int, str]]:
+    """Lines first..last (1-based, inclusive) grouped into statements: a line with open brackets takes the
+    following lines until they balance (at most 12). Comments and string contents are dropped. In JS a line that
+    ends by opening a block (`app.post('/x', (req, res) => {`) ends its statement there, so a callback's body is
+    read line by line rather than as one giant call."""
+    out, buf, start, depth = [], [], 0, 0
+    for ln in range(first, min(last, len(lines)) + 1):
+        raw = lines[ln - 1]
+        code = _STRINGS.sub("''", raw)
+        code = re.sub(r"//.*$" if js else r"#.*$", "", code)
+        if not buf:
+            start = ln
+        buf.append(code)
+        depth += code.count("(") + code.count("[") + code.count("{") - code.count(")") - code.count("]") - code.count("}")
+        if depth <= 0 or len(buf) >= 12 or (js and code.rstrip().endswith("{")):
+            out.append((start, ln, " ".join(x.strip() for x in buf)))
+            buf, depth = [], 0
+    if buf:
+        out.append((start, min(last, len(lines)), " ".join(x.strip() for x in buf)))
+    return out
+
+
+def _names(lhs: str) -> list[str]:
+    """Names bound by an assignment target: `a`, `a, b`, `[a, b]`, `{a, b: c}`, `self.x`."""
+    out = []
+    for part in re.split(r"[,\s]+", lhs.strip("[]{} ")):
+        part = part.strip().lstrip(".")
+        if ":" in part:
+            part = part.split(":", 1)[1].strip()   # {key: alias}
+        if re.fullmatch(r"[A-Za-z_$][\w$.]*", part):
+            out.append(part)
+    return out
+
+
+def _uses(name: str, text: str) -> bool:
+    return re.search(r"(?<![\w$.])" + re.escape(name) + r"(?![\w$])", text) is not None
 
 
 def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | False:
-    """Does the flagged line use something a caller controls: one of the function's parameters, or request data?
-    Local and one line only (no data-flow across functions), so it can say yes for a parameter that is in fact
-    always a constant, and it says no for input that arrives through another variable first."""
+    """Does the flagged line use something a caller controls: a parameter, request data, or a local variable
+    that was set from either earlier in the same function? Assignments are followed in order inside the function
+    only (not across functions, branches, or loops), so it can say yes for a parameter that is in fact always a
+    constant, and it says no for input that arrives through another function's return value."""
     n = g.nodes.get(f.get("node") or "")
-    if not n or not f.get("line"):
+    if not n or not f.get("line") or not n.start_line:
         return False
     if f["file"] not in cache:
         try:
@@ -138,18 +187,41 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         except OSError:
             cache[f["file"]] = []
     src = cache[f["file"]]
-    if not 0 < f["line"] <= len(src):
+    line = f["line"]
+    if not 0 < line <= len(src):
         return False
-    # bandit points at the statement's first line; take the statement's continuation lines too
-    text = " ".join(src[f["line"] - 1:min(len(src), f["line"] + 3)])
+    js = not f["file"].endswith(".py")
+    sig = n.signature or ""
+    params = re.findall(r"[(,{]\s*\*{0,2}(?:\.\.\.)?([A-Za-z_$][\w$]*)", sig[sig.find("("):] if "(" in sig else "")
+    tainted = {name: f"parameter `{name}`" for name in params if name not in ("self", "cls")}
+    stmts = _statements(src, n.start_line, max(n.end_line or n.start_line, line + 3), js)
+    flagged = next((st for st in stmts if st[0] <= line <= st[1]), None)
+    if flagged is None:
+        return False
+    for start, end, text in stmts:
+        if start >= flagged[0]:
+            break
+        m = ASSIGN.match(text) or next((b.match(text) for b in BINDS if b.match(text)), None)
+        if not m:
+            continue
+        lhs, rhs = m.group("lhs"), m.group("rhs")
+        req = REQUEST_DATA.search(rhs)
+        src_name = next((t for t in tainted if _uses(t, rhs)), None)
+        if req:
+            origin = f"request data `{req.group(0)}`"
+        elif src_name:
+            origin = tainted[src_name]
+        else:
+            continue
+        for name in _names(lhs):
+            tainted[name] = f"`{name}`, which line {start} sets from {origin}"
+    text = flagged[2]
     m = REQUEST_DATA.search(text)
     if m:
         return {"via": f"request data `{m.group(0)}`"}
-    sig = n.signature or ""
-    params = re.findall(r"[(,]\s*\*{0,2}([A-Za-z_]\w*)", sig[sig.find("("):] if "(" in sig else "")
-    for name in params:
-        if name not in ("self", "cls") and re.search(rf"(?<![\w.]){name}\b", text):
-            return {"via": f"parameter `{name}`"}
+    for name, origin in tainted.items():
+        if _uses(name, text):
+            return {"via": origin}
     return False
 
 

@@ -122,3 +122,42 @@ def test_critical_needs_input_on_the_flagged_line(tmp_path):
     f = {x["line"]: x for x in scan(g)["findings"] if x["rule"] == "B602"}
     assert f[8]["rank"] == "critical" and f[8]["input"] == {"via": "parameter `name`"}
     assert f[12]["rank"] == "high" and f[12]["input"] is False
+
+
+def test_input_through_a_local_variable_is_still_critical(tmp_path):
+    """The classic shape: read the request into a variable, use it on the next line. Lantern follows assignments
+    inside the function, in order, and names the line that set the variable. A constant stays high."""
+    from lantern.engine import build_graph
+    from lantern.security import scan
+    (tmp_path / "app.py").write_text(
+        "import subprocess\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n"
+        "@app.route('/run', methods=['POST'])\ndef run():\n    cmd = request.args.get('cmd')\n"
+        "    subprocess.run(cmd, shell=True)\n\n"
+        "@app.route('/run2', methods=['POST'])\ndef run2():\n    raw = request.form['cmd']\n    cleaned = raw.strip()\n"
+        "    subprocess.run(\n        'backup ' + cleaned,\n        shell=True,\n    )\n\n"
+        "@app.route('/nightly', methods=['POST'])\ndef nightly():\n    cmd = 'backup --all'\n"
+        "    subprocess.run(cmd, shell=True)\n", encoding="utf-8")
+    g = build_graph(tmp_path)
+    f = {x["node"].rsplit(".", 1)[-1]: x for x in scan(g)["findings"] if x["rule"] == "B602"}
+    assert f["run"]["rank"] == "critical"
+    assert f["run"]["input"] == {"via": "`cmd`, which line 8 sets from request data `request.args`"}
+    assert f["run2"]["rank"] == "critical"   # bandit points at the `shell=True` line inside the multi-line call
+    assert f["run2"]["input"]["via"] == ("`cleaned`, which line 14 sets from `raw`, which line 13 sets from request "
+                                         "data `request.form`")
+    assert f["nightly"]["rank"] == "high" and f["nightly"]["input"] is False
+
+
+def test_input_follows_assignments_in_js_handlers(tmp_path):
+    from lantern.engine import build_graph
+    from lantern.security import scan
+    (tmp_path / "package.json").write_text('{"name": "x", "dependencies": {"express": "^4"}}', encoding="utf-8")
+    (tmp_path / "server.js").write_text(
+        "const express = require('express');\nconst { exec } = require('child_process');\nconst app = express();\n\n"
+        "app.post('/run', (req, res) => {\n  const { cmd } = req.body;\n  const full = 'backup ' + cmd;\n"
+        "  exec('nice ' + full);\n  res.send('ok');\n});\n\n"
+        "app.post('/nightly', (req, res) => {\n  const job = 'all';\n  exec('backup ' + job);\n  res.send('ok');\n});\n",
+        encoding="utf-8")
+    f = {x["line"]: x for x in scan(build_graph(tmp_path))["findings"] if x["rule"] == "LJ-EXEC"}
+    assert f[8]["rank"] == "critical"
+    assert f[8]["input"] == {"via": "`full`, which line 7 sets from `cmd`, which line 6 sets from request data `req.body`"}
+    assert f[14]["rank"] == "high" and f[14]["input"] is False

@@ -4,7 +4,9 @@ gives a reason, with the evidence that triggered it.
 Findings say what is wrong in code that exists; this says what is missing. Every item is a heuristic built from the
 graph and file patterns (so it is labeled as such), and none of them changes a finding or the readiness score.
 
-Each item: {id, title, status: "add" | "in place", why, evidence: [file:line ...], how, found: [...]}
+Each item: {id, title, status: "add" | "check" | "in place", why, evidence: [file:line ...], how, found: [...]}
+"check" means the code shows an app-wide mechanism (middleware, a router dependency, an auth library) but not
+that it covers the routes in question; the reader has to confirm it.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import re
 from pathlib import Path
 
 from .graph import Graph
+from .websec import call_adjacency, is_public_route, mutating_route, route_auth_sign
 
 SENSITIVE_PATH = re.compile(r"(^|/)(login|log-in|signin|sign-in|signup|sign-up|register|auth|token|session|password|"
                             r"reset|forgot|otp|verify|magic-link|2fa|mfa|invite)(/|$|\b)", re.I)
@@ -34,6 +37,18 @@ ALLOW_LIST = re.compile(r"allow_?list|allowed_?hosts|ALLOWED_HOSTS|allowedHosts|
 UPLOAD = re.compile(r"\bUploadFile\b|request\.files|multer\(|formData\(\)|\.formData\(|FileField|busboy|formidable")
 UPLOAD_LIMIT = re.compile(r"MAX_CONTENT_LENGTH|max_size|maxFileSize|fileSize|content_type|contentType|mimetype|"
                           r"fileFilter|DATA_UPLOAD_MAX|sizeLimit|bodyParser", re.I)
+# A login check written inside a handler (names the auth rule would not see as a call: attributes, awaits, helpers)
+BODY_AUTH = re.compile(r"current_?user|request\.user|req\.user|\bauth(?!or)|authenticat|authoriz|login_required|"
+                       r"require_?(?:user|auth|login)|permission|jwt|is_?admin|superuser|getServerSession|getUser|"
+                       r"get_user|verify_?token|check_?token|clerk|\bguard|protect|locals\.user|session\.user|"
+                       r"session\[.{0,20}user", re.I)
+# App-wide mechanisms: middleware, router-level dependencies, auth libraries wired in once
+GLOBAL_AUTH = re.compile(
+    r"add_middleware\(\s*\w*(?:auth|login|session|jwt)\w*|AuthenticationMiddleware|LoginRequiredMiddleware|"
+    r"DEFAULT_PERMISSION_CLASSES|dependencies\s*=\s*\[\s*Depends\(|before_request|@app\.middleware|"
+    r"\b(?:app|router|server)\.use\(\s*[^)\n]*(?:auth|passport|jwt|session|requireUser|protect|guard|clerk)|"
+    r"clerkMiddleware|withAuth\(|authMiddleware|export\s+(?:default\s+)?(?:async\s+)?function\s+middleware\b|"
+    r"export\s+const\s+middleware\b|withMiddlewareAuth", re.I)
 
 
 def _where(hits, n=4) -> list[str]:
@@ -127,16 +142,43 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
                  "Passwords are handled in the code, and a slow hashing library is present.", [],
                  "Keep using it for every stored password.", ["bcrypt / argon2 / scrypt found"])
 
-    # 5. Authentication on routes that change data (from the LW-AUTH-MISSING findings)
+    # 5. Login check on every route that changes data. Each route is checked on its own (decorator, signature,
+    # what it calls, what its body mentions); the LW-AUTH-MISSING findings (routes the frontend calls) count too.
     no_auth = [f for f in (sec or {}).get("findings", []) if f.get("rule") == "LW-AUTH-MISSING" and f.get("status") != "accepted"]
-    if writes or no_auth:
-        item("route-auth", "Login check on routes that change data", "add" if no_auth else "in place",
-             f"{len(no_auth)} route(s) change data without any sign of a login check, so anyone on the internet can "
-             "call them." if no_auth else "No route that changes data was flagged for a missing login check (the "
-             "check looks for common login patterns, not your permission rules).",
-             [f"{f['file']}:{f['line']}" for f in no_auth[:4]],
-             "Check the signed-in user at the top of each handler (or in shared middleware), and check they may act "
-             "on this record, not just that they are signed in.")
+    need = [(n, d) for n, d in writes if not is_public_route(d) and mutating_route(d)]
+    if need or no_auth:
+        adj = call_adjacency(g)
+        signed, bare = [], []
+        for n, d in need:
+            sign = route_auth_sign(g, n, adj) or _body_sign(repo, n)
+            (signed if sign else bare).append((n, d, sign))
+        where = [f"{d} ({n.file}:{n.start_line})" for n, d, _ in bare]
+        for f in no_auth:
+            loc = f"{f['file']}:{f['line']}"
+            if not any(loc in w for w in where):
+                where.append(f"{f.get('snippet') or 'route'} ({loc})")
+        app_wide = _global_auth_signs(repo)
+        if not app_wide and managed:
+            app_wide = [("an auth library is installed", 0, "")]
+        how = ("Check the signed-in user at the top of each handler (or in shared middleware), and check they may "
+               "act on this record, not just that they are signed in.")
+        if no_auth or (bare and not app_wide):
+            item("route-auth", "Login check on routes that change data", "add",
+                 f"{len(where)} route(s) change data with no sign of a login check in the handler, in what it "
+                 "calls, or in app-wide middleware, so anyone on the internet can call them.",
+                 where[:6], how, [f"{d}: {sign}" for _, d, sign in signed[:4]])
+        elif bare:
+            item("route-auth", "Login check on routes that change data", "check",
+                 f"{len(bare)} route(s) that change data have no login check of their own. An app-wide check was "
+                 "found, so confirm it actually runs for these routes.", where[:6],
+                 "Make sure the middleware or router dependency covers these routes (path matchers, router "
+                 "prefixes, excluded paths), or add the check at the top of each handler. " + how,
+                 [f"{f}:{ln}" if ln else f for f, ln, _ in app_wide[:4]])
+        else:
+            item("route-auth", "Login check on routes that change data", "in place",
+                 f"All {len(need)} route(s) that change data show a login check in the handler or in what it calls "
+                 "(the check looks for common login patterns, not your permission rules).", [],
+                 how, [f"{d}: {sign}" for _, d, sign in signed[:6]])
 
     # 6. File uploads
     up = [h for h in repo.grep(UPLOAD, limit=10)]
@@ -147,6 +189,32 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
              "named photo.jpg can be anything.", _where(up),
              "Cap the size, check the real file type (not only the name), store uploads outside the web root or in "
              "object storage, and never run or serve them as code.", _where(lim))
+    return out
+
+
+def _body_sign(repo, n) -> str | None:
+    """A login check written inside the handler itself (an attribute, an await, a helper the graph did not link)."""
+    if not n.file or not n.start_line:
+        return None
+    body = "\n".join(repo.text(n.file).splitlines()[n.start_line - 1:(n.end_line or n.start_line)])
+    body = re.sub(r"(['\"`])(?:\\.|(?!\1).)*\1", "''", body)   # not the strings (route paths, messages)
+    m = BODY_AUTH.search(body)
+    return f"handler mentions `{m.group(0)}`" if m else None
+
+
+def _global_auth_signs(repo) -> list[tuple[str, int, str]]:
+    """Middleware, router-level dependencies, or auth libraries wired in once for the whole app."""
+    out = []
+    for f, ln, text in repo.grep(GLOBAL_AUTH, limit=40):
+        if re.search(r"before_request|@app\.middleware|function\s+middleware|const\s+middleware", text):
+            # generic hooks count only when what follows looks at who is calling
+            window = "\n".join(repo.text(f).splitlines()[ln - 1:ln + 20])
+            if not BODY_AUTH.search(window):
+                continue
+        out.append((f, ln, text))
+    for f in repo.project_files:   # Next.js middleware file
+        if re.fullmatch(r"(?:src/)?middleware\.[tj]sx?", f) and BODY_AUTH.search(repo.text(f)):
+            out.append((f, 1, "middleware file"))
     return out
 
 
