@@ -117,7 +117,7 @@ def python_pins(repo: Path) -> tuple[dict[str, tuple[str, str]], list[str], list
             continue
         deps = list((data.get("project") or {}).get("dependencies") or [])
         poetry = ((data.get("tool") or {}).get("poetry") or {}).get("dependencies") or {}
-        deps += [f"{k}{'==' + v if isinstance(v, str) and re.match(r'^\d', v) else ''}"
+        deps += [k + ("==" + v if isinstance(v, str) and re.match(r"^\d", v) else "")
                  for k, v in poetry.items() if k.lower() != "python"]
         if deps:
             files.append(rel)
