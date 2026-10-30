@@ -2,7 +2,8 @@
 
 Lantern is one Python package (`lantern/`, standard library plus tree-sitter grammars) with two front doors that call
 the same functions: the command line (`lantern/cli.py`) and the local app (`lantern/server.py`). There is no hosted
-service. The only network calls are to the model provider the user configures.
+service. The only network calls are to the model provider the user configures and the dependency audits
+(PyPI/OSV via pip-audit, the npm registry via `npm audit`), which `--offline` turns off.
 
 ## Pipeline
 

@@ -109,3 +109,16 @@ def test_accepted_risks_need_a_real_reason(tmp_path):
     (tmp_path / "lantern-accepted.json").write_text(json.dumps({"accepted": [
         {"id": "a", "reason": "x"}, {"id": "b", "reason": "Test fixture only, never deployed"}]}))
     assert set(load_accepted(tmp_path)) == {"b"}
+
+
+def test_critical_needs_input_on_the_flagged_line(tmp_path):
+    from lantern.engine import build_graph
+    from lantern.security import scan
+    (tmp_path / "app.py").write_text(
+        "import subprocess\nfrom fastapi import FastAPI\n\napp = FastAPI()\nCMD = 'backup --all'\n"
+        "@app.post('/run')\ndef run(name: str):\n    subprocess.run('backup ' + name, shell=True)\n\n"
+        "@app.post('/nightly')\ndef nightly():\n    subprocess.run(CMD, shell=True)\n", encoding="utf-8")
+    g = build_graph(tmp_path)
+    f = {x["line"]: x for x in scan(g)["findings"] if x["rule"] == "B602"}
+    assert f[8]["rank"] == "critical" and f[8]["input"] == {"via": "parameter `name`"}
+    assert f[12]["rank"] == "high" and f[12]["input"] is False

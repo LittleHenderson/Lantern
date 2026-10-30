@@ -22,7 +22,10 @@ is where an auditor is most likely to find the claim false. Mark each as **held*
 | S2 | Findings are ranked by severity and reachability; the UI shows the path from the page that triggers them | `security.rank`, `reachability`, `ui_path`; `tests/test_security.py`, shop fixture | A finding inside a function reached only through an unresolved call (should not claim reachable). A route reachable only from tests. |
 | S3 | Heuristic rules are labeled | `tool_confidence: LOW` → "heuristic" chip | Any `LW-*`/`LJ-*` rule that can misfire but isn't LOW. |
 | S4 | Accepted risks need a written reason and remain visible | `lantern accept` (≥10 chars), Evidence Report "Accepted risks" | Accept via a hand-edited `lantern-accepted.json` with an empty reason (should be ignored: `load_accepted`). See THREAT_MODEL T6. |
-| S5 | Lantern passes its own audit | CI step `lantern analyze . --fail-on medium` | Run it. Check whether a real issue is being hidden as "low". |
+| S5 | Lantern passes its own audit, on Linux and Windows | CI steps `lantern analyze . --fail-on medium` (ubuntu and windows jobs) | Run it. Check whether a real issue is being hidden as "low". |
+| S6 | Critical means high severity, reachable from a route/command, and the flagged line uses a parameter or request data (spec 9.3) | `security._input_on_line`, `rank`; `test_critical_needs_input_on_the_flagged_line` | Input that reaches the line through another variable (missed: one-line check). A parameter that is always a constant (over-ranked). |
+| S7 | Known-vulnerable dependencies are checked for Python (lock files, `==` pins, pyproject) and npm (package-lock.json); what can't be checked is said | `depaudit.py`, `tests/test_depaudit.py`; Limits section | Ranges without a lock file, pnpm/yarn/bun lock files, a hostile `.npmrc` or `--index-url` in the repo. |
+| S8 | "Protections to add" appear only with evidence from the code, and are labeled heuristic | `protections.py`, `tests/test_protections.py` | A protection reported missing when a library you use provides it; one reported in place because of a comment or variable name. |
 
 ## Readiness
 
@@ -37,7 +40,7 @@ is where an auditor is most likely to find the claim false. Mark each as **held*
 
 | # | Claim | Evidence | Try to break it |
 |---|---|---|---|
-| E1 | Every Lens 3 phrase must anchor to a real symbol, a line range inside the unit, or a term in the source/glossary; otherwise the explanation is rejected | `explain.validate`, `tests/test_explain.py` | Anchors to symbols outside the allowed set, line ranges outside the function, terms that only appear in comments a hostile repo planted. |
+| E1 | Every Lens 3 phrase must anchor to a real symbol, a line range inside the unit, or a term that is a whole word or name in the code (3+ characters, with a letter; line numbers excluded) or in the glossary; otherwise the explanation is rejected | `explain.validate`, `tests/test_explain.py` | Anchors to symbols outside the allowed set, line ranges outside the function, terms that only appear in comments a hostile repo planted. |
 | E2 | The UI says plainly when code goes to a cloud model, and offers local models | Settings and Explanations screens, Atlas button note | Any path that sends code without that notice (e.g. `openai-compatible` pointed at a remote host is treated as cloud unless the URL is localhost). |
 | E3 | Explanations are cached by a hash of each function's code | `explain.Cache` | Change only a callee; check whether a stale explanation is reused. |
 
@@ -46,7 +49,8 @@ is where an auditor is most likely to find the claim false. Mark each as **held*
 | # | Claim | Evidence | Try to break it |
 |---|---|---|---|
 | V1 | Pinned to a commit, and flags uncommitted changes | `evidence.git_info`; `tests/test_evidence.py` | Analyze a subfolder of a repo; analyze with untracked files (not counted as dirty: only tracked changes are). |
-| V2 | `lantern verify` re-runs and compares a digest of the deterministic results | `digest_payload`, `cmd_verify`; test shows match then mismatch after a code change | Nondeterminism: run twice and compare; different machines; different bandit versions (expected to differ, and Provenance lists versions). |
+| V2 | `lantern verify` re-runs the analysis the same way (scan on/off, trace, offline) and compares a digest of the deterministic results | `digest_payload` (`run`), `cmd_verify`; `test_verify_replays_no_scan`, `test_verify_replays_a_trace_only_when_the_verifier_types_it` | Nondeterminism: run twice and compare; different machines; different bandit versions; dependency advisories published between runs (stated in Limits and in verify's output). |
+| V5 | "Fixed" means the flagged code is gone: moving it is not a fix, and editing it shows "changed, still open" | `security.stable_ids`, `evidence.compare_baseline`; `test_moving_a_line_is_not_a_fix`, `test_editing_the_flagged_line_is_changed_not_fixed` | Rename the file; split the line in two; change the rule's wording. |
 | V3 | The digest is not a signature, and the report says so | Section 7 text | |
 | V4 | The Limits section states what the report does not prove | `evidence.limits` | Missing limits for situations you can construct. |
 

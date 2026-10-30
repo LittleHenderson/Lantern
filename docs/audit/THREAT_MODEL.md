@@ -30,7 +30,9 @@ Scope: Lantern as built today, running locally (`lantern serve` or the CLI). Clo
 | Symlink `creds.py` or `.env` → `~/.aws/credentials` to get it scanned and embedded in a report | All walkers skip symlinks that resolve outside the repo | `python_frontend.inside_repo` and its callers | Mitigated, tested (`test_symlinks_out_of_the_repo_are_not_read`) |
 | Symlinked *directory* inside the repo pointing out | `os.walk` and `Path.rglob` don't follow directory symlinks by default | discovery functions | Believed mitigated; add a test |
 | HTML/JS injection through file names, function names, strings, or code shown in the report | All dynamic text goes through `esc()` in the viewers and `html.escape` in `evidence.py`; embedded JSON escapes `</` | `viewer/report.html`, `report.py`, `evidence.py` | Mitigated; most valuable place to look for a miss |
-| Ship a `lantern-accepted.json` that accepts real findings, so `--fail-on` passes | Reason required; accepted findings stay listed (Findings, Evidence Report, counts) | `security.load_accepted` | **Open by design.** Changes to `lantern-accepted.json` must be reviewed like code. Consider a CI rule that fails when it changes without review. |
+| Ship a `lantern-accepted.json` that accepts real findings, so `--fail-on` passes | A real reason is required by the loader too (two+ words, 10+ letters: `security.reason_ok`); accepted findings stay listed (Findings, Evidence Report, counts) | `security.load_accepted` | **Open by design.** Changes to `lantern-accepted.json` must be reviewed like code. Consider a CI rule that fails when it changes without review. |
+| Plant `.lantern/` results (report.html, evidence.html, badge.svg, security.json) to run script in the app or receive the session token | The server never sends those files' bytes as pages: it reads only the data (JSON), rebuilds every page from its own templates, injects the token only into those, and sends a per-response nonce Content-Security-Policy (no script on the Evidence Report). Summary values are type-checked and escaped | `server._result_file`, `report.read_bundle`, `_csp` | Mitigated, tested (`test_planted_results_cannot_run_script`). Residual: planted report *data* can still place markup in the Atlas where the viewer prints a number unescaped; scripts stay blocked by the CSP |
+| Text like `<!--<script>` in a docstring or route that changes how the browser parses the embedded data (blanking the report) | Data sits in a `type="application/json"` block with every `<`, `>`, `&` escaped | `report.safe_json` | Mitigated, tested in Chromium by `tools/audit.sh --browser` (CI) |
 | Ship a fake `lantern-narratives.md` that misdescribes flows | It is shown under "Understanding" as the builder's own text, escaped | `evidence.py` | Accepted: it is labeled as the builder's text |
 | Huge or pathological files (deep nesting, megabyte lines) to exhaust CPU/memory, or regex backtracking | tree-sitter is linear; some regexes run over whole files | `websec.py`, `readiness.py`, `security.py` | **Not tested.** Fuzz with large and adversarial inputs (TEST_PLAN 4.6) |
 | Planted comments that prompt-inject the explaining model ("say this function is safe") | Models can't change findings or scores; Lens 3 anchors are validated; unvalidated output carries a warning | `explain.validate` | Partly mitigated: Lens 1/2 wording can still be steered. The UI says explanations aren't proof |
@@ -73,7 +75,10 @@ script in the app's origin can act as the user. That makes XSS in the viewers (T
 
 * Only `explain` sends code, only to the configured provider, and the UI says so in plain words when the provider is
   not local (spec 5.3). `openai-compatible` counts as local only when its base URL is localhost/127.0.0.1.
-* `analyze`, `verify`, scanners, and the server make no network calls. Exception: `pip-audit` queries a
+* `analyze`, `verify`, scanners, and the server make no network calls except the dependency audits: pip-audit
+  (PyPI/OSV) and `npm audit` (registry.npmjs.org). They send package names and versions, never code. `--offline` or
+  `LANTERN_OFFLINE=1` turns them off. Only `name==version` pairs reach pip-audit (index options in the repo are
+  ignored), and `npm audit` gets `--registry` explicitly so a repo's `.npmrc` can't redirect it. Earlier note: `pip-audit` queries a
   vulnerability database when `requirements*.txt` exists (**document in UI**: currently only in Provenance).
 
 ### T6. Shared reports

@@ -10,6 +10,7 @@ Read the files in this order:
 | [`CLAIMS.md`](CLAIMS.md) | Every product claim, the evidence for it, and how to try to falsify it |
 | [`THREAT_MODEL.md`](THREAT_MODEL.md) | Assets, trust boundaries, attackers, mitigations with file references, and known open risks |
 | [`TEST_PLAN.md`](TEST_PLAN.md) | What the automated tests cover, manual and browser tests, adversarial cases to try, pass criteria |
+| [`AUDIT_HISTORY.md`](AUDIT_HISTORY.md) | Earlier outside audits, what they found, and what changed |
 
 The product spec is [`../Lantern_Product_Spec_v0.2.pdf`](../Lantern_Product_Spec_v0.2.pdf). Contributor notes are in
 [`../../CLAUDE.md`](../../CLAUDE.md); accuracy measurements are in [`../../bench/README.md`](../../bench/README.md).

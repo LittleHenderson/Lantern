@@ -46,7 +46,7 @@ def run_bandit(repo: Path) -> tuple[list[dict], dict]:
     if excl:
         cmd += ["-x", excl]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
         data = json.loads(proc.stdout or "{}")
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
         return [], {"tool": "bandit", "status": f"error: {exc}"}
@@ -65,43 +65,13 @@ def run_bandit(repo: Path) -> tuple[list[dict], dict]:
     return out, {"tool": "bandit", "status": "ok", "version": version}
 
 
-def run_pip_audit(repo: Path) -> tuple[list[dict], dict]:
-    reqs = sorted(p for p in repo.glob("requirements*.txt") if p.is_file())
-    if not reqs:
-        return [], {"tool": "pip-audit", "status": "skipped: no requirements*.txt (pyproject support is Phase 1)"}
-    if not shutil.which("pip-audit"):
-        return [], {"tool": "pip-audit", "status": "skipped: not installed"}
-    out = []
-    for req in reqs:
-        cmd = ["pip-audit", "-r", str(req), "-f", "json", "--progress-spinner", "off",
-               "--no-deps", "--disable-pip"]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            data = json.loads(proc.stdout or "{}")
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-            return out, {"tool": "pip-audit", "status": f"error: {exc}"}
-        for dep in data.get("dependencies", []):
-            for v in dep.get("vulns", []):
-                out.append({
-                    "id": _fid("pip-audit", dep["name"], v["id"]),
-                    "tool": "pip-audit", "rule": v["id"],
-                    "title": f"{dep['name']} {dep.get('version', '')} has known vulnerability {v['id']}",
-                    "tool_severity": "HIGH", "tool_confidence": "HIGH",
-                    "file": req.relative_to(repo).as_posix(), "line": None,
-                    "more_info": f"Fixed in: {', '.join(v.get('fix_versions', [])) or 'no fix yet'}",
-                    "snippet": (v.get("description") or "")[:400], "category": "dependency",
-                    "package": dep["name"],
-                })
-    return out, {"tool": "pip-audit", "status": "ok", "files": [r.relative_to(repo).as_posix() for r in reqs]}
-
-
 def run_secrets(repo: Path) -> tuple[list[dict], dict]:
     """gitleaks when installed; otherwise a small built-in pattern scan."""
     if shutil.which("gitleaks"):
         try:
             proc = subprocess.run(
                 ["gitleaks", "detect", "--no-git", "-s", str(repo), "-f", "json", "-r", "/dev/stdout",
-                 "--exit-code", "0"], capture_output=True, text=True, timeout=300)
+                 "--exit-code", "0"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
             rows = json.loads(proc.stdout or "[]")
             out = [{
                 "id": _fid("gitleaks", r["RuleID"], r["File"], r["StartLine"]),
@@ -141,7 +111,7 @@ def run_secrets(repo: Path) -> tuple[list[dict], dict]:
 
 def _tool_version(cmd: list[str]) -> str | None:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout
         m = re.search(r"\d+\.\d+(\.\d+)?", out)
         return m.group(0) if m else None
     except Exception:
@@ -149,6 +119,39 @@ def _tool_version(cmd: list[str]) -> str | None:
 
 
 # ---------------------------------------------------------------------------- graph link
+
+REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|values|files|data|cookies|headers|"
+                          r"get_json|path_params|query_params)\b|\bsearchParams\b|\bformData\b|\bsys\.argv\b|"
+                          r"\binput\(|\bevent\[|\bctx\.(query|params|request)\b")
+
+
+def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | False:
+    """Does the flagged line use something a caller controls: one of the function's parameters, or request data?
+    Local and one line only (no data-flow across functions), so it can say yes for a parameter that is in fact
+    always a constant, and it says no for input that arrives through another variable first."""
+    n = g.nodes.get(f.get("node") or "")
+    if not n or not f.get("line"):
+        return False
+    if f["file"] not in cache:
+        try:
+            cache[f["file"]] = (Path(g.repo_root) / f["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            cache[f["file"]] = []
+    src = cache[f["file"]]
+    if not 0 < f["line"] <= len(src):
+        return False
+    # bandit points at the statement's first line; take the statement's continuation lines too
+    text = " ".join(src[f["line"] - 1:min(len(src), f["line"] + 3)])
+    m = REQUEST_DATA.search(text)
+    if m:
+        return {"via": f"request data `{m.group(0)}`"}
+    sig = n.signature or ""
+    params = re.findall(r"[(,]\s*\*{0,2}([A-Za-z_]\w*)", sig[sig.find("("):] if "(" in sig else "")
+    for name in params:
+        if name not in ("self", "cls") and re.search(rf"(?<![\w.]){name}\b", text):
+            return {"via": f"parameter `{name}`"}
+    return False
+
 
 def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
     if not file:
@@ -207,10 +210,10 @@ def rank(f: dict) -> str:
     untrusted = reach and reach["kind"] in UNTRUSTED_ENTRY_KINDS
     if f["category"] == "secret":
         return "critical"
-    if f["category"] == "dependency":
-        return "high"
-    if sev == "HIGH" and untrusted:
-        return "critical"
+    if f["category"] == "dependency":   # npm says how bad; pip-audit doesn't, so those stay high
+        return {"moderate": "medium", "low": "low", "info": "low"}.get(str(f.get("dep_severity")), "high")
+    if sev == "HIGH" and untrusted and f.get("input") is not False:
+        return "critical"   # spec 9.3: high severity and touched by untrusted input (False: the line uses none)
     if (sev == "HIGH" and reach) or (sev == "MEDIUM" and untrusted):
         return "high"
     if (sev == "MEDIUM" and reach) or sev == "HIGH":
@@ -274,10 +277,13 @@ def stable_ids(repo: Path, findings: list[dict]) -> None:
         f["id"] = _fid(key, seen[key])
 
 
-def scan(g: Graph) -> dict:
+def scan(g: Graph, offline: bool | None = None) -> dict:
+    """All scanners. `offline` skips the dependency audits, the only steps that use the network
+    (None: follow LANTERN_OFFLINE)."""
     repo = Path(g.repo_root)
     findings, tools = [], []
-    for fn in (run_bandit, run_pip_audit, run_secrets):
+    from .depaudit import run_npm_audit, run_pip_audit
+    for fn in (run_bandit, lambda r: run_pip_audit(r, offline), lambda r: run_npm_audit(r, offline), run_secrets):
         f, info = fn(repo)
         findings += f
         tools.append(info)
@@ -292,6 +298,7 @@ def scan(g: Graph) -> dict:
     test_reach = reachability(g, include_tests=True)
     from .js_frontend import TEST_RE as JS_TEST_RE
     from .python_frontend import TEST_FILE_RE
+    lines_cache: dict[str, list[str]] = {}
     for f in findings:
         f["in_tests"] = bool(f["file"] and (TEST_FILE_RE.search(f["file"]) or JS_TEST_RE.search(f["file"])))
         f["node"] = _node_at(g, f["file"], f["line"])
@@ -300,6 +307,8 @@ def scan(g: Graph) -> dict:
         f["reachable_from_tests_only"] = bool(not r and f["node"] in test_reach)
         u = ui_reach.get(f["node"]) if f["node"] else None
         f["ui_path"] = u["path"] if u else None
+        f["input"] = _input_on_line(g, f, lines_cache) if f["category"] == "code" and r and \
+            r["kind"] in UNTRUSTED_ENTRY_KINDS else None
         f["rank"] = "low" if f["in_tests"] and f["category"] == "code" else rank(f)
         acc = accepted.get(f["id"])
         f["status"] = "accepted" if acc else "open"
