@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .graph import Graph
 from .js_frontend import jwt_role
-from .python_frontend import SKIP_DIRS
+from .python_frontend import SKIP_DIRS, inside_repo
 
 PUBLIC_PREFIX = r"(?:NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_|GATSBY_|PUBLIC_|VUE_APP_)"
 SECRET_WORD = r"[A-Z0-9_]*(?:SECRET|PRIVATE|SERVICE_ROLE|PASSWORD|PASSWD|DB_URL|DATABASE_URL|STRIPE_SK)[A-Z0-9_]*"
@@ -67,7 +67,7 @@ def _fid(*parts) -> str:
 
 def _files(repo: Path, exts=None, names=None):
     for p in repo.rglob("*"):
-        if not p.is_file():
+        if not p.is_file() or not inside_repo(p, repo):
             continue
         parts = p.relative_to(repo).parts
         if any(x in SKIP_DIRS for x in parts[:-1]):   # a file named .env is not the .env/ venv folder

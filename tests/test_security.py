@@ -76,3 +76,26 @@ def test_secret_scans_read_dotenv_files(tmp_path):
     rules = {f["rule"] for f in scan(g)["findings"] if f["file"] == ".env"}
     assert "stripe-live-key" in rules        # security.run_secrets
     assert "LW-PUBLIC-SECRET" in rules       # websec.exposed_secrets
+
+
+def test_symlinks_out_of_the_repo_are_not_read(tmp_path):
+    import os
+    outside = tmp_path / "home"
+    outside.mkdir()
+    (outside / "credentials").write_text("aws_key = 'AKIA" + "ABCDEFGHIJKLMNOP'\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text("def main():\n    return 1\n")
+    try:
+        os.symlink(outside / "credentials", repo / "creds.py")
+        os.symlink(outside / "credentials", repo / ".env")
+    except OSError:
+        import pytest
+        pytest.skip("symlinks not supported")
+    from lantern.engine import build_graph
+    from lantern.report import collect_sources
+    from lantern.security import scan
+    g = build_graph(repo)
+    assert not any(n.file == "creds.py" for n in g.nodes.values())
+    assert not [f for f in scan(g)["findings"] if f["category"] == "secret"]
+    assert "AKIA" not in "".join(collect_sources(g).values())

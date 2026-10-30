@@ -56,6 +56,17 @@ TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$|(^|/)tests?/")
 # Discovery
 # --------------------------------------------------------------------------------------------
 
+def inside_repo(p: Path, repo: Path) -> bool:
+    """False for a symlink that points outside the repository: a hostile repo could otherwise link to
+    ~/.ssh or ~/.aws and get that file scanned and embedded in a report."""
+    if not p.is_symlink():
+        return True
+    try:
+        return p.resolve().is_relative_to(repo.resolve())
+    except OSError:
+        return False
+
+
 def discover(repo: Path) -> list[tuple[Path, str]]:
     """Return (path, dotted module name) for every Python file in the repo."""
     repo = repo.resolve()
@@ -67,6 +78,8 @@ def discover(repo: Path) -> list[tuple[Path, str]]:
             if not fn.endswith(".py"):
                 continue
             p = Path(dirpath) / fn
+            if not inside_repo(p, repo):
+                continue
             root = src_root if src_root and src_root in p.parents else repo
             rel = p.relative_to(root).with_suffix("")
             parts = list(rel.parts)
