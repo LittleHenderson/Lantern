@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, learn, pipeline
+from . import __version__, learn, pipeline, remote
 from .providers import PRESETS
 from .readiness import SHAPES
 
@@ -202,6 +202,28 @@ class App:
                 "finished_at": _str(run.get("finished_at")),
                 "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"],
                 "starter": learn.starter_of(Path(p["path"]))}
+
+    def clone_project(self, link: str) -> dict:
+        """A repository link pasted instead of a folder: the project is listed at once (so its card shows the job
+        log), cloned under LANTERN_HOME/repos in a job, then analyzed. A failed clone forgets the project again."""
+        info = remote.parse(link)   # ValueError for a bad link -> 400
+        dest = remote.destination(info, self.store.root / "repos")
+        dest.mkdir(parents=True, exist_ok=True)
+        p = self.store.add_project(dest)
+        privacy = self.store.settings().get("privacy", "full")
+
+        def work(log):
+            try:
+                remote.clone(link, log=log, dest=dest)
+            except Exception:
+                if dest.is_dir() and not any(dest.iterdir()):
+                    self.store.remove_project(p["id"])
+                    dest.rmdir()
+                raise
+            return pipeline.analyze(dest, self.out(p), privacy, log=log)
+
+        job = self.jobs.start(p["id"], "clone", work)
+        return {"job": job, "project": self.summary(p)}
 
     def provider_info(self) -> list[dict]:
         rows = []
@@ -457,7 +479,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/projects" and method == "POST":
             raw = str(b.get("path") or "").strip()
             if not raw:
-                raise ValueError("give a folder path")
+                raise ValueError("give a folder path or a repository link")
+            if remote.looks_like_url(raw):
+                return self._json(app.clone_project(raw), 202)
             d = Path(os.path.expanduser(raw))
             if not d.is_dir():
                 raise ValueError(f"not a folder: {raw}")

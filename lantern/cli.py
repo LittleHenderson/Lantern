@@ -381,6 +381,17 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--no-open", action="store_true", help="don't open a browser")
 
     a = p.parse_args(argv)
+    # A repository link instead of a folder: clone it (shallow) under ~/.lantern/repos and go on from there.
+    from . import remote
+    try:
+        if remote.looks_like_url(getattr(a, "path", None) or ""):
+            a.path = str(remote.clone(a.path, log=lambda m: print(m, file=sys.stderr)))
+        if a.cmd == "serve":
+            a.paths = [str(remote.clone(x, log=lambda m: print(m, file=sys.stderr))) if remote.looks_like_url(x) else x
+                       for x in a.paths]
+    except (ValueError, RuntimeError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     if a.cmd == "analyze":
         return cmd_analyze(a, trace_cmd if a.trace else [])
     if a.cmd == "trace":

@@ -29,12 +29,14 @@ You need Python 3.11 or newer. Then:
 
 ```bash
 pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"
-lantern serve path/to/your/app
+lantern serve path/to/your/app          # any existing project, new or years old
+lantern serve https://github.com/you/your-app   # or a GitHub link: cloned into ~/.lantern/repos, then analyzed
 ```
 
 Your browser opens Lantern. The app is analyzed on first open (a few seconds), and from there you can:
 
-* **Projects**: add more folders (type a path or browse), re-analyze, see each project's grade and open findings.
+* **Projects**: add more folders (type a path, browse, or paste a GitHub link), re-analyze, see each project's grade
+  and open findings.
 * **Atlas**: pick a page or API route and follow its path, through clicks and HTTP calls, down to the database.
   Click any function for what it does; "Explain with …" asks your model for the three lenses.
 * **Findings**: security problems ranked by severity and by whether a user can reach them. "Accept risk…" records a
