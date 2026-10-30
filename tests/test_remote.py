@@ -19,7 +19,7 @@ from test_server import FIX, call, srv, wait  # noqa: F401  (srv is a fixture)
     ("https://github.com/owner/repo/tree/dev/backend/app", "github.com", "owner", "repo", "dev"),
     ("git@github.com:owner/repo.git", "github.com", "owner", "repo", None),
     ("https://gitlab.com/group/project/-/tree/main", "gitlab.com", "group", "project", "main"),
-    ("https://git.example.org:8443/team/app.git", "git.example.org", "team", "app", None),
+    ("https://Codeberg.org/team/app.git", "codeberg.org", "team", "app", None),
 ])
 def test_repository_links_are_read(link, host, owner, name, branch):
     info = remote.parse(link)
@@ -36,6 +36,27 @@ def test_repository_links_are_read(link, host, owner, name, branch):
 def test_bad_links_are_refused(link):
     with pytest.raises(ValueError):
         remote.parse(link)
+
+
+@pytest.mark.parametrize("link", [
+    "https://evil.example.com/o/r", "https://127.0.0.1/o/r", "https://10.0.0.8:8443/o/r", "https://localhost/o/r",
+    "https://[::1]/o/r", "https://github.com.evil.example/o/r", "https://git.example.org:8443/team/app.git",
+])
+def test_links_to_other_hosts_are_refused(link, monkeypatch):
+    """A link pasted from a chat must not point this machine at a loopback or private address, or at the sender's
+    server: only the public forges are cloned, plus servers the user names in LANTERN_GIT_HOSTS."""
+    monkeypatch.delenv("LANTERN_GIT_HOSTS", raising=False)
+    with pytest.raises(ValueError, match="public forges"):
+        remote.parse(link)
+
+
+def test_your_own_git_server_can_be_added(monkeypatch):
+    monkeypatch.setenv("LANTERN_GIT_HOSTS", "git.example.org, Gitea.Internal")
+    info = remote.parse("https://git.example.org:8443/team/app.git")
+    assert (info["host"], info["owner"], info["name"]) == ("git.example.org", "team", "app")
+    assert remote.parse("https://gitea.internal/o/r")["host"] == "gitea.internal"
+    with pytest.raises(ValueError):
+        remote.parse("https://other.example.org/o/r")
 
 
 def test_links_and_folders_are_told_apart():
@@ -72,6 +93,23 @@ def test_clone_then_update_with_git(tmp_path):
     (other / "x").write_text("x", encoding="utf-8")
     with pytest.raises(RuntimeError, match="not a git clone"):
         remote.clone("https://github.com/o/r", dest=other)
+
+
+def test_big_repositories_are_refused_before_checkout(tmp_path, monkeypatch):
+    """The files are measured from the index after a no-checkout clone; above the cap nothing is written."""
+    src = _git_repo(tmp_path / "src")
+    (src / "blob.bin").write_bytes(b"\0" * 2_500_000)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."], cwd=src, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "big"], cwd=src, check=True)
+    monkeypatch.setenv("LANTERN_CLONE_MAX_MB", "2")
+    dest = tmp_path / "dest"
+    with pytest.raises(RuntimeError, match="above Lantern's 2 MB limit"):
+        remote.fetch(src.as_uri(), dest)
+    assert not dest.exists()
+    monkeypatch.setenv("LANTERN_CLONE_MAX_MB", "0")   # no cap
+    remote.fetch(src.as_uri(), dest)
+    assert (dest / "blob.bin").stat().st_size == 2_500_000 and (dest / "app.py").exists()
+    assert subprocess.run(["git", "status", "--porcelain"], cwd=dest, capture_output=True, text=True).stdout == ""
 
 
 def test_failed_clone_has_a_plain_message_and_no_credentials(tmp_path):
@@ -124,3 +162,20 @@ def test_app_clones_a_link_in_a_job(srv, tmp_path, monkeypatch):  # noqa: F811
     j = wait(base, r["job"]["id"])
     assert j["status"] == "error" and "repository not found" in j["error"]
     assert not store.project(r["project"]["id"]) and not (store.root / "repos" / "github.com" / "wakil" / "private").exists()
+
+
+def test_a_refused_clone_is_removed_even_with_read_only_files(tmp_path):
+    """Git's object files are read-only (and a folder can be too); the refused clone must still go away whole."""
+    dest = tmp_path / "dest"
+    objects = dest / ".git" / "objects" / "pack"
+    objects.mkdir(parents=True)
+    pack = objects / "pack-1.pack"
+    pack.write_bytes(b"\0" * 10)
+    pack.chmod(0o444)
+    objects.chmod(0o555)
+    try:
+        remote._rmtree(dest)
+    finally:
+        if objects.exists():
+            objects.chmod(0o755)
+    assert not dest.exists()

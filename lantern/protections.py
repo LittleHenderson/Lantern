@@ -154,34 +154,36 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
             else:
                 signed.append((n, d, sign[1]))
         where = [f"{d} ({n.file}:{n.start_line})" for n, d, _ in bare]
-        for f in no_auth:
+        weak_where = [f"{d} ({n.file}:{n.start_line}): {sign}" for n, d, sign in weak]
+        for f in no_auth:   # routes the app calls that the list above does not already name
             loc = f"{f['file']}:{f['line']}"
-            if not any(loc in w for w in where):
+            if not any(loc in w for w in where + weak_where):
                 where.append(f"{f.get('snippet') or 'route'} ({loc})")
         app_wide = _global_auth_signs(repo)
         if not app_wide and managed:
             app_wide = [("an auth library is installed", 0, "")]
         how = ("Check the signed-in user at the top of each handler (or in shared middleware), and check they may "
                "act on this record, not just that they are signed in.")
+        # The sentences describe what was found, so the finding and this item tell the same story.
+        none_found = (f"{len(where)} route(s) change data with no sign of a login check in the handler, in what it "
+                      "calls, or in app-wide middleware, so anyone on the internet can call them.") if where else ""
+        only_lookup = (f"{len(weak)} route(s) that change data only look up a user by a value from the request and "
+                       "test the result. That finds the record's owner, not who is calling (the shape behind most "
+                       "\"anyone can edit anyone's data\" bugs), so the signed-in user must be checked too.") if weak else ""
+        found_ok = [f"{d}: {sign}" for _, d, sign in signed[:4]]
         if no_auth or (bare and not app_wide):
             item("route-auth", "Login check on routes that change data", "add",
-                 f"{len(where)} route(s) change data with no sign of a login check in the handler, in what it "
-                 "calls, or in app-wide middleware, so anyone on the internet can call them.",
-                 where[:6], how, [f"{d}: {sign}" for _, d, sign in signed[:4]])
+                 " ".join(x for x in (none_found, only_lookup) if x), (where + weak_where)[:6], how, found_ok)
         elif bare:
             item("route-auth", "Login check on routes that change data", "check",
                  f"{len(bare)} route(s) that change data have no login check of their own. An app-wide check was "
-                 "found, so confirm it actually runs for these routes.", where[:6],
+                 f"found, so confirm it actually runs for these routes. {only_lookup}".rstrip(), (where + weak_where)[:6],
                  "Make sure the middleware or router dependency covers these routes (path matchers, router "
                  "prefixes, excluded paths), or add the check at the top of each handler. " + how,
                  [f"{f}:{ln}" if ln else f for f, ln, _ in app_wide[:4]])
         elif weak:
             item("route-auth", "Login check on routes that change data", "check",
-                 f"{len(weak)} route(s) that change data only look up a user by a value from the request and test "
-                 "the result. That finds the record's owner, not who is calling (the shape behind most "
-                 "\"anyone can edit anyone's data\" bugs), so confirm the signed-in user is checked too.",
-                 [f"{d} ({n.file}:{n.start_line}): {sign}" for n, d, sign in weak[:6]], how,
-                 [f"{d}: {sign}" for _, d, sign in signed[:4]])
+                 only_lookup.replace("must be checked too", "needs confirming"), weak_where[:6], how, found_ok)
         else:
             item("route-auth", "Login check on routes that change data", "in place",
                  f"All {len(need)} route(s) that change data show a login check in the handler or in what it calls "

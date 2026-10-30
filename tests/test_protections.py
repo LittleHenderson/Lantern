@@ -96,7 +96,7 @@ def test_route_auth_in_place_when_every_route_checks(tmp_path):
     _write(tmp_path, files)
     p = _prot(tmp_path)["route-auth"]
     assert p["status"] == "in place", p
-    assert p["found"] == ["POST /items: `current_user` in its parameters",
+    assert p["found"] == ["POST /items: `user=Depends(get_current_user)` in its parameters",
                           "DELETE /items/{item_id}: handler mentions `request.user`"]
 
 
@@ -143,6 +143,65 @@ def test_a_comment_or_docstring_is_not_a_login_check(tmp_path):
     p = _prot(tmp_path)["route-auth"]
     assert p["status"] == "add", p
     assert p["evidence"] == ["POST /items (svc/main.py:5)", "DELETE /items/{item_id} (svc/main.py:10)"]
+
+
+def test_a_payload_field_named_like_an_auth_word_is_data(tmp_path):
+    """`permissions = payload.get("permissions")` reads what the caller claims, the opposite of a check. Request data,
+    the names that hold it, assignment targets and plain parameters never count; a check is a call or an attribute."""
+    files = dict(BACKEND_ONLY)
+    files["svc/main.py"] = (
+        "from fastapi import Body, Depends, FastAPI\nfrom sqlmodel import Session\n\napp = FastAPI()\n\n"
+        "def get_session():\n    return 1\n\n"
+        "@app.post('/settings')\ndef save_settings(payload: dict):\n    permissions = payload.get('permissions')\n"
+        "    protected = payload['protected']\n    auth_enabled = payload.get('auth_enabled', False)\n"
+        "    if 'admin' in permissions and protected:\n        return auth_enabled\n    return permissions\n\n"
+        "@app.put('/settings')\ndef set_flags(settings_in: dict, payload: dict):\n"
+        "    settings.protected = payload['protected']\n    settings.is_admin = True\n    return settings\n\n"
+        "@app.patch('/roles')\ndef set_roles(permissions: list[str] = Body(), session: Session = Depends(get_session)):\n"
+        "    permissions.append('x')\n    session.add(permissions)\n    return permissions\n")
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "add", p
+    assert [e.split(" (")[0] for e in p["evidence"]] == ["POST /settings", "PUT /settings", "PATCH /roles"]
+    # the same words as a call or an attribute of something that is not request data do count
+    files["svc/main.py"] = files["svc/main.py"].replace(
+        "    permissions = payload.get('permissions')\n",
+        "    permissions = payload.get('permissions')\n    authorize(request_user(), 'settings')\n",
+    ).replace(
+        "    settings.is_admin = True\n", "    if not current_user.is_admin:\n        raise ValueError\n",
+    ).replace(
+        "    permissions.append('x')\n", "    permissions.append('x')\n    jwt.decode(token)\n",
+    )
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "in place", p
+    assert p["found"] == ["POST /settings: handler calls `authorize(...)`",
+                          "PUT /settings: handler mentions `current_user.is_admin`",
+                          "PATCH /roles: handler calls `jwt.decode(...)`"]
+
+
+def test_finding_and_protection_tell_one_story_on_a_tested_lookup(tmp_path):
+    """A route the app calls whose only sign is a tested user lookup: the finding names the lookup, and so does the
+    protection, which no longer claims there was no sign at all."""
+    files = {
+        "package.json": '{"dependencies": {"express": "4"}}',
+        "server.js": (
+            "const express = require('express')\nconst { getUser } = require('./users')\nconst app = express()\n"
+            "app.delete('/notes/:id', async (req, res) => {\n  const owner = await getUser(req.body.owner)\n"
+            "  if (!owner) return res.status(404).end()\n  res.send('ok')\n})\napp.listen(3000)\n"),
+        "users.js": "export function getUser(id) { return id }\n",
+        "web/app.js": "export async function remove(id) { await fetch('/notes/' + id, {method: 'DELETE'}) }\n",
+    }
+    _write(tmp_path, files)
+    g = build_graph(tmp_path)
+    sec = scan(g)
+    (f,) = [x for x in sec["findings"] if x["rule"] == "LW-AUTH-MISSING"]
+    p = {x["id"]: x for x in assess(g, sec, {})["protections"]}["route-auth"]
+    assert p["status"] == "add"
+    assert "no sign of a login check" not in p["why"] and "record's owner" in p["why"]
+    assert p["evidence"] == ["DELETE /notes/:id (server.js:4): `getUser(req.body.owner)` looks up a user by "
+                             "`req.body.owner`, not by who is calling"]
+    assert "`getUser(req.body.owner)` looks up a user by `req.body.owner`, not by who is calling" in f["more_info"]
 
 
 def test_looking_up_the_target_user_is_not_a_login_check(tmp_path):
