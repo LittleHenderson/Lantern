@@ -1,0 +1,42 @@
+export type Recipe = { id: number; title: string; servings: number; instructions: string; photo?: string }
+
+export async function listRecipes(): Promise<Recipe[]> {
+  return (await fetch("/api/recipes")).json()
+}
+
+export async function getRecipe(id: string): Promise<Recipe> {
+  return (await fetch(`/api/recipes/${id}`)).json()
+}
+
+export async function createRecipe(title: string, servings: number, instructions: string) {
+  const res = await fetch("/api/recipes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, servings, instructions }),
+  })
+  return res.json()
+}
+
+export async function importRecipe(url: string) {
+  const res = await fetch("/api/recipes/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  })
+  return res.json()
+}
+
+export async function uploadPhoto(id: number, file: File) {
+  const form = new FormData()
+  form.append("file", file)
+  return fetch(`/api/recipes/${id}/photo`, { method: "POST", body: form })
+}
+
+export async function suggestRecipe(ingredients: string): Promise<string> {
+  const res = await fetch("/api/suggest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ingredients }),
+  })
+  return (await res.json()).text
+}

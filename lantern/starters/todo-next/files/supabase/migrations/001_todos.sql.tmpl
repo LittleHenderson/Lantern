@@ -1,0 +1,8 @@
+-- Run this in the Supabase SQL editor (or with `supabase db push`).
+create table public.todos (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users (id),
+  title text not null,
+  done boolean not null default false,
+  created_at timestamptz not null default now()
+);

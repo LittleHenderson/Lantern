@@ -1,0 +1,54 @@
+"use client"
+import { useEffect, useState } from "react"
+import { supabase } from "@/lib/supabase"
+
+type Todo = { id: number; title: string; done: boolean }
+
+async function authHeaders() {
+  const { data } = await supabase.auth.getSession()
+  return { Authorization: `Bearer ${data.session?.access_token ?? ""}` }
+}
+
+export default function TodoList() {
+  const [todos, setTodos] = useState<Todo[]>([])
+  const [title, setTitle] = useState("")
+
+  async function load() {
+    const res = await fetch("/api/todos", { headers: await authHeaders() })
+    if (res.ok) setTodos(await res.json())
+  }
+
+  async function addTodo() {
+    await fetch("/api/todos", { method: "POST", headers: await authHeaders(), body: JSON.stringify({ title }) })
+    setTitle("")
+    load()
+  }
+
+  async function toggle(todo: Todo) {
+    await fetch(`/api/todos/${todo.id}`, { method: "PATCH", headers: await authHeaders(), body: JSON.stringify({ done: !todo.done }) })
+    load()
+  }
+
+  async function remove(id: number) {
+    await fetch(`/api/todos/${id}`, { method: "DELETE", headers: await authHeaders() })
+    load()
+  }
+
+  useEffect(() => { load() }, [])
+
+  return (
+    <div>
+      <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What needs doing?" />
+      <button onClick={addTodo}>Add</button>
+      <ul>
+        {todos.map((t) => (
+          <li key={t.id}>
+            <input type="checkbox" checked={t.done} onChange={() => toggle(t)} />
+            {t.title}
+            <button onClick={() => remove(t.id)}>Delete</button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}

@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, pipeline
+from . import __version__, learn, pipeline
 from .providers import PRESETS
 
 VIEWER = Path(__file__).parent / "viewer"
@@ -199,7 +199,8 @@ class App:
                 "shape": _str(rd.get("shape")),
                 "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
                 "finished_at": _str(run.get("finished_at")),
-                "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"]}
+                "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"],
+                "starter": learn.starter_of(Path(p["path"]))}
 
     def provider_info(self) -> list[dict]:
         rows = []
@@ -408,6 +409,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(j) if j else self._err(404, "no such job")
         if path == "/api/fs":
             return self._json(_list_dir((q.get("path") or [""])[0]))
+        if path == "/api/starters":
+            return self._json({"starters": learn.catalog(), "default_parent": str(Path.home() / "lantern-starters")})
+        m = re.fullmatch(r"/api/starters/([\w-]+)(/fix)?", path)
+        if m and m.group(1) not in learn.ids():
+            return self._err(404, "unknown starter")
+        if m and not m.group(2):
+            s = learn.get(m.group(1))
+            return self._json({k: s.get(k) for k in ("id", "title", "stack", "minutes", "summary", "run", "steps")})
+        if m:
+            text = learn.solution_text(m.group(1), (q.get("file") or [""])[0])
+            return self._json({"text": text}) if text is not None else self._err(404, "no fixed version of that file")
+        m = re.fullmatch(r"/api/projects/(\w+)/learn", path)
+        if m:
+            p = app.store.project(m.group(1))
+            sid = p and learn.starter_of(Path(p["path"]))
+            if not sid:
+                return self._err(404, "this project wasn't created from a starter")
+            return self._json(learn.progress(sid, Path(p["path"]), app.out(p)))
         m = re.fullmatch(r"/api/projects/(\w+)/plan", path)
         if m:
             p = app.store.project(m.group(1)) or {}
@@ -442,6 +461,18 @@ class Handler(BaseHTTPRequestHandler):
             if not d.is_dir():
                 raise ValueError(f"not a folder: {raw}")
             return self._json(app.summary(app.store.add_project(d)))
+        if path == "/api/starters" and method == "POST":
+            s = learn.get(str(b.get("id") or ""))
+            parent = Path(os.path.expanduser(str(b.get("parent") or "").strip() or Path.home() / "lantern-starters"))
+            dest = parent / s["id"]
+            n = 2
+            while dest.exists():
+                dest, n = parent / f"{s['id']}-{n}", n + 1
+            learn.scaffold(s["id"], dest)
+            proj = app.store.add_project(dest)
+            privacy = app.store.settings().get("privacy", "full")
+            job = app.jobs.start(proj["id"], "analyze", lambda log: pipeline.analyze(dest, app.out(proj), privacy, log=log))
+            return self._json({"project": app.summary(proj), "job": job}, 201)
         if path == "/api/settings":
             s = app.store.settings()
             for k in ("provider", "model", "base_url", "privacy"):

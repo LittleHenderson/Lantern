@@ -1,0 +1,30 @@
+import express from "express"
+import crypto from "node:crypto"
+import { saveLink, findLink, countClick, removeLink, setup } from "./db.js"
+import { isAlive, fetchTitle } from "./check.js"
+
+const app = express()
+app.use(express.json())
+app.use(express.static("public"))
+
+app.post("/api/links", async (req, res) => {
+  const { url } = req.body
+  if (!(await isAlive(url))) return res.status(400).json({ error: "That link doesn't seem to work" })
+  const code = crypto.randomBytes(4).toString("hex")
+  await saveLink(code, url)
+  res.json({ code, title: await fetchTitle(url) })
+})
+
+app.delete("/api/links/:code", async (req, res) => {
+  await removeLink(req.params.code)
+  res.json({ ok: true })
+})
+
+app.get("/:code", async (req, res) => {
+  const link = await findLink(req.params.code)
+  if (!link) return res.status(404).send("No such link")
+  await countClick(req.params.code)
+  res.redirect(link.url)
+})
+
+setup().then(() => app.listen(process.env.PORT || 3000, () => console.log("Listening on http://localhost:3000")))

@@ -1,0 +1,38 @@
+"""The Notes API: sign up, log in, write notes, search them."""
+from fastapi import FastAPI, Form, Header, HTTPException
+
+from . import db
+from .auth import check_password, current_user, hash_password, make_token
+
+app = FastAPI(title="Notes API")
+db.init()
+
+
+@app.post("/signup")
+def signup(username: str = Form(...), password: str = Form(...)):
+    db.create_user(username, hash_password(password))
+    return {"ok": True}
+
+
+@app.post("/login")
+def login(username: str = Form(...), password: str = Form(...)):
+    user = db.get_user(username)
+    if user is None or not check_password(password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Wrong username or password")
+    return {"token": make_token(user["id"])}
+
+
+@app.get("/notes")
+def list_notes(authorization: str = Header(...)):
+    return db.list_notes(current_user(authorization))
+
+
+@app.post("/notes")
+def add_note(text: str = Form(...), authorization: str = Header(...)):
+    note_id = db.add_note(current_user(authorization), text)
+    return {"id": note_id}
+
+
+@app.get("/notes/search")
+def search_notes(q: str, authorization: str = Header(...)):
+    return db.search_notes(current_user(authorization), q)

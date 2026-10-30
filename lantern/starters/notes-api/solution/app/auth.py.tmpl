@@ -1,0 +1,37 @@
+"""Passwords and login tokens."""
+import hashlib
+import hmac
+import os
+import secrets
+
+from fastapi import HTTPException
+
+# Read from the environment so the real key never lives in the code. Generate one with:
+#   python -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY = os.environ.get("NOTES_SECRET_KEY") or secrets.token_hex(32)
+
+
+def hash_password(password, salt=None):
+    """scrypt is deliberately slow, so a leaked database can't be cracked in an afternoon."""
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1)
+    return salt.hex() + "$" + digest.hex()
+
+
+def check_password(password, password_hash):
+    salt_hex, _, _ = password_hash.partition("$")
+    return hmac.compare_digest(hash_password(password, bytes.fromhex(salt_hex)), password_hash)
+
+
+def make_token(user_id):
+    sig = hmac.new(SECRET_KEY.encode(), str(user_id).encode(), "sha256").hexdigest()
+    return f"{user_id}.{sig}"
+
+
+def current_user(authorization):
+    """Turn the `Authorization: Bearer <token>` header into a user id, or refuse."""
+    token = authorization.removeprefix("Bearer ").strip()
+    user_id, _, sig = token.partition(".")
+    if not user_id or not hmac.compare_digest(make_token(user_id), token):
+        raise HTTPException(status_code=401, detail="Please log in")
+    return int(user_id)

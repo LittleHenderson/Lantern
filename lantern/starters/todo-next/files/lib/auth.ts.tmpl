@@ -1,0 +1,8 @@
+import { supabase } from "@/lib/supabase"
+
+// Reads "Authorization: Bearer <token>" and asks Supabase who it belongs to.
+export async function requireUser(req: Request) {
+  const token = (req.headers.get("authorization") ?? "").replace("Bearer ", "")
+  const { data } = await supabase.auth.getUser(token)
+  return data.user
+}

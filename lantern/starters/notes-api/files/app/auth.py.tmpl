@@ -1,0 +1,29 @@
+"""Passwords and login tokens."""
+import hashlib
+import hmac
+
+from fastapi import HTTPException
+
+SECRET_KEY = "my-super-secret-key-123"
+
+
+def hash_password(password):
+    return hashlib.md5(password.encode()).hexdigest()
+
+
+def check_password(password, password_hash):
+    return hmac.compare_digest(hash_password(password), password_hash)
+
+
+def make_token(user_id):
+    sig = hmac.new(SECRET_KEY.encode(), str(user_id).encode(), "sha256").hexdigest()
+    return f"{user_id}.{sig}"
+
+
+def current_user(authorization):
+    """Turn the `Authorization: Bearer <token>` header into a user id, or refuse."""
+    token = authorization.removeprefix("Bearer ").strip()
+    user_id, _, sig = token.partition(".")
+    if not user_id or not hmac.compare_digest(make_token(user_id), token):
+        raise HTTPException(status_code=401, detail="Please log in")
+    return int(user_id)

@@ -1,0 +1,104 @@
+{
+  "order": 4,
+  "title": "Link shortener with Express",
+  "stack": "JavaScript · Node.js · Express · Postgres",
+  "level": "Backend",
+  "minutes": 25,
+  "summary": "Paste a long link, get a short one. A plain JavaScript server with a tiny web page. The first draft builds SQL and shell commands out of whatever the user typed, turns off HTTPS certificate checks, lets anyone delete any link, and runs an Express version with known vulnerabilities.",
+  "teaches": ["Map for a plain JS server", "SQL injection", "Command injection", "TLS checks", "Ownership checks", "Rate limiting and headers", "Accepting a risk", "npm dependency audit"],
+  "run": [
+    "npm install",
+    "cp .env.example .env              # point DATABASE_URL at any Postgres (Supabase, Neon, or local)",
+    "node --env-file=.env src/server.js  # http://localhost:3000"
+  ],
+  "steps": [
+    {
+      "id": "analyze", "title": "Create the app and analyze it", "feature": "findings",
+      "body": [
+        "Lantern wrote the app and analyzed it. Three findings are critical. Each one is reachable from a URL anyone can call, and each one uses what the user sent."
+      ],
+      "check": {"kind": "analyzed"}
+    },
+    {
+      "id": "map", "title": "Follow the Shorten button", "feature": "atlas",
+      "body": [
+        "Open the **Atlas**. The server's routes are on the left: `POST /api/links`, `DELETE /api/links/:code` and `GET /:code`.",
+        "Pick `POST /api/links`. The handler calls `isAlive`, then `saveLink` and `fetchTitle`. The browser side is linked too: `shorten` in `public/app.js` sends **HTTP POST /api/links** to this handler."
+      ]
+    },
+    {
+      "id": "sql", "title": "Stop SQL injection", "feature": "findings",
+      "body": [
+        "`saveLink` and `findLink` paste values into SQL with `${...}`. A short code like `x' OR '1'='1` changes what the query does.",
+        "Postgres has placeholders built in: write `$1`, `$2` in the query and pass the values as an array. `countClick` and `removeLink` already do it this way."
+      ],
+      "prompt": "In src/db.js, rewrite saveLink and findLink to use $1/$2 placeholders with a values array instead of template strings.",
+      "fix_files": ["src/db.js"],
+      "check": {"kind": "cleared", "rules": ["LJ-SQL-CONCAT"]}
+    },
+    {
+      "id": "exec", "title": "Don't build shell commands from input", "feature": "findings",
+      "body": [
+        "`isAlive` runs `curl` through the shell with the user's URL glued on. Submitting `https://x.com; rm -rf ~` runs the second command on your server. That's the most dangerous finding in this app.",
+        "Node can check a URL itself with `fetch`, with no shell involved. While you're in `src/check.js`, also remove `rejectUnauthorized: false`: it turns off HTTPS certificate checks, so anyone between your server and the site could feed it fake pages."
+      ],
+      "prompt": "In src/check.js, replace the exec/curl call with fetch(new URL(url), { method: 'HEAD' }) with a 5 second timeout, only allowing http(s) URLs, and fetch titles with fetch instead of https.get with rejectUnauthorized: false.",
+      "fix_files": ["src/check.js"],
+      "check": {"kind": "cleared", "rules": ["LJ-EXEC", "LJ-TLS-OFF"]}
+    },
+    {
+      "id": "owner", "title": "Only the creator can delete a link", "feature": "findings",
+      "body": [
+        "`DELETE /api/links/:code` deletes any link for anyone. There are no accounts in this app, so here's a simple, real fix: when a link is created, give the creator a random **delete token**, and require that token to delete it.",
+        "Lantern looks for a check with a name like `verify...` or `...token` on the route's path, so name the helper `verifyDeleteToken`. Because this check is a heuristic, the finding is labeled that way in the viewer."
+      ],
+      "prompt": "Add a delete_token column; generate a random token in POST /api/links and return it; add verifyDeleteToken(req) in server.js comparing the X-Delete-Token header with crypto.timingSafeEqual and return 403 if it fails; send the header from public/app.js.",
+      "fix_files": ["src/server.js", "src/db.js", "public/app.js"],
+      "check": {"kind": "cleared", "rules": ["LW-AUTH-MISSING"], "match": "DELETE"}
+    },
+    {
+      "id": "protections", "title": "Add rate limiting and security headers", "feature": "ready",
+      "body": [
+        "Under Readiness, **Protections to add** lists rate limiting (a script could create millions of links) and security headers. For Express, both are one line each: `express-rate-limit` and `helmet`."
+      ],
+      "commands": ["npm install helmet express-rate-limit"],
+      "fix_files": ["src/server.js", "package.json"],
+      "check": {"kind": "protection", "ids": ["rate-limit", "security-headers"]}
+    },
+    {
+      "id": "accept", "title": "Accept that creating links is public", "feature": "findings",
+      "body": [
+        "`POST /api/links` is still flagged as changing data without a login. For a public link shortener that's the point: anyone may shorten a link, and the rate limit you just added keeps it in check.",
+        "Accept it with that reason (\"Accept risk...\" in Findings, or the command below). The Evidence Report will show your reasoning."
+      ],
+      "commands": ["lantern accept . <finding-id> --reason \"Public by design: anyone may shorten a link; rate limited to 20 per minute\""],
+      "check": {"kind": "accepted_or_cleared", "rules": ["LW-AUTH-MISSING"], "match": "POST"}
+    },
+    {
+      "id": "deps", "title": "Upgrade Express", "feature": "findings",
+      "body": [
+        "`express 4.17.1` pulls in old versions of `body-parser`, `qs`, `path-to-regexp` and others with published vulnerabilities, found by `npm audit` reading `package-lock.json`.",
+        "Upgrade to Express 5. The routes in this app work unchanged. If this step shows \"didn't run\", analyze again with internet access."
+      ],
+      "commands": ["npm install express@latest", "npm audit"],
+      "fix_files": ["package.json"],
+      "check": {"kind": "deps_clean"}
+    },
+    {
+      "id": "ready", "title": "Get it ready to ship", "feature": "ready",
+      "body": [
+        "Look at the grade and the deployment advice. Write a Dockerfile and SECURITY.md with the buttons in the Readiness tab."
+      ],
+      "commands": ["lantern starter . --write Dockerfile SECURITY.md"],
+      "check": {"kind": "exists", "files": ["Dockerfile", "SECURITY.md"]}
+    },
+    {
+      "id": "evidence", "title": "Prove it with the Evidence Report", "feature": "evidence",
+      "body": [
+        "Commit, analyze again, and open the **Evidence Report**: what you fixed, what you accepted and why, and a digest anyone can re-check with `lantern verify`."
+      ],
+      "commands": ["git init && git add . && git commit -m \"Secure the link shortener\"", "lantern analyze .", "lantern verify . --report .lantern/evidence.html"],
+      "check": {"kind": "fixed"}
+    }
+  ]
+}

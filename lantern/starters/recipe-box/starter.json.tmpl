@@ -1,0 +1,112 @@
+{
+  "order": 3,
+  "title": "Recipe box: React frontend, Python backend",
+  "stack": "TypeScript · React + Vite · Python · FastAPI",
+  "level": "Full stack",
+  "minutes": 30,
+  "summary": "Save recipes, import them from a web page, add photos, and ask an AI for ideas. The frontend is React and the backend is Python, and Lantern maps both as one app. The first draft runs typed text as code, renders untrusted HTML, puts an OpenAI key in the browser, and lets any website call the API.",
+  "teaches": ["Map across two languages", "Reachability from a click", "Cross-site scripting", "Browser-exposed secrets", "CORS", "Protections: SSRF, uploads, headers", "Accepting a risk", "Evidence Report"],
+  "run": [
+    "python -m venv .venv && source .venv/bin/activate   # Windows: .venv\\Scripts\\activate",
+    "pip install -r requirements.txt",
+    "uvicorn api.main:app --reload --port 8000",
+    "# in a second terminal:",
+    "cd web && npm install && npm run dev                # http://localhost:5173"
+  ],
+  "solution_delete": ["web/.env.example"],
+  "steps": [
+    {
+      "id": "analyze", "title": "Create the app and analyze it", "feature": "findings",
+      "body": [
+        "Lantern wrote the app (a `web/` folder in TypeScript and an `api/` folder in Python) and analyzed both together."
+      ],
+      "check": {"kind": "analyzed"}
+    },
+    {
+      "id": "map", "title": "Follow a click from React into Python", "feature": "atlas",
+      "body": [
+        "Open the **Atlas** and pick the `/new` page. Follow the Import button: `NewRecipe` to `importFromWeb` to `importRecipe`, then **HTTP POST /api/recipes/import** into the Python function `import_recipe`, then `fetch_page`.",
+        "One path, two languages. Lantern linked the browser's `fetch` to the FastAPI route by method and path. `suggestRecipe` instead shows an arrow to an external service (`api.openai.com`), straight from the browser. Remember that for step 5."
+      ]
+    },
+    {
+      "id": "eval", "title": "Never run typed text as code", "feature": "findings",
+      "body": [
+        "On the recipe page, the Scale box uses `eval(scale)` so that \"3/2\" works. But `eval` runs whatever is typed as JavaScript. Combined with a shared link or a stored value, that becomes a way to run code in someone else's browser.",
+        "Lantern shows this as reachable from a page. Use `Number(scale)` and accept decimals like 1.5 instead."
+      ],
+      "prompt": "In web/src/pages/RecipePage.tsx, replace eval(scale) with Number(scale), falling back to the original servings when it isn't a positive number.",
+      "fix_files": ["web/src/pages/RecipePage.tsx"],
+      "check": {"kind": "cleared", "rules": ["LJ-EVAL"]}
+    },
+    {
+      "id": "xss", "title": "Show instructions as text, not HTML", "feature": "findings",
+      "body": [
+        "`dangerouslySetInnerHTML` puts the recipe's instructions into the page as raw HTML. Imported recipes come from other websites, so a page with a `<script>` or an `<img onerror=...>` would run inside your app (cross-site scripting).",
+        "Render the text normally (React escapes it) and keep the line breaks with `white-space: pre-wrap`."
+      ],
+      "prompt": "In RecipePage.tsx, replace dangerouslySetInnerHTML with a div that renders recipe.instructions as text with whiteSpace: 'pre-wrap'.",
+      "fix_files": ["web/src/pages/RecipePage.tsx"],
+      "check": {"kind": "cleared", "rules": ["LJ-XSS-HTML"]}
+    },
+    {
+      "id": "key", "title": "Move the OpenAI key to the server", "feature": "findings",
+      "body": [
+        "`VITE_OPENAI_SECRET_KEY` is read in `web/src/api.ts`. Vite copies every `VITE_` variable into the JavaScript it serves, so every visitor gets your key and can run up your bill.",
+        "Add a `/api/suggest` route to the Python API that calls OpenAI with a server-only `OPENAI_API_KEY`, and have the browser call that route. Then delete `web/.env.example`. The Atlas will show `suggestRecipe` going to your own backend instead of straight to OpenAI.",
+        "Lantern catches this one because the name contains SECRET. A key named plainly `VITE_OPENAI_API_KEY` is just as exposed, so treat any key that costs money or grants access as secret."
+      ],
+      "prompt": "Move the OpenAI call to the backend: add POST /api/suggest in api/main.py using OPENAI_API_KEY from the environment and httpx, make suggestRecipe in web/src/api.ts call /api/suggest, and delete web/.env.example.",
+      "fix_files": ["api/main.py", "web/src/api.ts", ".env.example"],
+      "check": {"kind": "cleared", "rules": ["LW-PUBLIC-SECRET"]}
+    },
+    {
+      "id": "cors", "title": "Let only your own frontend call the API", "feature": "findings",
+      "body": [
+        "The API allows CORS from `*` with credentials. That tells browsers that any website a user visits may call your API on their behalf.",
+        "List the frontend's address instead (`http://localhost:5173` while developing, your real domain later), read from an environment variable."
+      ],
+      "prompt": "In api/main.py, replace allow_origins=['*'] with a list read from the FRONTEND_ORIGINS environment variable (default http://localhost:5173), and only allow GET and POST.",
+      "fix_files": ["api/main.py"],
+      "check": {"kind": "cleared", "rules": ["LW-CORS-ANY"]}
+    },
+    {
+      "id": "protections", "title": "Add the three protections Lantern suggests", "feature": "ready",
+      "body": [
+        "Readiness, then **Protections to add**. Each item says why it applies to this code:",
+        "**Allow-list for outgoing requests**: `fetch_page` downloads any URL a user types. Someone could type `http://169.254.169.254/` and make your server read its own cloud credentials (SSRF). Only allow a fixed list of recipe sites, over https.",
+        "**Upload size and type checks**: `upload_photo` saves any file, of any size, under the name the uploader chose (`../../something` included). Check the type, cap the size, and pick the file name yourself.",
+        "**Security headers**: add a small middleware that sets them on every response."
+      ],
+      "prompt": "In api/main.py: add an ALLOWED_HOSTS allow-list and https-only check in fetch_page; in upload_photo accept only JPEG/PNG/WebP up to 5 MB and save as recipe-<id>.<ext>; add an HTTP middleware setting X-Content-Type-Options, X-Frame-Options and Content-Security-Policy.",
+      "fix_files": ["api/main.py"],
+      "check": {"kind": "protection", "ids": ["ssrf-allowlist", "upload-checks", "security-headers"]}
+    },
+    {
+      "id": "accept", "title": "Accept a risk on purpose, with a reason", "feature": "findings",
+      "body": [
+        "Lantern still flags the routes that change data because none of them check who's logged in. For a personal recipe box running on your own laptop, that can be a fair decision. For anything on the internet, it isn't.",
+        "Lantern won't let you hide a finding, but you can **accept** it with a written reason. In Findings, use \"Accept risk...\" on each one, or run the command below with the finding's id. The reason is saved in `lantern-accepted.json` (commit it) and shown in the Evidence Report, so a reviewer sees your decision instead of a silent gap.",
+        "If you later put the app online, remove the acceptance (`lantern accept . ID --remove`) and add login."
+      ],
+      "commands": ["lantern accept . <finding-id> --reason \"Personal app that only runs on my own computer; add login before deploying\""],
+      "check": {"kind": "accepted_or_cleared", "rules": ["LW-AUTH-MISSING"]}
+    },
+    {
+      "id": "ready", "title": "Get it ready to ship", "feature": "ready",
+      "body": [
+        "Check the Readiness grade. Lantern recognizes this as a full-stack app and suggests a deployment shape and starter files. Write the ones you want with the buttons."
+      ],
+      "commands": ["lantern starter . --write SECURITY.md"],
+      "check": {"kind": "exists", "files": ["SECURITY.md"]}
+    },
+    {
+      "id": "evidence", "title": "Prove it with the Evidence Report", "feature": "evidence",
+      "body": [
+        "The Evidence Report now shows three kinds of findings: fixed (with before and after counts), accepted (with your reasons), and anything still open. That's the honest picture an engineer wants to see."
+      ],
+      "commands": ["git init && git add . && git commit -m \"Secure the recipe box\"", "lantern analyze .", "lantern verify . --report .lantern/evidence.html"],
+      "check": {"kind": "fixed"}
+    }
+  ]
+}

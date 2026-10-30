@@ -1,0 +1,27 @@
+import pg from "pg"
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
+
+export async function setup() {
+  await pool.query(
+    "CREATE TABLE IF NOT EXISTS links (code TEXT PRIMARY KEY, url TEXT NOT NULL, clicks INT DEFAULT 0, delete_token TEXT)",
+  )
+}
+
+// $1, $2 are placeholders: the database receives the values separately, so they can never change the query.
+export async function saveLink(code, url, deleteToken) {
+  await pool.query("INSERT INTO links (code, url, delete_token) VALUES ($1, $2, $3)", [code, url, deleteToken])
+}
+
+export async function findLink(code) {
+  const { rows } = await pool.query("SELECT url, delete_token FROM links WHERE code = $1", [code])
+  return rows[0]
+}
+
+export async function countClick(code) {
+  await pool.query("UPDATE links SET clicks = clicks + 1 WHERE code = $1", [code])
+}
+
+export async function removeLink(code) {
+  await pool.query("DELETE FROM links WHERE code = $1", [code])
+}
