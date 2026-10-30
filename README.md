@@ -5,8 +5,9 @@
 them, explains each function three ways, and audits it with security checks ranked by whether a user
 can actually reach the problem.
 
-> Working title. Built from the product spec in [`docs/`](docs/Lantern_Product_Spec_v0.2.pdf). Status: Phase 0 spike plus the
-> full-stack layer (v0.1). No PWA or cloud mode yet.
+> Working title. Built from the product spec in [`docs/`](docs/Lantern_Product_Spec_v0.2.pdf). Status: v0.1, the local
+> product: map, Three-Lens explanations with your own key, security audit, readiness grade, and Evidence Report, all in a
+> local app. Cloud mode and device pairing are not built yet.
 
 ```
 /admin page → BackupButton ─on click→ start → runBackup ─HTTP POST /backup→ backup() → subprocess(shell=True)   CRITICAL
@@ -22,12 +23,44 @@ security findings, and the reachability paths are computed by parsers and scanne
 repeatable. A model of your choosing only explains them, and every plain-English phrase it writes must
 anchor to a real symbol, line, or term in your code, or the explanation is rejected.
 
-## Quick start
+## Run it (one command)
+
+You need Python 3.11 or newer. Then:
 
 ```bash
-pip install -e ".[scan,dev]"            # Python 3.11+
+pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"
+lantern serve path/to/your/app
+```
 
-lantern analyze path/to/repo            # graph + bridge + security scan + report
+Your browser opens Lantern. The app is analyzed on first open (a few seconds), and from there you can:
+
+* **Projects**: add more folders (type a path or browse), re-analyze, see each project's grade and open findings.
+* **Atlas**: pick a page or API route and follow its path, through clicks and HTTP calls, down to the database.
+  Click any function for what it does; "Explain with …" asks your model for the three lenses.
+* **Findings**: security problems ranked by severity and by whether a user can reach them. "Accept risk…" records a
+  written reason instead of hiding the finding.
+* **Readiness**: a 0–100 grade across ten areas with what to fix first, a deployment recommendation, and starter files
+  (Dockerfile, CI workflow, `.env.example`, SECURITY.md) you can write with one click. Lantern never overwrites a file.
+* **Evidence Report**: a commit-pinned summary for a reviewer, with a "Save as PDF" button.
+* **Settings**: choose a model (Anthropic, OpenAI, OpenRouter, Mistral, Gemini, DeepSeek, or a local Ollama / LM Studio model) and
+  paste your key. Keys stay in memory unless you tick "remember". Lantern says plainly when code would leave your
+  computer; local models keep everything on it.
+
+Lantern only reads your code; it never runs it (unless you ask for `--trace` on the command line). The app listens on
+127.0.0.1 only and needs the one-time link it prints. It installs as an app from the browser (PWA) and keeps
+recently opened reports available offline.
+
+No key yet? Try the full flow with the offline demo model: `python tools/fake_model.py 8799`, then in Settings pick
+`openai-compatible`, model `demo`, base URL `http://127.0.0.1:8799/v1`, and open `tests/fixtures/shop`.
+
+From a clone instead: `git clone https://github.com/LittleHenderson/Lantern && cd Lantern && pip install -e ".[scan,dev]"`.
+
+## Command line
+
+Everything in the app also works from the terminal, for CI and scripts:
+
+```bash
+lantern analyze path/to/repo            # graph + bridge + security scan + readiness + report + evidence
 open path/to/repo/.lantern/report.html  # self-contained, works offline and on a phone
 ```
 
@@ -63,7 +96,7 @@ lantern explain path/to/repo --model anthropic/<model-name>
 lantern explain path/to/repo --model ollama/<model-name>          # local, nothing leaves your machine
 ```
 
-Providers: `anthropic`, `openai`, `openrouter`, `mistral`, `gemini` (keys from `<NAME>_API_KEY`),
+Providers: `anthropic`, `openai`, `openrouter`, `mistral`, `gemini`, `deepseek` (keys from `<NAME>_API_KEY`),
 `ollama`, `lmstudio`, and any `openai-compatible` endpoint (`--base-url`). Explanations are cached by a
 hash of each function's code.
 

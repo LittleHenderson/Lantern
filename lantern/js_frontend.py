@@ -27,7 +27,7 @@ import tree_sitter_typescript as tst
 from tree_sitter import Language, Node as TSNode, Parser
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS
+from .python_frontend import SKIP_DIRS, inside_repo
 
 LANGS = {
     ".ts": Language(tst.language_typescript()),
@@ -744,6 +744,8 @@ def discover(repo: Path) -> list[Path]:
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.startswith("."))
         for fn in sorted(filenames):
             p = Path(dirpath) / fn
+            if not inside_repo(p, repo):
+                continue
             if p.suffix in LANGS and not fn.endswith((".d.ts", ".min.js", ".bundle.js")) \
                     and not fn.startswith(("vite.config", "next.config", "tailwind.config", "postcss.config",
                                            "eslint.config", "jest.config", "vitest.config", "playwright.config",

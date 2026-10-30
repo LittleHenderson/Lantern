@@ -15,7 +15,7 @@ from collections import deque
 from pathlib import Path
 
 from .graph import Graph
-from .python_frontend import SKIP_DIRS
+from .python_frontend import SKIP_DIRS, inside_repo
 
 UNTRUSTED_ENTRY_KINDS = {"route", "cli", "main", "script"}
 
@@ -115,7 +115,8 @@ def run_secrets(repo: Path) -> tuple[list[dict], dict]:
             pass  # fall through to the built-in patterns below
     out = []
     for p in repo.rglob("*"):
-        if not p.is_file() or any(part in SKIP_DIRS for part in p.relative_to(repo).parts[:-1]):
+        if not p.is_file() or any(part in SKIP_DIRS for part in p.relative_to(repo).parts[:-1]) \
+                or not inside_repo(p, repo):
             continue
         if p.suffix not in SECRET_EXTS and not p.name.startswith(".env"):
             continue
