@@ -70,7 +70,7 @@ def _files(repo: Path, exts=None, names=None):
         if not p.is_file():
             continue
         parts = p.relative_to(repo).parts
-        if any(x in SKIP_DIRS for x in parts):
+        if any(x in SKIP_DIRS for x in parts[:-1]):   # a file named .env is not the .env/ venv folder
             continue
         if p.name.endswith((".min.js", ".map", ".d.ts")) or p.name in ("package-lock.json", "bun.lock"):
             continue

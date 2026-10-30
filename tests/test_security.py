@@ -67,3 +67,12 @@ def test_secret_scan_covers_frontend_files(tmp_path):
     g = build_graph(tmp_path)
     files = sorted(f["file"] for f in scan(g)["findings"] if f["category"] == "secret")
     assert files == ["src/Pay.tsx", "src/api.ts"]
+
+
+def test_secret_scans_read_dotenv_files(tmp_path):
+    # `.env` is in SKIP_DIRS (as a virtualenv folder name); a *file* named .env must still be scanned
+    (tmp_path / ".env").write_text("STRIPE_KEY=sk_live_" + "d" * 24 + "\nNEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY=eyJx\n")
+    g = build_graph(tmp_path)
+    rules = {f["rule"] for f in scan(g)["findings"] if f["file"] == ".env"}
+    assert "stripe-live-key" in rules        # security.run_secrets
+    assert "LW-PUBLIC-SECRET" in rules       # websec.exposed_secrets
