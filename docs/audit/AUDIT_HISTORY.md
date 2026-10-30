@@ -82,3 +82,22 @@ ALL PASS), then found one medium and one low problem in the login check and revi
 Still untested: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine digests, flask
 and rich benchmarks, real cross-origin CSRF, server concurrency, regex exhaustion, `--host 0.0.0.0`, and the `.npmrc`
 scoped-registry override.
+
+## 2026-10-30 · re-audit of commit 23877e6
+
+The same auditor confirmed both round-four fixes (request data is data; finding and protection name the same sign) on
+Windows and Linux (185 tests, self-audit 0/0/0, `tools/audit.sh` ALL PASS) and audited the repository-link feature as new
+code: 18 of 18 links behaved (loopback, private addresses, look-alike hosts, `http://`, `git://`, credentials, `..`,
+`..%2f` and an option-shaped branch refused; GitHub, GitLab, Codeberg and `git@host:owner/name` accepted;
+`LANTERN_GIT_HOSTS` only while set), the size cap refused a 1.25 MB repository at `LANTERN_CLONE_MAX_MB=1` and the folder
+was gone afterwards, the server answered 400/403/202 as designed, and the CLI analyzed a public repository end to end.
+Two things remained. Fixed in PR #PRNUM.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| R1 | A helper whose name merely contains an auth word turned the login tick green: `words = tokenize(payload.get("text"))` gave "in place" with the evidence "calls `tokenize`" (the substring `token`); so did `load_permissions(...)` and `protect_zone(...)`. The unsafe mirror image of the documented "a check hidden behind `load()` is missed" | low/medium | Fixed: auth words match whole name segments. A name is split on `_`, `.`, `$` and camelCase (`websec.segments`: `getServerSession` → "get server session", `OAuth2PasswordBearer` → "o auth 2 password bearer") and a word must match between word boundaries (`websec.auth_word`), in decorators, parameter types and defaults, called functions and the handler's own lines alike. `get_token`, `has_permission`, `protectedProcedure`, `AuthGuard` and `jwt.decode` count; `tokenize`, `load_permissions` (plural: a list, not a check), `protect_zone`, `count_tokens`, `generate_csrf_token`, `guard_rail` and `author` do not. `protect` and `requires` count only as a whole name (`protect()`, Starlette's `@requires(...)`); `getSession`/`useSession`/`getServerSession` count only in JavaScript, where they read the login, since a Python `get_session` is a database session |
+| R2 | The size-cap message rounded both numbers to whole megabytes: "files add up to 1 MB, above Lantern's 1 MB limit" for a 1.25 MB repository at a 1 MB cap | low | Fixed: one decimal ("1.3 MB, above Lantern's 1 MB limit") |
+| – | From the untested list: a clone that is slow rather than large | note | `git` is stopped after 900 s with a plain message; the partial folder it leaves is now removed, as is the folder of a clone git itself refused (`tests/test_remote.py`). The name-blanking pass was made linear in the number of names and a 100 KB hostile handler (unbalanced brackets, long chains, escaped quotes, 1,500 chained names) is read in bounded time (`tests/test_fullstack.py`). Cross-site writes were already covered: a write needs the token in the `X-Lantern-Token` header, which a page on another origin cannot add, and the cookie alone is refused (`tests/test_server.py`); `npm audit` was already pinned to the public registry so a repository's `.npmrc` cannot redirect it (`tests/test_depaudit.py`). With `--host 0.0.0.0` the Host check still admits only `127.0.0.1`, `localhost`, `[::1]` and `LANTERN_ALLOWED_HOST`, so a request from another machine is refused until that variable names the address used |
+
+Still untested: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine digests, flask
+and rich benchmarks, real cross-origin CSRF in a browser, server concurrency.

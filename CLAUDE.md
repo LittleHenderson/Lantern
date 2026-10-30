@@ -126,7 +126,9 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
   block level clears `x`; a default inside an `if` (`if not x: x = "ls"`) does not, and neither does `x += ...`,
   so a value that is always replaced inside a branch stays ranked critical (the safe direction).
 * The login check (`LW-AUTH-MISSING`, protection `route-auth`) reads names, not meaning: strings, comments, request
-  data and the names that hold it are blanked first; an auth word counts only as a call or an attribute, a parameter
+  data and the names that hold it are blanked first; an auth word must be a whole segment of a name (`get_token`,
+  `has_permission`, `protectedProcedure`; not `tokenize`, `load_permissions`, `protect_zone`; `websec.auth_word`) and
+  counts only as a call or an attribute, a parameter
   only through a dependency, type, injected header or cookie, or caller name; a user lookup counts only when its
   argument identifies the caller (a token, session or request parameter, a `_by_token` lookup, or no argument at all,
   which is taken as "the session", deliberately) and is otherwise at most `check`, which includes a token read from

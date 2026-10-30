@@ -116,15 +116,22 @@ def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900) -
     are measured from the index and refused above the size cap, then checked out. RuntimeError with a plain message."""
     args = (["clone", "--depth", "1", "--single-branch", "--no-checkout"] + (["--branch", branch] if branch else [])
             + ["--", url, str(dest)])
-    r = _git(args, cwd=None, timeout=timeout)
+    try:
+        r = _git(args, cwd=None, timeout=timeout)
+    except RuntimeError:
+        if dest.is_dir():   # a clone stopped by the timeout can leave a partial folder behind
+            _rmtree(dest)
+        raise
     if r.returncode != 0:
+        if dest.is_dir():
+            _rmtree(dest)
         raise RuntimeError("could not clone it: " + _tail(r.stderr) +
                            ". If the repository is private, clone it yourself and add the folder.")
     cap = max_mb()
     size = tree_mb(dest)
     if cap and size > cap:
         _rmtree(dest)
-        raise RuntimeError(f"the repository's files add up to {size:,.0f} MB, above Lantern's {cap} MB limit "
+        raise RuntimeError(f"the repository's files add up to {size:,.1f} MB, above Lantern's {cap} MB limit "
                            "(LANTERN_CLONE_MAX_MB). Clone it yourself and add the folder.")
     r = _git(["reset", "--hard", "--quiet"], cwd=dest, timeout=timeout)
     if r.returncode != 0:

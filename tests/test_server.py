@@ -233,3 +233,15 @@ def test_non_ascii_token_is_refused_not_crashed(srv):
     base, _ = srv
     code, _ = call(base, "/?token=%C3%A9", cookie=False, token=None)
     assert code == 403
+
+
+def test_another_machine_needs_its_address_allowed(srv, monkeypatch):
+    """`lantern serve --host 0.0.0.0` listens on every interface, but the Host check still admits only this machine's
+    own names until LANTERN_ALLOWED_HOST names the address the other machine uses, so DNS rebinding stays blocked."""
+    base, _ = srv
+    port = base.rsplit(":", 1)[1]
+    monkeypatch.delenv("LANTERN_ALLOWED_HOST", raising=False)
+    assert call(base, "/api/state", host=f"192.168.1.5:{port}")[0] == 403
+    monkeypatch.setenv("LANTERN_ALLOWED_HOST", f"192.168.1.5:{port}")
+    assert call(base, "/api/state", host=f"192.168.1.5:{port}")[0] == 200
+    assert call(base, "/api/state", host=f"192.168.1.6:{port}")[0] == 403

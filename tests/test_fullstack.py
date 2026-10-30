@@ -325,3 +325,28 @@ def test_what_counts_as_a_login_check_in_a_handler():
     assert sign("def f(user_id: int):\n    u = get_user(user_id)\n    if not u: abort(404)\n", "def f(user_id: int)") == "weak"
     assert sign("def f(payload):\n    who = get_user(payload['owner'])\n    if not who:\n        abort(404)\n") == "weak"
     assert sign("def f(payload):\n    token = payload.get('token')\n    user = get_user(token)\n    return user\n") is None
+
+
+def test_login_check_reads_hostile_code_in_bounded_time():
+    """The handler-reading regexes (strings, request-data chains, name blanking, lookups) must stay linear on code
+    built to make them backtrack: unbalanced brackets, long attribute chains, escaped quotes, thousands of names."""
+    import time
+    from lantern.websec import body_auth_sign
+
+    hostile = ["def f(payload, params):"]
+    hostile.append("    x = payload" + ".a" * 3000)
+    hostile.append("    y = payload(" + "(" * 2000)
+    hostile.append("    z = \"" + "\\\"" * 5000)
+    hostile.append("    w = params[" + "[" * 3000)
+    hostile.append("    v = params" + "(a)" * 1500)
+    hostile.append("    u = `" + "${payload." * 500)
+    hostile += [f"    a{i} = a{i - 1} if a{i - 1} else payload.get('k')" for i in range(1, 1500)]
+    hostile += [f"    who{i} = get_user(a{i})" for i in range(0, 1500, 5)]
+    hostile.append("    if not who5:\n        raise ValueError")
+    src = "\n".join(hostile) + "\n"
+    assert len(src) > 100_000
+    t = time.perf_counter()
+    for js in (False, True):
+        body_auth_sign(src, 1, src.count("\n"), js, signature="def f(payload, params)")
+    took = time.perf_counter() - t
+    assert took < 5, f"{took:.1f}s on {len(src):,} bytes"

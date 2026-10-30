@@ -103,7 +103,7 @@ def test_big_repositories_are_refused_before_checkout(tmp_path, monkeypatch):
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "big"], cwd=src, check=True)
     monkeypatch.setenv("LANTERN_CLONE_MAX_MB", "2")
     dest = tmp_path / "dest"
-    with pytest.raises(RuntimeError, match="above Lantern's 2 MB limit"):
+    with pytest.raises(RuntimeError, match="add up to 2.5 MB, above Lantern's 2 MB limit"):
         remote.fetch(src.as_uri(), dest)
     assert not dest.exists()
     monkeypatch.setenv("LANTERN_CLONE_MAX_MB", "0")   # no cap
@@ -178,4 +178,26 @@ def test_a_refused_clone_is_removed_even_with_read_only_files(tmp_path):
     finally:
         if objects.exists():
             objects.chmod(0o755)
+    assert not dest.exists()
+
+
+def test_a_clone_that_times_out_or_fails_leaves_nothing_behind(tmp_path, monkeypatch):
+    """A slow clone is stopped by the timeout with a plain message; the partial folder git left is removed, and so is
+    the folder of a clone git itself refused."""
+    dest = tmp_path / "dest"
+    outcomes = iter(["timeout", "refused"])
+
+    def fake_git(args, cwd, timeout=900):
+        (dest / ".git" / "objects").mkdir(parents=True)
+        (dest / ".git" / "objects" / "pack-partial.pack").write_bytes(b"\0" * 10)
+        if next(outcomes) == "timeout":
+            raise RuntimeError(f"git took longer than {timeout} seconds; try again, or clone it yourself and add the folder.")
+        return subprocess.CompletedProcess(args, 128, "", "fatal: repository 'https://github.com/o/r/' not found")
+
+    monkeypatch.setattr(remote, "_git", fake_git)
+    with pytest.raises(RuntimeError, match="took longer than 7 seconds"):
+        remote.fetch("https://github.com/o/r", dest, timeout=7)
+    assert not dest.exists()
+    with pytest.raises(RuntimeError, match="could not clone it: fatal: repository .* not found"):
+        remote.fetch("https://github.com/o/r", dest)
     assert not dest.exists()

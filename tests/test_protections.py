@@ -227,3 +227,36 @@ def test_looking_up_the_target_user_is_not_a_login_check(tmp_path):
     _write(tmp_path, files)
     p = _prot(tmp_path)["route-auth"]
     assert p["status"] == "add" and p["evidence"] == ["POST /items (svc/main.py:8)"], p
+
+
+def test_a_helper_named_like_an_auth_word_is_not_a_login_check(tmp_path):
+    """`words = tokenize(payload.get("text"))` gave "in place" with the evidence "calls `tokenize`" (the substring
+    `token`); so did `load_permissions(...)` and `protect_zone(...)`. Auth words now match whole name segments, so
+    these are nothing, while `get_token()`, `has_permission(...)` and `protect()` still count."""
+    files = dict(BACKEND_ONLY)
+    files["svc/main.py"] = (
+        "from fastapi import FastAPI\n\napp = FastAPI()\n\n"
+        "def tokenize(text):\n    return text.split()\n\n"
+        "def load_permissions(owner):\n    return [owner]\n\n"
+        "def protect_zone(zone):\n    return zone\n\n"
+        "@app.post('/index')\ndef index_text(payload: dict):\n    words = tokenize(payload.get('text'))\n"
+        "    return words\n\n"
+        "@app.put('/zones')\ndef set_zone(payload: dict):\n    perms = load_permissions(payload.get('owner'))\n"
+        "    if not perms:\n        raise ValueError\n    return perms\n\n"
+        "@app.patch('/zones')\ndef guard_zone(payload: dict):\n    protect_zone(payload)\n    return 1\n")
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "add", p
+    assert [e.split(" (")[0] for e in p["evidence"]] == ["POST /index", "PUT /zones", "PATCH /zones"]
+    files["svc/main.py"] = (files["svc/main.py"]
+                            .replace("def tokenize(text):", "def get_token(text):")
+                            .replace("tokenize(payload", "get_token(payload")
+                            .replace("def load_permissions(owner):", "def has_permission(owner):")
+                            .replace("load_permissions(payload", "has_permission(payload")
+                            .replace("def protect_zone(zone):", "def protect(zone):")
+                            .replace("protect_zone(payload)", "protect(payload)"))
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "in place", p
+    assert p["found"] == ["POST /index: calls `get_token`", "PUT /zones: calls `has_permission`",
+                          "PATCH /zones: calls `protect`"]

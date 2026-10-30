@@ -107,7 +107,11 @@ without `if not who:`; a route path `/authors`; `permissions = payload.get("perm
 whose only dependency is `Depends(get_session)`; `token = payload.get("token")` followed by a tested `get_user(token)`.
 Expect `add`, `check` (lookup with a test), `add` (lookup without), `add` for the next five and `check` for the last.
 Then `if not current_user.is_admin:`, `authorize(user, item)`, `get_user(token)` with `token: str = Header()`, and
-`get_user_by_token(token)` must still give `in place`. Then `cmd = request.args.get("cmd")` followed by `cmd = "ls -la"` (expect high, no input sentence) and
+`get_user_by_token(token)` must still give `in place`. A helper named with an auth word inside another word, called
+from the handler and defined in the repo (`tokenize(payload.get("text"))`, `load_permissions(...)`,
+`protect_zone(...)`), gives `add` with no "calls" evidence; renamed `get_token`, `has_permission`, `protect` it gives
+`in place`. A 100 KB handler built to make the regexes backtrack (unbalanced brackets, a 3,000-step attribute chain,
+5,000 escaped quotes, 1,500 chained names) is read in under five seconds. Then `cmd = request.args.get("cmd")` followed by `cmd = "ls -la"` (expect high, no input sentence) and
 by `if not cmd: cmd = "ls"` (expect critical, naming the request line).
 
 ## 5. Pass criteria for a release
