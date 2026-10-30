@@ -101,3 +101,20 @@ Two things remained. Fixed in PR #15.
 
 Still untested: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine digests, flask
 and rich benchmarks, real cross-origin CSRF in a browser, server concurrency.
+
+## 2026-10-30 · re-audit of commit 124fb98
+
+The same auditor confirmed both round-five fixes (whole-segment matching, with `Depends(get_session)` staying `add`; the
+one-decimal size message) and tried the three newly covered areas: timing stayed bounded on 800 hostile handler lines, a
+50,000-quote string and a 100,000-character unterminated string; clone cleanup held for a timeout, a real git refusal
+(nonexistent branch) and the size cap; `--host 0.0.0.0` stayed closed without `LANTERN_ALLOWED_HOST` set at startup
+(189 tests on Windows and Linux, self-audit 0/0/0, `tools/audit.sh` ALL PASS). Two things remained. Fixed in PR #PRNUM.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| S1 | A failed checkout left an empty clone, and the retry silently analyzed nothing. `fetch()` cleaned up after a timeout, a refusal and an over-size tree, but not when `git reset --hard` failed (reproduced with a repository holding `aux.txt`, a reserved Windows name; also a path over MAX_PATH or a full disk). The folder kept only `.git`, so the next attempt took it for an existing clone, ran `git pull --ff-only` (exit 0) and returned it without a checkout and without the size cap; `lantern analyze` then reported 0 files, 0 functions as a successful run | low/medium | Fixed: the checkout failure removes the folder like the other three paths (`remote._checkout`), and an earlier clone found without working files is checked out, under the same cap, before it is returned (`remote.has_files`). The app forgets a project whose clone left nothing behind (`server.App.clone_project`). Tests: `tests/test_remote.py`, `tests/test_server.py` |
+| S2 | Bare `verify` still counted: `verify_signature`, `verify_payment`, `verify_age` gave "in place", so a checkout route that verifies a payment was told it already had a login check | low | Fixed: `verify` counts only with the caller as its object (`verify_token`, `verify_jwt`, `verify_session`, `verify_user`, `verify_password`, `verify_otp`, `verify_credentials`); `verify_payment`, `verify_signature` and `verify_age` are nothing. The finding's list of example words no longer names `verify` or `session` |
+| – | Process: the refreshed packet for 124fb98 did not reach the auditor's Downloads folder | note | The packet and source files are attached to the reply as downloadable files and kept in the project Library under `lantern/audit/` |
+
+Still untested: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine digests, flask
+and rich benchmarks, real cross-origin CSRF in a browser, server concurrency.

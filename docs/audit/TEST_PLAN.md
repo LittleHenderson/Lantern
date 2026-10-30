@@ -110,7 +110,8 @@ Then `if not current_user.is_admin:`, `authorize(user, item)`, `get_user(token)`
 `get_user_by_token(token)` must still give `in place`. A helper named with an auth word inside another word, called
 from the handler and defined in the repo (`tokenize(payload.get("text"))`, `load_permissions(...)`,
 `protect_zone(...)`), gives `add` with no "calls" evidence; renamed `get_token`, `has_permission`, `protect` it gives
-`in place`. A 100 KB handler built to make the regexes backtrack (unbalanced brackets, a 3,000-step attribute chain,
+`in place`. So do `verify_payment(...)`, `verify_signature(...)` and `verify_age(...)` (`add`) against `verify_token`,
+`verify_session` and `verify_password` (`in place`). A 100 KB handler built to make the regexes backtrack (unbalanced brackets, a 3,000-step attribute chain,
 5,000 escaped quotes, 1,500 chained names) is read in under five seconds. Then `cmd = request.args.get("cmd")` followed by `cmd = "ls -la"` (expect high, no input sentence) and
 by `if not cmd: cmd = "ls"` (expect critical, naming the request line).
 

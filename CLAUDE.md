@@ -61,7 +61,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/report.py` + `viewer/report.html` | One self-contained HTML file (vanilla JS): pages/routes, path tree with HTTP and click hops, flowchart, lenses, findings with UI paths |
 | `lantern/pipeline.py` | analyze / explain / rebuild as functions with a `log` callback; used by the CLI and the server |
 | `lantern/server.py` + `viewer/app.html` | `lantern serve`: stdlib HTTP app (Home, Atlas iframe with live actions, Evidence, Explanations, Settings), jobs in threads, token + Host checks, keys in memory or `~/.lantern/keys.json` (0600); PWA manifest + service worker |
-| `lantern/remote.py` | A repository link instead of a folder (CLI `path`, `lantern serve`, the app's Add a project): `parse` (https only, public forges in `KNOWN_HOSTS` plus `LANTERN_GIT_HOSTS`, no credentials, `git@` form converted, `/tree/<branch>`), `clone` into `LANTERN_HOME/repos/<host>/<owner>/<name>` (`git clone --depth 1 --no-checkout`, prompts off, files measured against `LANTERN_CLONE_MAX_MB` before checkout, fast-forward if already there). The clone is as untrusted as any analyzed repo |
+| `lantern/remote.py` | A repository link instead of a folder (CLI `path`, `lantern serve`, the app's Add a project): `parse` (https only, public forges in `KNOWN_HOSTS` plus `LANTERN_GIT_HOSTS`, no credentials, `git@` form converted, `/tree/<branch>`), `clone` into `LANTERN_HOME/repos/<host>/<owner>/<name>` (`git clone --depth 1 --no-checkout`, prompts off, files measured against `LANTERN_CLONE_MAX_MB` before checkout, nothing left behind when any step fails, fast-forward if already there, checkout finished if an earlier one failed). The clone is as untrusted as any analyzed repo |
 | `lantern/learn.py` + `lantern/starters/` | Starter apps for beginners (`lantern learn`, the app's Learn tab and Guide). Each starter: `starter.json.tmpl` (steps, each with a deterministic `check` read from analysis results), `files/` (planted problems), `solution/` (fixes). Everything is `*.tmpl` and dot-files are `dot.<name>`, so the self-audit never sees the planted problems. `tests/test_learn.py` proves each planted problem is found and each fix clears its step |
 | `tools/fake_model.py` | Offline OpenAI-compatible server answering with the shop demo explanations, for end-to-end tests |
 | `lantern/cli.py` | `analyze`, `trace`, `explain`, `report`; results in `PATH/.lantern/` |
@@ -127,7 +127,8 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
   so a value that is always replaced inside a branch stays ranked critical (the safe direction).
 * The login check (`LW-AUTH-MISSING`, protection `route-auth`) reads names, not meaning: strings, comments, request
   data and the names that hold it are blanked first; an auth word must be a whole segment of a name (`get_token`,
-  `has_permission`, `protectedProcedure`; not `tokenize`, `load_permissions`, `protect_zone`; `websec.auth_word`) and
+  `has_permission`, `protectedProcedure`; not `tokenize`, `load_permissions`, `protect_zone`; `websec.auth_word`;
+  `verify` only with the caller as its object: `verify_token`, `verify_session`, not `verify_payment`) and
   counts only as a call or an attribute, a parameter
   only through a dependency, type, injected header or cookie, or caller name; a user lookup counts only when its
   argument identifies the caller (a token, session or request parameter, a `_by_token` lookup, or no argument at all,
