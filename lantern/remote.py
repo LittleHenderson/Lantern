@@ -12,7 +12,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
+import sys
 from pathlib import Path
 
 HTTPS = re.compile(r"^https://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?"
@@ -121,12 +123,28 @@ def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900) -
     cap = max_mb()
     size = tree_mb(dest)
     if cap and size > cap:
-        shutil.rmtree(dest, ignore_errors=True)
+        _rmtree(dest)
         raise RuntimeError(f"the repository's files add up to {size:,.0f} MB, above Lantern's {cap} MB limit "
                            "(LANTERN_CLONE_MAX_MB). Clone it yourself and add the folder.")
     r = _git(["reset", "--hard", "--quiet"], cwd=dest, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError("could not check out the files: " + _tail(r.stderr))
+
+
+def _rmtree(path: Path) -> None:
+    """Remove a clone. Git marks its object files read-only, which on Windows makes a plain rmtree fail halfway and
+    leave the folder behind; clearing the bit (on the file and its folder) and retrying is the standard recipe."""
+    def unlock(func, p, _exc):
+        for q in (p, os.path.dirname(p)):
+            try:
+                os.chmod(q, stat.S_IRWXU)
+            except OSError:
+                pass
+        func(p)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=unlock)
+    else:
+        shutil.rmtree(path, onerror=unlock)
 
 
 def _git(args: list[str], cwd: Path | None, timeout: int = 900) -> subprocess.CompletedProcess:

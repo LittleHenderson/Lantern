@@ -162,3 +162,20 @@ def test_app_clones_a_link_in_a_job(srv, tmp_path, monkeypatch):  # noqa: F811
     j = wait(base, r["job"]["id"])
     assert j["status"] == "error" and "repository not found" in j["error"]
     assert not store.project(r["project"]["id"]) and not (store.root / "repos" / "github.com" / "wakil" / "private").exists()
+
+
+def test_a_refused_clone_is_removed_even_with_read_only_files(tmp_path):
+    """Git's object files are read-only (and a folder can be too); the refused clone must still go away whole."""
+    dest = tmp_path / "dest"
+    objects = dest / ".git" / "objects" / "pack"
+    objects.mkdir(parents=True)
+    pack = objects / "pack-1.pack"
+    pack.write_bytes(b"\0" * 10)
+    pack.chmod(0o444)
+    objects.chmod(0o555)
+    try:
+        remote._rmtree(dest)
+    finally:
+        if objects.exists():
+            objects.chmod(0o755)
+    assert not dest.exists()
