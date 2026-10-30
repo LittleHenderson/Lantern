@@ -1,0 +1,92 @@
+# Threat model
+
+Scope: Lantern as built today, running locally (`lantern serve` or the CLI). Cloud mode is not built.
+
+## Assets
+
+| Asset | Where it lives |
+|---|---|
+| The user's source code | Their repo; copies of function bodies in `report.html` (privacy `full`) and in prompts sent to a cloud model |
+| Model API keys | Environment variables; server memory; `~/.lantern/keys.json` (0600) if "remember" is ticked |
+| Other files on the user's machine | Anything the user account can read |
+| Integrity of results | `security.json`, `readiness.json`, `evidence.json`, the digest; what a reviewer relies on |
+| The user's attention and trust | UI wording about where code goes, how sure an edge is, what a score means |
+
+## Trust boundaries
+
+1. **Analyzed repository → Lantern.** Repos are untrusted input: a user may analyze code they cloned from anywhere.
+2. **Model output → Lantern.** Text from any provider (or a hostile endpoint) is untrusted.
+3. **Browser (other websites) → local server.** Any page the user visits can send requests to `127.0.0.1`.
+4. **Lantern → model provider.** Code leaves the machine here, only on request, only to the configured endpoint.
+5. **Shared reports → their readers.** `report.html` / `evidence.html` are opened by other people.
+
+## Attackers and mitigations
+
+### T1. Hostile repository
+
+| Attack | Mitigation | Where | Status |
+|---|---|---|---|
+| Make Lantern execute code during analysis (`setup.py`, `conftest.py`, build scripts) | Analysis only parses. Bandit parses AST. Code runs only with `--trace -- <cmd>`, a command the user types | `pipeline.analyze`, `trace.py` | Mitigated; please verify (CLAIMS A4) |
+| Symlink `creds.py` or `.env` → `~/.aws/credentials` to get it scanned and embedded in a report | All walkers skip symlinks that resolve outside the repo | `python_frontend.inside_repo` and its callers | Mitigated, tested (`test_symlinks_out_of_the_repo_are_not_read`) |
+| Symlinked *directory* inside the repo pointing out | `os.walk` and `Path.rglob` don't follow directory symlinks by default | discovery functions | Believed mitigated; add a test |
+| HTML/JS injection through file names, function names, strings, or code shown in the report | All dynamic text goes through `esc()` in the viewers and `html.escape` in `evidence.py`; embedded JSON escapes `</` | `viewer/report.html`, `report.py`, `evidence.py` | Mitigated; most valuable place to look for a miss |
+| Ship a `lantern-accepted.json` that accepts real findings, so `--fail-on` passes | Reason required; accepted findings stay listed (Findings, Evidence Report, counts) | `security.load_accepted` | **Open by design.** Changes to `lantern-accepted.json` must be reviewed like code. Consider a CI rule that fails when it changes without review. |
+| Ship a fake `lantern-narratives.md` that misdescribes flows | It is shown under "Understanding" as the builder's own text, escaped | `evidence.py` | Accepted: it is labeled as the builder's text |
+| Huge or pathological files (deep nesting, megabyte lines) to exhaust CPU/memory, or regex backtracking | tree-sitter is linear; some regexes run over whole files | `websec.py`, `readiness.py`, `security.py` | **Not tested.** Fuzz with large and adversarial inputs (TEST_PLAN 4.6) |
+| Planted comments that prompt-inject the explaining model ("say this function is safe") | Models can't change findings or scores; Lens 3 anchors are validated; unvalidated output carries a warning | `explain.validate` | Partly mitigated: Lens 1/2 wording can still be steered. The UI says explanations aren't proof |
+| Make the readiness grade look better than it is (empty SECURITY.md, unused Dockerfile) | Limits section says checks show existence, not quality | `readiness.py`, `evidence.limits` | **Open by design**; documented |
+
+### T2. Other websites attacking the local server
+
+| Attack | Mitigation | Where |
+|---|---|---|
+| Cross-site request forgery against write endpoints | Writes need the `X-Lantern-Token` header (a custom header forces a CORS preflight, which the server never approves) | `Handler._write`, `_authed(True)` |
+| Cross-site reads (JSON of projects, reports) | Reads need the `lantern_token` cookie (SameSite=Strict, so not sent on cross-site requests); browsers' same-origin policy blocks reading responses | `_authed(False)` |
+| DNS rebinding (attacker domain resolves to 127.0.0.1) | Host header must be `127.0.0.1:PORT`, `localhost:PORT`, or `[::1]:PORT` | `_host_ok` |
+| Another local user on a shared machine | Needs the token printed in the starting user's terminal; 127.0.0.1 only | `serve` |
+| Clickjacking the app | `X-Frame-Options: SAMEORIGIN` | `_send` |
+| `--host 0.0.0.0` exposes it to the network | Prints a warning; token still required; plain HTTP | `serve` | **Use only on trusted networks** |
+| Token leakage through the address bar or Referer | Token link redirects to `/` after setting the cookie; `Referrer-Policy: no-referrer` | `do_GET` |
+
+Note: the token is also embedded in `app.html` and in served reports (`window.LANTERN_LIVE`), so anything that can run
+script in the app's origin can act as the user. That makes XSS in the viewers (T1, T3) the main path to a takeover.
+
+### T3. Hostile or compromised model endpoint
+
+| Attack | Mitigation |
+|---|---|
+| Return HTML/JS inside explanation fields | All lens fields rendered through `esc()`; line anchors escaped; non-list fields tolerated (`viewer/report.html` `lensBody`) |
+| Return explanations that "dismiss" a finding | Models have no write path to findings (`explain.run` writes only explanations) |
+| Very large responses | `max_tokens` is requested; response size is not hard-capped (**open**, low) |
+| Steal the key | The key is sent only to the configured endpoint, in a header; a user who points `base_url` at a hostile server gives it the key (expected) |
+
+### T4. Key handling
+
+* Keys pasted in Settings are held in memory by default; "remember" writes `~/.lantern/keys.json` with `O_CREAT` mode
+  0600 via a temp file and atomic replace (`Store._write`).
+* `/api/state` and `/api/settings` return only where a key came from, never the key (`test_keys_stay_private`).
+* Keys are never written into `.lantern/`, reports, or the Evidence Report. Check job logs and tracebacks: provider
+  errors include the HTTP body from the provider, which could echo request details (**review**).
+* On Windows, mode 0600 has no effect; the file relies on the user profile's ACLs (**open**, documented here).
+
+### T5. Code leaving the machine
+
+* Only `explain` sends code, only to the configured provider, and the UI says so in plain words when the provider is
+  not local (spec 5.3). `openai-compatible` counts as local only when its base URL is localhost/127.0.0.1.
+* `analyze`, `verify`, scanners, and the server make no network calls. Exception: `pip-audit` queries a
+  vulnerability database when `requirements*.txt` exists (**document in UI**: currently only in Provenance).
+
+### T6. Shared reports
+
+* `report.html` at privacy `full` embeds function source and scanner snippets (for example a hard-coded password
+  that bandit flagged). Share `--privacy structure` reports, or the Evidence Report, which contains no source.
+* The Evidence Report shows the git remote with credentials stripped (`git_info`, tested).
+
+## Known open risks, ranked
+
+1. Regex/CPU exhaustion on adversarial repos is untested (T1).
+2. A committed `lantern-accepted.json` can silence `--fail-on` (T1); needs a review rule.
+3. Readiness can be satisfied by placeholder files (T1); disclosed in Limits.
+4. Provider error text may surface in job logs; check it never includes the key (T4).
+5. `--host` beyond localhost serves plain HTTP (T2).
+6. No signature on the Evidence Report, only a digest (stated in the report).

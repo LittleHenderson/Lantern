@@ -55,6 +55,12 @@ No key yet? Try the full flow with the offline demo model: `python tools/fake_mo
 
 From a clone instead: `git clone https://github.com/LittleHenderson/Lantern && cd Lantern && pip install -e ".[scan,dev]"`.
 
+## Auditing Lantern
+
+[`docs/audit/`](docs/audit/README.md) is a handoff package for an outside reviewer or another LLM: architecture,
+every product claim with how to falsify it, a threat model, a test plan with adversarial cases, and a ready-to-paste
+auditor prompt. `bash tools/audit.sh` runs every automated check in one go.
+
 ## Command line
 
 Everything in the app also works from the terminal, for CI and scripts:

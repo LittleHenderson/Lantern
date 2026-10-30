@@ -17,3 +17,6 @@ jobs:
       - run: python -m pytest -q
       - name: Lantern audits itself (no critical, high, or medium findings)
         run: lantern analyze . --out /tmp/self --fail-on medium
+      - name: Audit package checks (tools/audit.sh)
+        if: matrix.python == '3.13'
+        run: bash tools/audit.sh
