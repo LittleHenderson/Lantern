@@ -1,0 +1,20 @@
+import { BrowserRouter, Link, Route, Routes } from "react-router-dom"
+import RecipeList from "./pages/RecipeList"
+import RecipePage from "./pages/RecipePage"
+import NewRecipe from "./pages/NewRecipe"
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <nav style={{ display: "flex", gap: 12 }}>
+        <Link to="/">All recipes</Link>
+        <Link to="/new">Add a recipe</Link>
+      </nav>
+      <Routes>
+        <Route path="/" element={<RecipeList />} />
+        <Route path="/recipes/:id" element={<RecipePage />} />
+        <Route path="/new" element={<NewRecipe />} />
+      </Routes>
+    </BrowserRouter>
+  )
+}

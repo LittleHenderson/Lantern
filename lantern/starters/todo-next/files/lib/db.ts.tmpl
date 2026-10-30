@@ -1,0 +1,24 @@
+import { createClient } from "@supabase/supabase-js"
+
+// The server's client. The service-role key skips every database rule, so it must never reach a browser.
+const admin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY!,
+)
+
+export async function listTodos(userId: string) {
+  const { data } = await admin.from("todos").select("*").eq("user_id", userId).order("id")
+  return data ?? []
+}
+
+export async function insertTodo(userId: string, title: string) {
+  return admin.from("todos").insert({ title, user_id: userId, done: false })
+}
+
+export async function setDone(userId: string, id: string, done: boolean) {
+  return admin.from("todos").update({ done }).eq("id", id).eq("user_id", userId)
+}
+
+export async function deleteTodo(id: string) {
+  return admin.from("todos").delete().eq("id", id)
+}

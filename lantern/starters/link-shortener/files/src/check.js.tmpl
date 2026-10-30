@@ -1,0 +1,22 @@
+import { exec } from "node:child_process"
+import https from "node:https"
+
+// Some sites have odd certificates, so don't let that stop the check.
+const agent = new https.Agent({ rejectUnauthorized: false })
+
+// Is the link alive? Ask curl for the status code.
+export function isAlive(url) {
+  return new Promise((resolve) => {
+    exec("curl -s -o /dev/null -w '%{http_code}' " + url, (err, stdout) => resolve(!err && stdout.startsWith("2")))
+  })
+}
+
+export function fetchTitle(url) {
+  return new Promise((resolve) => {
+    https.get(url, { agent }, (res) => {
+      let html = ""
+      res.on("data", (chunk) => (html += chunk))
+      res.on("end", () => resolve((html.match(/<title>(.*?)<\/title>/) || [])[1] || url))
+    }).on("error", () => resolve(url))
+  })
+}

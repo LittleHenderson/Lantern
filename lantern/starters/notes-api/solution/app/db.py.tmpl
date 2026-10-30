@@ -1,0 +1,46 @@
+"""Everything that touches the database lives here (SQLite, one file)."""
+import os
+import sqlite3
+
+DB_PATH = os.environ.get("NOTES_DB", "notes.db")
+
+
+def connect():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init():
+    with connect() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, user_id INTEGER, text TEXT)")
+
+
+def create_user(username, password_hash):
+    with connect() as conn:
+        conn.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, password_hash))
+
+
+def get_user(username):
+    with connect() as conn:
+        return conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+
+
+def add_note(user_id, text):
+    with connect() as conn:
+        cur = conn.execute("INSERT INTO notes (user_id, text) VALUES (?, ?)", (user_id, text))
+        return cur.lastrowid
+
+
+def list_notes(user_id):
+    with connect() as conn:
+        rows = conn.execute("SELECT id, text FROM notes WHERE user_id = ?", (user_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def search_notes(user_id, q):
+    with connect() as conn:
+        rows = conn.execute("SELECT id, text FROM notes WHERE user_id = ? AND text LIKE ?",
+                            (user_id, f"%{q}%")).fetchall()
+        return [dict(r) for r in rows]

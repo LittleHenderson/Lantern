@@ -64,12 +64,26 @@ pre.log{background:#0F1B2D;color:#D7E0EC;font:12px/1.5 var(--mono);padding:10px;
 .sub .title{font-weight:700;color:var(--ink);margin-right:8px}
 iframe{border:0;width:100%;height:calc(100vh - 106px);display:block;background:var(--bg)}
 .empty{text-align:center;padding:40px 10px;color:var(--muted)}
+code{font:12.5px var(--mono);background:var(--soft);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
+pre.cmd{background:var(--soft);border:1px solid var(--line);font:12.5px/1.5 var(--mono);padding:8px 10px;border-radius:9px;overflow:auto;margin:8px 0;white-space:pre}
+.starter h3{margin:0;color:var(--ink);font-size:16px}
+.starter .meta{font-size:12.5px;color:var(--muted)}
+.bar{height:8px;border-radius:99px;background:var(--soft);overflow:hidden;margin:8px 0}
+.bar span{display:block;height:100%;background:var(--accent)}
+.step{display:flex;gap:12px}
+.step .num{flex:none;width:30px;height:30px;border-radius:99px;display:grid;place-items:center;font-weight:800;background:var(--soft);color:var(--muted)}
+.step.done .num{background:var(--accent);color:#fff}
+.step .stitle{font-weight:700;color:var(--ink);font-size:15px}
+.step p{margin:6px 0}
+.badge{font-size:11.5px;padding:1px 8px;border-radius:99px;margin-left:6px;font-weight:600;background:var(--soft);color:var(--muted)}
+.badge.done{background:var(--accent-soft);color:var(--accent)} .badge.todo{background:var(--warns);color:var(--warn)}
+.prompt{border-left:3px solid var(--accent);padding:6px 10px;background:var(--accent-soft);border-radius:0 9px 9px 0;margin:8px 0}
 </style>
 </head>
 <body>
 <header>
   <button class="logo" id="home"><img src="/icon.svg" alt="">Lantern</button>
-  <nav id="nav"><button data-v="home" class="on">Projects</button><button data-v="settings">Settings</button><button data-v="help">Help</button></nav>
+  <nav id="nav"><button data-v="home" class="on">Projects</button><button data-v="learn">Learn</button><button data-v="settings">Settings</button><button data-v="help">Help</button></nav>
 </header>
 <div id="view"></div>
 <script>
@@ -83,7 +97,9 @@ const api = async (path, opts = {}) => {
   if (!r.ok) throw new Error(data.error || r.statusText);
   return data;
 };
-const S = {view: 'home', state: null, project: null, tab: 'atlas', browse: null, jobs: {}};
+const S = {view: 'home', state: null, project: null, tab: 'atlas', reportTab: null, browse: null, jobs: {}, starters: null, open: {}};
+// Step text comes from Lantern's own starter files; escape it anyway, then allow **bold** and `code`.
+const fmt = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 async function refresh() { S.state = await api('/api/state'); render(); }
@@ -127,7 +143,7 @@ function renderHome(el) {
       <div class="small muted">${p.score != null ? `Readiness ${esc(p.score)}/100 · ${esc(p.shape)}` : 'Not analyzed yet'}${p.finished_at ? ' · last run ' + esc(p.finished_at) : ''}${p.explained ? ` · ${esc(p.explained)} explained` : ''}</div>
       <div class="pills">${counts(p.counts)}</div>
       ${!p.exists ? '<div class="note warn">This folder no longer exists.</div>' : ''}
-      <div class="row">${p.has_report ? `<button class="btn primary" data-open="${p.id}">Open</button>` : ''}
+      <div class="row">${p.has_report ? `<button class="btn primary" data-open="${p.id}">Open</button>` : ''}${p.starter ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}
         <button class="btn" data-run="${p.id}" ${running || !p.exists ? 'disabled' : ''}>${running ? 'Analyzing…' : p.has_report ? 'Re-analyze' : 'Analyze'}</button>
         <button class="btn" data-del="${p.id}" title="Remove from this list (files are not touched)" style="margin-left:auto">Remove</button></div>
       ${running || (job && job.status === 'error') ? `<pre class="log" id="log-${p.id}">${esc((job && job.log || []).join('\n'))}</pre>` : ''}
@@ -147,6 +163,7 @@ function renderHome(el) {
   el.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => {
     try { const j = await api(`/api/projects/${b.dataset.run}/analyze`, {method: 'POST'}); watch(j.id, b.dataset.run); render(); } catch (e) { alert(e.message); } });
   el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => go('project', {project: b.dataset.open, tab: 'atlas'}));
+  el.querySelectorAll('[data-guide]').forEach(b => b.onclick = () => go('project', {project: b.dataset.guide, tab: 'guide'}));
   el.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (confirm('Remove this project from the list? Its files and results are not deleted.')) { await api('/api/projects/' + b.dataset.del, {method: 'DELETE'}); refresh(); } });
 }
 async function browse(path) {
@@ -164,15 +181,23 @@ async function browse(path) {
 function renderProject(el) {
   const p = S.state.projects.find(x => x.id === S.project);
   if (!p) return go('home');
+  if (S.tab === 'guide' && !p.starter) S.tab = 'atlas';
   el.innerHTML = `<div class="sub"><span class="title">${esc(p.name)}</span>
+    ${p.starter ? `<button data-t="guide" class="${S.tab === 'guide' ? 'on' : ''}">Guide</button>` : ''}
     <button data-t="atlas" class="${S.tab === 'atlas' ? 'on' : ''}">Atlas</button>
     <button data-t="evidence" class="${S.tab === 'evidence' ? 'on' : ''}">Evidence Report</button>
     <button data-t="explain" class="${S.tab === 'explain' ? 'on' : ''}">Explanations</button>
     <span style="margin-left:auto" class="row"><a class="btn" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener">Open in new tab</a></span></div>
     <div id="pbody"></div>`;
-  el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; renderProject(el); });
+  el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; renderProject(el); });
   const body = el.querySelector('#pbody');
-  if (S.tab === 'atlas') body.innerHTML = `<iframe src="/p/${p.id}/report.html" title="Atlas"></iframe>`;
+  if (S.tab === 'guide') return renderGuide(body, p);
+  if (S.tab === 'atlas') {
+    body.innerHTML = `<iframe src="/p/${p.id}/report.html" title="Atlas"></iframe>`;
+    const want = S.reportTab;
+    // The report is served from this app's origin, so a step's "Show me" can open its Findings or Readiness tab.
+    if (want) body.querySelector('iframe').onload = e => { try { e.target.contentDocument.querySelector(`[data-t="${want}"]`)?.click(); } catch (err) {} };
+  }
   else if (S.tab === 'evidence') body.innerHTML = `<iframe src="/p/${p.id}/evidence.html" title="Evidence Report"></iframe>`;
   else renderExplain(body, p);
 }
@@ -199,6 +224,77 @@ async function renderExplain(body, p) {
     try { const j = await api(`/api/projects/${p.id}/explain`, {method: 'POST', body: {depth: 3, limit: 40}}); watch(j.id, p.id); renderExplain(body, p); }
     catch (e) { alert(e.message); }
   };
+}
+
+// ---------------------------------------------------------------- learn
+async function renderLearn(el) {
+  if (!S.starters) { el.innerHTML = '<div class="empty">Loading…</div>'; S.starters = await api('/api/starters'); }
+  const d = S.starters;
+  el.innerHTML = `<main><h1>Learn Lantern by fixing a real app</h1>
+    <p class="muted">Each starter is a small, working app written the way an AI assistant often writes a first draft, with real problems in it. Lantern creates it in a folder, analyzes it, and a step-by-step guide walks you through every feature: following paths in the Atlas, explanations, findings and why some are critical, dependency checks, protections, readiness, and the Evidence Report you can hand to an engineer. <b>Check my progress</b> re-analyzes your copy and ticks off each step once the problem is really fixed.</p>
+    <div class="card"><label for="parent" style="margin-top:0">Create starter apps in this folder</label>
+      <input type="text" id="parent" value="${esc(d.default_parent)}"><div class="small muted" style="margin-top:4px">Each one gets its own subfolder. Lantern never overwrites existing files.</div><div id="lerr"></div></div>
+    <div class="grid">${d.starters.map(s => `<div class="card starter proj"><h3>${esc(s.title)}</h3>
+      <div class="meta">${esc(s.stack)} · ${esc(s.level)} · about ${esc(s.minutes)} minutes</div>
+      <div>${fmt(s.summary)}</div>
+      <div class="pills">${s.teaches.map(t => `<span class="pill">${esc(t)}</span>`).join('')}</div>
+      <details class="small"><summary>${esc(s.steps.length)} steps</summary><ol>${s.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol></details>
+      <div class="row"><button class="btn primary" data-make="${esc(s.id)}">Create this app</button>
+      ${S.state.projects.filter(p => p.starter === s.id).map(p => `<button class="btn" data-guide="${esc(p.id)}">Continue ${esc(p.name)}</button>`).join('')}</div></div>`).join('')}</div>
+    <p class="small muted">Command line: <code>lantern learn</code> lists them, <code>lantern learn notes-api</code> creates one, <code>lantern learn --check FOLDER</code> shows your progress.</p></main>`;
+  el.querySelectorAll('[data-guide]').forEach(b => b.onclick = () => go('project', {project: b.dataset.guide, tab: 'guide'}));
+  el.querySelectorAll('[data-make]').forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Creating…';
+    try {
+      const r = await api('/api/starters', {method: 'POST', body: {id: b.dataset.make, parent: el.querySelector('#parent').value}});
+      await refresh();
+      go('project', {project: r.project.id, tab: 'guide'});
+      watch(r.job.id, r.project.id);
+    } catch (e) { b.disabled = false; b.textContent = 'Create this app'; el.querySelector('#lerr').innerHTML = `<div class="note warn">${esc(e.message)}</div>`; }
+  });
+}
+const STATUS = {done: ['done', 'Done'], todo: ['todo', 'To do'], unknown: ['', "Can't tell yet"], read: ['', 'Explore']};
+const SHOW = {atlas: 'Open the Atlas', findings: 'Open Findings', ready: 'Open Readiness', evidence: 'Open the Evidence Report', explain: 'Open Explanations', settings: 'Open Settings'};
+async function renderGuide(body, p) {
+  body.innerHTML = '<main><div class="empty">Loading the guide…</div></main>';
+  const [s, pr] = await Promise.all([api('/api/starters/' + encodeURIComponent(p.starter)), api(`/api/projects/${p.id}/learn`).catch(() => null)]);
+  const job = S.jobs[p.id], running = p.job || (job && job.status === 'running');
+  const st = (pr && pr.steps) || [];
+  const pct = pr && pr.total ? Math.round(100 * pr.done / pr.total) : 0;
+  body.innerHTML = `<main><h1>${esc(s.title)}</h1><p class="muted">${fmt(s.summary)}</p>
+    <div class="card"><div class="row"><b>${pr ? `${esc(pr.done)} of ${esc(pr.total)} steps done` : 'Not analyzed yet'}</b>
+      <button class="btn primary" id="check" style="margin-left:auto" ${running ? 'disabled' : ''}>${running ? 'Analyzing…' : 'Check my progress'}</button></div>
+      <div class="bar"><span style="width:${pct}%"></span></div>
+      <div class="small muted">Folder: <code>${esc(p.path)}</code>. Open it in your editor or AI assistant, make each fix there, then press Check my progress.</div>
+      ${running ? `<pre class="log" id="log-${p.id}">${esc((job && job.log || []).join('\n'))}</pre>` : ''}
+      ${s.run && s.run.length ? `<details class="small" style="margin-top:8px"><summary>Run the app yourself (optional)</summary><pre class="cmd">${esc(s.run.join('\n'))}</pre></details>` : ''}</div>
+    ${s.steps.map((x, i) => { const r = st[i] || {status: x.check ? 'unknown' : 'read', why: ''}; const [cls, label] = STATUS[r.status] || STATUS.unknown;
+      return `<div class="card step ${r.status === 'done' ? 'done' : ''}"><div class="num">${r.status === 'done' ? '✓' : i + 1}</div><div style="min-width:0;flex:1">
+      <div class="stitle">${esc(x.title)}<span class="badge ${cls}">${esc(label)}</span>${r.why && r.status !== 'done' ? `<span class="small muted"> · ${esc(r.why)}</span>` : ''}</div>
+      ${x.body.map(t => `<p>${fmt(t)}</p>`).join('')}
+      ${x.prompt ? `<div class="prompt"><div class="small muted">Ask your AI assistant</div>${esc(x.prompt)} <button class="btn" data-copy="${i}" style="padding:2px 10px;font-size:12px">Copy</button></div>` : ''}
+      ${x.commands ? `<pre class="cmd">${esc(x.commands.join('\n'))}</pre>` : ''}
+      <div class="row">${SHOW[x.feature] ? `<button class="btn" data-show="${esc(x.feature)}">${esc(SHOW[x.feature])}</button>` : ''}
+        ${(x.fix_files || []).map(f => `<button class="btn" data-fix="${esc(f)}">Show the fix: ${esc(f)}</button>`).join('')}</div>
+      <div id="fix-${i}"></div></div></div>`; }).join('')}</main>`;
+  body.querySelector('#check').onclick = async () => {
+    try { const j = await api(`/api/projects/${p.id}/analyze`, {method: 'POST'}); watch(j.id, p.id); renderGuide(body, p); }
+    catch (e) { alert(e.message); }
+  };
+  body.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => navigator.clipboard?.writeText(s.steps[+b.dataset.copy].prompt).then(() => { b.textContent = 'Copied'; }, () => {}));
+  body.querySelectorAll('[data-show]').forEach(b => b.onclick = () => {
+    const f = b.dataset.show;
+    if (f === 'settings') return go('settings');
+    S.reportTab = f === 'findings' || f === 'ready' ? f : null;
+    S.tab = f === 'evidence' || f === 'explain' ? f : 'atlas';
+    render();
+  });
+  body.querySelectorAll('[data-fix]').forEach(b => b.onclick = async () => {
+    const box = b.closest('.step').querySelector('[id^=fix-]');
+    try { const r = await api(`/api/starters/${encodeURIComponent(p.starter)}/fix?file=${encodeURIComponent(b.dataset.fix)}`);
+      box.innerHTML = `<div class="small muted" style="margin-top:8px">Fixed version of <code>${esc(b.dataset.fix)}</code>. Compare it with yours, or paste it in.</div><pre class="cmd">${esc(r.text)}</pre>`; }
+    catch (e) { box.innerHTML = `<div class="note warn">${esc(e.message)}</div>`; }
+  });
 }
 
 // ---------------------------------------------------------------- settings
@@ -241,6 +337,7 @@ function renderSettings(el) {
 
 function renderHelp(el) {
   el.innerHTML = `<main><h1>How to use Lantern</h1><div class="card">
+    <p>New to this? The <b>Learn</b> tab has starter apps with real problems in them and a guide that walks you through every feature.</p>
     <ol><li><b>Add a project</b>: any folder with a Python or TypeScript/JavaScript app. Lantern reads the code; it never runs it.</li>
     <li><b>Open the Atlas</b>: pick a page or API route on the left and follow the path, from button clicks through HTTP calls to the backend. Lines show how sure Lantern is about each link.</li>
     <li><b>Findings</b>: security problems ranked by how bad they are and whether a user can reach them. Fix them, or accept a risk with a written reason.</li>
@@ -256,6 +353,7 @@ function render() {
   if (S.view === 'project') { el.className = ''; return renderProject(el); }
   if (S.view === 'settings') return renderSettings(el);
   if (S.view === 'help') return renderHelp(el);
+  if (S.view === 'learn') return renderLearn(el);
   renderHome(el);
 }
 refresh().catch(e => { document.getElementById('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });

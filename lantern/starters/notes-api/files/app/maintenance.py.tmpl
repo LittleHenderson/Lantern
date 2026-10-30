@@ -1,0 +1,6 @@
+"""Leftover helper from an earlier chat with the AI. Nothing calls it (yet)."""
+import subprocess
+
+
+def run_maintenance(command):
+    return subprocess.run(command, shell=True, capture_output=True, text=True).stdout

@@ -1,0 +1,45 @@
+import express from "express"
+import crypto from "node:crypto"
+import helmet from "helmet"
+import rateLimit from "express-rate-limit"
+import { saveLink, findLink, countClick, removeLink, setup } from "./db.js"
+import { isAlive, fetchTitle } from "./check.js"
+
+const app = express()
+app.use(helmet())
+app.use(express.json())
+app.use(express.static("public"))
+// At most 20 new links per minute from one address, so nobody can fill the database.
+app.use("/api/", rateLimit({ windowMs: 60_000, limit: 20 }))
+
+// Only the person who created a link gets its delete token.
+async function verifyDeleteToken(req) {
+  const link = await findLink(req.params.code)
+  const given = req.get("x-delete-token") || ""
+  return Boolean(link && given.length === link.delete_token.length &&
+    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(link.delete_token)))
+}
+
+app.post("/api/links", async (req, res) => {
+  const { url } = req.body
+  if (!(await isAlive(url))) return res.status(400).json({ error: "That link doesn't seem to work" })
+  const code = crypto.randomBytes(4).toString("hex")
+  const deleteToken = crypto.randomBytes(16).toString("hex")
+  await saveLink(code, url, deleteToken)
+  res.json({ code, deleteToken, title: await fetchTitle(url) })
+})
+
+app.delete("/api/links/:code", async (req, res) => {
+  if (!(await verifyDeleteToken(req))) return res.status(403).json({ error: "Not your link" })
+  await removeLink(req.params.code)
+  res.json({ ok: true })
+})
+
+app.get("/:code", async (req, res) => {
+  const link = await findLink(req.params.code)
+  if (!link) return res.status(404).send("No such link")
+  await countClick(req.params.code)
+  res.redirect(link.url)
+})
+
+setup().then(() => app.listen(process.env.PORT || 3000, () => console.log("Listening on http://localhost:3000")))

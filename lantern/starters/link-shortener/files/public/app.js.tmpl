@@ -1,0 +1,24 @@
+async function shorten() {
+  const url = document.getElementById("url").value
+  const res = await fetch("/api/links", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  })
+  const link = await res.json()
+  if (link.error) return alert(link.error)
+  const li = document.createElement("li")
+  li.textContent = `${location.origin}/${link.code} → ${link.title} `
+  const del = document.createElement("button")
+  del.textContent = "Delete"
+  del.onclick = () => removeLink(link.code, li)
+  li.appendChild(del)
+  document.getElementById("links").appendChild(li)
+}
+
+async function removeLink(code, li) {
+  await fetch(`/api/links/${code}`, { method: "DELETE" })
+  li.remove()
+}
+
+document.getElementById("shorten").addEventListener("click", shorten)

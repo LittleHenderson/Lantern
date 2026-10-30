@@ -1,0 +1,32 @@
+import os
+
+os.environ["NOTES_DB"] = "test-notes.db"
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.main import app  # noqa: E402
+
+client = TestClient(app)
+
+
+def teardown_module():
+    os.remove("test-notes.db")
+
+
+def test_signup_login_and_notes():
+    client.post("/signup", data={"username": "ada", "password": "correct horse"})
+    token = client.post("/login", data={"username": "ada", "password": "correct horse"}).json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post("/notes", data={"text": "buy milk"}, headers=headers)
+    client.post("/notes", data={"text": "call mum"}, headers=headers)
+    assert len(client.get("/notes", headers=headers).json()) == 2
+    assert [n["text"] for n in client.get("/notes/search", params={"q": "milk"}, headers=headers).json()] == ["buy milk"]
+
+
+def test_wrong_password_is_refused():
+    client.post("/signup", data={"username": "bob", "password": "pw1"})
+    assert client.post("/login", data={"username": "bob", "password": "nope"}).status_code == 401
+
+
+def test_notes_need_login():
+    assert client.get("/notes", headers={"Authorization": "Bearer 1.forged"}).status_code == 401

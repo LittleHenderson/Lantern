@@ -1,0 +1,124 @@
+{
+  "order": 1,
+  "title": "Notes API",
+  "stack": "Python · FastAPI · SQLite",
+  "level": "Start here",
+  "minutes": 25,
+  "summary": "A small backend where people sign up, log in, and save notes. It works, and its tests pass, but it has the problems an AI assistant often leaves in a first draft. You'll use Lantern to find them, understand them, and fix them one by one.",
+  "teaches": ["Map", "Three-Lens explanations", "Findings", "Reachability", "Dependency checks", "Protections", "Runtime tracing", "Readiness", "Evidence Report"],
+  "run": [
+    "python -m venv .venv",
+    "source .venv/bin/activate        # Windows: .venv\\Scripts\\activate",
+    "pip install -r requirements.txt",
+    "python -m pytest -q              # 3 tests pass",
+    "uvicorn app.main:app --reload    # then open http://127.0.0.1:8000/docs"
+  ],
+  "solution_delete": ["app/maintenance.py"],
+  "steps": [
+    {
+      "id": "analyze", "title": "Create the app and analyze it", "feature": "findings",
+      "body": [
+        "Lantern wrote the app into the folder you chose and analyzed it straight away. Nothing ran: Lantern only reads the code.",
+        "Look at the project card: a grade (probably F) and a row of findings. That's normal for a first draft. By the end of this guide most of them will be gone, and you'll have a report that proves it."
+      ],
+      "check": {"kind": "analyzed"}
+    },
+    {
+      "id": "map", "title": "Follow a request through the map", "feature": "atlas",
+      "body": [
+        "Open the **Atlas**. On the left are the app's entry points: every URL someone can call, such as `POST /login` and `GET /notes/search`.",
+        "Click `POST /login`. The path shows what happens when someone logs in: `login` calls `db.get_user` to find the account, then `check_password`, which calls `hash_password`. Each line is labeled with how sure Lantern is about the link.",
+        "Now click `GET /notes/search` and notice it ends in `db.search_notes`. Keep that one in mind; you'll fix it in step 5."
+      ]
+    },
+    {
+      "id": "explain", "title": "Get each function explained three ways", "feature": "explain",
+      "body": [
+        "In **Settings**, choose a model and paste your key, or pick Ollama or LM Studio to keep the code on your computer. Then open the project's **Explanations** tab and press Explain.",
+        "Every function gets three lenses: a technical description, an everyday version, and a one-to-one map between them. Lantern rejects any explanation whose phrases don't point at real code, so a model can't invent behavior.",
+        "Read the explanation of `hash_password`. It will tell you, in plain words, why the next step matters."
+      ],
+      "commands": ["lantern explain . --estimate                # how many tokens it would take, no calls", "lantern explain . --model anthropic/<model-name>"],
+      "check": {"kind": "explained"}
+    },
+    {
+      "id": "md5", "title": "Fix the critical one: fast password hashing", "feature": "findings",
+      "body": [
+        "Open **Findings**. The top one is critical: `hashlib.md5` in `app/auth.py`. MD5 is so fast that anyone who gets a copy of your database can try billions of passwords a second.",
+        "It's critical, not just high, for two reasons that Lantern shows you: the path from `POST /signup` and `POST /login` reaches it (anyone on the internet can trigger it), and the flagged line uses the `password` that came in with the request.",
+        "The fix is a slow, salted hash. Python's built-in `hashlib.scrypt` is enough, so you don't need a new package. **Protections to add** under Readiness lists \"Slow password hashing\" for the same reason, and it switches to \"in place\" once you've fixed it."
+      ],
+      "prompt": "In app/auth.py, replace the MD5 password hashing with salted hashlib.scrypt (store salt$hash), and make check_password verify against the stored salt.",
+      "fix_files": ["app/auth.py"],
+      "check": {"kind": "cleared", "rules": ["B324"]}
+    },
+    {
+      "id": "sql", "title": "Close the SQL injection in search", "feature": "findings",
+      "body": [
+        "Next finding: `search_notes` in `app/db.py` builds its SQL with an f-string. If someone searches for `' OR '1'='1`, the database runs their text as part of the query and returns every user's notes.",
+        "The fix is to keep the query fixed and pass the values separately as `?` placeholders. The database then treats them as data, never as SQL. Every other query in the file already does this."
+      ],
+      "prompt": "In app/db.py, rewrite search_notes to use ? placeholders instead of an f-string, passing user_id and the LIKE pattern as parameters.",
+      "fix_files": ["app/db.py"],
+      "check": {"kind": "cleared", "rules": ["B608"]}
+    },
+    {
+      "id": "reach", "title": "See why reachability matters", "feature": "findings",
+      "body": [
+        "There's a shell command with `shell=True` in `app/maintenance.py`. It's a dangerous pattern, yet Lantern ranks it only medium. Why? No route reaches it: nothing in the app calls `run_maintenance`, so no user can trigger it today.",
+        "Try an experiment. Add a route to `app/main.py` that calls it, then re-analyze:",
+        "`@app.post(\"/admin/run\")` with `def admin_run(command: str): return run_maintenance(command)` (plus `from .maintenance import run_maintenance`).",
+        "It jumps to **critical**, and the Atlas shows the path from the URL to the shell. Same line of code, but now anyone can run commands on your server. Undo the experiment and delete `app/maintenance.py`, since dead code that's this dangerous is one prompt away from being wired up."
+      ],
+      "check": {"kind": "cleared", "rules": ["B602"]}
+    },
+    {
+      "id": "secret", "title": "Take the secret key out of the code", "feature": "findings",
+      "body": [
+        "`SECRET_KEY = \"my-super-secret-key-123\"` signs every login token. Anyone who reads the code (on GitHub, say) can forge a token for any user.",
+        "Read it from an environment variable instead (`NOTES_SECRET_KEY`), and generate a long random value for each place the app runs."
+      ],
+      "prompt": "In app/auth.py, load SECRET_KEY from the NOTES_SECRET_KEY environment variable, falling back to a random secrets.token_hex(32) for local development.",
+      "fix_files": ["app/auth.py"],
+      "check": {"kind": "cleared", "rules": ["B105"]}
+    },
+    {
+      "id": "deps", "title": "Update packages with known vulnerabilities", "feature": "findings",
+      "body": [
+        "Lantern checked every pinned version in `requirements.txt` against public vulnerability databases. This is the only part of the analysis that goes online, and `--offline` turns it off. `fastapi 0.109.0` and `python-multipart 0.0.6` both have published vulnerabilities.",
+        "Update the pins, reinstall, and run the tests to make sure nothing broke. If this step shows \"didn't run\", you analyzed offline: re-analyze with internet access."
+      ],
+      "commands": ["pip install -r requirements.txt", "python -m pytest -q"],
+      "prompt": "Update requirements.txt to the latest versions of fastapi, uvicorn, python-multipart and httpx, keeping exact == pins.",
+      "fix_files": ["requirements.txt"],
+      "check": {"kind": "deps_clean"}
+    },
+    {
+      "id": "trace", "title": "Watch the code actually run", "feature": "cli",
+      "body": [
+        "So far every link in the map came from reading code. Lantern can also record what really happens when your tests run. Calls it sees are upgraded to **observed**, the strongest kind of evidence an engineer can ask for.",
+        "Run this in the project folder (with the packages from step 8 installed), then refresh the Atlas and look for \"observed\" on the login path."
+      ],
+      "commands": ["lantern analyze . --trace -- python -m pytest -q"],
+      "check": {"kind": "observed"}
+    },
+    {
+      "id": "ready", "title": "Get it ready to ship", "feature": "ready",
+      "body": [
+        "Open **Readiness**: ten areas, each point with a reason. Your fixes already raised the Security and Dependencies scores. What's left is mostly what any deployable app needs: a Dockerfile, a CI workflow, a SECURITY.md.",
+        "Lantern can write starter versions for you. Use the buttons in the Readiness tab, or `lantern starter . --write Dockerfile SECURITY.md`. It never overwrites a file you already have."
+      ],
+      "commands": ["lantern starter .                         # preview", "lantern starter . --write Dockerfile SECURITY.md"],
+      "check": {"kind": "exists", "files": ["Dockerfile", "SECURITY.md"]}
+    },
+    {
+      "id": "evidence", "title": "Prove it with the Evidence Report", "feature": "evidence",
+      "body": [
+        "Open the **Evidence Report**. It compares this run with your first one, so every finding you fixed is listed as **fixed**, next to the scorecard, the tools that ran, and a Limits section saying what Lantern can't see.",
+        "Commit your work (`git init`, `git add .`, `git commit -m \"Fix security findings\"`) and analyze again. The report is then pinned to that commit, and anyone can re-check it with `lantern verify . --report .lantern/evidence.html`. That's what you hand to a skeptical engineer."
+      ],
+      "commands": ["git init && git add . && git commit -m \"Fix security findings\"", "lantern analyze .", "lantern verify . --report .lantern/evidence.html"],
+      "check": {"kind": "fixed"}
+    }
+  ]
+}

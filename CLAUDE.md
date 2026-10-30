@@ -61,6 +61,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/report.py` + `viewer/report.html` | One self-contained HTML file (vanilla JS): pages/routes, path tree with HTTP and click hops, flowchart, lenses, findings with UI paths |
 | `lantern/pipeline.py` | analyze / explain / rebuild as functions with a `log` callback; used by the CLI and the server |
 | `lantern/server.py` + `viewer/app.html` | `lantern serve`: stdlib HTTP app (Home, Atlas iframe with live actions, Evidence, Explanations, Settings), jobs in threads, token + Host checks, keys in memory or `~/.lantern/keys.json` (0600); PWA manifest + service worker |
+| `lantern/learn.py` + `lantern/starters/` | Starter apps for beginners (`lantern learn`, the app's Learn tab and Guide). Each starter: `starter.json.tmpl` (steps, each with a deterministic `check` read from analysis results), `files/` (planted problems), `solution/` (fixes). Everything is `*.tmpl` and dot-files are `dot.<name>`, so the self-audit never sees the planted problems. `tests/test_learn.py` proves each planted problem is found and each fix clears its step |
 | `tools/fake_model.py` | Offline OpenAI-compatible server answering with the shop demo explanations, for end-to-end tests |
 | `lantern/cli.py` | `analyze`, `trace`, `explain`, `report`; results in `PATH/.lantern/` |
 | `tests/fixtures/shop` | Python backend (`shop/`) + React/Vite frontend (`web/`) with planted shell/SQL injection, MD5, XSS, public secret |

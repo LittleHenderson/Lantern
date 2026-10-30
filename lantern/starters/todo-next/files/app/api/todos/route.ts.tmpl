@@ -1,0 +1,16 @@
+import { requireUser } from "@/lib/auth"
+import { insertTodo, listTodos } from "@/lib/db"
+
+export async function GET(req: Request) {
+  const user = await requireUser(req)
+  if (!user) return new Response("Please sign in", { status: 401 })
+  return Response.json(await listTodos(user.id))
+}
+
+export async function POST(req: Request) {
+  const user = await requireUser(req)
+  if (!user) return new Response("Please sign in", { status: 401 })
+  const { title } = await req.json()
+  await insertTodo(user.id, title)
+  return Response.json({ ok: true })
+}

@@ -1,0 +1,20 @@
+// Is the link alive? Ask for it directly instead of building a shell command.
+export async function isAlive(url) {
+  if (!/^https?:\/\//.test(url)) return false
+  try {
+    const res = await fetch(new URL(url), { method: "HEAD", redirect: "follow", signal: AbortSignal.timeout(5000) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+export async function fetchTitle(url) {
+  try {
+    const res = await fetch(new URL(url), { signal: AbortSignal.timeout(5000) })
+    const html = await res.text()
+    return (html.match(/<title>(.*?)<\/title>/) || [])[1] || url
+  } catch {
+    return url
+  }
+}
