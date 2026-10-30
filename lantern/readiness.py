@@ -411,7 +411,13 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
     out.append(_check("tests-exist", "Tests exist", 4, "pass" if tests else "fail",
                       f"{len(tests)} test file{'s' if len(tests) != 1 else ''}" if tests else "no test files found",
                       "" if tests else "Add tests for your most important flows first (sign-in, payments, data changes)."))
-    # Which non-test entry points do tests reach, directly or through the code they call?
+    # Which non-test entry points do tests reach, directly or through the code they call? One pass over the edges
+    # builds both directions; scanning the edge list per node made this take minutes on a 30,000-function repo.
+    out_adj: dict[str, list[str]] = {}
+    in_adj: dict[str, list[str]] = {}
+    for e in g.call_edges():
+        out_adj.setdefault(e.src, []).append(e.dst)
+        in_adj.setdefault(e.dst, []).append(e.src)
     reach: set[str] = set()
     stack = [n.id for n in g.entry_points() if (n.entry or {}).get("kind") == "test"]
     while stack:
@@ -419,12 +425,13 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
         if u in reach:
             continue
         reach.add(u)
-        stack += [e.dst for e in g.callees(u)]
+        stack.extend(out_adj.get(u, ()))
     entries = [n for n in g.entry_points() if (n.entry or {}).get("kind") in ("route", "cli", "script", "page")]
     if entries:
-        hit = [n for n in entries if n.id in reach or any(e.src in reach for e in g.callers(n.id))]
+        hit_ids = {n.id for n in entries if n.id in reach or any(src in reach for src in in_adj.get(n.id, ()))}
+        hit = [n for n in entries if n.id in hit_ids]
         frac = len(hit) / len(entries)
-        miss = [n.entry.get("detail") or n.qualname for n in entries if n not in hit]
+        miss = [n.entry.get("detail") or n.qualname for n in entries if n.id not in hit_ids]
         out.append(_check("tests-entries", "Tests touch every entry point", 4,
                           "pass" if frac >= 0.999 else "partial" if frac >= 0.5 else "fail",
                           f"{len(hit)} of {len(entries)} reached from tests" + (f"; not reached: {', '.join(miss[:4])}" if miss else ""),
