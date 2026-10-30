@@ -35,7 +35,7 @@ CSRF, concurrency in the server, regex/CPU exhaustion on adversarial repos, `--h
 ## 2026-10-30 · re-audit of commit a78e7d8
 
 The same auditor retested every finding above and confirmed all ten fixed, then found three new problems and one
-wording bug. Fixed in the pull request after #9 (see the git history for its number).
+wording bug. Fixed in PR #11.
 
 | # | Finding | Severity | Status |
 |---|---|---|---|
