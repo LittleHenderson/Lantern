@@ -121,7 +121,12 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
 * Dependency audits need exact versions: Python ranges without a lock file, and pnpm/yarn/bun lock files, are reported as not checked.
 * "Uses input" follows assignments inside one function, in order (parameters, request data, and variables set
   from them), not across functions, branches, or loops. A value that arrives through another function's return
-  value is missed; a parameter that is always a constant is over-ranked.
+  value is missed; a parameter that is always a constant is over-ranked. A plain `x = <safe value>` at the same
+  block level clears `x`; a default inside an `if` (`if not x: x = "ls"`) does not, and neither does `x += ...`,
+  so a value that is always replaced inside a branch stays ranked critical (the safe direction).
+* The login check (`LW-AUTH-MISSING`, protection `route-auth`) reads names, not meaning: strings and comments are
+  blanked first; a user lookup counts only when its argument identifies the caller (token, session, request) and is
+  otherwise at most `check`. A check hidden behind a helper with a neutral name (`load()`) is missed.
 * The report embeds source by default; `--privacy structure` omits it.
 * Explanations exist only for selected nodes (entry points + 3 levels, capped at 40 by default).
 

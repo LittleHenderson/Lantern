@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__, learn, pipeline
 from .providers import PRESETS
+from .readiness import SHAPES
 
 VIEWER = Path(__file__).parent / "viewer"
 LOCAL_PROVIDERS = {"ollama", "lmstudio"}
@@ -193,10 +194,10 @@ class App:
         busy = self.jobs.busy(p["id"])
         # These files sit in the analyzed folder, which may come from anyone: keep only the expected types.
         counts = sec.get("counts") if isinstance(sec.get("counts"), dict) else None
-        grade = rd.get("grade")
+        grade, shape = rd.get("grade"), rd.get("shape")
         return {**p, "exists": Path(p["path"]).is_dir(), "has_report": (out / "report.html").exists(),
                 "score": _int(rd.get("score")), "grade": grade if grade in ("A", "B", "C", "D", "F") else None,
-                "shape": _str(rd.get("shape")),
+                "shape": shape if shape in SHAPES else None,
                 "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
                 "finished_at": _str(run.get("finished_at")),
                 "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"],

@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 from .graph import Graph
-from .websec import call_adjacency, is_public_route, mutating_route, route_auth_sign
+from .websec import BODY_AUTH, call_adjacency, code_only, is_public_route, login_check, mutating_route
 
 SENSITIVE_PATH = re.compile(r"(^|/)(login|log-in|signin|sign-in|signup|sign-up|register|auth|token|session|password|"
                             r"reset|forgot|otp|verify|magic-link|2fa|mfa|invite)(/|$|\b)", re.I)
@@ -37,11 +37,6 @@ ALLOW_LIST = re.compile(r"allow_?list|allowed_?hosts|ALLOWED_HOSTS|allowedHosts|
 UPLOAD = re.compile(r"\bUploadFile\b|request\.files|multer\(|formData\(\)|\.formData\(|FileField|busboy|formidable")
 UPLOAD_LIMIT = re.compile(r"MAX_CONTENT_LENGTH|max_size|maxFileSize|fileSize|content_type|contentType|mimetype|"
                           r"fileFilter|DATA_UPLOAD_MAX|sizeLimit|bodyParser", re.I)
-# A login check written inside a handler (names the auth rule would not see as a call: attributes, awaits, helpers)
-BODY_AUTH = re.compile(r"current_?user|request\.user|req\.user|\bauth(?!or)|authenticat|authoriz|login_required|"
-                       r"require_?(?:user|auth|login)|permission|jwt|is_?admin|superuser|getServerSession|getUser|"
-                       r"get_user|verify_?token|check_?token|clerk|\bguard|protect|locals\.user|session\.user|"
-                       r"session\[.{0,20}user", re.I)
 # App-wide mechanisms: middleware, router-level dependencies, auth libraries wired in once
 GLOBAL_AUTH = re.compile(
     r"add_middleware\(\s*\w*(?:auth|login|session|jwt)\w*|AuthenticationMiddleware|LoginRequiredMiddleware|"
@@ -143,15 +138,21 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
                  "Keep using it for every stored password.", ["bcrypt / argon2 / scrypt found"])
 
     # 5. Login check on every route that changes data. Each route is checked on its own (decorator, signature,
-    # what it calls, what its body mentions); the LW-AUTH-MISSING findings (routes the frontend calls) count too.
+    # what it calls, what its body says with strings and comments blanked out); the LW-AUTH-MISSING findings
+    # (routes the frontend calls) count too. A user lookup by a request value is a weak sign: at most "check".
     no_auth = [f for f in (sec or {}).get("findings", []) if f.get("rule") == "LW-AUTH-MISSING" and f.get("status") != "accepted"]
     need = [(n, d) for n, d in writes if not is_public_route(d) and mutating_route(d)]
     if need or no_auth:
         adj = call_adjacency(g)
-        signed, bare = [], []
+        signed, weak, bare = [], [], []
         for n, d in need:
-            sign = route_auth_sign(g, n, adj) or _body_sign(repo, n)
-            (signed if sign else bare).append((n, d, sign))
+            sign = login_check(g, n, adj, repo.text(n.file) if n.file else None)
+            if sign is None:
+                bare.append((n, d, None))
+            elif sign[0] == "weak":
+                weak.append((n, d, sign[1]))
+            else:
+                signed.append((n, d, sign[1]))
         where = [f"{d} ({n.file}:{n.start_line})" for n, d, _ in bare]
         for f in no_auth:
             loc = f"{f['file']}:{f['line']}"
@@ -174,6 +175,13 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
                  "Make sure the middleware or router dependency covers these routes (path matchers, router "
                  "prefixes, excluded paths), or add the check at the top of each handler. " + how,
                  [f"{f}:{ln}" if ln else f for f, ln, _ in app_wide[:4]])
+        elif weak:
+            item("route-auth", "Login check on routes that change data", "check",
+                 f"{len(weak)} route(s) that change data only look up a user by a value from the request and test "
+                 "the result. That finds the record's owner, not who is calling (the shape behind most "
+                 "\"anyone can edit anyone's data\" bugs), so confirm the signed-in user is checked too.",
+                 [f"{d} ({n.file}:{n.start_line}): {sign}" for n, d, sign in weak[:6]], how,
+                 [f"{d}: {sign}" for _, d, sign in signed[:4]])
         else:
             item("route-auth", "Login check on routes that change data", "in place",
                  f"All {len(need)} route(s) that change data show a login check in the handler or in what it calls "
@@ -192,16 +200,6 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     return out
 
 
-def _body_sign(repo, n) -> str | None:
-    """A login check written inside the handler itself (an attribute, an await, a helper the graph did not link)."""
-    if not n.file or not n.start_line:
-        return None
-    body = "\n".join(repo.text(n.file).splitlines()[n.start_line - 1:(n.end_line or n.start_line)])
-    body = re.sub(r"(['\"`])(?:\\.|(?!\1).)*\1", "''", body)   # not the strings (route paths, messages)
-    m = BODY_AUTH.search(body)
-    return f"handler mentions `{m.group(0)}`" if m else None
-
-
 def _global_auth_signs(repo) -> list[tuple[str, int, str]]:
     """Middleware, router-level dependencies, or auth libraries wired in once for the whole app."""
     out = []
@@ -209,11 +207,11 @@ def _global_auth_signs(repo) -> list[tuple[str, int, str]]:
         if re.search(r"before_request|@app\.middleware|function\s+middleware|const\s+middleware", text):
             # generic hooks count only when what follows looks at who is calling
             window = "\n".join(repo.text(f).splitlines()[ln - 1:ln + 20])
-            if not BODY_AUTH.search(window):
+            if not BODY_AUTH.search(code_only(window, js=not f.endswith(".py"))):
                 continue
         out.append((f, ln, text))
     for f in repo.project_files:   # Next.js middleware file
-        if re.fullmatch(r"(?:src/)?middleware\.[tj]sx?", f) and BODY_AUTH.search(repo.text(f)):
+        if re.fullmatch(r"(?:src/)?middleware\.[tj]sx?", f) and BODY_AUTH.search(code_only(repo.text(f), js=True)):
             out.append((f, 1, "middleware file"))
     return out
 

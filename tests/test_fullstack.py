@@ -256,3 +256,29 @@ def test_unreadable_http_verb_is_not_guessed_as_get(tmp_path):
     assert all(e.confidence == "possible" for e in d)
     assert edge(g, "js:web/src/api::getThing", "py:app.main.get_thing").confidence == "resolved"
     assert edge(g, "js:web/src/api::postThing", "py:app.main.make_thing").confidence == "resolved"
+
+
+def test_missing_auth_reads_the_handler_not_its_comments(tmp_path):
+    """LW-AUTH-MISSING and the protections advisor share one reading of a route: a comment or a user lookup by a
+    request value is not a login check, `req.user` in the body is."""
+    _write(tmp_path, {
+        "package.json": '{"dependencies": {"express": "4"}}',
+        "server.js": (
+            "const express = require('express')\nconst { getUser } = require('./users')\nconst app = express()\n"
+            "app.post('/notes', async (req, res) => {\n  // auth: TODO add a session check\n  res.send('ok')\n})\n"
+            "app.delete('/notes/:id', async (req, res) => {\n  const owner = await getUser(req.body.owner)\n"
+            "  if (!owner) return res.status(404).end()\n  res.send('ok')\n})\n"
+            "app.put('/notes/:id', async (req, res) => {\n  if (!req.user.isAdmin) return res.status(403).end()\n"
+            "  res.send('ok')\n})\n"
+            "app.listen(3000)\n"),
+        "users.js": "export function getUser(id) { return id }\n",
+        "web/app.js": (
+            "export async function save(text) { await fetch('/notes', {method: 'POST', body: text}) }\n"
+            "export async function remove(id) { await fetch('/notes/' + id, {method: 'DELETE'}) }\n"
+            "export async function rename(id) { await fetch('/notes/' + id, {method: 'PUT'}) }\n"),
+    })
+    s = scan(build_graph(tmp_path))
+    auth = {f["line"]: f for f in s["findings"] if f["rule"] == "LW-AUTH-MISSING"}
+    assert sorted(auth) == [4, 8], auth.keys()                          # POST (comment only) and DELETE (lookup)
+    assert "record's owner" in auth[8]["more_info"] and "getUser(req.body.owner)" in auth[8]["more_info"]
+    assert "record's owner" not in auth[4]["more_info"]

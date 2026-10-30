@@ -56,8 +56,25 @@ JS_RULES = [
      "LOW", "Stores a login token in localStorage, where any injected script can read it", 922),
 ]
 
+# Names of things that check who is calling: decorators, dependencies, callees, body words. `getUser`/`get_user`
+# are deliberately absent: fetching a user record is a check only when the argument identifies the caller (below).
 AUTH_NAME_RE = re.compile(r"current_?user|auth|login_required|require_?user|verify|token|permission|jwt|"
-                          r"session|is_?admin|superuser|guard|protect|clerk|getServerSession|getUser", re.I)
+                          r"session|is_?admin|superuser|guard|protect|clerk|getServerSession", re.I)
+# The same idea read from a handler's body (attributes, awaits, helpers the graph did not link)
+BODY_AUTH = re.compile(r"current_?user|request\.user|req\.user|\bauth(?!or)|authenticat|authoriz|login_required|"
+                       r"require_?(?:user|auth|login)|permission|jwt|is_?admin|superuser|getServerSession|"
+                       r"verify_?token|check_?token|clerk|\bguard|protect|locals\.user|session\.user|"
+                       r"session\[.{0,20}user", re.I)
+# A helper that fetches a user record. `get_user(token)` identifies the caller; `get_user(payload["owner"])` finds
+# the record's owner (the IDOR shape), which proves nothing about who is calling.
+USER_LOOKUP = re.compile(r"\b(?:get|fetch|find|load|lookup|read|select)_?user(?:_?by_?\w+|s)?\s*\(", re.I)
+CALLER_ARG = re.compile(r"token|session|request|\breq\b|\bctx\b|context|headers?|cookies?|authorization|jwt|"
+                        r"claims|locals|auth|credential|bearer|principal|identity", re.I)
+# ...but the request's content (body, query, path) is what the caller sent, not who the caller is
+REQUEST_VALUE = re.compile(r"\b(?:request|req)\.(?:args|form|json|body|query|params|values|files|data|get_json|"
+                           r"path_params|query_params|matchdict|POST|GET|FILES)\b|\b(?:params|payload|body|"
+                           r"searchParams|formData|form|args|input)\b", re.I)
+CONDITION = re.compile(r"\b(?:if|elif|while|assert|unless)\b|[=!]==?|\bis\b|\bnot\b|!|&&|\|\||\?")
 PUBLIC_ROUTE_RE = re.compile(r"login|signin|sign-in|signup|sign-up|register|password|reset|recover|health|"
                              r"webhook|callback|logout|verify|token|public|contact|subscribe|oauth|"
                              r"(?<![a-z])auth(?![a-z])", re.I)   # /auth/refresh, not /authors
@@ -238,9 +255,78 @@ def _func_name(g: Graph, nid: str) -> str:
     return n.qualname.split("::")[-1].split(".")[-1] if n.kind != "module" else ""
 
 
+def _blank(m: re.Match) -> str:
+    return re.sub(r"[^\n]", "~", m.group(0))
+
+
+def code_only(text: str, js: bool = False) -> str:
+    """The text with string literals and comments blanked out, same length, so offsets and line numbers still
+    hold. A route path '/auth/refresh', a message, a docstring, or `# TODO: add auth here` is not a login check."""
+    if js:
+        text = re.sub(r"`(?:\\.|[^`\\])*`", _blank, text)
+    else:
+        text = re.sub(r"(\"\"\"|''')[\s\S]*?\1", _blank, text)
+    text = re.sub(r"(['\"])(?:\\.|(?!\1).)*\1", _blank, text)
+    if js:
+        text = re.sub(r"/\*[\s\S]*?\*/", _blank, text)
+        text = re.sub(r"//[^\n]*", _blank, text)
+    else:
+        text = re.sub(r"#[^\n]*", _blank, text)
+    return text
+
+
 def _strip_strings(s: str) -> str:
-    """Code without its string literals, so a route path like '/auth/refresh' is not read as a login check."""
-    return re.sub(r"(['\"`])(?:\\.|(?!\1).)*\1", "''", s)
+    return code_only(s, js=True) if "`" in s else code_only(s)
+
+
+def _call_args(code: str, start: int) -> str:
+    """The text between the parenthesis at `start` and its match (at most 300 characters)."""
+    depth = 0
+    for i in range(start, min(len(code), start + 300)):
+        if code[i] == "(":
+            depth += 1
+        elif code[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return code[start + 1:i]
+    return code[start + 1:start + 300]
+
+
+def body_auth_sign(text: str, start_line: int, end_line: int, js: bool) -> tuple[str, str] | None:
+    """What a handler's own lines say about checking the caller, read with strings and comments blanked out.
+    ("strong", evidence) for words that only make sense when checking who is calling, or a user lookup given the
+    caller's token/request/session (or nothing); ("weak", evidence) for a user lookup by some other value whose
+    result is then tested, which finds a record, not the caller; None otherwise. Weak never counts as in place."""
+    lines = text.splitlines()
+    if not start_line or start_line > len(lines):
+        return None
+    raw = "\n".join(lines[start_line - 1:(end_line or start_line)])
+    code = code_only(raw, js)
+    m = BODY_AUTH.search(code)
+    if m:
+        return "strong", f"handler mentions `{m.group(0)}`"
+    weak = None
+    for m in USER_LOOKUP.finditer(code):
+        args = _call_args(code, m.end() - 1)
+        call = raw[m.start():m.end() + len(args) + 1].replace("\n", " ")
+        call = re.sub(r"\s+", " ", call)[:60]
+        if not args.strip() or (CALLER_ARG.search(args) and not REQUEST_VALUE.search(args)):
+            return "strong", f"handler calls `{call}`"
+        line_start = code.rfind("\n", 0, m.start()) + 1
+        line_end = code.find("\n", m.end())
+        line = code[line_start:line_end if line_end >= 0 else len(code)]
+        lhs = re.match(r"\s*(?:(?:const|let|var)\s+)?(?:\{\s*)?([A-Za-z_$][\w$]*)[^=]*=[^=]", line)
+        checked = bool(CONDITION.search(line[:m.start() - line_start]))   # `if not get_user(x):`
+        if lhs and not checked:
+            name = re.escape(lhs.group(1))
+            for later in code[line_end:].splitlines() if line_end >= 0 else []:
+                if re.search(rf"(?<![\w$.]){name}(?![\w$])", later) and CONDITION.search(later):
+                    checked = True
+                    break
+        if checked and weak is None:
+            by = re.sub(r"\s+", " ", raw[m.end():m.end() + len(args)].strip())[:40]
+            weak = ("weak", f"`{call}` looks up a user by `{by}`, not by who is calling")
+    return weak
 
 
 def call_adjacency(g: Graph) -> dict[str, list[str]]:
@@ -252,8 +338,7 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
 
 def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
-    its signature, or a function named like an auth check within `depth` calls. None when nothing was found.
-    Shared by the LW-AUTH-MISSING rule and the protections advisor so both tell the same story."""
+    its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
     for d in n.decorators:
         m = AUTH_NAME_RE.search(_strip_strings(d))
         if m:
@@ -276,6 +361,19 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
     return None
 
 
+def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None) -> tuple[str, str] | None:
+    """Everything Lantern can see about a route checking its caller: ("strong", why) from the decorator, signature,
+    callees or body; ("weak", why) when the body only looks up a user by a request value and tests the result;
+    None when nothing was found. Shared by the LW-AUTH-MISSING rule and the protections advisor so both tell the
+    same story: a weak sign is never "in place", and a route with no sign gets the finding."""
+    sign = route_auth_sign(g, n, adj)
+    if sign:
+        return "strong", sign
+    if text is None or not n.file:
+        return None
+    return body_auth_sign(text, n.start_line or 0, n.end_line or n.start_line or 0, js=not n.file.endswith(".py"))
+
+
 def is_public_route(detail: str) -> bool:
     """Sign-in, sign-up, webhooks and the like: expected to be reachable without a login."""
     return bool(PUBLIC_ROUTE_RE.search(detail.partition(" ")[2] or detail))
@@ -294,6 +392,7 @@ def missing_auth(g: Graph) -> list[dict]:
         if (e.via or "").startswith("http-") and not e.dst.startswith("ext:"):
             bridged.setdefault(e.dst, e.detail)
     adj = call_adjacency(g)
+    texts: dict[str, str] = {}
     for rid, detail in bridged.items():
         n = g.nodes.get(rid)
         if n is None or not n.entry:
@@ -301,14 +400,23 @@ def missing_auth(g: Graph) -> list[dict]:
         route = n.entry.get("detail", "")
         if not mutating_route(route) or is_public_route(route):
             continue
-        if route_auth_sign(g, n, adj):
+        if n.file and n.file not in texts:
+            try:
+                texts[n.file] = (Path(g.repo_root) / n.file).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                texts[n.file] = ""
+        sign = login_check(g, n, adj, texts.get(n.file or ""))
+        if sign and sign[0] == "strong":
             continue
+        more = ("Heuristic: Lantern looked three calls deep for anything named like an auth check (current_user, "
+                "auth, verify, session, permission...) and read the handler's own lines for the same words. ")
+        if sign:
+            more += (f"The handler only has {sign[1]}: that finds the record's owner, not who is calling. "
+                     "Check the signed-in user as well. ")
         out.append(_finding(
             "LW-AUTH-MISSING", f"{n.entry['detail']} changes data, is called by the app, and no login check was found",
             "MEDIUM", n.file, n.start_line, category="code", conf="LOW", cwe=306, fixed_rank="medium",
-            more=("Heuristic: Lantern looked three calls deep for anything named like an auth check "
-                  "(current_user, auth, verify, session, permission...). If this route is meant to be public, ignore it."),
-            snippet=detail or ""))
+            more=more + "If this route is meant to be public, ignore it.", snippet=detail or ""))
     return out
 
 

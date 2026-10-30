@@ -167,8 +167,10 @@ def progress(sid: str, repo: Path, out: Path | None = None) -> dict:
         status, why = check(st["check"], Path(repo), out) if st.get("check") else ("read", "")
         steps.append({"n": i, "id": st["id"], "title": st["title"], "status": status, "why": why})
     checkable = [x for x in steps if x["status"] != "read"]
+    # `total` counts the steps Lantern can check; read-only steps ("explore the map") are listed but counted apart.
     return {"starter": sid, "title": s["title"], "steps": steps,
-            "done": sum(1 for x in checkable if x["status"] == "done"), "total": len(checkable)}
+            "done": sum(1 for x in checkable if x["status"] == "done"), "total": len(checkable),
+            "explore": len(steps) - len(checkable)}
 
 
 # ---------------------------------------------------------------------------- text

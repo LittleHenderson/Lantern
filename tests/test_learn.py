@@ -109,6 +109,7 @@ def test_progress_ignores_planted_results(tmp_path):
     (out / "readiness.json").write_text("[1, 2]", encoding="utf-8")
     pr = learn.progress("notes-api", d)
     assert pr["steps"][0]["status"] == "done"
+    assert pr["total"] + pr["explore"] == len(pr["steps"])   # the counter and the list agree
     assert all(isinstance(s["why"], str) and "<" not in s["why"] for s in pr["steps"])
 
 
@@ -126,7 +127,8 @@ def test_cli_learn(tmp_path, capsys, monkeypatch):
     assert (d / ".lantern/baseline.json").exists()   # the "before" for the Evidence Report
     capsys.readouterr()
     assert main(["learn", "--check", str(d)]) == 0
-    assert "[ ] 4. Fix the critical one" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "[ ] 4. Fix the critical one" in out and "checked steps done" in out
     monkeypatch.chdir(d)
     assert main(["learn", "--show-fix", "app/db.py"]) == 0
     assert "AND text LIKE ?" in capsys.readouterr().out

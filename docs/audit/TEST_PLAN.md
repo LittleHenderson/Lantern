@@ -89,6 +89,12 @@ by hand. Pick three readiness passes and confirm the evidence text is literally 
 4.9 **Key leakage.** Set a fake key, trigger a provider error (wrong base URL, a server returning 401 with the request
 echoed), and search `~/.lantern`, `.lantern/`, job logs (`/api/jobs/<id>`), and the terminal for the key.
 
+4.10 **Heuristics that must not say "in place".** A data-changing route whose only login word is in a comment
+(`# TODO: add auth here later`) or a docstring; one whose body does `who = get_user(payload["owner"])` with or
+without `if not who:`; a route path `/authors`. Expect `add`, `check` (lookup with a test), `add` (lookup without),
+and `add`. Then `cmd = request.args.get("cmd")` followed by `cmd = "ls -la"` (expect high, no input sentence) and
+by `if not cmd: cmd = "ls"` (expect critical, naming the request line).
+
 ## 5. Pass criteria for a release
 
 * All of section 1 passes on Linux with Python 3.11–3.13 and on Windows with Python 3.12 under stock settings

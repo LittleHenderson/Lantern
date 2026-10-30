@@ -279,7 +279,8 @@ def cmd_learn(a) -> int:
             return 2
         pr = learn.progress(sid, here)
         marks = {"done": "[x]", "todo": "[ ]", "unknown": "[?]", "read": "[-]"}
-        print(f"{pr['title']}: {pr['done']} of {pr['total']} steps done")
+        extra = f" (+{pr['explore']} to explore on your own)" if pr.get("explore") else ""
+        print(f"{pr['title']}: {pr['done']} of {pr['total']} checked steps done{extra}")
         for st in pr["steps"]:
             print(f"  {marks[st['status']]} {st['n']}. {st['title']}" + (f"  ({st['why']})" if st["why"] else ""))
         return 0
