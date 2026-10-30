@@ -21,7 +21,7 @@ from pathlib import Path
 from .graph import Graph, Node
 from .providers import Provider, ProviderError
 
-PROMPT_VERSION = "lens-v1"
+PROMPT_VERSION = "lens-v2"
 
 # Technical vocabulary a Lens 3 "term" anchor may use even if it doesn't appear verbatim in the code.
 GLOSSARY = {
@@ -58,7 +58,7 @@ plain phrase that appears VERBATIM in `text` to the exact technical thing it sta
 needs an anchor:
   {"type":"symbol","id":"<an id from ALLOWED SYMBOLS>"}
   {"type":"lines","start":N,"end":M}   (within the unit's line range)
-  {"type":"term","term":"<a technical term that appears in the source, or a standard CS term>"}
+  {"type":"term","term":"<a whole word or name from the code (3+ characters), or a standard CS term>"}
 Use 4-8 pairs covering the main ideas. Plain phrases must be short (1-6 words) and distinct.
 
 If SECURITY FINDINGS are listed, add `findings` explaining each one in lens1 and lens2 terms,
@@ -98,6 +98,14 @@ class Context:
         h.update(json.dumps([self.node.fingerprint, sorted(self.callees), sorted(self.callers),
                              sorted(f["id"] for f in self.findings), self.metaphor]).encode())
         return h.hexdigest()[:12]
+
+
+def _term_in_code(term: str, code_lower: str) -> bool:
+    """A term anchors only if it is a real name or phrase in the code: at least 3 characters with a letter, found as
+    whole words (so "a", "1", or "|" can't anchor anything)."""
+    if len(term) < 3 or not re.search(r"[^\W\d_]", term):
+        return False
+    return re.search(r"(?<![\w])" + re.escape(term) + r"(?![\w])", code_lower) is not None
 
 
 def read_source(repo: Path, node: Node, max_lines: int = 160) -> str:
@@ -213,7 +221,7 @@ def validate(rec: dict, ctx: Context) -> list[str]:
     if not isinstance(pairs, list) or len(pairs) < 3:
         errs.append("lens3.pairs needs at least 3 pairs")
         return errs
-    src_lower = ctx.source.lower()
+    code_lower = re.sub(r"(?m)^\s*\d+ \| ", "", ctx.source).lower()   # without the line-number gutter
     seen_plain = set()
     for i, p in enumerate(pairs):
         tag = f"lens3.pairs[{i}]"
@@ -247,8 +255,9 @@ def validate(rec: dict, ctx: Context) -> list[str]:
                 errs.append(f"{tag} line anchor {s}-{e} is outside {lo}-{hi}")
         elif t == "term":
             term = str(anc.get("term", "")).strip().lower()
-            if not term or (term not in src_lower and term not in GLOSSARY):
-                errs.append(f"{tag} term '{anc.get('term')}' is neither in the source nor a standard term")
+            if term not in GLOSSARY and not _term_in_code(term, code_lower):
+                errs.append(f"{tag} term '{anc.get('term')}' is neither a word or name in the code (3+ characters, "
+                            "with a letter) nor a standard term")
         else:
             errs.append(f"{tag} has unknown anchor type '{t}'")
     fids = {f["id"] for f in ctx.findings}

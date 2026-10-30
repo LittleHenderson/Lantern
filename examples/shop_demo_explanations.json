@@ -195,7 +195,7 @@
       },
       "findings": [
         {
-          "id": "42c137610fea",
+          "id": "271ac69ef170",
           "lens1": "B608: user_id is interpolated into SQL text. It is reachable from GET /users/{user_id}, so a request can change the query, for example to return every row or to drop tables.",
           "lens2": "A visitor can add their own instructions to the slip, and the records room will follow them.",
           "fix": "Use a placeholder: self.conn.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,))."
@@ -253,7 +253,7 @@
       },
       "findings": [
         {
-          "id": "b198680dfd84",
+          "id": "12771352490c",
           "lens1": "B324: MD5 is a fast, broken hash. Stored MD5 password hashes can be cracked quickly with commodity GPUs.",
           "lens2": "The lock on the guest book has a master key that many people already have.",
           "fix": "Use a slow password hash such as Argon2id (argon2-cffi) or bcrypt, and compare with a constant-time check."
@@ -322,13 +322,13 @@
       },
       "findings": [
         {
-          "id": "d8d31e66c160",
+          "id": "57fa455f7b3b",
           "lens1": "B602: subprocess with shell=True and a request-controlled string. Reachable from POST /backup, so a request can run arbitrary commands on the server.",
           "lens2": "A visitor can slip their own orders into the intercom message, and the staff will carry them out.",
           "fix": "Pass an argument list without a shell: subprocess.run([\"tar\", \"czf\", f\"{safe_name}.tgz\", \"data/\"], check=True), after validating name against an allow-list pattern."
         },
         {
-          "id": "8c49a35a53de",
+          "id": "27105c2e3afc",
           "lens1": "LW-AUTH-MISSING (heuristic): POST /backup is called from the Admin page and changes server state, but no authentication dependency or check was found within three calls.",
           "lens2": "Anyone who finds this address can ask the storage room to pack boxes. Nobody checks that they work at the hotel.",
           "fix": "Require a logged-in admin: add a dependency such as current_user: CurrentAdmin = Depends(get_current_admin) to the route."

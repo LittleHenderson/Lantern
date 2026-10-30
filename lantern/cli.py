@@ -8,7 +8,7 @@
   lantern accept PATH FINDING_ID --reason "..."           record an accepted risk (committed in the repo)
   lantern starter PATH [--write NAME]                     show or write generated starter files
   lantern evidence PATH                                   rebuild the commit-pinned Evidence Report
-  lantern verify PATH --digest sha256:...                 re-run the analysis and compare with a report
+  lantern verify PATH --report evidence.html [-- CMD]     re-run the analysis the same way and compare
   lantern serve [PATH ...]                                the local app in your browser (start here)
 
 Results live in PATH/.lantern/ (override with --out).
@@ -75,38 +75,56 @@ def cmd_evidence(a) -> int:
     return 0
 
 
-def cmd_verify(a) -> int:
+def cmd_verify(a, trace_cmd: list[str]) -> int:
     import re
     from . import evidence
     from .engine import build_graph
     from .readiness import assess
     from .security import scan
-    want = a.digest
+    from .trace import merge_trace, run_trace
+    want, old = a.digest, None
     if a.report:
-        m = re.search(r"sha256:[0-9a-f]{64}", Path(a.report).read_text(encoding="utf-8", errors="replace"))
+        rp = Path(a.report)
+        m = re.search(r"sha256:[0-9a-f]{64}", rp.read_text(encoding="utf-8", errors="replace"))
         want = m.group(0) if m else None
+        if rp.with_suffix(".json").exists():
+            old = json.loads(rp.with_suffix(".json").read_text(encoding="utf-8")).get("payload") or {}
     if not want:
         print("give --digest sha256:... or --report evidence.html", file=sys.stderr)
         return 2
+    # Replay the report's run options. Scanning on/off is safe to copy. A trace runs code, so the command is
+    # never taken from the report: the verifier types it, and it must match what the report recorded.
+    run = (old or {}).get("run") or {}
+    do_scan = run.get("scan", not a.no_scan) and not a.no_scan
+    want_trace = run.get("trace")
+    if want_trace and trace_cmd != want_trace:
+        print("This report was made with a trace, which runs the project's code. Lantern won't run a command taken "
+              "from a report; check it, then run:\n  lantern verify " + (a.path or ".") + f" --report {a.report} -- "
+              + " ".join(want_trace), file=sys.stderr)
+        return 2
     repo = Path(a.path).resolve()
     g = build_graph(repo)
-    sec = scan(g)
-    rd = assess(g, sec, {})
+    run_meta: dict = {}
+    if trace_cmd:
+        tm = merge_trace(g, run_trace(repo, trace_cmd))
+        run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}
+    sec = scan(g) if do_scan else None
+    rd = assess(g, sec, run_meta)
     gi = evidence.git_info(repo)
-    got = evidence.digest(evidence.digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False)))
+    new = evidence.digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False),
+                                  evidence.run_options(sec, run_meta))
+    got = evidence.digest(new)
     print(f"commit  {gi.get('commit')}{' (uncommitted changes present)' if gi.get('dirty') else ''}")
+    print(f"options scan {'on' if do_scan else 'off'}, trace {' '.join(trace_cmd) if trace_cmd else 'off'}")
     print(f"report  {want}\nrerun   {got}")
     if got == want:
         print("MATCH: the report's results are what this analyzer finds on this commit.")
         return 0
     print("DIFFERENT: check out the report's commit, install the same scanner versions (see Provenance), "
           "and make sure lantern-accepted.json matches.")
-    if a.report and Path(a.report).with_suffix(".json").exists():
-        old = json.loads(Path(a.report).with_suffix(".json").read_text(encoding="utf-8")).get("payload", {})
-        new = evidence.digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False))
-        for k in new:
-            if old.get(k) != new[k]:
-                print(f"  differs: {k}")
+    for k in new:
+        if old is not None and old.get(k) != new[k]:
+            print(f"  differs: {k}")
     return 1
 
 
@@ -294,7 +312,8 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("verify", help="re-run the analysis and compare with an Evidence Report's digest")
     sp.add_argument("path", nargs="?", default=".")
     sp.add_argument("--digest", help="sha256:... from the report")
-    sp.add_argument("--report", help="evidence.html (or .json) to read the digest from")
+    sp.add_argument("--report", help="evidence.html (or .json) to read the digest and run options from")
+    sp.add_argument("--no-scan", action="store_true", help="the report was made with --no-scan (read from --report)")
 
     sp = sub.add_parser("serve", help="open the Lantern app in your browser (projects, map, findings, readiness)")
     sp.add_argument("paths", nargs="*", help="project folders to add (analyzed on first open)")
@@ -318,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "evidence":
         return cmd_evidence(a)
     if a.cmd == "verify":
-        return cmd_verify(a)
+        return cmd_verify(a, trace_cmd)
     if a.cmd == "serve":
         from .server import serve
         return serve(a.paths, host=a.host, port=a.port, open_browser=not a.no_open)

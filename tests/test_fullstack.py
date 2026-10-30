@@ -204,6 +204,9 @@ def test_tanstack_file_route_and_generated_client(tmp_path):
     (("POST", "/items", False), ["GET /items"], [], ""),                       # wrong method
     (("GET", "/x", True), ["GET /api/x"], ["GET /api/x"], "inferred"),         # ${API}/x
     (("GET", "/{}", False), ["GET /{id}"], [], ""),                           # all-wildcard proves nothing
+    (("ANY", "/things/{}", False), ["GET /things/{id}", "DELETE /things/{id}"],   # verb unreadable: both,
+     ["GET /things/{id}", "DELETE /things/{id}"], "possible"),                   # never a confirmed link
+    (("ANY", "/things/{}", False), ["GET /things/{id}"], ["GET /things/{id}"], "inferred"),
 ])
 def test_bridge_matching(call, routes, want, conf):
     rs = []
@@ -227,3 +230,26 @@ def test_public_secret_only_in_env_contexts(tmp_path):
                    if f["rule"] == "LW-PUBLIC-SECRET")
     assert found == [(".env.local", "VITE_ADMIN_PASSWORD"), ("src/a.ts", "NEXT_PUBLIC_STRIPE_SECRET_KEY"),
                      ("src/c.svelte", "PUBLIC_API_SECRET")]
+
+
+def test_unreadable_http_verb_is_not_guessed_as_get(tmp_path):
+    """`fetch(url, opts)` with opts defined elsewhere: the verb is unknown, so no confirmed link to the GET route."""
+    _write(tmp_path, {
+        "web/package.json": '{"dependencies": {"react": "18"}}',
+        "web/src/api.ts": (
+            "const deleteOpts = { method: 'DELETE' }\n"
+            "export const deleteThing = (id) => fetch(`/things/${id}`, deleteOpts)\n"
+            "export const getThing = (id) => fetch(`/things/${id}`)\n"
+            "export const postThing = (b) => fetch('/things', { method: 'POST', body: b })\n"),
+        "app/main.py": (
+            "from fastapi import FastAPI\napp = FastAPI()\n\n"
+            "@app.get('/things/{thing_id}')\ndef get_thing(thing_id: int):\n    return 1\n\n"
+            "@app.delete('/things/{thing_id}')\ndef delete_thing(thing_id: int):\n    return 1\n\n"
+            "@app.post('/things')\ndef make_thing():\n    return 1\n"),
+    })
+    g = build_graph(tmp_path)
+    d = [e for e in g.call_edges() if e.src == "js:web/src/api::deleteThing" and e.dst.startswith("py:")]
+    assert {e.dst for e in d} == {"py:app.main.get_thing", "py:app.main.delete_thing"}
+    assert all(e.confidence == "possible" for e in d)
+    assert edge(g, "js:web/src/api::getThing", "py:app.main.get_thing").confidence == "resolved"
+    assert edge(g, "js:web/src/api::postThing", "py:app.main.make_thing").confidence == "resolved"

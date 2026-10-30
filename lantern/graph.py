@@ -108,7 +108,9 @@ class Graph:
             "meta": self.meta,
             "nodes": [asdict(n) for n in self.nodes.values()],
             "edges": [asdict(e) for e in self._edges.values()],
+            # Only the 200 most common texts are kept, but the totals are the true counts.
             "unresolved": dict(sorted(self.unresolved.items(), key=lambda kv: -kv[1])[:200]),
+            "unresolved_totals": {"call_sites": sum(self.unresolved.values()), "distinct": len(self.unresolved)},
         }
 
     def save(self, path: str | Path) -> None:
@@ -125,6 +127,7 @@ class Graph:
             ed = Edge(**e)
             g._edges[(ed.src, ed.dst, ed.kind)] = ed
         g.unresolved = d.get("unresolved", {})
+        g._unresolved_totals = d.get("unresolved_totals")
         return g
 
     def stats(self) -> dict:
@@ -132,9 +135,10 @@ class Graph:
         for n in self.nodes.values():
             kinds[n.kind] = kinds.get(n.kind, 0) + 1
         conf: dict[str, int] = {}
-        internal_calls = 0
+        internal_calls = by_name = 0
         for e in self.call_edges():
             conf[e.confidence] = conf.get(e.confidence, 0) + 1
+            by_name += e.via in ("unique-method-name", "method-name")
             if not e.dst.startswith("ext:"):
                 internal_calls += 1
         return {
@@ -143,5 +147,7 @@ class Graph:
             "internal_call_edges": internal_calls,
             "confidence": conf,
             "entry_points": len(self.entry_points()),
-            "unresolved_call_sites": sum(self.unresolved.values()),
+            "unresolved_call_sites": (getattr(self, "_unresolved_totals", None) or {}).get(
+                "call_sites", sum(self.unresolved.values())),
+            "guessed_by_method_name": by_name,
         }

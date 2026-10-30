@@ -165,3 +165,9 @@ def test_starter_write_never_overwrites(tmp_path, capsys):
     assert (out / "readiness.json").exists()
     assert main(["starter", str(tmp_path), "--write", "../evil"]) == 0
     assert not (tmp_path.parent / "evil").exists()
+
+
+def test_unreadable_package_json_is_not_called_pinned(tmp_path):
+    _write(tmp_path, {"package.json": "{ not json", "index.js": "console.log(1)\n"})
+    c = _checks(assess(build_graph(tmp_path), EMPTY_SEC, {}))["deps-pinned"]
+    assert c["status"] == "fail" and "could not be read" in c["evidence"]

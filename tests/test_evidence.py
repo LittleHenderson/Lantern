@@ -1,5 +1,7 @@
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 from lantern import evidence
@@ -18,9 +20,9 @@ def _write(root, files):
 
 def _git(root, *args):
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
-                   env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
-                        "GIT_COMMITTER_EMAIL": "t@example.com", "PATH": "/usr/bin:/bin:/usr/local/bin",
-                        "HOME": str(root)})
+                   env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com", "HOME": str(root),
+                        "GIT_CONFIG_NOSYSTEM": "1"})
 
 
 def _repo(tmp_path):
@@ -79,3 +81,66 @@ def test_remote_credentials_are_not_echoed(tmp_path):
     repo = _repo(tmp_path)
     _git(repo, "remote", "add", "origin", "https://user:tok123@example.com/a/b.git")
     assert evidence.git_info(repo)["remote"] == "https://example.com/a/b.git"
+
+
+def test_moving_a_line_is_not_a_fix(tmp_path):
+    repo = _repo(tmp_path)
+    assert main(["analyze", str(repo)]) == 0
+    before = {f["id"] for f in json.loads((repo / ".lantern/security.json").read_text(encoding="utf-8"))["findings"]}
+    (repo / "app.py").write_text("# a comment\n# another\n" + APP["app.py"], encoding="utf-8")
+    assert main(["analyze", str(repo)]) == 0
+    after = {f["id"] for f in json.loads((repo / ".lantern/security.json").read_text(encoding="utf-8"))["findings"]}
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
+    assert before == after and not ev["security"]["fixed"] and not ev["security"]["changed"]
+
+
+def test_editing_the_flagged_line_is_changed_not_fixed(tmp_path):
+    repo = _repo(tmp_path)
+    assert main(["analyze", str(repo)]) == 0
+    (repo / "app.py").write_text(APP["app.py"].replace("hashlib.md5(x)", "hashlib.md5(x )"), encoding="utf-8")
+    assert main(["analyze", str(repo)]) == 0
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
+    assert not ev["security"]["fixed"]          # whitespace-only edits keep the id
+    (repo / "app.py").write_text(APP["app.py"].replace("hashlib.md5(x)", "hashlib.md5(bytes(x))"), encoding="utf-8")
+    assert main(["analyze", str(repo)]) == 0
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
+    assert not ev["security"]["fixed"] and any(f["rule"] == "B324" for f in ev["security"]["changed"])
+    assert "Changed but still open" in (repo / ".lantern/evidence.html").read_text(encoding="utf-8")
+
+
+def test_verify_replays_no_scan(tmp_path):
+    repo = _repo(tmp_path)
+    assert main(["analyze", str(repo), "--no-scan"]) == 0
+    assert main(["verify", str(repo), "--report", str(repo / ".lantern/evidence.html")]) == 0
+
+
+def test_verify_replays_a_trace_only_when_the_verifier_types_it(tmp_path):
+    repo = _repo(tmp_path)
+    cmd = [sys.executable, "app.py"]
+    assert main(["analyze", str(repo), "--trace", "--", *cmd]) == 0
+    rep = str(repo / ".lantern/evidence.html")
+    assert main(["verify", str(repo), "--report", rep]) == 2               # never runs a command from a report
+    assert main(["verify", str(repo), "--report", rep, "--", *cmd]) == 0
+
+
+def test_render_escapes_every_field(tmp_path):
+    """The server re-renders evidence.json from the repo folder, so every field may be hostile."""
+    repo = _repo(tmp_path)
+    assert main(["analyze", str(repo)]) == 0
+    x = "<img src=x onerror=alert(1)>"
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
+
+    def poison(v):
+        if isinstance(v, dict):
+            return {k: poison(w) for k, w in v.items()}
+        if isinstance(v, list):
+            return [poison(w) for w in v]
+        return x
+    f = {k: x for k in ("id", "rank", "rule", "tool", "title", "file", "line", "tool_confidence")} | {"path": [x]}
+    for k in ("open", "fixed", "changed"):
+        ev["security"][k] = [f]
+    ev["security"]["accepted"] = [f | {"accepted": {"by": x, "date": x, "reason": x}}]
+    ev["understanding"] = x
+    ev = poison(ev)
+    ev["header"]["commit"] = x
+    assert "<img" not in evidence.render_html(ev)
