@@ -18,7 +18,7 @@ RANKS = ["critical", "high", "medium", "low"]
 
 def load(out: Path, name: str) -> dict | None:
     p = out / name
-    return json.loads(p.read_text()) if p.exists() else None
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
 def out_dir(repo: Path, out: str | Path | None = None) -> Path:
@@ -59,13 +59,13 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
         c = sec["counts"]
         log(f"scan    {c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low "
             f"({timings['scan']}s)")
-        (out / "security.json").write_text(json.dumps(sec, indent=1))
+        (out / "security.json").write_text(json.dumps(sec, indent=1), encoding="utf-8")
     g.save(out / "graph.json")
     rd = assess(g, sec, run_meta)
-    (out / "readiness.json").write_text(json.dumps(rd, indent=1))
+    (out / "readiness.json").write_text(json.dumps(rd, indent=1), encoding="utf-8")
     log(f"ready   {rd['score']}/100 (grade {rd['grade']}), {rd['shape']}")
     run_meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M")
-    (out / "run.json").write_text(json.dumps(run_meta, indent=1))
+    (out / "run.json").write_text(json.dumps(run_meta, indent=1), encoding="utf-8")
     path = write_report(out, g, sec, load(out, "explanations.json"), privacy, timings, rd)
     log(f"report  {path}")
     log(f"proof   {evidence(out, g, sec, rd, run_meta, privacy)}")
@@ -78,7 +78,7 @@ def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str) -> Path
     base = load(out, "baseline.json")
     if base is None and sec is not None:
         base = ev.baseline_from(sec, ev.git_info(Path(g.repo_root)).get("commit"))
-        (out / "baseline.json").write_text(json.dumps(base, indent=1))
+        (out / "baseline.json").write_text(json.dumps(base, indent=1), encoding="utf-8")
     rec = ev.build(g, sec, rd, load(out, "explanations.json"), run_meta, base, privacy)
     return ev.write(out, rec)["html"]
 
@@ -118,6 +118,6 @@ def explain(out: Path, provider, nids: list[str], metaphor: str | None = None,
         res["explanations"] = prev["explanations"]
         if prev.get("metaphor", {}).get("world") == res["metaphor"]["world"] and prev["metaphor"].get("roles"):
             res["metaphor"] = prev["metaphor"]
-    (out / "explanations.json").write_text(json.dumps(res, indent=1))
+    (out / "explanations.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
     rebuild_outputs(out, g)
     return res

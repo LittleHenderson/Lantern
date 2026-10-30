@@ -67,8 +67,8 @@ def test_fingerprint_ignores_comments_and_whitespace(tmp_path):
     b = tmp_path / "b"
     for d in (a, b):
         d.mkdir()
-    (a / "m.py").write_text("def f(x):\n    return x + 1\n")
-    (b / "m.py").write_text("def f(x):  # adds one\n\n    return x   +   1\n")
+    (a / "m.py").write_text("def f(x):\n    return x + 1\n", encoding="utf-8")
+    (b / "m.py").write_text("def f(x):  # adds one\n\n    return x   +   1\n", encoding="utf-8")
     fa = build_graph(a).nodes["py:m.f"].fingerprint
     fb = build_graph(b).nodes["py:m.f"].fingerprint
     assert fa == fb
@@ -91,7 +91,7 @@ def _write(root, files):
     for rel, text in files.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
+        p.write_text(text, encoding="utf-8")
 
 
 def test_subproject_import_root(tmp_path):

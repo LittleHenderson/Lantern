@@ -11,12 +11,14 @@ const { chromium } = require('playwright');
   for (const [name, vp] of [['desk', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
     const p = await b.newPage({ viewport: vp });
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
+    p.on('dialog', d => { errs.push(`${name}: a dialog opened (script from the data ran): ${d.message()}`); d.dismiss(); });
     p.on('console', m => { if (m.type() === 'error') errs.push(`${name} console: ${m.text()}`); });
     await p.goto('file://' + require('path').resolve(file));
     await p.waitForSelector('#center');
     if (await p.$('#expand')) { await p.click('#expand'); await p.waitForTimeout(150); }
     await p.screenshot({ path: `${out}-${name}-map.png` });
     const nodes = await p.$$('.node');
+    if (!nodes.length) errs.push(`${name}: the map is empty (did the report's data load?)`);
     if (nodes.length) {
       await nodes[Math.min(nodes.length - 1, 2)].click();
       await p.waitForTimeout(150);

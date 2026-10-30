@@ -20,3 +20,41 @@ jobs:
       - name: Audit package checks (tools/audit.sh)
         if: matrix.python == '3.13'
         run: bash tools/audit.sh
+
+  windows:
+    # Stock Windows settings: the system code page, not UTF-8, and backslash paths.
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[scan,dev]"
+      - run: python -m pytest -q
+      - name: Lantern audits itself (no critical, high, or medium findings)
+        run: lantern analyze . --out "$env:RUNNER_TEMP\self" --fail-on medium
+      - name: Next.js sample finds the unprotected route
+        shell: python
+        run: |
+          import json, os, subprocess
+          out = os.path.join(os.environ["RUNNER_TEMP"], "nx")
+          subprocess.run(["lantern", "analyze", "tests/fixtures/nextapp", "--out", out], check=True)
+          rules = {f["rule"] for f in json.load(open(os.path.join(out, "security.json"), encoding="utf-8"))["findings"]}
+          assert "LW-AUTH-MISSING" in rules, rules
+
+  browser:
+    # The viewer in a real browser: no JS errors, and hostile text can't break or hijack the page.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: pip install -e ".[scan,dev]"
+      - run: npm i --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+      - run: bash tools/audit.sh --browser

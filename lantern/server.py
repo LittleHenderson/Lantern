@@ -16,8 +16,8 @@ Safety model for a local server:
 from __future__ import annotations
 
 import hmac
+import html
 import json
-import mimetypes
 import os
 import re
 import secrets
@@ -60,7 +60,7 @@ class Store:
     def _read(self, name, default):
         p = self.root / name
         try:
-            return json.loads(p.read_text()) if p.exists() else default
+            return json.loads(p.read_text(encoding="utf-8")) if p.exists() else default
         except (OSError, json.JSONDecodeError):
             return default
 
@@ -69,10 +69,10 @@ class Store:
         tmp = p.with_suffix(".tmp")
         if private:
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(json.dumps(data, indent=1))
         else:
-            tmp.write_text(json.dumps(data, indent=1))
+            tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
         tmp.replace(p)
 
     # projects
@@ -191,9 +191,14 @@ class App:
         run = _load(out / "run.json") or {}
         ex = _load(out / "explanations.json") or {}
         busy = self.jobs.busy(p["id"])
+        # These files sit in the analyzed folder, which may come from anyone: keep only the expected types.
+        counts = sec.get("counts") if isinstance(sec.get("counts"), dict) else None
+        grade = rd.get("grade")
         return {**p, "exists": Path(p["path"]).is_dir(), "has_report": (out / "report.html").exists(),
-                "score": rd.get("score"), "grade": rd.get("grade"), "shape": rd.get("shape"),
-                "counts": sec.get("counts"), "finished_at": run.get("finished_at"),
+                "score": _int(rd.get("score")), "grade": grade if grade in ("A", "B", "C", "D", "F") else None,
+                "shape": _str(rd.get("shape")),
+                "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
+                "finished_at": _str(run.get("finished_at")),
                 "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"]}
 
     def provider_info(self) -> list[dict]:
@@ -214,9 +219,31 @@ class App:
                              api_key=self.store.key_for(s["provider"]))
 
 
+def _same(given, token: str) -> bool:
+    """Constant-time token check that also copes with missing or non-ASCII input (compare_digest raises on those)."""
+    return isinstance(given, str) and hmac.compare_digest(given.encode("utf-8"), token.encode("utf-8"))
+
+
+def _csp(nonce: str | None) -> str:
+    """Only our own scripts run on Lantern's pages: inline ones carry this response's nonce, and pages without
+    a nonce (Evidence Report, messages) run none at all."""
+    script = f"'nonce-{nonce}'" if nonce else "'none'"
+    return (f"default-src 'self'; script-src {script}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+            "frame-ancestors 'self'")
+
+
+def _int(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _str(v):
+    return v[:80] if isinstance(v, str) else None
+
+
 def _load(p: Path):
     try:
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -277,8 +304,8 @@ class Handler(BaseHTTPRequestHandler):
     def _authed(self, write: bool) -> bool:
         tok = self.app.token
         if write:
-            return hmac.compare_digest(self.headers.get("X-Lantern-Token") or "", tok)
-        return hmac.compare_digest(self._cookie_token() or "", tok)
+            return _same(self.headers.get("X-Lantern-Token"), tok)
+        return _same(self._cookie_token(), tok)
 
     # ------------------------------------------------------------------ dispatch
     def do_HEAD(self):
@@ -293,15 +320,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._static(u.path[1:])
         if u.path == "/":
             given = (q.get("token") or [""])[0]
-            if given and hmac.compare_digest(given, self.app.token):
+            if given and _same(given, self.app.token):
                 # set the cookie, then drop the token from the address bar
                 return self._send(303, "", "text/plain", {
                     "Location": "/", "Set-Cookie": f"lantern_token={self.app.token}; HttpOnly; SameSite=Strict; Path=/"})
             if not self._authed(False):
                 return self._send(403, LOCKED_PAGE, "text/html; charset=utf-8")
-            html = (VIEWER / "app.html").read_text().replace("__LANTERN_TOKEN__", self.app.token).replace(
-                "__LANTERN_VERSION__", __version__)
-            return self._send(200, html, "text/html; charset=utf-8")
+            nonce = secrets.token_urlsafe(16)
+            html = (VIEWER / "app.html").read_text(encoding="utf-8").replace("__LANTERN_TOKEN__", self.app.token).replace(
+                "__LANTERN_VERSION__", __version__).replace("<script>", f'<script nonce="{nonce}">')
+            return self._send(200, html, "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)})
         if not self._authed(False):
             return self._err(403, "open the link printed by `lantern serve`")
         try:
@@ -336,6 +364,37 @@ class Handler(BaseHTTPRequestHandler):
             name.rsplit(".", 1)[1]]
         self._send(200, p.read_bytes(), ctype)
 
+    def _result_file(self, p: dict, name: str):
+        """Serve a result page. Files in `.lantern/` sit inside the analyzed folder, so a cloned repo can plant them:
+        never send their bytes as a page. Read only the data back and rebuild every page from our own templates,
+        with a per-response nonce so nothing but our scripts can run."""
+        from .evidence import badge_svg, render_html
+        from .report import read_bundle, render
+        f = self.app.out(p) / name.replace("badge.svg", "readiness.json")
+        if not f.exists():
+            return self._send(404, "<p>Not analyzed yet.</p>", "text/html; charset=utf-8",
+                              {"Content-Security-Policy": _csp(None)})
+        try:
+            if name == "report.html":
+                s = self.app.store.settings()
+                live = {"api": f"/api/projects/{p['id']}", "token": self.app.token, "model": s.get("model") and
+                        f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS}
+                nonce = secrets.token_urlsafe(16)
+                return self._send(200, render(read_bundle(f), live, nonce), "text/html; charset=utf-8",
+                                  {"Content-Security-Policy": _csp(nonce)})
+            if name == "evidence.html":
+                ev = _load(f.with_suffix(".json"))
+                return self._send(200, render_html(ev), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
+            if name == "badge.svg":
+                rd = _load(f) or {}
+                grade = rd.get("grade") if rd.get("grade") in ("A", "B", "C", "D", "F") else "?"
+                return self._send(200, badge_svg(_int(rd.get("score")) or 0, grade), "image/svg+xml",
+                                  {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
+            return self._send(200, json.dumps(_load(f)), "application/json")
+        except Exception as exc:  # noqa: BLE001: a damaged or hand-made file
+            return self._send(409, f"<p>This result file can't be read ({html.escape(type(exc).__name__)}). "
+                              "Analyze the project again.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
+
     # ------------------------------------------------------------------ GET routes
     def _get(self, path: str, q: dict):
         app = self.app
@@ -369,18 +428,7 @@ class Handler(BaseHTTPRequestHandler):
             p = app.store.project(m.group(1))
             if not p:
                 return self._err(404, "unknown project")
-            f = app.out(p) / m.group(2)
-            if not f.exists():
-                return self._send(404, "<p>Not analyzed yet.</p>", "text/html; charset=utf-8")
-            data = f.read_text()
-            if m.group(2) == "report.html":
-                s = app.store.settings()
-                live = {"api": f"/api/projects/{p['id']}", "token": app.token, "model": s.get("model") and
-                        f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS}
-                data = data.replace("<script>\nconst DATA", "<script>window.LANTERN_LIVE = " +
-                                    json.dumps(live).replace("</", "<\\/") + ";</script>\n<script>\nconst DATA", 1)
-            ctype = mimetypes.guess_type(m.group(2))[0] or "text/plain"
-            return self._send(200, data, ctype + ("; charset=utf-8" if ctype.startswith("text") else ""))
+            return self._result_file(p, m.group(2))
         return self._err(404, "not found")
 
     # ------------------------------------------------------------------ write routes
@@ -448,7 +496,7 @@ class Handler(BaseHTTPRequestHandler):
                 return {"stats": st}
             return self._json(app.jobs.start(p["id"], "explain", work), 202)
         if action == "accept":
-            from .security import load_accepted, save_accepted
+            from .security import load_accepted, reason_ok, save_accepted
             fid, reason = str(b.get("finding") or ""), str(b.get("reason") or "").strip()
             if b.get("remove"):
                 acc = load_accepted(repo)
@@ -459,8 +507,8 @@ class Handler(BaseHTTPRequestHandler):
                 f = next((x for x in sec["findings"] if x["id"] == fid), None)
                 if not f:
                     raise ValueError("unknown finding")
-                if len(reason) < 10:
-                    raise ValueError("write a real reason (at least 10 characters); it appears in the Evidence Report")
+                if not reason_ok(reason):
+                    raise ValueError("write a real reason (a sentence of at least 10 letters); it appears in the Evidence Report")
                 acc = load_accepted(repo)
                 acc[fid] = {"id": fid, "rule": f["rule"], "file": f["file"], "line": f["line"], "title": f["title"],
                             "reason": reason, "by": str(b.get("by") or "me")[:80], "date": time.strftime("%Y-%m-%d")}
@@ -480,7 +528,7 @@ class Handler(BaseHTTPRequestHandler):
             if dest.exists():
                 raise ValueError(f"{name} already exists; Lantern never overwrites files")
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(f["content"])
+            dest.write_text(f["content"], encoding="utf-8")
             return self._json({"ok": True, "wrote": name})
         return self._err(404, "not found")
 

@@ -110,10 +110,10 @@ function watch(jobId, pid) {
 function counts(c) {
   if (!c) return '<span class="pill">not scanned</span>';
   const parts = [];
-  if (c.critical) parts.push(`<span class="pill crit">${c.critical} critical</span>`);
-  if (c.high) parts.push(`<span class="pill high">${c.high} high</span>`);
-  if (c.medium) parts.push(`<span class="pill">${c.medium} medium</span>`);
-  if (c.accepted) parts.push(`<span class="pill">${c.accepted} accepted</span>`);
+  if (c.critical) parts.push(`<span class="pill crit">${esc(c.critical)} critical</span>`);
+  if (c.high) parts.push(`<span class="pill high">${esc(c.high)} high</span>`);
+  if (c.medium) parts.push(`<span class="pill">${esc(c.medium)} medium</span>`);
+  if (c.accepted) parts.push(`<span class="pill">${esc(c.accepted)} accepted</span>`);
   return parts.join('') || '<span class="pill">no open critical, high, or medium</span>';
 }
 function renderHome(el) {
@@ -122,9 +122,9 @@ function renderHome(el) {
     const job = S.jobs[p.id];
     const running = p.job || (job && job.status === 'running');
     if (p.job && !job) watch(p.job, p.id);
-    return `<div class="card proj"><div class="top"><span class="grade ${esc(p.grade || '')}">${p.grade || '–'}</span>
+    return `<div class="card proj"><div class="top"><span class="grade ${esc(p.grade || '')}">${esc(p.grade || '–')}</span>
       <div style="min-width:0"><div class="name">${esc(p.name)}</div><div class="path">${esc(p.path)}</div></div></div>
-      <div class="small muted">${p.score != null ? `Readiness ${p.score}/100 · ${esc(p.shape)}` : 'Not analyzed yet'}${p.finished_at ? ' · last run ' + esc(p.finished_at) : ''}${p.explained ? ` · ${p.explained} explained` : ''}</div>
+      <div class="small muted">${p.score != null ? `Readiness ${esc(p.score)}/100 · ${esc(p.shape)}` : 'Not analyzed yet'}${p.finished_at ? ' · last run ' + esc(p.finished_at) : ''}${p.explained ? ` · ${esc(p.explained)} explained` : ''}</div>
       <div class="pills">${counts(p.counts)}</div>
       ${!p.exists ? '<div class="note warn">This folder no longer exists.</div>' : ''}
       <div class="row">${p.has_report ? `<button class="btn primary" data-open="${p.id}">Open</button>` : ''}

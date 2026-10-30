@@ -52,7 +52,7 @@ def run_bandit(repo: Path) -> tuple[list[dict], dict]:
         return [], {"tool": "bandit", "status": f"error: {exc}"}
     out = []
     for r in data.get("results", []):
-        rel = str(Path(r["filename"]).resolve().relative_to(repo))
+        rel = Path(r["filename"]).resolve().relative_to(repo).as_posix()
         out.append({
             "id": _fid("bandit", r["test_id"], rel, r["line_number"]),
             "tool": "bandit", "rule": r["test_id"], "title": r["issue_text"],
@@ -87,12 +87,12 @@ def run_pip_audit(repo: Path) -> tuple[list[dict], dict]:
                     "tool": "pip-audit", "rule": v["id"],
                     "title": f"{dep['name']} {dep.get('version', '')} has known vulnerability {v['id']}",
                     "tool_severity": "HIGH", "tool_confidence": "HIGH",
-                    "file": str(req.relative_to(repo)), "line": None,
+                    "file": req.relative_to(repo).as_posix(), "line": None,
                     "more_info": f"Fixed in: {', '.join(v.get('fix_versions', [])) or 'no fix yet'}",
                     "snippet": (v.get("description") or "")[:400], "category": "dependency",
                     "package": dep["name"],
                 })
-    return out, {"tool": "pip-audit", "status": "ok", "files": [str(r.relative_to(repo)) for r in reqs]}
+    return out, {"tool": "pip-audit", "status": "ok", "files": [r.relative_to(repo).as_posix() for r in reqs]}
 
 
 def run_secrets(repo: Path) -> tuple[list[dict], dict]:
@@ -107,7 +107,7 @@ def run_secrets(repo: Path) -> tuple[list[dict], dict]:
                 "id": _fid("gitleaks", r["RuleID"], r["File"], r["StartLine"]),
                 "tool": "gitleaks", "rule": r["RuleID"], "title": f"Possible secret: {r['Description']}",
                 "tool_severity": "HIGH", "tool_confidence": "MEDIUM",
-                "file": str(Path(r["File"]).resolve().relative_to(repo)), "line": r["StartLine"],
+                "file": Path(r["File"]).resolve().relative_to(repo).as_posix(), "line": r["StartLine"],
                 "snippet": "[redacted]", "category": "secret",
             } for r in rows]
             return out, {"tool": "gitleaks", "status": "ok"}
@@ -123,13 +123,13 @@ def run_secrets(repo: Path) -> tuple[list[dict], dict]:
         if p.name in SECRET_SKIP_FILES or p.name.endswith((".min.js", ".map")):
             continue
         try:
-            text = p.read_text(errors="replace")
+            text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             for rule, rx in SECRET_PATTERNS:
                 if rx.search(line):
-                    rel = str(p.relative_to(repo))
+                    rel = p.relative_to(repo).as_posix()
                     out.append({
                         "id": _fid("secrets", rule, rel, i), "tool": "lantern-secrets", "rule": rule,
                         "title": f"Possible secret ({rule})", "tool_severity": "HIGH",
@@ -226,17 +226,27 @@ def load_accepted(repo: Path) -> dict[str, dict]:
     """Accepted risks live in the repo (committed), each with the builder's written reason."""
     p = repo / ACCEPTED_FILE
     try:
-        rows = json.loads(p.read_text()).get("accepted", []) if p.exists() else []
+        rows = json.loads(p.read_text(encoding="utf-8")).get("accepted", []) if p.exists() else []
     except (OSError, json.JSONDecodeError, AttributeError):
         return {}
-    return {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id") and r.get("reason")}
+    return {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id") and reason_ok(r.get("reason"))}
+
+
+def reason_ok(reason) -> bool:
+    """A real written reason: at least 10 letters/digits across two or more words, not one repeated character.
+    Applies to hand-edited `lantern-accepted.json` too, so "x" can't silence --fail-on."""
+    if not isinstance(reason, str):
+        return False
+    words = re.findall(r"[^\W_]{2,}", reason)
+    chars = "".join(words)
+    return len(words) >= 2 and len(chars) >= 10 and len(set(chars.lower())) >= 5
 
 
 def save_accepted(repo: Path, accepted: dict[str, dict]) -> Path:
     p = repo / ACCEPTED_FILE
     rows = sorted(accepted.values(), key=lambda r: r["id"])
     p.write_text(json.dumps({"about": "Security findings the builder reviewed and accepted, with reasons. "
-                                      "Managed by `lantern accept`.", "accepted": rows}, indent=1) + "\n")
+                                      "Managed by `lantern accept`.", "accepted": rows}, indent=1) + "\n", encoding="utf-8")
     return p
 
 

@@ -170,8 +170,9 @@ pre.file{background:var(--code);color:var(--codeink);font:12px/1.5 var(--mono);p
   <section class="center" id="center"></section>
   <aside class="right" id="right"><div class="empty">Select a function to see what it does.</div></aside>
 </main>
+<script type="application/json" id="lantern-data">/*__LANTERN_DATA__*/null</script>
 <script>
-const DATA = /*__LANTERN_DATA__*/null;
+const DATA = JSON.parse(document.getElementById('lantern-data').textContent);
 const G = DATA.graph, SEC = DATA.security || {findings: [], counts: {}}, EXP = (DATA.explanations || {}).explanations || {};
 const SRC = DATA.sources || {};
 const N = Object.fromEntries(G.nodes.map(n => [n.id, n]));

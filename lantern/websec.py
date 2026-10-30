@@ -80,7 +80,7 @@ def _files(repo: Path, exts=None, names=None):
 
 def _read(p: Path) -> str:
     try:
-        return p.read_text(errors="replace")
+        return p.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
 
@@ -103,7 +103,7 @@ def js_rules(repo: Path) -> list[dict]:
     out = []
     for p in _files(repo, JS_EXTS):
         text = _read(p)
-        rel = str(p.relative_to(repo))
+        rel = p.relative_to(repo).as_posix()
         for rule, rx, sev, title, cwe in JS_RULES:
             for m in rx.finditer(text):
                 ln = _line_of(text, m.start())
@@ -118,7 +118,7 @@ def exposed_secrets(repo: Path) -> list[dict]:
     out, seen = [], set()
     for p in _files(repo, WEB_EXTS | {".json", ".yml", ".yaml", ".toml"}, names=(".env",)):
         text = _read(p)
-        rel = str(p.relative_to(repo))
+        rel = p.relative_to(repo).as_posix()
         is_conf = p.name.startswith(".env") or p.suffix in (".yml", ".yaml", ".toml")
         hits = [(m.start(), m.group(1)) for m in PUBLIC_SECRET_CONF_RE.finditer(text)] if is_conf else \
             [(m.start(), m.group(1) or m.group(2)) for m in PUBLIC_SECRET_CODE_RE.finditer(text)]
@@ -157,7 +157,7 @@ def cors(repo: Path) -> list[dict]:
     out = []
     for p in _files(repo, {".py"} | JS_EXTS):
         text = _read(p)
-        rel = str(p.relative_to(repo))
+        rel = p.relative_to(repo).as_posix()
         if p.suffix == ".py":
             for m in re.finditer(r"add_middleware\(\s*CORSMiddleware|\bCORS\(", text):
                 window = text[m.start(): m.start() + 600]
@@ -189,7 +189,7 @@ def database_rules(repo: Path) -> list[dict]:
     out = []
     for p in _files(repo, names=("firestore.rules", "storage.rules", "database.rules.json")):
         text = _read(p)
-        rel = str(p.relative_to(repo))
+        rel = p.relative_to(repo).as_posix()
         for m in re.finditer(r"allow\s+[\w,\s]*:\s*if\s+true\s*;?", text):
             out.append(_finding("LW-DB-OPEN", "Database rules let anyone on the internet read or write", "HIGH",
                                 rel, _line_of(text, m.start()), category="config", cwe=284, fixed_rank="critical",
@@ -211,10 +211,10 @@ def database_rules(repo: Path) -> list[dict]:
                                  r"enable\s+row\s+level\s+security", text, re.I):
                 rls.add(m.group(1).lower())
             for m in re.finditer(r"create\s+table\s+(?:if\s+not\s+exists\s+)?(?:\"?public\"?\.)?\"?(\w+)\"?", text, re.I):
-                created.append((m.group(1).lower(), str(p.relative_to(repo)), _line_of(text, m.start())))
+                created.append((m.group(1).lower(), p.relative_to(repo).as_posix(), _line_of(text, m.start())))
             for m in re.finditer(r"create\s+policy[^;]*using\s*\(\s*true\s*\)", text, re.I | re.S):
                 out.append(_finding("LW-NO-RLS", "Row-level security policy allows everyone (using (true))",
-                                    "MEDIUM", str(p.relative_to(repo)), _line_of(text, m.start()),
+                                    "MEDIUM", p.relative_to(repo).as_posix(), _line_of(text, m.start()),
                                     category="config", cwe=284, fixed_rank="medium"))
         for name, rel, line in created:
             if name not in rls:

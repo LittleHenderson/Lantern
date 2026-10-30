@@ -14,7 +14,7 @@ def _write(root, files):
     for rel, text in files.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
+        p.write_text(text, encoding="utf-8")
 
 
 def _checks(r):
@@ -135,21 +135,21 @@ def test_accept_finding_and_fail_on(tmp_path):
                                 "if __name__ == '__main__':\n    run('ls')\n"})
     out = tmp_path / "out"
     assert main(["analyze", str(tmp_path), "--out", str(out)]) == 0
-    sec = json.loads((out / "security.json").read_text())
+    sec = json.loads((out / "security.json").read_text(encoding="utf-8"))
     f = next(x for x in sec["findings"] if x["rule"] == "B602")
     worst = f["rank"]
     assert main(["analyze", str(tmp_path), "--out", str(out), "--fail-on", worst]) == 1
     assert main(["accept", str(tmp_path), f["id"], "--out", str(out), "--reason", "short"]) == 2
     assert main(["accept", str(tmp_path), f["id"], "--out", str(out),
                  "--reason", "Only runs fixed commands from our own admin script", "--by", "tester"]) == 0
-    saved = json.loads((tmp_path / "lantern-accepted.json").read_text())
+    saved = json.loads((tmp_path / "lantern-accepted.json").read_text(encoding="utf-8"))
     assert saved["accepted"][0]["by"] == "tester"
     assert main(["analyze", str(tmp_path), "--out", str(out), "--fail-on", worst]) == 0
-    sec = json.loads((out / "security.json").read_text())
+    sec = json.loads((out / "security.json").read_text(encoding="utf-8"))
     f2 = next(x for x in sec["findings"] if x["id"] == f["id"])
     assert f2["status"] == "accepted" and f2["accepted"]["reason"].startswith("Only runs")
     assert sec["counts"]["accepted"] == 1
-    rd = json.loads((out / "readiness.json").read_text())
+    rd = json.loads((out / "readiness.json").read_text(encoding="utf-8"))
     assert "accepted" in _checks(rd)[f"sec-{worst}"]["evidence"]
     assert main(["accept", str(tmp_path), f["id"], "--out", str(out), "--remove"]) == 0
 
@@ -158,9 +158,9 @@ def test_starter_write_never_overwrites(tmp_path, capsys):
     _write(tmp_path, API)
     out = tmp_path / ".lantern"
     assert main(["analyze", str(tmp_path), "--no-scan"]) == 0
-    (tmp_path / "SECURITY.md").write_text("mine")
+    (tmp_path / "SECURITY.md").write_text("mine", encoding="utf-8")
     assert main(["starter", str(tmp_path), "--write", "all"]) == 0
-    assert (tmp_path / "SECURITY.md").read_text() == "mine"
+    assert (tmp_path / "SECURITY.md").read_text(encoding="utf-8") == "mine"
     assert (tmp_path / "Dockerfile").exists() and (tmp_path / ".github/workflows/ci.yml").exists()
     assert (out / "readiness.json").exists()
     assert main(["starter", str(tmp_path), "--write", "../evil"]) == 0

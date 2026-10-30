@@ -114,13 +114,13 @@ def test_project_lifecycle(srv, tmp_path):
     assert call(base, f"/api/projects/{p['id']}/starter", "POST", {"name": "SECURITY.md"})[0] == 400
     assert call(base, f"/api/projects/{p['id']}/starter", "POST", {"name": "../x"})[0] == 400
     # accept a risk with a reason, which re-runs the analysis
-    sec = json.loads((repo / ".lantern/security.json").read_text())
+    sec = json.loads((repo / ".lantern/security.json").read_text(encoding="utf-8"))
     fid = next(f["id"] for f in sec["findings"] if f["rank"] == "critical" and f["category"] == "code")
     assert call(base, f"/api/projects/{p['id']}/accept", "POST", {"finding": fid, "reason": "no"})[0] == 400
     code, job = call(base, f"/api/projects/{p['id']}/accept", "POST",
                      {"finding": fid, "reason": "Admin-only endpoint behind the VPN"})
     assert code == 202 and wait(base, job["id"])["status"] == "done"
-    sec = json.loads((repo / ".lantern/security.json").read_text())
+    sec = json.loads((repo / ".lantern/security.json").read_text(encoding="utf-8"))
     assert next(f for f in sec["findings"] if f["id"] == fid)["status"] == "accepted"
     # removing from the list keeps files
     assert call(base, f"/api/projects/{p['id']}", "DELETE")[0] == 200
@@ -133,16 +133,16 @@ def test_keys_stay_private(srv):
     assert code == 200
     anth = next(x for x in r["providers"] if x["name"] == "anthropic")
     assert anth["key"] == "this session" and "sk-session" not in json.dumps(r)
-    assert "sk-session" not in (store.root / "keys.json").read_text()
+    assert "sk-session" not in (store.root / "keys.json").read_text(encoding="utf-8")
     call(base, "/api/settings", "POST", {"provider": "anthropic", "key": "sk-remember", "remember": True})
     kf = store.root / "keys.json"
-    assert json.loads(kf.read_text())["anthropic"] == "sk-remember"
+    assert json.loads(kf.read_text(encoding="utf-8"))["anthropic"] == "sk-remember"
     if os.name == "posix":
         assert stat.S_IMODE(kf.stat().st_mode) == 0o600
     _, st = call(base, "/api/state")
     assert "sk-remember" not in json.dumps(st)
     call(base, "/api/settings", "POST", {"forget_key": True})
-    assert "anthropic" not in json.loads(kf.read_text())
+    assert "anthropic" not in json.loads(kf.read_text(encoding="utf-8"))
     assert call(base, "/api/settings", "POST", {"provider": "nope"})[0] == 400
 
 
@@ -172,6 +172,63 @@ def test_explain_end_to_end_with_a_local_fake_model(srv, tmp_path):
         assert j["status"] == "done", j
         _, r = call(base, f"/api/projects/{p['id']}/explanation?node=" + urllib.request.quote(node))
         assert r["record"]["validated"] and r["record"]["lens1"]["summary"]
-        assert node in (repo / ".lantern/report.html").read_text()
+        assert node in (repo / ".lantern/report.html").read_text(encoding="utf-8")
     finally:
         fake.terminate()
+
+
+def _planted_repo(tmp_path):
+    """A cloned repo that ships its own .lantern/ results, with script in every field it can reach."""
+    repo = tmp_path / "planted"
+    out = repo / ".lantern"
+    out.mkdir(parents=True)
+    x = '<img src=x onerror="alert(1)">'
+    (repo / "app.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    (out / "report.html").write_text(f"<!doctype html><script>alert('planted')</script>{x}", encoding="utf-8")
+    (out / "evidence.html").write_text(f"<script>alert('planted')</script>", encoding="utf-8")
+    (out / "badge.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>', encoding="utf-8")
+    (out / "security.json").write_text(json.dumps({"counts": {"critical": x, "high": 1, "medium": 0}, "findings": []}), encoding="utf-8")
+    (out / "readiness.json").write_text(json.dumps({"score": x, "grade": x, "shape": x}), encoding="utf-8")
+    (out / "run.json").write_text(json.dumps({"finished_at": x}), encoding="utf-8")
+    return repo
+
+
+def test_planted_results_cannot_run_script(srv, tmp_path):
+    base, store = srv
+    repo = _planted_repo(tmp_path)
+    p = store.add_project(repo)
+    _, st = call(base, "/api/state")
+    s = next(x for x in st["projects"] if x["id"] == p["id"])
+    assert s["counts"]["critical"] == 0 and s["counts"]["high"] == 1   # non-numbers dropped
+    assert s["score"] is None and s["grade"] is None
+    # Repo-supplied HTML is never served as a page: no planted script, no live token in a planted report.
+    code, body = call(base, f"/p/{p['id']}/report.html")
+    assert code == 409 and "planted" not in body and "tok-123" not in body
+    for name in ("evidence.html", "badge.svg"):
+        code, body = call(base, f"/p/{p['id']}/{name}")
+        assert "alert" not in str(body), name
+
+
+def test_pages_carry_a_nonce_csp(srv, tmp_path):
+    base, store = srv
+    repo = tmp_path / "app"
+    shutil.copytree(FIX / "shop", repo)
+    p = store.add_project(repo)
+    wait(base, call(base, f"/api/projects/{p['id']}/analyze", "POST", {})[1]["id"])
+    for path in ("/", f"/p/{p['id']}/report.html", f"/p/{p['id']}/evidence.html"):
+        req = urllib.request.Request(base + path, headers={"Cookie": "lantern_token=tok-123"})
+        with urllib.request.urlopen(req) as r:
+            csp, body = r.headers["Content-Security-Policy"], r.read().decode()
+        assert "script-src" in csp and "unsafe-inline" not in csp.split("script-src")[1].split(";")[0], path
+        if "nonce-" in csp:
+            nonce = csp.split("nonce-")[1].split("'")[0]
+            assert body.count("<script") == body.count(f'nonce="{nonce}"') + body.count('type="application/json"'), path
+    # the live report is rebuilt from the template, with the token only in our own script
+    _, body = call(base, f"/p/{p['id']}/report.html")
+    assert "window.LANTERN_LIVE" in body
+
+
+def test_non_ascii_token_is_refused_not_crashed(srv):
+    base, _ = srv
+    code, _ = call(base, "/?token=%C3%A9", cookie=False, token=None)
+    assert code == 403

@@ -15,7 +15,7 @@ def _write(root, files):
     for rel, text in files.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
+        p.write_text(text, encoding="utf-8")
 
 
 def edge(g, src, dst):

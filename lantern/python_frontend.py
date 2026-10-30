@@ -508,7 +508,7 @@ _Visitor._def_only = _def_only  # type: ignore[attr-defined]
 def parse_module(path: Path, modname: str, repo: Path, parser: Parser) -> ModuleInfo:
     src = path.read_bytes()
     tree = parser.parse(src)
-    info = ModuleInfo(name=modname, path=path, rel=str(path.relative_to(repo)),
+    info = ModuleInfo(name=modname, path=path, rel=path.relative_to(repo).as_posix(),
                       is_package=path.name == "__init__.py", lines=src.count(b"\n") + 1)
     _visit_body(_Visitor(info), tree.root_node)
     return info
@@ -1032,7 +1032,7 @@ def _scripts_from_config(repo: Path) -> dict[str, str]:
     pp = repo / "pyproject.toml"
     if pp.exists():
         try:
-            data = tomllib.loads(pp.read_text())
+            data = tomllib.loads(pp.read_text(encoding="utf-8"))
             out.update(data.get("project", {}).get("scripts", {}) or {})
             out.update(data.get("tool", {}).get("poetry", {}).get("scripts", {}) or {})
         except Exception:
@@ -1040,7 +1040,7 @@ def _scripts_from_config(repo: Path) -> dict[str, str]:
     for f in ("setup.cfg", "setup.py"):
         p = repo / f
         if p.exists():
-            for m in re.finditer(r"([\w\-]+)\s*=\s*([\w\.]+:[\w\.]+)", p.read_text(errors="replace")):
+            for m in re.finditer(r"([\w\-]+)\s*=\s*([\w\.]+:[\w\.]+)", p.read_text(encoding="utf-8", errors="replace")):
                 out.setdefault(m.group(1), m.group(2))
     return out
 

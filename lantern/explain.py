@@ -102,7 +102,7 @@ class Context:
 
 def read_source(repo: Path, node: Node, max_lines: int = 160) -> str:
     try:
-        lines = (repo / node.file).read_text(errors="replace").splitlines()
+        lines = (repo / node.file).read_text(encoding="utf-8", errors="replace").splitlines()
     except (OSError, TypeError):
         return ""
     start, end = (node.start_line or 1), (node.end_line or node.start_line or 1)
@@ -353,10 +353,10 @@ class Cache:
 
     def get(self, k: str) -> dict | None:
         p = self.root / f"{k}.json"
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
     def put(self, k: str, rec: dict) -> None:
-        (self.root / f"{k}.json").write_text(json.dumps(rec, indent=1))
+        (self.root / f"{k}.json").write_text(json.dumps(rec, indent=1), encoding="utf-8")
 
 
 # --------------------------------------------------------------------------------------------
