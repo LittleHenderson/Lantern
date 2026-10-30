@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from collections import Counter
 from pathlib import Path
 
@@ -331,19 +332,76 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
             for k, v in (d.get(sect) or {}).items():
                 if isinstance(v, str) and v.strip() in ("*", "latest", "") :
                     loose.append(f"{pj}: {k}@{v or '(empty)'}")
-    for r in (f for f in repo.project_files if re.search(r"(^|/)requirements[^/]*\.txt$", f)):
-        for ln in repo.text(r).splitlines():
-            s = ln.split("#")[0].strip()
-            if s and not s.startswith("-") and not re.search(r"[=<>~!@]", s):
-                loose.append(f"{r}: {s}")
-    if want:
+    py_deps = python_dependencies(repo)
+    for man, spec in py_deps:
+        if spec is None:
+            loose.append(f"{man} could not be read, so its versions were not checked")
+        elif not re.search(r"[=<>~!@^]|://", spec.split(";")[0]):
+            loose.append(f"{man}: {spec.split(';')[0].strip()}")
+    # Every file that declares dependencies is checked, whatever the project's shape: a library should give
+    # bounds too (a lower bound at least), it just should not pin exact versions.
+    manifests = js_manifests + sorted({m for m, _ in py_deps})
+    if manifests:
         out.append(_check("deps-pinned", "Versions are bounded (no `*`, `latest`, or bare names)", 2,
                           "pass" if not loose else "fail",
                           "every dependency has a version constraint" if not loose else ", ".join(loose[:4]),
-                          "" if not loose else "Give each dependency a version range."))
+                          "" if not loose else
+                          "Give each dependency a lower bound at least (for example `requests>=2.31`), so an install "
+                          "never picks a release that breaks it. " + (
+                              f"A {shape} should use bounds, not exact pins." if not py_manifest and has_py else "")))
     else:
-        out.append(_check("deps-pinned", "Versions are bounded", 2, "skip", "no dependency manifest"))
+        out.append(_check("deps-pinned", "Versions are bounded", 2, "skip",
+                          f"no dependency list found ({has_py} declares none)" if has_py else "no dependency manifest"))
     return out
+
+
+def python_dependencies(repo: Repo) -> list[tuple[str, str | None]]:
+    """(manifest, requirement) for every Python dependency declared in pyproject.toml ([project] dependencies and
+    optional-dependencies, [dependency-groups], [tool.poetry.dependencies]), Pipfile, and requirements*.txt.
+    A manifest that cannot be parsed yields one (manifest, None) entry."""
+    out: list[tuple[str, str | None]] = []
+    for f in repo.project_files:
+        name = f.rsplit("/", 1)[-1]
+        if name == "pyproject.toml":
+            try:
+                d = tomllib.loads(repo.text(f))
+            except (tomllib.TOMLDecodeError, ValueError):
+                out.append((f, None))
+                continue
+            proj = d.get("project") or {}
+            specs = list(_strs(proj.get("dependencies")))
+            for group in (proj.get("optional-dependencies") or {}).values():
+                specs += _strs(group)
+            for group in (d.get("dependency-groups") or {}).values():
+                specs += _strs(group)
+            for k, v in ((d.get("tool") or {}).get("poetry") or {}).get("dependencies", {}).items():
+                if k == "python":
+                    continue
+                if isinstance(v, dict):
+                    v = v.get("version") or ("@ " + v["git"] if v.get("git") else "@ " + v["path"] if v.get("path") else "")
+                specs.append(f"{k} {v}" if isinstance(v, str) and v.strip() not in ("*", "") else k)
+            out += [(f, sp) for sp in specs]
+        elif name == "Pipfile":
+            try:
+                d = tomllib.loads(repo.text(f))
+            except (tomllib.TOMLDecodeError, ValueError):
+                out.append((f, None))
+                continue
+            for sect in ("packages", "dev-packages"):
+                for k, v in (d.get(sect) or {}).items():
+                    if isinstance(v, dict):
+                        v = v.get("version") or ("@ vcs" if v.get("git") or v.get("path") or v.get("file") else "")
+                    out.append((f, f"{k} {v}" if isinstance(v, str) and v.strip() not in ("*", "") else k))
+        elif re.search(r"(^|/)requirements[^/]*\.txt$", f):
+            for ln in repo.text(f).splitlines():
+                s = ln.split("#")[0].strip()
+                if s and not s.startswith("-"):
+                    out.append((f, s))
+    return out
+
+
+def _strs(v) -> list[str]:
+    return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
 
 
 def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:

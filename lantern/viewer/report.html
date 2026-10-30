@@ -167,13 +167,14 @@ pre.file{background:var(--code);color:var(--codeink);font:12px/1.5 var(--mono);p
 </header>
 <main id="main">
   <aside class="left" id="left"></aside>
-  <section class="center" id="center"></section>
+  <section class="center" id="center"><div class="empty">If this stays empty, the report's script did not run: the file was changed after Lantern wrote it (its content policy allows only the original script), or the browser blocked it. Run <code>lantern report</code> to write it again.</div></section>
   <aside class="right" id="right"><div class="empty">Select a function to see what it does.</div></aside>
 </main>
 <script type="application/json" id="lantern-data">/*__LANTERN_DATA__*/null</script>
 <script>
 const DATA = JSON.parse(document.getElementById('lantern-data').textContent);
-const G = DATA.graph, SEC = DATA.security || {findings: [], counts: {}}, EXP = (DATA.explanations || {}).explanations || {};
+const G = DATA.graph, SEC = DATA.security || {}, EXP = (DATA.explanations || {}).explanations || {};
+SEC.findings = Array.isArray(SEC.findings) ? SEC.findings : []; SEC.counts = SEC.counts || {};
 const SRC = DATA.sources || {};
 const N = Object.fromEntries(G.nodes.map(n => [n.id, n]));
 const OUT = {}, IN = {};
@@ -185,6 +186,14 @@ const FIND_BY_NODE = {};
 for (const f of SEC.findings) if (f.node) (FIND_BY_NODE[f.node] ||= []).push(f);
 const RANK = {critical: 0, high: 1, medium: 2, low: 3};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Every value from the data goes through esc() before it reaches innerHTML. Values used as CSS class names or as
+// lookup keys go through cls()/pick(), so only known words come out; numbers used in styles go through pct().
+const RANKS = ['critical', 'high', 'medium', 'low'], STATUSES = ['pass', 'fail', 'partial', 'skip'];
+const CONFS = ['observed', 'resolved', 'inferred', 'possible'], GRADES = ['A', 'B', 'C', 'D', 'F'];
+const cls = (v, set) => set.includes(v) ? v : '';
+const pick = (m, k) => Object.prototype.hasOwnProperty.call(m, k) ? m[k] : '';
+const pct = v => Math.max(0, Math.min(100, +v || 0));
+const arr = a => Array.isArray(a) ? a : [];
 const short = q => {
   q = q || '';
   if (q.includes('::')) { const local = q.split('::').pop(); const p = local.split('.'); return p.length > 2 ? p.slice(-2).join('.') : local; }
@@ -209,11 +218,11 @@ const chips = [
   ...(BR && BR.matched ? [`${BR.matched} frontend→backend calls linked`] : []),
 ];
 let chipHtml = chips.map(c => `<span class="chip">${esc(c)}</span>`).join('');
-if (SEC.counts.critical) chipHtml += `<span class="chip crit">${SEC.counts.critical} critical</span>`;
-if (SEC.counts.high) chipHtml += `<span class="chip high">${SEC.counts.high} high</span>`;
+if (SEC.counts.critical) chipHtml += `<span class="chip crit">${esc(SEC.counts.critical)} critical</span>`;
+if (SEC.counts.high) chipHtml += `<span class="chip high">${esc(SEC.counts.high)} high</span>`;
 const nexp = Object.keys(EXP).length;
 chipHtml += `<span class="chip">${nexp ? nexp + ' explained' : 'no explanations yet'}</span>`;
-if (DATA.readiness) chipHtml += `<span class="chip">readiness ${DATA.readiness.score}/100 (${DATA.readiness.grade})</span>`;
+if (DATA.readiness) chipHtml += `<span class="chip">readiness ${esc(DATA.readiness.score)}/100 (${esc(DATA.readiness.grade)})</span>`;
 document.getElementById('chips').innerHTML = chipHtml;
 document.getElementById('tabs').onclick = ev => {
   const t = ev.target.closest('button'); if (!t) return;
@@ -236,7 +245,7 @@ function renderLeft() {
   if (q) {
     const hits = G.nodes.filter(n => n.kind === 'callable' && n.qualname.toLowerCase().includes(q)).slice(0, 60);
     html += `<div class="group"><h4>Matches (${hits.length})</h4>` + hits.map(n =>
-      `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(short(n.qualname))}<span class="d">${esc(n.file)}:${n.start_line}</span></button>`).join('') + '</div>';
+      `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(short(n.qualname))}<span class="d">${esc(n.file)}:${esc(n.start_line)}</span></button>`).join('') + '</div>';
   } else {
     if (!eps.length) html += '<div class="empty">No entry points detected. Use search to start from any function.</div>';
     for (const k of ['page', 'route', 'main', 'cli', 'script', 'test']) {
@@ -275,15 +284,15 @@ function renderTree() {
     const n = N[r.id], w = worstRank(r.id);
     const indent = '<span class="indent">' + '<i></i>'.repeat(r.depth) + '</span>';
     const tog = r.kids && !r.loop ? `<button class="tog" data-tog="${esc(r.id)}">${S.open.has(r.id) ? '▼' : '▶'}</button>` : '<span class="tog"></span>';
-    const conf = r.edge ? `<span class="conn ln ${r.edge.confidence}" title="${esc(r.edge.confidence)} (${esc(r.edge.via || '')})"></span>` : '';
+    const conf = r.edge ? `<span class="conn ln ${cls(r.edge.confidence, CONFS)}" title="${esc(r.edge.confidence)} (${esc(r.edge.via || '')})"></span>` : '';
     const hop = r.edge && (r.edge.via || '').startsWith('http-') ? `<span class="hop">HTTP ${esc(r.edge.detail || '')}</span>`
       : r.edge && r.edge.detail ? `<span class="hop ui">${esc(UI_WORDS[r.edge.detail] || r.edge.detail)}</span>` : '';
     const sum = summaryOf(r.id);
     const ext = r.exts.length ? `<span class="ext"> → ${r.exts.slice(0, 4).map(e => esc(e.dst.slice(4))).join(', ')}${r.exts.length > 4 ? '…' : ''}</span>` : '';
     return `${hop ? `<div class="row hoprow">${indent}<span class="tog"></span>${hop}</div>` : ''}<div class="row">${indent}${tog}${conf}<button class="node ${S.sel === r.id ? 'on' : ''}" data-id="${esc(r.id)}">
-      <span class="layer ${layer(r.id)}"></span><span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? `<span class="badge ${w}">${w}</span>` : ''}
+      <span class="layer ${layer(r.id)}"></span><span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? `<span class="badge ${cls(w, RANKS)}">${esc(w)}</span>` : ''}
       ${r.loop ? '<span class="again"> ↻ already on this path</span>' : ''}
-      <span class="loc"> ${esc(n.file)}:${n.start_line ?? ''}</span>${ext}
+      <span class="loc"> ${esc(n.file)}:${esc(n.start_line ?? '')}</span>${ext}
       ${sum ? `<span class="sum">${esc(sum.length > 140 ? sum.slice(0, 140) + '…' : sum)}</span>` : ''}</button></div>`;
   }).join('') + '</div>';
 }
@@ -373,16 +382,16 @@ function renderFindings() {
       return `${sep}<button data-id="${esc(p)}"><span class="layer ${layer(p)}"></span>${esc(nm)}</button>`; }).join('')}</div>`;
     const uiSame = f.ui_path && f.reachable && f.ui_path.join() === f.reachable.path.join();
     let path = f.ui_path ? chain('From the app:', f.ui_path) : '';
-    if (f.reachable && !uiSame) path += chain(`Reachable from ${f.reachable.kind}:`, f.reachable.path);
+    if (f.reachable && !uiSame) path += chain(`Reachable from ${esc(f.reachable.kind)}:`, f.reachable.path);
     if (!path) path = `<div class="note" style="margin-top:6px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
     const heur = f.tool_confidence === 'LOW' ? '<span class="chip" title="Pattern-based check; review before acting">heuristic</span>' : '';
     const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
     const accepted = f.status === 'accepted' ? `<span class="chip" title="${esc((f.accepted || {}).reason)}">accepted risk</span>` : '';
-    return `<div class="fcard"${f.status === 'accepted' ? ' style="opacity:.75"' : ''}><div class="top"><span class="badge ${f.rank}">${f.rank}</span><span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
+    return `<div class="fcard"${f.status === 'accepted' ? ' style="opacity:.75"' : ''}><div class="top"><span class="badge ${cls(f.rank, RANKS)}">${esc(f.rank)}</span><span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
       ${f.status === 'accepted' ? `<div class="note">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
-      <h4>${esc(f.title)}</h4><div class="note">${esc(f.file)}${f.line ? ':' + f.line : ''}${f.node && N[f.node] ? ' · in ' + esc(short(N[f.node].qualname)) : ''}</div>
+      <h4>${esc(f.title)}</h4><div class="note">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${f.node && N[f.node] ? ' · in ' + esc(short(N[f.node].qualname)) : ''}</div>
       ${path}
-      ${f.input ? `<div class="note" style="margin-top:4px">Uses outside input on this line: ${esc(f.input.via)}</div>` : f.input === false ? '<div class="note" style="margin-top:4px">Reachable, but this line uses no parameter or request data, so it is not ranked critical (one-line check, not full data flow).</div>' : ''}
+      ${f.input ? `<div class="note" style="margin-top:4px">Uses outside input: ${esc(f.input.via)}</div>` : f.input === false ? '<div class="note" style="margin-top:4px">Reachable, but no parameter or request data reaches this line inside this function (Lantern follows assignments within the function, not across functions), so it is not ranked critical.</div>' : ''}
       ${ex ? `<div class="lens l2" style="margin-top:8px"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:6px">${esc(f.more_info)}</div>` : ''}
       <div style="margin-top:6px;display:flex;gap:6px">${f.node ? `<button class="chip" data-id="${esc(f.node)}">Open function</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="chip" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div></div>`;
   }).join('');
@@ -433,21 +442,22 @@ function renderReady() {
   if (!R) { el.innerHTML = '<div class="empty">No readiness results. Run <code>lantern analyze</code> again to compute them.</div>'; return; }
   const icon = {pass: '✓', fail: '✗', partial: '◐', skip: '–'};
   const label = {pass: 'passed', fail: 'failed', partial: 'partly', skip: 'skipped'};
-  const cats = R.categories.map(c => `<details class="cat"${c.percent !== null && c.percent < 100 ? ' open' : ''}><summary><b>${esc(c.title)}</b>
-      <span class="bar" aria-hidden="true"><i style="width:${c.percent ?? 0}%"></i></span>
-      <span class="pts">${c.score === null ? 'n/a' : c.score + '/' + c.weight}</span></summary>
-      ${c.checks.map(k => `<div class="chk"><span class="ic ${k.status}" aria-label="${label[k.status]}">${icon[k.status]}</span><div><div>${esc(k.title)}</div><div class="ev">${esc(k.evidence)}${k.how && k.how !== 'file check' ? ` · <i>${esc(k.how)}</i>` : ''}</div>${k.fix ? `<div class="fx">${esc(k.fix)}</div>` : ''}</div><span class="pts">${k.status === 'skip' ? '' : (+k.earned).toFixed(k.earned % 1 ? 1 : 0) + '/' + k.points}</span></div>`).join('')}
+  const cats = arr(R.categories).map(c => `<details class="cat"${c.percent !== null && c.percent < 100 ? ' open' : ''}><summary><b>${esc(c.title)}</b>
+      <span class="bar" aria-hidden="true"><i style="width:${pct(c.percent)}%"></i></span>
+      <span class="pts">${c.score === null ? 'n/a' : esc(c.score) + '/' + esc(c.weight)}</span></summary>
+      ${arr(c.checks).map(k => `<div class="chk"><span class="ic ${cls(k.status, STATUSES)}" aria-label="${esc(pick(label, k.status))}">${esc(pick(icon, k.status))}</span><div><div>${esc(k.title)}</div><div class="ev">${esc(k.evidence)}${k.how && k.how !== 'file check' ? ` · <i>${esc(k.how)}</i>` : ''}</div>${k.fix ? `<div class="fx">${esc(k.fix)}</div>` : ''}</div><span class="pts">${k.status === 'skip' ? '' : esc((+k.earned).toFixed(k.earned % 1 ? 1 : 0)) + '/' + esc(k.points)}</span></div>`).join('')}
     </details>`).join('');
-  const next = R.next_steps.length ? `<h3>Biggest wins</h3><ol class="ready-list">${R.next_steps.map(k => `<li><b>${esc(k.title)}</b> <span class="note">(+${k.gain} points, ${esc(k.category)})</span><br><span class="note">${esc(k.fix || k.evidence)}</span></li>`).join('')}</ol>` : '';
-  const arr = a => Array.isArray(a) ? a : [];
+  const next = arr(R.next_steps).length ? `<h3>Biggest wins</h3><ol class="ready-list">${arr(R.next_steps).map(k => `<li><b>${esc(k.title)}</b> <span class="note">(+${esc(k.gain)} points, ${esc(k.category)})</span><br><span class="note">${esc(k.fix || k.evidence)}</span></li>`).join('')}</ol>` : '';
   const prot = arr(R.protections);
-  const protHtml = prot.length ? `<h3>Protections to add</h3><p class="note">What a senior engineer would add, shown only where the code gives a reason. These are heuristic checks: they don't change findings or the score.</p>${prot.map(p => `<div class="chk"><span class="ic ${p.status === 'add' ? 'fail' : 'pass'}" aria-label="${p.status === 'add' ? 'missing' : 'in place'}">${p.status === 'add' ? '✗' : '✓'}</span><div><div><b>${esc(p.title)}</b> <span class="chip">${p.status === 'add' ? 'add this' : 'in place'}</span> <span class="chip" title="Pattern-based check; review before acting">heuristic</span></div><div class="ev">${esc(p.why)}</div>${arr(p.evidence).length ? `<div class="ev">Why Lantern thinks so: ${arr(p.evidence).map(esc).join(' · ')}</div>` : ''}${arr(p.found).length ? `<div class="ev">Found: ${arr(p.found).map(esc).join(' · ')}</div>` : ''}${p.status === 'add' ? `<div class="fx">${esc(p.how)}</div>` : ''}</div><span></span></div>`).join('')}` : '';
+  // status words: add (nothing found), check (an app-wide check exists but this route has none of its own), in place
+  const PROT = {add: ['fail', '✗', 'add this'], check: ['partial', '◐', 'check this'], 'in place': ['pass', '✓', 'in place']};
+  const protHtml = prot.length ? `<h3>Protections to add</h3><p class="note">What a senior engineer would add, shown only where the code gives a reason. These are heuristic checks: they don't change findings or the score.</p>${prot.map(p => { const [ic, sym, word] = pick(PROT, p.status) || PROT.check; return `<div class="chk"><span class="ic ${ic}" aria-label="${word}">${sym}</span><div><div><b>${esc(p.title)}</b> <span class="chip">${word}</span> <span class="chip" title="Pattern-based check; review before acting">heuristic</span></div><div class="ev">${esc(p.why)}</div>${arr(p.evidence).length ? `<div class="ev">Why Lantern thinks so: ${arr(p.evidence).map(esc).join(' · ')}</div>` : ''}${arr(p.found).length ? `<div class="ev">Found: ${arr(p.found).map(esc).join(' · ')}</div>` : ''}${word !== 'in place' ? `<div class="fx">${esc(p.how)}</div>` : ''}</div><span></span></div>`; }).join('')}` : '';
   const st = R.stack || {};
-  const advisor = `<h3>Recommended deployment</h3><p class="note">Lantern reads this project as a <b>${esc(R.shape)}</b>${st.frameworks && st.frameworks.length ? ' using ' + esc(st.frameworks.join(', ')) : ''}${st.deploy_targets && st.deploy_targets.length ? '; deploy config found for ' + esc(st.deploy_targets.join(', ')) : ''}.</p><ul class="ready-list">${R.advice.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`;
-  const hot = R.hotspots.length ? `<h3>Hotspots</h3><p class="note">Functions many others depend on. Changes here have the widest blast radius.</p><ul class="ready-list">${R.hotspots.map(h => `<li><button class="chip" data-id="${esc(h.node)}">${esc(short(h.name))}</button> called from ${h.callers} places <span class="note">${esc(h.file)}:${h.line}</span></li>`).join('')}</ul>` : '';
+  const advisor = `<h3>Recommended deployment</h3><p class="note">Lantern reads this project as a <b>${esc(R.shape)}</b>${arr(st.frameworks).length ? ' using ' + esc(st.frameworks.join(', ')) : ''}${arr(st.deploy_targets).length ? '; deploy config found for ' + esc(st.deploy_targets.join(', ')) : ''}.</p><ul class="ready-list">${arr(R.advice).map(a => `<li>${esc(a)}</li>`).join('')}</ul>`;
+  const hot = arr(R.hotspots).length ? `<h3>Hotspots</h3><p class="note">Functions many others depend on. Changes here have the widest blast radius.</p><ul class="ready-list">${arr(R.hotspots).map(h => `<li><button class="chip" data-id="${esc(h.node)}">${esc(short(h.name))}</button> called from ${esc(h.callers)} places <span class="note">${esc(h.file)}:${esc(h.line)}</span></li>`).join('')}</ul>` : '';
   const files = Object.entries(R.starter || {});
   const starter = files.length ? `<h3>Starter files</h3><p class="note">Generated for this project. Nothing is written until you ${LIVE ? 'press Write' : 'run <code>lantern starter . --write NAME</code>'} (it never overwrites).</p>${files.map(([n, f]) => `<div><b style="font-family:var(--mono);font-size:12.5px;color:var(--ink)">${esc(n)}</b> <span class="note">${esc(f.why)}</span>${LIVE && !f.snippet ? ` <button class="chip" data-starter="${esc(n)}">Write file</button>` : ''}<pre class="file">${esc(f.content)}</pre></div>`).join('')}` : '';
-  el.innerHTML = `<div class="about" style="max-width:860px"><div class="score"><span class="big">${R.score}<span style="font-size:20px;color:var(--muted)">/100</span></span><span class="grade ${R.grade}">${R.grade}</span><div class="note">Deployment readiness across ten categories.<br>A low score is shown plainly, with what to fix first.</div></div>
+  el.innerHTML = `<div class="about" style="max-width:860px"><div class="score"><span class="big">${esc(R.score)}<span style="font-size:20px;color:var(--muted)">/100</span></span><span class="grade ${cls(R.grade, GRADES)}">${esc(R.grade)}</span><div class="note">Deployment readiness across ten categories.<br>A low score is shown plainly, with what to fix first.</div></div>
     ${cats}${next}${protHtml}${advisor}${hot}${starter}</div>`;
   el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
   el.querySelectorAll('[data-starter]').forEach(b => b.onclick = () => starterLive(b.dataset.starter, b));
@@ -460,18 +470,18 @@ function renderAbout() {
   el.innerHTML = `<div class="about"><h2 style="color:var(--ink);margin:0 0 6px">About this report</h2>
     <p class="note">Generated by Lantern ${esc(DATA.version)} on ${esc(DATA.generated_at)}. Schema ${esc(G.schema)}.</p>
     <h3>Map</h3><div class="kv">
-      <div>Files / lines</div><div>${G.meta.files} / ${G.meta.lines}</div>
-      <div>Functions and methods</div><div>${(st.nodes || {}).callable ?? 0}</div>
-      <div>Call edges</div><div>${st.call_edges} (${st.internal_call_edges} inside the repo)</div>
-      <div>Confidence</div><div>${Object.entries(st.confidence || {}).map(([k, v]) => `${k}: ${v}`).join(' · ')}</div>
-      <div>Unresolved call sites</div><div>${st.unresolved_call_sites} (calls Lantern could not trace to a target; left out rather than guessed)</div>
-      <div>Analysis time</div><div>${DATA.timings ? Object.entries(DATA.timings).map(([k, v]) => `${k} ${v}s`).join(' · ') : '–'}</div>
+      <div>Files / lines</div><div>${esc(G.meta.files)} / ${esc(G.meta.lines)}</div>
+      <div>Functions and methods</div><div>${esc((st.nodes || {}).callable ?? 0)}</div>
+      <div>Call edges</div><div>${esc(st.call_edges)} (${esc(st.internal_call_edges)} inside the repo)</div>
+      <div>Confidence</div><div>${Object.entries(st.confidence || {}).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(' · ')}</div>
+      <div>Unresolved call sites</div><div>${esc(st.unresolved_call_sites)} (calls Lantern could not trace to a target; left out rather than guessed)</div>
+      <div>Analysis time</div><div>${DATA.timings ? Object.entries(DATA.timings).map(([k, v]) => `${esc(k)} ${esc(v)}s`).join(' · ') : '–'}</div>
     </div>
-    ${Object.keys(LANGS).length ? `<h3>Languages</h3><div class="kv">${Object.entries(LANGS).map(([k, v]) => `<div>${esc(k)}</div><div>${v.files} files · ${v.lines} lines${v.components ? ` · ${v.components} components` : ''}</div>`).join('')}</div>` : ''}
-    ${BR && BR.http_calls ? `<h3>Frontend → backend links</h3><div class="kv"><div>HTTP calls found</div><div>${BR.http_calls}</div><div>Linked to a route</div><div>${BR.matched} (${BR.exact} exact path, ${BR.suffix + BR['unknown-prefix']} with a prefix added elsewhere${BR.ambiguous ? `, ${BR.ambiguous} ambiguous` : ''})</div><div>External services</div><div>${BR.external}</div><div>No route in this repo</div><div>${BR.unmatched}${BR.unmatched_examples && BR.unmatched_examples.length ? '<br><span class="note">' + BR.unmatched_examples.slice(0, 8).map(esc).join('<br>') + '</span>' : ''}</div></div>` : ''}
-    ${tr ? `<h3>Runtime trace</h3><div class="kv"><div>Calls seen running</div><div>${tr.observed_edges}</div><div>Also found statically</div><div>${tr.static_found} (recall ${tr.recall})</div><div>Only seen at runtime</div><div>${tr.runtime_only}</div></div>` : ''}
-    <h3>Security tools</h3><div class="kv">${(SEC.tools || []).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${esc(t.status)}</div>`).join('')}</div>
-    ${exStats ? `<h3>Explanations</h3><div class="kv"><div>Model</div><div>${esc(exStats.model)}</div><div>Metaphor world</div><div>${esc(DATA.explanations.metaphor.world)}</div><div>Validated</div><div>${exStats.validated} of ${exStats.validated + exStats.failed} (${exStats.first_try} on first try)</div><div>Tokens</div><div>${exStats.usage.input_tokens} in · ${exStats.usage.output_tokens} out</div></div>` : ''}
+    ${Object.keys(LANGS).length ? `<h3>Languages</h3><div class="kv">${Object.entries(LANGS).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v.files)} files · ${esc(v.lines)} lines${v.components ? ` · ${esc(v.components)} components` : ''}</div>`).join('')}</div>` : ''}
+    ${BR && BR.http_calls ? `<h3>Frontend → backend links</h3><div class="kv"><div>HTTP calls found</div><div>${esc(BR.http_calls)}</div><div>Linked to a route</div><div>${esc(BR.matched)} (${esc(BR.exact)} exact path, ${(+BR.suffix || 0) + (+BR['unknown-prefix'] || 0)} with a prefix added elsewhere${BR.ambiguous ? `, ${esc(BR.ambiguous)} ambiguous` : ''})</div><div>External services</div><div>${esc(BR.external)}</div><div>No route in this repo</div><div>${esc(BR.unmatched)}${arr(BR.unmatched_examples).length ? '<br><span class="note">' + arr(BR.unmatched_examples).slice(0, 8).map(esc).join('<br>') + '</span>' : ''}</div></div>` : ''}
+    ${tr ? `<h3>Runtime trace</h3><div class="kv"><div>Calls seen running</div><div>${esc(tr.observed_edges)}</div><div>Also found statically</div><div>${esc(tr.static_found)} (recall ${esc(tr.recall)})</div><div>Only seen at runtime</div><div>${esc(tr.runtime_only)}</div></div>` : ''}
+    <h3>Security tools</h3><div class="kv">${arr(SEC.tools).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${esc(t.status)}</div>`).join('')}</div>
+    ${exStats ? `<h3>Explanations</h3><div class="kv"><div>Model</div><div>${esc(exStats.model)}</div><div>Metaphor world</div><div>${esc((DATA.explanations.metaphor || {}).world)}</div><div>Validated</div><div>${esc(exStats.validated)} of ${(+exStats.validated || 0) + (+exStats.failed || 0)} (${esc(exStats.first_try)} on first try)</div><div>Tokens</div><div>${esc((exStats.usage || {}).input_tokens)} in · ${esc((exStats.usage || {}).output_tokens)} out</div></div>` : ''}
     <h3>Line styles</h3><p>Solid bold: seen while the program ran. Solid: confirmed by name resolution. Dashed: likely, based on types Lantern could infer. Dotted: one of several possible targets.</p>
     <h3>What this report does not prove</h3><ul>
       <li>Behavior that isn't exercised by detected entry points or tests.</li>
@@ -528,8 +538,8 @@ function srcBlock(n) {
   let hi = null;
   const r = EXP[n.id];
   if (S.lens === 3 && S.pair !== null && r && r.lens3) { const a = (r.lens3.pairs[S.pair] || {}).anchor; if (a && a.type === 'lines') hi = [a.start, a.end]; }
-  return `<pre class="src">${s.split('\n').map((ln, i) => { const no = n.start_line + i; const cls = fl.has(no) ? 'f' : (hi && no >= hi[0] && no <= hi[1]) ? 'h' : '';
-    return `<span class="${cls}">${String(no).padStart(4)}  ${esc(ln)}</span>`; }).join('')}</pre>`;
+  return `<pre class="src">${s.split('\n').map((ln, i) => { const no = (+n.start_line || 0) + i; const c = fl.has(no) ? 'f' : (hi && no >= hi[0] && no <= hi[1]) ? 'h' : '';
+    return `<span class="${c}">${String(no).padStart(4)}  ${esc(ln)}</span>`; }).join('')}</pre>`;
 }
 
 function renderRight() {
@@ -542,11 +552,11 @@ function renderRight() {
   const fs = FIND_BY_NODE[n.id] || [];
   el.innerHTML = `<div class="detail"><button class="closebtn" id="close">×</button>
     <h3>${esc(n.qualname)}</h3>
-    <div class="meta">${esc(n.file)}:${n.start_line}–${n.end_line}${n.entry ? ` · <span class="badge entry">${esc(n.entry.kind)}</span> ${esc(n.entry.detail || '')}` : ''}</div>
+    <div class="meta">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry ? ` · <span class="badge entry">${esc(n.entry.kind)}</span> ${esc(n.entry.detail || '')}` : ''}</div>
     <div class="sig">${esc(n.signature || n.kind)}</div>
     <div class="lenses"><button data-l="1" class="${S.lens === 1 ? 'on' : ''}">1 · Technical</button><button data-l="2" class="${S.lens === 2 ? 'on' : ''}">2 · Everyday</button><button data-l="3" class="${S.lens === 3 ? 'on' : ''}">3 · Mapped</button></div>
     ${lensBody(r)}
-    ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard" style="margin-top:10px"><div class="top"><span class="badge ${f.rank}">${f.rank}</span><span class="rule">${esc(f.rule)} · line ${f.line ?? '–'}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
+    ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard" style="margin-top:10px"><div class="top"><span class="badge ${cls(f.rank, RANKS)}">${esc(f.rank)}</span><span class="rule">${esc(f.rule)} · line ${esc(f.line ?? '–')}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
     ${srcBlock(n)}
     <div class="links"><div><h5>Called by (${callers.length})</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
       <div><h5>Calls (${callees.length})</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div></div>`;

@@ -25,14 +25,16 @@ from .js_frontend import jwt_role
 from .python_frontend import SKIP_DIRS, inside_repo
 
 PUBLIC_PREFIX = r"(?:NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_|GATSBY_|PUBLIC_|VUE_APP_)"
-SECRET_WORD = r"[A-Z0-9_]*(?:SECRET|PRIVATE|SERVICE_ROLE|PASSWORD|PASSWD|DB_URL|DATABASE_URL|STRIPE_SK)[A-Z0-9_]*"
+SECRET_WORD = r"[A-Z0-9_]*(?:SECRET|PRIVATE|SERVICE_ROLE|PASSWORD|PASSWD|DB_URL|DATABASE_URL|STRIPE_SK|API_KEY)[A-Z0-9_]*"
 _NAME = rf"({PUBLIC_PREFIX}{SECRET_WORD})\b"
 # Only where a value is actually read or set as an environment variable, never a mere identifier:
 PUBLIC_SECRET_CODE_RE = re.compile(
     rf"(?:process\.env|import\.meta\.env|\benv)\s*(?:\.\s*|\[\s*['\"`]){_NAME}|['\"`]{_NAME}['\"`]")
 PUBLIC_SECRET_CONF_RE = re.compile(rf"^\s*(?:export\s+)?-?\s*{_NAME}\s*[:=]", re.M)
 SVELTE_PUBLIC_RE = re.compile(r"import\s*\{([^}]*)\}\s*from\s*['\"]\$env/(?:static|dynamic)/public['\"]")
-SAFE_NAMES = re.compile(r"PUBLISHABLE|ANON|PUBLIC_KEY$|SITE_KEY")
+# Keys that are meant for the browser (restricted by referrer or project rules, not secrets): not flagged
+SAFE_NAMES = re.compile(r"PUBLISHABLE|ANON|PUBLIC_KEY$|SITE_KEY|FIREBASE|MAPS_API|MAPBOX|RECAPTCHA|TURNSTILE|ALGOLIA|"
+                        r"SENTRY|POSTHOG|ANALYTICS|_GA_|GTM|EMAILJS|CLERK_|TINYMCE|FONTAWESOME|GIPHY|YOUTUBE")
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
 
 JS_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro"}
@@ -40,7 +42,7 @@ WEB_EXTS = JS_EXTS | {".py", ".html"}
 
 JS_RULES = [
     # id, regex, severity, title, cwe
-    ("LJ-EVAL", re.compile(r"(?<![\w.])eval\s*\(|\bnew\s+Function\s*\("), "HIGH",
+    ("LJ-EVAL", re.compile(r"(?<![\w.$])eval\s*\(|\bnew\s+Function\s*\("), "HIGH",   # not Playwright's $eval
      "Runs text as code (eval / new Function)", 95),
     ("LJ-XSS-HTML", re.compile(r"dangerouslySetInnerHTML|\.innerHTML\s*=(?!\s*['\"]{2})|\bv-html\s*=|\{@html\s"), "MEDIUM",
      "Inserts raw HTML into the page (cross-site scripting risk)", 79),
@@ -57,7 +59,8 @@ JS_RULES = [
 AUTH_NAME_RE = re.compile(r"current_?user|auth|login_required|require_?user|verify|token|permission|jwt|"
                           r"session|is_?admin|superuser|guard|protect|clerk|getServerSession|getUser", re.I)
 PUBLIC_ROUTE_RE = re.compile(r"login|signin|sign-in|signup|sign-up|register|password|reset|recover|health|"
-                             r"webhook|callback|logout|verify|token|public|contact|subscribe|oauth|auth", re.I)
+                             r"webhook|callback|logout|verify|token|public|contact|subscribe|oauth|"
+                             r"(?<![a-z])auth(?![a-z])", re.I)   # /auth/refresh, not /authors
 MUTATING = {"POST", "PUT", "PATCH", "DELETE", "ANY"}
 
 
@@ -235,6 +238,54 @@ def _func_name(g: Graph, nid: str) -> str:
     return n.qualname.split("::")[-1].split(".")[-1] if n.kind != "module" else ""
 
 
+def _strip_strings(s: str) -> str:
+    """Code without its string literals, so a route path like '/auth/refresh' is not read as a login check."""
+    return re.sub(r"(['\"`])(?:\\.|(?!\1).)*\1", "''", s)
+
+
+def call_adjacency(g: Graph) -> dict[str, list[str]]:
+    adj: dict[str, list[str]] = {}
+    for e in g.call_edges():
+        adj.setdefault(e.src, []).append(e.dst)
+    return adj
+
+
+def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
+    """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
+    its signature, or a function named like an auth check within `depth` calls. None when nothing was found.
+    Shared by the LW-AUTH-MISSING rule and the protections advisor so both tell the same story."""
+    for d in n.decorators:
+        m = AUTH_NAME_RE.search(_strip_strings(d))
+        if m:
+            return f"decorator @{d.split('(')[0]}"
+    m = AUTH_NAME_RE.search(_strip_strings(n.signature or ""))
+    if m:
+        return f"`{m.group(0)}` in its parameters"
+    seen, frontier = {n.id}, [n.id]
+    for _ in range(depth):
+        nxt = []
+        for u in frontier:
+            for v in adj.get(u, []):
+                if v in seen:
+                    continue
+                seen.add(v)
+                if AUTH_NAME_RE.search(_func_name(g, v)):
+                    return f"calls `{_func_name(g, v)}`"
+                nxt.append(v)
+        frontier = nxt
+    return None
+
+
+def is_public_route(detail: str) -> bool:
+    """Sign-in, sign-up, webhooks and the like: expected to be reachable without a login."""
+    return bool(PUBLIC_ROUTE_RE.search(detail.partition(" ")[2] or detail))
+
+
+def mutating_route(detail: str) -> bool:
+    verb = detail.partition(" ")[0]
+    return bool({v.upper() for v in verb.split("/")} & MUTATING)
+
+
 def missing_auth(g: Graph) -> list[dict]:
     """Routes the frontend calls that change data, where no login check is visible within 3 calls."""
     out = []
@@ -242,32 +293,15 @@ def missing_auth(g: Graph) -> list[dict]:
     for e in g.call_edges():
         if (e.via or "").startswith("http-") and not e.dst.startswith("ext:"):
             bridged.setdefault(e.dst, e.detail)
-    adj: dict[str, list[str]] = {}
-    for e in g.call_edges():
-        adj.setdefault(e.src, []).append(e.dst)
+    adj = call_adjacency(g)
     for rid, detail in bridged.items():
         n = g.nodes.get(rid)
         if n is None or not n.entry:
             continue
-        verb, _, path = n.entry.get("detail", "").partition(" ")
-        verbs = {v.upper() for v in verb.split("/")}
-        if not verbs & MUTATING or PUBLIC_ROUTE_RE.search(path):
+        route = n.entry.get("detail", "")
+        if not mutating_route(route) or is_public_route(route):
             continue
-        if any(AUTH_NAME_RE.search(d) for d in n.decorators) or AUTH_NAME_RE.search(n.signature or ""):
-            continue
-        seen, frontier, found = {rid}, [rid], False
-        for _ in range(3):
-            nxt = []
-            for u in frontier:
-                for v in adj.get(u, []):
-                    if v in seen:
-                        continue
-                    seen.add(v)
-                    if AUTH_NAME_RE.search(_func_name(g, v)):
-                        found = True
-                    nxt.append(v)
-            frontier = nxt
-        if found:
+        if route_auth_sign(g, n, adj):
             continue
         out.append(_finding(
             "LW-AUTH-MISSING", f"{n.entry['detail']} changes data, is called by the app, and no login check was found",

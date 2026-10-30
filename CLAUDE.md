@@ -20,7 +20,11 @@ product's job is to make their code understandable and defensible to skeptical e
 4. **Lantern must pass its own audit.** `lantern analyze .` should report no critical/high/medium. CI
    enforces it. (It caught two false positives in the web rules during development.)
 5. **Heuristic checks say so.** Graph/pattern-based security rules that can misfire set
-   `tool_confidence: LOW`; the viewer labels them "heuristic".
+   `tool_confidence: LOW`; the viewer labels them "heuristic". Protections have three statuses: `add`, `check`
+   (an app-wide mechanism exists but the code does not show it covers the routes in question), `in place`.
+6. **Everything in the viewer is escaped.** Every value from the data goes through `esc()` (class names through
+   `cls()`), and `render()` adds a hash-based Content-Security-Policy so a report opened from disk cannot run
+   script planted in its data. CI opens a poisoned report (`tools/poison_report.py`) in Chromium to prove it.
 
 ## Commands
 
@@ -114,7 +118,9 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
   unresolved; React Query `mutationFn`/`queryFn` callbacks are linked, which covers most real paths.
 * Calls into libraries that call back into the repo (framework dispatch) only show when traced (Python).
 * Dependency audits need exact versions: Python ranges without a lock file, and pnpm/yarn/bun lock files, are reported as not checked.
-* "Uses input" is a one-line check (parameters and request data on the flagged line), not data flow across functions.
+* "Uses input" follows assignments inside one function, in order (parameters, request data, and variables set
+  from them), not across functions, branches, or loops. A value that arrives through another function's return
+  value is missed; a parameter that is always a constant is over-ranked.
 * The report embeds source by default; `--privacy structure` omits it.
 * Explanations exist only for selected nodes (entry points + 3 levels, capped at 40 by default).
 

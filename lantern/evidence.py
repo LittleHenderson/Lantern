@@ -350,11 +350,12 @@ def render_html(ev: dict) -> str:
                          f"<span class='tag ok'>fixed · verified by rescan</span><br><span class='muted'>{E(f['rule'])} · "
                          f"{E(f['file'] or '')}:{E(f.get('line') or '')}</span></td></tr>" for f in se["fixed"])
     prot = [x for x in se.get("protections") or [] if isinstance(x, dict)]
+    prot_word = {"add": "add", "check": "check", "in place": "in place"}
     prot_rows = "".join(
-        f"<tr><td><span class='tag{'' if x.get('status') == 'add' else ' ok'}'>{'add' if x.get('status') == 'add' else 'in place'}"
+        f"<tr><td><span class='tag{' ok' if x.get('status') == 'in place' else ''}'>{prot_word.get(x.get('status'), 'check')}"
         f"</span></td><td><b>{E(x.get('title'))}</b><br><span class='muted'>{E(x.get('why'))}</span>"
         + (f"<br><span class='muted'>Evidence: {E(' · '.join(map(str, x.get('evidence') or [])))}</span>" if x.get("evidence") else "")
-        + (f"<div class='reason'>{E(x.get('how'))}</div>" if x.get("status") == "add" else "") + "</td></tr>" for x in prot)
+        + (f"<div class='reason'>{E(x.get('how'))}</div>" if x.get("status") != "in place" else "") + "</td></tr>" for x in prot)
     tools = "".join(f"<tr><td>{E(t['tool'] or '')}</td><td>{E(t.get('version') or '–')}</td><td class='muted'>"
                     f"{E(t.get('role') or '')}{(' · ' + E(t['status'])) if t.get('status') and t['status'] != 'ok' else ''}"
                     f"</td></tr>" for t in ev["provenance"]["tools"])
@@ -422,7 +423,7 @@ button.print{{float:right;font:inherit;font-size:12.5px;padding:6px 12px;border-
 {f"<h4>Fixed since first analysis ({len(se['fixed'])})</h4><table>{fixed_rows}</table>" if se['fixed'] else ''}
 {f"<h4>Changed but still open ({len(se.get('changed') or [])})</h4><p class='muted'>The flagged line changed, and the same rule now flags new code in the same file, so these are not counted as fixed.</p><table>{changed_rows}</table>" if se.get('changed') else ''}
 {f"<h4>Accepted risks ({len(se['accepted'])})</h4><table>{acc_rows}</table>" if se['accepted'] else ''}
-{f"<h4>Protections to add ({sum(1 for x in prot if x.get('status') == 'add')})</h4><p class='muted'>Heuristic: shown only where the code gives a reason; they don't change findings or the score.</p><table>{prot_rows}</table>" if prot else ''}
+{f"<h4>Protections to add ({sum(1 for x in prot if x.get('status') != 'in place')})</h4><p class='muted'>Heuristic: shown only where the code gives a reason; they don't change findings or the score.</p><table>{prot_rows}</table>" if prot else ''}
 {f"<p class='muted'>{E(se['in_tests'])} more finding(s) are in test code only.</p>" if se['in_tests'] else ''}
 </section>
 

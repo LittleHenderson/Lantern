@@ -156,19 +156,35 @@ def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
             return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
     out = []
     for dep in data.get("dependencies", []):
-        for v in dep.get("vulns", []):
-            name = dep.get("name", "")
+        name = dep.get("name", "")
+        for v, aliases in _advisories(dep.get("vulns", [])):
             out.append({
                 "id": _fid("pip-audit", _norm(name), v["id"]),
                 "tool": "pip-audit", "rule": v["id"],
                 "title": f"{name} {dep.get('version', '')} has known vulnerability {v['id']}",
                 "tool_severity": "HIGH", "tool_confidence": "HIGH",
                 "file": pins.get(_norm(name), ("", files[0]))[1], "line": None,
-                "more_info": f"Fixed in: {', '.join(v.get('fix_versions', [])) or 'no fix yet'}",
+                "more_info": f"Fixed in: {', '.join(v.get('fix_versions', [])) or 'no fix yet'}"
+                             + (f". Also listed as {', '.join(aliases)}" if aliases else ""),
                 "snippet": (v.get("description") or "")[:400], "category": "dependency", "package": name,
             })
     return out, info | {"status": "ok", "files": files, "checked": len(pins), "unpinned": len(loose),
                         "unpinned_examples": loose[:5]}
+
+
+def _advisories(vulns: list[dict]) -> list[tuple[dict, list[str]]]:
+    """One entry per advisory. pip-audit can list the same id twice and the same CVE under two ids (a PYSEC and a
+    GHSA entry that alias each other); those are merged, lowest id first so results are stable between runs."""
+    groups: list[tuple[set[str], dict]] = []
+    for v in sorted((v for v in vulns if isinstance(v, dict) and v.get("id")), key=lambda v: str(v["id"])):
+        keys = {str(v["id"])} | {str(a) for a in (v.get("aliases") or [])}
+        for known, _ in groups:
+            if known & keys:
+                known |= keys
+                break
+        else:
+            groups.append((keys, v))
+    return [(v, sorted(keys - {str(v["id"])})) for keys, v in groups]
 
 
 # ---------------------------------------------------------------------------- JavaScript

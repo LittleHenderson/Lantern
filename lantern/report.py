@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
+import hashlib
 import json
+import re
 from pathlib import Path
 
 from . import __version__
@@ -50,7 +53,8 @@ def write_report(out_dir: Path, g: Graph, security: dict | None, explanations: d
         for f in bundle["security"]["findings"]:
             f["snippet"] = "[omitted: structure-only privacy level]"
     path = out_dir / "report.html"
-    path.write_text(render(bundle), encoding="utf-8")
+    # newline="\n": the content policy hashes the script bytes, so a CRLF rewrite on Windows would block it
+    path.write_text(render(bundle), encoding="utf-8", newline="\n")
     return path
 
 
@@ -64,12 +68,34 @@ def safe_json(obj) -> str:
     return json.dumps(obj, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
+CSP_MARK = '<meta charset="utf-8">'
+CSP_META = ('<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src {hashes}; '
+            "style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'\">")
+
+
+def script_hashes(html: str) -> list[str]:
+    """CSP hash sources for the page's inline scripts (the JSON data block never runs and is left out)."""
+    out = []
+    for m in re.finditer(r"<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>", html, re.S):
+        if 'type="application/json"' in m.group("attrs"):
+            continue
+        digest = hashlib.sha256(m.group("body").encode("utf-8")).digest()
+        out.append("'sha256-" + base64.b64encode(digest).decode("ascii") + "'")
+    return out
+
+
 def render(bundle: dict, live: dict | None = None, nonce: str | None = None) -> str:
     """The report page: our template plus the data. `live` (only from `lantern serve`) enables in-page actions;
-    `nonce` marks our own scripts for the server's Content-Security-Policy."""
+    `nonce` marks our own scripts for the server's Content-Security-Policy header.
+
+    The page also carries its own Content-Security-Policy in a <meta> tag, listing the SHA-256 of each of our
+    scripts. A report opened from disk has no server to send headers, and this makes it hold anyway: someone who
+    edits only the data block cannot get script to run (inline handlers, javascript: URLs, and injected scripts
+    are all refused), and only a script that hashes to ours runs at all."""
     html = TEMPLATE.read_text(encoding="utf-8").replace("/*__LANTERN_DATA__*/null", safe_json(bundle))
     if live is not None:
         html = html.replace(DATA_OPEN, "<script>window.LANTERN_LIVE = " + safe_json(live) + ";</script>\n" + DATA_OPEN, 1)
+    html = html.replace(CSP_MARK, CSP_MARK + "\n" + CSP_META.format(hashes=" ".join(script_hashes(html))), 1)
     if nonce:
         html = html.replace("<script>", f'<script nonce="{nonce}">')
     return html
