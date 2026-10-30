@@ -70,7 +70,7 @@ and the `.npmrc` scoped-registry override.
 ## 2026-10-30 · re-audit of commit ca3fcb6
 
 The same auditor confirmed all four round-three fixes on Windows and Linux (148 tests, self-audit clean, `tools/audit.sh`
-ALL PASS), then found one medium and one low problem in the login check and reviewed the draft of PR #13. Fixed in PR #PRNUM.
+ALL PASS), then found one medium and one low problem in the login check and reviewed the draft of PR #13. Fixed in PR #14.
 
 | # | Finding | Severity | Status |
 |---|---|---|---|
