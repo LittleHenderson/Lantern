@@ -128,3 +128,43 @@ def test_a_route_path_is_not_a_login_check(tmp_path):
     _write(tmp_path, files)
     p = _prot(tmp_path)["route-auth"]
     assert p["status"] == "add" and len(p["evidence"]) == 2
+
+
+def test_a_comment_or_docstring_is_not_a_login_check(tmp_path):
+    """Strings and comments are blanked before the handler's lines are read for login words."""
+    files = dict(BACKEND_ONLY)
+    files["svc/main.py"] = (
+        "from fastapi import FastAPI\n\napp = FastAPI()\n\n"
+        "@app.post('/items')\ndef create_item(name: str):\n    # TODO: add auth here later\n    return {'name': name}\n\n"
+        "@app.delete('/items/{item_id}')\ndef delete_item(item_id: int):\n"
+        "    \"\"\"Delete an item.\n\n    Needs a permission check and current_user once login exists.\n    \"\"\"\n"
+        "    msg = 'authorized by nobody'\n    return item_id\n")
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "add", p
+    assert p["evidence"] == ["POST /items (svc/main.py:5)", "DELETE /items/{item_id} (svc/main.py:10)"]
+
+
+def test_looking_up_the_target_user_is_not_a_login_check(tmp_path):
+    """`who = get_user(payload['owner'])` fetches the record's owner, not the caller (the IDOR shape). With the
+    result tested it is a weak sign, so the status is `check`, never `in place`. `get_user(token)` is a real check."""
+    files = dict(BACKEND_ONLY)
+    files["svc/main.py"] = (
+        "from fastapi import FastAPI, Header\n\napp = FastAPI()\n\n"
+        "def get_user(key):\n    return {'id': key}\n\n"
+        "@app.post('/items')\ndef create_item(payload: dict):\n    who = get_user(payload.get('owner'))\n"
+        "    if not who:\n        raise ValueError('no such user')\n    return {'owner': who['id']}\n\n"
+        "@app.delete('/items/{item_id}')\ndef delete_item(item_id: int, x_key: str = Header()):\n"
+        "    who = get_user(token=x_key)\n    return who\n")
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "check", p
+    assert p["evidence"] == ["POST /items (svc/main.py:8): `get_user(payload.get('owner'))` looks up a user by "
+                             "`payload.get('owner')`, not by who is calling"]
+    assert p["found"] == ["DELETE /items/{item_id}: handler calls `get_user(token=x_key)`"]
+    assert "record's owner" in p["why"]
+    # the same lookup without testing the result is no sign at all
+    files["svc/main.py"] = files["svc/main.py"].replace("    if not who:\n        raise ValueError('no such user')\n", "")
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "add" and p["evidence"] == ["POST /items (svc/main.py:8)"], p

@@ -164,6 +164,7 @@ def classify_shape(stack: dict) -> str:
     return "library"
 
 
+SHAPES = frozenset({"full-stack web app", "web API", "frontend web app", "command-line tool", "script or worker", "library"})
 SERVICE_SHAPES = {"full-stack web app", "web API"}
 
 

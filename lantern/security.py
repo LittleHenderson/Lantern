@@ -125,7 +125,7 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
                           r"\bsys\.argv\b|\binput\(|\bevent\[|\bctx\.(query|params|request)\b")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
-                    r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?:[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
+                    r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
                     re.S)
 BINDS = [   # loops and context managers that bind a name to a value
     re.compile(r"^\s*(?:async\s+)?for\s+(?P<lhs>[\w., ]+?)\s+in\s+(?P<rhs>.+?):", re.S),
@@ -173,11 +173,17 @@ def _uses(name: str, text: str) -> bool:
     return re.search(r"(?<![\w$.])" + re.escape(name) + r"(?![\w$])", text) is not None
 
 
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
 def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | False:
     """Does the flagged line use something a caller controls: a parameter, request data, or a local variable
     that was set from either earlier in the same function? Assignments are followed in order inside the function
     only (not across functions, branches, or loops), so it can say yes for a parameter that is in fact always a
-    constant, and it says no for input that arrives through another function's return value."""
+    constant, and it says no for input that arrives through another function's return value. A plain `name = ...`
+    with nothing tainted on its right clears the name again, but only at the same block level as the line that
+    tainted it (or the function body for a parameter): `if not cmd: cmd = "ls"` is a default, not a reset."""
     n = g.nodes.get(f.get("node") or "")
     if not n or not f.get("line") or not n.start_line:
         return False
@@ -198,6 +204,9 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
     flagged = next((st for st in stmts if st[0] <= line <= st[1]), None)
     if flagged is None:
         return False
+    head = _indent(src[n.start_line - 1])
+    body = next((_indent(src[st[0] - 1]) for st in stmts if _indent(src[st[0] - 1]) > head), head + 1)
+    level = {name: body for name in tainted}   # the block level at which each name was tainted
     for start, end, text in stmts:
         if start >= flagged[0]:
             break
@@ -212,9 +221,14 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         elif src_name:
             origin = tainted[src_name]
         else:
+            if "op" in m.groupdict() and not m.group("op"):
+                for name in _names(lhs):   # a plain reassignment at the same level replaces the tainted value
+                    if name in tainted and _indent(src[start - 1]) <= level[name]:
+                        del tainted[name], level[name]
             continue
         for name in _names(lhs):
             tainted[name] = f"`{name}`, which line {start} sets from {origin}"
+            level[name] = _indent(src[start - 1])
     text = flagged[2]
     m = REQUEST_DATA.search(text)
     if m:

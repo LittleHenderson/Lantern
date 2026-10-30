@@ -161,3 +161,30 @@ def test_input_follows_assignments_in_js_handlers(tmp_path):
     assert f[8]["rank"] == "critical"
     assert f[8]["input"] == {"via": "`full`, which line 7 sets from `cmd`, which line 6 sets from request data `req.body`"}
     assert f[14]["rank"] == "high" and f[14]["input"] is False
+
+
+def test_reassigning_a_safe_value_clears_the_input(tmp_path):
+    """`cmd = request.args.get(...)` then `cmd = "ls -la"` at the same level: the request value is gone, so the
+    line is high, not critical. A default inside an `if` block (`if not cmd: cmd = "ls"`) does not clear it,
+    nor does `cmd += "x"`, nor a reassignment that still uses the tainted name."""
+    from lantern.engine import build_graph
+    from lantern.security import scan
+    (tmp_path / "app.py").write_text(
+        "import subprocess\nfrom flask import Flask, request\n\napp = Flask(__name__)\n\n"
+        "@app.route('/reset', methods=['POST'])\ndef reset():\n    cmd = request.args.get('cmd')\n"
+        "    cmd = 'ls -la'\n    subprocess.run(cmd, shell=True)\n\n"
+        "@app.route('/default', methods=['POST'])\ndef default():\n    cmd = request.args.get('cmd')\n"
+        "    if not cmd:\n        cmd = 'ls'\n    subprocess.run(cmd, shell=True)\n\n"
+        "@app.route('/append', methods=['POST'])\ndef append():\n    cmd = request.args.get('cmd')\n"
+        "    cmd += ' --all'\n    subprocess.run(cmd, shell=True)\n\n"
+        "@app.route('/wrap', methods=['POST'])\ndef wrap():\n    cmd = request.args.get('cmd')\n"
+        "    cmd = 'nice ' + cmd\n    subprocess.run(cmd, shell=True)\n\n"
+        "@app.route('/param', methods=['POST'])\ndef param(cmd):\n    cmd = 'ls'\n    subprocess.run(cmd, shell=True)\n",
+        encoding="utf-8")
+    f = {x["node"].rsplit(".", 1)[-1]: x for x in scan(build_graph(tmp_path))["findings"] if x["rule"] == "B602"}
+    assert f["reset"]["rank"] == "high" and f["reset"]["input"] is False
+    assert f["param"]["rank"] == "high" and f["param"]["input"] is False
+    assert f["default"]["rank"] == "critical"
+    assert f["default"]["input"] == {"via": "`cmd`, which line 14 sets from request data `request.args`"}
+    assert f["append"]["rank"] == "critical" and f["wrap"]["rank"] == "critical"
+    assert f["wrap"]["input"]["via"].startswith("`cmd`, which line 28 sets from `cmd`, which line 27 sets from")

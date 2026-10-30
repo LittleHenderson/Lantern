@@ -100,6 +100,7 @@ def test_project_lifecycle(srv, tmp_path):
     _, st = call(base, "/api/state")
     pr = st["projects"][0]
     assert pr["has_report"] and pr["grade"] == "F" and pr["counts"]["critical"] >= 1
+    assert pr["shape"] == "full-stack web app"
     code, html = call(base, f"/p/{p['id']}/report.html")
     assert code == 200 and "window.LANTERN_LIVE" in html
     assert call(base, f"/p/{p['id']}/evidence.html")[0] == 200
@@ -200,7 +201,7 @@ def test_planted_results_cannot_run_script(srv, tmp_path):
     _, st = call(base, "/api/state")
     s = next(x for x in st["projects"] if x["id"] == p["id"])
     assert s["counts"]["critical"] == 0 and s["counts"]["high"] == 1   # non-numbers dropped
-    assert s["score"] is None and s["grade"] is None
+    assert s["score"] is None and s["grade"] is None and s["shape"] is None   # only Lantern's own shape names
     # Repo-supplied HTML is never served as a page: no planted script, no live token in a planted report.
     code, body = call(base, f"/p/{p['id']}/report.html")
     assert code == 409 and "planted" not in body and "tok-123" not in body

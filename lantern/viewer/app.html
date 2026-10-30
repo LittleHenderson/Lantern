@@ -262,7 +262,7 @@ async function renderGuide(body, p) {
   const st = (pr && pr.steps) || [];
   const pct = pr && pr.total ? Math.round(100 * pr.done / pr.total) : 0;
   body.innerHTML = `<main><h1>${esc(s.title)}</h1><p class="muted">${fmt(s.summary)}</p>
-    <div class="card"><div class="row"><b>${pr ? `${esc(pr.done)} of ${esc(pr.total)} steps done` : 'Not analyzed yet'}</b>
+    <div class="card"><div class="row"><b>${pr ? `${esc(pr.done)} of ${esc(pr.total)} checked steps done${pr.explore ? ` · ${esc(pr.explore)} to explore on your own` : ''}` : 'Not analyzed yet'}</b>
       <button class="btn primary" id="check" style="margin-left:auto" ${running ? 'disabled' : ''}>${running ? 'Analyzing…' : 'Check my progress'}</button></div>
       <div class="bar"><span style="width:${pct}%"></span></div>
       <div class="small muted">Folder: <code>${esc(p.path)}</code>. Open it in your editor or AI assistant, make each fix there, then press Check my progress.</div>

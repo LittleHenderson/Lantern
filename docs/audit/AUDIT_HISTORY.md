@@ -50,3 +50,19 @@ Process notes from this round: the refreshed audit packet is now written as `LAN
 download never shadows the previous one. Still untested: flask and rich benchmarks, cross-machine digests, real
 cross-origin CSRF, server concurrency, regex exhaustion, `--host 0.0.0.0`, and an npm scoped-registry override
 through a repo `.npmrc`.
+
+## 2026-10-30 · re-audit of commit 17d8704
+
+The same auditor confirmed all four findings above fixed and could not break the fixes or the two extras, then
+found one medium and one low problem plus two notes. Fixed in PR #PRNUM.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| R1 | A comment still counted as a login check: `# TODO: add auth here later` made `route-auth` "in place" with the evidence "handler mentions `auth`". `who = get_user(payload.get("owner"))` did too, although fetching the target user (the IDOR shape) says nothing about who is calling | medium | Fixed: strings and comments (including docstrings and `/* */`) are blanked before a handler is read. A user lookup (`get_user`, `getUser`, `find_user_by_...`) is a sign only when its argument identifies the caller (token, session, request, headers, cookies, or nothing); given a request value it is at most a weak sign (the result is tested), which makes the status `check` with the lookup named, and with no test it is no sign at all. `LW-AUTH-MISSING` now uses the same reading (`websec.login_check`) and names the lookup in its text, so the finding and the protection tell one story. When unsure the answer is `check`, never `in place` |
+| R2 | Input taint survived reassignment: `cmd = request.args.get(...)` then `cmd = "ls -la"` stayed critical, and this was not in the known gaps | low | Fixed: a plain `=` whose right side has no request data or tainted name clears the name when the statement sits at the same block level as the one that tainted it (the function body for a parameter). `if not cmd: cmd = "ls"` is deeper, so it keeps the taint; so do `cmd += "x"` and `cmd = "nice " + cmd`. Documented in `CLAUDE.md` known gaps and CLAIMS S6 |
+| – | Learn said "1 of 10 steps done" while listing 11 steps (the read-only step was outside the denominator) | note | Fixed: the counter reads "1 of 10 checked steps done · 1 to explore on your own", in the app and in `lantern learn --check`; `progress()` returns `explore` and a test checks that `total + explore` equals the number of listed steps |
+| – | The project card's `shape` label was unvalidated text from `readiness.json` (escaped, so no script, but spoofable) | note | Fixed: the server passes a shape only when it is one of Lantern's six shape names (`readiness.SHAPES`); anything else becomes null, like a bad grade |
+
+Still untested after this round: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine
+digests, flask and rich benchmarks, real cross-origin CSRF, server concurrency, regex exhaustion, `--host 0.0.0.0`,
+and the `.npmrc` scoped-registry override.
