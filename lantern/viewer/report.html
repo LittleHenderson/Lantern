@@ -123,6 +123,23 @@ pre.src span.h{background:var(--hl)}
 .kv div:nth-child(odd){color:var(--muted)}
 .about{max-width:760px}
 .about h3{color:var(--ink);font-size:15px;margin:18px 0 6px}
+.score{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:4px 0 14px}
+.score .big{font:800 44px/1 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;color:var(--ink)}
+.score .grade{font:800 22px/1 inherit;width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:var(--soft);color:var(--ink)}
+.score .grade.A,.score .grade.B{background:var(--lows);color:var(--low)} .score .grade.C{background:var(--meds);color:var(--med)}
+.score .grade.D{background:var(--highs);color:var(--high)} .score .grade.F{background:var(--crits);color:var(--crit)}
+.cat{border:1px solid var(--line);border-radius:10px;background:var(--panel);margin:0 0 8px}
+.cat summary{display:grid;grid-template-columns:1fr 120px 64px;gap:10px;align-items:center;padding:10px 12px;cursor:pointer;list-style:none}
+.cat summary::-webkit-details-marker{display:none}
+.cat summary b{color:var(--ink);font-size:13.5px}
+.bar{height:8px;border-radius:99px;background:var(--soft);overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}
+.cat .pts{font:12px var(--mono);color:var(--muted);text-align:right}
+.chk{display:grid;grid-template-columns:22px 1fr auto;gap:8px;padding:8px 12px;border-top:1px dashed var(--line);font-size:13px}
+.chk .ic{font-weight:800;text-align:center} .chk .ic.pass{color:var(--low)} .chk .ic.fail{color:var(--crit)} .chk .ic.partial{color:var(--high)} .chk .ic.skip{color:var(--muted)}
+.chk .ev{font-size:12px;color:var(--muted);overflow-wrap:anywhere} .chk .fx{font-size:12px;color:var(--body);margin-top:2px}
+pre.file{background:var(--code);color:var(--codeink);font:12px/1.5 var(--mono);padding:10px;border-radius:8px;overflow:auto;margin:6px 0 12px;white-space:pre}
+.ready-list{margin:6px 0 0;padding-left:18px} .ready-list li{margin:4px 0}
+.fid{font:11px var(--mono);color:var(--muted);user-select:all}
 .closebtn{display:none}
 @media (max-width: 1100px){
   main{grid-template-columns:240px minmax(0,1fr)}
@@ -145,7 +162,7 @@ pre.src span.h{background:var(--hl)}
   <div class="brand"><b>Lantern</b><span class="repo" id="repo"></span></div>
   <div class="chips" id="chips"></div>
   <nav class="tabs" id="tabs">
-    <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="about">About</button>
+    <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="ready">Readiness</button><button data-t="about">About</button>
   </nav>
 </header>
 <main id="main">
@@ -195,6 +212,7 @@ if (SEC.counts.critical) chipHtml += `<span class="chip crit">${SEC.counts.criti
 if (SEC.counts.high) chipHtml += `<span class="chip high">${SEC.counts.high} high</span>`;
 const nexp = Object.keys(EXP).length;
 chipHtml += `<span class="chip">${nexp ? nexp + ' explained' : 'no explanations yet'}</span>`;
+if (DATA.readiness) chipHtml += `<span class="chip">readiness ${DATA.readiness.score}/100 (${DATA.readiness.grade})</span>`;
 document.getElementById('chips').innerHTML = chipHtml;
 document.getElementById('tabs').onclick = ev => {
   const t = ev.target.closest('button'); if (!t) return;
@@ -207,7 +225,7 @@ document.getElementById('tabs').onclick = ev => {
 const ENTRY_LABEL = {page: 'Pages and screens', route: 'API routes', cli: 'Command-line commands', main: 'App and program starts', script: 'Installed scripts', test: 'Tests'};
 function renderLeft() {
   const el = document.getElementById('left');
-  if (S.tab !== 'map') { el.innerHTML = `<div class="note" style="padding:6px">${S.tab === 'findings' ? 'Findings are ranked by severity and by whether an entry point can reach them.' : 'How this report was made.'}</div>`; return; }
+  if (S.tab !== 'map') { el.innerHTML = `<div class="note" style="padding:6px">${{findings: 'Findings are ranked by severity and by whether an entry point can reach them.', ready: 'Every point has a reason. Checks that don\'t apply to this kind of project are skipped, not counted against it.', about: 'How this report was made.'}[S.tab]}</div>`; return; }
   const eps = G.nodes.filter(n => n.entry);
   const q = S.q.toLowerCase();
   const groups = {};
@@ -358,12 +376,36 @@ function renderFindings() {
     if (!path) path = `<div class="note" style="margin-top:6px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
     const heur = f.tool_confidence === 'LOW' ? '<span class="chip" title="Pattern-based check; review before acting">heuristic</span>' : '';
     const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
-    return `<div class="fcard"><div class="top"><span class="badge ${f.rank}">${f.rank}</span><span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}</div>
+    const accepted = f.status === 'accepted' ? `<span class="chip" title="${esc((f.accepted || {}).reason)}">accepted risk</span>` : '';
+    return `<div class="fcard"${f.status === 'accepted' ? ' style="opacity:.75"' : ''}><div class="top"><span class="badge ${f.rank}">${f.rank}</span><span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
+      ${f.status === 'accepted' ? `<div class="note">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
       <h4>${esc(f.title)}</h4><div class="note">${esc(f.file)}${f.line ? ':' + f.line : ''}${f.node && N[f.node] ? ' · in ' + esc(short(N[f.node].qualname)) : ''}</div>
       ${path}
       ${ex ? `<div class="lens l2" style="margin-top:8px"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:6px">${esc(f.more_info)}</div>` : ''}
       ${f.node ? `<div style="margin-top:6px"><button class="chip" data-id="${esc(f.node)}">Open function</button></div>` : ''}</div>`;
   }).join('');
+  el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
+}
+
+function renderReady() {
+  const el = document.getElementById('center');
+  const R = DATA.readiness;
+  if (!R) { el.innerHTML = '<div class="empty">No readiness results. Run <code>lantern analyze</code> again to compute them.</div>'; return; }
+  const icon = {pass: '✓', fail: '✗', partial: '◐', skip: '–'};
+  const label = {pass: 'passed', fail: 'failed', partial: 'partly', skip: 'skipped'};
+  const cats = R.categories.map(c => `<details class="cat"${c.percent !== null && c.percent < 100 ? ' open' : ''}><summary><b>${esc(c.title)}</b>
+      <span class="bar" aria-hidden="true"><i style="width:${c.percent ?? 0}%"></i></span>
+      <span class="pts">${c.score === null ? 'n/a' : c.score + '/' + c.weight}</span></summary>
+      ${c.checks.map(k => `<div class="chk"><span class="ic ${k.status}" aria-label="${label[k.status]}">${icon[k.status]}</span><div><div>${esc(k.title)}</div><div class="ev">${esc(k.evidence)}${k.how && k.how !== 'file check' ? ` · <i>${esc(k.how)}</i>` : ''}</div>${k.fix ? `<div class="fx">${esc(k.fix)}</div>` : ''}</div><span class="pts">${k.status === 'skip' ? '' : (+k.earned).toFixed(k.earned % 1 ? 1 : 0) + '/' + k.points}</span></div>`).join('')}
+    </details>`).join('');
+  const next = R.next_steps.length ? `<h3>Biggest wins</h3><ol class="ready-list">${R.next_steps.map(k => `<li><b>${esc(k.title)}</b> <span class="note">(+${k.gain} points, ${esc(k.category)})</span><br><span class="note">${esc(k.fix || k.evidence)}</span></li>`).join('')}</ol>` : '';
+  const st = R.stack || {};
+  const advisor = `<h3>Recommended deployment</h3><p class="note">Lantern reads this project as a <b>${esc(R.shape)}</b>${st.frameworks && st.frameworks.length ? ' using ' + esc(st.frameworks.join(', ')) : ''}${st.deploy_targets && st.deploy_targets.length ? '; deploy config found for ' + esc(st.deploy_targets.join(', ')) : ''}.</p><ul class="ready-list">${R.advice.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`;
+  const hot = R.hotspots.length ? `<h3>Hotspots</h3><p class="note">Functions many others depend on. Changes here have the widest blast radius.</p><ul class="ready-list">${R.hotspots.map(h => `<li><button class="chip" data-id="${esc(h.node)}">${esc(short(h.name))}</button> called from ${h.callers} places <span class="note">${esc(h.file)}:${h.line}</span></li>`).join('')}</ul>` : '';
+  const files = Object.entries(R.starter || {});
+  const starter = files.length ? `<h3>Starter files</h3><p class="note">Generated for this project. Nothing is written until you run <code>lantern starter . --write NAME</code> (it never overwrites).</p>${files.map(([n, f]) => `<div><b style="font-family:var(--mono);font-size:12.5px;color:var(--ink)">${esc(n)}</b> <span class="note">${esc(f.why)}</span><pre class="file">${esc(f.content)}</pre></div>`).join('')}` : '';
+  el.innerHTML = `<div class="about" style="max-width:860px"><div class="score"><span class="big">${R.score}<span style="font-size:20px;color:var(--muted)">/100</span></span><span class="grade ${R.grade}">${R.grade}</span><div class="note">Deployment readiness across ten categories.<br>A low score is shown plainly, with what to fix first.</div></div>
+    ${cats}${next}${advisor}${hot}${starter}</div>`;
   el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
 }
 
@@ -471,7 +513,7 @@ function renderRight() {
 
 function render() {
   renderLeft();
-  if (S.tab === 'map') renderMap(); else if (S.tab === 'findings') renderFindings(); else renderAbout();
+  if (S.tab === 'map') renderMap(); else if (S.tab === 'findings') renderFindings(); else if (S.tab === 'ready') renderReady(); else renderAbout();
   renderRight();
 }
 // default: first non-test entry point, preferring routes

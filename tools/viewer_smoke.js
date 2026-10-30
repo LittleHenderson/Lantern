@@ -33,6 +33,10 @@ const { chromium } = require('playwright');
     }
     await p.click('#tabs button[data-t="findings"]'); await p.waitForTimeout(150);
     await p.screenshot({ path: `${out}-${name}-findings.png` });
+    if (await p.$('#tabs button[data-t="ready"]')) {
+      await p.click('#tabs button[data-t="ready"]'); await p.waitForTimeout(150);
+      await p.screenshot({ path: `${out}-${name}-ready.png`, fullPage: true });
+    }
     await p.click('#tabs button[data-t="about"]'); await p.waitForTimeout(150);
     await p.close();
   }

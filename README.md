@@ -31,6 +31,16 @@ lantern analyze path/to/repo            # graph + bridge + security scan + repor
 open path/to/repo/.lantern/report.html  # self-contained, works offline and on a phone
 ```
 
+Grade how ready it is to ship (0–100 across ten categories, every point with a reason), and get
+starter files generated for what's missing:
+
+```bash
+lantern starter path/to/repo                     # preview Dockerfile, CI workflow, .env.example, SECURITY.md, /health
+lantern starter path/to/repo --write Dockerfile  # write one (never overwrites)
+lantern accept path/to/repo FINDING_ID --reason "why this risk is acceptable"   # recorded in lantern-accepted.json
+lantern analyze path/to/repo --fail-on high      # exit 1 in CI if an open high or critical finding remains
+```
+
 Record what actually runs (Python): `lantern analyze path/to/repo --trace -- python -m pytest -q`
 
 Add Three-Lens explanations with your own key or a local model:
