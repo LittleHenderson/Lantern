@@ -51,7 +51,7 @@ def test_rank_rules():
 
 
 def test_builtin_secret_scan(tmp_path):
-    (tmp_path / "config.py").write_text('KEY = "AKIA' + "ABCDEFGHIJKLMNOP" + '"\n')
+    (tmp_path / "config.py").write_text('KEY = "AKIA' + "ABCDEFGHIJKLMNOP" + '"\n', encoding="utf-8")
     g = build_graph(tmp_path)
     s = scan(g)
     secrets = [f for f in s["findings"] if f["category"] == "secret"]
@@ -61,10 +61,10 @@ def test_builtin_secret_scan(tmp_path):
 
 def test_secret_scan_covers_frontend_files(tmp_path):
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "api.ts").write_text('const key = "sk_live_' + "a" * 24 + '"\n')
-    (tmp_path / "src" / "Pay.tsx").write_text('export const t = "ghp_' + "b" * 36 + '"\n')
+    (tmp_path / "src" / "api.ts").write_text('const key = "sk_live_' + "a" * 24 + '"\n', encoding="utf-8")
+    (tmp_path / "src" / "Pay.tsx").write_text('export const t = "ghp_' + "b" * 36 + '"\n', encoding="utf-8")
     (tmp_path / "node_modules").mkdir()
-    (tmp_path / "node_modules" / "x.js").write_text('k = "sk_live_' + "c" * 24 + '"\n')
+    (tmp_path / "node_modules" / "x.js").write_text('k = "sk_live_' + "c" * 24 + '"\n', encoding="utf-8")
     g = build_graph(tmp_path)
     files = sorted(f["file"] for f in scan(g)["findings"] if f["category"] == "secret")
     assert files == ["src/Pay.tsx", "src/api.ts"]
@@ -72,7 +72,7 @@ def test_secret_scan_covers_frontend_files(tmp_path):
 
 def test_secret_scans_read_dotenv_files(tmp_path):
     # `.env` is in SKIP_DIRS (as a virtualenv folder name); a *file* named .env must still be scanned
-    (tmp_path / ".env").write_text("STRIPE_KEY=sk_live_" + "d" * 24 + "\nNEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY=eyJx\n")
+    (tmp_path / ".env").write_text("STRIPE_KEY=sk_live_" + "d" * 24 + "\nNEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY=eyJx\n", encoding="utf-8")
     g = build_graph(tmp_path)
     rules = {f["rule"] for f in scan(g)["findings"] if f["file"] == ".env"}
     assert "stripe-live-key" in rules        # security.run_secrets
@@ -83,10 +83,10 @@ def test_symlinks_out_of_the_repo_are_not_read(tmp_path):
     import os
     outside = tmp_path / "home"
     outside.mkdir()
-    (outside / "credentials").write_text("aws_key = 'AKIA" + "ABCDEFGHIJKLMNOP'\n")
+    (outside / "credentials").write_text("aws_key = 'AKIA" + "ABCDEFGHIJKLMNOP'\n", encoding="utf-8")
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "app.py").write_text("def main():\n    return 1\n")
+    (repo / "app.py").write_text("def main():\n    return 1\n", encoding="utf-8")
     try:
         os.symlink(outside / "credentials", repo / "creds.py")
         os.symlink(outside / "credentials", repo / ".env")
