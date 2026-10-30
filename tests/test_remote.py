@@ -155,6 +155,7 @@ def test_app_clones_a_link_in_a_job(srv, tmp_path, monkeypatch):  # noqa: F811
     assert call(base, "/api/projects", "POST", {"path": "https://me:tok@github.com/o/r"})[0] == 400
     # a clone that fails forgets the project again and leaves no folder behind
     def failing(url, dest, branch=None, timeout=900):
+        shutil.rmtree(dest, ignore_errors=True)   # a failed clone removes its own folder first
         raise RuntimeError("could not clone it: repository not found")
     monkeypatch.setattr(remote, "fetch", failing)
     code, r = call(base, "/api/projects", "POST", {"path": "https://github.com/wakil/private"})
@@ -174,7 +175,7 @@ def test_a_refused_clone_is_removed_even_with_read_only_files(tmp_path):
     pack.chmod(0o444)
     objects.chmod(0o555)
     try:
-        remote._rmtree(dest)
+        remote.remove_tree(dest)
     finally:
         if objects.exists():
             objects.chmod(0o755)
@@ -201,3 +202,43 @@ def test_a_clone_that_times_out_or_fails_leaves_nothing_behind(tmp_path, monkeyp
     with pytest.raises(RuntimeError, match="could not clone it: fatal: repository .* not found"):
         remote.fetch("https://github.com/o/r", dest)
     assert not dest.exists()
+
+
+def test_a_failed_checkout_leaves_nothing_behind(tmp_path, monkeypatch):
+    """`git reset --hard` can fail after a successful no-checkout clone (a reserved Windows name such as `aux.txt`, a
+    path over MAX_PATH, a full disk). The folder, holding only `.git`, used to stay and pass as a finished clone."""
+    src = _git_repo(tmp_path / "src")
+    real = remote._git
+
+    def git_without_checkout(args, cwd, timeout=900):
+        if args[0] == "reset":
+            return subprocess.CompletedProcess(args, 128, "", "fatal: Could not reset index file to revision 'HEAD'.")
+        return real(args, cwd, timeout)
+
+    monkeypatch.setattr(remote, "_git", git_without_checkout)
+    dest = tmp_path / "dest"
+    with pytest.raises(RuntimeError, match="could not check out the files: fatal: Could not reset index file"):
+        remote.fetch(src.as_uri(), dest)
+    assert not dest.exists()
+
+
+def test_an_earlier_clone_without_files_is_checked_out(tmp_path, monkeypatch):
+    """A folder with only `.git` (left by an older Lantern after a failed checkout) is not an existing clone to
+    analyze as an empty project: the next attempt checks the files out, under the size cap."""
+    src = _git_repo(tmp_path / "src")
+    (src / "blob.bin").write_bytes(b"\0" * 1_500_000)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."], cwd=src, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "big"], cwd=src, check=True)
+    dest, log = tmp_path / "dest", []
+    r = remote._git(["clone", "--depth", "1", "--no-checkout", "--", src.as_uri(), str(dest)], cwd=None)
+    assert r.returncode == 0 and (dest / ".git").is_dir() and not (dest / "app.py").exists()
+    assert not remote.has_files(dest)
+    monkeypatch.setenv("LANTERN_CLONE_MAX_MB", "1")
+    with pytest.raises(RuntimeError, match="above Lantern's"):
+        remote.clone("https://github.com/o/r", log=log.append, dest=dest)
+    assert not dest.exists()
+    remote._git(["clone", "--depth", "1", "--no-checkout", "--", src.as_uri(), str(dest)], cwd=None)
+    monkeypatch.setenv("LANTERN_CLONE_MAX_MB", "500")
+    assert remote.clone("https://github.com/o/r", log=log.append, dest=dest) == dest
+    assert (dest / "app.py").exists() and remote.has_files(dest)
+    assert log[-1] == "the earlier clone has no files yet; checking them out"

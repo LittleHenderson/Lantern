@@ -83,6 +83,9 @@ def clone(link: str, log=None, dest: Path | None = None, root: Path | None = Non
         r = _git(["pull", "--ff-only", "--quiet"], cwd=dest)
         if r.returncode != 0:
             log("could not update it, kept the copy that was there: " + _tail(r.stderr))
+        if not has_files(dest):   # an earlier checkout failed and left only .git: finish it, under the same cap
+            log("the earlier clone has no files yet; checking them out")
+            _checkout(dest)
         return dest
     if dest.exists() and any(dest.iterdir()):
         raise RuntimeError(f"{dest} already exists and is not a git clone. Add it as a folder, or remove it.")
@@ -120,25 +123,39 @@ def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900) -
         r = _git(args, cwd=None, timeout=timeout)
     except RuntimeError:
         if dest.is_dir():   # a clone stopped by the timeout can leave a partial folder behind
-            _rmtree(dest)
+            remove_tree(dest)
         raise
     if r.returncode != 0:
         if dest.is_dir():
-            _rmtree(dest)
+            remove_tree(dest)
         raise RuntimeError("could not clone it: " + _tail(r.stderr) +
                            ". If the repository is private, clone it yourself and add the folder.")
+    _checkout(dest, timeout)
+
+
+def has_files(dest: Path) -> bool:
+    """Whether a clone has working files, not just `.git`."""
+    return dest.is_dir() and any(p.name != ".git" for p in dest.iterdir())
+
+
+def _checkout(dest: Path, timeout: int = 900) -> None:
+    """Measure the files from the index, refuse above the cap, then check them out. Whatever fails, nothing is left
+    behind: a folder holding only `.git` would otherwise pass as a finished clone and analyze as an empty project
+    (seen with a reserved Windows file name such as `aux.txt`, a path over MAX_PATH, or a full disk)."""
     cap = max_mb()
     size = tree_mb(dest)
     if cap and size > cap:
-        _rmtree(dest)
+        remove_tree(dest)
         raise RuntimeError(f"the repository's files add up to {size:,.1f} MB, above Lantern's {cap} MB limit "
                            "(LANTERN_CLONE_MAX_MB). Clone it yourself and add the folder.")
     r = _git(["reset", "--hard", "--quiet"], cwd=dest, timeout=timeout)
     if r.returncode != 0:
-        raise RuntimeError("could not check out the files: " + _tail(r.stderr))
+        remove_tree(dest)
+        raise RuntimeError("could not check out the files: " + _tail(r.stderr) +
+                           ". Clone it yourself and add the folder.")
 
 
-def _rmtree(path: Path) -> None:
+def remove_tree(path: Path) -> None:
     """Remove a clone. Git marks its object files read-only, which on Windows makes a plain rmtree fail halfway and
     leave the folder behind; clearing the bit (on the file and its folder) and retrying is the standard recipe."""
     def unlock(func, p, _exc):

@@ -260,3 +260,29 @@ def test_a_helper_named_like_an_auth_word_is_not_a_login_check(tmp_path):
     assert p["status"] == "in place", p
     assert p["found"] == ["POST /index: calls `get_token`", "PUT /zones: calls `has_permission`",
                           "PATCH /zones: calls `protect`"]
+
+
+def test_verify_counts_only_with_the_caller_as_its_object(tmp_path):
+    """`verify_payment(...)`, `verify_signature(...)` and `verify_age(...)` gave "in place": a checkout route that
+    verifies a payment was told it already had a login check. `verify` now needs the caller as its object."""
+    files = dict(BACKEND_ONLY)
+    files["svc/main.py"] = (
+        "from fastapi import FastAPI\n\napp = FastAPI()\n\n"
+        "def verify_payment(p):\n    return p\n\n"
+        "def verify_signature(s):\n    return s\n\n"
+        "def verify_age(a):\n    return a\n\n"
+        "@app.post('/checkout')\ndef checkout(payload: dict):\n    verify_payment(payload.get('payment'))\n    return 1\n\n"
+        "@app.put('/orders')\ndef sign(payload: dict):\n    verify_signature(payload.get('sig'))\n    return 1\n\n"
+        "@app.patch('/orders')\ndef age(payload: dict):\n    verify_age(payload.get('dob'))\n    return 1\n")
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "add", p
+    assert [e.split(" (")[0] for e in p["evidence"]] == ["POST /checkout", "PUT /orders", "PATCH /orders"]
+    files["svc/main.py"] = (files["svc/main.py"]
+                            .replace("verify_payment", "verify_token").replace("verify_signature", "verify_session")
+                            .replace("verify_age", "verify_password"))
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "in place", p
+    assert p["found"] == ["POST /checkout: calls `verify_token`", "PUT /orders: calls `verify_session`",
+                          "PATCH /orders: calls `verify_password`"]

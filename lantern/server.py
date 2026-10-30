@@ -216,9 +216,10 @@ class App:
             try:
                 remote.clone(link, log=log, dest=dest)
             except Exception:
-                if dest.is_dir() and not any(dest.iterdir()):
+                if not remote.has_files(dest):   # nothing was cloned (a failed clone removes itself): forget the project
                     self.store.remove_project(p["id"])
-                    dest.rmdir()
+                    if dest.is_dir():
+                        remote.remove_tree(dest)
                 raise
             return pipeline.analyze(dest, self.out(p), privacy, log=log)
 

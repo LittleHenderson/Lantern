@@ -57,7 +57,9 @@ JS_RULES = [
 ]
 
 # An auth word counts only as a whole segment of a name: `getToken`, `has_permission`, `OAuth2PasswordBearer` and
-# `protectedProcedure` are checks; `tokenize`, `load_permissions`, `protect_zone` and `author` are not. Names are split
+# `protectedProcedure` are checks; `tokenize`, `load_permissions`, `protect_zone` and `author` are not. `verify` counts
+# only with the caller as its object (`verify_token`, `verify_session`, `verify_password`): a route that verifies a
+# payment, a signature or an age has not checked who is calling. Names are split
 # on `_`, `.`, `$` and camelCase by `segments()` ("load permissions") and matched with word boundaries. `getUser`/
 # `get_user` are deliberately absent (fetching a user record is a check only when the argument identifies the caller,
 # below), and so is a bare `session`: `Depends(get_session)` and `db.session` are database sessions.
@@ -66,7 +68,8 @@ AUTH_WORDS = re.compile(
     r"(?:login|permission|admin|staff|staff member|jwt|fresh jwt|token|auth|user|role|roles|scope|scopes|api key) required|"
     r"require[sd]? (?:user|auth|login|session|admin|role|roles|permission|permissions|scope|scopes|api key)|"
     r"has (?:role|roles|permission|permissions|scope|scopes)|check (?:permission|permissions|role|roles|scope|scopes)|"
-    r"is (?:admin|superuser|staff|logged in|signed in)|logged in|signed in|verify|(?<!csrf )token|permission|jwt|"
+    r"is (?:admin|superuser|staff|logged in|signed in)|logged in|signed in|"
+    r"verify (?:session|user|password|otp|2 ?fa|mfa|credentials?|identity|caller|login)|(?<!csrf )token|permission|jwt|"
     r"superuser|(?:^|\w+ )guard$|protected|clerk|bearer|principal)\b|^(?:protect|requires)$")
 # In JavaScript, `getSession`/`useSession`/`getServerSession` read the login (next-auth, Supabase); a Python
 # `get_session` is a database session and never counts.
@@ -592,7 +595,7 @@ def missing_auth(g: Graph) -> list[dict]:
         if sign and sign[0] == "strong":
             continue
         more = ("Heuristic: Lantern looked three calls deep for anything named like an auth check (current_user, "
-                "auth, verify, session, permission...) and read the handler's own lines for the same words. ")
+                "auth, login_required, token, permission...) and read the handler's own lines for the same words. ")
         if sign:
             more += (f"The only sign in the handler is that {sign[1]}: that finds a record, not the caller. "
                      "Check the signed-in user as well. ")
