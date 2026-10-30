@@ -1,7 +1,9 @@
 # CLAUDE.md
 
 Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.1.pdf`;
-this repo is its **Phase 0 spike** (Python engine, scanners, Three-Lens explainer, static HTML report).
+this repo is its **Phase 0 spike** (Python and TS/JS engines, frontend-to-backend bridge, scanners,
+Three-Lens explainer, static HTML report). Language order is now Python → TypeScript/JavaScript →
+Rust → C++ (TS moved up because most vibe-coded apps are full stack; the spec PDF v0.2 reflects this).
 
 ## Non-negotiable principles (from the spec)
 
@@ -19,7 +21,7 @@ this repo is its **Phase 0 spike** (Python engine, scanners, Three-Lens explaine
 
 ```bash
 pip install -e ".[scan,dev]"
-python -m pytest -q                                   # ~2 s, 48 tests
+python -m pytest -q                                   # ~2 s, 75 tests
 lantern analyze tests/fixtures/shop --out /tmp/shop   # end to end on the fixture
 python examples/make_demo.py /tmp/demo                # report with hand-written explanations, no key
 python bench/run_bench.py /tmp/bench                  # clones 6 public repos; ~2 min with tracing
@@ -33,6 +35,9 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 |---|---|
 | `lantern/graph.py` | Unified Code Graph: `Node`, `Edge`, confidence ranks, JSON round-trip, `stats()` |
 | `lantern/python_frontend.py` | Discover → tree-sitter parse (`_visit_body`, `CallSite`s) → `Resolver` → `build_graph()` |
+| `lantern/ts_frontend.py` | TS/JS: discover → tree-sitter parse (`_Walker`: defs, `TSCall`s, `HttpCall`s) → `TSResolver` → `add_to_graph()`; ids `ts:` |
+| `lantern/bridge.py` | Matches frontend `HttpCall`s to route entry points by method + path segments; adds call edges |
+| `lantern/engine.py` | `build_graph()` used by the CLI: Python frontend, then TS frontend, then bridge; `meta.languages`, `meta.bridge` |
 | `lantern/tracehook.py` | Runs a program with `sys.monitoring`, records repo-internal caller→callee pairs |
 | `lantern/trace.py` | Runs the hook in a subprocess, maps pairs to nodes, collapses wrapper hops, upgrades edges to `observed` |
 | `lantern/security.py` | Bandit, pip-audit, secrets → findings pinned to nodes → BFS reachability from entry points → rank |
@@ -40,6 +45,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/providers.py` | Anthropic, OpenAI-compatible (OpenAI, OpenRouter, Mistral, Gemini, Ollama, LM Studio, vLLM), fixture stub |
 | `lantern/report.py` + `viewer/report.html` | Bundle JSON into one self-contained HTML file (vanilla JS, no build step) |
 | `lantern/cli.py` | `analyze`, `trace`, `explain`, `report`; results in `PATH/.lantern/` |
+| `tests/fixtures/fullstack` | FastAPI backend + React/TS frontend + Express server; bridge, entry, and public-env tests |
 | `tests/fixtures/shop` | Tiny app with planted SQL injection, shell injection, and MD5 for end-to-end tests |
 | `bench/` | Accuracy benchmark and its write-up; `results.json` is the latest run |
 
@@ -60,6 +66,19 @@ To add a rule: write a failing test in `tests/test_frontend.py` with a tiny repo
 the edge a distinct `via`, then run `bench/run_bench.py` and check the per-method table before choosing
 its confidence.
 
+## How TS/JS resolution works (ts_frontend.py)
+
+`TSCall.kind`: `call`, `new`, `jsx` (render = call, "resolved"), `ref` (function passed by name) and
+`event` (`onClick={fn}`); refs and events are "possible" because they run later, if ever. Names resolve
+through nested scopes, then imports → `export_of()` (follows `export *`, `export { x } from`, default
+exports) with tsconfig/jsconfig `paths`, Vite/webpack aliases, and an `@/` → `src/` fallback. Bare
+package imports become `ext:<pkg>.<name>`. Browser/Node globals (`JS_GLOBALS`) are skipped, not counted
+as unresolved. Test, story and config files are not parsed yet.
+
+TS confidence levels are **provisional**: there is no JS runtime tracer yet, so they are not backed by
+bench numbers the way Python's are. The bridge's prefix match was 23/23 correct on the FastAPI template,
+checked by hand; one repo is thin evidence.
+
 ## Phase 1 backlog (priority order)
 
 1. **Run real models through `lantern explain`** on the benchmark repos with two providers; record the
@@ -73,12 +92,20 @@ its confidence.
 5. **Evidence Report** (spec section 11): commit-pinned summary with provenance and a Limits section.
 6. **PWA shell + local agent pairing** (spec sections 5 and 12). The current viewer becomes the Atlas
    screen; keep it framework-free or port to SvelteKit/React as the spec suggests.
-7. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
+7. **TS/JS depth:** a Node/V8 runtime tracer (to measure TS precision like Python), more bench repos
+   (Next.js + Supabase, Express, a Vite SPA), Supabase/Firebase client calls as database edges and RLS
+   checks, CORS and missing-auth checks on routes reachable from pages, Semgrep/Opengrep JS rules,
+   `npm audit`, and FastAPI `include_router(prefix=...)` so bridge matches become exact.
+8. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
    Bandit and pip-audit are fine locally.
 
 ## Known gaps
 
-* Callbacks passed as values (`ctx.invoke(f)`, `map(fn, ...)`) aren't edges yet.
+* Python callbacks passed as values (`ctx.invoke(f)`, `map(fn, ...)`) aren't edges yet (TS ones are, as "possible").
+* TS: functions inside module-level object/array literals (e.g. table `columns` with `cell: () => <X/>`)
+  are attributed to the module, so a page that uses `columns` doesn't link to `X`.
+* TS: no type inference, so `obj.method()` on a variable resolves only via `this`, classes, namespaces
+  and `new Foo().m()`; hooks returning objects (`const { login } = useAuth()`) aren't followed.
 * Calls into libraries that call back into the repo (framework dispatch) only show when traced.
 * `pip-audit` only reads `requirements*.txt`; `pyproject.toml`/lockfiles are Phase 1.
 * The report embeds source by default; `--privacy structure` omits it.

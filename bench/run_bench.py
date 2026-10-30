@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from lantern.python_frontend import build_graph
+from lantern.engine import build_graph
 from lantern.security import scan
 from lantern.trace import merge_trace, run_trace
 
@@ -103,6 +103,13 @@ def main():
                "entry_kinds": {}, "internal_edges": st["internal_call_edges"],
                "confidence": st["confidence"], "unresolved": st["unresolved_call_sites"],
                "graph_s": round(t_graph, 2), "scan_s": round(t_scan, 2), "findings": sec["counts"]}
+        row["languages"] = g.meta.get("languages")
+        b = g.meta.get("bridge") or {}
+        if b.get("http_calls"):
+            row["bridge"] = {k: b[k] for k in ("http_calls", "linked", "ambiguous", "unmatched", "routes")}
+            row["bridge"]["by_level"] = {}
+            for c in b["calls"]:
+                row["bridge"]["by_level"][c["level"] or "unmatched"] = row["bridge"]["by_level"].get(c["level"] or "unmatched", 0) + 1
         for n in g.entry_points():
             row["entry_kinds"][n.entry["kind"]] = row["entry_kinds"].get(n.entry["kind"], 0) + 1
         if test_cmd and not a.no_trace:

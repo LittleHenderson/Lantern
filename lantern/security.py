@@ -28,7 +28,16 @@ SECRET_PATTERNS = [
     ("anthropic-key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b")),
     ("openai-key", re.compile(r"\bsk-(proj-)?[A-Za-z0-9]{32,}\b")),
 ]
-SECRET_EXTS = {".py", ".env", ".cfg", ".ini", ".toml", ".yaml", ".yml", ".json", ".txt", ".sh"}
+SECRET_EXTS = {".py", ".env", ".cfg", ".ini", ".toml", ".yaml", ".yml", ".json", ".txt", ".sh",
+               ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", ".svelte", ".astro", ".html"}
+
+# Env vars with these prefixes are compiled into the browser bundle, where anyone can read them.
+# A secret-sounding name there means a server-only key is being shipped to every visitor.
+_PUBLIC_ENV_NAME = (
+    r"((?:VITE|NEXT_PUBLIC|REACT_APP|EXPO_PUBLIC|PUBLIC|NUXT_PUBLIC|GATSBY)_\w*?"
+    r"(?:SECRET|PRIVATE|SERVICE_ROLE|PASSWORD|OPENAI|ANTHROPIC|STRIPE_SK|DATABASE_URL|DB_URL)\w*)")
+PUBLIC_ENV_SECRET = re.compile(r"(?:\benv\.|\benv\[['\"])" + _PUBLIC_ENV_NAME)   # process.env.X, import.meta.env.X
+PUBLIC_ENV_FILE_LINE = re.compile(r"^\s*(?:export\s+)?" + _PUBLIC_ENV_NAME + r"\s*=")  # X=... in a .env file
 
 
 def _fid(*parts) -> str:
@@ -112,7 +121,7 @@ def run_secrets(repo: Path) -> tuple[list[dict], dict]:
             pass  # fall through to the built-in patterns below
     out = []
     for p in repo.rglob("*"):
-        if not p.is_file() or any(part in SKIP_DIRS for part in p.relative_to(repo).parts):
+        if not p.is_file() or any(part in SKIP_DIRS for part in p.relative_to(repo).parts[:-1]):
             continue
         if p.suffix not in SECRET_EXTS and not p.name.startswith(".env"):
             continue
@@ -131,6 +140,32 @@ def run_secrets(repo: Path) -> tuple[list[dict], dict]:
                         "snippet": "[redacted]", "category": "secret",
                     })
     return out, {"tool": "lantern-secrets", "status": "ok (built-in patterns; install gitleaks for full coverage)"}
+
+
+def run_public_env(repo: Path) -> tuple[list[dict], dict]:
+    """Server-only secrets referenced through browser-exposed env prefixes (VITE_, NEXT_PUBLIC_, ...)."""
+    out = []
+    for p in repo.rglob("*"):
+        if not p.is_file() or any(part in SKIP_DIRS for part in p.relative_to(repo).parts[:-1]):
+            continue
+        if p.suffix not in SECRET_EXTS and not p.name.startswith(".env"):
+            continue
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            m = (PUBLIC_ENV_FILE_LINE if p.name.startswith(".env") else PUBLIC_ENV_SECRET).search(line)
+            if m and "PUBLISHABLE" not in m.group(1) and "ANON" not in m.group(1):
+                rel = str(p.relative_to(repo))
+                out.append({
+                    "id": _fid("public-env", m.group(1), rel, i), "tool": "lantern-secrets",
+                    "rule": "public-env-secret",
+                    "title": f"Secret-looking setting {m.group(1)} is sent to the browser (public env prefix)",
+                    "tool_severity": "HIGH", "tool_confidence": "MEDIUM", "file": rel, "line": i,
+                    "snippet": m.group(1), "category": "secret",
+                })
+    return out, {"tool": "lantern-public-env", "status": "ok"}
 
 
 def _tool_version(cmd: list[str]) -> str | None:
@@ -215,15 +250,16 @@ RANK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 def scan(g: Graph) -> dict:
     repo = Path(g.repo_root)
     findings, tools = [], []
-    for fn in (run_bandit, run_pip_audit, run_secrets):
+    for fn in (run_bandit, run_pip_audit, run_secrets, run_public_env):
         f, info = fn(repo)
         findings += f
         tools.append(info)
     reach = reachability(g)
     test_reach = reachability(g, include_tests=True)
     from .python_frontend import TEST_FILE_RE
+    from .ts_frontend import TEST_FILE_RE as TS_TEST_FILE_RE
     for f in findings:
-        f["in_tests"] = bool(f["file"] and TEST_FILE_RE.search(f["file"]))
+        f["in_tests"] = bool(f["file"] and (TEST_FILE_RE.search(f["file"]) or TS_TEST_FILE_RE.search(f["file"])))
         f["node"] = _node_at(g, f["file"], f["line"])
         r = reach.get(f["node"]) if f["node"] else None
         f["reachable"] = r

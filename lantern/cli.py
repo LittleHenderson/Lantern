@@ -1,4 +1,4 @@
-"""lantern: map, trace, scan, explain, and report on a Python repository.
+"""lantern: map, trace, scan, explain, and report on a Python and/or JS/TS repository.
 
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
   lantern trace PATH -- python -m pytest -q               record what actually runs
@@ -39,7 +39,7 @@ def _split_cmd(argv: list[str]) -> tuple[list[str], list[str]]:
 
 
 def cmd_analyze(a, trace_cmd: list[str]) -> int:
-    from .python_frontend import build_graph
+    from .engine import build_graph
     from .report import write_report
     from .security import scan
     from .trace import merge_trace, run_trace
@@ -51,9 +51,13 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
     g = build_graph(repo)
     timings["graph"] = round(time.perf_counter() - t, 2)
     s = g.stats()
-    print(f"graph   {g.meta['files']} files, {s['nodes'].get('callable', 0)} functions, "
+    print(f"graph   {g.meta['files']} files ({g.meta['language']}), {s['nodes'].get('callable', 0)} functions, "
           f"{s['internal_call_edges']} internal calls, {s['entry_points']} entry points "
           f"({timings['graph']}s)")
+    b = g.meta.get("bridge") or {}
+    if b.get("http_calls"):
+        print(f"bridge  {b['linked']} of {b['http_calls']} frontend HTTP calls linked to backend routes, "
+              f"{b['ambiguous']} ambiguous, {b['unmatched']} going elsewhere")
     if trace_cmd:
         t = time.perf_counter()
         m = merge_trace(g, run_trace(repo, trace_cmd))

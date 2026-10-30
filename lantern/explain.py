@@ -268,8 +268,11 @@ def select_nodes(g: Graph, depth: int = 3, include_tests: bool = False, limit: i
                  only: list[str] | None = None) -> list[str]:
     """Entry points plus their callees up to `depth`, ordered bottom-up (callees first)."""
     if only:
-        chosen = [o if o.startswith("py:") else f"py:{o}" for o in only]
-        chosen = [c for c in chosen if c in g.nodes]
+        chosen = []
+        for o in only:
+            for c in ([o] if o.startswith(("py:", "ts:")) else [f"py:{o}", f"ts:{o}"]):
+                if c in g.nodes:
+                    chosen.append(c)
     else:
         adj: dict[str, list[str]] = {}
         for e in g.call_edges():

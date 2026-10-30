@@ -83,3 +83,15 @@ last category. Phase 1 adds Pyright for type-aware resolution and framework adap
   providers; run `lantern explain --model ...` on the six repos above with two providers to complete
   this Phase 0 exit criterion.
 * The 5 builders + 5 engineers review of explanations and reports.
+
+## Full stack (TypeScript frontend + bridge)
+
+`run_bench.py` now builds the combined graph and records `languages` and `bridge` per repo.
+
+| Repo | Python lines | TS/JS lines | Graph | Frontend HTTP calls | Linked to route | Ambiguous | Unmatched |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| full-stack-fastapi-template | 2,944 | 10,001 | 0.27 s | 23 | 23 (all "prefix": backend mounts routers under `/api/v1` from a setting) | 0 | 0 |
+
+All 23 links were checked by hand against the generated client and the FastAPI routers: 23/23 correct.
+There is no JS runtime tracer yet, so TS edge precision isn't measured the way Python's is; the TS
+confidence levels are provisional until it is (CLAUDE.md backlog item 7).

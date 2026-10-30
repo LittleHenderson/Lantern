@@ -73,6 +73,7 @@ input.search{width:100%;padding:8px 10px;border:1px solid var(--line);border-rad
 .badge.critical{background:var(--crits);color:var(--crit)} .badge.high{background:var(--highs);color:var(--high)}
 .badge.medium{background:var(--meds);color:var(--med)} .badge.low{background:var(--lows);color:var(--low)}
 .badge.entry{background:var(--l1s);color:var(--l1)}
+.badge.http{background:transparent;color:var(--l1);border:1px solid currentColor;margin:0 6px 0 0;font-family:ui-monospace,monospace;font-weight:600}
 .ext{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
 .again{font-size:11.5px;color:var(--muted);font-style:italic}
 .empty{color:var(--muted);padding:30px 10px;text-align:center}
@@ -173,6 +174,7 @@ const chips = [
   `${G.meta.files ?? '?'} files`, `${(st.nodes || {}).callable ?? 0} functions`, `${st.entry_points ?? 0} entry points`,
   `${st.internal_call_edges ?? 0} internal calls`,
 ];
+if (G.meta.bridge && G.meta.bridge.http_calls) chips.push(`${G.meta.bridge.linked}/${G.meta.bridge.http_calls} frontend calls linked`);
 let chipHtml = chips.map(c => `<span class="chip">${esc(c)}</span>`).join('');
 if (SEC.counts.critical) chipHtml += `<span class="chip crit">${SEC.counts.critical} critical</span>`;
 if (SEC.counts.high) chipHtml += `<span class="chip high">${SEC.counts.high} high</span>`;
@@ -187,7 +189,7 @@ document.getElementById('tabs').onclick = ev => {
 };
 
 // ---------- left: entry points ----------
-const ENTRY_LABEL = {route: 'Web routes', cli: 'Command-line commands', main: 'Program starts', script: 'Installed scripts', test: 'Tests'};
+const ENTRY_LABEL = {page: 'Pages (frontend)', route: 'Web routes', cli: 'Command-line commands', main: 'Program starts', script: 'Installed scripts', test: 'Tests'};
 function renderLeft() {
   const el = document.getElementById('left');
   if (S.tab !== 'map') { el.innerHTML = `<div class="note" style="padding:6px">${S.tab === 'findings' ? 'Findings are ranked by severity and by whether an entry point can reach them.' : 'How this report was made.'}</div>`; return; }
@@ -203,11 +205,11 @@ function renderLeft() {
       `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(short(n.qualname))}<span class="d">${esc(n.file)}:${n.start_line}</span></button>`).join('') + '</div>';
   } else {
     if (!eps.length) html += '<div class="empty">No entry points detected. Use search to start from any function.</div>';
-    for (const k of ['route', 'cli', 'main', 'script', 'test']) {
+    for (const k of ['page', 'route', 'cli', 'main', 'script', 'test']) {
       const list = groups[k]; if (!list) continue;
       list.sort((a, b) => (a.entry.detail || '').localeCompare(b.entry.detail || ''));
       html += `<div class="group"><h4>${ENTRY_LABEL[k]} (${list.length})</h4>` + list.slice(0, 300).map(n =>
-        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(k === 'route' || k === 'script' ? n.entry.detail : short(n.qualname))}<span class="d">${esc(short(n.qualname))}</span></button>`).join('') + '</div>';
+        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(k === 'route' || k === 'script' || k === 'page' ? n.entry.detail : short(n.qualname))}<span class="d">${esc(short(n.qualname))}</span></button>`).join('') + '</div>';
     }
   }
   html += '</div>';
@@ -243,7 +245,7 @@ function renderTree() {
     const sum = summaryOf(r.id);
     const ext = r.exts.length ? `<span class="ext"> → ${r.exts.slice(0, 4).map(e => esc(e.dst.slice(4))).join(', ')}${r.exts.length > 4 ? '…' : ''}</span>` : '';
     return `<div class="row">${indent}${tog}${conf}<button class="node ${S.sel === r.id ? 'on' : ''}" data-id="${esc(r.id)}">
-      <span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? `<span class="badge ${w}">${w}</span>` : ''}
+      ${r.edge && (r.edge.via || '').startsWith('http ') ? `<span class="badge http" title="frontend calls backend over the network">${esc(r.edge.via.split(' (')[0].slice(5))}</span>` : ''}<span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? `<span class="badge ${w}">${w}</span>` : ''}
       ${r.loop ? '<span class="again"> ↻ already on this path</span>' : ''}
       <span class="loc"> ${esc(n.file)}:${n.start_line ?? ''}</span>${ext}
       ${sum ? `<span class="sum">${esc(sum.length > 140 ? sum.slice(0, 140) + '…' : sum)}</span>` : ''}</button></div>`;
@@ -307,11 +309,11 @@ function renderMap() {
   const el = document.getElementById('center');
   if (!S.entry) {
     const eps = G.nodes.filter(n => n.entry && n.entry.kind !== 'test');
-    el.innerHTML = `<div class="empty"><b>Pick a starting point.</b><br>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
+    el.innerHTML = `<div class="empty"><b>Pick a starting point.</b><br>Every page, web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
     return;
   }
   const n = N[S.entry];
-  const title = n.entry && (n.entry.kind === 'route' || n.entry.kind === 'script') ? n.entry.detail : short(n.qualname);
+  const title = n.entry && (n.entry.kind === 'route' || n.entry.kind === 'script' || n.entry.kind === 'page') ? n.entry.detail : short(n.qualname);
   el.innerHTML = `<div class="toolbar"><h2>${esc(title)}</h2>
     <div class="seg"><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button></div>
     <button class="chip" id="expand">Expand all</button></div>
@@ -342,7 +344,7 @@ function renderFindings() {
 
 function renderAbout() {
   const el = document.getElementById('center');
-  const tr = G.meta.trace;
+  const tr = G.meta.trace, br = G.meta.bridge;
   const exStats = (DATA.explanations || {}).stats;
   el.innerHTML = `<div class="about"><h2 style="color:var(--ink);margin:0 0 6px">About this report</h2>
     <p class="note">Generated by Lantern ${esc(DATA.version)} on ${esc(DATA.generated_at)}. Schema ${esc(G.schema)}.</p>
@@ -354,6 +356,8 @@ function renderAbout() {
       <div>Unresolved call sites</div><div>${st.unresolved_call_sites} (calls Lantern could not trace to a target; left out rather than guessed)</div>
       <div>Analysis time</div><div>${DATA.timings ? Object.entries(DATA.timings).map(([k, v]) => `${k} ${v}s`).join(' · ') : '–'}</div>
     </div>
+    ${G.meta.languages ? `<h3>Languages</h3><div class="kv">${Object.entries(G.meta.languages).map(([k, v]) => `<div>${esc(k)}</div><div>${v.files} files, ${v.lines} lines</div>`).join('')}</div>` : ''}
+    ${br && br.http_calls ? `<h3>Frontend to backend</h3><div class="kv"><div>HTTP calls in frontend code</div><div>${br.http_calls}</div><div>Linked to a backend route</div><div>${br.linked} (exact path or same path under a shared prefix like /api/v1)</div><div>Ambiguous</div><div>${br.ambiguous} (shown as possible links to each candidate)</div><div>Going elsewhere</div><div>${br.unmatched} (third-party APIs or routes Lantern did not find)</div></div>` : ''}
     ${tr ? `<h3>Runtime trace</h3><div class="kv"><div>Calls seen running</div><div>${tr.observed_edges}</div><div>Also found statically</div><div>${tr.static_found} (recall ${tr.recall})</div><div>Only seen at runtime</div><div>${tr.runtime_only}</div></div>` : ''}
     <h3>Security tools</h3><div class="kv">${(SEC.tools || []).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${esc(t.status)}</div>`).join('')}</div>
     ${exStats ? `<h3>Explanations</h3><div class="kv"><div>Model</div><div>${esc(exStats.model)}</div><div>Metaphor world</div><div>${esc(DATA.explanations.metaphor.world)}</div><div>Validated</div><div>${exStats.validated} of ${exStats.validated + exStats.failed} (${exStats.first_try} on first try)</div><div>Tokens</div><div>${exStats.usage.input_tokens} in · ${exStats.usage.output_tokens} out</div></div>` : ''}
@@ -446,7 +450,7 @@ function render() {
   renderRight();
 }
 // default: first non-test entry point, preferring routes
-const firstEp = G.nodes.filter(n => n.entry && n.entry.kind !== 'test').sort((a, b) => ['route','cli','main','script'].indexOf(a.entry.kind) - ['route','cli','main','script'].indexOf(b.entry.kind))[0];
+const firstEp = G.nodes.filter(n => n.entry && n.entry.kind !== 'test').sort((a, b) => ['page','route','cli','main','script'].indexOf(a.entry.kind) - ['page','route','cli','main','script'].indexOf(b.entry.kind))[0];
 if (firstEp) { S.entry = firstEp.id; S.open = new Set([firstEp.id]); }
 render();
 </script>

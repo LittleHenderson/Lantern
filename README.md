@@ -1,8 +1,9 @@
-# Lantern (Phase 0 spike)
+# Lantern
 
-**See every path your code takes.** Lantern maps the call graph of a Python repository, explains each
-function three ways, audits it with real security scanners, and ranks each finding by whether an
-entry point (a web route, a CLI command, `main`) can actually reach it.
+**See every path your code takes, from the button to the database.** Lantern maps the call graph of a
+Python and/or TypeScript/JavaScript repository, links frontend HTTP calls to the backend routes that
+answer them, explains each function three ways, audits it with real security scanners, and ranks each
+finding by whether an entry point (a page, a web route, a CLI command, `main`) can actually reach it.
 
 > Working title. This is the Phase 0 spike from the product spec in [`docs/`](docs/). It proves the
 > engine and the explanation format before the PWA, the cloud mode, and the Rust/C++ frontends are built.
@@ -52,11 +53,37 @@ Try it without a key: `python examples/make_demo.py demo-out` builds a report fo
 
 | | |
 |---|---|
-| **Map** | Every web route, CLI command, and program start, with the call path beneath it as an expandable tree (phone-friendly) or a flowchart. Line style shows confidence: seen running, confirmed, likely, possible. |
+| **Map** | Every page, web route, CLI command, and program start, with the call path beneath it as an expandable tree (phone-friendly) or a flowchart. Line style shows confidence: seen running, confirmed, likely, possible. |
 | **Three lenses** | 1 · Technical, 2 · Everyday (no jargon, one example, one analogy from a single metaphor world per repo), 3 · Mapped (each plain phrase paired 1:1 with the technical term, symbol, or line it stands for). |
 | **Findings** | Bandit, pip-audit (requirements files), and secret detection (gitleaks if installed, built-in patterns otherwise). Ranked critical/high/medium/low by severity *and* reachability, with the exact path from the entry point. Test-code findings are counted separately. |
 
-## How the engine resolves calls
+## Full stack: one path through the whole app
+
+Most AI-built apps are a React/Next.js front end talking to an API. Lantern parses both halves and
+joins them where they meet, so a path reads straight through:
+
+```
+ItemActionsMenu → EditItem → ItemsService.updateItem → [PUT /api/v1/items/{}] → update_item
+  → get_current_user → Session.commit
+```
+
+* **TS/JS engine** (`lantern/ts_frontend.py`): functions, arrow functions, classes and methods, ES
+  imports and re-exports, tsconfig `paths` and Vite `@` aliases, JSX `<Component />` renders,
+  `this.method()`, `Class.static()`, and functions passed by name (`onClick={save}`, callbacks) as
+  "possible" edges.
+* **Entry points:** Next.js pages and route handlers (app and pages routers), TanStack/React Router
+  file routes, Express-style `app.get("/path", handler)` servers, and app starts (`createRoot`, `.listen()`).
+* **Bridge** (`lantern/bridge.py`): every `fetch`, axios-style, or generated-client call is matched to a
+  backend route by method and path. Exact matches are "confirmed"; a match under a shared prefix the
+  backend sets at runtime (like `/api/v1`) is "likely"; ties become "possible" links to each candidate.
+  Calls to third-party APIs show up with their host.
+* **Frontend secrets:** the secret scan reads JS/TS/HTML files and `.env` files, and flags server-only
+  secrets referenced through browser-exposed prefixes (`VITE_`, `NEXT_PUBLIC_`, `REACT_APP_`, ...).
+
+On the FastAPI full-stack template (2.9k lines Python, 10k lines TypeScript), all 23 frontend API calls
+link to the right backend route.
+
+## How the engine resolves Python calls
 
 Tree-sitter parses every file; a resolver binds names through scopes, imports (including subproject
 roots like `backend/app`), classes and their MRO. It understands `self`/`cls`, `super()`, overrides
