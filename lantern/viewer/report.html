@@ -491,7 +491,7 @@ function lensBody(r) {
   const by = `<div class="note" style="margin-top:8px">Written by ${esc(r.model)} · metaphor: ${esc(r.metaphor_world)}</div>`;
   if (S.lens === 1) {
     const l = r.lens1 || {};
-    const list = a => (a && a.length) ? '<ul style="margin:2px 0 0;padding-left:18px">' + a.map(x => `<li>${esc(x)}</li>`).join('') + '</ul>' : '<span class="note">none noted</span>';
+    const list = a => (Array.isArray(a) && a.length) ? '<ul style="margin:2px 0 0;padding-left:18px">' + a.map(x => `<li>${esc(x)}</li>`).join('') + '</ul>' : '<span class="note">none noted</span>';
     return warn + `<div class="lens l1">${esc(l.summary)}<dl><dt>Inputs</dt><dd>${list(l.inputs)}</dd><dt>Output</dt><dd>${esc(l.outputs) || '<span class="note">none noted</span>'}</dd>
       <dt>Side effects</dt><dd>${list(l.side_effects)}</dd><dt>Errors</dt><dd>${list(l.errors)}</dd><dt>Role in the path</dt><dd>${esc(l.role)}</dd></dl></div>` + by;
   }
@@ -512,7 +512,7 @@ function lensBody(r) {
     text = text.slice(0, at) + tok + text.slice(at + pl.length);
   }
   text = text.replace(/\u0000(\d+)\u0000/g, (_, k) => tokens[+k]);
-  const anc = a => !a ? '' : a.type === 'symbol' ? `symbol · ${esc(short((N[a.id] || {}).qualname || a.id))}` : a.type === 'lines' ? `lines ${a.start}–${a.end}` : `term · ${esc(a.term)}`;
+  const anc = a => !a ? '' : a.type === 'symbol' ? `symbol · ${esc(short((N[a.id] || {}).qualname || a.id))}` : a.type === 'lines' ? `lines ${esc(a.start)}–${esc(a.end)}` : `term · ${esc(a.term)}`;
   return warn + `<div class="lens l3">${text}<div class="pairs">${pairs.map((p, i) =>
     `<div class="pair ${S.pair === i ? 'on' : ''}" data-p="${i}"><span>${esc(p.plain)}</span><span class="ar">↔</span><span class="t">${esc(p.technical)}</span><span class="an">${anc(p.anchor)}</span></div>`).join('')}</div></div>` + by;
 }
