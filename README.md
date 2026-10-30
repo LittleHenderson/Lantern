@@ -42,7 +42,7 @@ Your browser opens Lantern. The app is analyzed on first open (a few seconds), a
 * **Readiness**: a 0–100 grade across ten areas with what to fix first, a deployment recommendation, and starter files
   (Dockerfile, CI workflow, `.env.example`, SECURITY.md) you can write with one click. Lantern never overwrites a file.
 * **Evidence Report**: a commit-pinned summary for a reviewer, with a "Save as PDF" button.
-* **Settings**: choose a model (Anthropic, OpenAI, OpenRouter, Mistral, Gemini, or a local Ollama / LM Studio model) and
+* **Settings**: choose a model (Anthropic, OpenAI, OpenRouter, Mistral, Gemini, DeepSeek, or a local Ollama / LM Studio model) and
   paste your key. Keys stay in memory unless you tick "remember". Lantern says plainly when code would leave your
   computer; local models keep everything on it.
 
@@ -96,7 +96,7 @@ lantern explain path/to/repo --model anthropic/<model-name>
 lantern explain path/to/repo --model ollama/<model-name>          # local, nothing leaves your machine
 ```
 
-Providers: `anthropic`, `openai`, `openrouter`, `mistral`, `gemini` (keys from `<NAME>_API_KEY`),
+Providers: `anthropic`, `openai`, `openrouter`, `mistral`, `gemini`, `deepseek` (keys from `<NAME>_API_KEY`),
 `ollama`, `lmstudio`, and any `openai-compatible` endpoint (`--base-url`). Explanations are cached by a
 hash of each function's code.
 

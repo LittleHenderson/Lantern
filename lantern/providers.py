@@ -3,7 +3,7 @@
 Three adapters cover nearly every provider:
   * anthropic       - Anthropic Messages API
   * openai          - any OpenAI-compatible /chat/completions endpoint: OpenAI, OpenRouter,
-                      Mistral, Google's OpenAI-compatible endpoint, Ollama, vLLM, LM Studio, llama.cpp
+                      Mistral, DeepSeek, Google's OpenAI-compatible endpoint, Ollama, vLLM, LM Studio, llama.cpp
   * fixture         - offline stub used by tests and `--dry-run` style experiments
 
 Keys come from environment variables, or from `lantern serve` Settings (kept in memory, or in
@@ -28,6 +28,7 @@ PRESETS = {
     "openrouter": ("openai", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "mistral": ("openai", "https://api.mistral.ai/v1", "MISTRAL_API_KEY"),
     "gemini": ("openai", "https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY"),
+    "deepseek": ("openai", "https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
     "ollama": ("openai", "http://localhost:11434/v1", None),
     "lmstudio": ("openai", "http://localhost:1234/v1", None),
 }

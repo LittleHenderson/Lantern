@@ -51,7 +51,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/readiness.py` | Deployment Readiness Score (spec 10): ten weighted categories of deterministic checks (`pass/fail/partial/skip`, skip leaves the denominator), shape advisor, fan-in hotspots, starter files. Accepted risks: `lantern-accepted.json` via `lantern accept` |
 | `lantern/evidence.py` | Evidence Report (spec 11): commit-pinned HTML/JSON, baseline → fixed findings, provenance, Limits, SHA-256 results digest checked by `lantern verify`, badge |
 | `lantern/explain.py` | Prompt (language-aware, includes HTTP links), `validate()`, retry, bottom-up `select_nodes`, cache |
-| `lantern/providers.py` | Anthropic, OpenAI-compatible (OpenAI, OpenRouter, Mistral, Gemini, Ollama, LM Studio, vLLM), fixture stub |
+| `lantern/providers.py` | Anthropic, OpenAI-compatible (OpenAI, OpenRouter, Mistral, Gemini, DeepSeek, Ollama, LM Studio, vLLM), fixture stub |
 | `lantern/report.py` + `viewer/report.html` | One self-contained HTML file (vanilla JS): pages/routes, path tree with HTTP and click hops, flowchart, lenses, findings with UI paths |
 | `lantern/pipeline.py` | analyze / explain / rebuild as functions with a `log` callback; used by the CLI and the server |
 | `lantern/server.py` + `viewer/app.html` | `lantern serve`: stdlib HTTP app (Home, Atlas iframe with live actions, Evidence, Explanations, Settings), jobs in threads, token + Host checks, keys in memory or `~/.lantern/keys.json` (0600); PWA manifest + service worker |
