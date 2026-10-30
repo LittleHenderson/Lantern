@@ -6,6 +6,8 @@
   lantern report PATH                                     rebuild report.html from saved results
   lantern accept PATH FINDING_ID --reason "..."           record an accepted risk (committed in the repo)
   lantern starter PATH [--write NAME]                     show or write generated starter files
+  lantern evidence PATH                                   rebuild the commit-pinned Evidence Report
+  lantern verify PATH --digest sha256:...                 re-run the analysis and compare with a report
 
 Results live in PATH/.lantern/ (override with --out).
 """
@@ -82,6 +84,7 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
     (out / "run.json").write_text(json.dumps(run_meta, indent=1))
     path = write_report(out, g, sec, _load(out, "explanations.json"), a.privacy, timings, rd)
     print(f"report  {path}")
+    print(f"proof   {_evidence(out, g, sec, rd, run_meta, a.privacy)}")
     if a.fail_on and sec:
         levels = list(RANKS[:RANKS.index(a.fail_on) + 1])
         n = sum(sec["counts"].get(k, 0) for k in levels)
@@ -92,6 +95,65 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
 
 
 RANKS = ["critical", "high", "medium", "low"]
+
+
+def _evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str) -> Path:
+    from . import evidence
+    base = _load(out, "baseline.json")
+    if base is None and sec is not None:
+        base = evidence.baseline_from(sec, evidence.git_info(Path(g.repo_root)).get("commit"))
+        (out / "baseline.json").write_text(json.dumps(base, indent=1))
+    ev = evidence.build(g, sec, rd, _load(out, "explanations.json"), run_meta, base, privacy)
+    return evidence.write(out, ev)["html"]
+
+
+def cmd_evidence(a) -> int:
+    repo = Path(a.path).resolve()
+    out = _out(repo, a.out)
+    if not (out / "graph.json").exists():
+        print("run `lantern analyze` first", file=sys.stderr)
+        return 2
+    run_meta = _load(out, "run.json") or {}
+    if a.reset_baseline and (out / "baseline.json").exists():
+        (out / "baseline.json").unlink()
+    print(_evidence(out, Graph.load(out / "graph.json"), _load(out, "security.json"), _load(out, "readiness.json"),
+                    run_meta, run_meta.get("privacy", "full")))
+    return 0
+
+
+def cmd_verify(a) -> int:
+    import re
+    from . import evidence
+    from .engine import build_graph
+    from .readiness import assess
+    from .security import scan
+    want = a.digest
+    if a.report:
+        m = re.search(r"sha256:[0-9a-f]{64}", Path(a.report).read_text(errors="replace"))
+        want = m.group(0) if m else None
+    if not want:
+        print("give --digest sha256:... or --report evidence.html", file=sys.stderr)
+        return 2
+    repo = Path(a.path).resolve()
+    g = build_graph(repo)
+    sec = scan(g)
+    rd = assess(g, sec, {})
+    gi = evidence.git_info(repo)
+    got = evidence.digest(evidence.digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False)))
+    print(f"commit  {gi.get('commit')}{' (uncommitted changes present)' if gi.get('dirty') else ''}")
+    print(f"report  {want}\nrerun   {got}")
+    if got == want:
+        print("MATCH: the report's results are what this analyzer finds on this commit.")
+        return 0
+    print("DIFFERENT: check out the report's commit, install the same scanner versions (see Provenance), "
+          "and make sure lantern-accepted.json matches.")
+    if a.report and Path(a.report).with_suffix(".json").exists():
+        old = json.loads(Path(a.report).with_suffix(".json").read_text()).get("payload", {})
+        new = evidence.digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False))
+        for k in new:
+            if old.get(k) != new[k]:
+                print(f"  differs: {k}")
+    return 1
 
 
 def cmd_trace(a, trace_cmd: list[str]) -> int:
@@ -282,6 +344,15 @@ def main(argv: list[str] | None = None) -> int:
     common(sp)
     sp.add_argument("--write", nargs="+", metavar="NAME", help="file name(s) to write, or `all`; never overwrites")
 
+    sp = sub.add_parser("evidence", help="rebuild the Evidence Report from saved results")
+    common(sp)
+    sp.add_argument("--reset-baseline", action="store_true", help="treat the current findings as the new 'before'")
+
+    sp = sub.add_parser("verify", help="re-run the analysis and compare with an Evidence Report's digest")
+    sp.add_argument("path", nargs="?", default=".")
+    sp.add_argument("--digest", help="sha256:... from the report")
+    sp.add_argument("--report", help="evidence.html (or .json) to read the digest from")
+
     a = p.parse_args(argv)
     if a.cmd == "analyze":
         return cmd_analyze(a, trace_cmd if a.trace else [])
@@ -295,6 +366,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_accept(a)
     if a.cmd == "starter":
         return cmd_starter(a)
+    if a.cmd == "evidence":
+        return cmd_evidence(a)
+    if a.cmd == "verify":
+        return cmd_verify(a)
     return cmd_report(a)
 
 
