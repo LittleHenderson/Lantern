@@ -48,6 +48,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/security.py` | Bandit, pip-audit, secrets → `websec.scan_web` → pin to nodes → reachability + `ui_path` → rank |
 | `lantern/websec.py` | Full-stack rules: `LW-*` (public-env secrets, service-role JWT, CORS, Firebase, Supabase RLS, missing auth) and `LJ-*` JS patterns |
 | `lantern/readiness.py` | Deployment Readiness Score (spec 10): ten weighted categories of deterministic checks (`pass/fail/partial/skip`, skip leaves the denominator), shape advisor, fan-in hotspots, starter files. Accepted risks: `lantern-accepted.json` via `lantern accept` |
+| `lantern/evidence.py` | Evidence Report (spec 11): commit-pinned HTML/JSON, baseline → fixed findings, provenance, Limits, SHA-256 results digest checked by `lantern verify`, badge |
 | `lantern/explain.py` | Prompt (language-aware, includes HTTP links), `validate()`, retry, bottom-up `select_nodes`, cache |
 | `lantern/providers.py` | Anthropic, OpenAI-compatible (OpenAI, OpenRouter, Mistral, Gemini, Ollama, LM Studio, vLLM), fixture stub |
 | `lantern/report.py` + `viewer/report.html` | One self-contained HTML file (vanilla JS): pages/routes, path tree with HTTP and click hops, flowchart, lenses, findings with UI paths |
@@ -96,10 +97,9 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
    to resolve `useQuery`/`useMutation` results, hooks returning objects, and props typed by interface.
 4. **JS runtime tracing** (V8 inspector or a Babel/esbuild transform) so frontend edges get the same
    precision measurement Python has.
-5. **Evidence Report** (spec section 11): commit-pinned summary with provenance and a Limits section.
-6. **PWA shell + local agent pairing** (spec sections 5 and 12). The current viewer becomes the Atlas.
-7. **Rust, then C++** frontends (spec 6.3), reusing the same graph, bridge, and viewer.
-8. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
+5. **PWA shell + local agent pairing** (spec sections 5 and 12). The current viewer becomes the Atlas.
+6. **Rust, then C++** frontends (spec 6.3), reusing the same graph, bridge, and viewer.
+7. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
 
 ## Known gaps
 

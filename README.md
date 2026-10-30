@@ -41,6 +41,17 @@ lantern accept path/to/repo FINDING_ID --reason "why this risk is acceptable"   
 lantern analyze path/to/repo --fail-on high      # exit 1 in CI if an open high or critical finding remains
 ```
 
+Prove it to a reviewer: every `analyze` also writes `.lantern/evidence.html`, a short Evidence Report
+pinned to the git commit, with the readiness scorecard, open/fixed/accepted findings, tool and model
+provenance, a required Limits section, and a results digest anyone can check:
+
+```bash
+lantern verify path/to/repo --report evidence.html   # re-runs the analysis on this commit, compares digests
+```
+
+Attach your own walkthroughs of key flows by writing `lantern-narratives.md` at the repo root.
+`.lantern/badge.svg` is a README badge with the score.
+
 Record what actually runs (Python): `lantern analyze path/to/repo --trace -- python -m pytest -q`
 
 Add Three-Lens explanations with your own key or a local model:
