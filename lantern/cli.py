@@ -9,7 +9,6 @@
   lantern starter PATH [--write NAME]                     show or write generated starter files
   lantern evidence PATH                                   rebuild the commit-pinned Evidence Report
   lantern verify PATH --report evidence.html [-- CMD]     re-run the analysis the same way and compare
-  lantern serve [PATH ...]                                the local app in your browser (start here)
 
 Results live in PATH/.lantern/ (override with --out).
 """
@@ -47,7 +46,7 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
     from .pipeline import analyze
     repo = Path(a.path).resolve()
     out = _out(repo, a.out)
-    res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan)
+    res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan, offline=a.offline or None)
     if a.fail_on and res["counts"]:
         levels = RANKS[:RANKS.index(a.fail_on) + 1]
         n = sum(res["counts"].get(k, 0) for k in levels)
@@ -104,24 +103,27 @@ def cmd_verify(a, trace_cmd: list[str]) -> int:
         return 2
     repo = Path(a.path).resolve()
     g = build_graph(repo)
-    run_meta: dict = {}
+    run_meta: dict = {"offline": bool(run.get("offline")) or a.offline}
     if trace_cmd:
         tm = merge_trace(g, run_trace(repo, trace_cmd))
         run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}
-    sec = scan(g) if do_scan else None
+    offline = bool(run.get("offline")) or a.offline
+    sec = scan(g, offline) if do_scan else None
     rd = assess(g, sec, run_meta)
     gi = evidence.git_info(repo)
     new = evidence.digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False),
                                   evidence.run_options(sec, run_meta))
     got = evidence.digest(new)
     print(f"commit  {gi.get('commit')}{' (uncommitted changes present)' if gi.get('dirty') else ''}")
-    print(f"options scan {'on' if do_scan else 'off'}, trace {' '.join(trace_cmd) if trace_cmd else 'off'}")
+    print(f"options scan {'on' if do_scan else 'off'}, trace {' '.join(trace_cmd) if trace_cmd else 'off'}, "
+          f"dependency audit {'off (offline)' if run_meta['offline'] else 'on'}")
     print(f"report  {want}\nrerun   {got}")
     if got == want:
         print("MATCH: the report's results are what this analyzer finds on this commit.")
         return 0
     print("DIFFERENT: check out the report's commit, install the same scanner versions (see Provenance), "
-          "and make sure lantern-accepted.json matches.")
+          "and make sure lantern-accepted.json matches. Dependency findings come from live vulnerability "
+          "databases, so new advisories alone can make a later run differ.")
     for k in new:
         if old is not None and old.get(k) != new[k]:
             print(f"  differs: {k}")
@@ -273,6 +275,8 @@ def main(argv: list[str] | None = None) -> int:
     common(sp)
     sp.add_argument("--trace", action="store_true", help="also run the command after -- and record real calls")
     sp.add_argument("--no-scan", action="store_true")
+    sp.add_argument("--offline", action="store_true",
+                    help="skip dependency audits (pip-audit, npm audit), the only steps that use the network")
     sp.add_argument("--privacy", choices=["full", "structure"], default="full",
                     help="full embeds function source in the report; structure leaves it out")
     sp.add_argument("--fail-on", choices=RANKS, help="exit 1 if any open finding is at this rank or worse (for CI)")
@@ -314,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--digest", help="sha256:... from the report")
     sp.add_argument("--report", help="evidence.html (or .json) to read the digest and run options from")
     sp.add_argument("--no-scan", action="store_true", help="the report was made with --no-scan (read from --report)")
+    sp.add_argument("--offline", action="store_true", help="skip the dependency audits (read from --report)")
 
     sp = sub.add_parser("serve", help="open the Lantern app in your browser (projects, map, findings, readiness)")
     sp.add_argument("paths", nargs="*", help="project folders to add (analyzed on first open)")

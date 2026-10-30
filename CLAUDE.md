@@ -46,7 +46,9 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/js_frontend.py` | TS/JS: `Walker` (defs, imports/exports, refs, HTTP calls, route/page registrations) → `SpecResolver` (relative, tsconfig paths, `@/`) → `JSResolver` (barrels, classes, `this`) → entries |
 | `lantern/bridge.py` | Links `g.meta["http_calls"]` to route entry points by method + path segments; exact / suffix / unknown-prefix / ambiguous |
 | `lantern/tracehook.py`, `trace.py` | Python runtime tracing (`sys.monitoring`), wrapper-hop collapse, upgrade edges to `observed` |
-| `lantern/security.py` | Bandit, pip-audit, secrets → `websec.scan_web` → pin to nodes → reachability + `ui_path` → rank |
+| `lantern/security.py` | Bandit, dependency audits, secrets → `websec.scan_web` → stable ids (line text, not number) → pin to nodes → reachability + `ui_path` → `input` on the flagged line → rank |
+| `lantern/depaudit.py` | pip-audit (lock files, `==` pins, pyproject) and `npm audit --package-lock-only`; the only network calls in `analyze`; `--offline` / `LANTERN_OFFLINE` skips them; tests run offline (`tests/conftest.py`) |
+| `lantern/protections.py` | Spec 9.4 "protections to add": rate limiting, headers, SSRF allow-list, password hashing, route auth, uploads; heuristic, never changes findings or score |
 | `lantern/websec.py` | Full-stack rules: `LW-*` (public-env secrets, service-role JWT, CORS, Firebase, Supabase RLS, missing auth) and `LJ-*` JS patterns |
 | `lantern/readiness.py` | Deployment Readiness Score (spec 10): ten weighted categories of deterministic checks (`pass/fail/partial/skip`, skip leaves the denominator), shape advisor, fan-in hotspots, starter files. Accepted risks: `lantern-accepted.json` via `lantern accept` |
 | `lantern/evidence.py` | Evidence Report (spec 11): commit-pinned HTML/JSON, baseline → fixed findings, provenance, Limits, SHA-256 results digest checked by `lantern verify`, badge |
@@ -111,13 +113,19 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
 * JS: hook results (`const m = useMutation(...)`, `m.mutate()`) and destructured hook returns are
   unresolved; React Query `mutationFn`/`queryFn` callbacks are linked, which covers most real paths.
 * Calls into libraries that call back into the repo (framework dispatch) only show when traced (Python).
-* `pip-audit` only reads `requirements*.txt`; no npm audit yet (`package-lock.json`/`pnpm-lock.yaml`).
+* Dependency audits need exact versions: Python ranges without a lock file, and pnpm/yarn/bun lock files, are reported as not checked.
+* "Uses input" is a one-line check (parameters and request data on the flagged line), not data flow across functions.
 * The report embeds source by default; `--privacy structure` omits it.
 * Explanations exist only for selected nodes (entry points + 3 levels, capped at 40 by default).
 
 ## Conventions
 
-* Python 3.11+, standard library plus tree-sitter grammars; no network calls except model providers.
+* Python 3.11+, standard library plus tree-sitter grammars; no network calls except model providers and the dependency
+  audits (skippable with `--offline`).
+* Always pass `encoding="utf-8"` to file reads/writes and `subprocess.run(text=True)`, and build repo-relative paths with
+  `.as_posix()`: Windows CI runs with the system code page and backslash paths.
+* Files in `.lantern/` live in the analyzed folder and may be planted: the server rebuilds every page from our templates,
+  and anything rendered from them must be escaped.
 * Keep `report.html` a single self-contained file that works offline and on a phone.
 * Plain language in user-facing text; technical detail lives in Lens 1, `via`, and `detail`.
 * Never commit real-looking secrets in fixtures (GitHub push protection); build them at test time.

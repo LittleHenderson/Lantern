@@ -91,7 +91,9 @@ echoed), and search `~/.lantern`, `.lantern/`, job logs (`/api/jobs/<id>`), and 
 
 ## 5. Pass criteria for a release
 
-* All of section 1 passes on Linux and macOS with Python 3.11–3.13; Windows: tests pass except POSIX-mode checks.
+* All of section 1 passes on Linux with Python 3.11–3.13 and on Windows with Python 3.12 under stock settings
+  (`PYTHONUTF8=0`, the system code page). CI runs both, plus `tools/audit.sh --browser` in Chromium. macOS is not in
+  CI. (Before PR #7, Windows failed 24 of 88 tests; see `AUDIT_HISTORY.md`.)
 * No critical or high issue open from sections 4.1–4.5 and 4.9.
 * Section 4.6: analysis of a 100k-line repo finishes in under 60 s and under 2 GB.
 * Every claim in `CLAIMS.md` is held or its text is corrected.

@@ -12,7 +12,9 @@ import re
 from collections import Counter
 from pathlib import Path
 
+from .depaudit import NOTHING_TO_CHECK
 from .graph import Graph
+from .protections import advise as advise_protections
 from .python_frontend import SKIP_DIRS, TEST_FILE_RE, inside_repo
 
 READINESS_VERSION = 1
@@ -296,16 +298,26 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
         out.append(_check("deps-lock", "Lockfile committed", 4, "skip",
                           f"not expected: a {shape} usually leaves exact versions to whoever installs it"
                           if has_py else "no dependency manifest"))
-    audited = [t for t in (sec or {}).get("tools", []) if t.get("tool") == "pip-audit" and t.get("status") == "ok"]
+    tools = {t.get("tool"): t for t in (sec or {}).get("tools", [])}
+    audited = [n for n in ("pip-audit", "npm-audit") if (tools.get(n) or {}).get("status") == "ok"]
+    unchecked = [f"{n} ({str(tools[n].get('status', ''))[:90]})" for n in ("pip-audit", "npm-audit")
+                 if n in tools and n not in audited and tools[n].get("status") not in NOTHING_TO_CHECK]
     vuln = [f for f in (sec or {}).get("findings", []) if f["category"] == "dependency" and f.get("status") != "accepted"]
-    if audited or vuln:
-        out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "pass" if not vuln else "fail",
-                          f"{len(vuln)} vulnerable package{'s' if len(vuln) != 1 else ''}" if vuln else "pip-audit found none",
-                          "" if not vuln else "Upgrade to the fixed versions listed in Findings.", how="pip-audit"))
+    if vuln:
+        out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "fail",
+                          f"{len(vuln)} known vulnerabilit{'ies' if len(vuln) != 1 else 'y'} in "
+                          f"{len({f.get('package') for f in vuln})} package(s)",
+                          "Upgrade to the fixed versions listed in Findings.", how="pip-audit, npm audit"))
+    elif audited:
+        out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "partial" if unchecked else "pass",
+                          f"{' and '.join(audited)} found none" + (f"; not checked: {'; '.join(unchecked)}"
+                                                                   if unchecked else ""),
+                          "" if not unchecked else "Commit a lock file so exact versions can be checked.",
+                          how="pip-audit, npm audit"))
     else:
         out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "skip",
-                          "not checked: pip-audit reads requirements*.txt only, and npm audit needs the network",
-                          how="pip-audit"))
+                          "not checked: " + ("; ".join(unchecked) if unchecked else "no dependency files"),
+                          how="pip-audit, npm audit"))
     loose = []
     for pj in js_manifests:
         try:
@@ -751,6 +763,7 @@ def assess(g: Graph, sec: dict | None, run_meta: dict | None = None) -> dict:
         "version": READINESS_VERSION, "score": score, "grade": grade(score), "categories": cats,
         "shape": shape, "stack": {k: v for k, v in stack.items() if k != "routes"},
         "advice": advice(shape, stack), "hotspots": hotspots(g),
+        "protections": advise_protections(g, sec, repo, shape),
         "env_vars": sorted(env), "next_steps": todo[:8],
         "starter": starter_files(repo, shape, stack, env),
     }

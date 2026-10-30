@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 
 from . import SCHEMA_VERSION, __version__
+from .depaudit import NOTHING_TO_CHECK
 from .graph import Graph
 from .security import ID_VERSION
 
@@ -34,7 +35,7 @@ def git_info(repo: Path) -> dict:
 
     def run(*args):
         try:
-            p = subprocess.run([git, "-C", str(repo), *args], capture_output=True, text=True, timeout=20)
+            p = subprocess.run([git, "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
             return p.stdout.strip() if p.returncode == 0 else None
         except (OSError, subprocess.TimeoutExpired):
             return None
@@ -68,7 +69,8 @@ def tool_versions(sec: dict | None) -> list[dict]:
 
 def run_options(sec: dict | None, run_meta: dict | None) -> dict:
     """How the results were made, so `lantern verify` can make them the same way."""
-    return {"scan": sec is not None, "trace": ((run_meta or {}).get("trace") or {}).get("command")}
+    return {"scan": sec is not None, "trace": ((run_meta or {}).get("trace") or {}).get("command"),
+            "offline": bool((run_meta or {}).get("offline"))}
 
 
 def digest_payload(g: Graph, sec: dict | None, rd: dict | None, commit: str | None, dirty: bool = False,
@@ -89,7 +91,8 @@ def digest_payload(g: Graph, sec: dict | None, rd: dict | None, commit: str | No
                            for t in (sec or {}).get("tools", [])),
         "readiness": None if not rd else {
             "score": rd["score"], "checks": sorted(f"{c['id']}:{c['status']}" for cat in rd["categories"]
-                                                   for c in cat["checks"])},
+                                                   for c in cat["checks"]),
+            "protections": sorted(f"{x['id']}:{x['status']}" for x in rd.get("protections") or [])},
     }
 
 
@@ -118,12 +121,21 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
         out.append("Runtime behavior. No code was run for this report, so every edge is from static analysis and "
                    "tests were not executed.")
     if "typescript/javascript" in (g.meta.get("languages") or {}):
-        out.append("Frontend call edges are static only (no JavaScript runtime tracing yet), and npm "
-                   "dependencies were not checked for known vulnerabilities (that needs network access).")
+        out.append("Frontend call edges are static only (no JavaScript runtime tracing yet).")
     if sec is None:
         out.append("Security scanners were not run for this report (--no-scan): no findings does not mean no problems.")
-    if not any(t.get("tool") == "pip-audit" and t.get("status") == "ok" for t in (sec or {}).get("tools", [])):
-        out.append("Python dependency vulnerabilities were not checked (pip-audit reads requirements*.txt only).")
+    for t in (sec or {}).get("tools", []):
+        st = str(t.get("status") or "")
+        if t.get("tool") in ("pip-audit", "npm-audit") and st != "ok" and st not in NOTHING_TO_CHECK:
+            lang = "Python" if t["tool"] == "pip-audit" else "npm"
+            out.append(f"{lang} dependencies were not fully checked for known vulnerabilities ({st}).")
+        if t.get("tool") == "pip-audit" and t.get("unpinned"):
+            out.append(f"{t['unpinned']} Python requirement(s) give a range, not an exact version, so they were not "
+                       "checked for known vulnerabilities. A lock file fixes this.")
+    if any(f.get("category") == "dependency" for f in (sec or {}).get("findings", [])) or any(
+            t.get("tool") in ("pip-audit", "npm-audit") and t.get("status") == "ok" for t in (sec or {}).get("tools", [])):
+        out.append("Dependency findings come from live vulnerability databases, so a re-check can find new ones "
+                   "without any code change.")
     heur = sum(1 for f in (sec or {}).get("findings", []) if f.get("tool_confidence") == "LOW")
     if heur:
         out.append(f"{heur} finding{'s are' if heur != 1 else ' is'} from heuristic checks that can misfire; they are "
@@ -188,6 +200,8 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
             "open": [_f(f) for f in live if f.get("status") == "open"],
             "accepted": [_f(f) | {"accepted": f.get("accepted")} for f in findings if f.get("status") == "accepted"],
             "fixed": fixed, "changed": changed, "in_tests": sum(1 for f in findings if f.get("in_tests")),
+            "protections": [{k: x.get(k) for k in ("id", "title", "status", "why", "evidence", "how")}
+                            for x in (rd or {}).get("protections") or []],
         },
         "understanding": narratives,
         "provenance": {"tools": tool_versions(sec), "models": models,
@@ -335,6 +349,12 @@ def render_html(ev: dict) -> str:
     fixed_rows = "".join(f"<tr><td><span class='sev {E(f['rank'])}'>{E(f['rank'])}</span></td><td><b>{E(f['title'])}</b> "
                          f"<span class='tag ok'>fixed · verified by rescan</span><br><span class='muted'>{E(f['rule'])} · "
                          f"{E(f['file'] or '')}:{E(f.get('line') or '')}</span></td></tr>" for f in se["fixed"])
+    prot = [x for x in se.get("protections") or [] if isinstance(x, dict)]
+    prot_rows = "".join(
+        f"<tr><td><span class='tag{'' if x.get('status') == 'add' else ' ok'}'>{'add' if x.get('status') == 'add' else 'in place'}"
+        f"</span></td><td><b>{E(x.get('title'))}</b><br><span class='muted'>{E(x.get('why'))}</span>"
+        + (f"<br><span class='muted'>Evidence: {E(' · '.join(map(str, x.get('evidence') or [])))}</span>" if x.get("evidence") else "")
+        + (f"<div class='reason'>{E(x.get('how'))}</div>" if x.get("status") == "add" else "") + "</td></tr>" for x in prot)
     tools = "".join(f"<tr><td>{E(t['tool'] or '')}</td><td>{E(t.get('version') or '–')}</td><td class='muted'>"
                     f"{E(t.get('role') or '')}{(' · ' + E(t['status'])) if t.get('status') and t['status'] != 'ok' else ''}"
                     f"</td></tr>" for t in ev["provenance"]["tools"])
@@ -402,6 +422,7 @@ button.print{{float:right;font:inherit;font-size:12.5px;padding:6px 12px;border-
 {f"<h4>Fixed since first analysis ({len(se['fixed'])})</h4><table>{fixed_rows}</table>" if se['fixed'] else ''}
 {f"<h4>Changed but still open ({len(se.get('changed') or [])})</h4><p class='muted'>The flagged line changed, and the same rule now flags new code in the same file, so these are not counted as fixed.</p><table>{changed_rows}</table>" if se.get('changed') else ''}
 {f"<h4>Accepted risks ({len(se['accepted'])})</h4><table>{acc_rows}</table>" if se['accepted'] else ''}
+{f"<h4>Protections to add ({sum(1 for x in prot if x.get('status') == 'add')})</h4><p class='muted'>Heuristic: shown only where the code gives a reason; they don't change findings or the score.</p><table>{prot_rows}</table>" if prot else ''}
 {f"<p class='muted'>{E(se['in_tests'])} more finding(s) are in test code only.</p>" if se['in_tests'] else ''}
 </section>
 

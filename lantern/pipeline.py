@@ -28,7 +28,7 @@ def out_dir(repo: Path, out: str | Path | None = None) -> Path:
 
 
 def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] | None = None,
-            no_scan: bool = False, log: Log = print) -> dict:
+            no_scan: bool = False, log: Log = print, offline: bool | None = None) -> dict:
     """Graph -> (trace) -> scan -> readiness -> report -> evidence. Returns a short summary."""
     from .engine import build_graph
     from .readiness import assess
@@ -43,7 +43,9 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     s = g.stats()
     log(f"graph   {g.meta['files']} files, {s['nodes'].get('callable', 0)} functions, "
         f"{s['internal_call_edges']} internal calls, {s['entry_points']} entry points ({timings['graph']}s)")
-    run_meta: dict = {"timings": timings, "privacy": privacy}
+    from .depaudit import offline as offline_env
+    offline = offline_env() if offline is None else offline
+    run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
     if trace_cmd:
         t = time.perf_counter()
         m = merge_trace(g, run_trace(repo, trace_cmd))
@@ -54,7 +56,7 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     sec = None
     if not no_scan:
         t = time.perf_counter()
-        sec = scan(g)
+        sec = scan(g, offline)
         timings["scan"] = round(time.perf_counter() - t, 2)
         c = sec["counts"]
         log(f"scan    {c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low "

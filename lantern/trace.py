@@ -25,7 +25,7 @@ def run_trace(repo: str | Path, command: list[str], timeout: int = 900) -> dict:
     pkg_root = str(Path(__file__).resolve().parent.parent)
     env["PYTHONPATH"] = os.pathsep.join(p for p in [pkg_root, repo, env.get("PYTHONPATH", "")] if p)
     cmd = [sys.executable, "-m", "lantern.tracehook", out, repo, "--", *command]
-    proc = subprocess.run(cmd, cwd=repo, env=env, timeout=timeout, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=repo, env=env, timeout=timeout, capture_output=True, text=True, encoding="utf-8", errors="replace")
     try:
         data = json.loads(Path(out).read_text(encoding="utf-8") or "{}")
     except json.JSONDecodeError:
