@@ -1,0 +1,1010 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lantern — Product Specification v0.2</title>
+<style>
+@page {
+  size: Letter;
+  margin: 0.85in 0.8in 0.9in 0.8in;
+  @top-left { content: "LANTERN · PRODUCT SPECIFICATION"; font: 600 6.8pt "Inter"; letter-spacing: 0.14em; color: #8A94A6; }
+  @top-right { content: string(chapter); font: 500 6.8pt "Inter"; letter-spacing: 0.06em; color: #8A94A6; }
+  @bottom-left { content: "v0.2 · Draft for review · October 2026"; font: 500 6.8pt "Inter"; color: #A0A8B8; }
+  @bottom-right { content: counter(page, decimal-leading-zero); font: 700 8pt "Inter Display"; color: #0F1B2D; }
+}
+@page cover { margin: 0; @top-left{content:none} @top-right{content:none} @bottom-left{content:none} @bottom-right{content:none} }
+@page toc { @top-right{content:"Contents"} }
+
+:root{
+  --ink:#0F1B2D; --body:#2B3445; --muted:#667085; --line:#E4E7EC; --soft:#F5F7FA;
+  --accent:#0D9488; --accent-soft:#E6F6F4;
+  --l1:#4F46E5; --l1s:#EEF0FF; --l2:#C2410C; --l2s:#FFF3EA; --l3:#0D9488; --l3s:#E6F6F4;
+  --warn:#B42318; --warns:#FEF0EE; --amber:#B54708; --ambers:#FFF6E5;
+}
+html{ font-family:"Inter", sans-serif; font-size:9.6pt; line-height:1.55; color:var(--body); }
+body{ margin:0; }
+h1,h2,h3,h4{ font-family:"Inter Display","Inter",sans-serif; color:var(--ink); }
+h2.chapter{ string-set: chapter content(text); page-break-before: always; font-size:24pt; font-weight:700; letter-spacing:-0.02em; margin:0 0 4pt; line-height:1.1; }
+.kicker{ font:700 7.4pt "Inter"; letter-spacing:0.18em; text-transform:uppercase; color:var(--accent); margin:0 0 6pt; }
+.lede{ font-size:11.2pt; line-height:1.5; color:#475467; margin:4pt 0 18pt; max-width:92%; }
+h3{ font-size:12.6pt; font-weight:650; margin:20pt 0 6pt; letter-spacing:-0.01em; page-break-after:avoid; }
+h3 .num{ color:var(--accent); font-weight:700; margin-right:6pt; }
+h4{ font-size:10pt; font-weight:650; margin:12pt 0 4pt; page-break-after:avoid; }
+p{ margin:0 0 7pt; orphans:3; widows:3; }
+strong{ color:var(--ink); font-weight:650; }
+code, .mono{ font-family:"DejaVu Sans Mono", monospace; font-size:8.1pt; background:#F2F4F7; padding:0.5pt 3pt; border-radius:3pt; color:#344054; }
+ul,ol{ margin:2pt 0 9pt; padding-left:14pt; }
+li{ margin:0 0 3.5pt; }
+ul li::marker{ color:var(--accent); }
+
+table{ width:100%; border-collapse:collapse; margin:8pt 0 12pt; font-size:8.5pt; page-break-inside:auto; }
+thead th{ text-align:left; font:700 7pt "Inter"; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); border-bottom:1.4pt solid var(--ink); padding:5pt 7pt 5pt 0; }
+tbody td{ border-bottom:0.6pt solid var(--line); padding:6pt 8pt 6pt 0; vertical-align:top; }
+tbody tr{ page-break-inside:avoid; }
+td:first-child{ font-weight:600; color:var(--ink); }
+table.plain td:first-child{ font-weight:400; color:var(--body); }
+
+.callout{ border-left:2.5pt solid var(--accent); background:var(--accent-soft); padding:9pt 12pt; margin:10pt 0 12pt; border-radius:0 5pt 5pt 0; page-break-inside:avoid; }
+.callout.warn{ border-color:var(--warn); background:var(--warns); }
+.callout.amber{ border-color:var(--amber); background:var(--ambers); }
+.callout .t{ font:700 7.2pt "Inter"; letter-spacing:0.14em; text-transform:uppercase; color:var(--accent); display:block; margin-bottom:3pt; }
+.callout.warn .t{ color:var(--warn); } .callout.amber .t{ color:var(--amber); }
+.callout p:last-child{ margin:0; }
+
+.grid2{ display:flex; gap:12pt; margin:8pt 0 12pt; }
+.grid2 > div{ flex:1; }
+.card{ border:0.8pt solid var(--line); border-radius:7pt; padding:11pt 12pt; page-break-inside:avoid; background:#fff; }
+.card h4{ margin-top:0; }
+.card .tag{ font:700 6.8pt "Inter"; letter-spacing:0.14em; text-transform:uppercase; }
+.feat{ display:flex; flex-wrap:wrap; gap:9pt; margin:10pt 0; }
+.feat .card{ width:calc(50% - 30pt); }
+.feat .n{ font:700 18pt "Inter Display"; color:var(--accent); line-height:1; margin-bottom:5pt; display:block; }
+.figure{ margin:10pt 0 14pt; page-break-inside:avoid; }
+.figure svg{ width:100%; height:auto; }
+.cap{ font-size:7.6pt; color:var(--muted); margin-top:4pt; }
+.cap b{ color:var(--ink); }
+
+.lens{ border-radius:7pt; padding:10pt 12pt; margin:0 0 8pt; page-break-inside:avoid; }
+.lens .h{ font:700 7pt "Inter"; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:4pt; display:block; }
+.lens.l1{ background:var(--l1s); } .lens.l1 .h{ color:var(--l1); }
+.lens.l2{ background:var(--l2s); } .lens.l2 .h{ color:var(--l2); }
+.lens.l3{ background:var(--l3s); } .lens.l3 .h{ color:var(--l3); }
+.pair{ display:flex; font-size:8.6pt; border-bottom:0.5pt dashed #9FD8D1; padding:3pt 0; }
+.pair span:first-child{ flex:1; color:var(--ink); }
+.pair span.ar{ width:16pt; text-align:center; color:var(--l3); font-weight:700; }
+.pair span:last-child{ flex:1; font-family:"DejaVu Sans Mono"; font-size:7.8pt; color:#134E48; }
+pre{ font-family:"DejaVu Sans Mono", monospace; font-size:7.6pt; line-height:1.45; background:#0F1B2D; color:#D7E0EC; padding:10pt 12pt; border-radius:6pt; white-space:pre-wrap; page-break-inside:avoid; margin:8pt 0 12pt; }
+pre .c{ color:#7C8BA1; } pre .k{ color:#7DD3C8; } pre .s{ color:#F7C58B; }
+
+.pill{ display:inline-block; font:600 6.8pt "Inter"; letter-spacing:0.06em; padding:1.5pt 5pt; border-radius:8pt; background:var(--soft); color:var(--ink); border:0.6pt solid var(--line); }
+.p-hi{ background:var(--warns); color:var(--warn); border-color:#FBCFC9; }
+.p-md{ background:var(--ambers); color:var(--amber); border-color:#FCD9A7; }
+.p-lo{ background:var(--accent-soft); color:var(--accent); border-color:#A7E1DA; }
+
+/* cover */
+.cover{ page: cover; height:11in; width:8.5in; background:#0B1424; color:#fff; position:relative; overflow:hidden; }
+.cover .inner{ position:absolute; left:0.85in; right:0.85in; top:0.9in; bottom:0.85in; }
+.cover .brand{ font:700 8pt "Inter"; letter-spacing:0.32em; color:#7DD3C8; }
+.cover h1{ color:#fff; font:700 64pt "Inter Display"; letter-spacing:-0.035em; margin:2.35in 0 0; line-height:0.95; }
+.cover .sub{ font:300 17pt "Inter Display"; color:#C9D3E1; margin-top:12pt; line-height:1.3; max-width:5.4in; }
+.cover .meta{ position:absolute; bottom:0; left:0; right:0; display:flex; border-top:0.6pt solid #2A3A55; padding-top:12pt; }
+.cover .meta div{ flex:1; font:500 7.6pt "Inter"; color:#9AA8BD; line-height:1.6; }
+.cover .meta b{ display:block; font:700 6.6pt "Inter"; letter-spacing:0.16em; text-transform:uppercase; color:#5F728F; margin-bottom:2pt; }
+.cover svg.bg{ position:absolute; right:-0.2in; top:0.4in; width:5.6in; opacity:0.9; }
+
+/* toc */
+.tocpage{ page: toc; }
+.toc{ list-style:none; padding:0; margin:18pt 0 0; }
+.toc li{ display:flex; border-bottom:0.6pt solid var(--line); padding:7pt 0; margin:0; font-size:10pt; }
+.toc li a{ color:var(--ink); text-decoration:none; flex:1; font-weight:500; }
+.toc li a .no{ display:inline-block; width:26pt; color:var(--accent); font-weight:700; font-family:"Inter Display"; }
+.toc li a::after{ content: target-counter(attr(href), page, decimal-leading-zero); float:right; color:var(--muted); font-weight:600; }
+.doccontrol td{ font-size:8.4pt; }
+.small{ font-size:8pt; color:var(--muted); }
+.score{ display:flex; align-items:center; gap:10pt; }
+.bar{ height:5pt; background:#EEF1F5; border-radius:3pt; width:100%; position:relative; }
+.bar i{ position:absolute; left:0; top:0; bottom:0; background:var(--accent); border-radius:3pt; }
+.keep{ page-break-inside:avoid; }
+a{ color:var(--accent); }
+.toc li{ padding:4.6pt 0; font-size:9.6pt; } .toc{ margin-top:12pt; } .doccontrol td{ font-size:8pt; padding-top:4pt; padding-bottom:4pt; }
+.feat{ display:grid; grid-template-columns:1fr 1fr; gap:9pt; }
+.feat .card{ width:auto; }
+h2.chapter{ string-set: chapter attr(data-title); }
+.toc li{ padding:3.4pt 0; }
+</style>
+</head>
+<body>
+
+<!-- ============ COVER ============ -->
+<section class="cover">
+  <svg class="bg" viewBox="0 0 520 620" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <radialGradient id="glow" cx="50%" cy="45%" r="55%"><stop offset="0" stop-color="#2DD4BF" stop-opacity="0.22"/><stop offset="1" stop-color="#2DD4BF" stop-opacity="0"/></radialGradient>
+    </defs>
+    <circle cx="300" cy="260" r="260" fill="url(#glow)"/>
+    <g stroke="#2E4566" stroke-width="1.2" fill="none">
+      <path d="M300 110 L180 220 M300 110 L420 220 M180 220 L120 340 M180 220 L250 340 M420 220 L360 340 M420 220 L480 340 M250 340 L300 460 M360 340 L300 460 M120 340 L170 460 M480 340 L430 460"/>
+    </g>
+    <g stroke="#2DD4BF" stroke-width="2" fill="none">
+      <path d="M300 110 L180 220 L250 340 L300 460"/>
+    </g>
+    <g fill="#0B1424" stroke="#4A6283" stroke-width="1.4">
+      <rect x="276" y="96" width="48" height="28" rx="6"/>
+      <rect x="396" y="206" width="48" height="28" rx="6"/>
+      <rect x="96" y="326" width="48" height="28" rx="6"/>
+      <rect x="336" y="326" width="48" height="28" rx="6"/>
+      <rect x="456" y="326" width="48" height="28" rx="6"/>
+      <rect x="146" y="446" width="48" height="28" rx="6"/>
+      <rect x="406" y="446" width="48" height="28" rx="6"/>
+    </g>
+    <g fill="#0B1424" stroke="#2DD4BF" stroke-width="2">
+      <rect x="156" y="206" width="48" height="28" rx="6"/>
+      <rect x="226" y="326" width="48" height="28" rx="6"/>
+      <rect x="276" y="446" width="48" height="28" rx="6"/>
+    </g>
+    <circle cx="300" cy="110" r="5" fill="#2DD4BF"/>
+    <g font-family="DejaVu Sans Mono" font-size="9" fill="#5F728F">
+      <text x="334" y="92">&lt;SaveButton /&gt;</text>
+      <text x="40" y="214">fetch("/api/items")</text>
+      <text x="282" y="368">auth.verify()</text>
+      <text x="334" y="496">db.query()</text>
+    </g>
+  </svg>
+  <div class="inner">
+    <div class="brand">LANTERN · WORKING TITLE</div>
+    <h1>See every<br>path your<br>code takes.</h1>
+    <div class="sub">Product specification for a full-stack code-mapping, explanation, and deployment-readiness platform built for AI-assisted developers.</div>
+    <div class="meta">
+      <div><b>Document</b>Product Specification<br>Version 0.2 · Draft</div>
+      <div><b>Date</b>October 30, 2026</div>
+      <div><b>Owner</b>Little Henderson</div>
+      <div><b>Status</b>For review · Not for distribution</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TOC ============ -->
+<section class="tocpage">
+  <p class="kicker" style="margin-top:0">Contents</p>
+  <h1 style="font-size:26pt;margin:0;letter-spacing:-0.02em;">What this document covers</h1>
+  <ol class="toc">
+    <li><a href="#s1"><span class="no">01</span>Executive summary</a></li>
+    <li><a href="#s2"><span class="no">02</span>Problem, audience, and positioning</a></li>
+    <li><a href="#s3"><span class="no">03</span>Product principles</a></li>
+    <li><a href="#s4"><span class="no">04</span>Feature overview</a></li>
+    <li><a href="#s5"><span class="no">05</span>System architecture and the two access modes</a></li>
+    <li><a href="#s6"><span class="no">06</span>Analysis engine</a></li>
+    <li><a href="#s7"><span class="no">07</span>The Three-Lens explanation system</a></li>
+    <li><a href="#s8"><span class="no">08</span>Model choice: the multi-LLM layer</a></li>
+    <li><a href="#s9"><span class="no">09</span>Security audit</a></li>
+    <li><a href="#s10"><span class="no">10</span>Deployment readiness and systems design</a></li>
+    <li><a href="#s11"><span class="no">11</span>The Evidence Report</a></li>
+    <li><a href="#s12"><span class="no">12</span>The PWA client</a></li>
+    <li><a href="#s13"><span class="no">13</span>Technology stack, data model, and API</a></li>
+    <li><a href="#s14"><span class="no">14</span>Trust and security of Lantern itself</a></li>
+    <li><a href="#s15"><span class="no">15</span>Non-functional requirements</a></li>
+    <li><a href="#s16"><span class="no">16</span>Roadmap</a></li>
+    <li><a href="#s17"><span class="no">17</span>Risks, open questions, and success metrics</a></li>
+  </ol>
+  <h4 style="margin-top:16pt;">Document control</h4>
+  <table class="doccontrol plain">
+    <tbody>
+      <tr><td><b>Working title</b></td><td>Lantern. A placeholder; trademark and domain checks are pending.</td></tr>
+      <tr><td><b>Scope</b></td><td>Product, architecture, and phased delivery for v1. Pricing and go-to-market are sketched, not decided.</td></tr>
+      <tr><td><b>Conventions</b></td><td>"MUST", "SHOULD", and "MAY" mark requirement strength. Performance numbers are targets to validate in Phase 0, not measured results.</td></tr>
+      <tr><td><b>Changes in v0.2</b></td><td>Lantern is now full stack: TypeScript/JavaScript joins Python in Phase 1, ahead of Rust and C++, and a bridge links each frontend API call to the backend route that answers it (Section 6.4). Scanners, security suggestions, roadmap, and risks updated; Phase 0 results added (16.1).</td></tr>
+      <tr><td><b>Third-party tools</b></td><td>Named tools reflect the landscape as of October 2026. Licenses and capabilities change, so each choice gets re-checked before build.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============ 1 ============ -->
+<h2 class="chapter" id="s1" data-title="Executive summary"><span class="kicker" style="display:block">01 · Executive summary</span>Executive summary</h2>
+<p class="lede">Lantern maps every call path in a codebase, explains each piece in three registers, audits it with real security tooling, and grades how ready it is to ship. The output is evidence a builder can hand to a skeptical engineer.</p>
+
+<p>A new class of builders ships software with AI assistance. They move fast, but they often can't explain what their code does, and they don't know what they don't know about security or deployment. Professional engineers notice, and the label "AI slop" sticks even when the work is sound.</p>
+<p>Lantern closes that gap in four moves:</p>
+<ol>
+  <li><strong>Map.</strong> It parses Python and TypeScript/JavaScript repositories (then Rust and C++) into a single call graph, joins the frontend to the backend wherever one calls the other over HTTP, and renders it as an interactive flowchart. A path starts at a real entry point, such as a page, a button's click handler, an API route, <code>main()</code>, or a CLI command, and can run unbroken from the button to the database.</li>
+  <li><strong>Explain.</strong> Every function and module gets three explanations: a technical one, a plain-English one with analogies, and a mapped one where each everyday phrase is pinned to the exact technical term it stands for.</li>
+  <li><strong>Audit.</strong> Established static-analysis and dependency scanners find the security problems. The call graph tells you which findings are actually reachable. An LLM of the user's choosing explains each finding and drafts a fix, and a rescan verifies the fix.</li>
+  <li><strong>Prove.</strong> A Deployment Readiness Score and a shareable Evidence Report tie each claim to a specific commit and to the tool that produced it.</li>
+</ol>
+
+<div class="grid2">
+  <div class="card"><span class="tag" style="color:var(--accent)">Two ways in</span><h4>Cloud mode</h4><p style="margin:0">Connect GitHub. A sandboxed worker clones the repo, analyzes it, and destroys the copy. Zero setup, works from any device.</p></div>
+  <div class="card"><span class="tag" style="color:var(--l1)">Two ways in</span><h4>Local agent mode</h4><p style="margin:0">Run one binary on your own machine. Source never leaves it; only results are uploaded, with optional redaction. Model calls can stay local too.</p></div>
+</div>
+
+<div class="callout"><span class="t">The core design bet</span><p><strong>Deterministic tools find facts; language models explain them.</strong> The call graph, the security findings, and the readiness checks come from parsers and scanners whose output is repeatable. Models never invent structure or vulnerabilities. They translate verified facts into language people can learn from. That separation is what makes the output credible to engineers.</p></div>
+
+<h4>v1 scope at a glance</h4>
+<table>
+  <thead><tr><th>Area</th><th>In v1</th><th>Later</th></tr></thead>
+  <tbody>
+    <tr><td>Languages</td><td>Python and TypeScript/JavaScript, linked full stack (Phase 1); Rust (Phase 2); C++ (Phase 3)</td><td>Go, Java, Kotlin, Swift</td></tr>
+    <tr><td>Hosted backends</td><td>Calls to the app's own API routes, in any supported language</td><td>Supabase, Firebase, and similar client SDKs modeled as database edges, with their access rules checked</td></tr>
+    <tr><td>Access</td><td>GitHub cloud mode; local agent on macOS, Linux, Windows</td><td>GitLab, Bitbucket, self-hosted cloud workers</td></tr>
+    <tr><td>Models</td><td>Bring-your-own-key for major providers, plus local models</td><td>Hosted credits, fine-tuned explainer model</td></tr>
+    <tr><td>Client</td><td>Installable PWA with offline report viewing</td><td>IDE extensions, native wrappers</td></tr>
+    <tr><td>Collaboration</td><td>Single user, shareable read-only reports</td><td>Teams, comments, review workflows</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ 2 ============ -->
+<h2 class="chapter" id="s2" data-title="Problem, audience, and positioning"><span class="kicker" style="display:block">02 · Problem and audience</span>Problem, audience, and positioning</h2>
+<p class="lede">AI tools let people build software faster than they can understand it. Lantern sells understanding, and the proof of it.</p>
+
+<h3><span class="num">2.1</span>The gap</h3>
+<p>An AI-assisted builder can produce a working app in a weekend. What they usually can't produce is an answer to the questions a reviewer asks: <em>What calls this? What happens if this input is malicious? Where are the secrets? How does this run in production? What breaks under load?</em> The criticism they get is often fair on the specifics, but it lands as dismissal of the whole person. Nothing on the market today turns "I built this" into "I understand this, and here's the evidence."</p>
+<p>Most of these apps are full stack: a React or Next.js frontend, usually in TypeScript, talking to an API or a hosted database. Many of the holes engineers point to live exactly where the two halves meet: server secrets shipped in the browser bundle, API routes the frontend calls without any login check, database access rules switched off, and CORS left wide open. A reviewer's real question is usually <em>"what happens when someone clicks this button?"</em> Answering it means following one path across both halves, so Lantern treats the whole stack as one program.</p>
+
+<h3><span class="num">2.2</span>Who it's for</h3>
+<div class="grid2">
+  <div class="card"><span class="tag" style="color:var(--accent)">Primary</span><h4>The AI-assisted builder</h4><p>Ships real projects with AI coding tools. Self-taught or career-switching. Wants to learn what their code does and stop getting dismissed. Uses a phone and laptop interchangeably.</p><p style="margin:0"><strong>Job to be done:</strong> "Help me understand my code well enough to defend it, and fix what's indefensible."</p></div>
+  <div class="card"><span class="tag" style="color:var(--l1)">Secondary</span><h4>The reviewing engineer</h4><p>Receives an Evidence Report from a builder, a contractor, or a junior teammate. Has five minutes. Trusts scanners more than claims.</p><p style="margin:0"><strong>Job to be done:</strong> "Show me, quickly and verifiably, whether this is safe to merge or deploy."</p></div>
+</div>
+<div class="grid2">
+  <div class="card"><span class="tag" style="color:var(--l2)">Secondary</span><h4>The learner and educator</h4><p style="margin:0">Students, bootcamps, and self-learners who use the Three-Lens view to climb from plain English to real terminology on codebases they care about.</p></div>
+  <div class="card"><span class="tag" style="color:var(--muted)">Future</span><h4>The small team lead</h4><p style="margin:0">Onboards new hires onto an unfamiliar codebase and wants a living map plus a readiness gate in CI.</p></div>
+</div>
+
+<h3><span class="num">2.3</span>Landscape</h3>
+<table>
+  <thead><tr><th>Category</th><th>What it does well</th><th>What's missing for this audience</th></tr></thead>
+  <tbody>
+    <tr><td>Call-graph tools</td><td>Accurate structure (code2flow, pyan, IDE call hierarchies)</td><td>No explanation, no security, no shareable output; developer-only UX</td></tr>
+    <tr><td>AI repo explainers</td><td>Fluent summaries of a whole repository</td><td>Structure is inferred by the model, so it can be wrong; no plain-to-technical mapping</td></tr>
+    <tr><td>Security scanners</td><td>Trusted findings</td><td>Output assumes security expertise; little guidance on reachability or fixes for beginners</td></tr>
+    <tr><td>AI code review bots</td><td>PR-level feedback</td><td>Diff-focused, not whole-system understanding; no learning path</td></tr>
+  </tbody>
+</table>
+<div class="callout"><span class="t">Positioning statement</span><p>For AI-assisted builders who get dismissed by engineers, Lantern is the code-understanding platform that turns a repository into a verified map, plain-English explanations, and a security and readiness report. Unlike AI explainers, every structural and security claim comes from deterministic tools and is traceable to a commit.</p></div>
+
+<!-- ============ 3 ============ -->
+<h2 class="chapter" id="s3" data-title="Product principles"><span class="kicker" style="display:block">03 · Principles</span>Product principles</h2>
+<p class="lede">These principles settle design arguments. When two good ideas conflict, the higher one wins.</p>
+
+<table>
+  <thead><tr><th style="width:28%">Principle</th><th>What it means in practice</th></tr></thead>
+  <tbody>
+    <tr><td>1 · Facts from tools, words from models</td><td>Call edges, findings, and readiness checks MUST come from deterministic analysis. Models MUST only explain, triage, and propose fixes, and their output is always labeled as model-generated.</td></tr>
+    <tr><td>2 · The user decides where code goes</td><td>Cloud mode and local mode are equal first-class paths. Every screen that sends data anywhere says exactly what is sent and to whom.</td></tr>
+    <tr><td>3 · Show confidence, never fake certainty</td><td>Every edge and finding carries a confidence level. Dynamic languages produce uncertain graphs; Lantern says so instead of hiding it.</td></tr>
+    <tr><td>4 · Teach, don't just tell</td><td>Plain language is a ramp toward real terminology, never a replacement for it. The mapped lens exists so learners graduate.</td></tr>
+    <tr><td>5 · Evidence must be verifiable</td><td>Reports are pinned to a commit hash, list the tools and versions used, and state what they do not prove.</td></tr>
+    <tr><td>6 · Practice what we preach</td><td>Lantern handles source code and API keys. It MUST pass its own audit and publish its security posture.</td></tr>
+    <tr><td>7 · Mobile is a real surface</td><td>Every core task, short of initial local-agent setup, works on a phone.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout amber"><span class="t">Tone guardrail</span><p>Lantern is on the builder's side but never flatters. A low readiness score is shown plainly, with the path to improve it. The report's credibility with engineers depends on it being honest with builders.</p></div>
+
+<!-- ============ 4 ============ -->
+<h2 class="chapter" id="s4" data-title="Feature overview"><span class="kicker" style="display:block">04 · Features</span>Feature overview</h2>
+<p class="lede">Six capabilities, each built on the one before it.</p>
+
+<div class="feat">
+  <div class="card"><span class="n">F1</span><h4>Code Atlas</h4><p style="margin:0">An interactive map of every function, method, and module, and who calls whom. Two views: a zoomable network overview, and a Flow view that lays out one entry point's call path as a top-down flowchart.</p></div>
+  <div class="card"><span class="n">F2</span><h4>Three-Lens explanations</h4><p style="margin:0">Technical, Everyday, and Mapped explanations for every node, toggled instantly. The Mapped lens pairs each plain phrase with its technical twin, one-to-one.</p></div>
+  <div class="card"><span class="n">F3</span><h4>Security audit</h4><p style="margin:0">Real scanners, reachability analysis over the call graph, model-written explanations in all three lenses, suggested fixes as diffs, and verification by rescan. Also proactive suggestions for security features the app lacks.</p></div>
+  <div class="card"><span class="n">F4</span><h4>Deployment readiness</h4><p style="margin:0">A 0–100 score across ten categories, plus a systems-design advisor that recommends a deployment shape and generates starter files such as a Dockerfile, a CI workflow, and <code>.env.example</code>.</p></div>
+  <div class="card"><span class="n">F5</span><h4>Evidence Report</h4><p style="margin:0">A shareable, commit-pinned report with a public link and PDF export, built for an engineer with five minutes.</p></div>
+  <div class="card"><span class="n">F6</span><h4>Model choice</h4><p style="margin:0">Bring your own API key for any major provider, or run local models. Pick models per task, preview costs before a run, and compare two models' explanations side by side.</p></div>
+</div>
+
+<h3><span class="num">4.1</span>Core user journey</h3>
+<ol>
+  <li><strong>Connect.</strong> The user signs in on the PWA and chooses cloud mode (authorize the GitHub App on selected repos) or local mode (install the agent and pair it by scanning a QR code or entering a one-time code).</li>
+  <li><strong>Configure.</strong> They choose models for each task and see an estimated token cost for a full run. They choose a privacy level (Section 5.3).</li>
+  <li><strong>Analyze.</strong> Structural analysis and scanning run first and finish quickly. Explanations stream in afterward, entry points first. A push notification fires when the run completes.</li>
+  <li><strong>Explore.</strong> They open the Atlas at an entry point, follow the path, and toggle lenses on any node.</li>
+  <li><strong>Fix.</strong> They work down the findings and readiness checklist, apply suggested patches (cloud mode opens a pull request; local mode writes a patch file or applies it on confirmation), then re-run.</li>
+  <li><strong>Prove.</strong> They publish an Evidence Report and share the link.</li>
+</ol>
+
+<!-- ============ 5 ============ -->
+<h2 class="chapter" id="s5" data-title="System architecture and the two access modes"><span class="kicker" style="display:block">05 · Architecture</span>System architecture and the two access modes</h2>
+<p class="lede">One analysis engine, packaged as a single binary, runs in two places. That guarantees identical results whether the user picks cloud or local.</p>
+
+<div class="figure">
+<svg viewBox="0 0 760 430" xmlns="http://www.w3.org/2000/svg" font-family="Inter">
+  <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#667085"/></marker>
+  <marker id="art" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#0D9488"/></marker>
+  <marker id="ari" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#4F46E5"/></marker></defs>
+  <!-- zones -->
+  <rect x="10" y="10" width="230" height="410" rx="12" fill="#F5F7FA" stroke="#E4E7EC"/>
+  <text x="26" y="34" font-size="9" font-weight="700" letter-spacing="1.6" fill="#667085">USER DEVICES</text>
+  <rect x="260" y="10" width="490" height="410" rx="12" fill="#F7FBFB" stroke="#CDEBE7"/>
+  <text x="276" y="34" font-size="9" font-weight="700" letter-spacing="1.6" fill="#0D9488">LANTERN CLOUD</text>
+
+  <!-- PWA -->
+  <rect x="30" y="52" width="190" height="70" rx="9" fill="#fff" stroke="#0F1B2D" stroke-width="1.4"/>
+  <text x="44" y="76" font-size="12" font-weight="700" fill="#0F1B2D">PWA client</text>
+  <text x="44" y="94" font-size="9" fill="#475467">Phone, tablet, desktop</text>
+  <text x="44" y="108" font-size="9" fill="#475467">Offline cache · push alerts</text>
+
+  <!-- Local machine -->
+  <rect x="30" y="160" width="190" height="240" rx="9" fill="#fff" stroke="#4F46E5" stroke-width="1.4"/>
+  <text x="44" y="184" font-size="12" font-weight="700" fill="#4F46E5">Local mode</text>
+  <text x="44" y="200" font-size="9" fill="#475467">User's own computer</text>
+  <rect x="44" y="214" width="162" height="34" rx="6" fill="#EEF0FF"/>
+  <text x="54" y="235" font-size="9.5" font-weight="600" fill="#0F1B2D">Source code (stays here)</text>
+  <rect x="44" y="258" width="162" height="50" rx="6" fill="#0F1B2D"/>
+  <text x="54" y="278" font-size="10" font-weight="700" fill="#fff">lantern agent</text>
+  <text x="54" y="294" font-size="8.5" fill="#B7C3D4">same engine binary</text>
+  <rect x="44" y="318" width="162" height="34" rx="6" fill="#EEF0FF"/>
+  <text x="54" y="339" font-size="9.5" font-weight="600" fill="#0F1B2D">Local model (optional)</text>
+  <text x="44" y="380" font-size="8.5" fill="#4F46E5">Uploads results only</text>
+  <path d="M125 248 L125 258" stroke="#4F46E5" stroke-width="1.4" marker-end="url(#ari)"/>
+  <path d="M125 318 L125 310" stroke="#4F46E5" stroke-width="1.4" marker-end="url(#ari)"/>
+
+  <!-- API -->
+  <rect x="290" y="52" width="180" height="70" rx="9" fill="#fff" stroke="#0F1B2D" stroke-width="1.4"/>
+  <text x="304" y="76" font-size="12" font-weight="700" fill="#0F1B2D">API gateway</text>
+  <text x="304" y="94" font-size="9" fill="#475467">Auth · sessions · rate limits</text>
+  <text x="304" y="108" font-size="9" fill="#475467">Agent pairing · WebSocket</text>
+
+  <!-- Orchestrator -->
+  <rect x="290" y="160" width="180" height="62" rx="9" fill="#fff" stroke="#0F1B2D" stroke-width="1.4"/>
+  <text x="304" y="184" font-size="12" font-weight="700" fill="#0F1B2D">Job orchestrator</text>
+  <text x="304" y="202" font-size="9" fill="#475467">Queue · retries · progress</text>
+
+  <!-- Sandbox -->
+  <rect x="510" y="52" width="220" height="170" rx="9" fill="#fff" stroke="#0D9488" stroke-width="1.4"/>
+  <text x="524" y="76" font-size="12" font-weight="700" fill="#0D9488">Cloud mode worker</text>
+  <text x="524" y="92" font-size="9" fill="#475467">Ephemeral microVM per job</text>
+  <rect x="524" y="104" width="192" height="30" rx="6" fill="#E6F6F4"/>
+  <text x="534" y="123" font-size="9.5" font-weight="600" fill="#0F1B2D">Shallow clone via GitHub App</text>
+  <rect x="524" y="140" width="192" height="34" rx="6" fill="#0F1B2D"/>
+  <text x="534" y="161" font-size="10" font-weight="700" fill="#fff">lantern agent</text>
+  <text x="534" y="198" font-size="8.5" fill="#0D9488">Workspace destroyed on completion</text>
+  <text x="534" y="212" font-size="8.5" fill="#0D9488">No outbound network but model API</text>
+
+  <!-- Stores -->
+  <rect x="290" y="262" width="140" height="60" rx="9" fill="#fff" stroke="#0F1B2D" stroke-width="1.4"/>
+  <text x="304" y="286" font-size="11" font-weight="700" fill="#0F1B2D">Results store</text>
+  <text x="304" y="303" font-size="9" fill="#475467">Graphs · findings · scores</text>
+  <rect x="446" y="262" width="140" height="60" rx="9" fill="#fff" stroke="#0F1B2D" stroke-width="1.4"/>
+  <text x="460" y="286" font-size="11" font-weight="700" fill="#0F1B2D">Explanation cache</text>
+  <text x="460" y="303" font-size="9" fill="#475467">Keyed by code hash</text>
+  <rect x="602" y="262" width="128" height="60" rx="9" fill="#fff" stroke="#0F1B2D" stroke-width="1.4"/>
+  <text x="616" y="286" font-size="11" font-weight="700" fill="#0F1B2D">Key vault</text>
+  <text x="616" y="303" font-size="9" fill="#475467">Envelope-encrypted</text>
+
+  <!-- LLM providers -->
+  <rect x="290" y="352" width="440" height="50" rx="9" fill="#FFF3EA" stroke="#C2410C" stroke-width="1.2"/>
+  <text x="304" y="374" font-size="11" font-weight="700" fill="#C2410C">Model providers (user's choice)</text>
+  <text x="304" y="390" font-size="9" fill="#475467">Anthropic · OpenAI · Google · Mistral · OpenRouter · self-hosted endpoints</text>
+
+  <!-- arrows -->
+  <path d="M220 87 L288 87" stroke="#667085" stroke-width="1.4" marker-end="url(#ar)"/>
+  <path d="M380 122 L380 158" stroke="#667085" stroke-width="1.4" marker-end="url(#ar)"/>
+  <path d="M470 180 L508 140" stroke="#0D9488" stroke-width="1.4" marker-end="url(#art)"/>
+  <path d="M380 222 L380 260" stroke="#667085" stroke-width="1.4" marker-end="url(#ar)"/>
+  <path d="M600 222 L560 260" stroke="#0D9488" stroke-width="1.4" marker-end="url(#art)"/>
+  <path d="M620 222 L620 350" stroke="#0D9488" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#art)"/>
+  <path d="M206 290 C 250 290, 250 120, 288 112" stroke="#4F46E5" stroke-width="1.4" fill="none" marker-end="url(#ari)"/>
+  <text x="232" y="150" font-size="8" fill="#4F46E5" transform="rotate(-80 232 150)">results via WSS</text>
+</svg>
+<div class="cap"><b>Figure 1.</b> System overview. The same <code>lantern agent</code> binary performs analysis in both modes. In cloud mode it runs inside a disposable sandbox; in local mode it runs on the user's machine and sends only results.</div>
+</div>
+
+<h3><span class="num">5.1</span>Cloud mode</h3>
+<p>Best for zero setup and for users who work mostly from a phone or tablet.</p>
+<ul>
+  <li><strong>Access.</strong> A GitHub App with the narrowest permissions: read-only repository contents and metadata on repositories the user explicitly selects. Pull-request write permission is requested separately, only when the user first asks Lantern to open a fix PR.</li>
+  <li><strong>Isolation.</strong> Each job runs in a fresh microVM (Firecracker or gVisor class) with no persistent disk, CPU and memory caps, a wall-clock limit, and egress restricted to the configured model endpoints.</li>
+  <li><strong>Untrusted code.</strong> The worker never runs the user's build scripts or tests by default. This matters most for C++ (CMake configure steps execute code), Rust (build scripts and procedural macros execute code), and JavaScript (<code>npm install</code> runs package lifecycle scripts, so the worker never installs dependencies; it reads lockfiles instead). Section 6.3 covers the accuracy trade-off and the opt-in "sandboxed build" setting.</li>
+  <li><strong>Retention.</strong> The clone is destroyed when the job ends. Only derived results persist: the graph, findings, scores, and explanations. Source snippets inside results are governed by the privacy level.</li>
+</ul>
+
+<h3><span class="num">5.2</span>Local agent mode</h3>
+<p>Best for private or proprietary code and for users who want model calls to stay on their own hardware.</p>
+<ul>
+  <li><strong>Distribution.</strong> A single signed binary for macOS (Apple silicon and Intel), Linux (x86-64 and ARM64), and Windows. Install via Homebrew, a shell script with a published checksum, winget, or <code>cargo install</code>.</li>
+  <li><strong>Pairing.</strong> <code>lantern login</code> shows a one-time code and QR code. The user approves it in the PWA, and the agent receives a device-scoped, revocable token.</li>
+  <li><strong>Operation.</strong> <code>lantern analyze</code> runs once. <code>lantern watch</code> re-analyzes on file changes. The agent can also sit idle and accept "analyze now" requests triggered from the PWA, so a user on their phone can kick off a run on their home machine.</li>
+  <li><strong>Model calls.</strong> Made directly from the agent using keys stored in the operating system's keychain, or sent to a local model server. In this mode Lantern's servers never see API keys or source.</li>
+  <li><strong>Tooling.</strong> The agent uses language servers and scanners already installed on the machine when present, and offers to fetch pinned versions when they're missing.</li>
+</ul>
+
+<h3><span class="num">5.3</span>What leaves the machine: privacy levels</h3>
+<p>Both modes honor one setting that controls how much source-derived content is stored in Lantern's cloud. The PWA shows the active level on every analysis.</p>
+<table>
+  <thead><tr><th style="width:20%">Level</th><th>Stored in Lantern cloud</th><th style="width:30%">Trade-off</th></tr></thead>
+  <tbody>
+    <tr><td>Full</td><td>Graph, findings, explanations, and short source snippets (the function body shown beside its explanation)</td><td>Best experience; code viewable from any device</td></tr>
+    <tr><td>Structure only</td><td>Graph, symbol names, file paths, findings, explanations. No source text.</td><td>Code panel only works when the agent is online</td></tr>
+    <tr><td>Redacted</td><td>As above, with names and paths replaced by stable aliases. The alias map stays on the user's machine.</td><td>Shared reports show aliases unless the user publishes the map</td></tr>
+    <tr><td>Offline</td><td>Nothing. The agent serves the PWA over the local network or localhost.</td><td>No remote access or sharing</td></tr>
+  </tbody>
+</table>
+<div class="callout warn"><span class="t">Be precise with users</span><p>Even in local mode, if the user chooses a cloud model provider, source code is sent to that provider to generate explanations. The UI MUST say this in plain words when a cloud model is selected, and MUST offer local models as the alternative. "Your code never leaves your computer" is only true with a local model.</p></div>
+
+<h3><span class="num">5.4</span>Mode comparison</h3>
+<table>
+  <thead><tr><th>Consideration</th><th>Cloud mode</th><th>Local agent mode</th></tr></thead>
+  <tbody>
+    <tr><td>Setup</td><td>Two taps: sign in, select repos</td><td>Install binary, pair once</td></tr>
+    <tr><td>Where source lives</td><td>Briefly in a disposable sandbox</td><td>Never leaves the machine (except to a chosen cloud model)</td></tr>
+    <tr><td>Analysis accuracy</td><td>Good; build-dependent analysis limited by default</td><td>Best; can use the user's real build environment</td></tr>
+    <tr><td>Runtime tracing</td><td>Opt-in, test suite only, in sandbox</td><td>Full: run the app or tests and record real calls</td></tr>
+    <tr><td>Private or non-GitHub repos</td><td>GitHub only in v1</td><td>Any folder, any host</td></tr>
+    <tr><td>API key custody</td><td>Encrypted in Lantern's vault</td><td>OS keychain; never sent to Lantern</td></tr>
+    <tr><td>Applying fixes</td><td>Opens a pull request</td><td>Writes a patch, or applies on confirmation</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ 6 ============ -->
+<h2 class="chapter" id="s6" data-title="Analysis engine"><span class="kicker" style="display:block">06 · Analysis engine</span>Analysis engine</h2>
+<p class="lede">The engine turns a repository into a Unified Code Graph: one language-neutral model of every symbol and every call, with an honest confidence level on each edge.</p>
+
+<h3><span class="num">6.1</span>Pipeline</h3>
+<div class="figure">
+<svg viewBox="0 0 760 120" xmlns="http://www.w3.org/2000/svg" font-family="Inter">
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#0D9488"/></marker></defs>
+  <g font-size="10">
+    <rect x="4" y="20" width="110" height="64" rx="8" fill="#0F1B2D"/><text x="16" y="44" fill="#7DD3C8" font-size="8" font-weight="700" letter-spacing="1">STAGE 1</text><text x="16" y="62" fill="#fff" font-weight="700">Discover</text><text x="16" y="76" fill="#B7C3D4" font-size="8">files, languages</text>
+    <rect x="130" y="20" width="110" height="64" rx="8" fill="#0F1B2D"/><text x="142" y="44" fill="#7DD3C8" font-size="8" font-weight="700" letter-spacing="1">STAGE 2</text><text x="142" y="62" fill="#fff" font-weight="700">Parse</text><text x="142" y="76" fill="#B7C3D4" font-size="8">tree-sitter</text>
+    <rect x="256" y="20" width="110" height="64" rx="8" fill="#0F1B2D"/><text x="268" y="44" fill="#7DD3C8" font-size="8" font-weight="700" letter-spacing="1">STAGE 3</text><text x="268" y="62" fill="#fff" font-weight="700">Resolve</text><text x="268" y="76" fill="#B7C3D4" font-size="8">language servers</text>
+    <rect x="382" y="20" width="110" height="64" rx="8" fill="#0F1B2D"/><text x="394" y="44" fill="#7DD3C8" font-size="8" font-weight="700" letter-spacing="1">STAGE 4</text><text x="394" y="62" fill="#fff" font-weight="700">Trace</text><text x="394" y="76" fill="#B7C3D4" font-size="8">optional, runtime</text>
+    <rect x="508" y="20" width="110" height="64" rx="8" fill="#0F1B2D"/><text x="520" y="44" fill="#7DD3C8" font-size="8" font-weight="700" letter-spacing="1">STAGE 5</text><text x="520" y="62" fill="#fff" font-weight="700">Scan</text><text x="520" y="76" fill="#B7C3D4" font-size="8">security, readiness</text>
+    <rect x="634" y="20" width="122" height="64" rx="8" fill="#0D9488"/><text x="646" y="44" fill="#CCFBF1" font-size="8" font-weight="700" letter-spacing="1">STAGE 6</text><text x="646" y="62" fill="#fff" font-weight="700">Explain</text><text x="646" y="76" fill="#CCFBF1" font-size="8">models, cached</text>
+  </g>
+  <g stroke="#0D9488" stroke-width="1.5"><path d="M114 52 L128 52" marker-end="url(#a2)"/><path d="M240 52 L254 52" marker-end="url(#a2)"/><path d="M366 52 L380 52" marker-end="url(#a2)"/><path d="M492 52 L506 52" marker-end="url(#a2)"/><path d="M618 52 L632 52" marker-end="url(#a2)"/></g>
+  <text x="4" y="108" font-size="8.5" fill="#667085">Stages 1–5 are deterministic and run in seconds to minutes. Stage 6 is the only stage that calls a model, and it streams results as they arrive.</text>
+</svg>
+<div class="cap"><b>Figure 2.</b> Analysis pipeline. Each stage writes to the Unified Code Graph; later stages enrich it rather than replace it.</div>
+</div>
+
+<h3><span class="num">6.2</span>Unified Code Graph</h3>
+<p>All languages are normalized into one graph schema, so the PWA, the scanners' reachability step, and the explainer never need language-specific logic.</p>
+<div class="grid2">
+<div>
+<table>
+  <thead><tr><th>Node kind</th><th>Examples</th></tr></thead>
+  <tbody>
+    <tr><td>Module</td><td>Python module, TS/JS file, Rust crate or module, C++ translation unit</td></tr>
+    <tr><td>Type</td><td>Class, struct, trait, enum, interface</td></tr>
+    <tr><td>Callable</td><td>Function, method, closure, lambda, arrow function, React component</td></tr>
+    <tr><td>EntryPoint</td><td><code>main</code>, page, route handler, CLI command, test</td></tr>
+    <tr><td>External</td><td>Third-party library call, system call, network or database boundary</td></tr>
+  </tbody>
+</table>
+</div>
+<div>
+<table>
+  <thead><tr><th>Edge kind</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>calls</td><td>A invokes B</td></tr>
+    <tr><td>calls (http)</td><td>Frontend code calls a backend route over the network (Section 6.4)</td></tr>
+    <tr><td>may_call</td><td>A invokes one of a set (dynamic dispatch), or A hands B over to run later (callback, event handler)</td></tr>
+    <tr><td>contains</td><td>Module or type owns a member</td></tr>
+    <tr><td>implements</td><td>Type fulfills a trait or base class</td></tr>
+    <tr><td>reads / writes</td><td>Touches a file, environment variable, socket, or database</td></tr>
+  </tbody>
+</table>
+</div>
+</div>
+
+<h4>Edge confidence</h4>
+<p>Every edge carries one of four confidence levels, displayed in the Atlas as line style so users can see at a glance what is proven and what is inferred.</p>
+<table>
+  <thead><tr><th style="width:18%">Level</th><th style="width:16%">Line style</th><th>Source</th></tr></thead>
+  <tbody>
+    <tr><td>Observed</td><td>Solid, bold</td><td>Recorded during a real run (Stage 4)</td></tr>
+    <tr><td>Resolved</td><td>Solid</td><td>A language server or compiler-grade resolver confirmed the target</td></tr>
+    <tr><td>Inferred</td><td>Dashed</td><td>Name and type heuristics; plausible but unconfirmed</td></tr>
+    <tr><td>Possible</td><td>Dotted</td><td>One of several candidate targets of dynamic dispatch</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">6.3</span>Language support</h3>
+<table>
+  <thead><tr><th style="width:11%">Language</th><th>Parse and resolve</th><th>Hard cases</th><th>Runtime tracing</th></tr></thead>
+  <tbody>
+    <tr><td>Python</td><td>tree-sitter for syntax; Pyright (or an equivalent type-aware analyzer) for resolution. Import graph built from the project's real layout and virtual environment when available.</td><td>Monkey-patching, <code>getattr</code>, decorators that wrap callables, framework magic (Django signals, FastAPI dependency injection). Framework adapters recognize common patterns.</td><td>PEP 669 <code>sys.monitoring</code> on Python 3.12+, with a <code>sys.setprofile</code> fallback for older versions. Low overhead, records caller→callee pairs only.</td></tr>
+    <tr><td>TypeScript / JavaScript</td><td>tree-sitter (TS, TSX, JS grammars) with an import resolver that follows re-exports, tsconfig <code>paths</code>, and bundler aliases; the TypeScript compiler API or tsserver for type-aware resolution in Phase 1.</td><td>Hooks and closures, objects passed around as props, callbacks and event handlers (shown as <em>possible</em> because they run later), dynamic imports, framework conventions (file-based routing, server actions). Framework adapters cover React, Next.js, React Router and TanStack Router, Express, Hono, and Fastify.</td><td>Opt-in V8 coverage or a Node <code>--require</code> hook for server code, and a browser-side recorder driven by Playwright for frontend flows; local mode only in v1.</td></tr>
+    <tr><td>Rust</td><td>tree-sitter plus rust-analyzer for name and trait resolution.</td><td>Trait objects (<code>dyn Trait</code>) become <em>may_call</em> sets. Macros are expanded where rust-analyzer can. In cloud mode build scripts and procedural macros are disabled by default because they execute arbitrary code, which lowers accuracy on macro-heavy crates.</td><td>Opt-in instrumentation through the <code>tracing</code> ecosystem or a sampling profiler; local mode only in v1.</td></tr>
+    <tr><td>C++</td><td>tree-sitter for a fast first pass; clangd driven by <code>compile_commands.json</code> for accurate resolution. The agent can generate the compile database from CMake, Meson, or Bear.</td><td>Templates, macros, virtual calls, function pointers, and build-flag-dependent code. Without a compile database, accuracy drops sharply; the UI says so prominently.</td><td>Opt-in compiler instrumentation (<code>-finstrument-functions</code>) or uprobes-based tracers on Linux; local mode only in v1.</td></tr>
+  </tbody>
+</table>
+<div class="callout"><span class="t">Why the order is Python → TypeScript/JavaScript → Rust → C++</span><p>Python has the simplest toolchain and a large share of AI-built backends. TypeScript/JavaScript comes right after because most apps this audience ships are full stack, and a Python-only map leaves the frontend, often most of the code, invisible: on the FastAPI full-stack template, 10,000 of its 13,000 lines are TypeScript. Rust has excellent tooling and moderate difficulty. C++ is the hardest to analyze correctly and the riskiest to analyze safely in the cloud, so it ships last, with lessons learned from the rest.</p></div>
+
+<h3><span class="num">6.4</span>Full-stack tracing: the frontend-to-backend bridge</h3>
+<p>The signature output of a full-stack Lantern is one unbroken path through the whole app. Each language is parsed into the same graph, and then a bridge stage joins them: every HTTP call found in frontend code is matched to the backend route that answers it.</p>
+<div class="figure">
+<svg viewBox="0 0 760 132" xmlns="http://www.w3.org/2000/svg" font-family="Inter">
+  <defs><marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#0D9488"/></marker></defs>
+  <rect x="2" y="6" width="368" height="104" rx="9" fill="#F5F7FA" stroke="#E4E7EC"/>
+  <rect x="390" y="6" width="368" height="104" rx="9" fill="#E6F6F4" stroke="#A7E1DA"/>
+  <text x="14" y="24" font-size="7.5" font-weight="700" letter-spacing="1.2" fill="#667085">FRONTEND · TYPESCRIPT</text>
+  <text x="402" y="24" font-size="7.5" font-weight="700" letter-spacing="1.2" fill="#0D9488">BACKEND · PYTHON</text>
+  <g font-size="9.5">
+    <rect x="14" y="40" width="104" height="40" rx="6" fill="#0F1B2D"/><text x="24" y="57" fill="#fff" font-weight="700">Save button</text><text x="24" y="71" fill="#B7C3D4" font-size="7.5" font-family="DejaVu Sans Mono">onClick</text>
+    <rect x="134" y="40" width="104" height="40" rx="6" fill="#0F1B2D"/><text x="144" y="57" fill="#fff" font-weight="700">EditItem</text><text x="144" y="71" fill="#B7C3D4" font-size="7.5" font-family="DejaVu Sans Mono">component</text>
+    <rect x="254" y="40" width="104" height="40" rx="6" fill="#0F1B2D"/><text x="264" y="57" fill="#fff" font-weight="700">updateItem()</text><text x="264" y="71" fill="#B7C3D4" font-size="7.5" font-family="DejaVu Sans Mono">API client</text>
+    <rect x="402" y="40" width="104" height="40" rx="6" fill="#0D9488"/><text x="412" y="57" fill="#fff" font-weight="700">update_item</text><text x="412" y="71" fill="#CCFBF1" font-size="7.5" font-family="DejaVu Sans Mono">PUT /items/{id}</text>
+    <rect x="522" y="40" width="112" height="40" rx="6" fill="#0D9488"/><text x="532" y="57" fill="#fff" font-weight="700">get_current_user</text><text x="532" y="71" fill="#CCFBF1" font-size="7.5" font-family="DejaVu Sans Mono">login check</text>
+    <rect x="650" y="40" width="96" height="40" rx="6" fill="#0D9488"/><text x="660" y="57" fill="#fff" font-weight="700">database</text><text x="660" y="71" fill="#CCFBF1" font-size="7.5" font-family="DejaVu Sans Mono">session.commit</text>
+  </g>
+  <g stroke="#0D9488" stroke-width="1.5" fill="none"><path d="M118 60 L132 60" marker-end="url(#a6)"/><path d="M238 60 L252 60" marker-end="url(#a6)"/><path d="M358 60 L400 60" stroke-dasharray="4 3" marker-end="url(#a6)"/><path d="M506 60 L520 60" marker-end="url(#a6)"/><path d="M634 60 L648 60" marker-end="url(#a6)"/></g>
+  <rect x="338" y="86" width="84" height="16" rx="8" fill="#fff" stroke="#0D9488"/><text x="347" y="97" font-size="7.5" font-family="DejaVu Sans Mono" fill="#0D9488">PUT /api/v1/…</text>
+  <text x="2" y="126" font-size="8.5" fill="#667085">The dashed hop is the bridge: a network call matched to its route by method and path. Every other hop is an ordinary call edge.</text>
+</svg>
+<div class="cap"><b>Figure 2b.</b> One path from a button to the database, measured on the open-source FastAPI full-stack template in Phase 0.</div>
+</div>
+<h4>What the bridge reads</h4>
+<ul>
+  <li><strong>Frontend calls:</strong> <code>fetch</code>, axios-style clients (<code>api.get("/items")</code>), and generated API clients that carry a <code>url</code> field. Template strings become path parameters, so <code>`/items/${id}`</code> matches <code>/items/{id}</code>.</li>
+  <li><strong>Backend routes:</strong> every route entry point in the graph, from any language: FastAPI, Flask, and Django in Python; Next.js route handlers, Express, Hono, and Fastify in JavaScript.</li>
+  <li><strong>Third-party APIs:</strong> calls that match no route stay on the map as External nodes with their host, so the user sees where data leaves the app.</li>
+</ul>
+<h4>Match confidence</h4>
+<table>
+  <thead><tr><th style="width:18%">Match</th><th style="width:16%">Confidence</th><th>Rule</th></tr></thead>
+  <tbody>
+    <tr><td>Exact</td><td>Resolved</td><td>Same method and the same path segments, with parameters lining up</td></tr>
+    <tr><td>Shared prefix</td><td>Inferred</td><td>The route's path is the tail of the call's path, because the backend mounts its routers under a prefix it reads at runtime (for example <code>/api/v1</code> from a setting). Literal segments outrank parameters, so <code>/users/me</code> beats <code>/users/{id}</code>.</td></tr>
+    <tr><td>Tie</td><td>Possible</td><td>Two or more routes match equally well. Lantern links each one as possible and never picks silently.</td></tr>
+  </tbody>
+</table>
+<div class="callout"><span class="t">Why this matters for security</span><p>Once the frontend and backend share one graph, reachability (Section 9.2) runs across the network boundary. A finding deep in the backend can be traced to the exact page and button that reach it, and a route the frontend calls with no login check on its path stands out on the map.</p></div>
+
+<h3><span class="num">6.5</span>Entry-point detection and scale</h3>
+<p>Large repositories produce graphs too dense to read. Lantern never opens on the whole graph. It detects entry points and starts there:</p>
+<ul>
+  <li><strong>Detected automatically:</strong> <code>if __name__ == "__main__"</code>, <code>fn main</code>, <code>int main</code>, console-script and binary targets in <code>pyproject.toml</code>, <code>package.json</code>, <code>Cargo.toml</code>, and CMake; route decorators for Flask, FastAPI, Django, Axum, and Actix; Next.js pages and route handlers, React Router and TanStack Router file routes, and Express-style <code>app.get("/path", handler)</code> servers; app starts such as <code>createRoot</code> and <code>.listen()</code>; CLI frameworks such as Click, Typer, argparse, and clap; and test functions.</li>
+  <li><strong>Pages and buttons:</strong> frontend entry points are pages, and event handlers wired in JSX (<code>onClick</code>, <code>onSubmit</code>) appear as the first hops beneath them, so a user can start from "what happens when someone clicks Save?"</li>
+  <li><strong>Collapsing:</strong> modules collapse into single nodes until expanded. Calls into the standard library and third-party packages collapse into an "External" boundary node by default.</li>
+  <li><strong>Incremental runs:</strong> each callable is fingerprinted by a hash of its normalized syntax tree. Re-runs only re-resolve changed files and only re-explain changed callables, which keeps repeat runs fast and cheap.</li>
+</ul>
+
+<!-- ============ 7 ============ -->
+<h2 class="chapter" id="s7" data-title="The Three-Lens explanation system"><span class="kicker" style="display:block">07 · Explanations</span>The Three-Lens explanation system</h2>
+<p class="lede">Each node can be read three ways. The third lens is the product's signature: it teaches the vocabulary instead of hiding it.</p>
+
+<h3><span class="num">7.1</span>The three lenses</h3>
+<table>
+  <thead><tr><th style="width:18%">Lens</th><th>Audience and rules</th></tr></thead>
+  <tbody>
+    <tr><td style="color:var(--l1)">1 · Technical</td><td>For engineers. Precise terminology, inputs and outputs, side effects, error behavior, complexity where relevant, and the role the function plays in its call path.</td></tr>
+    <tr><td style="color:var(--l2)">2 · Everyday</td><td>For anyone. No jargon. Must include at least one concrete example ("if a user types…") and one analogy. Analogies come from a single <em>metaphor world</em> chosen per repository, so explanations stay consistent across the whole map.</td></tr>
+    <tr><td style="color:var(--l3)">3 · Mapped</td><td>A bridge. The everyday explanation, rewritten so that every plain phrase is paired 1:1 with the exact technical term, symbol, or line it stands for. Tapping either side highlights its twin.</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">7.2</span>Worked example</h3>
+<p class="small" style="margin-bottom:6pt">Function: <code>auth.verify_token(token: str) -&gt; User</code> in a FastAPI app. Metaphor world for this repository: <em>a hotel</em>.</p>
+<div class="lens l1"><span class="h">Lens 1 · Technical</span>Decodes a JWT with HS256 using the <code>JWT_SECRET</code> environment variable, validates <code>exp</code> and <code>iss</code> claims, then loads the user by the <code>sub</code> claim through <code>UserRepo.get()</code>. Raises <code>HTTPException(401)</code> on any decode or lookup failure. Called by the <code>get_current_user</code> dependency on every protected route.</div>
+<div class="lens l2"><span class="h">Lens 2 · Everyday</span>This is the front desk checking a room key. When someone tries to enter a members-only part of the app, they show a key card. The desk checks that the card was made by this hotel, hasn't expired, and belongs to a real guest. If anything is off, the guest is turned away. For example, a card issued yesterday that was only good for one hour gets rejected.</div>
+<div class="lens l3"><span class="h">Lens 3 · Mapped</span>
+  <div class="pair"><span>the front desk</span><span class="ar">↔</span><span>verify_token()</span></div>
+  <div class="pair"><span>a key card</span><span class="ar">↔</span><span>token: str (a JWT)</span></div>
+  <div class="pair"><span>made by this hotel</span><span class="ar">↔</span><span>signature check, HS256 + JWT_SECRET</span></div>
+  <div class="pair"><span>hasn't expired</span><span class="ar">↔</span><span>exp claim validation</span></div>
+  <div class="pair"><span>belongs to a real guest</span><span class="ar">↔</span><span>UserRepo.get(sub)</span></div>
+  <div class="pair"><span>turned away</span><span class="ar">↔</span><span>raise HTTPException(401)</span></div>
+  <div class="pair" style="border:0"><span>members-only part of the app</span><span class="ar">↔</span><span>routes using get_current_user</span></div>
+</div>
+
+<h3><span class="num">7.3</span>Keeping the mapping honest</h3>
+<p>A plain-English layer is only valuable if it's anchored to reality. Lantern enforces that mechanically:</p>
+<ul>
+  <li><strong>Structured output.</strong> Models return a JSON object, not free text (schema below). Each Lens 3 pair carries an <code>anchor</code>: a symbol ID from the graph, a source line range, or a vocabulary term from a curated glossary.</li>
+  <li><strong>Anchor validation.</strong> Every anchor is checked against the graph and the source. Pairs with anchors that don't exist are rejected, and the explanation is regenerated or flagged. A model cannot invent a function that isn't there.</li>
+  <li><strong>Grounding context.</strong> The prompt includes the callable's source, its callers and callees from the graph, any security findings on it, and the repository's metadata. Models explain what the graph shows, not what they guess.</li>
+  <li><strong>Glossary build-up.</strong> Technical terms that recur across a repository (JWT, middleware, mutex) gain a glossary entry in all three lenses, so a learner can browse vocabulary on its own.</li>
+</ul>
+<pre><span class="c">// Explanation record (abridged)</span>
+{
+  <span class="k">"node_id"</span>: <span class="s">"py:auth.verify_token"</span>,
+  <span class="k">"code_hash"</span>: <span class="s">"b3f1…9a"</span>,  <span class="k">"model"</span>: <span class="s">"provider/model-name"</span>,  <span class="k">"prompt_version"</span>: <span class="s">"lens-v3"</span>,
+  <span class="k">"lens1"</span>: { <span class="k">"summary"</span>: <span class="s">"…"</span>, <span class="k">"inputs"</span>: [ … ], <span class="k">"side_effects"</span>: [ … ], <span class="k">"errors"</span>: [ … ] },
+  <span class="k">"lens2"</span>: { <span class="k">"text"</span>: <span class="s">"…"</span>, <span class="k">"example"</span>: <span class="s">"…"</span>, <span class="k">"analogy"</span>: <span class="s">"…"</span>, <span class="k">"metaphor_world"</span>: <span class="s">"hotel"</span> },
+  <span class="k">"lens3"</span>: [ { <span class="k">"plain"</span>: <span class="s">"the front desk"</span>, <span class="k">"technical"</span>: <span class="s">"verify_token()"</span>,
+               <span class="k">"anchor"</span>: { <span class="k">"type"</span>: <span class="s">"symbol"</span>, <span class="k">"id"</span>: <span class="s">"py:auth.verify_token"</span> } }, … ],
+  <span class="k">"validated"</span>: <span class="k">true</span>
+}</pre>
+
+<h3><span class="num">7.4</span>Generation strategy</h3>
+<ul>
+  <li><strong>Bottom-up, then top-down.</strong> Leaf functions are explained first, so callers can reference what their callees do. Module and entry-point summaries are generated last from their members' explanations.</li>
+  <li><strong>Lazy by default.</strong> Entry points and their first three levels of calls are explained eagerly. Everything else is explained when first opened, which keeps the first run's cost low. "Explain everything" is one tap, with a cost estimate first.</li>
+  <li><strong>Path narratives.</strong> In Flow view, the user can ask for a step-by-step story of one entry point's path ("what happens when someone logs in"), in any lens.</li>
+</ul>
+
+<!-- ============ 8 ============ -->
+<h2 class="chapter" id="s8" data-title="Model choice: the multi-LLM layer"><span class="kicker" style="display:block">08 · Models</span>Model choice: the multi-LLM layer</h2>
+<p class="lede">Users choose the model for each job, see what it will cost before it runs, and can always tell which model wrote what.</p>
+
+<h3><span class="num">8.1</span>Provider support</h3>
+<ul>
+  <li><strong>Bring your own key (BYOK)</strong> for major providers: Anthropic, OpenAI, Google, Mistral, and aggregators such as OpenRouter that expose many models behind one key.</li>
+  <li><strong>Local and self-hosted models</strong> through any OpenAI-compatible endpoint, which covers Ollama, llama.cpp's server, vLLM, and LM Studio.</li>
+  <li><strong>Adapter design.</strong> A thin internal interface with three adapters (OpenAI-compatible, Anthropic, Google) covers nearly every provider. The cloud backend MAY use a gateway library such as LiteLLM for routing, spend tracking, and fallbacks; the agent ships its own small adapters so it stays a single dependency-free binary.</li>
+  <li><strong>Capability checks.</strong> Before a model is selectable for a task, Lantern runs a short probe for structured JSON output and context length. Models that fail the Lens 3 schema reliably are marked "not recommended for Mapped lens."</li>
+</ul>
+
+<h3><span class="num">8.2</span>Per-task routing</h3>
+<table>
+  <thead><tr><th style="width:26%">Task</th><th>What it needs</th><th style="width:28%">Typical choice</th></tr></thead>
+  <tbody>
+    <tr><td>Lens 1–3 explanations</td><td>High volume, structured output, good writing</td><td>A fast, inexpensive model</td></tr>
+    <tr><td>Path narratives and module summaries</td><td>Long context, synthesis</td><td>A mid-tier model</td></tr>
+    <tr><td>Security triage and fix drafting</td><td>Careful reasoning, low error tolerance</td><td>The strongest model available</td></tr>
+    <tr><td>Systems-design advisor</td><td>Broad knowledge, judgment</td><td>The strongest model available</td></tr>
+  </tbody>
+</table>
+<p>Users can accept a recommended routing preset (Economy, Balanced, Best) or set each task by hand.</p>
+
+<h3><span class="num">8.3</span>Cost, caching, and transparency</h3>
+<ul>
+  <li><strong>Cost preview.</strong> Before any model run, Lantern estimates tokens from the graph's size and shows a price range per provider. Users can set a hard spend cap per run and per month.</li>
+  <li><strong>Cache key.</strong> <code>(code_hash, context_hash, model, prompt_version, lens)</code>. An unchanged function is never paid for twice. Changing models doesn't discard the cache; both versions are kept.</li>
+  <li><strong>Attribution.</strong> Every explanation, triage note, and fix shows the model that produced it and the date. Reports list all models used.</li>
+  <li><strong>Compare mode.</strong> Any node can be explained by two models side by side. This doubles as a quality check and helps users pick a default.</li>
+</ul>
+
+<h3><span class="num">8.4</span>Key custody</h3>
+<table>
+  <thead><tr><th style="width:22%">Mode</th><th>Where keys live</th></tr></thead>
+  <tbody>
+    <tr><td>Local agent</td><td>The OS keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux). Never transmitted to Lantern.</td></tr>
+    <tr><td>Cloud</td><td>Envelope-encrypted: a per-user data key encrypts the API key; a managed KMS key encrypts the data key. Decrypted only inside the worker for the job's duration. Never logged, never returned to any client after entry; the UI shows only the last four characters.</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ 9 ============ -->
+<h2 class="chapter" id="s9" data-title="Security audit"><span class="kicker" style="display:block">09 · Security</span>Security audit</h2>
+<p class="lede">Scanners find; the call graph prioritizes; models explain and draft fixes; a rescan verifies. Each step is labeled so an engineer can see where every claim came from.</p>
+
+<h3><span class="num">9.1</span>Scanner stack</h3>
+<table>
+  <thead><tr><th style="width:15%">Concern</th><th>Python</th><th>TypeScript / JavaScript</th><th>Rust</th><th>C++</th></tr></thead>
+  <tbody>
+    <tr><td>Code patterns and taint</td><td>Opengrep or Semgrep CE engine; Bandit</td><td>Opengrep or Semgrep CE engine; ESLint security plugins</td><td>Opengrep or Semgrep CE engine; Clippy security lints</td><td>Opengrep or Semgrep CE engine; cppcheck; clang-tidy (cert-*, bugprone-*)</td></tr>
+    <tr><td>Vulnerable dependencies</td><td>pip-audit / OSV-Scanner</td><td>OSV-Scanner on <code>package-lock.json</code>, <code>pnpm-lock.yaml</code>, <code>yarn.lock</code></td><td>cargo-audit (RustSec) / OSV-Scanner</td><td>OSV-Scanner on Conan lockfiles; inventory of vendored libraries</td></tr>
+    <tr><td>Unsafe or risky code</td><td>Use of <code>eval</code>, <code>pickle</code>, <code>subprocess</code> with shell</td><td><code>eval</code>, <code>innerHTML</code>, <code>dangerouslySetInnerHTML</code>, tokens in <code>localStorage</code></td><td>cargo-geiger (count of <code>unsafe</code>)</td><td>Raw buffers, unchecked casts, banned functions list</td></tr>
+    <tr><td>Secrets</td><td colspan="4">gitleaks across the working tree, including frontend source and <code>.env</code> files, and, in local mode, optionally across git history</td></tr>
+    <tr><td>Browser exposure</td><td colspan="4">Server-only secrets referenced through prefixes that bundlers ship to every visitor (<code>VITE_</code>, <code>NEXT_PUBLIC_</code>, <code>REACT_APP_</code>, <code>EXPO_PUBLIC_</code>). Ranked critical, because anyone can read them from the browser.</td></tr>
+    <tr><td>Supply chain</td><td colspan="4">Lockfile presence, pinned versions, typosquat heuristics, license inventory</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn"><span class="t">Licensing: requires legal review before launch</span><p>In December 2024 Semgrep moved its maintained rules to the Semgrep Rules License v1.0, which limits them to internal, non-competing, non-SaaS use. The engine itself remains LGPL 2.1. Lantern's cloud mode is a SaaS, so it MUST NOT bundle Semgrep-maintained rules there. The plan: run the Opengrep fork (or the LGPL engine) with Lantern's own rules plus permissively licensed community rules. In local mode, the agent MAY run a user's own Semgrep installation and rules, since that is the user's internal use; counsel should confirm this reading.</p></div>
+
+<h3><span class="num">9.2</span>The finding lifecycle</h3>
+<ol>
+  <li><strong>Collect and normalize.</strong> All scanner output is converted to SARIF, deduplicated, and attached to graph nodes by file and line.</li>
+  <li><strong>Reachability.</strong> Lantern checks whether the affected function is reachable from any entry point, and whether untrusted input (a route parameter, file upload, CLI argument) can flow there along graph edges. Reachable findings rank up; unreachable ones rank down but are never hidden. This is the feature engineers will value most: it separates real risk from noise.</li>
+  <li><strong>Triage.</strong> The chosen model explains the finding in all three lenses and gives a likelihood that it's a false positive, with reasoning. Models MAY flag a likely false positive; they MUST NOT dismiss one. Only the user can mark a finding as accepted risk, with a written reason that appears in the report.</li>
+  <li><strong>Fix.</strong> The model drafts a minimal patch as a unified diff, with a Lens 2 explanation of what changed and why.</li>
+  <li><strong>Verify.</strong> After the patch is applied, the same scanner re-runs on the affected files. A finding is only marked "fixed" when the scanner agrees.</li>
+</ol>
+
+<h3><span class="num">9.3</span>Severity model</h3>
+<table>
+  <thead><tr><th style="width:16%">Rank</th><th>Rule</th></tr></thead>
+  <tbody>
+    <tr><td><span class="pill p-hi">Critical</span></td><td>High scanner severity, reachable from an entry point, and touched by untrusted input. Also any live secret.</td></tr>
+    <tr><td><span class="pill p-md">High</span></td><td>High severity and reachable, or a known-exploited dependency vulnerability.</td></tr>
+    <tr><td><span class="pill">Medium</span></td><td>Medium severity and reachable, or high severity but unreachable.</td></tr>
+    <tr><td><span class="pill p-lo">Low</span></td><td>Everything else, including hardening suggestions.</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">9.4</span>Security features to add</h3>
+<p>Beyond finding bugs, Lantern recommends protections the app is missing, based on what the graph shows it does. Each recommendation names the evidence that triggered it.</p>
+<table>
+  <thead><tr><th style="width:36%">If the graph shows…</th><th>Lantern suggests</th></tr></thead>
+  <tbody>
+    <tr><td>Public HTTP routes</td><td>Authentication on non-public routes, rate limiting, request size limits, security headers, CORS configured narrowly</td></tr>
+    <tr><td>Route input reaching a database call</td><td>Parameterized queries or an ORM, input validation schemas (Pydantic, serde with validation)</td></tr>
+    <tr><td>Passwords handled</td><td>A slow password hash (Argon2id or bcrypt), never a plain or fast hash</td></tr>
+    <tr><td>File uploads</td><td>Type and size checks, storage outside the web root, randomized file names</td></tr>
+    <tr><td>Secrets read from code or config files</td><td>Environment variables or a secrets manager, plus a committed <code>.env.example</code></td></tr>
+    <tr><td>Frontend calls reaching a route with no login check on its path</td><td>An auth dependency or middleware on the route, or an explicit "public" marker so the choice is deliberate</td></tr>
+    <tr><td>Server secrets referenced from frontend code</td><td>Move the call behind a backend route that holds the key; rotate the exposed key</td></tr>
+    <tr><td>A hosted database client (Supabase, Firebase) used from the browser</td><td>Row-level security or security rules turned on for every table; service-role keys kept server side only</td></tr>
+    <tr><td>Cross-origin requests from the frontend</td><td>CORS limited to the app's own origins, never a wildcard with credentials</td></tr>
+    <tr><td>Outbound calls built from user input</td><td>An allow-list to prevent server-side request forgery</td></tr>
+    <tr><td>C++ or <code>unsafe</code> Rust handling external input</td><td>Bounds-checked containers, sanitizer builds (ASan, UBSan) in CI, fuzzing harness for parsers</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ 10 ============ -->
+<h2 class="chapter" id="s10" data-title="Deployment readiness and systems design"><span class="kicker" style="display:block">10 · Readiness</span>Deployment readiness and systems design</h2>
+<p class="lede">A score that can be gamed is worthless. So most checks are deterministic, every point has a visible reason, and the advisor produces real files rather than advice alone.</p>
+
+<h3><span class="num">10.1</span>The Deployment Readiness Score</h3>
+<p>Scored 0–100 across ten weighted categories. Weights below are a starting proposal to validate with reviewing engineers in Phase 1.</p>
+<table>
+  <thead><tr><th style="width:24%">Category</th><th style="width:8%">Weight</th><th>Example checks</th></tr></thead>
+  <tbody>
+    <tr><td>Security findings</td><td>20</td><td>No open Critical or High findings; accepted risks documented</td></tr>
+    <tr><td>Secrets and config</td><td>12</td><td>No secrets in code; config from environment; <code>.env.example</code> present</td></tr>
+    <tr><td>Input and error handling</td><td>10</td><td>Validation at boundaries; no bare <code>except:</code>; no <code>unwrap()</code> on external input; errors don't leak stack traces to users</td></tr>
+    <tr><td>Dependencies</td><td>10</td><td>Lockfile committed; no known-vulnerable versions; versions pinned</td></tr>
+    <tr><td>Tests</td><td>10</td><td>Tests exist; tests touch every entry point; tests pass (local mode, or opt-in sandbox)</td></tr>
+    <tr><td>Observability</td><td>8</td><td>Structured logging; a health-check endpoint for services; no <code>print</code> debugging on hot paths</td></tr>
+    <tr><td>Packaging</td><td>8</td><td>Reproducible build; container definition with a non-root user and a slim base image</td></tr>
+    <tr><td>CI/CD</td><td>8</td><td>A CI workflow that builds, tests, and scans on every push</td></tr>
+    <tr><td>Resilience</td><td>8</td><td>Timeouts on outbound calls; retries with backoff; graceful shutdown</td></tr>
+    <tr><td>Documentation</td><td>6</td><td>README with run instructions; SECURITY.md; license</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">10.2</span>Systems-design advisor</h3>
+<p>The advisor classifies the project's shape from the graph (web API, background worker, CLI tool, library, desktop app, data pipeline), then recommends a deployment pattern and explains it in all three lenses.</p>
+<ul>
+  <li><strong>Shape-specific advice.</strong> A web API gets twelve-factor configuration, a container, a managed database, a reverse proxy, and horizontal scaling notes. Long-running request handlers get a recommendation to move work onto a queue. A CLI gets release packaging and cross-platform builds.</li>
+  <li><strong>Hotspot detection.</strong> The graph reveals fan-in hotspots (one function everything depends on), synchronous network calls inside loops, and database calls inside request loops (the N+1 pattern). Each is flagged with the path that shows it.</li>
+  <li><strong>Generated starter files.</strong> Dockerfile, <code>.dockerignore</code>, a GitHub Actions workflow that runs tests and Lantern's scanners, <code>.env.example</code>, SECURITY.md, and a health-check handler. Each is delivered as a diff the user reviews; nothing is committed silently.</li>
+  <li><strong>Architecture diagram.</strong> A one-page diagram of the recommended deployment, which can be included in the Evidence Report.</li>
+</ul>
+
+<!-- ============ 11 ============ -->
+<h2 class="chapter" id="s11" data-title="The Evidence Report"><span class="kicker" style="display:block">11 · Evidence</span>The Evidence Report</h2>
+<p class="lede">The deliverable that changes the conversation with a skeptical engineer: short, verifiable, and honest about its limits.</p>
+
+<h3><span class="num">11.1</span>Contents</h3>
+<ol>
+  <li><strong>Header.</strong> Repository, commit hash, branch, analysis date, mode (cloud or local), and privacy level.</li>
+  <li><strong>Scorecard.</strong> Readiness score with category breakdown; finding counts by severity, before and after fixes.</li>
+  <li><strong>Architecture.</strong> Entry points, the top-level Atlas, and the recommended deployment diagram.</li>
+  <li><strong>Security.</strong> Open findings, fixed findings with verification status, and accepted risks with the builder's written reasons.</li>
+  <li><strong>Understanding.</strong> The builder can attach path narratives they've reviewed, demonstrating they know how key flows work.</li>
+  <li><strong>Provenance.</strong> Every tool and version used, every model used, and the rule sets applied.</li>
+  <li><strong>Limits.</strong> A required, plain-language section stating what the report does not prove, such as runtime behavior not covered by tests, business-logic flaws scanners can't see, and lower accuracy for dynamic code or C++ analyzed without a compile database.</li>
+</ol>
+
+<h3><span class="num">11.2</span>Verifiability</h3>
+<ul>
+  <li>Each report gets a public, unguessable link and a PDF export. The builder can revoke the link at any time.</li>
+  <li>The report includes a signed digest of its results and the commit hash. A reviewer can re-run the same analysis on that commit with the open-source agent and compare.</li>
+  <li>A README badge can show the latest score, linked to the full report.</li>
+</ul>
+<div class="callout"><span class="t">Why open-source the agent</span><p>An engineer who doubts the report can read the code that produced it and run it themselves. That is the strongest possible answer to "this is just AI output." The commercial value sits in the hosted experience, the explanations, the PWA, and team features, not in the scanner orchestration.</p></div>
+
+<!-- ============ 12 ============ -->
+<h2 class="chapter" id="s12" data-title="The PWA client"><span class="kicker" style="display:block">12 · Client</span>The PWA client</h2>
+<p class="lede">One installable web app for phone, tablet, and desktop. It is the control panel and the viewer, never the analysis engine.</p>
+
+<h3><span class="num">12.1</span>Screens</h3>
+<table>
+  <thead><tr><th style="width:20%">Screen</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>Home</td><td>Repositories, latest score per repo, runs in progress, connected agents and their online status</td></tr>
+    <tr><td>Atlas · Network</td><td>Whole-repo map with module clustering, search, and confidence-styled edges</td></tr>
+    <tr><td>Atlas · Flow</td><td>One entry point's call path as a top-down flowchart; tap a node to open its detail sheet</td></tr>
+    <tr><td>Node detail</td><td>Lens toggle (1 · 2 · 3), source panel, callers and callees, findings on this node, model attribution</td></tr>
+    <tr><td>Findings</td><td>Ranked list with filters; finding detail with lenses, reachability path, diff, and verify status</td></tr>
+    <tr><td>Readiness</td><td>Score breakdown, checklist, advisor output, generated files</td></tr>
+    <tr><td>Reports</td><td>Create, preview, publish, revoke</td></tr>
+    <tr><td>Settings</td><td>Models and keys, routing presets, spend caps, privacy level, connected repos and devices</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">12.2</span>Rendering graphs on every screen size</h3>
+<ul>
+  <li><strong>Network view</strong> uses WebGL rendering (Sigma.js on a Graphology model) so tens of thousands of nodes stay smooth, with level-of-detail labels.</li>
+  <li><strong>Flow view</strong> uses a layered layout engine (ELK via elkjs) to draw a clean top-down flowchart of one path.</li>
+  <li><strong>On phones</strong>, Flow view defaults to a vertical "path list": each step is a card, indented by call depth, with a swipe to expand callees. The full graph remains available but is never the default on a small screen.</li>
+  <li><strong>Accessibility.</strong> Every graph has an equivalent list representation for screen readers and keyboard navigation. Lens colors are never the only signal.</li>
+</ul>
+
+<h3><span class="num">12.3</span>PWA capabilities</h3>
+<table>
+  <thead><tr><th style="width:24%">Capability</th><th>Implementation</th></tr></thead>
+  <tbody>
+    <tr><td>Install</td><td>Web app manifest with icons and shortcuts; install prompt after the first completed analysis</td></tr>
+    <tr><td>Offline</td><td>Service worker (Workbox) caches the app shell. Graphs, explanations, and reports for recently viewed repos are stored in IndexedDB, so past analyses can be explored on a plane.</td></tr>
+    <tr><td>Notifications</td><td>Web Push when a run finishes or a new Critical finding appears. On iPhone and iPad, web push requires the PWA to be added to the home screen; onboarding explains this.</td></tr>
+    <tr><td>Remote control</td><td>From the phone, trigger "analyze now" on a paired agent at home, then watch progress stream in over a WebSocket</td></tr>
+    <tr><td>Local-only use</td><td>In Offline privacy level, the agent serves the PWA from localhost, so no data touches Lantern's servers at all</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ 13 ============ -->
+<h2 class="chapter" id="s13" data-title="Technology stack, data model, and API"><span class="kicker" style="display:block">13 · Stack</span>Technology stack, data model, and API</h2>
+<p class="lede">Choices favor a single portable engine, boring infrastructure, and components the team can replace later.</p>
+
+<h3><span class="num">13.1</span>Proposed stack</h3>
+<table>
+  <thead><tr><th style="width:20%">Layer</th><th>Choice</th><th style="width:34%">Rationale</th></tr></thead>
+  <tbody>
+    <tr><td>Engine and agent</td><td>Rust; tree-sitter grammars compiled in; language servers and scanners run as managed subprocesses</td><td>One static binary per platform; fast; memory-safe parsing of untrusted input</td></tr>
+    <tr><td>Graph format</td><td>Versioned schema, serialized as compressed JSON for transport and stored in Postgres with JSONB plus an edges table</td><td>Simple to start; graph database only if query needs demand it</td></tr>
+    <tr><td>Backend API</td><td>Python with FastAPI, or TypeScript with Fastify; REST for CRUD, WebSocket for progress</td><td>Either is fine; pick the language the founding team ships fastest in</td></tr>
+    <tr><td>Jobs</td><td>Postgres-backed queue initially; move to a dedicated queue when volume requires</td><td>Fewer moving parts early</td></tr>
+    <tr><td>Sandbox</td><td>Firecracker microVMs or gVisor on a container platform</td><td>Strong isolation for untrusted repos</td></tr>
+    <tr><td>Storage</td><td>Postgres (results, metadata), object storage (reports, PDFs), managed KMS (keys)</td><td>Standard and well understood</td></tr>
+    <tr><td>PWA</td><td>SvelteKit or React with Vite; vite-plugin-pwa (Workbox); Sigma.js, Graphology, elkjs</td><td>Mature PWA tooling; WebGL graph rendering</td></tr>
+    <tr><td>Auth</td><td>GitHub OAuth plus email magic links; passkeys as an option</td><td>Matches the audience; no passwords to leak</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">13.2</span>Core entities</h3>
+<table>
+  <thead><tr><th style="width:20%">Entity</th><th>Key fields</th></tr></thead>
+  <tbody>
+    <tr><td>User</td><td>id, auth identities, default routing preset, spend caps</td></tr>
+    <tr><td>Repo</td><td>id, owner, source (github / local), display name, privacy level, alias map location</td></tr>
+    <tr><td>Device</td><td>id, user, platform, agent version, last seen, token hash, revoked</td></tr>
+    <tr><td>Run</td><td>id, repo, commit, mode, status, stage timings, tool versions, models used, cost</td></tr>
+    <tr><td>Graph</td><td>run, schema version, nodes, edges with confidence, entry points</td></tr>
+    <tr><td>Finding</td><td>id, run, node, tool, rule, SARIF blob, severity, reachability path, status, accepted-risk reason</td></tr>
+    <tr><td>Explanation</td><td>node fingerprint, model, prompt version, lenses, validation result</td></tr>
+    <tr><td>Report</td><td>id, run, public slug, signed digest, revoked</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">13.3</span>API sketch</h3>
+<pre><span class="k">POST</span>  /v1/repos                      <span class="c">connect a GitHub repo or register a local one</span>
+<span class="k">POST</span>  /v1/repos/{id}/runs            <span class="c">start a run (cloud) or ask a paired agent to run</span>
+<span class="k">GET</span>   /v1/runs/{id}                  <span class="c">status, stages, cost so far</span>
+<span class="k">WS</span>    /v1/runs/{id}/stream           <span class="c">live progress and streamed explanations</span>
+<span class="k">GET</span>   /v1/runs/{id}/graph?entry=…    <span class="c">graph, optionally scoped to one entry point</span>
+<span class="k">GET</span>   /v1/nodes/{fp}/explanations    <span class="c">all lenses, all models</span>
+<span class="k">POST</span>  /v1/nodes/{fp}/explain         <span class="c">generate on demand with a chosen model</span>
+<span class="k">GET</span>   /v1/runs/{id}/findings         <span class="c">ranked findings</span>
+<span class="k">POST</span>  /v1/findings/{id}/fix          <span class="c">draft a patch; open a PR in cloud mode</span>
+<span class="k">POST</span>  /v1/runs/{id}/reports          <span class="c">publish an Evidence Report</span>
+<span class="k">POST</span>  /v1/devices/pair               <span class="c">exchange a one-time code for a device token</span>
+<span class="k">POST</span>  /v1/agent/results              <span class="c">agent uploads results (signed, chunked)</span></pre>
+
+<!-- ============ 14 ============ -->
+<h2 class="chapter" id="s14" data-title="Trust and security of Lantern itself"><span class="kicker" style="display:block">14 · Trust</span>Trust and security of Lantern itself</h2>
+<p class="lede">A product that judges other people's security will be judged on its own. This section is a launch gate, not a wish list.</p>
+
+<h3><span class="num">14.1</span>Threat model highlights</h3>
+<table>
+  <thead><tr><th style="width:28%">Threat</th><th>Mitigation</th></tr></thead>
+  <tbody>
+    <tr><td>Malicious repository escapes the sandbox</td><td>MicroVM isolation; no build execution by default; no credentials inside the VM beyond a short-lived model key; restricted egress</td></tr>
+    <tr><td>Prompt injection in source code (comments telling the model to report "no issues")</td><td>Findings come from scanners, not models, so injection cannot hide a finding. Model output is schema-validated. Source is passed as clearly delimited data. Triage cannot close findings.</td></tr>
+    <tr><td>Stolen API keys</td><td>Envelope encryption; keys decrypted only inside job scope; never logged; local mode keeps keys in the OS keychain</td></tr>
+    <tr><td>Compromised agent update</td><td>Signed releases; reproducible builds; checksums published; update channel pinned to signing key</td></tr>
+    <tr><td>Stolen device token</td><td>Device-scoped tokens, revocable from the PWA; agent requests are signed and rate-limited</td></tr>
+    <tr><td>Leaked source via reports</td><td>Privacy levels; reports default to Structure only; explicit confirmation before publishing snippets</td></tr>
+    <tr><td>GitHub App over-permission</td><td>Read-only contents by default; PR permission requested only on first use; per-repo selection</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">14.2</span>Launch gates</h3>
+<ul>
+  <li>Lantern's own repositories pass Lantern's audit with no open Critical or High findings, and the report is published.</li>
+  <li>An independent penetration test of the sandbox and API, with a public summary.</li>
+  <li>Published data-handling policy in plain language, written in all three lenses.</li>
+  <li>A vulnerability disclosure policy and security contact.</li>
+</ul>
+
+<!-- ============ 15 ============ -->
+<h2 class="chapter" id="s15" data-title="Non-functional requirements"><span class="kicker" style="display:block">15 · Quality</span>Non-functional requirements</h2>
+<p class="lede">Targets to validate with benchmark repositories in Phase 0. They are design goals, not measured results.</p>
+<table>
+  <thead><tr><th style="width:32%">Requirement</th><th>Target</th></tr></thead>
+  <tbody>
+    <tr><td>Structural analysis, 50k-line repo (Python and TS/JS, any mix)</td><td>Under 3 minutes in cloud mode, first run</td></tr>
+    <tr><td>Bridge accuracy</td><td>At least 95% of resolved and inferred frontend-to-backend links correct on a labeled set of full-stack repos</td></tr>
+    <tr><td>Incremental re-run after a small change</td><td>Under 20 seconds for stages 1–5</td></tr>
+    <tr><td>First explanation visible</td><td>Under 30 seconds after stage 5 completes</td></tr>
+    <tr><td>Atlas interaction</td><td>60 fps pan and zoom up to 20k nodes on a recent laptop; Flow view usable on a mid-range phone</td></tr>
+    <tr><td>Edge precision (resolved edges)</td><td>At least 95% correct on a labeled benchmark per language</td></tr>
+    <tr><td>Lens 3 anchor validity</td><td>100% of published pairs resolve to real symbols, lines, or glossary terms (enforced, not sampled)</td></tr>
+    <tr><td>Availability</td><td>99.5% for API and PWA; local mode keeps working when the cloud is down</td></tr>
+    <tr><td>Agent footprint</td><td>Binary under 60 MB, excluding language servers and scanners</td></tr>
+    <tr><td>Accessibility</td><td>WCAG 2.2 AA for all PWA screens</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ 16 ============ -->
+<h2 class="chapter" id="s16" data-title="Roadmap"><span class="kicker" style="display:block">16 · Roadmap</span>Roadmap</h2>
+<p class="lede">Each phase ends with something real users can try. Durations are estimates for a small team and will be revised after Phase 0.</p>
+
+<div class="figure">
+<svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" font-family="Inter">
+  <line x1="20" y1="40" x2="740" y2="40" stroke="#E4E7EC" stroke-width="2"/>
+  <g font-size="8" fill="#667085" font-weight="600" letter-spacing="1">
+    <text x="20" y="24">PHASE 0</text><text x="140" y="24">PHASE 1</text><text x="350" y="24">PHASE 2</text><text x="500" y="24">PHASE 3</text><text x="650" y="24">PHASE 4</text>
+  </g>
+  <rect x="20" y="52" width="110" height="128" rx="8" fill="#F5F7FA" stroke="#E4E7EC"/>
+  <rect x="140" y="52" width="200" height="128" rx="8" fill="#E6F6F4" stroke="#A7E1DA"/>
+  <rect x="350" y="52" width="140" height="128" rx="8" fill="#EEF0FF" stroke="#C7CBFB"/>
+  <rect x="500" y="52" width="140" height="128" rx="8" fill="#FFF3EA" stroke="#F9C9A7"/>
+  <rect x="650" y="52" width="100" height="128" rx="8" fill="#F5F7FA" stroke="#E4E7EC"/>
+  <g font-size="11" font-weight="700" fill="#0F1B2D">
+    <text x="32" y="74">Spike</text><text x="152" y="74">Full-stack MVP</text><text x="362" y="74">Rust</text><text x="512" y="74">C++</text><text x="662" y="74">Teams</text>
+  </g>
+  <g font-size="8.5" fill="#475467">
+    <text x="32" y="90">~4 weeks</text><text x="152" y="90">~14 weeks</text><text x="362" y="90">~8 weeks</text><text x="512" y="90">~10 weeks</text><text x="662" y="90">ongoing</text>
+    <text x="32" y="110">Python + TS engines</text><text x="32" y="124">Bridge, benchmarks</text><text x="32" y="138">Lens 3 validation</text><text x="32" y="152">test on 10 repos</text>
+    <text x="152" y="110">Python + TypeScript/JS, linked</text><text x="152" y="124">Both modes, GitHub + agent</text><text x="152" y="138">Atlas, Three Lens, BYOK</text><text x="152" y="152">Security + readiness, PWA</text><text x="152" y="166">Evidence Report, beta of 50</text>
+    <text x="362" y="110">rust-analyzer</text><text x="362" y="124">cargo-audit, geiger</text><text x="362" y="138">Axum, Actix, clap</text><text x="362" y="152">Public beta</text>
+    <text x="512" y="110">clangd + compile db</text><text x="512" y="124">cppcheck, clang-tidy</text><text x="512" y="138">Sandboxed builds</text><text x="512" y="152">v1.0 launch</text>
+    <text x="662" y="110">Shared workspaces</text><text x="662" y="124">CI gate</text><text x="662" y="138">More languages</text>
+  </g>
+</svg>
+<div class="cap"><b>Figure 3.</b> Phased delivery. Phase 1 is deliberately the largest: it builds every layer end to end for a full-stack app (a Python or TypeScript backend with a TypeScript frontend), so later languages slot into a finished product.</div>
+</div>
+
+<h3><span class="num">16.1</span>Phase 0 exit criteria and status</h3>
+<ul>
+  <li>Engine produces a graph for 10 public Python repositories of varying size, with edge precision measured against hand-labeled samples.</li>
+  <li>The TypeScript/JavaScript engine and the bridge produce a linked graph for at least three full-stack repositories (for example FastAPI with React, Next.js with its own API routes, Express with a Vite frontend), with bridge links checked by hand.</li>
+  <li>Lens 3 generation passes anchor validation on at least 90% of nodes on first attempt with two different model providers.</li>
+  <li>Five AI-assisted builders and five working engineers react to sample Three-Lens explanations and a mock Evidence Report. Their feedback sets the readiness weights and report layout.</li>
+</ul>
+
+<h4>Measured so far (October 2026)</h4>
+<table>
+  <thead><tr><th style="width:34%">Check</th><th>Result</th></tr></thead>
+  <tbody>
+    <tr><td>Python edge precision (resolved edges, lower bound)</td><td>95.5% to 96.7% on Click, Flask, and Rich, measured against each project's own test suite running under the tracer. Meets the 95% target.</td></tr>
+    <tr><td>Python speed</td><td>About 1 second for 40,000 lines, against a 3-minute target</td></tr>
+    <tr><td>Full stack: FastAPI template</td><td>2,900 lines of Python and 10,000 of TypeScript analyzed together in 0.3 seconds. All 23 frontend API calls linked to the correct backend route, checked by hand.</td></tr>
+    <tr><td>Still open</td><td>Lens 3 first-try pass rate with real models; a JavaScript runtime tracer so TypeScript precision is measured the way Python's is; more full-stack benchmark repositories</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">16.2</span>Business model sketch</h3>
+<table>
+  <thead><tr><th style="width:18%">Tier</th><th>Offer</th></tr></thead>
+  <tbody>
+    <tr><td>Free</td><td>Local agent, unlimited local analysis, BYOK or local models, one public Evidence Report</td></tr>
+    <tr><td>Pro</td><td>Cloud mode, private reports, unlimited reports, PR fixes, priority runs</td></tr>
+    <tr><td>Team</td><td>Shared workspaces, CI readiness gate, onboarding maps, admin controls</td></tr>
+  </tbody>
+</table>
+<p class="small">Users always pay model providers directly through their own keys in v1, so Lantern carries no model-cost risk. Hosted model credits are a later option.</p>
+
+<!-- ============ 17 ============ -->
+<h2 class="chapter" id="s17" data-title="Risks, open questions, and success metrics"><span class="kicker" style="display:block">17 · Risks and metrics</span>Risks, open questions, and success metrics</h2>
+<p class="lede">The biggest risks are trust risks. Most of the design above exists to reduce them.</p>
+
+<h3><span class="num">17.1</span>Risks</h3>
+<table>
+  <thead><tr><th style="width:30%">Risk</th><th style="width:11%">Impact</th><th>Mitigation</th></tr></thead>
+  <tbody>
+    <tr><td>Graphs are wrong for dynamic Python, hook-heavy React, or macro-heavy C++</td><td><span class="pill p-hi">High</span></td><td>Confidence levels on every edge; runtime tracing; compile databases; honest Limits section</td></tr>
+    <tr><td>The bridge links a frontend call to the wrong route</td><td><span class="pill p-md">Medium</span></td><td>Method and path must both match; prefix matches are shown as likely, ties as possible; hand-labeled full-stack benchmark; runtime tracing confirms links when available</td></tr>
+    <tr><td>Engineers dismiss the report as AI output</td><td><span class="pill p-hi">High</span></td><td>Scanner-sourced findings, provenance, open-source agent, reproducible results</td></tr>
+    <tr><td>Analogies mislead learners</td><td><span class="pill p-md">Medium</span></td><td>Lens 3 anchors; consistent metaphor worlds; "this analogy breaks down when…" notes; user feedback per explanation</td></tr>
+    <tr><td>Model costs surprise users</td><td><span class="pill p-md">Medium</span></td><td>Cost preview, spend caps, lazy explanation, aggressive caching</td></tr>
+    <tr><td>Scanner rule licensing</td><td><span class="pill p-md">Medium</span></td><td>Opengrep plus own and permissive rules in cloud; legal review before launch</td></tr>
+    <tr><td>Sandbox escape from a hostile repo</td><td><span class="pill p-hi">High</span></td><td>MicroVMs, no build execution by default, pen test as a launch gate</td></tr>
+    <tr><td>A large incumbent ships something similar</td><td><span class="pill p-md">Medium</span></td><td>Focus on the underserved audience; the Mapped lens and Evidence Report as differentiators; community around the open agent</td></tr>
+  </tbody>
+</table>
+
+<h3><span class="num">17.2</span>Open questions</h3>
+<ol>
+  <li>Final product name, plus trademark and domain availability.</li>
+  <li>Backend language: Python or TypeScript. Decide by team skills in Phase 0.</li>
+  <li>Should metaphor worlds be chosen by the user, by the model per repository, or from a curated set?</li>
+  <li>Open-source license for the agent: permissive (Apache 2.0) or copyleft (AGPL)?</li>
+  <li>Should the Evidence Report support a reviewer sign-off, letting an engineer attest they reviewed it?</li>
+  <li>Which second code host to add after GitHub, if any, for cloud mode?</li>
+  <li>Which hosted backends to model first as database edges with access-rule checks: Supabase, Firebase, or both?</li>
+  <li>Should Lantern read a backend's OpenAPI document, when one exists, to turn prefix matches into exact ones?</li>
+</ol>
+
+<h3><span class="num">17.3</span>Success metrics</h3>
+<table>
+  <thead><tr><th style="width:34%">Metric</th><th>Why it matters</th></tr></thead>
+  <tbody>
+    <tr><td>Median readiness score gain between a repo's first and fifth run</td><td>Shows the product actually improves code, not just describes it</td></tr>
+    <tr><td>Critical and High findings fixed and verified per active repo</td><td>The core safety outcome</td></tr>
+    <tr><td>Share of users who toggle into Lens 1 after starting in Lens 2</td><td>Shows the Mapped lens is working as a learning ramp</td></tr>
+    <tr><td>Evidence Reports opened by someone other than the author</td><td>Measures the product's reach into the engineer audience</td></tr>
+    <tr><td>Explanation thumbs-down rate, per model and lens</td><td>Quality signal for routing defaults and prompt changes</td></tr>
+    <tr><td>Split of runs between cloud and local mode</td><td>Validates the two-mode investment and guides roadmap</td></tr>
+  </tbody>
+</table>
+
+<div class="callout" style="margin-top:18pt"><span class="t">Recommended next step</span><p>Finish Phase 0. The Python engine, the TypeScript/JavaScript engine, and the bridge are built and benchmarked. What remains: run the Lens 3 validator with real models from two providers, add full-stack benchmark repositories, and put sample reports in front of five builders and five engineers. That answers the two questions that decide everything else: can the graph be trusted across the whole stack, and does the Mapped lens actually teach.</p></div>
+
+</body>
+</html>

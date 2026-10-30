@@ -1,9 +1,11 @@
 # CLAUDE.md
 
-Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.1.pdf`;
+Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.2.pdf`;
 this repo is its **Phase 0 spike** (Python and TS/JS engines, frontend-to-backend bridge, scanners,
 Three-Lens explainer, static HTML report). Language order is now Python → TypeScript/JavaScript →
 Rust → C++ (TS moved up because most vibe-coded apps are full stack; the spec PDF v0.2 reflects this).
+The PDF is rendered from `docs/source/Lantern_Product_Spec.html` with WeasyPrint (Inter fonts installed):
+`python -c "from weasyprint import HTML; HTML('docs/source/Lantern_Product_Spec.html').write_pdf('docs/Lantern_Product_Spec_v0.2.pdf')"`.
 
 ## Non-negotiable principles (from the spec)
 
