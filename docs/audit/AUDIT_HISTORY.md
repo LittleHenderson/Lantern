@@ -54,7 +54,7 @@ through a repo `.npmrc`.
 ## 2026-10-30 · re-audit of commit 17d8704
 
 The same auditor confirmed all four findings above fixed and could not break the fixes or the two extras, then
-found one medium and one low problem plus two notes. Fixed in PR #PRNUM.
+found one medium and one low problem plus two notes. Fixed in PR #12.
 
 | # | Finding | Severity | Status |
 |---|---|---|---|
