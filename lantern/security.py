@@ -115,7 +115,7 @@ def run_secrets(repo: Path) -> tuple[list[dict], dict]:
             pass  # fall through to the built-in patterns below
     out = []
     for p in repo.rglob("*"):
-        if not p.is_file() or any(part in SKIP_DIRS for part in p.relative_to(repo).parts):
+        if not p.is_file() or any(part in SKIP_DIRS for part in p.relative_to(repo).parts[:-1]):
             continue
         if p.suffix not in SECRET_EXTS and not p.name.startswith(".env"):
             continue
