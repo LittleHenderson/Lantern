@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import SCHEMA_VERSION, __version__
 from .graph import Graph
+from .security import ID_VERSION
 
 EVIDENCE_VERSION = 1
 NARRATIVES_FILE = "lantern-narratives.md"
@@ -65,12 +66,18 @@ def tool_versions(sec: dict | None) -> list[dict]:
     return rows
 
 
-def digest_payload(g: Graph, sec: dict | None, rd: dict | None, commit: str | None, dirty: bool = False) -> dict:
-    """The deterministic part of the results. Same code + same tool versions -> same payload."""
+def run_options(sec: dict | None, run_meta: dict | None) -> dict:
+    """How the results were made, so `lantern verify` can make them the same way."""
+    return {"scan": sec is not None, "trace": ((run_meta or {}).get("trace") or {}).get("command")}
+
+
+def digest_payload(g: Graph, sec: dict | None, rd: dict | None, commit: str | None, dirty: bool = False,
+                   run: dict | None = None) -> dict:
+    """The deterministic part of the results. Same code + same tool versions + same run options -> same payload."""
     st = g.stats()
     return {
         "evidence_version": EVIDENCE_VERSION, "schema": SCHEMA_VERSION, "lantern": __version__, "commit": commit,
-        "uncommitted_changes": bool(dirty),
+        "uncommitted_changes": bool(dirty), "run": run or {"scan": sec is not None, "trace": None},
         "graph": {"files": g.meta.get("files"), "lines": g.meta.get("lines"),
                   "nodes": st.get("nodes"), "call_edges": st.get("call_edges"),
                   "entry_points": sorted(f"{(n.entry or {}).get('kind')}:{(n.entry or {}).get('detail')}"
@@ -99,6 +106,10 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
         "rather than guessed, mostly calls into libraries or very dynamic code (getattr, plugins, "
         "hooks returning objects).",
     ]
+    if st.get("guessed_by_method_name"):
+        out.append(f"{st['guessed_by_method_name']} call edges were linked by method name alone because the object's "
+                   "type was unknown. They are marked likely or possible, never confirmed, and can point at the "
+                   "wrong function.")
     tr = run_meta.get("trace")
     if tr:
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "
@@ -109,6 +120,8 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
     if "typescript/javascript" in (g.meta.get("languages") or {}):
         out.append("Frontend call edges are static only (no JavaScript runtime tracing yet), and npm "
                    "dependencies were not checked for known vulnerabilities (that needs network access).")
+    if sec is None:
+        out.append("Security scanners were not run for this report (--no-scan): no findings does not mean no problems.")
     if not any(t.get("tool") == "pip-audit" and t.get("status") == "ok" for t in (sec or {}).get("tools", [])):
         out.append("Python dependency vulnerabilities were not checked (pip-audit reads requirements*.txt only).")
     heur = sum(1 for f in (sec or {}).get("findings", []) if f.get("tool_confidence") == "LOW")
@@ -120,7 +133,8 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "that it is configured well.")
     if exp and exp.get("explanations"):
         out.append("Plain-language explanations were written by a model. Each phrase is checked to anchor to real "
-                   "code, but the wording itself is not proof.")
+                   "code, but the wording itself is not proof. The results digest does not cover explanations or "
+                   "which model wrote them.")
     if privacy != "full":
         out.append("Source code was left out of this report (structure-only privacy).")
     return out
@@ -135,8 +149,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
     gi = git_info(repo)
     findings = (sec or {}).get("findings", [])
     live = [f for f in findings if not f.get("in_tests")]
-    cur_ids = {f["id"] for f in findings}
-    fixed = [dict(v, id=k) for k, v in ((baseline or {}).get("findings") or {}).items() if k not in cur_ids]
+    fixed, changed = compare_baseline(findings, baseline)
     narratives = None
     nf = repo / NARRATIVES_FILE
     if nf.exists():
@@ -149,7 +162,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         models.append({"model": s.get("model"), "task": "Three-Lens explanations", "validated": s.get("validated"),
                        "failed": s.get("failed"), "prompt_version": next(
                            (r.get("prompt_version") for r in exp.get("explanations", {}).values()), None)})
-    payload = digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False))
+    payload = digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False), run_options(sec, run_meta))
     return {
         "evidence_version": EVIDENCE_VERSION,
         "header": {"repo": gi.get("remote") or repo.name, "name": repo.name, **gi,
@@ -174,7 +187,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         "security": {
             "open": [_f(f) for f in live if f.get("status") == "open"],
             "accepted": [_f(f) | {"accepted": f.get("accepted")} for f in findings if f.get("status") == "accepted"],
-            "fixed": fixed, "in_tests": sum(1 for f in findings if f.get("in_tests")),
+            "fixed": fixed, "changed": changed, "in_tests": sum(1 for f in findings if f.get("in_tests")),
         },
         "understanding": narratives,
         "provenance": {"tools": tool_versions(sec), "models": models,
@@ -185,6 +198,23 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
     }
 
 
+def compare_baseline(findings: list[dict], baseline: dict | None) -> tuple[list[dict], list[dict]]:
+    """Baseline findings that are gone. A gone finding counts as fixed only if the same rule doesn't show up as a
+    new finding in the same file; otherwise the flagged line was probably edited or moved, so it is listed as
+    "changed, still open" and never as fixed. Baselines from before stable ids can't be compared."""
+    if not baseline or baseline.get("id_version") != ID_VERSION:
+        return [], []
+    old = baseline.get("findings") or {}
+    cur_ids = {f["id"] for f in findings}
+    new_by_place = {(f.get("rule"), f.get("file")) for f in findings if f["id"] not in old and not f.get("in_tests")}
+    fixed, changed = [], []
+    for k, v in old.items():
+        if k in cur_ids:
+            continue
+        (changed if (v.get("rule"), v.get("file")) in new_by_place else fixed).append(dict(v, id=k))
+    return fixed, changed
+
+
 def _f(f: dict) -> dict:
     return {k: f.get(k) for k in ("id", "rank", "rule", "tool", "title", "file", "line", "tool_confidence")} | {
         "path": f.get("ui_path") or (f.get("reachable") or {}).get("path")}
@@ -192,7 +222,7 @@ def _f(f: dict) -> dict:
 
 def baseline_from(sec: dict | None, commit: str | None) -> dict:
     live = [f for f in (sec or {}).get("findings", []) if not f.get("in_tests")]
-    return {"date": dt.date.today().isoformat(), "commit": commit,
+    return {"date": dt.date.today().isoformat(), "commit": commit, "id_version": ID_VERSION,
             "counts": {k: sum(1 for f in live if f["rank"] == k and f.get("status") == "open")
                        for k in ("critical", "high", "medium", "low")},
             "findings": {f["id"]: {"rule": f["rule"], "rank": f["rank"], "title": f["title"], "file": f["file"],
@@ -212,7 +242,19 @@ def badge_svg(score: int, grade: str) -> str:
             f'<text x="8" y="14">lantern</text><text x="{w1 + 6}" y="14">{right}</text></g></svg>')
 
 
-E = html.escape
+def E(v) -> str:
+    """Escape anything for HTML. The renderer also runs on `evidence.json` read back from a repo folder, so no
+    field is trusted to be the type or text we wrote."""
+    return html.escape("" if v is None else str(v), quote=True)
+
+
+def _trace_suffix(ev: dict) -> str:
+    cmd = (((ev.get("payload") or {}).get("run") or {}).get("trace"))
+    return " -- " + " ".join(map(str, cmd)) if isinstance(cmd, list) and cmd else ""
+
+
+def _pct(v) -> float:
+    return max(0.0, min(100.0, float(v))) if isinstance(v, (int, float)) else 0.0
 
 
 def _deploy_svg(shape: str | None) -> str:
@@ -263,41 +305,44 @@ def render_html(ev: dict) -> str:
                    if commit else "<b class='warn'>not pinned: no git commit</b>")
 
     def cnt(d):
-        return " · ".join(f"<span class='sev {k}'>{d.get(k, 0)} {k}</span>" for k in ("critical", "high", "medium", "low")) if d else "–"
+        return " · ".join(f"<span class='sev {k}'>{E(d.get(k, 0))} {k}</span>" for k in ("critical", "high", "medium", "low")) if d else "–"
 
-    cats = "".join(f"<tr><td>{E(c['title'])}</td><td class='num'>{'n/a' if c['score'] is None else c['score']}"
-                   f"<span class='muted'>/{c['weight']}</span></td><td><span class='bar'><i style='width:{c['percent'] or 0}%'></i>"
+    cats = "".join(f"<tr><td>{E(c['title'])}</td><td class='num'>{'n/a' if c['score'] is None else E(c['score'])}"
+                   f"<span class='muted'>/{E(c['weight'])}</span></td><td><span class='bar'><i style='width:{_pct(c.get('percent'))}%'></i>"
                    f"</span></td></tr>" for c in (rd or {}).get("categories", []))
     entries = "".join(f"<li><span class='tag'>{E(e['kind'])}</span> <code>{E(e['detail'] or e['name'])}</code> "
                       f"<span class='muted'>{E(e['file'] or '')}</span></li>" for e in ar["entries"][:40])
     if len(ar["entries"]) > 40:
         entries += f"<li class='muted'>and {len(ar['entries']) - 40} more</li>"
     br = ar.get("bridge") or {}
-    bridge = (f"<p>{br.get('matched', 0)} of {br.get('http_calls', 0)} frontend HTTP calls are linked to a backend "
-              f"route in this repo; {br.get('external', 0)} go to external services.</p>" if br.get("http_calls") else "")
+    bridge = (f"<p>{E(br.get('matched', 0))} of {E(br.get('http_calls', 0))} frontend HTTP calls are linked to a backend "
+              f"route in this repo; {E(br.get('external', 0))} go to external services.</p>" if br.get("http_calls") else "")
 
     def frow(f, extra=""):
         path = " → ".join(E(p.split("::")[-1].split(".")[-1]) for p in (f.get("path") or [])[:8])
         heur = " <span class='tag'>heuristic</span>" if f.get("tool_confidence") == "LOW" else ""
-        return (f"<tr><td><span class='sev {f['rank']}'>{f['rank']}</span></td><td><b>{E(f['title'])}</b>{heur}<br>"
-                f"<span class='muted'>{E(f.get('tool') or '')} {E(f['rule'])} · {E(f['file'] or '')}:{f.get('line') or ''}"
+        return (f"<tr><td><span class='sev {E(f['rank'])}'>{E(f['rank'])}</span></td><td><b>{E(f['title'])}</b>{heur}<br>"
+                f"<span class='muted'>{E(f.get('tool') or '')} {E(f['rule'])} · {E(f['file'] or '')}:{E(f.get('line') or '')}"
                 f"</span>{'<br><span class=path>' + path + '</span>' if path else ''}{extra}</td></tr>")
 
     open_rows = "".join(frow(f) for f in se["open"]) or "<tr><td colspan=2 class='muted'>None.</td></tr>"
     acc_rows = "".join(frow(f, f"<div class='reason'>Accepted by {E(f['accepted'].get('by') or '?')} on "
                                 f"{E(f['accepted'].get('date') or '?')}: {E(f['accepted'].get('reason') or '')}</div>")
                        for f in se["accepted"])
-    fixed_rows = "".join(f"<tr><td><span class='sev {f['rank']}'>{f['rank']}</span></td><td><b>{E(f['title'])}</b> "
+    changed_rows = "".join(f"<tr><td><span class='sev {E(f['rank'])}'>{E(f['rank'])}</span></td><td><b>{E(f['title'])}</b> "
+                           f"<span class='tag'>changed · still open</span><br><span class='muted'>{E(f['rule'])} · "
+                           f"{E(f['file'] or '')}</span></td></tr>" for f in se.get("changed") or [])
+    fixed_rows = "".join(f"<tr><td><span class='sev {E(f['rank'])}'>{E(f['rank'])}</span></td><td><b>{E(f['title'])}</b> "
                          f"<span class='tag ok'>fixed · verified by rescan</span><br><span class='muted'>{E(f['rule'])} · "
-                         f"{E(f['file'] or '')}:{f.get('line') or ''}</span></td></tr>" for f in se["fixed"])
+                         f"{E(f['file'] or '')}:{E(f.get('line') or '')}</span></td></tr>" for f in se["fixed"])
     tools = "".join(f"<tr><td>{E(t['tool'] or '')}</td><td>{E(t.get('version') or '–')}</td><td class='muted'>"
                     f"{E(t.get('role') or '')}{(' · ' + E(t['status'])) if t.get('status') and t['status'] != 'ok' else ''}"
                     f"</td></tr>" for t in ev["provenance"]["tools"])
-    models = "".join(f"<tr><td>{E(m['model'] or '')}</td><td>{E(m['task'])}</td><td class='muted'>{m.get('validated')} "
-                     f"validated, {m.get('failed')} rejected · prompt {E(m.get('prompt_version') or '-')}</td></tr>"
+    models = "".join(f"<tr><td>{E(m['model'] or '')}</td><td>{E(m['task'])}</td><td class='muted'>{E(m.get('validated'))} "
+                     f"validated, {E(m.get('failed'))} rejected · prompt {E(m.get('prompt_version') or '-')}</td></tr>"
                      for m in ev["provenance"]["models"]) or "<tr><td colspan=3 class='muted'>No model was used.</td></tr>"
     verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern\" "
-              f"&& lantern verify . --digest {ev['digest']}") if commit else "Commit your changes and regenerate the report to make it verifiable."
+              f"&& lantern verify . --report evidence.html{_trace_suffix(ev)}") if commit else "Commit your changes and regenerate the report to make it verifiable."
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Evidence Report · {E(h['name'])}</title>
@@ -339,15 +384,15 @@ button.print{{float:right;font:inherit;font-size:12.5px;padding:6px 12px;border-
 <div>Privacy level</div><div>{E(h['privacy'])}</div></div></section>
 
 <section><h2>1 · Scorecard</h2>
-{f'''<div class="score"><span class="big">{rd["score"]}<span style="font-size:20px" class="muted">/100</span></span><span class="grade">{rd["grade"]}</span>
+{f'''<div class="score"><span class="big">{E(rd["score"])}<span style="font-size:20px" class="muted">/100</span></span><span class="grade">{E(rd["grade"])}</span>
 <div class="muted">Deployment readiness for a {E(rd["shape"])}.<br>Checks that don't apply are skipped, not counted.</div></div>
 <table style="margin-top:12px">{cats}</table>''' if rd else '<p class="muted">Readiness was not computed.</p>'}
 <div class="kv" style="margin-top:14px"><div>Open findings now</div><div>{cnt(sc['now'])}</div>
 <div>At first analysis</div><div>{cnt(sc['before'])}{(' <span class="muted">(' + E(sc['baseline_date'] or '') + ')</span>') if sc.get('before') else ''}</div></div></section>
 
 <section><h2>2 · Architecture</h2>
-<p>{ar['files']} files, {ar['lines']} lines{(' · ' + E(', '.join(ar['frameworks']))) if ar['frameworks'] else ''}.
-{len(ar['entries'])} entry points: the places a user, a request, or a command can start running code.</p>
+<p>{E(ar['files'])} files, {E(ar['lines'])} lines{(' · ' + E(', '.join(ar['frameworks']))) if ar['frameworks'] else ''}.
+{E(len(ar['entries']))} entry points: the places a user, a request, or a command can start running code.</p>
 <ul>{entries}</ul>{bridge}
 {f'<h4>Recommended deployment</h4><div class="diagram">{_deploy_svg(ar["shape"])}</div><ul>' + ''.join(f'<li>{E(a)}</li>' for a in ar['advice']) + '</ul>' if ar['advice'] else ''}
 </section>
@@ -355,8 +400,9 @@ button.print{{float:right;font:inherit;font-size:12.5px;padding:6px 12px;border-
 <section><h2>3 · Security <small>· ranked by severity and by whether a user can reach the code</small></h2>
 <h4>Open ({len(se['open'])})</h4><table>{open_rows}</table>
 {f"<h4>Fixed since first analysis ({len(se['fixed'])})</h4><table>{fixed_rows}</table>" if se['fixed'] else ''}
+{f"<h4>Changed but still open ({len(se.get('changed') or [])})</h4><p class='muted'>The flagged line changed, and the same rule now flags new code in the same file, so these are not counted as fixed.</p><table>{changed_rows}</table>" if se.get('changed') else ''}
 {f"<h4>Accepted risks ({len(se['accepted'])})</h4><table>{acc_rows}</table>" if se['accepted'] else ''}
-{f"<p class='muted'>{se['in_tests']} more finding(s) are in test code only.</p>" if se['in_tests'] else ''}
+{f"<p class='muted'>{E(se['in_tests'])} more finding(s) are in test code only.</p>" if se['in_tests'] else ''}
 </section>
 
 <section><h2>4 · Understanding</h2>

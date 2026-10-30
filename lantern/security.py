@@ -250,6 +250,30 @@ def save_accepted(repo: Path, accepted: dict[str, dict]) -> Path:
     return p
 
 
+ID_VERSION = 2
+
+
+def stable_ids(repo: Path, findings: list[dict]) -> None:
+    """Give each finding an id that survives moving its code: tool, rule, file, and the flagged line's text with
+    spaces removed, plus a counter for identical lines in one file. Lines added above a finding don't change it,
+    so "fixed" means the flagged code is really gone (or changed). Findings without a line keep the scanner's id."""
+    lines: dict[str, list[str]] = {}
+    seen: dict[str, int] = {}
+    for f in sorted(findings, key=lambda f: (f.get("file") or "", f.get("line") or 0, f.get("rule") or "")):
+        if not f.get("file") or not f.get("line"):
+            continue
+        if f["file"] not in lines:
+            try:
+                lines[f["file"]] = (repo / f["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                lines[f["file"]] = []
+        src = lines[f["file"]]
+        text = re.sub(r"\s+", "", src[f["line"] - 1]) if 0 < f["line"] <= len(src) else f"line{f['line']}"
+        key = "|".join(map(str, (f.get("tool"), f.get("rule"), f["file"], text)))
+        seen[key] = seen.get(key, 0) + 1
+        f["id"] = _fid(key, seen[key])
+
+
 def scan(g: Graph) -> dict:
     repo = Path(g.repo_root)
     findings, tools = [], []
@@ -261,6 +285,7 @@ def scan(g: Graph) -> dict:
     wf, wt = scan_web(g)
     findings += wf
     tools += wt
+    stable_ids(repo, findings)
     accepted = load_accepted(repo)
     reach = reachability(g)
     ui_reach = reachability(g, kinds={"page", "main"})
@@ -285,5 +310,5 @@ def scan(g: Graph) -> dict:
     counts = {k: sum(1 for f in live if f["rank"] == k) for k in RANK_ORDER}
     counts["in_tests"] = sum(1 for f in findings if f["in_tests"])
     counts["accepted"] = sum(1 for f in findings if f["status"] == "accepted")
-    return {"findings": findings, "tools": tools, "counts": counts,
+    return {"findings": findings, "tools": tools, "counts": counts, "id_version": ID_VERSION,
             "reachable_nodes": len(reach), "total_callables": sum(1 for n in g.nodes.values() if n.kind == "callable")}

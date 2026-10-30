@@ -76,7 +76,8 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
 def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str) -> Path:
     from . import evidence as ev
     base = load(out, "baseline.json")
-    if base is None and sec is not None:
+    from .security import ID_VERSION
+    if sec is not None and (base is None or base.get("id_version") != ID_VERSION):   # first run, or ids changed
         base = ev.baseline_from(sec, ev.git_info(Path(g.repo_root)).get("commit"))
         (out / "baseline.json").write_text(json.dumps(base, indent=1), encoding="utf-8")
     rec = ev.build(g, sec, rd, load(out, "explanations.json"), run_meta, base, privacy)

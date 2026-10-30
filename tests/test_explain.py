@@ -89,7 +89,22 @@ def test_rejects_unknown_term(gs):
     g, ctx = ctx_for(gs, "py:shop.repo.UserRepo.get")
     rec = good_record(render_prompt(ctx, g))
     rec["lens3"]["pairs"][1]["anchor"] = {"type": "term", "term": "quantum flux capacitor"}
-    assert any("neither in the source" in e for e in validate(rec, ctx))
+    assert any("neither a word" in e for e in validate(rec, ctx))
+
+
+@pytest.mark.parametrize("term", ["1", "|", "a", "   ", "ge", "12345"])
+def test_rejects_meaningless_terms(gs, term):
+    g, ctx = ctx_for(gs, "py:shop.repo.UserRepo.get")
+    rec = good_record(render_prompt(ctx, g))
+    rec["lens3"]["pairs"][1]["anchor"] = {"type": "term", "term": term}
+    assert any("neither a word" in e for e in validate(rec, ctx)), term
+
+
+def test_accepts_a_real_name_from_the_code(gs):
+    g, ctx = ctx_for(gs, "py:shop.repo.UserRepo.get")
+    rec = good_record(render_prompt(ctx, g))
+    rec["lens3"]["pairs"][1]["anchor"] = {"type": "term", "term": "execute"}
+    assert validate(rec, ctx) == []
 
 
 def test_requires_every_finding_explained(gs):

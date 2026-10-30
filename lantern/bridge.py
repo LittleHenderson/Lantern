@@ -7,6 +7,7 @@ Matching is on HTTP method plus path segments, with "{}" standing for any dynami
                      (the call carries a global prefix the backend adds elsewhere, like /api/v1)
   * unknown prefix   `${API_URL}/items`: call matches the end of the route's path -> inferred
   * several routes tie for the best match                         -> possible, one edge each
+  * the call's verb couldn't be read (a variable) -> method "ANY": matches any verb, never resolved
 Unmatched calls become external "HTTP" nodes, so the map shows a call whose server isn't in the repo.
 """
 
@@ -58,7 +59,7 @@ def match(call: dict, routes: list[dict]) -> tuple[list[dict], str, str | None]:
     cs = _segs(call["path"])
     best: list[tuple[int, int, dict, str]] = []   # (score, literal overlap, route, how)
     for r in routes:
-        if "ANY" not in r["verbs"] and call["method"] not in r["verbs"]:
+        if "ANY" not in r["verbs"] and call["method"] != "ANY" and call["method"] not in r["verbs"]:
             continue
         rs = r["segs"]
         how, score = None, 0
@@ -87,6 +88,8 @@ def match(call: dict, routes: list[dict]) -> tuple[list[dict], str, str | None]:
     how = top[0][3]
     if len(top) > 1:
         return [b[2] for b in top], POSSIBLE, how
+    if call["method"] == "ANY" and how == "exact":
+        how = "exact-path-only"      # the verb couldn't be read, so the path alone can't confirm the link
     return [top[0][2]], RESOLVED if how == "exact" else INFERRED, how
 
 
@@ -94,7 +97,7 @@ def link(g: Graph) -> dict:
     calls = g.meta.get("http_calls", [])
     routes = _routes(g)
     stats = {"http_calls": len(calls), "routes": len(routes), "matched": 0, "exact": 0, "suffix": 0,
-             "unknown-prefix": 0, "ambiguous": 0, "external": 0, "unmatched": 0, "unmatched_examples": []}
+             "unknown-prefix": 0, "exact-path-only": 0, "ambiguous": 0, "external": 0, "unmatched": 0, "unmatched_examples": []}
     for c in calls:
         label = f"{c['method']} {c['raw'] if c['host'] else c['path']}"
         if c["host"]:

@@ -602,6 +602,19 @@ class Walker:
             return self.m.consts[_text(n)]
         return None
 
+    def _method_of(self, opts: TSNode | None) -> str:
+        """The HTTP verb from a fetch/axios options argument. No options means GET. A verb we can't read (a variable,
+        an options object built elsewhere, a spread) is "ANY": the bridge then never claims a confirmed link."""
+        if opts is None:
+            return "GET"
+        if opts.type != "object":
+            return "ANY"
+        mnode = self._obj_prop(opts, ("method",))
+        if mnode is None:
+            return "ANY" if any(c.type == "spread_element" for c in opts.named_children) else "GET"
+        v = _string_value(mnode)
+        return v.upper() if v and v.upper() in {m.upper() for m in HTTP_METHODS} else "ANY"
+
     def _http(self, ch, argv, line, scope, ui) -> HttpCall | None:
         if not ch:
             return None
@@ -609,9 +622,7 @@ class Walker:
         method, url_node, opts = None, None, None
         if last in ("fetch", "$fetch", "ofetch", "useSWR", "useFetch") and len(ch) <= 2 and argv:
             url_node = argv[0]
-            opts = argv[1] if len(argv) > 1 and argv[1].type == "object" else None
-            mnode = self._obj_prop(opts, ("method",)) if opts is not None else None
-            method = (_string_value(mnode) or "GET").upper() if mnode is not None else "GET"
+            method = self._method_of(argv[1] if len(argv) > 1 else None)
         elif last.lower() in HTTP_METHODS and len(ch) >= 2 and argv:
             method = last.upper()
             if argv[0].type == "object":
@@ -620,8 +631,7 @@ class Walker:
                 url_node = argv[0]
         elif (last == "request" and len(ch) >= 2 or ch == ["axios"]) and argv and argv[0].type == "object":
             url_node = self._obj_prop(argv[0], ("url",))
-            mnode = self._obj_prop(argv[0], ("method",))
-            method = ((_string_value(mnode) if mnode is not None else None) or "GET").upper()
+            method = self._method_of(argv[0])
         if method is None or url_node is None:
             return None
         raw = self._url_of(url_node)

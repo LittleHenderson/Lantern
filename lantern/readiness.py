@@ -189,7 +189,9 @@ def check_security(sec: dict | None) -> list[dict]:
     for rank, pts in (("critical", 10), ("high", 6), ("medium", 4)):
         n = by.get(rank, 0)
         out.append(_check(f"sec-{rank}", f"No open {rank} findings", pts, "pass" if not n else "fail",
-                          f"{n} open {rank} finding{'s' if n != 1 else ''}" + (
+                          (f"{n} open {rank} finding{'s' if n != 1 else ''}" if n else
+                           f"no open {rank} findings from the scanners that ran (they recognize known patterns, "
+                           "not every flaw)") + (
                               f"; {sum(1 for f in acc if f['rank'] == rank)} accepted with a written reason"
                               if any(f['rank'] == rank for f in acc) else ""),
                           "" if not n else "Fix them (see the Findings tab), or record why the risk is acceptable "
@@ -268,8 +270,8 @@ def check_input(repo: Repo, shape: str) -> list[dict]:
 def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
     out = []
     # Published libraries and CLI tools declare version ranges and let installers resolve them.
-    py_manifest = shape not in ("library", "command-line tool") and repo.has(
-        "pyproject.toml", "requirements.txt", "setup.py", "Pipfile")
+    has_py = repo.has("pyproject.toml", "requirements.txt", "setup.py", "Pipfile")
+    py_manifest = shape not in ("library", "command-line tool") and has_py
     js_manifests = [f for f in repo.project_files if f.rsplit("/", 1)[-1] == "package.json"]
     want, have = [], []
     if py_manifest:
@@ -291,7 +293,9 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
                           "" if not miss else "Commit the lockfile your package manager writes (package-lock.json, "
                           "pnpm-lock.yaml, uv.lock, poetry.lock) so every install gets the same versions."))
     else:
-        out.append(_check("deps-lock", "Lockfile committed", 4, "skip", "no dependency manifest"))
+        out.append(_check("deps-lock", "Lockfile committed", 4, "skip",
+                          f"not expected: a {shape} usually leaves exact versions to whoever installs it"
+                          if has_py else "no dependency manifest"))
     audited = [t for t in (sec or {}).get("tools", []) if t.get("tool") == "pip-audit" and t.get("status") == "ok"]
     vuln = [f for f in (sec or {}).get("findings", []) if f["category"] == "dependency" and f.get("status") != "accepted"]
     if audited or vuln:
@@ -307,6 +311,9 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
         try:
             d = json.loads(repo.text(pj) or "{}")
         except json.JSONDecodeError:
+            d = None
+        if not isinstance(d, dict):
+            loose.append(f"{pj} could not be read (not valid JSON), so its versions were not checked")
             continue
         for sect in ("dependencies", "devDependencies"):
             for k, v in (d.get(sect) or {}).items():
