@@ -91,7 +91,7 @@ code: 18 of 18 links behaved (loopback, private addresses, look-alike hosts, `ht
 `..%2f` and an option-shaped branch refused; GitHub, GitLab, Codeberg and `git@host:owner/name` accepted;
 `LANTERN_GIT_HOSTS` only while set), the size cap refused a 1.25 MB repository at `LANTERN_CLONE_MAX_MB=1` and the folder
 was gone afterwards, the server answered 400/403/202 as designed, and the CLI analyzed a public repository end to end.
-Two things remained. Fixed in PR #PRNUM.
+Two things remained. Fixed in PR #15.
 
 | # | Finding | Severity | Status |
 |---|---|---|---|
