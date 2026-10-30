@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lantern"
-version = "0.0.1"
-description = "Phase 0 spike: map every call path in a Python repo, explain it in three lenses, and audit it."
+version = "0.1.0"
+description = "Map every call path in a full-stack app (Python + TypeScript/JavaScript), explain it in three lenses, and audit it."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "tree-sitter>=0.23",
   "tree-sitter-python>=0.23",
+  "tree-sitter-typescript>=0.23",
+  "tree-sitter-javascript>=0.23",
 ]
 
 [project.optional-dependencies]

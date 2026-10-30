@@ -39,7 +39,7 @@ def _split_cmd(argv: list[str]) -> tuple[list[str], list[str]]:
 
 
 def cmd_analyze(a, trace_cmd: list[str]) -> int:
-    from .python_frontend import build_graph
+    from .engine import build_graph
     from .report import write_report
     from .security import scan
     from .trace import merge_trace, run_trace

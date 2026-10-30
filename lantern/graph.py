@@ -45,6 +45,7 @@ class Edge:
     confidence: str = RESOLVED
     lines: list[int] = field(default_factory=list)  # call-site lines in src's file
     via: str | None = None       # how it was resolved, for debugging and trust
+    detail: str | None = None    # e.g. "PUT /api/items/{id}" on an HTTP edge, "onClick" on a UI edge
 
 
 class Graph:
@@ -69,12 +70,14 @@ class Graph:
 
     # ---- edges ----
     def add_edge(self, src: str, dst: str, kind: str = CALLS, confidence: str = RESOLVED,
-                 line: int | None = None, via: str | None = None) -> Edge:
+                 line: int | None = None, via: str | None = None, detail: str | None = None) -> Edge:
         key = (src, dst, kind)
         e = self._edges.get(key)
         if e is None:
-            e = Edge(src=src, dst=dst, kind=kind, confidence=confidence, via=via)
+            e = Edge(src=src, dst=dst, kind=kind, confidence=confidence, via=via, detail=detail)
             self._edges[key] = e
+        elif detail and not e.detail:
+            e.detail = detail
         elif CONFIDENCE_RANK[confidence] < CONFIDENCE_RANK[e.confidence]:
             e.confidence, e.via = confidence, via or e.via
         if line is not None and line not in e.lines:

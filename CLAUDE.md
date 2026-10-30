@@ -1,28 +1,36 @@
 # CLAUDE.md
 
-Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.1.pdf`;
-this repo is its **Phase 0 spike** (Python engine, scanners, Three-Lens explainer, static HTML report).
+Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.2.pdf`.
+This repo is Phase 0 plus the full-stack layer: Python and TypeScript/JavaScript engines, the API bridge
+between them, scanners, the Three-Lens explainer, and a static HTML report.
+
+**Audience:** AI-assisted ("vibe") coders whose apps are usually full stack, often TypeScript. The
+product's job is to make their code understandable and defensible to skeptical engineers.
 
 ## Non-negotiable principles (from the spec)
 
-1. **Facts from tools, words from models.** Call edges, findings, and reachability come from
-   deterministic code. Models only explain, and never create, dismiss, or close a finding.
+1. **Facts from tools, words from models.** Call edges, HTTP links, findings, and reachability come
+   from deterministic code. Models only explain, and never create, dismiss, or close a finding.
 2. **Show confidence, never fake certainty.** Every edge has `observed | resolved | inferred | possible`
-   plus a `via` saying how it was resolved. A new resolution rule gets a confidence level backed by
-   `bench/` numbers: "inferred" (UI: "likely") needs about 90%+ measured precision across repos.
+   plus a `via` saying how it was resolved. A new rule gets a confidence level backed by `bench/`
+   numbers: "inferred" (UI: "likely") needs about 90%+ measured precision across repos.
    Unresolvable calls are counted in `graph.unresolved`, not guessed.
 3. **Every Lens 3 pair must anchor** to an allowed symbol, a line range inside the unit, or a term found
    in the source or `GLOSSARY`. `explain.validate()` enforces this; don't loosen it to make a model pass.
-4. **Lantern must pass its own audit.** `lantern analyze .` should report no critical/high/medium.
+4. **Lantern must pass its own audit.** `lantern analyze .` should report no critical/high/medium. CI
+   enforces it. (It caught two false positives in the web rules during development.)
+5. **Heuristic checks say so.** Graph/pattern-based security rules that can misfire set
+   `tool_confidence: LOW`; the viewer labels them "heuristic".
 
 ## Commands
 
 ```bash
 pip install -e ".[scan,dev]"
-python -m pytest -q                                   # ~2 s, 48 tests
-lantern analyze tests/fixtures/shop --out /tmp/shop   # end to end on the fixture
+python -m pytest -q                                   # ~4 s, 68 tests
+lantern analyze tests/fixtures/shop --out /tmp/shop   # React + FastAPI sample, end to end
+lantern analyze tests/fixtures/nextapp --out /tmp/nx  # Next.js + Supabase sample
 python examples/make_demo.py /tmp/demo                # report with hand-written explanations, no key
-python bench/run_bench.py /tmp/bench                  # clones 6 public repos; ~2 min with tracing
+python bench/run_bench.py /tmp/bench                  # clones 7 public repos; ~2 min with tracing
 node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS error check
                                                       # (needs Playwright + Chromium)
 ```
@@ -31,61 +39,81 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 
 | File | Role |
 |---|---|
-| `lantern/graph.py` | Unified Code Graph: `Node`, `Edge`, confidence ranks, JSON round-trip, `stats()` |
-| `lantern/python_frontend.py` | Discover → tree-sitter parse (`_visit_body`, `CallSite`s) → `Resolver` → `build_graph()` |
-| `lantern/tracehook.py` | Runs a program with `sys.monitoring`, records repo-internal caller→callee pairs |
-| `lantern/trace.py` | Runs the hook in a subprocess, maps pairs to nodes, collapses wrapper hops, upgrades edges to `observed` |
-| `lantern/security.py` | Bandit, pip-audit, secrets → findings pinned to nodes → BFS reachability from entry points → rank |
-| `lantern/explain.py` | Prompt, `validate()`, retry, bottom-up ordering (`select_nodes`), cache, metaphor world |
+| `lantern/engine.py` | **Entry point for analysis**: Python frontend → JS/TS frontend → bridge. Use `engine.build_graph`, not the per-language builders. |
+| `lantern/graph.py` | Unified Code Graph: `Node`, `Edge` (`via`, `detail`), confidence ranks, JSON round-trip, `stats()` |
+| `lantern/python_frontend.py` | Python: discover → tree-sitter parse (`_visit_body`, `CallSite`s) → `Resolver` |
+| `lantern/js_frontend.py` | TS/JS: `Walker` (defs, imports/exports, refs, HTTP calls, route/page registrations) → `SpecResolver` (relative, tsconfig paths, `@/`) → `JSResolver` (barrels, classes, `this`) → entries |
+| `lantern/bridge.py` | Links `g.meta["http_calls"]` to route entry points by method + path segments; exact / suffix / unknown-prefix / ambiguous |
+| `lantern/tracehook.py`, `trace.py` | Python runtime tracing (`sys.monitoring`), wrapper-hop collapse, upgrade edges to `observed` |
+| `lantern/security.py` | Bandit, pip-audit, secrets → `websec.scan_web` → pin to nodes → reachability + `ui_path` → rank |
+| `lantern/websec.py` | Full-stack rules: `LW-*` (public-env secrets, service-role JWT, CORS, Firebase, Supabase RLS, missing auth) and `LJ-*` JS patterns |
+| `lantern/explain.py` | Prompt (language-aware, includes HTTP links), `validate()`, retry, bottom-up `select_nodes`, cache |
 | `lantern/providers.py` | Anthropic, OpenAI-compatible (OpenAI, OpenRouter, Mistral, Gemini, Ollama, LM Studio, vLLM), fixture stub |
-| `lantern/report.py` + `viewer/report.html` | Bundle JSON into one self-contained HTML file (vanilla JS, no build step) |
+| `lantern/report.py` + `viewer/report.html` | One self-contained HTML file (vanilla JS): pages/routes, path tree with HTTP and click hops, flowchart, lenses, findings with UI paths |
 | `lantern/cli.py` | `analyze`, `trace`, `explain`, `report`; results in `PATH/.lantern/` |
-| `tests/fixtures/shop` | Tiny app with planted SQL injection, shell injection, and MD5 for end-to-end tests |
-| `bench/` | Accuracy benchmark and its write-up; `results.json` is the latest run |
+| `tests/fixtures/shop` | Python backend (`shop/`) + React/Vite frontend (`web/`) with planted shell/SQL injection, MD5, XSS, public secret |
+| `tests/fixtures/nextapp` | Next.js + Supabase with an unprotected DELETE route, a table without RLS, a public service-role var |
+| `bench/` | Accuracy benchmark and write-up; `results.json` is the latest run |
 
-## How resolution works (python_frontend.py)
+Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.name>` (module: `js:<path>`);
+external `ext:<pkg.member>` or `ext:HTTP <METHOD> <path-or-host>`.
 
-The walker emits `CallSite`s with a `kind`:
-`call` (normal), `depends` (FastAPI `Depends(fn)`), `depends-alias` (param typed with an `Annotated`
-alias defined elsewhere), `decorator-result` (the closure a decorator factory returns), `attr`
-(attribute read; kept only if it hits a `@property`), `with` / `with-obj` (`__enter__`/`__exit__`).
+## How Python resolution works
 
-`Resolver.resolve_call` handles `call`; `resolve_special` handles the rest. Typing sources, in order:
-`self`/`cls` → class; `self.x = Foo()` → attr type; `x = Foo()` / `x = make()` (return type) / param
-hints / `with Foo() as x` → local type; pytest fixture by parameter name. Imports are canonicalized
-through a suffix index so `from app import crud` finds `backend.app.crud`; stdlib names are never
-remapped onto repo files.
+The walker emits `CallSite`s with a `kind`: `call`, `depends` (FastAPI `Depends(fn)`), `depends-alias`
+(`Annotated` alias defined elsewhere), `decorator-result` (closure a decorator factory returns), `attr`
+(kept only if it hits a `@property`), `with` / `with-obj`. Typing sources: `self`/`cls`; `self.x = Foo()`;
+`x = Foo()` / `x = make()` (return type) / param hints / `with Foo() as x`; pytest fixtures by name.
+Imports go through a suffix index (`from app import crud` → `backend.app.crud`); stdlib names never remap.
 
-To add a rule: write a failing test in `tests/test_frontend.py` with a tiny repo via `_write()`, give
-the edge a distinct `via`, then run `bench/run_bench.py` and check the per-method table before choosing
-its confidence.
+## How JS/TS resolution works
 
-## Phase 1 backlog (priority order)
+`Walker` records defs (functions, arrow functions assigned to names, `memo`/`forwardRef` wrappers,
+classes and methods, inline route handlers), imports/exports (default, named, namespace, `export *`,
+`export { a as b } from`), and refs with kinds `call`, `new`, `jsx` (rendering `<Comp/>`), `callback`
+(function passed by name; `ui` set to `onClick` etc. when inside an event prop). Anonymous inline
+functions are attributed to the enclosing named function. HTTP calls: `fetch`/`$fetch`/`useSWR`,
+`x.get|post|...(url)`, `x.get({url})` (generated clients), `axios({url, method})`; URLs from strings,
+template literals (`${id}` → `{}`), `+` concatenation, and module-level string constants.
+
+Entries: Next.js (`app/**/page`, `app/**/route` exports, `pages/**`, `pages/api/**`, only when the
+nearest `package.json` depends on `next`), `createFileRoute`, React Router `<Route>` and route objects,
+`createRoot().render` (SPA start), Express-style `app.get('/x', handler)`, test files.
+
+To add a rule (either language): write a failing test with a tiny repo via `_write()`
+(`tests/test_frontend.py` for Python, `tests/test_fullstack.py` for JS/bridge/web security), give the
+edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before choosing its confidence.
+
+## Backlog (priority order)
 
 1. **Run real models through `lantern explain`** on the benchmark repos with two providers; record the
-   first-try anchor pass rate (Phase 0 exit criterion, target 90%). Tune `SYSTEM` prompt from failures.
-2. **Pyright for type-aware resolution** (spec 6.3) to lift recall, especially attributes typed only
-   by annotations on class fields.
-3. **Framework adapters:** Flask/Django URL routing to view functions, Django `urls.py`, Celery tasks,
-   Typer/argparse subcommands, `app.include_router(prefix=...)` for FastAPI global prefixes.
-4. **Deployment Readiness Score** (spec section 10): deterministic checks for secrets/config, lockfile,
-   tests, Dockerfile, CI, logging, timeouts.
-5. **Evidence Report** (spec section 11): commit-pinned summary with provenance and a Limits section.
-6. **PWA shell + local agent pairing** (spec sections 5 and 12). The current viewer becomes the Atlas
-   screen; keep it framework-free or port to SvelteKit/React as the spec suggests.
-7. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
-   Bandit and pip-audit are fine locally.
+   first-try anchor pass rate (target 90%). Tune `SYSTEM` from failures, especially on JS components.
+2. **Deployment Readiness Score** (spec section 10) across both stacks: env/secrets handling, lockfiles,
+   tests, Dockerfile, CI, logging, timeouts, `vercel.json`/`fly.toml`/compose awareness.
+3. **More full-stack frameworks:** FastAPI `include_router(prefix=...)` (would turn the template's suffix
+   matches into exact ones), Supabase client calls (`supabase.from('t')` as a data-layer edge with RLS
+   status), tRPC and Next.js server actions (`"use server"`), Remix loaders/actions, SvelteKit, Django.
+4. **Type-aware resolution:** Pyright for Python; the TypeScript compiler API (or `tsserver`) for JS,
+   to resolve `useQuery`/`useMutation` results, hooks returning objects, and props typed by interface.
+5. **JS runtime tracing** (V8 inspector or a Babel/esbuild transform) so frontend edges get the same
+   precision measurement Python has.
+6. **Evidence Report** (spec section 11): commit-pinned summary with provenance and a Limits section.
+7. **PWA shell + local agent pairing** (spec sections 5 and 12). The current viewer becomes the Atlas.
+8. **Rust, then C++** frontends (spec 6.3), reusing the same graph, bridge, and viewer.
+9. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
 
 ## Known gaps
 
-* Callbacks passed as values (`ctx.invoke(f)`, `map(fn, ...)`) aren't edges yet.
-* Calls into libraries that call back into the repo (framework dispatch) only show when traced.
-* `pip-audit` only reads `requirements*.txt`; `pyproject.toml`/lockfiles are Phase 1.
+* JS: hook results (`const m = useMutation(...)`, `m.mutate()`) and destructured hook returns are
+  unresolved; React Query `mutationFn`/`queryFn` callbacks are linked, which covers most real paths.
+* Calls into libraries that call back into the repo (framework dispatch) only show when traced (Python).
+* `pip-audit` only reads `requirements*.txt`; no npm audit yet (`package-lock.json`/`pnpm-lock.yaml`).
 * The report embeds source by default; `--privacy structure` omits it.
-* Explanations exist only for the selected nodes (entry points + 3 levels, capped at 40 by default).
+* Explanations exist only for selected nodes (entry points + 3 levels, capped at 40 by default).
 
 ## Conventions
 
-* Python 3.11+, standard library plus tree-sitter; no network calls except model providers.
+* Python 3.11+, standard library plus tree-sitter grammars; no network calls except model providers.
 * Keep `report.html` a single self-contained file that works offline and on a phone.
-* Plain language in user-facing text; technical detail lives in Lens 1 and `via`.
+* Plain language in user-facing text; technical detail lives in Lens 1, `via`, and `detail`.
+* Never commit real-looking secrets in fixtures (GitHub push protection); build them at test time.

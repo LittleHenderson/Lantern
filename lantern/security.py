@@ -28,7 +28,10 @@ SECRET_PATTERNS = [
     ("anthropic-key", re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b")),
     ("openai-key", re.compile(r"\bsk-(proj-)?[A-Za-z0-9]{32,}\b")),
 ]
-SECRET_EXTS = {".py", ".env", ".cfg", ".ini", ".toml", ".yaml", ".yml", ".json", ".txt", ".sh"}
+SECRET_EXTS = {".py", ".env", ".cfg", ".ini", ".toml", ".yaml", ".yml", ".json", ".txt", ".sh",
+               ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro", ".html",
+               ".rb", ".go", ".rs", ".java", ".kt", ".swift", ".php", ".tf", ".properties", ".xml"}
+SECRET_SKIP_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "poetry.lock", "uv.lock"}
 
 
 def _fid(*parts) -> str:
@@ -116,6 +119,8 @@ def run_secrets(repo: Path) -> tuple[list[dict], dict]:
             continue
         if p.suffix not in SECRET_EXTS and not p.name.startswith(".env"):
             continue
+        if p.name in SECRET_SKIP_FILES or p.name.endswith((".min.js", ".map")):
+            continue
         try:
             text = p.read_text(errors="replace")
         except OSError:
@@ -162,14 +167,15 @@ def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
     return best
 
 
-def reachability(g: Graph, include_tests: bool = False) -> dict[str, dict]:
+def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None = None) -> dict[str, dict]:
     """Multi-source BFS from entry points. Returns node id -> {entry, kind, path}."""
     adj: dict[str, list[str]] = {}
     for e in g.call_edges():
         adj.setdefault(e.src, []).append(e.dst)
     seen: dict[str, dict] = {}
     q: deque[str] = deque()
-    entries = [n for n in g.entry_points() if include_tests or n.entry["kind"] != "test"]
+    entries = [n for n in g.entry_points() if (include_tests or n.entry["kind"] != "test")
+               and (kinds is None or n.entry["kind"] in kinds)]
     # untrusted-input entries first so their paths win ties
     entries.sort(key=lambda n: 0 if n.entry["kind"] in UNTRUSTED_ENTRY_KINDS else 1)
     for n in entries:
@@ -193,6 +199,8 @@ def reachability(g: Graph, include_tests: bool = False) -> dict[str, dict]:
 
 
 def rank(f: dict) -> str:
+    if f.get("fixed_rank"):
+        return f["fixed_rank"]
     sev = f["tool_severity"]
     reach = f.get("reachable")
     untrusted = reach and reach["kind"] in UNTRUSTED_ENTRY_KINDS
@@ -219,15 +227,23 @@ def scan(g: Graph) -> dict:
         f, info = fn(repo)
         findings += f
         tools.append(info)
+    from .websec import scan_web
+    wf, wt = scan_web(g)
+    findings += wf
+    tools += wt
     reach = reachability(g)
+    ui_reach = reachability(g, kinds={"page", "main"})
     test_reach = reachability(g, include_tests=True)
+    from .js_frontend import TEST_RE as JS_TEST_RE
     from .python_frontend import TEST_FILE_RE
     for f in findings:
-        f["in_tests"] = bool(f["file"] and TEST_FILE_RE.search(f["file"]))
+        f["in_tests"] = bool(f["file"] and (TEST_FILE_RE.search(f["file"]) or JS_TEST_RE.search(f["file"])))
         f["node"] = _node_at(g, f["file"], f["line"])
         r = reach.get(f["node"]) if f["node"] else None
         f["reachable"] = r
         f["reachable_from_tests_only"] = bool(not r and f["node"] in test_reach)
+        u = ui_reach.get(f["node"]) if f["node"] else None
+        f["ui_path"] = u["path"] if u else None
         f["rank"] = "low" if f["in_tests"] and f["category"] == "code" else rank(f)
         f["status"] = "open"
     findings.sort(key=lambda f: (f["in_tests"], RANK_ORDER[f["rank"]], f["file"] or "", f["line"] or 0))

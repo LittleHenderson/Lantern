@@ -26,7 +26,8 @@ PY_LANGUAGE = Language(tsp.language())
 SKIP_DIRS = {
     ".git", ".hg", ".svn", "__pycache__", ".venv", "venv", "env", ".env", ".tox", ".nox",
     "node_modules", "build", "dist", ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages",
-    ".eggs", ".lantern",
+    ".eggs", ".lantern", ".next", ".nuxt", ".svelte-kit", ".turbo", ".vercel", ".expo", "coverage",
+    ".parcel-cache", ".angular", "bower_components", "vendor",
 }
 
 BUILTIN_NAMES = set(dir(builtins))

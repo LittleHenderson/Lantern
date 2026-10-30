@@ -37,6 +37,12 @@ GLOSSARY = {
     "validation", "authentication", "authorization", "session", "cookie", "password hash", "salt",
     "md5", "sha256", "bcrypt", "argon2", "cli", "command-line argument", "test", "assertion",
     "side effect", "state", "global variable", "scope", "closure", "lambda", "type hint",
+    # web / full stack
+    "component", "react component", "hook", "props", "render", "jsx", "event handler", "click handler",
+    "fetch", "promise", "api route", "api call", "mutation", "form", "form submission", "page", "router",
+    "frontend", "backend", "server", "browser", "cors", "xss", "cross-site scripting", "local storage",
+    "environment variable", "row level security", "middleware", "dependency injection", "rest api",
+    "http method", "get request", "post request", "put request", "delete request", "url", "query string",
 }
 
 SYSTEM = """You explain code to people learning to understand software they built with AI help.
@@ -124,8 +130,10 @@ def build_context(g: Graph, nid: str, findings: list[dict], done: dict[str, dict
 
 def render_prompt(ctx: Context, g: Graph) -> str:
     n = ctx.node
+    lang = "TypeScript/JavaScript" if (n.file or "").endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")) else "Python"
     parts = [
         f"METAPHOR WORLD: {ctx.metaphor}",
+        f"LANGUAGE: {lang}",
         f"UNIT: {n.qualname}  ({n.kind}, {n.file} lines {ctx.line_range[0]}-{ctx.line_range[1]})",
         f"SIGNATURE: {n.signature or ''}",
     ]
@@ -136,6 +144,14 @@ def render_prompt(ctx: Context, g: Graph) -> str:
     parts.append("SOURCE:\n" + (ctx.source or "(source unavailable)"))
     if ctx.callers:
         parts.append("CALLED BY: " + ", ".join(g.nodes[c].qualname for c in ctx.callers[:10] if c in g.nodes))
+    http = [e for e in g.callees(n.id) if (e.via or "").startswith("http-")]
+    if http:
+        parts.append("MAKES HTTP REQUESTS (frontend to backend):\n" + "\n".join(
+            f"  - {e.detail} -> handled by {g.nodes[e.dst].qualname if e.dst in g.nodes else e.dst[4:]}" for e in http))
+    served = [e for e in g.callers(n.id) if (e.via or "").startswith("http-")]
+    if served:
+        parts.append("CALLED OVER HTTP BY THE FRONTEND FROM: " + ", ".join(
+            g.nodes[e.src].qualname for e in served[:8] if e.src in g.nodes))
     if ctx.callees:
         lines = []
         for c in ctx.callees[:20]:
@@ -165,7 +181,7 @@ def _code_identifiers(ctx: Context) -> set[str]:
     """Identifiers that look like code (snake_case, CamelCase, dotted) and so don't belong in Lens 2."""
     out = set()
     for q in ctx.allowed_symbols.values():
-        for part in q.split("."):
+        for part in re.split(r"[./:]+", q):
             if "_" in part.strip("_") or (part[:1].isupper() and any(c.isupper() for c in part[1:])):
                 out.add(part)
     return out

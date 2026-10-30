@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from lantern.python_frontend import build_graph
+from lantern.engine import build_graph
 from lantern.security import rank, reachability, scan
 
 FIX = Path(__file__).parent / "fixtures" / "shop"
@@ -56,3 +56,14 @@ def test_builtin_secret_scan(tmp_path):
     secrets = [f for f in s["findings"] if f["category"] == "secret"]
     assert secrets and secrets[0]["rank"] == "critical"
     assert secrets[0]["snippet"] == "[redacted]"
+
+
+def test_secret_scan_covers_frontend_files(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "api.ts").write_text('const key = "sk_live_' + "a" * 24 + '"\n')
+    (tmp_path / "src" / "Pay.tsx").write_text('export const t = "ghp_' + "b" * 36 + '"\n')
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "x.js").write_text('k = "sk_live_' + "c" * 24 + '"\n')
+    g = build_graph(tmp_path)
+    files = sorted(f["file"] for f in scan(g)["findings"] if f["category"] == "secret")
+    assert files == ["src/Pay.tsx", "src/api.ts"]

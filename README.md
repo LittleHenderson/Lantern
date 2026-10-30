@@ -1,35 +1,37 @@
-# Lantern (Phase 0 spike)
+# Lantern
 
-**See every path your code takes.** Lantern maps the call graph of a Python repository, explains each
-function three ways, audits it with real security scanners, and ranks each finding by whether an
-entry point (a web route, a CLI command, `main`) can actually reach it.
+**See every path your code takes, from the button to the database.** Lantern maps a full-stack app
+(Python and TypeScript/JavaScript), links the frontend's API calls to the backend routes that serve
+them, explains each function three ways, and audits it with security checks ranked by whether a user
+can actually reach the problem.
 
-> Working title. This is the Phase 0 spike from the product spec in [`docs/`](docs/). It proves the
-> engine and the explanation format before the PWA, the cloud mode, and the Rust/C++ frontends are built.
+> Working title. Built from the product spec in [`docs/`](docs/Lantern_Product_Spec_v0.2.pdf). Status: Phase 0 spike plus the
+> full-stack layer (v0.1). No PWA or cloud mode yet.
+
+```
+/admin page → BackupButton ─on click→ start → runBackup ─HTTP POST /backup→ backup() → subprocess(shell=True)   CRITICAL
+```
+
+That's a real path from the sample app in `tests/fixtures/shop`: a React button whose click ends up in a
+shell command on the Python server. Lantern finds it with deterministic analysis and shows it as one chain.
 
 ## The core idea
 
-**Facts come from tools; words come from models.** The call graph, the security findings, and the
-reachability paths are computed by parsers and scanners, so they're repeatable. A model of your
-choosing only explains them, and every plain-English phrase it writes must anchor to a real symbol,
-line, or term in your code, or the explanation is rejected.
+**Facts come from tools; words come from models.** The call graph, the frontend-to-backend links, the
+security findings, and the reachability paths are computed by parsers and scanners, so they're
+repeatable. A model of your choosing only explains them, and every plain-English phrase it writes must
+anchor to a real symbol, line, or term in your code, or the explanation is rejected.
 
 ## Quick start
 
 ```bash
 pip install -e ".[scan,dev]"            # Python 3.11+
 
-lantern analyze path/to/repo            # graph + security scan + report
-open path/to/repo/.lantern/report.html  # self-contained, works offline
+lantern analyze path/to/repo            # graph + bridge + security scan + report
+open path/to/repo/.lantern/report.html  # self-contained, works offline and on a phone
 ```
 
-Record what actually runs (marks edges as "seen running"):
-
-```bash
-lantern analyze path/to/repo --trace -- python -m pytest -q
-# or after analyze:
-lantern trace path/to/repo -- python app.py
-```
+Record what actually runs (Python): `lantern analyze path/to/repo --trace -- python -m pytest -q`
 
 Add Three-Lens explanations with your own key or a local model:
 
@@ -38,53 +40,54 @@ lantern explain path/to/repo --estimate                          # token estimat
 export ANTHROPIC_API_KEY=...
 lantern explain path/to/repo --model anthropic/<model-name>
 lantern explain path/to/repo --model ollama/<model-name>          # local, nothing leaves your machine
-lantern explain path/to/repo --model openai-compatible/<model> --base-url http://localhost:8000/v1
 ```
 
 Providers: `anthropic`, `openai`, `openrouter`, `mistral`, `gemini` (keys from `<NAME>_API_KEY`),
-`ollama`, `lmstudio`, and any `openai-compatible` endpoint. Explanations are cached by a hash of each
-function's code, so unchanged functions are never paid for twice.
+`ollama`, `lmstudio`, and any `openai-compatible` endpoint (`--base-url`). Explanations are cached by a
+hash of each function's code.
 
-Try it without a key: `python examples/make_demo.py demo-out` builds a report for the small
-`tests/fixtures/shop` app using hand-written explanations that pass the same validator.
+Try it without a key: `python examples/make_demo.py demo-out` builds the report for the sample
+full-stack app with hand-written explanations that pass the same validator.
 
-## What you get
+## What it understands
 
-| | |
+| Layer | Coverage |
 |---|---|
-| **Map** | Every web route, CLI command, and program start, with the call path beneath it as an expandable tree (phone-friendly) or a flowchart. Line style shows confidence: seen running, confirmed, likely, possible. |
-| **Three lenses** | 1 · Technical, 2 · Everyday (no jargon, one example, one analogy from a single metaphor world per repo), 3 · Mapped (each plain phrase paired 1:1 with the technical term, symbol, or line it stands for). |
-| **Findings** | Bandit, pip-audit (requirements files), and secret detection (gitleaks if installed, built-in patterns otherwise). Ranked critical/high/medium/low by severity *and* reachability, with the exact path from the entry point. Test-code findings are counted separately. |
+| **Python** | Scopes, imports (including `backend/app` subproject roots), classes and MRO, `self`/`super()`, overrides, type hints, return types, properties, `with`, decorator factories, pytest fixtures, FastAPI `Depends()`/`Annotated`, router prefixes. Entry points: FastAPI/Flask routes, Click/Typer commands, `__main__`, console scripts. |
+| **TypeScript / JavaScript** | ES modules, `tsconfig` path aliases (`@/…`), barrel re-exports (`export *`), classes and `this`, React components and what they render, event handlers (`onClick`), callbacks passed as props. Entry points: Next.js pages and route handlers (app and pages router), TanStack Router and React Router routes, SPA mounts, Express/Hono/Fastify routes. |
+| **The bridge** | `fetch`, axios, and generated API clients matched to backend routes by method and path, including global prefixes like `/api/v1` added elsewhere. External services and calls with no matching route are shown as such. |
+| **Security** | Bandit, pip-audit, secret detection across Python and frontend files, plus full-stack checks: secrets in browser-exposed env vars (`NEXT_PUBLIC_`, `VITE_`, …), committed Supabase service-role keys, Supabase tables without row-level security, open Firebase rules, wildcard CORS, data-changing routes the UI calls with no login check, and JS code patterns (`eval`, raw HTML, shell/SQL built from strings, TLS off). Every finding is ranked by severity and reachability and shows the path from the page that triggers it. |
 
-## How the engine resolves calls
+## Measured accuracy
 
-Tree-sitter parses every file; a resolver binds names through scopes, imports (including subproject
-roots like `backend/app`), classes and their MRO. It understands `self`/`cls`, `super()`, overrides
-(as "possible"), constructors, parameter type hints, function return types, `with` blocks, properties,
-decorator factories (`@click.command()`), pytest fixtures, and FastAPI `Depends()` including
-`Annotated` aliases. Calls it can't trace are counted as unresolved, never guessed silently.
+`python bench/run_bench.py WORKDIR`. Full method and tables: [`bench/README.md`](bench/README.md).
 
-## Measured accuracy (Phase 0)
+**Python call graph** (each repo's test suite runs under the tracer and is compared to the static graph):
 
-Run with `python bench/run_bench.py WORKDIR`. Each repo's own test suite runs under the tracer, and the
-static graph is compared to what actually executed. Full method and numbers: [`bench/README.md`](bench/README.md).
+| Repo | Lines | Graph time | Confirmed edges correct* | Likely edges correct* | Recall |
+|---|---:|---:|---:|---:|---:|
+| click 8.1.8 | 17.9k | 0.4 s | 96.7% | 90.4% | 75.4% |
+| flask (main) | 18.4k | 0.5 s | 95.5% | 97.0% | 57.0% |
+| rich 13.9.4 | 39.5k | 1.2 s | 96.6% | 98.1% | 70.9% |
 
-| Repo | Lines | Graph time | Confirmed edges correct* | Likely edges correct* | Possible edges correct* | Recall |
-|---|---:|---:|---:|---:|---:|---:|
-| click 8.1.8 | 17.9k | 0.33 s | 96.7% | 90.4% | 61.0% | 75.4% |
-| flask (main) | 18.4k | 0.32 s | 95.5% | 97.0% | 48.7% | 57.0% |
-| rich 13.9.4 | 39.5k | 0.75 s | 96.6% | 98.1% | 57.7% | 70.9% |
+\*Lower bound: tests don't run every branch.
 
-\*Lower bound: tests don't run every branch, so some correct edges are never observed.
+**Frontend → backend bridge:**
+
+| Repo | Stack | Pages / routes found | Calls linked | Verified |
+|---|---|---:|---:|---|
+| full-stack-fastapi-template | React + FastAPI | 9 / 23 | 23 of 23 to its API | all 23 by name (`ItemsService.updateItem` → `update_item`) |
+| taxonomy | Next.js | 14 / 8 | 5 of 5 to its API (+1 external) | all 5 by hand against every `fetch` in the repo |
 
 ## Privacy
 
 Everything runs locally. `report.html` embeds function source by default; use
-`lantern analyze --privacy structure` to leave source out. If you use a cloud model, the source of each
-explained function is sent to that provider. Use a local model to keep it on your machine.
+`lantern analyze --privacy structure` to leave it out. With a cloud model, the source of each explained
+function is sent to that provider; use a local model to keep it on your machine.
 
 ## Status and limits
 
-Phase 0 spike. Python only; no PWA, cloud mode, or deployment-readiness score yet. Very dynamic code
-(`getattr`, plugin registries, monkey-patching) lowers recall; the report says how many calls were
-unresolved. See [`CLAUDE.md`](CLAUDE.md) for architecture and the Phase 1 backlog.
+No PWA, cloud mode, or deployment-readiness score yet. Runtime tracing is Python-only. Very dynamic
+code (`getattr`, plugin registries, framework dispatch) lowers recall; the report counts what it
+couldn't resolve. Full-stack security checks are pattern- and graph-based; the "no login check" rule
+is marked as a heuristic in the report. See [`CLAUDE.md`](CLAUDE.md) for architecture and the backlog.

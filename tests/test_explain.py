@@ -7,7 +7,7 @@ import pytest
 from lantern.explain import (Context, build_context, parse_json, render_prompt, run, select_nodes,
                              validate)
 from lantern.providers import FixtureProvider
-from lantern.python_frontend import build_graph
+from lantern.engine import build_graph
 from lantern.security import scan
 
 FIX = Path(__file__).parent / "fixtures" / "shop"
@@ -23,7 +23,7 @@ def good_record(user: str) -> dict:
     """A stub 'model' that answers correctly using only what the prompt gives it."""
     unit = re.search(r"^UNIT: (\S+)", user, re.M).group(1)
     lo, hi = map(int, re.search(r"lines (\d+)-(\d+)", user).groups())
-    sym = re.search(r"ALLOWED SYMBOLS.*?\n\s+(py:\S+)", user, re.S).group(1)
+    sym = re.search(r"ALLOWED SYMBOLS.*?\n\s+((?:py|js):\S+)", user, re.S).group(1)
     fids = re.findall(r"id=([0-9a-f]{12})", user)
     text = "The helper at the counter takes a request, checks it, and hands back an answer."
     return {

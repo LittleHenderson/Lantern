@@ -20,7 +20,7 @@ import sys
 import time
 from pathlib import Path
 
-from lantern.python_frontend import build_graph
+from lantern.engine import build_graph  # Python + TypeScript + API bridge
 from lantern.security import scan
 from lantern.trace import merge_trace, run_trace
 
@@ -32,6 +32,7 @@ REPOS = [
     ("requests", "https://github.com/psf/requests", "v2.32.3", False, None),
     ("httpie", "https://github.com/httpie/cli", "3.2.4", False, None),
     ("fastapi-template", "https://github.com/fastapi/full-stack-fastapi-template", "master", False, None),
+    ("taxonomy", "https://github.com/shadcn-ui/taxonomy", "main", False, None),
 ]
 
 
@@ -73,6 +74,17 @@ def edge_metrics(g, trace_data):
     return m
 
 
+def name_verified(g) -> str | None:
+    """For generated API clients (ItemsService.updateItem -> update_item), check each link by name."""
+    import re
+    links = [e for e in g.call_edges() if (e.via or "").startswith("http-") and not e.dst.startswith("ext:")]
+    gen = [e for e in links if ".gen" in (g.nodes[e.src].file or "")]
+    if not gen:
+        return None
+    ok = sum(1 for e in gen if re.sub(r"(?<!^)(?=[A-Z])", "_", g.nodes[e.src].name).lower() == g.nodes[e.dst].name)
+    return f"{ok}/{len(gen)}"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("work")
@@ -105,6 +117,14 @@ def main():
                "graph_s": round(t_graph, 2), "scan_s": round(t_scan, 2), "findings": sec["counts"]}
         for n in g.entry_points():
             row["entry_kinds"][n.entry["kind"]] = row["entry_kinds"].get(n.entry["kind"], 0) + 1
+        row["languages"] = g.meta.get("languages", {})
+        br = g.meta.get("bridge", {})
+        if br.get("http_calls"):
+            row["bridge"] = {k: v for k, v in br.items() if k != "unmatched_examples"}
+            row["bridge"]["links"] = sorted(
+                f"{e.detail}  {g.nodes[e.src].qualname} -> {g.nodes[e.dst].qualname}"
+                for e in g.call_edges() if (e.via or "").startswith("http-") and not e.dst.startswith("ext:"))
+            row["bridge"]["name_verified"] = name_verified(g)
         if test_cmd and not a.no_trace:
             if install:
                 sh([sys.executable, "-m", "pip", "install", "-q", "--break-system-packages", "-e", str(repo)])

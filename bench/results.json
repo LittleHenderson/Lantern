@@ -17,8 +17,8 @@
    "possible": 142
   },
   "unresolved": 662,
-  "graph_s": 0.33,
-  "scan_s": 1.38,
+  "graph_s": 0.43,
+  "scan_s": 1.85,
   "findings": {
    "critical": 2,
    "high": 0,
@@ -26,7 +26,13 @@
    "low": 36,
    "in_tests": 777
   },
-  "trace_s": 1.4,
+  "languages": {
+   "python": {
+    "files": 70,
+    "lines": 17899
+   }
+  },
+  "trace_s": 1.5,
   "trace": {
    "observed_edges": 2519,
    "static_found": 1899,
@@ -86,8 +92,8 @@
    "possible": 196
   },
   "unresolved": 1273,
-  "graph_s": 0.32,
-  "scan_s": 1.52,
+  "graph_s": 0.51,
+  "scan_s": 1.99,
   "findings": {
    "critical": 0,
    "high": 1,
@@ -95,7 +101,13 @@
    "low": 11,
    "in_tests": 1070
   },
-  "trace_s": 2.4,
+  "languages": {
+   "python": {
+    "files": 83,
+    "lines": 18416
+   }
+  },
+  "trace_s": 2.6,
   "trace": {
    "observed_edges": 2159,
    "static_found": 1231,
@@ -151,8 +163,8 @@
    "possible": 86
   },
   "unresolved": 1243,
-  "graph_s": 0.75,
-  "scan_s": 5.97,
+  "graph_s": 1.23,
+  "scan_s": 7.65,
   "findings": {
    "critical": 0,
    "high": 0,
@@ -160,7 +172,13 @@
    "low": 72,
    "in_tests": 1292
   },
-  "trace_s": 5.7,
+  "languages": {
+   "python": {
+    "files": 190,
+    "lines": 39533
+   }
+  },
+  "trace_s": 6.7,
   "trace": {
    "observed_edges": 3688,
    "static_found": 2615,
@@ -218,14 +236,20 @@
    "possible": 48
   },
   "unresolved": 568,
-  "graph_s": 0.21,
-  "scan_s": 1.65,
+  "graph_s": 0.35,
+  "scan_s": 1.93,
   "findings": {
    "critical": 0,
    "high": 0,
    "medium": 3,
    "low": 11,
    "in_tests": 665
+  },
+  "languages": {
+   "python": {
+    "files": 36,
+    "lines": 11245
+   }
   }
  },
  {
@@ -247,43 +271,155 @@
    "possible": 69
   },
   "unresolved": 971,
-  "graph_s": 0.33,
-  "scan_s": 1.44,
+  "graph_s": 0.5,
+  "scan_s": 1.72,
   "findings": {
    "critical": 0,
    "high": 1,
    "medium": 1,
    "low": 56,
    "in_tests": 753
+  },
+  "languages": {
+   "python": {
+    "files": 133,
+    "lines": 19135
+   }
   }
  },
  {
   "name": "fastapi-template",
   "ref": "master",
-  "files": 43,
-  "lines": 2944,
-  "functions": 146,
-  "entry_points": 87,
+  "files": 149,
+  "lines": 14121,
+  "functions": 441,
+  "entry_points": 109,
   "entry_kinds": {
-   "main": 3,
+   "main": 4,
    "route": 23,
-   "test": 58,
-   "cli": 3
+   "test": 70,
+   "cli": 3,
+   "page": 9
   },
-  "internal_edges": 246,
+  "internal_edges": 846,
   "confidence": {
-   "resolved": 417,
-   "inferred": 153
+   "resolved": 1055,
+   "inferred": 217
   },
-  "unresolved": 140,
-  "graph_s": 0.07,
-  "scan_s": 0.6,
+  "unresolved": 465,
+  "graph_s": 0.37,
+  "scan_s": 0.96,
   "findings": {
    "critical": 0,
    "high": 0,
    "medium": 0,
-   "low": 5,
-   "in_tests": 172
+   "low": 6,
+   "in_tests": 173
+  },
+  "languages": {
+   "python": {
+    "files": 43,
+    "lines": 2944
+   },
+   "typescript/javascript": {
+    "files": 106,
+    "lines": 11177,
+    "unresolved": 325,
+    "components": 173,
+    "http_calls": 25
+   }
+  },
+  "bridge": {
+   "http_calls": 25,
+   "routes": 23,
+   "matched": 23,
+   "exact": 0,
+   "suffix": 23,
+   "unknown-prefix": 0,
+   "ambiguous": 0,
+   "external": 0,
+   "unmatched": 2,
+   "links": [
+    "DELETE /api/v1/items/{}  frontend/src/client/sdk.gen::ItemsService.deleteItem -> backend.app.api.routes.items.delete_item",
+    "DELETE /api/v1/users/me  frontend/src/client/sdk.gen::UsersService.deleteUserMe -> backend.app.api.routes.users.delete_user_me",
+    "DELETE /api/v1/users/{}  frontend/src/client/sdk.gen::UsersService.deleteUser -> backend.app.api.routes.users.delete_user",
+    "GET /api/v1/items  frontend/src/client/sdk.gen::ItemsService.readItems -> backend.app.api.routes.items.read_items",
+    "GET /api/v1/items/{}  frontend/src/client/sdk.gen::ItemsService.readItem -> backend.app.api.routes.items.read_item",
+    "GET /api/v1/users  frontend/src/client/sdk.gen::UsersService.readUsers -> backend.app.api.routes.users.read_users",
+    "GET /api/v1/users/me  frontend/src/client/sdk.gen::UsersService.readUserMe -> backend.app.api.routes.users.read_user_me",
+    "GET /api/v1/users/{}  frontend/src/client/sdk.gen::UsersService.readUserById -> backend.app.api.routes.users.read_user_by_id",
+    "GET /api/v1/utils/health-check  frontend/src/client/sdk.gen::UtilsService.healthCheck -> backend.app.api.routes.utils.health_check",
+    "PATCH /api/v1/users/me  frontend/src/client/sdk.gen::UsersService.updateUserMe -> backend.app.api.routes.users.update_user_me",
+    "PATCH /api/v1/users/me/password  frontend/src/client/sdk.gen::UsersService.updatePasswordMe -> backend.app.api.routes.users.update_password_me",
+    "PATCH /api/v1/users/{}  frontend/src/client/sdk.gen::UsersService.updateUser -> backend.app.api.routes.users.update_user",
+    "POST /api/v1/items  frontend/src/client/sdk.gen::ItemsService.createItem -> backend.app.api.routes.items.create_item",
+    "POST /api/v1/login/access-token  frontend/src/client/sdk.gen::LoginService.loginAccessToken -> backend.app.api.routes.login.login_access_token",
+    "POST /api/v1/login/test-token  frontend/src/client/sdk.gen::LoginService.testToken -> backend.app.api.routes.login.test_token",
+    "POST /api/v1/password-recovery-html-content/{}  frontend/src/client/sdk.gen::LoginService.recoverPasswordHtmlContent -> backend.app.api.routes.login.recover_password_html_content",
+    "POST /api/v1/password-recovery/{}  frontend/src/client/sdk.gen::LoginService.recoverPassword -> backend.app.api.routes.login.recover_password",
+    "POST /api/v1/private/users  frontend/src/client/sdk.gen::PrivateService.createUser -> backend.app.api.routes.private.create_user",
+    "POST /api/v1/reset-password  frontend/src/client/sdk.gen::LoginService.resetPassword -> backend.app.api.routes.login.reset_password",
+    "POST /api/v1/users  frontend/src/client/sdk.gen::UsersService.createUser -> backend.app.api.routes.users.create_user",
+    "POST /api/v1/users/signup  frontend/src/client/sdk.gen::UsersService.registerUser -> backend.app.api.routes.users.register_user",
+    "POST /api/v1/utils/test-email  frontend/src/client/sdk.gen::UtilsService.testEmail -> backend.app.api.routes.utils.test_email",
+    "PUT /api/v1/items/{}  frontend/src/client/sdk.gen::ItemsService.updateItem -> backend.app.api.routes.items.update_item"
+   ],
+   "name_verified": "23/23"
+  }
+ },
+ {
+  "name": "taxonomy",
+  "ref": "main",
+  "files": 126,
+  "lines": 7809,
+  "functions": 229,
+  "entry_points": 22,
+  "entry_kinds": {
+   "page": 14,
+   "route": 8
+  },
+  "internal_edges": 330,
+  "confidence": {
+   "resolved": 412,
+   "inferred": 8
+  },
+  "unresolved": 224,
+  "graph_s": 0.25,
+  "scan_s": 0.54,
+  "findings": {
+   "critical": 0,
+   "high": 0,
+   "medium": 0,
+   "low": 0,
+   "in_tests": 0
+  },
+  "languages": {
+   "typescript/javascript": {
+    "files": 126,
+    "lines": 7809,
+    "unresolved": 224,
+    "components": 176,
+    "http_calls": 6
+   }
+  },
+  "bridge": {
+   "http_calls": 6,
+   "routes": 8,
+   "matched": 5,
+   "exact": 5,
+   "suffix": 0,
+   "unknown-prefix": 0,
+   "ambiguous": 0,
+   "external": 1,
+   "unmatched": 0,
+   "links": [
+    "DELETE /api/posts/{}  components/post-operations::deletePost -> app/api/posts/[postId]/route::DELETE",
+    "GET /api/users/stripe  components/billing-form::BillingForm.onSubmit -> app/api/users/stripe/route::GET",
+    "PATCH /api/posts/{}  components/editor::Editor.onSubmit -> app/api/posts/[postId]/route::PATCH",
+    "PATCH /api/users/{}  components/user-name-form::UserNameForm.onSubmit -> app/api/users/[userId]/route::PATCH",
+    "POST /api/posts  components/post-create-button::PostCreateButton.onClick -> app/api/posts/route::POST"
+   ],
+   "name_verified": null
   }
  }
 ]

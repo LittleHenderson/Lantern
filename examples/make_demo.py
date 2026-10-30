@@ -15,7 +15,7 @@ from pathlib import Path
 
 from lantern.explain import run, select_nodes
 from lantern.providers import FixtureProvider
-from lantern.python_frontend import build_graph
+from lantern.engine import build_graph
 from lantern.report import write_report
 from lantern.security import scan
 from lantern.trace import merge_trace, run_trace
@@ -38,7 +38,7 @@ def main(out: Path):
         return json.dumps(demo["units"][unit])
 
     provider = FixtureProvider(respond, model="hand-written-demo")
-    nids = [f"py:{q}" for q in demo["units"]]
+    nids = [f"js:{q}" if "::" in q else f"py:{q}" for q in demo["units"]]
     nids = [n for n in select_nodes(g) if n in nids]
     res = run(g, provider, sec["findings"], out / "cache", nids, metaphor=demo["metaphor"]["world"])
     bad = {k: v["validation_errors"] for k, v in res["explanations"].items() if not v["validated"]}

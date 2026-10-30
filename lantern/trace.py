@@ -43,14 +43,14 @@ def _index(g: Graph):
     module_of_file: dict[str, str] = {}
     mains: dict[str, tuple[int, int, str]] = {}
     for n in g.nodes.values():
-        if not n.file:
+        if not n.file or not n.file.endswith(".py"):
             continue
         if n.kind == "module":
             module_of_file[n.file] = n.id
         elif n.name == "<main>":
             mains[n.file] = (n.start_line, n.end_line, n.id)
     for n in g.nodes.values():
-        if n.file and n.kind != "module" and n.name != "<main>":
+        if n.file and n.file.endswith(".py") and n.kind != "module" and n.name != "<main>":
             mod = g.nodes[module_of_file[n.file]].qualname
             local = n.qualname[len(mod) + 1:]
             by_file_qual[(n.file, local)] = n.id

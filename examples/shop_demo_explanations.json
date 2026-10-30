@@ -1,13 +1,24 @@
 {
-  "metaphor": {"world": "a hotel", "why": "requests arrive like guests, the user store is the guest register, and login is the front desk", "roles": {}},
+  "metaphor": {
+    "world": "a hotel",
+    "why": "requests arrive like guests, the user store is the guest register, and login is the front desk",
+    "roles": {}
+  },
   "units": {
     "shop.app.read_user": {
       "lens1": {
         "summary": "FastAPI GET handler for /users/{user_id}. Builds a new Session and calls Session.login with the path parameter and a hard-coded password \"pw\", returning the login result.",
-        "inputs": ["user_id: str, taken directly from the URL path"],
+        "inputs": [
+          "user_id: str, taken directly from the URL path"
+        ],
         "outputs": "Whatever Session.login returns (a boolean from the password comparison).",
-        "side_effects": ["Opens a SQLite connection through Session.__init__ -> UserRepo", "Runs a database query through UserRepo.get"],
-        "errors": ["Any sqlite3 error propagates as an HTTP 500"],
+        "side_effects": [
+          "Opens a SQLite connection through Session.__init__ -> UserRepo",
+          "Runs a database query through UserRepo.get"
+        ],
+        "errors": [
+          "Any sqlite3 error propagates as an HTTP 500"
+        ],
         "role": "Entry point. Untrusted input enters here and flows into a SQL query two calls deeper."
       },
       "lens2": {
@@ -18,11 +29,47 @@
       "lens3": {
         "text": "This is the hotel's front door for one kind of visitor. It sets up a fresh front-desk clerk and asks the clerk to check that guest in. The room number comes straight from the visitor.",
         "pairs": [
-          {"plain": "the hotel's front door", "technical": "@app.get(\"/users/{user_id}\") route", "anchor": {"type": "lines", "start": 8, "end": 9}},
-          {"plain": "a fresh front-desk clerk", "technical": "Session()", "anchor": {"type": "symbol", "id": "py:shop.auth.Session.__init__"}},
-          {"plain": "check that guest in", "technical": "s.login(user_id, \"pw\")", "anchor": {"type": "symbol", "id": "py:shop.auth.Session.login"}},
-          {"plain": "the room number", "technical": "user_id path parameter", "anchor": {"type": "term", "term": "user_id"}},
-          {"plain": "straight from the visitor", "technical": "untrusted HTTP input", "anchor": {"type": "term", "term": "http request"}}
+          {
+            "plain": "the hotel's front door",
+            "technical": "@app.get(\"/users/{user_id}\") route",
+            "anchor": {
+              "type": "lines",
+              "start": 8,
+              "end": 9
+            }
+          },
+          {
+            "plain": "a fresh front-desk clerk",
+            "technical": "Session()",
+            "anchor": {
+              "type": "symbol",
+              "id": "py:shop.auth.Session.__init__"
+            }
+          },
+          {
+            "plain": "check that guest in",
+            "technical": "s.login(user_id, \"pw\")",
+            "anchor": {
+              "type": "symbol",
+              "id": "py:shop.auth.Session.login"
+            }
+          },
+          {
+            "plain": "the room number",
+            "technical": "user_id path parameter",
+            "anchor": {
+              "type": "term",
+              "term": "user_id"
+            }
+          },
+          {
+            "plain": "straight from the visitor",
+            "technical": "untrusted HTTP input",
+            "anchor": {
+              "type": "term",
+              "term": "http request"
+            }
+          }
         ]
       },
       "findings": []
@@ -30,10 +77,17 @@
     "shop.auth.Session.login": {
       "lens1": {
         "summary": "Fetches the user record with self.users.get(user_id), then returns check_password(password, user).",
-        "inputs": ["user_id: forwarded unvalidated", "password: plaintext password"],
+        "inputs": [
+          "user_id: forwarded unvalidated",
+          "password: plaintext password"
+        ],
         "outputs": "bool from check_password",
-        "side_effects": ["Database read through UserRepo.get"],
-        "errors": ["No handling for a missing user; get returns a cursor, not a row, so the comparison is against the wrong type"],
+        "side_effects": [
+          "Database read through UserRepo.get"
+        ],
+        "errors": [
+          "No handling for a missing user; get returns a cursor, not a row, so the comparison is against the wrong type"
+        ],
         "role": "Middle step between the route and the data layer; forwards untrusted input to a SQL query."
       },
       "lens2": {
@@ -44,10 +98,39 @@
       "lens3": {
         "text": "The front-desk clerk looks the guest up in the register, then checks whether the password they gave matches what is on file.",
         "pairs": [
-          {"plain": "the front-desk clerk", "technical": "Session.login", "anchor": {"type": "symbol", "id": "py:shop.auth.Session.login"}},
-          {"plain": "looks the guest up in the register", "technical": "self.users.get(user_id)", "anchor": {"type": "symbol", "id": "py:shop.repo.UserRepo.get"}},
-          {"plain": "checks whether the password they gave matches", "technical": "check_password(password, user)", "anchor": {"type": "symbol", "id": "py:shop.auth.check_password"}},
-          {"plain": "what is on file", "technical": "the stored user record", "anchor": {"type": "lines", "start": 13, "end": 13}}
+          {
+            "plain": "the front-desk clerk",
+            "technical": "Session.login",
+            "anchor": {
+              "type": "symbol",
+              "id": "py:shop.auth.Session.login"
+            }
+          },
+          {
+            "plain": "looks the guest up in the register",
+            "technical": "self.users.get(user_id)",
+            "anchor": {
+              "type": "symbol",
+              "id": "py:shop.repo.UserRepo.get"
+            }
+          },
+          {
+            "plain": "checks whether the password they gave matches",
+            "technical": "check_password(password, user)",
+            "anchor": {
+              "type": "symbol",
+              "id": "py:shop.auth.check_password"
+            }
+          },
+          {
+            "plain": "what is on file",
+            "technical": "the stored user record",
+            "anchor": {
+              "type": "lines",
+              "start": 13,
+              "end": 13
+            }
+          }
         ]
       },
       "findings": []
@@ -55,10 +138,16 @@
     "shop.repo.UserRepo.get": {
       "lens1": {
         "summary": "Builds a SQL SELECT by %-formatting user_id into the string and runs it through BaseRepo.execute.",
-        "inputs": ["user_id: any string"],
+        "inputs": [
+          "user_id: any string"
+        ],
         "outputs": "sqlite3.Cursor for the query",
-        "side_effects": ["Executes SQL against the connected database"],
-        "errors": ["sqlite3.OperationalError on malformed SQL, which attacker input can trigger on purpose"],
+        "side_effects": [
+          "Executes SQL against the connected database"
+        ],
+        "errors": [
+          "sqlite3.OperationalError on malformed SQL, which attacker input can trigger on purpose"
+        ],
         "role": "Data-access leaf. The untrusted value from GET /users/{user_id} ends up inside the SQL text here."
       },
       "lens2": {
@@ -69,23 +158,62 @@
       "lens3": {
         "text": "This opens the guest register and finds a guest by number. It writes the request on a slip by copying the visitor's words into the instruction, then hands the slip to the records room.",
         "pairs": [
-          {"plain": "the guest register", "technical": "users table", "anchor": {"type": "term", "term": "users"}},
-          {"plain": "writes the request on a slip", "technical": "SQL string built with % formatting", "anchor": {"type": "lines", "start": 15, "end": 15}},
-          {"plain": "copying the visitor's words into the instruction", "technical": "string-built SQL (SQL injection risk)", "anchor": {"type": "term", "term": "sql injection"}},
-          {"plain": "hands the slip to the records room", "technical": "self.execute(sql)", "anchor": {"type": "symbol", "id": "py:shop.repo.BaseRepo.execute"}}
+          {
+            "plain": "the guest register",
+            "technical": "users table",
+            "anchor": {
+              "type": "term",
+              "term": "users"
+            }
+          },
+          {
+            "plain": "writes the request on a slip",
+            "technical": "SQL string built with % formatting",
+            "anchor": {
+              "type": "lines",
+              "start": 15,
+              "end": 15
+            }
+          },
+          {
+            "plain": "copying the visitor's words into the instruction",
+            "technical": "string-built SQL (SQL injection risk)",
+            "anchor": {
+              "type": "term",
+              "term": "sql injection"
+            }
+          },
+          {
+            "plain": "hands the slip to the records room",
+            "technical": "self.execute(sql)",
+            "anchor": {
+              "type": "symbol",
+              "id": "py:shop.repo.BaseRepo.execute"
+            }
+          }
         ]
       },
       "findings": [
-        {"id": "42c137610fea", "lens1": "B608: user_id is interpolated into SQL text. It is reachable from GET /users/{user_id}, so a request can change the query, for example to return every row or to drop tables.", "lens2": "A visitor can add their own instructions to the slip, and the records room will follow them.", "fix": "Use a placeholder: self.conn.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,))."}
+        {
+          "id": "42c137610fea",
+          "lens1": "B608: user_id is interpolated into SQL text. It is reachable from GET /users/{user_id}, so a request can change the query, for example to return every row or to drop tables.",
+          "lens2": "A visitor can add their own instructions to the slip, and the records room will follow them.",
+          "fix": "Use a placeholder: self.conn.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,))."
+        }
       ]
     },
     "shop.auth.check_password": {
       "lens1": {
         "summary": "Hashes the password with MD5 and compares the hex digest to the stored value.",
-        "inputs": ["password: str", "user: stored hash (here, mistakenly a cursor)"],
+        "inputs": [
+          "password: str",
+          "user: stored hash (here, mistakenly a cursor)"
+        ],
         "outputs": "bool",
         "side_effects": [],
-        "errors": ["AttributeError if password is not a str"],
+        "errors": [
+          "AttributeError if password is not a str"
+        ],
         "role": "Credential check called by Session.login."
       },
       "lens2": {
@@ -96,22 +224,57 @@
       "lens3": {
         "text": "This scrambles the password the guest gave and checks it against the scrambled version on file. The scrambling method is old and fast.",
         "pairs": [
-          {"plain": "scrambles the password", "technical": "hashlib.md5(password.encode()).hexdigest()", "anchor": {"type": "term", "term": "md5"}},
-          {"plain": "checks it against the scrambled version on file", "technical": "== user", "anchor": {"type": "lines", "start": 18, "end": 18}},
-          {"plain": "old and fast", "technical": "MD5 is unsuitable for password hashing", "anchor": {"type": "term", "term": "password hash"}}
+          {
+            "plain": "scrambles the password",
+            "technical": "hashlib.md5(password.encode()).hexdigest()",
+            "anchor": {
+              "type": "term",
+              "term": "md5"
+            }
+          },
+          {
+            "plain": "checks it against the scrambled version on file",
+            "technical": "== user",
+            "anchor": {
+              "type": "lines",
+              "start": 18,
+              "end": 18
+            }
+          },
+          {
+            "plain": "old and fast",
+            "technical": "MD5 is unsuitable for password hashing",
+            "anchor": {
+              "type": "term",
+              "term": "password hash"
+            }
+          }
         ]
       },
       "findings": [
-        {"id": "b198680dfd84", "lens1": "B324: MD5 is a fast, broken hash. Stored MD5 password hashes can be cracked quickly with commodity GPUs.", "lens2": "The lock on the guest book has a master key that many people already have.", "fix": "Use a slow password hash such as Argon2id (argon2-cffi) or bcrypt, and compare with a constant-time check."}
+        {
+          "id": "b198680dfd84",
+          "lens1": "B324: MD5 is a fast, broken hash. Stored MD5 password hashes can be cracked quickly with commodity GPUs.",
+          "lens2": "The lock on the guest book has a master key that many people already have.",
+          "fix": "Use a slow password hash such as Argon2id (argon2-cffi) or bcrypt, and compare with a constant-time check."
+        }
       ]
     },
     "shop.app.backup": {
       "lens1": {
         "summary": "POST /backup handler. Runs `tar` through the shell with the request's name concatenated into the command, then saves a record through a new UserRepo.",
-        "inputs": ["name: str from the request"],
+        "inputs": [
+          "name: str from the request"
+        ],
         "outputs": "{\"ok\": True}",
-        "side_effects": ["Spawns a shell process", "Writes a file to disk", "Database insert through UserRepo.save"],
-        "errors": ["Shell failures are ignored; subprocess.call's return code is not checked"],
+        "side_effects": [
+          "Spawns a shell process",
+          "Writes a file to disk",
+          "Database insert through UserRepo.save"
+        ],
+        "errors": [
+          "Shell failures are ignored; subprocess.call's return code is not checked"
+        ],
         "role": "Entry point. Untrusted input goes directly into a shell command."
       },
       "lens2": {
@@ -122,15 +285,183 @@
       "lens3": {
         "text": "A visitor gives a name for a backup box, and the staff shouts an order to the storage room that includes the visitor's words, then notes the request in the register.",
         "pairs": [
-          {"plain": "a name for a backup box", "technical": "name request parameter", "anchor": {"type": "term", "term": "name"}},
-          {"plain": "shouts an order to the storage room", "technical": "subprocess.call(..., shell=True)", "anchor": {"type": "lines", "start": 16, "end": 16}},
-          {"plain": "includes the visitor's words", "technical": "string concatenation into a shell command", "anchor": {"type": "term", "term": "shell injection"}},
-          {"plain": "notes the request in the register", "technical": "make_repo().save(...)", "anchor": {"type": "symbol", "id": "py:shop.auth.make_repo"}}
+          {
+            "plain": "a name for a backup box",
+            "technical": "name request parameter",
+            "anchor": {
+              "type": "term",
+              "term": "name"
+            }
+          },
+          {
+            "plain": "shouts an order to the storage room",
+            "technical": "subprocess.call(..., shell=True)",
+            "anchor": {
+              "type": "lines",
+              "start": 16,
+              "end": 16
+            }
+          },
+          {
+            "plain": "includes the visitor's words",
+            "technical": "string concatenation into a shell command",
+            "anchor": {
+              "type": "term",
+              "term": "shell injection"
+            }
+          },
+          {
+            "plain": "notes the request in the register",
+            "technical": "make_repo().save(...)",
+            "anchor": {
+              "type": "symbol",
+              "id": "py:shop.auth.make_repo"
+            }
+          }
         ]
       },
       "findings": [
-        {"id": "d8d31e66c160", "lens1": "B602: subprocess with shell=True and a request-controlled string. Reachable from POST /backup, so a request can run arbitrary commands on the server.", "lens2": "A visitor can slip their own orders into the intercom message, and the staff will carry them out.", "fix": "Pass an argument list without a shell: subprocess.run([\"tar\", \"czf\", f\"{safe_name}.tgz\", \"data/\"], check=True), after validating name against an allow-list pattern."}
+        {
+          "id": "d8d31e66c160",
+          "lens1": "B602: subprocess with shell=True and a request-controlled string. Reachable from POST /backup, so a request can run arbitrary commands on the server.",
+          "lens2": "A visitor can slip their own orders into the intercom message, and the staff will carry them out.",
+          "fix": "Pass an argument list without a shell: subprocess.run([\"tar\", \"czf\", f\"{safe_name}.tgz\", \"data/\"], check=True), after validating name against an allow-list pattern."
+        },
+        {
+          "id": "8c49a35a53de",
+          "lens1": "LW-AUTH-MISSING (heuristic): POST /backup is called from the Admin page and changes server state, but no authentication dependency or check was found within three calls.",
+          "lens2": "Anyone who finds this address can ask the storage room to pack boxes. Nobody checks that they work at the hotel.",
+          "fix": "Require a logged-in admin: add a dependency such as current_user: CurrentAdmin = Depends(get_current_admin) to the route."
+        }
       ]
+    },
+    "web/src/pages/Admin::BackupButton": {
+      "lens1": {
+        "summary": "React component that renders a 'Back up now' button. Its onClick handler `start` calls runBackup(name), which POSTs to /backup on the Python backend.",
+        "inputs": [
+          "props.name: backup name typed into the Admin page's input"
+        ],
+        "outputs": "JSX: a <button>",
+        "side_effects": [
+          "On click: HTTP POST /backup through runBackup"
+        ],
+        "errors": [
+          "The returned promise is not awaited or caught, so a failed request is silent"
+        ],
+        "role": "UI trigger. A click here is the start of the path that reaches the server's shell command."
+      },
+      "lens2": {
+        "text": "This is the button on the admin screen that says Back up now. When someone presses it, it sends the name from the text box to the hotel's back office and asks it to pack up the records.",
+        "example": "Type nightly in the box, press the button, and the back office is asked to make a box called nightly.",
+        "analogy": "Like a call bell at the front desk that rings the storage room with a note attached."
+      },
+      "lens3": {
+        "text": "This is the button on the admin screen. When someone presses it, it sends the name from the text box to the back office.",
+        "pairs": [
+          {
+            "plain": "the button on the admin screen",
+            "technical": "<button> rendered by BackupButton",
+            "anchor": {
+              "type": "symbol",
+              "id": "js:web/src/pages/Admin::BackupButton"
+            }
+          },
+          {
+            "plain": "when someone presses it",
+            "technical": "onClick={start}",
+            "anchor": {
+              "type": "lines",
+              "start": 8,
+              "end": 8
+            }
+          },
+          {
+            "plain": "sends the name",
+            "technical": "start = () => runBackup(name)",
+            "anchor": {
+              "type": "symbol",
+              "id": "js:web/src/pages/Admin::BackupButton.start"
+            }
+          },
+          {
+            "plain": "from the text box",
+            "technical": "props.name passed down from Admin",
+            "anchor": {
+              "type": "term",
+              "term": "props"
+            }
+          },
+          {
+            "plain": "the back office",
+            "technical": "the Python backend (POST /backup)",
+            "anchor": {
+              "type": "term",
+              "term": "backend"
+            }
+          }
+        ]
+      },
+      "findings": []
+    },
+    "web/src/api::runBackup": {
+      "lens1": {
+        "summary": "Sends an HTTP POST to /backup with JSON body {name} using axios. Lantern links this request to the Python handler shop.app.backup.",
+        "inputs": [
+          "name: string, unvalidated"
+        ],
+        "outputs": "Promise of the axios response",
+        "side_effects": [
+          "Network request to the backend"
+        ],
+        "errors": [
+          "Rejects on network errors or non-2xx responses"
+        ],
+        "role": "The frontend-to-backend hop: the name typed in the browser travels to backup(), which puts it into a shell command."
+      },
+      "lens2": {
+        "text": "This is the messenger that carries the backup request from the screen to the back office. It hands over the name exactly as it was typed.",
+        "example": "If the box says march, the messenger delivers a request to back up march.",
+        "analogy": "Like a bellhop carrying a sealed note from the lobby to the storage room without reading it."
+      },
+      "lens3": {
+        "text": "This is the messenger that carries the backup request to the back office. It hands over the name exactly as it was typed.",
+        "pairs": [
+          {
+            "plain": "the messenger",
+            "technical": "runBackup()",
+            "anchor": {
+              "type": "symbol",
+              "id": "js:web/src/api::runBackup"
+            }
+          },
+          {
+            "plain": "carries the backup request",
+            "technical": "axios.post(\"/backup\", ...)",
+            "anchor": {
+              "type": "lines",
+              "start": 11,
+              "end": 11
+            }
+          },
+          {
+            "plain": "the back office",
+            "technical": "backup() in shop/app.py, reached over HTTP",
+            "anchor": {
+              "type": "symbol",
+              "id": "py:shop.app.backup"
+            }
+          },
+          {
+            "plain": "exactly as it was typed",
+            "technical": "unvalidated name in the request body",
+            "anchor": {
+              "type": "term",
+              "term": "name"
+            }
+          }
+        ]
+      },
+      "findings": []
     }
   }
 }

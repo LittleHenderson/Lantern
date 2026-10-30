@@ -74,6 +74,11 @@ input.search{width:100%;padding:8px 10px;border:1px solid var(--line);border-rad
 .badge.medium{background:var(--meds);color:var(--med)} .badge.low{background:var(--lows);color:var(--low)}
 .badge.entry{background:var(--l1s);color:var(--l1)}
 .ext{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+.hop{display:inline-block;font:600 10.5px var(--mono);color:var(--l2);background:var(--l2s);border-radius:999px;padding:1px 8px;margin:0 4px;white-space:nowrap}
+.hop.ui{color:var(--l1);background:var(--l1s);font-family:inherit}
+.hoprow{padding:0;margin:-2px 0 -2px}
+.layer{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:6px;vertical-align:1px;background:var(--muted)}
+.layer.frontend{background:var(--l1)} .layer.backend{background:var(--accent)} .layer.external{background:var(--line)}
 .again{font-size:11.5px;color:var(--muted);font-style:italic}
 .empty{color:var(--muted);padding:30px 10px;text-align:center}
 #chart{width:100%;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
@@ -162,16 +167,28 @@ const FIND_BY_NODE = {};
 for (const f of SEC.findings) if (f.node) (FIND_BY_NODE[f.node] ||= []).push(f);
 const RANK = {critical: 0, high: 1, medium: 2, low: 3};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const short = q => { const p = (q || '').split('.'); return p.length > 2 ? p.slice(-2).join('.') : q; };
+const short = q => {
+  q = q || '';
+  if (q.includes('::')) { const local = q.split('::').pop(); const p = local.split('.'); return p.length > 2 ? p.slice(-2).join('.') : local; }
+  if (q.startsWith('HTTP ')) return q;
+  if (q.includes('/')) return q.split('/').pop();
+  const p = q.split('.'); return p.length > 2 ? p.slice(-2).join('.') : q;
+};
+const isJS = id => (id || '').startsWith('js:');
+const layer = id => isJS(id) ? 'frontend' : (id || '').startsWith('py:') ? 'backend' : 'external';
+const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
 const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', open: new Set(), q: '', pair: null};
 try { S.lens = +localStorage.getItem('lantern.lens') || 1; } catch (e) {}
 
 // ---------- header ----------
 document.getElementById('repo').textContent = G.repo_root;
 const st = DATA.stats || {};
+const LANGS = G.meta.languages || {};
+const BR = G.meta.bridge;
 const chips = [
-  `${G.meta.files ?? '?'} files`, `${(st.nodes || {}).callable ?? 0} functions`, `${st.entry_points ?? 0} entry points`,
-  `${st.internal_call_edges ?? 0} internal calls`,
+  ...Object.entries(LANGS).map(([k, v]) => `${k === 'python' ? 'Python' : 'TypeScript/JS'} · ${v.files} files`),
+  `${(st.nodes || {}).callable ?? 0} functions`, `${st.entry_points ?? 0} entry points`,
+  ...(BR && BR.matched ? [`${BR.matched} frontend→backend calls linked`] : []),
 ];
 let chipHtml = chips.map(c => `<span class="chip">${esc(c)}</span>`).join('');
 if (SEC.counts.critical) chipHtml += `<span class="chip crit">${SEC.counts.critical} critical</span>`;
@@ -187,7 +204,7 @@ document.getElementById('tabs').onclick = ev => {
 };
 
 // ---------- left: entry points ----------
-const ENTRY_LABEL = {route: 'Web routes', cli: 'Command-line commands', main: 'Program starts', script: 'Installed scripts', test: 'Tests'};
+const ENTRY_LABEL = {page: 'Pages and screens', route: 'API routes', cli: 'Command-line commands', main: 'App and program starts', script: 'Installed scripts', test: 'Tests'};
 function renderLeft() {
   const el = document.getElementById('left');
   if (S.tab !== 'map') { el.innerHTML = `<div class="note" style="padding:6px">${S.tab === 'findings' ? 'Findings are ranked by severity and by whether an entry point can reach them.' : 'How this report was made.'}</div>`; return; }
@@ -203,11 +220,11 @@ function renderLeft() {
       `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(short(n.qualname))}<span class="d">${esc(n.file)}:${n.start_line}</span></button>`).join('') + '</div>';
   } else {
     if (!eps.length) html += '<div class="empty">No entry points detected. Use search to start from any function.</div>';
-    for (const k of ['route', 'cli', 'main', 'script', 'test']) {
+    for (const k of ['page', 'route', 'main', 'cli', 'script', 'test']) {
       const list = groups[k]; if (!list) continue;
       list.sort((a, b) => (a.entry.detail || '').localeCompare(b.entry.detail || ''));
       html += `<div class="group"><h4>${ENTRY_LABEL[k]} (${list.length})</h4>` + list.slice(0, 300).map(n =>
-        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(k === 'route' || k === 'script' ? n.entry.detail : short(n.qualname))}<span class="d">${esc(short(n.qualname))}</span></button>`).join('') + '</div>';
+        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(['route', 'script', 'page'].includes(k) ? n.entry.detail : short(n.qualname))}<span class="d">${esc(short(n.qualname))}${isJS(n.id) ? ' · frontend' : LANGS['typescript/javascript'] ? ' · backend' : ''}</span></button>`).join('') + '</div>';
     }
   }
   html += '</div>';
@@ -240,10 +257,12 @@ function renderTree() {
     const indent = '<span class="indent">' + '<i></i>'.repeat(r.depth) + '</span>';
     const tog = r.kids && !r.loop ? `<button class="tog" data-tog="${esc(r.id)}">${S.open.has(r.id) ? '▼' : '▶'}</button>` : '<span class="tog"></span>';
     const conf = r.edge ? `<span class="conn ln ${r.edge.confidence}" title="${esc(r.edge.confidence)} (${esc(r.edge.via || '')})"></span>` : '';
+    const hop = r.edge && (r.edge.via || '').startsWith('http-') ? `<span class="hop">HTTP ${esc(r.edge.detail || '')}</span>`
+      : r.edge && r.edge.detail ? `<span class="hop ui">${esc(UI_WORDS[r.edge.detail] || r.edge.detail)}</span>` : '';
     const sum = summaryOf(r.id);
     const ext = r.exts.length ? `<span class="ext"> → ${r.exts.slice(0, 4).map(e => esc(e.dst.slice(4))).join(', ')}${r.exts.length > 4 ? '…' : ''}</span>` : '';
-    return `<div class="row">${indent}${tog}${conf}<button class="node ${S.sel === r.id ? 'on' : ''}" data-id="${esc(r.id)}">
-      <span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? `<span class="badge ${w}">${w}</span>` : ''}
+    return `${hop ? `<div class="row hoprow">${indent}<span class="tog"></span>${hop}</div>` : ''}<div class="row">${indent}${tog}${conf}<button class="node ${S.sel === r.id ? 'on' : ''}" data-id="${esc(r.id)}">
+      <span class="layer ${layer(r.id)}"></span><span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? `<span class="badge ${w}">${w}</span>` : ''}
       ${r.loop ? '<span class="again"> ↻ already on this path</span>' : ''}
       <span class="loc"> ${esc(n.file)}:${n.start_line ?? ''}</span>${ext}
       ${sum ? `<span class="sum">${esc(sum.length > 140 ? sum.slice(0, 140) + '…' : sum)}</span>` : ''}</button></div>`;
@@ -315,7 +334,7 @@ function renderMap() {
   el.innerHTML = `<div class="toolbar"><h2>${esc(title)}</h2>
     <div class="seg"><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button></div>
     <button class="chip" id="expand">Expand all</button></div>
-    <div class="legend"><span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>
+    <div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>
     ${S.view === 'tree' ? renderTree() : renderChart()}`;
   el.querySelectorAll('.seg button').forEach(b => b.onclick = () => { S.view = b.dataset.v; renderMap(); });
   document.getElementById('expand').onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
@@ -328,13 +347,21 @@ function renderFindings() {
   const fs = SEC.findings;
   if (!fs.length) { el.innerHTML = '<div class="empty">No findings from the scanners that ran. See About for which tools ran.</div>'; return; }
   el.innerHTML = `<div class="toolbar"><h2>Security findings (${fs.length})</h2></div>` + fs.map(f => {
-    const path = f.reachable ? `<div class="path"><span class="note">Reachable from ${esc(f.reachable.kind)}:</span>${f.reachable.path.map((p, i) => `${i ? '<span class="note">→</span>' : ''}<button data-id="${esc(p)}">${esc(short((N[p] || {}).qualname || p))}</button>`).join('')}</div>`
-      : `<div class="note" style="margin-top:6px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
+    const chain = (label, ids) => `<div class="path"><span class="note">${label}</span>${ids.map((p, i) => {
+      const n = N[p], e = i ? (OUT[ids[i - 1]] || []).find(x => x.dst === p) : null;
+      const sep = !i ? '' : e && (e.via || '').startsWith('http-') ? `<span class="hop">HTTP ${esc(e.detail || '')}</span>` : e && e.detail ? `<span class="hop ui">${esc(UI_WORDS[e.detail] || e.detail)}</span>` : '<span class="note">→</span>';
+      const nm = n && n.entry && n.entry.kind === 'page' ? `${n.entry.detail} page` : short((n || {}).qualname || p);
+      return `${sep}<button data-id="${esc(p)}"><span class="layer ${layer(p)}"></span>${esc(nm)}</button>`; }).join('')}</div>`;
+    const uiSame = f.ui_path && f.reachable && f.ui_path.join() === f.reachable.path.join();
+    let path = f.ui_path ? chain('From the app:', f.ui_path) : '';
+    if (f.reachable && !uiSame) path += chain(`Reachable from ${f.reachable.kind}:`, f.reachable.path);
+    if (!path) path = `<div class="note" style="margin-top:6px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
+    const heur = f.tool_confidence === 'LOW' ? '<span class="chip" title="Pattern-based check; review before acting">heuristic</span>' : '';
     const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
-    return `<div class="fcard"><div class="top"><span class="badge ${f.rank}">${f.rank}</span><span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span></div>
+    return `<div class="fcard"><div class="top"><span class="badge ${f.rank}">${f.rank}</span><span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}</div>
       <h4>${esc(f.title)}</h4><div class="note">${esc(f.file)}${f.line ? ':' + f.line : ''}${f.node && N[f.node] ? ' · in ' + esc(short(N[f.node].qualname)) : ''}</div>
       ${path}
-      ${ex ? `<div class="lens l2" style="margin-top:8px"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}
+      ${ex ? `<div class="lens l2" style="margin-top:8px"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:6px">${esc(f.more_info)}</div>` : ''}
       ${f.node ? `<div style="margin-top:6px"><button class="chip" data-id="${esc(f.node)}">Open function</button></div>` : ''}</div>`;
   }).join('');
   el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
@@ -354,6 +381,8 @@ function renderAbout() {
       <div>Unresolved call sites</div><div>${st.unresolved_call_sites} (calls Lantern could not trace to a target; left out rather than guessed)</div>
       <div>Analysis time</div><div>${DATA.timings ? Object.entries(DATA.timings).map(([k, v]) => `${k} ${v}s`).join(' · ') : '–'}</div>
     </div>
+    ${Object.keys(LANGS).length ? `<h3>Languages</h3><div class="kv">${Object.entries(LANGS).map(([k, v]) => `<div>${esc(k)}</div><div>${v.files} files · ${v.lines} lines${v.components ? ` · ${v.components} components` : ''}</div>`).join('')}</div>` : ''}
+    ${BR && BR.http_calls ? `<h3>Frontend → backend links</h3><div class="kv"><div>HTTP calls found</div><div>${BR.http_calls}</div><div>Linked to a route</div><div>${BR.matched} (${BR.exact} exact path, ${BR.suffix + BR['unknown-prefix']} with a prefix added elsewhere${BR.ambiguous ? `, ${BR.ambiguous} ambiguous` : ''})</div><div>External services</div><div>${BR.external}</div><div>No route in this repo</div><div>${BR.unmatched}${BR.unmatched_examples && BR.unmatched_examples.length ? '<br><span class="note">' + BR.unmatched_examples.slice(0, 8).map(esc).join('<br>') + '</span>' : ''}</div></div>` : ''}
     ${tr ? `<h3>Runtime trace</h3><div class="kv"><div>Calls seen running</div><div>${tr.observed_edges}</div><div>Also found statically</div><div>${tr.static_found} (recall ${tr.recall})</div><div>Only seen at runtime</div><div>${tr.runtime_only}</div></div>` : ''}
     <h3>Security tools</h3><div class="kv">${(SEC.tools || []).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${esc(t.status)}</div>`).join('')}</div>
     ${exStats ? `<h3>Explanations</h3><div class="kv"><div>Model</div><div>${esc(exStats.model)}</div><div>Metaphor world</div><div>${esc(DATA.explanations.metaphor.world)}</div><div>Validated</div><div>${exStats.validated} of ${exStats.validated + exStats.failed} (${exStats.first_try} on first try)</div><div>Tokens</div><div>${exStats.usage.input_tokens} in · ${exStats.usage.output_tokens} out</div></div>` : ''}
@@ -446,7 +475,8 @@ function render() {
   renderRight();
 }
 // default: first non-test entry point, preferring routes
-const firstEp = G.nodes.filter(n => n.entry && n.entry.kind !== 'test').sort((a, b) => ['route','cli','main','script'].indexOf(a.entry.kind) - ['route','cli','main','script'].indexOf(b.entry.kind))[0];
+const EP_ORDER = ['page', 'route', 'cli', 'main', 'script'];
+const firstEp = G.nodes.filter(n => n.entry && n.entry.kind !== 'test').sort((a, b) => EP_ORDER.indexOf(a.entry.kind) - EP_ORDER.indexOf(b.entry.kind) || (a.entry.detail || '').length - (b.entry.detail || '').length)[0];
 if (firstEp) { S.entry = firstEp.id; S.open = new Set([firstEp.id]); }
 render();
 </script>
