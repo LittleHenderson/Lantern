@@ -108,7 +108,7 @@ The same auditor confirmed both round-five fixes (whole-segment matching, with `
 one-decimal size message) and tried the three newly covered areas: timing stayed bounded on 800 hostile handler lines, a
 50,000-quote string and a 100,000-character unterminated string; clone cleanup held for a timeout, a real git refusal
 (nonexistent branch) and the size cap; `--host 0.0.0.0` stayed closed without `LANTERN_ALLOWED_HOST` set at startup
-(189 tests on Windows and Linux, self-audit 0/0/0, `tools/audit.sh` ALL PASS). Two things remained. Fixed in PR #PRNUM.
+(189 tests on Windows and Linux, self-audit 0/0/0, `tools/audit.sh` ALL PASS). Two things remained. Fixed in PR #16.
 
 | # | Finding | Severity | Status |
 |---|---|---|---|
