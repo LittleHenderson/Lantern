@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0F1B2D">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg">
+<title>Lantern</title>
+<style>
+:root{
+  --bg:#F6F7F9; --panel:#FFFFFF; --ink:#0F1B2D; --body:#334155; --muted:#64748B; --line:#E2E8F0;
+  --soft:#F1F5F9; --accent:#0D9488; --accent-soft:#E6F6F4; --warn:#B54708; --warns:#FFF6E5;
+  --crit:#B42318; --crits:#FEF0EE; --low:#0D9488; --lows:#E6F6F4; --meds:#F2F4F7; --med:#475467;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#0B1220; --panel:#111A2B; --ink:#E6EDF6; --body:#C2CCDA; --muted:#8A97AB; --line:#22304A;
+    --soft:#17223A; --accent:#2DD4BF; --accent-soft:#0E2E2B; --warn:#FEC84B; --warns:#33240B;
+    --crit:#FDA29B; --crits:#3A1512; --low:#5EEAD4; --lows:#0E2E2B; --meds:#1E293B; --med:#CBD5E1; }
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--body);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+a{color:var(--accent)}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+header .logo{display:flex;align-items:center;gap:8px;font-weight:800;color:var(--ink);font-size:16px;background:none;border:0;padding:0}
+header .logo img{width:26px;height:26px}
+header nav{display:flex;gap:4px;margin-left:auto}
+header nav button{background:none;border:0;padding:6px 12px;border-radius:8px;font-weight:600;color:var(--muted)}
+header nav button.on{background:var(--ink);color:var(--panel)}
+main{max-width:1000px;margin:0 auto;padding:20px 16px 60px}
+main.wide{max-width:none;padding:0}
+h1{color:var(--ink);font-size:22px;margin:0 0 4px} h2{color:var(--ink);font-size:16px;margin:22px 0 8px}
+.muted{color:var(--muted)} .small{font-size:12.5px}
+.btn{border:1px solid var(--line);background:var(--panel);padding:7px 14px;border-radius:9px;font-weight:600;color:var(--ink)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn:disabled{opacity:.5;cursor:default}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin:0 0 12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+.proj{display:flex;flex-direction:column;gap:8px}
+.proj .top{display:flex;align-items:center;gap:12px}
+.proj .name{font-weight:700;color:var(--ink);font-size:15px;overflow-wrap:anywhere}
+.proj .path{font:12px var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.grade{flex:none;width:46px;height:46px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:20px;background:var(--soft);color:var(--muted)}
+.grade.A,.grade.B{background:var(--lows);color:var(--low)} .grade.C{background:var(--meds);color:var(--med)}
+.grade.D{background:var(--warns);color:var(--warn)} .grade.F{background:var(--crits);color:var(--crit)}
+.pills{display:flex;gap:6px;flex-wrap:wrap}
+.pill{font-size:11.5px;padding:1px 8px;border-radius:99px;background:var(--soft);border:1px solid var(--line)}
+.pill.crit{background:var(--crits);color:var(--crit);border-color:transparent} .pill.high{background:var(--warns);color:var(--warn);border-color:transparent}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input[type=text],input[type=password],select{width:100%;padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel)}
+label{display:block;font-weight:600;color:var(--ink);margin:12px 0 4px;font-size:13px}
+.note{font-size:12.5px;padding:10px 12px;border-radius:9px;background:var(--soft);margin:10px 0}
+.note.warn{background:var(--warns);color:var(--warn)} .note.ok{background:var(--accent-soft);color:var(--accent)}
+pre.log{background:#0F1B2D;color:#D7E0EC;font:12px/1.5 var(--mono);padding:10px;border-radius:9px;max-height:260px;overflow:auto;white-space:pre-wrap;margin:8px 0 0}
+.browser{border:1px solid var(--line);border-radius:9px;max-height:300px;overflow:auto;margin-top:8px;background:var(--panel)}
+.browser button{display:flex;gap:8px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:7px 10px}
+.browser button:hover{background:var(--soft)} .browser .p{margin-left:auto;font-size:11px;color:var(--accent)}
+.sub{display:flex;gap:4px;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line);align-items:center;flex-wrap:wrap}
+.sub button{background:none;border:0;padding:5px 12px;border-radius:8px;font-weight:600;color:var(--muted)}
+.sub button.on{background:var(--soft);color:var(--ink)}
+.sub .title{font-weight:700;color:var(--ink);margin-right:8px}
+iframe{border:0;width:100%;height:calc(100vh - 106px);display:block;background:var(--bg)}
+.empty{text-align:center;padding:40px 10px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <button class="logo" id="home"><img src="/icon.svg" alt="">Lantern</button>
+  <nav id="nav"><button data-v="home" class="on">Projects</button><button data-v="settings">Settings</button><button data-v="help">Help</button></nav>
+</header>
+<div id="view"></div>
+<script>
+const TOKEN = '__LANTERN_TOKEN__';
+const VERSION = '__LANTERN_VERSION__';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api = async (path, opts = {}) => {
+  const r = await fetch(path, {method: opts.method || 'GET', headers: {'Content-Type': 'application/json', 'X-Lantern-Token': TOKEN},
+    body: opts.body ? JSON.stringify(opts.body) : undefined, credentials: 'same-origin'});
+  const data = await r.json().catch(() => ({error: 'bad response'}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+};
+const S = {view: 'home', state: null, project: null, tab: 'atlas', browse: null, jobs: {}};
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+async function refresh() { S.state = await api('/api/state'); render(); }
+function go(view, extra = {}) { Object.assign(S, {view}, extra); for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); }
+document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); };
+document.getElementById('home').onclick = () => go('home');
+
+function watch(jobId, pid) {
+  S.jobs[pid] = {id: jobId, log: [], status: 'running'};
+  const tick = async () => {
+    try {
+      const j = await api('/api/jobs/' + jobId);
+      S.jobs[pid] = j;
+      const el = document.getElementById('log-' + pid);
+      if (el) { el.textContent = j.log.join('\n'); el.scrollTop = el.scrollHeight; }
+      if (j.status === 'running') return setTimeout(tick, 700);
+      await refresh();
+    } catch (e) { setTimeout(tick, 2000); }
+  };
+  tick();
+}
+
+// ---------------------------------------------------------------- home
+function counts(c) {
+  if (!c) return '<span class="pill">not scanned</span>';
+  const parts = [];
+  if (c.critical) parts.push(`<span class="pill crit">${c.critical} critical</span>`);
+  if (c.high) parts.push(`<span class="pill high">${c.high} high</span>`);
+  if (c.medium) parts.push(`<span class="pill">${c.medium} medium</span>`);
+  if (c.accepted) parts.push(`<span class="pill">${c.accepted} accepted</span>`);
+  return parts.join('') || '<span class="pill">no open critical, high, or medium</span>';
+}
+function renderHome(el) {
+  const ps = S.state.projects;
+  const cards = ps.map(p => {
+    const job = S.jobs[p.id];
+    const running = p.job || (job && job.status === 'running');
+    if (p.job && !job) watch(p.job, p.id);
+    return `<div class="card proj"><div class="top"><span class="grade ${esc(p.grade || '')}">${p.grade || '–'}</span>
+      <div style="min-width:0"><div class="name">${esc(p.name)}</div><div class="path">${esc(p.path)}</div></div></div>
+      <div class="small muted">${p.score != null ? `Readiness ${p.score}/100 · ${esc(p.shape)}` : 'Not analyzed yet'}${p.finished_at ? ' · last run ' + esc(p.finished_at) : ''}${p.explained ? ` · ${p.explained} explained` : ''}</div>
+      <div class="pills">${counts(p.counts)}</div>
+      ${!p.exists ? '<div class="note warn">This folder no longer exists.</div>' : ''}
+      <div class="row">${p.has_report ? `<button class="btn primary" data-open="${p.id}">Open</button>` : ''}
+        <button class="btn" data-run="${p.id}" ${running || !p.exists ? 'disabled' : ''}>${running ? 'Analyzing…' : p.has_report ? 'Re-analyze' : 'Analyze'}</button>
+        <button class="btn" data-del="${p.id}" title="Remove from this list (files are not touched)" style="margin-left:auto">Remove</button></div>
+      ${running || (job && job.status === 'error') ? `<pre class="log" id="log-${p.id}">${esc((job && job.log || []).join('\n'))}</pre>` : ''}
+      ${job && job.status === 'error' ? `<div class="note warn">${esc(job.error)}</div>` : ''}</div>`;
+  }).join('');
+  el.innerHTML = `<main><h1>Projects</h1><p class="muted">Lantern maps every path through your code, checks it for security problems, grades how ready it is to ship, and writes evidence you can hand to a reviewer. Everything runs on this computer.</p>
+    <div class="card"><label for="addpath" style="margin-top:0">Add a project folder</label>
+      <div class="row"><input type="text" id="addpath" placeholder="/path/to/your/app" style="flex:1;min-width:200px"><button class="btn primary" id="add">Add and analyze</button><button class="btn" id="browsebtn">Browse…</button></div>
+      <div id="browse"></div><div id="adderr"></div></div>
+    ${ps.length ? `<div class="grid">${cards}</div>` : '<div class="empty">No projects yet. Add a folder above.</div>'}</main>`;
+  el.querySelector('#add').onclick = async () => {
+    const path = el.querySelector('#addpath').value.trim();
+    try { const p = await api('/api/projects', {method: 'POST', body: {path}}); const j = await api(`/api/projects/${p.id}/analyze`, {method: 'POST'}); watch(j.id, p.id); await refresh(); }
+    catch (e) { el.querySelector('#adderr').innerHTML = `<div class="note warn">${esc(e.message)}</div>`; }
+  };
+  el.querySelector('#browsebtn').onclick = () => browse(el.querySelector('#addpath').value || '');
+  el.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => {
+    try { const j = await api(`/api/projects/${b.dataset.run}/analyze`, {method: 'POST'}); watch(j.id, b.dataset.run); render(); } catch (e) { alert(e.message); } });
+  el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => go('project', {project: b.dataset.open, tab: 'atlas'}));
+  el.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (confirm('Remove this project from the list? Its files and results are not deleted.')) { await api('/api/projects/' + b.dataset.del, {method: 'DELETE'}); refresh(); } });
+}
+async function browse(path) {
+  const box = document.getElementById('browse');
+  const d = await api('/api/fs?path=' + encodeURIComponent(path));
+  box.innerHTML = `<div class="small muted" style="margin-top:8px">${esc(d.path)}</div><div class="browser">
+    ${d.parent ? `<button data-b="${esc(d.parent)}">↑ Up</button>` : ''}
+    <button data-pick="${esc(d.path)}"><b>Use this folder</b></button>
+    ${d.dirs.map(x => `<button data-b="${esc(x.path)}">📁 ${esc(x.name)}${x.project ? '<span class="p">looks like a project</span>' : ''}</button>`).join('')}</div>`;
+  box.querySelectorAll('[data-b]').forEach(b => b.onclick = () => browse(b.dataset.b));
+  box.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { document.getElementById('addpath').value = b.dataset.pick; box.innerHTML = ''; });
+}
+
+// ---------------------------------------------------------------- project
+function renderProject(el) {
+  const p = S.state.projects.find(x => x.id === S.project);
+  if (!p) return go('home');
+  el.innerHTML = `<div class="sub"><span class="title">${esc(p.name)}</span>
+    <button data-t="atlas" class="${S.tab === 'atlas' ? 'on' : ''}">Atlas</button>
+    <button data-t="evidence" class="${S.tab === 'evidence' ? 'on' : ''}">Evidence Report</button>
+    <button data-t="explain" class="${S.tab === 'explain' ? 'on' : ''}">Explanations</button>
+    <span style="margin-left:auto" class="row"><a class="btn" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener">Open in new tab</a></span></div>
+    <div id="pbody"></div>`;
+  el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; renderProject(el); });
+  const body = el.querySelector('#pbody');
+  if (S.tab === 'atlas') body.innerHTML = `<iframe src="/p/${p.id}/report.html" title="Atlas"></iframe>`;
+  else if (S.tab === 'evidence') body.innerHTML = `<iframe src="/p/${p.id}/evidence.html" title="Evidence Report"></iframe>`;
+  else renderExplain(body, p);
+}
+async function renderExplain(body, p) {
+  const s = S.state.settings, prov = S.state.providers.find(x => x.name === s.provider) || {};
+  const job = S.jobs[p.id];
+  body.innerHTML = `<main><h1>Three-Lens explanations</h1>
+    <p class="muted">A model writes each explanation three ways: technical, everyday, and a 1:1 map between them. Lantern checks every phrase anchors to real code and rejects ones that don't. Models never create or close findings.</p>
+    <div class="card" id="plan">Working out what to explain…</div></main>`;
+  let plan;
+  try { plan = await api(`/api/projects/${p.id}/plan?depth=3&limit=40`); } catch (e) { body.querySelector('#plan').innerHTML = `<div class="note warn">${esc(e.message)}</div>`; return; }
+  const cloud = prov.local === false || (prov.local === null && !/localhost|127\.0\.0\.1/.test(s.base_url || ''));
+  const ready = s.model && (!prov.needs_key || prov.key);
+  body.querySelector('#plan').innerHTML = `<div><b>${plan.nodes}</b> functions: entry points and what they call, up to 3 levels deep. About <b>${plan.input_tokens.toLocaleString()}</b> input and <b>${plan.output_tokens.toLocaleString()}</b> output tokens. <span class="muted small">${esc(plan.note)}</span></div>
+    <div class="note">${s.model ? `Model: <b>${esc(s.provider)}/${esc(s.model)}</b>` : 'No model chosen yet.'} <a href="#" id="toset">Change in Settings</a></div>
+    ${s.model && cloud ? `<div class="note warn">The source code of these functions will be sent to ${esc(s.provider)} to write the explanations. To keep everything on this computer, choose Ollama or LM Studio in Settings.</div>` : ''}
+    ${s.model && !cloud ? '<div class="note ok">Local model: your code stays on this computer.</div>' : ''}
+    ${s.model && prov.needs_key && !prov.key ? `<div class="note warn">Add your ${esc(s.provider)} API key in Settings first.</div>` : ''}
+    <div class="row"><button class="btn primary" id="go" ${!ready || (job && job.status === 'running') ? 'disabled' : ''}>Explain ${plan.nodes} functions</button>
+    <span class="small muted">You can also explain one function at a time from the Atlas.</span></div>
+    ${job ? `<pre class="log" id="log-${p.id}">${esc((job.log || []).join('\n'))}</pre>${job.status === 'error' ? `<div class="note warn">${esc(job.error)}</div>` : ''}` : ''}`;
+  body.querySelector('#toset').onclick = e => { e.preventDefault(); go('settings'); };
+  body.querySelector('#go').onclick = async () => {
+    try { const j = await api(`/api/projects/${p.id}/explain`, {method: 'POST', body: {depth: 3, limit: 40}}); watch(j.id, p.id); renderExplain(body, p); }
+    catch (e) { alert(e.message); }
+  };
+}
+
+// ---------------------------------------------------------------- settings
+function renderSettings(el) {
+  const s = S.state.settings, provs = S.state.providers;
+  const draw = () => {
+    const name = el.querySelector('#prov').value, pr = provs.find(x => x.name === name) || {};
+    el.querySelector('#provinfo').innerHTML = (pr.local ? '<div class="note ok">Runs on this computer: your code never leaves it. Start the model server first (for Ollama: <code>ollama serve</code>, then <code>ollama pull &lt;model&gt;</code>).</div>'
+      : pr.local === false ? `<div class="note warn">Cloud model: when you ask for explanations, the code of each explained function is sent to ${esc(name)}. Lantern itself has no server and never sees your code or key.</div>`
+      : '<div class="note">Any OpenAI-compatible endpoint. If it runs on this computer, your code stays here.</div>')
+      + (pr.needs_key ? `<div class="small muted">${pr.key ? 'Key: set (' + esc(pr.key) + ')' : `No key yet. Paste one below, or set ${esc(pr.env)} before starting Lantern.`}</div>` : '');
+    el.querySelector('#keyrow').style.display = pr.needs_key || name === 'openai-compatible' ? '' : 'none';
+    el.querySelector('#urlrow').style.display = name === 'openai-compatible' || pr.local ? '' : 'none';
+    el.querySelector('#url').placeholder = pr.default_url || 'http://localhost:8000/v1';
+  };
+  el.innerHTML = `<main><h1>Settings</h1>
+    <div class="card"><h2 style="margin-top:0">Model for explanations</h2>
+      <label for="prov">Provider</label><select id="prov">${provs.map(p => `<option value="${esc(p.name)}" ${p.name === s.provider ? 'selected' : ''}>${esc(p.name)}${p.local ? ' (local)' : ''}</option>`).join('')}</select>
+      <div id="provinfo"></div>
+      <label for="model">Model name</label><input type="text" id="model" value="${esc(s.model)}" placeholder="the provider's model id, e.g. from its model list">
+      <div id="urlrow"><label for="url">Base URL (optional)</label><input type="text" id="url" value="${esc(s.base_url)}"></div>
+      <div id="keyrow"><label for="key">API key</label><input type="password" id="key" autocomplete="off" placeholder="paste to set or replace">
+        <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" id="remember"> Remember on this computer (saved in ~/.lantern/keys.json, readable only by you). Otherwise kept in memory until Lantern stops.</label>
+        <button class="btn" id="forget" type="button">Forget saved key</button></div>
+      <h2>Privacy</h2>
+      <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="radio" name="priv" value="full" ${s.privacy !== 'structure' ? 'checked' : ''}> Full: reports include each function's source, for the code panel</label>
+      <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="radio" name="priv" value="structure" ${s.privacy === 'structure' ? 'checked' : ''}> Structure only: reports leave source code out (safer to share)</label>
+      <div class="row" style="margin-top:14px"><button class="btn primary" id="save">Save</button><span id="saved" class="small muted"></span></div></div>
+    <p class="small muted">Lantern ${esc(VERSION)} · settings live in ~/.lantern on this computer.</p></main>`;
+  el.querySelector('#prov').onchange = draw; draw();
+  const save = async (extra = {}) => {
+    const body = {provider: el.querySelector('#prov').value, model: el.querySelector('#model').value, base_url: el.querySelector('#url').value,
+      privacy: el.querySelector('input[name=priv]:checked').value, key: el.querySelector('#key').value || undefined, remember: el.querySelector('#remember').checked, ...extra};
+    try { const r = await api('/api/settings', {method: 'POST', body}); S.state.settings = r.settings; S.state.providers = r.providers; el.querySelector('#key').value = ''; draw(); el.querySelector('#saved').textContent = 'Saved.'; }
+    catch (e) { el.querySelector('#saved').textContent = e.message; }
+  };
+  el.querySelector('#save').onclick = () => save();
+  el.querySelector('#forget').onclick = () => save({forget_key: true, key: undefined});
+}
+
+function renderHelp(el) {
+  el.innerHTML = `<main><h1>How to use Lantern</h1><div class="card">
+    <ol><li><b>Add a project</b>: any folder with a Python or TypeScript/JavaScript app. Lantern reads the code; it never runs it.</li>
+    <li><b>Open the Atlas</b>: pick a page or API route on the left and follow the path, from button clicks through HTTP calls to the backend. Lines show how sure Lantern is about each link.</li>
+    <li><b>Findings</b>: security problems ranked by how bad they are and whether a user can reach them. Fix them, or accept a risk with a written reason.</li>
+    <li><b>Readiness</b>: a 0–100 grade across ten areas, with what to fix first and starter files (Dockerfile, CI, .env.example) you can write with one click.</li>
+    <li><b>Explanations</b>: add your own model key (or a local model) in Settings to get every function explained three ways.</li>
+    <li><b>Evidence Report</b>: a commit-pinned summary to share with an engineer. They can re-run <code>lantern verify</code> to check it.</li></ol>
+    <p class="muted small">Command line: <code>lantern analyze PATH</code>, <code>lantern explain PATH --model provider/model</code>, <code>lantern verify PATH --report evidence.html</code>. Run <code>lantern --help</code> for all commands.</p></div></main>`;
+}
+
+function render() {
+  const el = document.getElementById('view');
+  if (!S.state) { el.innerHTML = '<div class="empty">Loading…</div>'; return; }
+  if (S.view === 'project') { el.className = ''; return renderProject(el); }
+  if (S.view === 'settings') return renderSettings(el);
+  if (S.view === 'help') return renderHelp(el);
+  renderHome(el);
+}
+refresh().catch(e => { document.getElementById('view').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>

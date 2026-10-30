@@ -27,6 +27,7 @@ product's job is to make their code understandable and defensible to skeptical e
 ```bash
 pip install -e ".[scan,dev]"
 python -m pytest -q                                   # ~6 s
+lantern serve tests/fixtures/shop                     # the app; prints a one-time link
 lantern analyze tests/fixtures/shop --out /tmp/shop   # React + FastAPI sample, end to end
 lantern analyze tests/fixtures/nextapp --out /tmp/nx  # Next.js + Supabase sample
 python examples/make_demo.py /tmp/demo                # report with hand-written explanations, no key
@@ -52,6 +53,9 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/explain.py` | Prompt (language-aware, includes HTTP links), `validate()`, retry, bottom-up `select_nodes`, cache |
 | `lantern/providers.py` | Anthropic, OpenAI-compatible (OpenAI, OpenRouter, Mistral, Gemini, Ollama, LM Studio, vLLM), fixture stub |
 | `lantern/report.py` + `viewer/report.html` | One self-contained HTML file (vanilla JS): pages/routes, path tree with HTTP and click hops, flowchart, lenses, findings with UI paths |
+| `lantern/pipeline.py` | analyze / explain / rebuild as functions with a `log` callback; used by the CLI and the server |
+| `lantern/server.py` + `viewer/app.html` | `lantern serve`: stdlib HTTP app (Home, Atlas iframe with live actions, Evidence, Explanations, Settings), jobs in threads, token + Host checks, keys in memory or `~/.lantern/keys.json` (0600); PWA manifest + service worker |
+| `tools/fake_model.py` | Offline OpenAI-compatible server answering with the shop demo explanations, for end-to-end tests |
 | `lantern/cli.py` | `analyze`, `trace`, `explain`, `report`; results in `PATH/.lantern/` |
 | `tests/fixtures/shop` | Python backend (`shop/`) + React/Vite frontend (`web/`) with planted shell/SQL injection, MD5, XSS, public secret |
 | `tests/fixtures/nextapp` | Next.js + Supabase with an unprotected DELETE route, a table without RLS, a public service-role var |
@@ -97,7 +101,8 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
    to resolve `useQuery`/`useMutation` results, hooks returning objects, and props typed by interface.
 4. **JS runtime tracing** (V8 inspector or a Babel/esbuild transform) so frontend edges get the same
    precision measurement Python has.
-5. **PWA shell + local agent pairing** (spec sections 5 and 12). The current viewer becomes the Atlas.
+5. **Cloud mode + local agent pairing** (spec sections 5 and 12): accounts, GitHub App, remote "analyze now",
+   WebGL network view (Sigma.js) for very large graphs. The local app (`lantern serve`) is the base.
 6. **Rust, then C++** frontends (spec 6.3), reusing the same graph, bridge, and viewer.
 7. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
 

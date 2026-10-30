@@ -1,5 +1,6 @@
-"""lantern: map, trace, scan, explain, and report on a Python repository.
+"""lantern: map, explain, audit, and grade a full-stack app (Python + TypeScript/JavaScript).
 
+  lantern serve [PATH ...]                                the local app in your browser (start here)
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
   lantern trace PATH -- python -m pytest -q               record what actually runs
   lantern explain PATH --model anthropic/<model>          add Three-Lens explanations
@@ -8,6 +9,7 @@
   lantern starter PATH [--write NAME]                     show or write generated starter files
   lantern evidence PATH                                   rebuild the commit-pinned Evidence Report
   lantern verify PATH --digest sha256:...                 re-run the analysis and compare with a report
+  lantern serve [PATH ...]                                the local app in your browser (start here)
 
 Results live in PATH/.lantern/ (override with --out).
 """
@@ -17,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
 
 from . import __version__
@@ -43,51 +44,13 @@ def _split_cmd(argv: list[str]) -> tuple[list[str], list[str]]:
 
 
 def cmd_analyze(a, trace_cmd: list[str]) -> int:
-    from .engine import build_graph
-    from .report import write_report
-    from .security import scan
-    from .trace import merge_trace, run_trace
-
+    from .pipeline import analyze
     repo = Path(a.path).resolve()
     out = _out(repo, a.out)
-    timings = {}
-    t = time.perf_counter()
-    g = build_graph(repo)
-    timings["graph"] = round(time.perf_counter() - t, 2)
-    s = g.stats()
-    print(f"graph   {g.meta['files']} files, {s['nodes'].get('callable', 0)} functions, "
-          f"{s['internal_call_edges']} internal calls, {s['entry_points']} entry points "
-          f"({timings['graph']}s)")
-    if trace_cmd:
-        t = time.perf_counter()
-        m = merge_trace(g, run_trace(repo, trace_cmd))
-        timings["trace"] = round(time.perf_counter() - t, 2)
-        print(f"trace   {m['observed_edges']} calls seen running, recall {m['recall']}, "
-              f"{m['runtime_only']} runtime-only (exit {m['returncode']})")
-    sec = None
-    if not a.no_scan:
-        t = time.perf_counter()
-        sec = scan(g)
-        timings["scan"] = round(time.perf_counter() - t, 2)
-        c = sec["counts"]
-        print(f"scan    {c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low "
-              f"({timings['scan']}s)")
-        (out / "security.json").write_text(json.dumps(sec, indent=1))
-    g.save(out / "graph.json")
-    run_meta = {"timings": timings, "privacy": a.privacy}
-    if trace_cmd:
-        run_meta["trace"] = {"command": trace_cmd, "returncode": m["returncode"]}
-    from .readiness import assess
-    rd = assess(g, sec, run_meta)
-    (out / "readiness.json").write_text(json.dumps(rd, indent=1))
-    print(f"ready   {rd['score']}/100 (grade {rd['grade']}), {rd['shape']}")
-    (out / "run.json").write_text(json.dumps(run_meta, indent=1))
-    path = write_report(out, g, sec, _load(out, "explanations.json"), a.privacy, timings, rd)
-    print(f"report  {path}")
-    print(f"proof   {_evidence(out, g, sec, rd, run_meta, a.privacy)}")
-    if a.fail_on and sec:
-        levels = list(RANKS[:RANKS.index(a.fail_on) + 1])
-        n = sum(sec["counts"].get(k, 0) for k in levels)
+    res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan)
+    if a.fail_on and res["counts"]:
+        levels = RANKS[:RANKS.index(a.fail_on) + 1]
+        n = sum(res["counts"].get(k, 0) for k in levels)
         if n:
             print(f"fail    {n} open finding(s) at {a.fail_on} or worse", file=sys.stderr)
             return 1
@@ -95,16 +58,6 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
 
 
 RANKS = ["critical", "high", "medium", "low"]
-
-
-def _evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str) -> Path:
-    from . import evidence
-    base = _load(out, "baseline.json")
-    if base is None and sec is not None:
-        base = evidence.baseline_from(sec, evidence.git_info(Path(g.repo_root)).get("commit"))
-        (out / "baseline.json").write_text(json.dumps(base, indent=1))
-    ev = evidence.build(g, sec, rd, _load(out, "explanations.json"), run_meta, base, privacy)
-    return evidence.write(out, ev)["html"]
 
 
 def cmd_evidence(a) -> int:
@@ -116,8 +69,9 @@ def cmd_evidence(a) -> int:
     run_meta = _load(out, "run.json") or {}
     if a.reset_baseline and (out / "baseline.json").exists():
         (out / "baseline.json").unlink()
-    print(_evidence(out, Graph.load(out / "graph.json"), _load(out, "security.json"), _load(out, "readiness.json"),
-                    run_meta, run_meta.get("privacy", "full")))
+    from .pipeline import evidence
+    print(evidence(out, Graph.load(out / "graph.json"), _load(out, "security.json"), _load(out, "readiness.json"),
+                   run_meta, run_meta.get("privacy", "full")))
     return 0
 
 
@@ -178,42 +132,31 @@ def cmd_trace(a, trace_cmd: list[str]) -> int:
 
 
 def cmd_explain(a) -> int:
-    from .explain import estimate, run, select_nodes
+    from .pipeline import explain, plan_explain
     from .providers import make_provider
-    from .report import write_report
     repo = Path(a.path).resolve()
     out = _out(repo, a.out)
     if not (out / "graph.json").exists():
         print("run `lantern analyze` first", file=sys.stderr)
         return 2
-    g = Graph.load(out / "graph.json")
-    sec = _load(out, "security.json") or {"findings": []}
-    nids = select_nodes(g, depth=a.depth, limit=a.max_nodes, only=a.node or None)
-    est = estimate(g, nids, sec["findings"])
-    print(f"plan    {est['nodes']} functions, about {est['input_tokens']:,} input and "
-          f"{est['output_tokens']:,} output tokens. {est['note']}")
+    plan = plan_explain(out, a.depth, a.max_nodes, a.node or None)
+    print(f"plan    {len(plan["nodes"])} functions, about {plan['input_tokens']:,} input and "
+          f"{plan['output_tokens']:,} output tokens. {plan['note']}")
     if a.estimate:
         return 0
     provider = make_provider(a.model, base_url=a.base_url)
+    g = Graph.load(out / "graph.json")
 
     def progress(i, n, nid, rec):
         flag = "ok" if rec.get("validated") else ("ERR " + rec["error"][:80] if "error" in rec else "unvalidated")
         print(f"  [{i}/{n}] {g.nodes[nid].qualname}  {flag}", flush=True)
 
-    res = run(g, provider, sec["findings"], out / "cache", nids, metaphor=a.metaphor, progress=progress)
-    prev = _load(out, "explanations.json")
-    if prev and prev.get("explanations"):
-        prev["explanations"].update(res["explanations"])
-        res["explanations"] = prev["explanations"]
-    (out / "explanations.json").write_text(json.dumps(res, indent=1))
+    res = explain(out, provider, plan["nodes"], metaphor=a.metaphor, progress=progress)
     st = res["stats"]
     print(f"explain {st['validated']} validated ({st['first_try']} first try), {st['failed']} failed, "
           f"{st['cached']} from cache. Tokens: {st['usage']['input_tokens']:,} in, "
           f"{st['usage']['output_tokens']:,} out. Metaphor: {res['metaphor']['world']}")
-    run_meta = _load(out, "run.json") or {}
-    path = write_report(out, g, sec, res, run_meta.get("privacy", "full"), run_meta.get("timings"),
-                        _load(out, "readiness.json"))
-    print(f"report  {path}")
+    print(f"report  {out / 'report.html'}")
     return 0
 
 
@@ -353,6 +296,12 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--digest", help="sha256:... from the report")
     sp.add_argument("--report", help="evidence.html (or .json) to read the digest from")
 
+    sp = sub.add_parser("serve", help="open the Lantern app in your browser (projects, map, findings, readiness)")
+    sp.add_argument("paths", nargs="*", help="project folders to add (analyzed on first open)")
+    sp.add_argument("--port", type=int, default=8765)
+    sp.add_argument("--host", default="127.0.0.1", help="default 127.0.0.1 (this computer only)")
+    sp.add_argument("--no-open", action="store_true", help="don't open a browser")
+
     a = p.parse_args(argv)
     if a.cmd == "analyze":
         return cmd_analyze(a, trace_cmd if a.trace else [])
@@ -370,6 +319,9 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_evidence(a)
     if a.cmd == "verify":
         return cmd_verify(a)
+    if a.cmd == "serve":
+        from .server import serve
+        return serve(a.paths, host=a.host, port=a.port, open_browser=not a.no_open)
     return cmd_report(a)
 
 

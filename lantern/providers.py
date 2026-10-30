@@ -6,7 +6,8 @@ Three adapters cover nearly every provider:
                       Mistral, Google's OpenAI-compatible endpoint, Ollama, vLLM, LM Studio, llama.cpp
   * fixture         - offline stub used by tests and `--dry-run` style experiments
 
-Keys come from environment variables and are never written to disk by Lantern.
+Keys come from environment variables, or from `lantern serve` Settings (kept in memory, or in
+~/.lantern/keys.json with mode 0600 only when the user ticks "remember").
 """
 
 from __future__ import annotations
