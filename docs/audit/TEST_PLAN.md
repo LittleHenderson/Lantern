@@ -58,8 +58,10 @@ CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every pu
 3b. **An existing repository from a link.** On Projects, paste `https://github.com/fastapi/full-stack-fastapi-template`
 and press Add and analyze: the card appears at once with the clone log, then the analysis, then grade and findings.
 `lantern analyze https://github.com/pallets/flask --offline` does the same from a terminal (the clone lands in
-`~/.lantern/repos/github.com/pallets/flask`). A link with a token in it, an `http://` link, or a link to a user
-page must be refused with a message that says why. Measured 2026-10-30 on a 2-core container: the template clones
+`~/.lantern/repos/github.com/pallets/flask`). A link with a token in it, an `http://` link, a link to a user
+page, or a link to any host other than the public forges (`https://127.0.0.1/o/r`, `https://10.0.0.8/o/r`, your own
+server unless it is in `LANTERN_GIT_HOSTS`) must be refused with a message that says why. With
+`LANTERN_CLONE_MAX_MB=1`, a repository with a 2 MB file must be refused before any file is written. Measured 2026-10-30 on a 2-core container: the template clones
 and analyzes in 3 s; Django (2,984 files, 33,000 functions) in about 90 s plus the clone (graph 24 s, scanners
 56 s, readiness 2 s). Its report embeds every function's source and is 74 MB, so for a repository that size set
 privacy to "structure" (Settings, or `--privacy structure`).
@@ -100,8 +102,12 @@ echoed), and search `~/.lantern`, `.lantern/`, job logs (`/api/jobs/<id>`), and 
 
 4.10 **Heuristics that must not say "in place".** A data-changing route whose only login word is in a comment
 (`# TODO: add auth here later`) or a docstring; one whose body does `who = get_user(payload["owner"])` with or
-without `if not who:`; a route path `/authors`. Expect `add`, `check` (lookup with a test), `add` (lookup without),
-and `add`. Then `cmd = request.args.get("cmd")` followed by `cmd = "ls -la"` (expect high, no input sentence) and
+without `if not who:`; a route path `/authors`; `permissions = payload.get("permissions")` followed by a test on
+`permissions`; `settings.protected = payload["protected"]`; a parameter `permissions: list[str] = Body()`; a route
+whose only dependency is `Depends(get_session)`; `token = payload.get("token")` followed by a tested `get_user(token)`.
+Expect `add`, `check` (lookup with a test), `add` (lookup without), `add` for the next five and `check` for the last.
+Then `if not current_user.is_admin:`, `authorize(user, item)`, `get_user(token)` with `token: str = Header()`, and
+`get_user_by_token(token)` must still give `in place`. Then `cmd = request.args.get("cmd")` followed by `cmd = "ls -la"` (expect high, no input sentence) and
 by `if not cmd: cmd = "ls"` (expect critical, naming the request line).
 
 ## 5. Pass criteria for a release

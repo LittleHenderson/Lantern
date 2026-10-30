@@ -280,5 +280,48 @@ def test_missing_auth_reads_the_handler_not_its_comments(tmp_path):
     s = scan(build_graph(tmp_path))
     auth = {f["line"]: f for f in s["findings"] if f["rule"] == "LW-AUTH-MISSING"}
     assert sorted(auth) == [4, 8], auth.keys()                          # POST (comment only) and DELETE (lookup)
-    assert "record's owner" in auth[8]["more_info"] and "getUser(req.body.owner)" in auth[8]["more_info"]
-    assert "record's owner" not in auth[4]["more_info"]
+    assert ("The only sign in the handler is that `getUser(req.body.owner)` looks up a user by `req.body.owner`, "
+            "not by who is calling: that finds a record, not the caller.") in auth[8]["more_info"]
+    assert "only sign" not in auth[4]["more_info"]
+
+
+def test_what_counts_as_a_login_check_in_a_handler():
+    """The rules behind `LW-AUTH-MISSING` and the `route-auth` protection, read straight from a handler's lines.
+    Request data and the names that hold it are data, an auth word is a check only as a call or an attribute, and a
+    user lookup identifies the caller only through a token, session, request, header or cookie (or no argument)."""
+    from lantern.websec import body_auth_sign
+
+    def sign(src, signature="def f(payload)", js=False):
+        got = body_auth_sign(src, 1, src.count("\n"), js, signature=signature)
+        return got[0] if got else None
+
+    # what the caller sent is never a check, however it is named
+    assert sign("def f(payload: dict):\n    permissions = payload.get('permissions')\n    if 'admin' in permissions:\n"
+                "        return 1\n", "def f(payload: dict)") is None
+    assert sign("def f(payload):\n    scopes = []\n    scopes += payload['scopes']\n    if permission in scopes:\n"
+                "        return 1\n") is None
+    assert sign("def f(permissions: list[str] = Body(), session: Session = Depends(get_session)):\n"
+                "    permissions.append('x')\n    session.add(permissions)\n",
+                "def f(permissions: list[str] = Body(), session: Session = Depends(get_session))") is None
+    assert sign("app.post('/x', (req, res) => {\n  const auth = req.body.auth\n  if (auth) res.send('ok')\n})\n",
+                "(req, res) =>", js=True) is None
+    # a call or an attribute is
+    assert sign("def f(request):\n    if not request.user.is_admin:\n        raise X\n", "def f(request)") == "strong"
+    assert sign("def f(payload):\n    authorize(request_user(), 'x')\n") == "strong"
+    assert sign("def f(payload):\n    token = payload['token']\n    verify_token(token)\n") == "strong"
+    assert sign("export async function DELETE(req) {\n  const session = await getServerSession(authOptions)\n"
+                "  if (!session) return new Response('no', {status: 401})\n}\n", "async function DELETE(req)",
+                js=True) == "strong"
+    # a user lookup: by the caller's credential (strong), by a request value with a test (weak), untested (nothing)
+    assert sign("def f(request):\n    kind = 'admin'\n    token = request.headers['Authorization']\n"
+                "    user = get_user(token)\n    if not user:\n        abort(401)\n", "def f(request)") == "strong"
+    assert sign("def f(token: str = Header()):\n    user = get_user(token)\n    if not user: abort(401)\n",
+                "def f(token: str = Header())") == "strong"
+    assert sign("def f(payload):\n    token = payload.get('token')\n    user = get_user_by_token(token)\n"
+                "    if not user:\n        abort(401)\n") == "strong"
+    assert sign("def f(payload):\n    u = get_user()\n    if not u: abort(401)\n") == "strong"
+    assert sign("def f(payload):\n    token = payload.get('token')\n    user = get_user(token)\n    if not user:\n"
+                "        abort(401)\n") == "weak"
+    assert sign("def f(user_id: int):\n    u = get_user(user_id)\n    if not u: abort(404)\n", "def f(user_id: int)") == "weak"
+    assert sign("def f(payload):\n    who = get_user(payload['owner'])\n    if not who:\n        abort(404)\n") == "weak"
+    assert sign("def f(payload):\n    token = payload.get('token')\n    user = get_user(token)\n    return user\n") is None

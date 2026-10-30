@@ -56,15 +56,28 @@ JS_RULES = [
      "LOW", "Stores a login token in localStorage, where any injected script can read it", 922),
 ]
 
-# Names of things that check who is calling: decorators, dependencies, callees, body words. `getUser`/`get_user`
-# are deliberately absent: fetching a user record is a check only when the argument identifies the caller (below).
-AUTH_NAME_RE = re.compile(r"current_?user|auth|login_required|require_?user|verify|token|permission|jwt|"
-                          r"session|is_?admin|superuser|guard|protect|clerk|getServerSession", re.I)
-# The same idea read from a handler's body (attributes, awaits, helpers the graph did not link)
-BODY_AUTH = re.compile(r"current_?user|request\.user|req\.user|\bauth(?!or)|authenticat|authoriz|login_required|"
-                       r"require_?(?:user|auth|login)|permission|jwt|is_?admin|superuser|getServerSession|"
-                       r"verify_?token|check_?token|clerk|\bguard|protect|locals\.user|session\.user|"
-                       r"session\[.{0,20}user", re.I)
+# Names of things that check who is calling: decorators, dependencies, callees, annotations. `getUser`/`get_user`
+# are deliberately absent (fetching a user record is a check only when the argument identifies the caller, below),
+# and so is a bare `session`: `Depends(get_session)` and `db.session` are database sessions.
+AUTH_NAME_RE = re.compile(r"current_?user|auth|login_required|require_?(?:user|session)|verify|token|permission|jwt|"
+                          r"is_?admin|superuser|guard|protect|clerk|getServerSession|getSession|useSession", re.I)
+# Read from a handler's body. Shapes that are a check wherever they appear: the framework's view of the caller.
+BODY_AUTH_SHAPED = re.compile(r"request\.user|req\.user|locals\.user|session\.user|session\[.{0,20}user|"
+                              r"\bin\s+session\s*[:)]|request\.state\.user|ctx\.state\.user|req\.session|"
+                              r"request\.session", re.I)
+# Words that are a check only as a call or an attribute (`authorize(...)`, `user.is_admin`), never as a bare local
+# name, parameter or assignment target, which is usually data the caller sent (`permissions = payload.get(...)`).
+BODY_AUTH_WORDS = re.compile(r"current_?user|\bauth(?!or)|authenticat|authoriz|login_required|"
+                             r"require_?(?:user|auth|login|session)|permission|jwt|is_?admin|superuser|"
+                             r"getServerSession|getSession|useSession|verify_?token|check_?token|clerk|\bguard|"
+                             r"protect", re.I)
+BODY_AUTH = re.compile(BODY_AUTH_SHAPED.pattern + "|" + BODY_AUTH_WORDS.pattern, re.I)   # middleware windows
+# A parameter whose bare name means the caller (anything else named like an auth word is data: `permissions`)
+CALLER_PARAM = re.compile(r"(?:current|auth|authenticated|logged_?in|signed_?in|session)_?user|current_?identity|"
+                          r"principal|caller|viewer", re.I)
+# Parameters that carry the request itself, or are injected by the framework rather than sent in the request
+INJECTED = re.compile(r"\b(?:Header|Cookie|Depends|Security)\s*\(")
+CARRIER = re.compile(r"req|request|res|response|ctx|context|event|locals|self|cls|next|env|platform|c|h|e", re.I)
 # A helper that fetches a user record. `get_user(token)` identifies the caller; `get_user(payload["owner"])` finds
 # the record's owner (the IDOR shape), which proves nothing about who is calling.
 USER_LOOKUP = re.compile(r"\b(?:get|fetch|find|load|lookup|read|select)_?user(?:_?by_?\w+|s)?\s*\(", re.I)
@@ -74,6 +87,10 @@ CALLER_ARG = re.compile(r"token|session|request|\breq\b|\bctx\b|context|headers?
 REQUEST_VALUE = re.compile(r"\b(?:request|req)\.(?:args|form|json|body|query|params|values|files|data|get_json|"
                            r"path_params|query_params|matchdict|POST|GET|FILES)\b|\b(?:params|payload|body|"
                            r"searchParams|formData|form|args|input)\b", re.I)
+# ...and so is everything reached from it: `payload.get("permissions")`, `req.body.auth`, `params["protected"]`
+DATA_CHAIN = re.compile(REQUEST_VALUE.pattern + r"(?:\s*(?:\.\s*[\w$]+|\[[^\]\n]*\]|\((?:[^()\n]|\([^()\n]*\))*\)))*", re.I)
+ASSIGNMENT = re.compile(r"^\s*(?:(?:const|let|var)\s+)?(?P<lhs>[\w$]+(?:\s*,\s*[\w$]+)*|\{[^}=\n]*\}|\[[^\]=\n]*\])"
+                        r"\s*(?::[^=\n]+?)?\s*(?:[-+*/%&|^]|\*\*|//|\?\?|\|\||&&)?=(?![=>])\s*(?P<rhs>.+)$")
 CONDITION = re.compile(r"\b(?:if|elif|while|assert|unless)\b|[=!]==?|\bis\b|\bnot\b|!|&&|\|\||\?")
 PUBLIC_ROUTE_RE = re.compile(r"login|signin|sign-in|signup|sign-up|register|password|reset|recover|health|"
                              r"webhook|callback|logout|verify|token|public|contact|subscribe|oauth|"
@@ -259,6 +276,10 @@ def _blank(m: re.Match) -> str:
     return re.sub(r"[^\n]", "~", m.group(0))
 
 
+def _blank_data(m: re.Match) -> str:
+    return re.sub(r"[^\n]", "^", m.group(0))
+
+
 def code_only(text: str, js: bool = False) -> str:
     """The text with string literals and comments blanked out, same length, so offsets and line numbers still
     hold. A route path '/auth/refresh', a message, a docstring, or `# TODO: add auth here` is not a login check."""
@@ -292,34 +313,157 @@ def _call_args(code: str, start: int) -> str:
     return code[start + 1:start + 300]
 
 
-def body_auth_sign(text: str, start_line: int, end_line: int, js: bool) -> tuple[str, str] | None:
-    """What a handler's own lines say about checking the caller, read with strings and comments blanked out.
-    ("strong", evidence) for words that only make sense when checking who is calling, or a user lookup given the
-    caller's token/request/session (or nothing); ("weak", evidence) for a user lookup by some other value whose
-    result is then tested, which finds a record, not the caller; None otherwise. Weak never counts as in place."""
+def _split_top(s: str, ch: str) -> tuple[str, str]:
+    """Split at the first `ch` outside brackets (and not part of `==`, `=>`, `!=`)."""
+    depth = 0
+    for i, c in enumerate(s):
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == ch and depth == 0 and not (ch == "=" and (s[i + 1:i + 2] in ("=", ">") or s[i - 1:i] in ("=", "!", "<", ">"))):
+            return s[:i], s[i + 1:]
+    return s, ""
+
+
+def _params(signature: str) -> list[tuple[str, str, str]]:
+    """(name, annotation, default) for each parameter of `def f(a: int = 1, *, user=Depends(x))` or `(req, res)`."""
+    start = signature.find("(")
+    if start < 0:
+        return []
+    inner, out, depth, buf, parts = _call_args(signature, start), [], 0, [], []
+    for c in inner:
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        if c == "," and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(c)
+    parts.append("".join(buf))
+    for part in parts:
+        part = part.strip().lstrip("*").strip()
+        if not part or part in ("/",):
+            continue
+        head, default = _split_top(part, "=")
+        name, annotation = _split_top(head, ":")
+        out.append((name.strip(), annotation.strip(), default.strip()))
+    return out
+
+
+def signature_sign(signature: str) -> str | None:
+    """A parameter that brings the caller in: a dependency or type named like an auth check (`Depends(current_user)`,
+    `user: CurrentUser`, `Security(...)`), or a name that can only mean the caller (`current_user`). A parameter
+    merely named like an auth word (`permissions: list[str]`, `is_admin: bool`) is data the caller sent."""
+    for name, annotation, default in _params(signature):
+        if default and (AUTH_NAME_RE.search(_strip_strings(default)) or re.search(r"\bSecurity\s*\(", default)):
+            return f"`{name}={default}`"[:70] + " in its parameters"
+        if annotation and AUTH_NAME_RE.search(_strip_strings(annotation)):
+            return f"`{name}: {annotation}`"[:70] + " in its parameters"
+        if CALLER_PARAM.fullmatch(name):
+            return f"`{name}` in its parameters"
+    return None
+
+
+def _data_params(signature: str) -> set[str]:
+    """Plain parameters: what the caller sent. Not the request itself, an injected dependency, header or cookie, an
+    auth-typed parameter, or a name that means the caller or a credential (`token`, `authorization`)."""
+    out = set()
+    for name, annotation, default in _params(signature):
+        if CARRIER.fullmatch(name) or CALLER_PARAM.fullmatch(name) or CALLER_ARG.search(name):
+            continue
+        if AUTH_NAME_RE.search(_strip_strings(default + " " + annotation)) or INJECTED.search(default):
+            continue
+        for part in re.findall(r"[A-Za-z_$][\w$]*", name):   # `{ a, b }` destructuring too
+            out.add(part)
+    return out
+
+
+def _blank_names(code: str, signature: str) -> str:
+    """Blank the names that hold what the caller sent: plain parameters, and every local name assigned from request
+    data (already blanked to `^`; strings and comments are `~`) or from such a name, followed in order.
+    `permissions = payload.get("permissions")` then reads as no check, and so does every later use of `permissions`."""
+    names = _data_params(signature)
+    for line in code.splitlines():
+        m = ASSIGNMENT.match(line)
+        if not m:
+            continue
+        rhs = m.group("rhs")
+        if "^" in rhs or any(re.search(rf"(?<![\w$.]){re.escape(t)}(?![\w$])", rhs) for t in names):
+            names.update(re.findall(r"[A-Za-z_$][\w$]*", re.sub(r":\s*[\w$]+", "", m.group("lhs"))))
+    names -= {"const", "let", "var"}
+    for t in sorted(names, key=len, reverse=True):
+        code = re.sub(rf"(?<![\w$.]){re.escape(t)}(?![\w$])", lambda mm: "^" * len(mm.group(0)), code)
+    return code
+
+
+def _use_shape(code: str, s: int, e: int) -> tuple[str, str] | None:
+    """How the auth word at code[s:e] is used: ("call", ident), ("attribute", ident), ("decorator", ident), or
+    None for a bare name or an assignment target (`permissions = ...`, `user.is_admin = True`)."""
+    i = s
+    while i > 0 and (code[i - 1].isalnum() or code[i - 1] in "_$."):
+        i -= 1
+    j = e
+    while j < len(code) and (code[j].isalnum() or code[j] in "_$" or (code[j] == "." and j + 1 < len(code) and (code[j + 1].isalnum() or code[j + 1] in "_$"))):
+        j += 1
+    ident = code[i:j].strip(".")
+    k = j
+    while k < len(code) and code[k] in " \t":
+        k += 1
+    rest = code[k:k + 3]
+    if re.match(r"(?:[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?![=>])", rest):
+        return None
+    if rest.startswith("("):
+        return "call", ident
+    if rest.startswith("[") or "." in ident:
+        return "attribute", ident
+    q = i - 1
+    while q >= 0 and code[q] in " \t":
+        q -= 1
+    if q >= 0 and code[q] == "@":
+        return "decorator", ident
+    return None
+
+
+def body_auth_sign(text: str, start_line: int, end_line: int, js: bool, signature: str = "") -> tuple[str, str] | None:
+    """What a handler's own lines say about checking the caller, read with strings, comments and request data
+    blanked out. ("strong", evidence) for the framework's view of the caller (`request.user`), an auth word used
+    as a call or attribute (`authorize(...)`, `user.is_admin`), or a user lookup given the caller's token/request/
+    session (or nothing); ("weak", evidence) for a user lookup by some other value whose result is then tested,
+    which finds a record, not the caller; None otherwise. A bare local name or parameter is never a sign, however
+    it is called: `permissions = payload.get("permissions")` is what the caller claims. Weak never counts as in place."""
     lines = text.splitlines()
     if not start_line or start_line > len(lines):
         return None
     raw = "\n".join(lines[start_line - 1:(end_line or start_line)])
-    code = code_only(raw, js)
-    m = BODY_AUTH.search(code)
+    chains = DATA_CHAIN.sub(_blank_data, code_only(raw, js))   # strings, comments (~), request data and what hangs off it (^)
+    code = _blank_names(chains, signature)                 # ...and the names that hold it (all the same length)
+    m = BODY_AUTH_SHAPED.search(code)
     if m:
-        return "strong", f"handler mentions `{m.group(0)}`"
+        return "strong", f"handler mentions `{m.group(0).rstrip(':) ')}`"
+    for m in BODY_AUTH_WORDS.finditer(code):
+        shape = _use_shape(code, m.start(), m.end())
+        if shape:
+            kind, ident = shape
+            return "strong", f"handler calls `{ident}(...)`" if kind == "call" else f"handler mentions `{ident}`"
     weak = None
-    for m in USER_LOOKUP.finditer(code):
-        args = _call_args(code, m.end() - 1)
+    for m in USER_LOOKUP.finditer(chains):   # the lookup's result variable is tested, so read it with names intact
+        args = _call_args(chains, m.end() - 1)
         call = raw[m.start():m.end() + len(args) + 1].replace("\n", " ")
         call = re.sub(r"\s+", " ", call)[:60]
-        if not args.strip() or (CALLER_ARG.search(args) and not REQUEST_VALUE.search(args)):
-            return "strong", f"handler calls `{call}`"
-        line_start = code.rfind("\n", 0, m.start()) + 1
-        line_end = code.find("\n", m.end())
-        line = code[line_start:line_end if line_end >= 0 else len(code)]
+        held = code[m.end():m.end() + len(args)]   # same span with the names that hold request data blanked
+        if not args.strip() or CALLER_ARG.search(m.group(0)) or (CALLER_ARG.search(args) and "^" not in held):
+            return "strong", f"handler calls `{call}`"   # get_user(), get_user_by_token(x), get_user(token)
+        line_start = chains.rfind("\n", 0, m.start()) + 1
+        line_end = chains.find("\n", m.end())
+        line = chains[line_start:line_end if line_end >= 0 else len(chains)]
         lhs = re.match(r"\s*(?:(?:const|let|var)\s+)?(?:\{\s*)?([A-Za-z_$][\w$]*)[^=]*=[^=]", line)
         checked = bool(CONDITION.search(line[:m.start() - line_start]))   # `if not get_user(x):`
         if lhs and not checked:
             name = re.escape(lhs.group(1))
-            for later in code[line_end:].splitlines() if line_end >= 0 else []:
+            for later in chains[line_end:].splitlines() if line_end >= 0 else []:
                 if re.search(rf"(?<![\w$.]){name}(?![\w$])", later) and CONDITION.search(later):
                     checked = True
                     break
@@ -343,9 +487,9 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
         m = AUTH_NAME_RE.search(_strip_strings(d))
         if m:
             return f"decorator @{d.split('(')[0]}"
-    m = AUTH_NAME_RE.search(_strip_strings(n.signature or ""))
-    if m:
-        return f"`{m.group(0)}` in its parameters"
+    sig = signature_sign(n.signature or "")
+    if sig:
+        return sig
     seen, frontier = {n.id}, [n.id]
     for _ in range(depth):
         nxt = []
@@ -371,7 +515,8 @@ def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None) -> tup
         return "strong", sign
     if text is None or not n.file:
         return None
-    return body_auth_sign(text, n.start_line or 0, n.end_line or n.start_line or 0, js=not n.file.endswith(".py"))
+    return body_auth_sign(text, n.start_line or 0, n.end_line or n.start_line or 0, js=not n.file.endswith(".py"),
+                          signature=n.signature or "")
 
 
 def is_public_route(detail: str) -> bool:
@@ -411,7 +556,7 @@ def missing_auth(g: Graph) -> list[dict]:
         more = ("Heuristic: Lantern looked three calls deep for anything named like an auth check (current_user, "
                 "auth, verify, session, permission...) and read the handler's own lines for the same words. ")
         if sign:
-            more += (f"The handler only has {sign[1]}: that finds the record's owner, not who is calling. "
+            more += (f"The only sign in the handler is that {sign[1]}: that finds a record, not the caller. "
                      "Check the signed-in user as well. ")
         out.append(_finding(
             "LW-AUTH-MISSING", f"{n.entry['detail']} changes data, is called by the app, and no login check was found",
