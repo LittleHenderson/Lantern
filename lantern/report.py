@@ -33,7 +33,7 @@ def collect_sources(g: Graph, max_lines: int = 200) -> dict[str, str]:
 
 
 def write_report(out_dir: Path, g: Graph, security: dict | None, explanations: dict | None,
-                 privacy: str = "full", timings: dict | None = None) -> Path:
+                 privacy: str = "full", timings: dict | None = None, readiness: dict | None = None) -> Path:
     bundle = {
         "version": __version__,
         "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -44,6 +44,7 @@ def write_report(out_dir: Path, g: Graph, security: dict | None, explanations: d
         "sources": collect_sources(g) if privacy == "full" else {},
         "privacy": privacy,
         "timings": timings or {},
+        "readiness": readiness,
     }
     if privacy != "full":
         for f in bundle["security"]["findings"]:

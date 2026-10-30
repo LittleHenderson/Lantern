@@ -218,6 +218,25 @@ def rank(f: dict) -> str:
 
 
 RANK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+ACCEPTED_FILE = "lantern-accepted.json"
+
+
+def load_accepted(repo: Path) -> dict[str, dict]:
+    """Accepted risks live in the repo (committed), each with the builder's written reason."""
+    p = repo / ACCEPTED_FILE
+    try:
+        rows = json.loads(p.read_text()).get("accepted", []) if p.exists() else []
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return {}
+    return {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id") and r.get("reason")}
+
+
+def save_accepted(repo: Path, accepted: dict[str, dict]) -> Path:
+    p = repo / ACCEPTED_FILE
+    rows = sorted(accepted.values(), key=lambda r: r["id"])
+    p.write_text(json.dumps({"about": "Security findings the builder reviewed and accepted, with reasons. "
+                                      "Managed by `lantern accept`.", "accepted": rows}, indent=1) + "\n")
+    return p
 
 
 def scan(g: Graph) -> dict:
@@ -231,6 +250,7 @@ def scan(g: Graph) -> dict:
     wf, wt = scan_web(g)
     findings += wf
     tools += wt
+    accepted = load_accepted(repo)
     reach = reachability(g)
     ui_reach = reachability(g, kinds={"page", "main"})
     test_reach = reachability(g, include_tests=True)
@@ -245,9 +265,14 @@ def scan(g: Graph) -> dict:
         u = ui_reach.get(f["node"]) if f["node"] else None
         f["ui_path"] = u["path"] if u else None
         f["rank"] = "low" if f["in_tests"] and f["category"] == "code" else rank(f)
-        f["status"] = "open"
+        acc = accepted.get(f["id"])
+        f["status"] = "accepted" if acc else "open"
+        if acc:
+            f["accepted"] = {k: acc.get(k) for k in ("reason", "by", "date")}
     findings.sort(key=lambda f: (f["in_tests"], RANK_ORDER[f["rank"]], f["file"] or "", f["line"] or 0))
-    counts = {k: sum(1 for f in findings if f["rank"] == k and not f["in_tests"]) for k in RANK_ORDER}
+    live = [f for f in findings if not f["in_tests"] and f["status"] == "open"]
+    counts = {k: sum(1 for f in live if f["rank"] == k) for k in RANK_ORDER}
     counts["in_tests"] = sum(1 for f in findings if f["in_tests"])
+    counts["accepted"] = sum(1 for f in findings if f["status"] == "accepted")
     return {"findings": findings, "tools": tools, "counts": counts,
             "reachable_nodes": len(reach), "total_callables": sum(1 for n in g.nodes.values() if n.kind == "callable")}

@@ -26,7 +26,7 @@ product's job is to make their code understandable and defensible to skeptical e
 
 ```bash
 pip install -e ".[scan,dev]"
-python -m pytest -q                                   # ~4 s, 68 tests
+python -m pytest -q                                   # ~6 s
 lantern analyze tests/fixtures/shop --out /tmp/shop   # React + FastAPI sample, end to end
 lantern analyze tests/fixtures/nextapp --out /tmp/nx  # Next.js + Supabase sample
 python examples/make_demo.py /tmp/demo                # report with hand-written explanations, no key
@@ -47,6 +47,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/tracehook.py`, `trace.py` | Python runtime tracing (`sys.monitoring`), wrapper-hop collapse, upgrade edges to `observed` |
 | `lantern/security.py` | Bandit, pip-audit, secrets → `websec.scan_web` → pin to nodes → reachability + `ui_path` → rank |
 | `lantern/websec.py` | Full-stack rules: `LW-*` (public-env secrets, service-role JWT, CORS, Firebase, Supabase RLS, missing auth) and `LJ-*` JS patterns |
+| `lantern/readiness.py` | Deployment Readiness Score (spec 10): ten weighted categories of deterministic checks (`pass/fail/partial/skip`, skip leaves the denominator), shape advisor, fan-in hotspots, starter files. Accepted risks: `lantern-accepted.json` via `lantern accept` |
 | `lantern/explain.py` | Prompt (language-aware, includes HTTP links), `validate()`, retry, bottom-up `select_nodes`, cache |
 | `lantern/providers.py` | Anthropic, OpenAI-compatible (OpenAI, OpenRouter, Mistral, Gemini, Ollama, LM Studio, vLLM), fixture stub |
 | `lantern/report.py` + `viewer/report.html` | One self-contained HTML file (vanilla JS): pages/routes, path tree with HTTP and click hops, flowchart, lenses, findings with UI paths |
@@ -88,19 +89,17 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
 
 1. **Run real models through `lantern explain`** on the benchmark repos with two providers; record the
    first-try anchor pass rate (target 90%). Tune `SYSTEM` from failures, especially on JS components.
-2. **Deployment Readiness Score** (spec section 10) across both stacks: env/secrets handling, lockfiles,
-   tests, Dockerfile, CI, logging, timeouts, `vercel.json`/`fly.toml`/compose awareness.
-3. **More full-stack frameworks:** FastAPI `include_router(prefix=...)` (would turn the template's suffix
+2. **More full-stack frameworks:** FastAPI `include_router(prefix=...)` (would turn the template's suffix
    matches into exact ones), Supabase client calls (`supabase.from('t')` as a data-layer edge with RLS
    status), tRPC and Next.js server actions (`"use server"`), Remix loaders/actions, SvelteKit, Django.
-4. **Type-aware resolution:** Pyright for Python; the TypeScript compiler API (or `tsserver`) for JS,
+3. **Type-aware resolution:** Pyright for Python; the TypeScript compiler API (or `tsserver`) for JS,
    to resolve `useQuery`/`useMutation` results, hooks returning objects, and props typed by interface.
-5. **JS runtime tracing** (V8 inspector or a Babel/esbuild transform) so frontend edges get the same
+4. **JS runtime tracing** (V8 inspector or a Babel/esbuild transform) so frontend edges get the same
    precision measurement Python has.
-6. **Evidence Report** (spec section 11): commit-pinned summary with provenance and a Limits section.
-7. **PWA shell + local agent pairing** (spec sections 5 and 12). The current viewer becomes the Atlas.
-8. **Rust, then C++** frontends (spec 6.3), reusing the same graph, bridge, and viewer.
-9. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
+5. **Evidence Report** (spec section 11): commit-pinned summary with provenance and a Limits section.
+6. **PWA shell + local agent pairing** (spec sections 5 and 12). The current viewer becomes the Atlas.
+7. **Rust, then C++** frontends (spec 6.3), reusing the same graph, bridge, and viewer.
+8. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
 
 ## Known gaps
 

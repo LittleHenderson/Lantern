@@ -16,6 +16,4 @@ jobs:
       - run: pip install -e ".[scan,dev]"
       - run: python -m pytest -q
       - name: Lantern audits itself (no critical, high, or medium findings)
-        run: |
-          lantern analyze . --out /tmp/self
-          python -c "import json,sys; c=json.load(open('/tmp/self/security.json'))['counts']; print(c); sys.exit(1 if c['critical']+c['high']+c['medium'] else 0)"
+        run: lantern analyze . --out /tmp/self --fail-on medium
