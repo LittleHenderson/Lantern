@@ -284,7 +284,7 @@ def select_nodes(g: Graph, depth: int = 3, include_tests: bool = False, limit: i
                  only: list[str] | None = None) -> list[str]:
     """Entry points plus their callees up to `depth`, ordered bottom-up (callees first)."""
     if only:
-        chosen = [o if o in g.nodes or o.startswith(("py:", "js:", "ext:")) else f"py:{o}" for o in only]
+        chosen = [next((c for c in (o, f"py:{o}", f"js:{o}") if c in g.nodes), o) for o in only]
         chosen = [c for c in chosen if c in g.nodes]
     else:
         adj: dict[str, list[str]] = {}

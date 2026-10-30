@@ -140,7 +140,7 @@ def cmd_explain(a) -> int:
         print("run `lantern analyze` first", file=sys.stderr)
         return 2
     plan = plan_explain(out, a.depth, a.max_nodes, a.node or None)
-    print(f"plan    {len(plan["nodes"])} functions, about {plan['input_tokens']:,} input and "
+    print(f"plan    {len(plan['nodes'])} functions, about {plan['input_tokens']:,} input and "
           f"{plan['output_tokens']:,} output tokens. {plan['note']}")
     if a.estimate:
         return 0
