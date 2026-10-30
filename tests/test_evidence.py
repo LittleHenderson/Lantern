@@ -86,26 +86,26 @@ def test_remote_credentials_are_not_echoed(tmp_path):
 def test_moving_a_line_is_not_a_fix(tmp_path):
     repo = _repo(tmp_path)
     assert main(["analyze", str(repo)]) == 0
-    before = {f["id"] for f in json.loads((repo / ".lantern/security.json").read_text())["findings"]}
-    (repo / "app.py").write_text("# a comment\n# another\n" + APP["app.py"])
+    before = {f["id"] for f in json.loads((repo / ".lantern/security.json").read_text(encoding="utf-8"))["findings"]}
+    (repo / "app.py").write_text("# a comment\n# another\n" + APP["app.py"], encoding="utf-8")
     assert main(["analyze", str(repo)]) == 0
-    after = {f["id"] for f in json.loads((repo / ".lantern/security.json").read_text())["findings"]}
-    ev = json.loads((repo / ".lantern/evidence.json").read_text())
+    after = {f["id"] for f in json.loads((repo / ".lantern/security.json").read_text(encoding="utf-8"))["findings"]}
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
     assert before == after and not ev["security"]["fixed"] and not ev["security"]["changed"]
 
 
 def test_editing_the_flagged_line_is_changed_not_fixed(tmp_path):
     repo = _repo(tmp_path)
     assert main(["analyze", str(repo)]) == 0
-    (repo / "app.py").write_text(APP["app.py"].replace("hashlib.md5(x)", "hashlib.md5(x )"))
+    (repo / "app.py").write_text(APP["app.py"].replace("hashlib.md5(x)", "hashlib.md5(x )"), encoding="utf-8")
     assert main(["analyze", str(repo)]) == 0
-    ev = json.loads((repo / ".lantern/evidence.json").read_text())
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
     assert not ev["security"]["fixed"]          # whitespace-only edits keep the id
-    (repo / "app.py").write_text(APP["app.py"].replace("hashlib.md5(x)", "hashlib.md5(bytes(x))"))
+    (repo / "app.py").write_text(APP["app.py"].replace("hashlib.md5(x)", "hashlib.md5(bytes(x))"), encoding="utf-8")
     assert main(["analyze", str(repo)]) == 0
-    ev = json.loads((repo / ".lantern/evidence.json").read_text())
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
     assert not ev["security"]["fixed"] and any(f["rule"] == "B324" for f in ev["security"]["changed"])
-    assert "Changed but still open" in (repo / ".lantern/evidence.html").read_text()
+    assert "Changed but still open" in (repo / ".lantern/evidence.html").read_text(encoding="utf-8")
 
 
 def test_verify_replays_no_scan(tmp_path):
@@ -128,7 +128,7 @@ def test_render_escapes_every_field(tmp_path):
     repo = _repo(tmp_path)
     assert main(["analyze", str(repo)]) == 0
     x = "<img src=x onerror=alert(1)>"
-    ev = json.loads((repo / ".lantern/evidence.json").read_text())
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
 
     def poison(v):
         if isinstance(v, dict):
