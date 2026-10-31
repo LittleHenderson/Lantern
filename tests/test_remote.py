@@ -374,9 +374,31 @@ def test_the_port_in_a_link_is_kept(monkeypatch):
     assert remote.parse("https://git.example.org:8443/team/app.git")["url"] == "https://git.example.org:8443/team/app"
     assert remote.parse("https://forge.internal:8443/o/r")["url"] == "https://forge.internal:8443/o/r"
     assert remote.parse("https://github.com:443/o/r")["url"] == "https://github.com/o/r"
-    with pytest.raises(ValueError, match="public forges"):
+    with pytest.raises(ValueError, match="only on port 8443"):
         remote.parse("https://forge.internal:9000/o/r")   # only the port named
-    with pytest.raises(ValueError, match="public forges"):
+    with pytest.raises(ValueError, match="only on the standard port 443"):
         remote.parse("https://github.com:8443/o/r")       # a public forge on another port is someone else's server
     with pytest.raises(ValueError, match="port"):
         remote.parse("https://git.example.org:70000/o/r")
+
+
+def test_a_port_refusal_says_why(monkeypatch):
+    """A host allowed only on one port, given a link with another port or none, is refused with a sentence about the
+    port, not the general message about public forges."""
+    monkeypatch.setenv("LANTERN_GIT_HOSTS", "git.example:8443")
+    with pytest.raises(ValueError, match="allows git.example only on port 8443, and this link uses the standard port 443"):
+        remote.parse("https://git.example/o/r")
+    with pytest.raises(ValueError, match="only on port 8443, and this link uses port 9000. Add git.example without a port"):
+        remote.parse("https://git.example:9000/o/r")
+    with pytest.raises(ValueError, match="github.com is cloned only on the standard port 443; this link uses port 8443"):
+        remote.parse("https://github.com:8443/o/r")
+    with pytest.raises(ValueError, match="public forges"):
+        remote.parse("https://other.example:8443/o/r")
+
+
+def test_a_port_gets_its_own_checkout_folder(monkeypatch):
+    monkeypatch.setenv("LANTERN_GIT_HOSTS", "git.example")
+    root = Path("/r")
+    assert remote.destination(remote.parse("https://git.example:8443/o/r"), root) == root / "git.example_8443" / "o" / "r"
+    assert remote.destination(remote.parse("https://git.example:9443/o/r"), root) == root / "git.example_9443" / "o" / "r"
+    assert remote.destination(remote.parse("https://git.example:443/o/r"), root) == root / "git.example" / "o" / "r"

@@ -175,3 +175,22 @@ slow clone each gave a finding (197 tests on Windows and Linux, self-audit 97/10
 
 Still untested: rich in the benchmark, a clone that stalls mid-transfer (after the handshake), concurrency beyond the
 cases above, and Safari on macOS (Playwright's WebKit was used).
+
+## 2026-10-31 · re-audit of commit db01e52
+
+A clean pass. The same auditor re-tested all three round-nine fixes. Against the same silent TLS server with a
+2-second timeout, the clone now raised after 3.2 s (it took 300.4 s before), and no git process or folder was left. Four
+processes adding 15 projects each kept 60 of 60, and two `lantern serve` instances adding 6 kept 6 of 6 with no error.
+The port matrix held: your own host on any port, a public forge on 8443 refused, `host:port` only that port, port 0 and
+70000 refused, `:443` normalised away, and the port really used. 202 tests passed on Windows and Linux, the self-audit
+scored 97/100 A, `tools/audit.sh` printed ALL PASS, and CI was green. Two notes, neither a defect, applied in PR #20.
+
+| # | Note | Severity | Status |
+|---|---|---|---|
+| W1 | `host:port` in `LANTERN_GIT_HOSTS` also closes port 443 for that host (by design), but the refusal message did not mention ports, so a no-port link failed with no hint why | note | Applied: the refusal names the port, for example "LANTERN_GIT_HOSTS allows git.example only on port 8443, and this link uses the standard port 443. Add git.example without a port to allow any port on it." A public forge on another port gets "github.com is cloned only on the standard port 443" |
+| W2 | Two forges on one host (different ports) shared a checkout folder, because the folder name dropped the port | note | Applied: a non-default port is part of the folder name, `repos/git.example_8443/o/r` (no colon, which Windows does not allow) |
+| – | The default 900 s clone timeout is longer than libcurl's 300 s connect timeout, so on a stalled connect git's own message ("Connection timed out after 300015 milliseconds") appears first | note | Documented in `remote.fetch`. The 900 s limit stays, because it is meant for slow transfers |
+| – | Process: the packet files attached to the thread never reached the auditor, who cloned the commit and read `docs/audit/` instead | note | No more packet `.md` / source `.zip` / `.txt` files. `docs/audit/` at the audited commit is the whole package (its README says how to use it), and each reply gives the merged commit and the PR link |
+
+Still untested: rich in the benchmark, a clone that stalls after the handshake, more than four store writers, and Safari
+on macOS (Playwright's WebKit was used).

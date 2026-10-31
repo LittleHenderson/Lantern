@@ -44,6 +44,18 @@ def _host_allowed(host: str, port: str | None) -> bool:
     return host in own or f"{host}:{port}" in own
 
 
+def _port_refusal(host: str, port: str | None) -> str | None:
+    """Why a known host was refused because of its port, in one sentence (None when the host itself is unknown)."""
+    used = f"port {port}" if port else "the standard port 443"
+    ports = sorted(e.split(":", 1)[1] for e in _own_hosts() if e.startswith(host + ":"))
+    if ports:
+        return (f"LANTERN_GIT_HOSTS allows {host} only on port {', '.join(ports)}, and this link uses {used}. "
+                f"Add {host} without a port to allow any port on it.")
+    if port and host in KNOWN_HOSTS:
+        return f"{host} is cloned only on the standard port 443; this link uses port {port}."
+    return None
+
+
 def looks_like_url(s: str) -> bool:
     """Something the user typed that is a link rather than a folder (so a bad link gets a link error)."""
     s = s.strip().lower()
@@ -70,6 +82,9 @@ def parse(link: str) -> dict:
         raise ValueError("not a repository link: the port must be between 1 and 65535")
     port = None if port in (None, "443") else str(int(port))
     if not _host_allowed(host, port):
+        why = _port_refusal(host, port)
+        if why:
+            raise ValueError(why)
         raise ValueError("Lantern clones from github.com, gitlab.com, bitbucket.org, codeberg.org and a few other "
                          "public forges. For your own git server, set LANTERN_GIT_HOSTS to its host name; "
                          "otherwise clone the repository yourself and add the folder.")
@@ -88,7 +103,10 @@ def repos_dir() -> Path:
 
 
 def destination(info: dict, root: Path | None = None) -> Path:
-    return (root or repos_dir()) / info["host"] / info["owner"] / info["name"]
+    """LANTERN_HOME/repos/<host>/<owner>/<name>; a non-default port is part of the folder (`git.example_8443`, no
+    colon, which Windows does not allow), so two forges on one host never share a checkout."""
+    host = f"{info['host']}_{info['port']}" if info.get("port") else info["host"]
+    return (root or repos_dir()) / host / info["owner"] / info["name"]
 
 
 def clone(link: str, log=None, dest: Path | None = None, root: Path | None = None) -> Path:
@@ -141,7 +159,10 @@ def tree_mb(dest: Path) -> float:
 
 def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900) -> None:
     """`git clone --depth 1` of `url` into `dest` (an empty or missing folder), without a checkout first: the files
-    are measured from the index and refused above the size cap, then checked out. RuntimeError with a plain message."""
+    are measured from the index and refused above the size cap, then checked out. RuntimeError with a plain message.
+    The 900 s limit is for a slow transfer; a server that never answers the connection is given up on by git itself
+    after about 300 s (libcurl's connect timeout), so that message ("Connection timed out after 300015 milliseconds")
+    comes first."""
     args = (["clone", "--depth", "1", "--single-branch", "--no-checkout"] + (["--branch", branch] if branch else [])
             + ["--", url, str(dest)])
     try:
