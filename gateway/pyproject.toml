@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lantern-gateway"
+version = "0.1.0"
+description = "Metered OpenAI-compatible proxy that hosts Lantern's free DeepSeek allowance."
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.29"]
+
+[tool.setuptools.packages.find]
+include = ["lantern_gateway*"]
