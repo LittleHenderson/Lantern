@@ -118,3 +118,22 @@ one-decimal size message) and tried the three newly covered areas: timing stayed
 
 Still untested: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine digests, flask
 and rich benchmarks, real cross-origin CSRF in a browser, server concurrency.
+
+## 2026-10-30 · re-audit of commit 6f9ffeb
+
+A clean pass. The same auditor re-tested every change in PR #16 and found nothing to report: a failed checkout left
+nothing behind (the reserved-name fixture, plus one with a writable file and a reserved one in a subfolder); a
+`.git`-only folder was completed through the same checkout, so the size cap applied; the running app forgot a project
+whose clone failed; `verify_payment`/`verify_signature`/`verify_age` gave `add` and `verify_token`/`verify_session`/
+`verify_password`/`verify_credentials`/`verify_jwt`/`authenticate_user` gave `in place`, with no regression on
+`tokenize`/`get_token` (192 tests on Windows and Linux, self-audit 0/0/0, `tools/audit.sh` ALL PASS, CI green). Two notes,
+neither a defect, applied in PR #PRNUM.
+
+| # | Note | Severity | Status |
+|---|---|---|---|
+| T1 | API-key checks were missed, in the safe direction: `verify_api_key(...)` and `check_api_key(...)` gave `add`, a false alarm rather than a false pass | note | Applied: `verify`, `check`, `validate` and `require(s/d)` followed by `api key` count (`verify_api_key`, `check_api_key`, `require_api_key`); `get_api_key` and `create_api_key` still do not |
+| T2 | The `.git`-only repair tested `has_files()`, which is true as soon as anything but `.git` exists, so a checkout that stopped part-way (not reproducible with current git, code reading only) would have passed as complete. `git diff --quiet HEAD` was suggested | note | Applied with a narrower test than suggested: `git ls-files --deleted` lists tracked files missing from the working tree, and `git checkout-index -a` writes exactly those (it never overwrites a file that exists), so a file the user edited in the clone is kept. `git diff --quiet HEAD` would also flag edited files, and completing the checkout with `reset --hard` would have discarded them. A clone that still has files missing afterwards is refused with a message naming the first |
+| – | Process: the packets for 124fb98 and 6f9ffeb were attached to the thread but the auditor runs in WSL and reads only the Downloads folder | note | The reply names the three attached files to download; the project Library keeps the same files |
+
+Still untested: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine digests, flask
+and rich benchmarks, real cross-origin CSRF in a browser, server concurrency.

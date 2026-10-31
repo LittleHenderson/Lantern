@@ -61,7 +61,9 @@ and press Add and analyze: the card appears at once with the clone log, then the
 `~/.lantern/repos/github.com/pallets/flask`). A link with a token in it, an `http://` link, a link to a user
 page, or a link to any host other than the public forges (`https://127.0.0.1/o/r`, `https://10.0.0.8/o/r`, your own
 server unless it is in `LANTERN_GIT_HOSTS`) must be refused with a message that says why. With
-`LANTERN_CLONE_MAX_MB=1`, a repository with a 2 MB file must be refused before any file is written. Measured 2026-10-30 on a 2-core container: the template clones
+`LANTERN_CLONE_MAX_MB=1`, a repository with a 2 MB file must be refused before any file is written. A clone whose
+checkout failed (nothing but `.git` left) or stopped part-way (tracked files missing) must be completed on the next
+attempt, with a file you edited in it left as it is. Measured 2026-10-30 on a 2-core container: the template clones
 and analyzes in 3 s; Django (2,984 files, 33,000 functions) in about 90 s plus the clone (graph 24 s, scanners
 56 s, readiness 2 s). Its report embeds every function's source and is 74 MB, so for a repository that size set
 privacy to "structure" (Settings, or `--privacy structure`).
@@ -111,7 +113,7 @@ Then `if not current_user.is_admin:`, `authorize(user, item)`, `get_user(token)`
 from the handler and defined in the repo (`tokenize(payload.get("text"))`, `load_permissions(...)`,
 `protect_zone(...)`), gives `add` with no "calls" evidence; renamed `get_token`, `has_permission`, `protect` it gives
 `in place`. So do `verify_payment(...)`, `verify_signature(...)` and `verify_age(...)` (`add`) against `verify_token`,
-`verify_session` and `verify_password` (`in place`). A 100 KB handler built to make the regexes backtrack (unbalanced brackets, a 3,000-step attribute chain,
+`verify_session`, `verify_password`, `verify_api_key` and `check_api_key` (`in place`). A 100 KB handler built to make the regexes backtrack (unbalanced brackets, a 3,000-step attribute chain,
 5,000 escaped quotes, 1,500 chained names) is read in under five seconds. Then `cmd = request.args.get("cmd")` followed by `cmd = "ls -la"` (expect high, no input sentence) and
 by `if not cmd: cmd = "ls"` (expect critical, naming the request line).
 

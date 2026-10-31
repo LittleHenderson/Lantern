@@ -86,6 +86,15 @@ def clone(link: str, log=None, dest: Path | None = None, root: Path | None = Non
         if not has_files(dest):   # an earlier checkout failed and left only .git: finish it, under the same cap
             log("the earlier clone has no files yet; checking them out")
             _checkout(dest)
+        else:
+            missing = missing_files(dest)
+            if missing:   # an earlier checkout stopped part-way: write the missing files, touch nothing else
+                log(f"{len(missing)} file(s) were missing from the earlier checkout; restoring them")
+                _git(["checkout-index", "-a"], cwd=dest)   # writes only files that do not exist yet (exit 1 otherwise)
+                still = missing_files(dest)
+                if still:
+                    raise RuntimeError(f"could not restore {len(still)} missing file(s), starting with {still[0]}. "
+                                       f"Remove {dest} and try again, or clone it yourself and add the folder.")
         return dest
     if dest.exists() and any(dest.iterdir()):
         raise RuntimeError(f"{dest} already exists and is not a git clone. Add it as a folder, or remove it.")
@@ -136,6 +145,13 @@ def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900) -
 def has_files(dest: Path) -> bool:
     """Whether a clone has working files, not just `.git`."""
     return dest.is_dir() and any(p.name != ".git" for p in dest.iterdir())
+
+
+def missing_files(dest: Path) -> list[str]:
+    """Files in the clone's index that are not in its working tree: what a checkout that stopped part-way left out
+    (edited files are not missing, and are never touched)."""
+    r = _git(["ls-files", "--deleted", "-z"], cwd=dest)
+    return [p for p in r.stdout.split("\0") if p] if r.returncode == 0 else []
 
 
 def _checkout(dest: Path, timeout: int = 900) -> None:

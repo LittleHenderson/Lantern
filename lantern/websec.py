@@ -69,7 +69,8 @@ AUTH_WORDS = re.compile(
     r"require[sd]? (?:user|auth|login|session|admin|role|roles|permission|permissions|scope|scopes|api key)|"
     r"has (?:role|roles|permission|permissions|scope|scopes)|check (?:permission|permissions|role|roles|scope|scopes)|"
     r"is (?:admin|superuser|staff|logged in|signed in)|logged in|signed in|"
-    r"verify (?:session|user|password|otp|2 ?fa|mfa|credentials?|identity|caller|login)|(?<!csrf )token|permission|jwt|"
+    r"verify (?:session|user|password|otp|2 ?fa|mfa|credentials?|identity|caller|login)|"
+    r"(?:verify|check|validate|require[sd]?) api key|(?<!csrf )token|permission|jwt|"
     r"superuser|(?:^|\w+ )guard$|protected|clerk|bearer|principal)\b|^(?:protect|requires)$")
 # In JavaScript, `getSession`/`useSession`/`getServerSession` read the login (next-auth, Supabase); a Python
 # `get_session` is a database session and never counts.

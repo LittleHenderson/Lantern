@@ -286,3 +286,20 @@ def test_verify_counts_only_with_the_caller_as_its_object(tmp_path):
     assert p["status"] == "in place", p
     assert p["found"] == ["POST /checkout: calls `verify_token`", "PUT /orders: calls `verify_session`",
                           "PATCH /orders: calls `verify_password`"]
+
+
+def test_an_api_key_check_counts(tmp_path):
+    """`verify_api_key(...)`, `check_api_key(...)` and `require_api_key(...)` identify the caller by its key."""
+    files = dict(BACKEND_ONLY)
+    files["svc/main.py"] = (
+        "from fastapi import FastAPI, Header\n\napp = FastAPI()\n\n"
+        "def verify_api_key(k):\n    return k\n\n"
+        "def check_api_key(k):\n    return k\n\n"
+        "def require_api_key(k):\n    return k\n\n"
+        "@app.post('/a')\ndef a(payload: dict, x_key: str = Header()):\n    verify_api_key(x_key)\n    return 1\n\n"
+        "@app.put('/b')\ndef b(payload: dict, x_key: str = Header()):\n    check_api_key(x_key)\n    return 1\n\n"
+        "@app.patch('/c')\ndef c(payload: dict, x_key: str = Header()):\n    require_api_key(x_key)\n    return 1\n")
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["route-auth"]
+    assert p["status"] == "in place", p
+    assert p["found"] == ["POST /a: calls `verify_api_key`", "PUT /b: calls `check_api_key`", "PATCH /c: calls `require_api_key`"]
