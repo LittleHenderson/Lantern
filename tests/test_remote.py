@@ -327,3 +327,56 @@ def test_your_own_git_folder_with_a_deleted_file_is_analyzed(tmp_path, monkeypat
     # an older clone under LANTERN_HOME/repos, made before the mark, still counts as Lantern's
     old = _git_repo(tmp_path / "home" / "repos" / "github.com" / "o" / "r")
     assert remote.is_clone(old)
+
+
+def test_the_timeout_bounds_the_call_when_a_child_keeps_the_pipes(tmp_path):
+    """`subprocess.run` killed only the command and then waited for its output pipes, which a child it started (git's
+    `git-remote-https`) kept open: a 2-second timeout returned after 300 seconds. The whole process tree is killed."""
+    import sys
+    import time
+    holder = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], " \
+             "stdout=sys.stdout, stderr=sys.stderr); time.sleep(60)"
+    t = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        remote.run_bounded([sys.executable, "-c", holder], timeout=1)
+    assert time.monotonic() - t < 15
+    r = remote.run_bounded([sys.executable, "-c", "print('ok')"], timeout=30)
+    assert (r.returncode, r.stdout.strip()) == (0, "ok")
+
+
+def test_a_silent_server_is_given_up_on_in_time(tmp_path, monkeypatch):
+    """The audit's case: a server that accepts the connection and never answers. The link's port is used, and the
+    clone stops at the timeout with a plain message and nothing left behind."""
+    import socket
+    import time
+    srv_sock = socket.socket()
+    srv_sock.bind(("127.0.0.1", 0))
+    srv_sock.listen(8)
+    port = srv_sock.getsockname()[1]
+    monkeypatch.setenv("LANTERN_GIT_HOSTS", "127.0.0.1")
+    for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("NO_PROXY", "*")
+    info = remote.parse(f"https://127.0.0.1:{port}/o/r")
+    assert info["url"] == f"https://127.0.0.1:{port}/o/r"
+    dest = tmp_path / "dest"
+    t = time.monotonic()
+    try:
+        with pytest.raises(RuntimeError, match="took longer than 2 seconds"):
+            remote.fetch(info["url"], dest, timeout=2)
+    finally:
+        srv_sock.close()
+    assert time.monotonic() - t < 20 and not dest.exists()
+
+
+def test_the_port_in_a_link_is_kept(monkeypatch):
+    monkeypatch.setenv("LANTERN_GIT_HOSTS", "git.example.org, forge.internal:8443")
+    assert remote.parse("https://git.example.org:8443/team/app.git")["url"] == "https://git.example.org:8443/team/app"
+    assert remote.parse("https://forge.internal:8443/o/r")["url"] == "https://forge.internal:8443/o/r"
+    assert remote.parse("https://github.com:443/o/r")["url"] == "https://github.com/o/r"
+    with pytest.raises(ValueError, match="public forges"):
+        remote.parse("https://forge.internal:9000/o/r")   # only the port named
+    with pytest.raises(ValueError, match="public forges"):
+        remote.parse("https://github.com:8443/o/r")       # a public forge on another port is someone else's server
+    with pytest.raises(ValueError, match="port"):
+        remote.parse("https://git.example.org:70000/o/r")
