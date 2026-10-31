@@ -127,7 +127,7 @@ nothing behind (the reserved-name fixture, plus one with a writable file and a r
 whose clone failed; `verify_payment`/`verify_signature`/`verify_age` gave `add` and `verify_token`/`verify_session`/
 `verify_password`/`verify_credentials`/`verify_jwt`/`authenticate_user` gave `in place`, with no regression on
 `tokenize`/`get_token` (192 tests on Windows and Linux, self-audit 0/0/0, `tools/audit.sh` ALL PASS, CI green). Two notes,
-neither a defect, applied in PR #PRNUM.
+neither a defect, applied in PR #17.
 
 | # | Note | Severity | Status |
 |---|---|---|---|
