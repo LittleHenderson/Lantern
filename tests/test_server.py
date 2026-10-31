@@ -245,3 +245,34 @@ def test_another_machine_needs_its_address_allowed(srv, monkeypatch):
     monkeypatch.setenv("LANTERN_ALLOWED_HOST", f"192.168.1.5:{port}")
     assert call(base, "/api/state", host=f"192.168.1.5:{port}")[0] == 200
     assert call(base, "/api/state", host=f"192.168.1.6:{port}")[0] == 403
+
+
+def test_two_apps_sharing_a_home_keep_every_project(tmp_path):
+    """Two `lantern serve` on one LANTERN_HOME: each add reads, changes and writes projects.json. With an in-process
+    lock and one shared projects.tmp, 4 of 6 simultaneous adds survived and one failed; now all of them do."""
+    import subprocess
+    import sys
+    home = tmp_path / "home"
+    home.mkdir()
+    code = ("import sys, time; from pathlib import Path; from lantern.server import Store\n"
+            "s = Store(Path(sys.argv[1])); start = float(sys.argv[3])\n"
+            "while time.time() < start: pass\n"
+            "for i in range(15):\n"
+            "    s.add_project(Path(sys.argv[2]) / f'p{i}')\n")
+    start = time.time() + 1.5
+    procs = [subprocess.Popen([sys.executable, "-c", code, str(home), str(tmp_path / f"app{n}"), str(start)])
+             for n in range(4)]
+    assert [p.wait(timeout=120) for p in procs] == [0, 0, 0, 0]
+    ps = json.loads((home / "projects.json").read_text(encoding="utf-8"))
+    assert len(ps) == 60 and len({p["id"] for p in ps}) == 60
+    assert not list(home.glob("*.tmp"))   # no temporary file left behind
+
+
+def test_remembered_keys_stay_private(tmp_path):
+    store = Store(tmp_path / "home")
+    store.set_key("deepseek", "sk-test", remember=True)
+    store.add_project(tmp_path / "app")
+    assert store.key_for("deepseek") == "sk-test" and len(store.projects()) == 1
+    if os.name != "nt":   # the temporary file is created 0600; only keys.json keeps that
+        assert stat.S_IMODE((store.root / "keys.json").stat().st_mode) == 0o600
+        assert stat.S_IMODE((store.root / "projects.json").stat().st_mode) == 0o644

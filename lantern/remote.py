@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-HTTPS = re.compile(r"^https://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?"
+HTTPS = re.compile(r"^https://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::(?P<port>\d{1,5}))?"
                    r"/(?P<owner>[\w.-]+)/(?P<name>[\w.-]+?)(?:\.git)?/?"
                    r"(?:/(?:tree|src|-/tree|commits?)/(?P<branch>[^\s?#/]+)[^\s?#]*)?(?:[?#]\S*)?$")
 SSH = re.compile(r"^(?:ssh://)?git@(?P<host>[A-Za-z0-9.-]+):(?P<owner>[\w.-]+)/(?P<name>[\w.-]+?)(?:\.git)?/?$")
@@ -27,9 +27,21 @@ DEFAULT_MAX_MB = 500
 
 
 def allowed_hosts() -> frozenset[str]:
-    """The public forges, plus your own servers from LANTERN_GIT_HOSTS (comma-separated host names)."""
-    extra = {h.strip().lower() for h in os.environ.get("LANTERN_GIT_HOSTS", "").split(",") if h.strip()}
-    return KNOWN_HOSTS | frozenset(extra)
+    """The public forges, plus your own servers from LANTERN_GIT_HOSTS (comma-separated host names; `host` allows any
+    port on it, `host:port` only that port)."""
+    return KNOWN_HOSTS | _own_hosts()
+
+
+def _own_hosts() -> frozenset[str]:
+    return frozenset(h.strip().lower() for h in os.environ.get("LANTERN_GIT_HOSTS", "").split(",") if h.strip())
+
+
+def _host_allowed(host: str, port: str | None) -> bool:
+    """A public forge on the standard port; your own server on any port (`host`) or on the one named (`host:port`)."""
+    if port is None:
+        return host in allowed_hosts()
+    own = _own_hosts()
+    return host in own or f"{host}:{port}" in own
 
 
 def looks_like_url(s: str) -> bool:
@@ -53,7 +65,11 @@ def parse(link: str) -> dict:
     if not m:
         raise ValueError("not a repository link; expected https://github.com/<owner>/<repository>")
     host, owner, name, branch = m.group("host").lower(), m.group("owner"), m.group("name"), m.group("branch")
-    if host not in allowed_hosts():
+    port = m.group("port")
+    if port is not None and not 0 < int(port) < 65536:
+        raise ValueError("not a repository link: the port must be between 1 and 65535")
+    port = None if port in (None, "443") else str(int(port))
+    if not _host_allowed(host, port):
         raise ValueError("Lantern clones from github.com, gitlab.com, bitbucket.org, codeberg.org and a few other "
                          "public forges. For your own git server, set LANTERN_GIT_HOSTS to its host name; "
                          "otherwise clone the repository yourself and add the folder.")
@@ -62,7 +78,9 @@ def parse(link: str) -> dict:
             raise ValueError("not a repository link")
     if branch and (".." in branch or branch.startswith("-")):
         raise ValueError("not a repository link")
-    return {"host": host, "owner": owner, "name": name, "branch": branch, "url": f"https://{host}/{owner}/{name}"}
+    netloc = f"{host}:{port}" if port else host   # kept: a self-hosted forge on 8443 is cloned from 8443, not 443
+    return {"host": host, "port": port, "owner": owner, "name": name, "branch": branch,
+            "url": f"https://{netloc}/{owner}/{name}"}
 
 
 def repos_dir() -> Path:
@@ -227,12 +245,62 @@ def remove_tree(path: Path) -> None:
 def _git(args: list[str], cwd: Path | None, timeout: int = 900) -> subprocess.CompletedProcess:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_ASKPASS": "", "SSH_ASKPASS": ""}
     try:
-        return subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout)
+        return run_bounded(["git", *args], cwd=cwd, env=env, timeout=timeout)
     except FileNotFoundError:
         raise RuntimeError("git is not installed. Install Git, or clone the repository yourself and add the folder.") from None
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"git took longer than {timeout} seconds; try again, or clone it yourself and add the folder.") from None
+
+
+def run_bounded(cmd: list[str], cwd: Path | None = None, env: dict | None = None,
+                timeout: float = 900) -> subprocess.CompletedProcess:
+    """`subprocess.run(capture_output=True, text=True, timeout=...)`, except that the timeout bounds the call. git
+    starts helpers (`git-remote-https`) that inherit its output pipes; `subprocess.run` kills only git, and then waits
+    for the pipes to close, which a helper stuck on a silent server keeps open for minutes. The command runs in its
+    own process group and the whole group is killed (`taskkill /T` on Windows), then the pipes are dropped."""
+    kw: dict = {}
+    if sys.platform == "win32":
+        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kw["start_new_session"] = True
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **kw)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:   # a helper outside the group still holds a pipe: stop waiting for it
+            for f in (proc.stdout, proc.stderr):
+                try:
+                    f.close()
+                except OSError:
+                    pass
+            proc.wait(timeout=5)
+        raise subprocess.TimeoutExpired(cmd, timeout) from None
+    except BaseException:
+        _kill_tree(proc)
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    if sys.platform == "win32":
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    else:
+        import signal
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
 
 
 def _tail(stderr: str) -> str:

@@ -34,7 +34,7 @@ lantern serve https://github.com/you/your-app   # or a GitHub link: cloned into 
 ```
 
 Links are accepted for the public forges (GitHub, GitLab, Bitbucket, Codeberg, and a few more); add your own git
-server with `LANTERN_GIT_HOSTS=git.example.org`. A repository whose files exceed `LANTERN_CLONE_MAX_MB` (500 by
+server with `LANTERN_GIT_HOSTS=git.example.org` (any port on it; `git.example.org:8443` allows only that port). A repository whose files exceed `LANTERN_CLONE_MAX_MB` (500 by
 default) is refused before anything is written; clone it yourself and add the folder instead.
 
 Your browser opens Lantern. The app is analyzed on first open (a few seconds), and from there you can:

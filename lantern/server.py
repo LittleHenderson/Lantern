@@ -50,12 +50,63 @@ def _pid(path: Path) -> str:
     return hashlib.sha256(str(path).encode()).hexdigest()[:10]
 
 
+class FileLock:
+    """A lock held across threads and processes: two `lantern serve` sharing one LANTERN_HOME (or a server and a
+    `lantern learn`) each read-modify-write projects.json, and an in-process lock alone let one overwrite the other's
+    additions. The OS lock is on a separate file (`store.lock`), so the data files can still be replaced atomically."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.local = threading.Lock()
+        self.fd: int | None = None
+
+    def __enter__(self):
+        self.local.acquire()
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    while True:   # LK_NBLCK fails at once when another process holds it; LK_LOCK gives up after 10 s
+                        try:
+                            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                            break
+                        except OSError:
+                            time.sleep(0.02)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+            except BaseException:
+                os.close(fd)
+                raise
+            self.fd = fd
+        except BaseException:
+            self.local.release()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        fd, self.fd = self.fd, None
+        try:
+            if os.name == "nt":
+                import msvcrt
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+            self.local.release()
+
+
 class Store:
     """Projects, settings, and remembered keys under LANTERN_HOME (default ~/.lantern)."""
 
     def __init__(self, root: Path):
         self.root = root
-        self.lock = threading.Lock()
+        self.lock = FileLock(root / "store.lock")
         self.session_keys: dict[str, str] = {}
 
     def _read(self, name, default):
@@ -66,15 +117,31 @@ class Store:
             return default
 
     def _write(self, name, data, private=False):
+        """Write to a temporary file of this call's own (a shared `projects.tmp` let two writers interleave), then
+        replace the file in one step. Callers hold `self.lock`."""
+        import tempfile
         p = self.root / name
-        tmp = p.with_suffix(".tmp")
-        if private:
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        self.root.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=self.root, prefix=f".{p.stem}.", suffix=".tmp")   # mode 0600
+        try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(json.dumps(data, indent=1))
-        else:
-            tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
-        tmp.replace(p)
+            if not private:
+                os.chmod(tmp, 0o644)
+            for attempt in range(50):   # Windows refuses to replace a file another process is reading at that moment
+                try:
+                    os.replace(tmp, p)
+                    break
+                except PermissionError:
+                    if attempt == 49:
+                        raise
+                    time.sleep(0.02)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     # projects
     def projects(self) -> list[dict]:

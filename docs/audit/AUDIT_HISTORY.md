@@ -154,3 +154,24 @@ standing where its folder belongs) was refused with the file named (194 tests on
 
 Still untested: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine digests, flask
 and rich benchmarks, real cross-origin CSRF in a browser, server concurrency, a clone that is genuinely slow.
+
+## 2026-10-31 · re-audit of commit 45a3c86
+
+The same auditor confirmed PR #18 on five cases: a marked clone with a file deleted, an older clone under
+`LANTERN_HOME/repos` without the mark, and a corrupted `.git/index` are each refused with exit 2; a git folder of your own
+and a complete clone are analyzed. Then it covered five of the areas listed as untested. The report's
+Content-Security-Policy meta holds in Chromium, Firefox and WebKit (poisoned reports inert, an injected `<script>` and
+`onerror` blocked). The results digest is identical on Windows and Linux for the same clean commit (analyzing a `C:` tree
+through WSL makes git see mode changes, so the tree counts as dirty and the digest differs; a native clone matches). The
+flask benchmark reproduces the published figures exactly (95.5% resolved over 554, 97.0% inferred over 625, recall
+57.0%). Cross-origin requests from a real browser on another origin get 403 or are blocked by CORS. Concurrency and a
+slow clone each gave a finding (197 tests on Windows and Linux, self-audit 97/100 A, `tools/audit.sh` ALL PASS). Fixed in PR #19.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| V1 | The clone timeout did not bound the call. Against a server that accepts the connection and never answers, `remote.fetch(..., timeout=2)` returned after 300 s on Windows: `subprocess.run` killed `git.exe`, then (on Windows only) waited in `communicate()` for the output pipes, which `git-remote-https.exe` still held. The app's clone job showed "running" for those 300 s | medium/low | Fixed: every git call goes through `remote.run_bounded`, which starts the command in its own process group (a new session on POSIX, `CREATE_NEW_PROCESS_GROUP` on Windows), kills the whole tree at the timeout (`killpg`, `taskkill /F /T`), and stops waiting for a pipe that something outside the tree still holds. Tests: a command whose child keeps the pipes open returns within the timeout, and a clone from a silent server on a local port stops after 2 s with nothing left behind (`tests/test_remote.py`) |
+| V2 | Two app instances sharing `~/.lantern` lost projects: of six simultaneous adds across two servers, one returned 500 and four were kept. `Store.lock` was a thread lock, so each process read, changed and wrote `projects.json` over the other's change, and every write went through the same `projects.tmp` | low | Fixed: `Store` writes under `server.FileLock`, an OS lock on `store.lock` (`flock` on POSIX, `msvcrt.locking` on Windows) held around each read-modify-write, and each write uses a temporary file of its own before an atomic replace (retried briefly when Windows refuses to replace a file being read). Test: four processes adding 15 projects each at the same moment keep all 60, and no temporary file is left (`tests/test_server.py`) |
+| V3 | A port in a link was dropped: `https://git.example:8443/o/r` was cloned from port 443, so a self-hosted forge on another port failed with a confusing error even when allow-listed | low | Fixed: the port is kept in the clone URL (443 is dropped as the default). In `LANTERN_GIT_HOSTS`, `host` allows any port on that server and `host:port` only that port; the public forges are accepted only on 443, since `github.com:8443` is not GitHub's service. A port above 65535 is refused. Test: `tests/test_remote.py` |
+
+Still untested: rich in the benchmark, a clone that stalls mid-transfer (after the handshake), concurrency beyond the
+cases above, and Safari on macOS (Playwright's WebKit was used).
