@@ -12,6 +12,9 @@
   lantern starter PATH [--write NAME]                     show or write generated starter files
   lantern evidence PATH                                   rebuild the commit-pinned Evidence Report
   lantern verify PATH --report evidence.html [-- CMD]     re-run the analysis the same way and compare
+  lantern mcp [PATH ...] [--setup]                        serve Lantern to AI assistants (Claude, ChatGPT, Cursor)
+  lantern packs PATH                                      list and check the analysis packs a project uses
+  lantern export PATH --sarif out.sarif                   findings as SARIF (GitHub code scanning and others)
 
 Results live in PATH/.lantern/ (override with --out).
 """
@@ -82,59 +85,65 @@ def cmd_evidence(a) -> int:
 
 
 def cmd_verify(a, trace_cmd: list[str]) -> int:
-    import re
     from . import evidence
-    from .engine import build_graph
-    from .readiness import assess
-    from .security import scan
-    from .trace import merge_trace, run_trace
     want, old = a.digest, None
     if a.report:
-        rp = Path(a.report)
-        m = re.search(r"sha256:[0-9a-f]{64}", rp.read_text(encoding="utf-8", errors="replace"))
-        want = m.group(0) if m else None
-        if rp.with_suffix(".json").exists():
-            old = json.loads(rp.with_suffix(".json").read_text(encoding="utf-8")).get("payload") or {}
+        want, old = evidence.read_digest(Path(a.report))
     if not want:
         print("give --digest sha256:... or --report evidence.html", file=sys.stderr)
         return 2
-    # Replay the report's run options. Scanning on/off is safe to copy. A trace runs code, so the command is
-    # never taken from the report: the verifier types it, and it must match what the report recorded.
-    run = (old or {}).get("run") or {}
-    do_scan = run.get("scan", not a.no_scan) and not a.no_scan
-    want_trace = run.get("trace")
-    if want_trace and trace_cmd != want_trace:
-        print("This report was made with a trace, which runs the project's code. Lantern won't run a command taken "
-              "from a report; check it, then run:\n  lantern verify " + (a.path or ".") + f" --report {a.report} -- "
-              + " ".join(want_trace), file=sys.stderr)
-        return 2
     repo = Path(a.path).resolve()
-    g = build_graph(repo)
-    run_meta: dict = {"offline": bool(run.get("offline")) or a.offline}
-    if trace_cmd:
-        tm = merge_trace(g, run_trace(repo, trace_cmd))
-        run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}
-    offline = bool(run.get("offline")) or a.offline
-    sec = scan(g, offline) if do_scan else None
-    rd = assess(g, sec, run_meta)
-    gi = evidence.git_info(repo)
-    new = evidence.digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False),
-                                  evidence.run_options(sec, run_meta))
-    got = evidence.digest(new)
-    print(f"commit  {gi.get('commit')}{' (uncommitted changes present)' if gi.get('dirty') else ''}")
-    print(f"options scan {'on' if do_scan else 'off'}, trace {' '.join(trace_cmd) if trace_cmd else 'off'}, "
-          f"dependency audit {'off (offline)' if run_meta['offline'] else 'on'}")
-    print(f"report  {want}\nrerun   {got}")
-    if got == want:
+    r = evidence.verify(repo, want, old, trace_cmd, a.no_scan, a.offline)
+    if r.get("refused"):
+        print(r["refused"] + "\n  lantern verify " + (a.path or ".") + f" --report {a.report} -- "
+              + " ".join(r["trace_command"]), file=sys.stderr)
+        return 2
+    o = r["options"]
+    print(f"commit  {r['commit']}{' (uncommitted changes present)' if r['dirty'] else ''}")
+    print(f"options scan {'on' if o['scan'] else 'off'}, trace {' '.join(o['trace']) if o['trace'] else 'off'}, "
+          f"dependency audit {'on' if o['dependency_audit'] else 'off (offline)'}")
+    print(f"report  {r['report']}\nrerun   {r['rerun']}")
+    if r["match"]:
         print("MATCH: the report's results are what this analyzer finds on this commit.")
         return 0
-    print("DIFFERENT: check out the report's commit, install the same scanner versions (see Provenance), "
-          "and make sure lantern-accepted.json matches. Dependency findings come from live vulnerability "
-          "databases, so new advisories alone can make a later run differ.")
-    for k in new:
-        if old is not None and old.get(k) != new[k]:
-            print(f"  differs: {k}")
+    print("DIFFERENT: " + r["note"])
+    for k in r.get("differs") or []:
+        print(f"  differs: {k}")
     return 1
+
+
+def cmd_packs(a) -> int:
+    from . import packs
+    repo = Path(a.path).resolve()
+    loaded, problems = packs.load_all(repo, keep_inactive=True)
+    for pk in loaded:
+        req = pk.get("requires") or {}
+        why = "" if pk["active"] else "  not used here: needs " + ", ".join(req.get("files", []) + req.get("text", []))
+        print(f"{pk['pack']:<20} v{str(pk.get('version', '-')):<6} {len(pk.get('rules', [])):>2} rule(s), "
+              f"{len(pk.get('entries', []))} entry pattern(s)  [{pk['source']}]{why}")
+    for where, msg in problems:
+        print(f"skipped {where}: {msg}", file=sys.stderr)
+    if not loaded and not problems:
+        print("no packs: built-in packs live in lantern/packs/, a project's in lantern-packs/*.json, "
+              "yours in ~/.lantern/packs/")
+    return 1 if problems else 0
+
+
+def cmd_export(a) -> int:
+    from .exporters import sarif
+    repo = Path(a.path).resolve()
+    out = _out(repo, a.out)
+    sec = _load(out, "security.json")
+    if sec is None:
+        print("run `lantern analyze` first", file=sys.stderr)
+        return 2
+    text = json.dumps(sarif(sec, repo), indent=1)
+    if a.sarif == "-":
+        print(text)
+    else:
+        Path(a.sarif).write_text(text, encoding="utf-8")
+        print(f"wrote   {a.sarif}  ({len(sec.get('findings', []))} findings)")
+    return 0
 
 
 def cmd_trace(a, trace_cmd: list[str]) -> int:
@@ -327,6 +336,9 @@ def cmd_learn(a) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["mcp"]:   # its own small parser; stdout belongs to the protocol
+        from .mcp_server import main as mcp_main
+        return mcp_main(argv[1:])
     argv, trace_cmd = _split_cmd(argv)
     p = argparse.ArgumentParser(prog="lantern", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -394,6 +406,15 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--no-scan", action="store_true", help="the report was made with --no-scan (read from --report)")
     sp.add_argument("--offline", action="store_true", help="skip the dependency audits (read from --report)")
 
+    sp = sub.add_parser("mcp", help="serve Lantern to an AI assistant over MCP (stdio); --setup prints config")
+
+    sp = sub.add_parser("packs", help="list the analysis packs (rule and framework pattern files) in use and check them")
+    common(sp)
+
+    sp = sub.add_parser("export", help="export findings as SARIF for GitHub code scanning and other tools")
+    common(sp)
+    sp.add_argument("--sarif", metavar="FILE", default="-", help="write here (default: stdout)")
+
     sp = sub.add_parser("learn", help="list starter apps, create one to learn Lantern, or check your progress")
     sp.add_argument("name", nargs="?", help="starter to create (omit to list them)")
     sp.add_argument("dir", nargs="?", help="folder to create it in (default ./NAME); with --check/--show-fix, the app's folder")
@@ -449,6 +470,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_evidence(a)
     if a.cmd == "verify":
         return cmd_verify(a, trace_cmd)
+    if a.cmd == "packs":
+        return cmd_packs(a)
+    if a.cmd == "export":
+        return cmd_export(a)
     if a.cmd == "learn":
         if (a.check or a.show_fix) and a.name and not a.dir:
             a.dir, a.name = a.name, None   # `lantern learn --check FOLDER`

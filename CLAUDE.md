@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.3.pdf`.
+Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.4.pdf`.
 This repo is Phase 0 plus the full-stack layer: Python and TypeScript/JavaScript engines, the API bridge
 between them, scanners, the Three-Lens explainer, and a static HTML report.
 
@@ -55,7 +55,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/protections.py` | Spec 9.4 "protections to add": rate limiting, headers, SSRF allow-list, password hashing, route auth, uploads; heuristic, never changes findings or score |
 | `lantern/websec.py` | Full-stack rules: `LW-*` (public-env secrets, service-role JWT, CORS, Firebase, Supabase RLS, missing auth) and `LJ-*` JS patterns |
 | `lantern/readiness.py` | Deployment Readiness Score (spec 10): ten weighted categories of deterministic checks (`pass/fail/partial/skip`, skip leaves the denominator), shape advisor, fan-in hotspots, starter files. Accepted risks: `lantern-accepted.json` via `lantern accept` |
-| `lantern/evidence.py` | Evidence Report (spec 11): commit-pinned HTML/JSON, baseline → fixed findings, provenance, Limits, SHA-256 results digest checked by `lantern verify`, badge |
+| `lantern/evidence.py` | Evidence Report (spec 11): commit-pinned HTML/JSON, baseline → fixed findings, provenance (including analysis packs), Limits, SHA-256 results digest; `verify()` re-runs and compares (used by the CLI and the connector; never replays a trace command); badge reads `Lantern · commit 1a2b3c · 0 critical · Oct 31`, never "verified" or "secure" |
 | `lantern/explain.py` | Prompt (language-aware, includes HTTP links), `validate()`, retry, bottom-up `select_nodes`, cache |
 | `lantern/providers.py` | Default `deepseek/deepseek-flash`; `resolve_default()` (--model > LANTERN_MODEL > DEEPSEEK_API_KEY > allowance token); `LanternHostedProvider` (402 → `AllowanceExhausted`; run stops cleanly, cache shared with the user's own key via `cache_model`); `ensure_consent()` once per provider before code leaves the machine (local presets and localhost endpoints never ask); Anthropic and OpenAI-compatible adapters. `_post` returns the body; `_post_full` also returns headers |
 | `gateway/` | Separate deployable (FastAPI, `create_app --factory`) hosting the free allowance. The owner's DeepSeek key lives only here; per-user lifetime and daily limits, global daily dollar cap, narrowed requests (one model, capped tokens and body), token hashes and counters only, never bodies. Tests: `tests/test_gateway.py`, `tests/test_allowance_flow.py` (live local gateway, end to end) |
@@ -65,7 +65,10 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/remote.py` | A repository link instead of a folder (CLI `path`, `lantern serve`, the app's Add a project): `parse` (https only, public forges in `KNOWN_HOSTS` on 443 plus `LANTERN_GIT_HOSTS` (`host` any port, `host:port` that one; the port is kept in the clone URL), no credentials, `git@` form converted, `/tree/<branch>`), `clone` into `LANTERN_HOME/repos/<host>[_<port>]/<owner>/<name>` (`git clone --depth 1 --no-checkout`, prompts off, files measured against `LANTERN_CLONE_MAX_MB` before checkout, nothing left behind when any step fails, fast-forward if already there, an earlier checkout that failed or stopped part-way finished without touching edited files; `pipeline.analyze` refuses a Lantern clone (`is_clone`: `.git/lantern-clone` mark or under `LANTERN_HOME/repos`) with files still missing, or whose files git cannot list, via `check_complete`). Every git call goes through `run_bounded`, which kills the whole process tree at the timeout (Windows `subprocess.run` waited on pipes held by `git-remote-https`). The clone is as untrusted as any analyzed repo |
 | `lantern/learn.py` + `lantern/starters/` | Starter apps for beginners (`lantern learn`, the app's Learn tab and Guide). Each starter: `starter.json.tmpl` (steps, each with a deterministic `check` read from analysis results), `files/` (planted problems), `solution/` (fixes). Everything is `*.tmpl` and dot-files are `dot.<name>`, so the self-audit never sees the planted problems. `tests/test_learn.py` proves each planted problem is found and each fix clears its step |
 | `tools/fake_model.py` | Offline OpenAI-compatible server answering with the shop demo explanations, for end-to-end tests |
-| `lantern/cli.py` | `analyze`, `trace`, `explain`, `report`; results in `PATH/.lantern/` |
+| `lantern/mcp_server.py` | Lantern as a connector: MCP over stdio (`lantern mcp`), standard library JSON-RPC. Tools: projects, findings (with click paths and fixes), paths (callers/callees/reachability), explain (stored only), readiness, analyze, recheck (fix-and-verify loop), verify. **No accept/close/dismiss tool exists**; `lantern_verify` refuses traced reports. Records each client's `clientInfo` in `LANTERN_HOME/connections.json` (names and times only) for Settings › Connections (`/api/connections`). `--setup` prints config snippets. Docs: `docs/connectors.md` |
+| `lantern/packs.py` + `lantern/packs/*.json` | Analysis packs: JSON pattern files (rules `LP-*` matched per line; framework entry patterns whose handler names resolve to graph nodes, `via: pack:<name>`). Loaded from built-in, `<repo>/lantern-packs/`, `LANTERN_HOME/packs/`; `requires` gates by manifest text or files. Third-party pack findings are always `tool_confidence: LOW`. Applied in `engine.build_graph` (before the bridge) and `security.scan`. `lantern packs` lists and validates. Docs: `docs/packs.md` |
+| `lantern/exporters.py` | SARIF 2.1.0 export of findings (`lantern export --sarif`), with click paths in messages and accepted risks as suppressions |
+| `lantern/cli.py` | `analyze`, `trace`, `explain`, `report`, `verify`, `accept`, `mcp`, `packs`, `export`; results in `PATH/.lantern/` |
 | `tests/fixtures/shop` | Python backend (`shop/`) + React/Vite frontend (`web/`) with planted shell/SQL injection, MD5, XSS, public secret |
 | `tests/fixtures/nextapp` | Next.js + Supabase with an unprotected DELETE route, a table without RLS, a public service-role var |
 | `bench/` | Accuracy benchmark and write-up; `results.json` is the latest run |
@@ -110,9 +113,11 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 ## Backlog (priority order)
 
 0. **Ship the allowance:** deploy `gateway/` behind HTTPS, set `DEFAULT_GATEWAY_URL`, issue tokens through
-   "Sign in with GitHub" (one per account). Then the spec chapter 19 order: wallet-drain check, fix-and-verify
-   loop, Lantern skill + MCP server for AI assistants, "Prove it" live checks (domain verification and consent
-   first), Ask Lantern with screenshots, What changed, data-flow map.
+   "Sign in with GitHub" (one per account). Then the spec chapter 19 order: wallet-drain check, "Prove it" live
+   checks (domain verification and consent first), Ask Lantern with screenshots, What changed, data-flow map.
+   Done: the MCP connector (`lantern mcp`) with the fix-and-verify loop (`lantern_recheck`), "Send to…",
+   analysis packs (Django built in), SARIF export. Next for the connector: an HTTP transport with GitHub sign-in
+   so ChatGPT and Claude on the web can use it without a bridge; more packs (Remix, tRPC, SvelteKit, Rails).
 
 1. **Run real models through `lantern explain`** on the benchmark repos with two providers; record the
    first-try anchor pass rate (target 90%). Tune `SYSTEM` from failures, especially on JS components.
@@ -165,3 +170,5 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   Status colors (good/warning/serious/critical) mean risk or results only and always sit beside a word or icon.
 * Plain language in user-facing text; technical detail lives in Lens 1, `via`, and `detail`.
 * Never commit real-looking secrets in fixtures (GitHub push protection); build them at test time.
+* The connector and the plugin seams never get a way to create, dismiss, close or re-rank a finding. New MCP tools
+  are read-only or re-run the analysis; new seams are data (patterns, endpoints, exports), not code.

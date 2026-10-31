@@ -296,3 +296,19 @@ def test_deepseek_default_and_free_allowance(tmp_path, monkeypatch):
     assert isinstance(app.make_provider(), LanternHostedProvider)
     app.store.set_key("deepseek", "sk-own", remember=False)  # the user's own key wins
     assert not isinstance(app.make_provider(), LanternHostedProvider)
+
+
+def test_connections_list_assistants_by_name(srv):
+    base, store = srv
+    code, d = call(base, "/api/connections")
+    assert code == 200 and d["connections"] == [] and "claude mcp add lantern" in d["setup"]["claude_code"]
+    assert d["setup"]["json"]["mcpServers"]["lantern"]["args"] == ["mcp"]
+    from lantern.mcp_server import record_connection
+    record_connection(store, {"name": "Cursor", "version": "1.2"}, "lantern_paths")
+    code, d = call(base, "/api/connections")
+    assert d["connections"][0]["name"] == "Cursor" and d["connections"][0]["last_tool"] == "lantern_paths"
+    assert d["now"] >= d["connections"][0]["last_used"]
+    # a planted connections file can't push anything but short strings and numbers into the page's data
+    (store.root / "connections.json").write_text(json.dumps({"x": {"name": "<img src=x>" * 50, "calls": "9e9"}}), encoding="utf-8")
+    code, d = call(base, "/api/connections")
+    assert len(d["connections"][0]["name"]) == 80 and d["connections"][0]["calls"] == 0

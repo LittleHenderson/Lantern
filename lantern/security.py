@@ -377,6 +377,13 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     wf, wt = scan_web(g)
     findings += wf
     tools += wt
+    from .packs import load_all, scan_packs
+    loaded, skipped = load_all(repo)
+    if loaded:
+        pf, pt = scan_packs(repo, loaded)
+        findings += pf
+        tools += pt
+    tools += [{"tool": where, "status": "skipped: " + why, "version": "-"} for where, why in skipped]
     stable_ids(repo, findings)
     accepted = load_accepted(repo)
     reach = reachability(g)

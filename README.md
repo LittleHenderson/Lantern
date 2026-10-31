@@ -5,7 +5,7 @@
 them, explains each function three ways, and audits it with security checks ranked by whether a user
 can actually reach the problem.
 
-> Working title. Built from the product spec in [`docs/`](docs/Lantern_Product_Spec_v0.3.pdf). Status: v0.1, the local
+> Working title. Built from the product spec in [`docs/`](docs/Lantern_Product_Spec_v0.4.pdf). Status: v0.1, the local
 > product: map, Three-Lens explanations with your own key, security audit, readiness grade, and Evidence Report, all in a
 > local app. Cloud mode and device pairing are not built yet.
 
@@ -148,6 +148,24 @@ DeepSeek key on the server, never in the client, with per-user, per-day, and glo
 
 Try it without a key: `python examples/make_demo.py demo-out` builds the report for the sample
 full-stack app with hand-written explanations that pass the same validator.
+
+## Inside your AI assistant
+
+Lantern is also a connector. One MCP server works in Claude Code, Claude Desktop, ChatGPT, Cursor and others:
+
+```bash
+claude mcp add lantern -- lantern mcp     # Claude Code; `lantern mcp --setup` prints the JSON for the rest
+```
+
+The assistant can then ask "what calls this function, and can a user reach it?" before editing, get a
+finding's file, line, click path and fix, re-check after writing a fix, and verify an Evidence Report. It can
+never accept or close a finding; that stays with you, with a written reason. Each finding in the report has a
+**Send to…** button that hands Claude or ChatGPT a reference the assistant resolves through the connector.
+Settings › Connections shows which assistants have used Lantern. Details: [`docs/connectors.md`](docs/connectors.md).
+
+Extending Lantern has three seams: [analysis packs](docs/packs.md) (JSON rule and framework patterns, not
+code; a Django pack is built in), explanation providers (any OpenAI-compatible endpoint), and exporters
+(`lantern export --sarif` for GitHub code scanning).
 
 ## What it understands
 

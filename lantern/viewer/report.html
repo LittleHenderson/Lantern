@@ -245,6 +245,9 @@ pre.src span.h{background:var(--code-hl);box-shadow:inset 3px 0 0 #FFB547}
 .fcard .rule{font:11.5px var(--mono);color:var(--muted)}
 .fcard h4{margin:10px 0 4px;font:650 15px/1.4 var(--display);letter-spacing:-.01em;color:var(--ink)}
 .fcard .acts{margin-top:12px;display:flex;gap:6px;flex-wrap:wrap}
+.sendmenu{margin-top:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--soft);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.sendmenu .note{flex-basis:100%;margin:0 0 2px}
+.sendmenu a.btn{text-decoration:none}
 .tag{display:inline-flex;align-items:center;font-size:11px;font-weight:550;color:var(--ink-2);padding:1px 8px;border-radius:99px;border:1px solid var(--line-2);white-space:nowrap}
 .path{display:flex;flex-wrap:wrap;gap:5px;align-items:center;font:11.5px var(--mono);margin-top:10px}
 .path .note{font-family:var(--font);margin-right:2px}
@@ -624,11 +627,42 @@ function renderFindings() {
       ${path}
       ${f.input ? `<div class="note" style="margin-top:8px">Uses outside input: ${esc(f.input.via)}</div>` : f.input === false ? '<div class="note" style="margin-top:8px">Reachable, but no parameter or request data reaches this line inside this function (Lantern follows assignments within the function, not across functions), so it is not ranked critical.</div>' : ''}
       ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
-      <div class="acts">${f.node ? `<button class="btn" data-id="${esc(f.node)}">Open function</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div></div>`;
+      <div class="acts">${f.node ? `<button class="btn" data-id="${esc(f.node)}">Open function</button>` : ''}${f.status !== 'accepted' ? `<button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div><div class="sendslot"></div></div>`;
   }).join('');
   el.querySelectorAll('[data-sev]').forEach(b => b.onclick = () => { S.fsev = b.dataset.sev; renderFindings(); });
   el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
   el.querySelectorAll("[data-accept]").forEach(b => b.onclick = () => acceptLive(b.dataset.accept));
+  el.querySelectorAll("[data-send]").forEach(b => b.onclick = () => sendMenu(b));
+}
+
+// ---------- "Send to…": hand a finding to an AI assistant as a reference, not a pasted blob ----------
+// With the Lantern connector installed (`lantern mcp --setup`), the assistant pulls the exact file, line, click path
+// and fix from Lantern itself, so nothing goes stale or gets edited in transit, and re-checks the fix the same way.
+// Without it, the message carries the one-line essentials. The assistant can never accept or close the finding.
+const PROJECT = (G.repo_root || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'this';
+function sendText(f) {
+  const where = `${f.file || ''}${f.line ? ':' + f.line : ''}`;
+  const path = f.ui_path ? ' Reachable from the app: ' + f.ui_path.map(p => { const n = N[p]; return n && n.entry && n.entry.kind === 'page' ? n.entry.detail + ' page' : short((n || {}).qualname || p); }).join(' → ') + '.' : '';
+  return `Fix Lantern finding ${f.id} (${f.rule}) in the ${PROJECT} project.\n` +
+    `If the Lantern connector is available, call lantern_findings with id ${f.id} for the file, line, click path and fix, lantern_paths before editing, and lantern_recheck with the finding id after the fix. Do not try to accept or close it; only I can, with a reason.\n` +
+    `Essentials: ${f.title} at ${where}${f.input ? ' (uses outside input: ' + f.input.via + ')' : ''}.${path}`;
+}
+function sendMenu(btn) {
+  const card = btn.closest('.fcard'), slot = card.querySelector('.sendslot');
+  if (slot.innerHTML) { slot.innerHTML = ''; btn.setAttribute('aria-expanded', 'false'); return; }
+  const f = SEC.findings.find(x => x.id === btn.dataset.send);
+  if (!f) return;
+  const text = sendText(f), q = encodeURIComponent(text);
+  slot.innerHTML = `<div class="sendmenu"><p class="note">Opens the assistant with a reference to this finding. With the Lantern connector installed it fetches the facts from Lantern; otherwise the message carries the essentials. Assistants can read and re-check, never close a finding.</p>
+    <a class="btn" href="https://claude.ai/new?q=${q}" target="_blank" rel="noopener noreferrer">Claude</a>
+    <a class="btn" href="https://chatgpt.com/?q=${q}" target="_blank" rel="noopener noreferrer">ChatGPT</a>
+    <button class="btn" data-copy>Copy for Cursor, Claude Code, others</button><span class="note" data-msg></span></div>`;
+  btn.setAttribute('aria-expanded', 'true');
+  slot.querySelector('[data-copy]').onclick = async e => {
+    const msg = slot.querySelector('[data-msg]');
+    try { await navigator.clipboard.writeText(text); msg.textContent = 'Copied.'; }
+    catch (err) { msg.textContent = 'Copy failed; here it is:'; slot.insertAdjacentHTML('beforeend', `<textarea readonly style="flex-basis:100%;min-height:90px;font:12px var(--mono)">${esc(text)}</textarea>`); }
+  };
 }
 
 // ---------- live actions (only when opened from `lantern serve`) ----------
