@@ -79,8 +79,8 @@ string in routes and JSX text, a filename on Linux), a route path containing `">
 4.2 **XSS through model output.** Make `tools/fake_model.py` return `<script>` in `lens1.summary`, a string instead
 of a list in `lens1.inputs`, and `{"type":"lines","start":"<b>1</b>"}` as an anchor. Explain and view.
 
-Last run 2026-10-30 (Chromium, both report.html and evidence.html, every lens opened): no script executed for 4.1
-or 4.2. Re-run after any viewer change.
+Last run 2026-10-31 after the UI redesign (Chromium, both report.html and evidence.html, every lens opened, light and dark):
+no script executed for 4.1 or 4.2; `tools/audit.sh --browser` all pass. Re-run after any viewer change.
 
 4.3 **Local server from another origin.** From a page on `http://localhost:9999`, `fetch('http://127.0.0.1:8765/api/
 state', {credentials:'include'})` and a form POST to `/api/projects/<id>/analyze`. Both must fail. Repeat with a

@@ -1,6 +1,6 @@
 // Lantern service worker: keeps the app shell and recently opened reports available offline.
 // API calls always go to the network; reports fall back to the last copy when the server is off.
-const CACHE = 'lantern-v1';
+const CACHE = 'lantern-v2';
 self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/icon.svg', '/manifest.webmanifest']))); });
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {

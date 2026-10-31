@@ -147,5 +147,7 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
 * Files in `.lantern/` live in the analyzed folder and may be planted: the server rebuilds every page from our templates,
   and anything rendered from them must be escaped.
 * Keep `report.html` a single self-contained file that works offline and on a phone.
+* UI: the design tokens at the top of `app.html`, `report.html` and `evidence.py` are one set; change all three together.
+  Status colors (good/warning/serious/critical) mean risk or results only and always sit beside a word or icon.
 * Plain language in user-facing text; technical detail lives in Lens 1, `via`, and `detail`.
 * Never commit real-looking secrets in fixtures (GitHub push protection); build them at test time.
