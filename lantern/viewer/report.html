@@ -5,165 +5,349 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lantern report</title>
 <style>
+/* Lantern design tokens (shared with app.html and evidence.py). Ink for text and primary actions, one blue accent
+   for selection and links, status colors only for risk and results (always with a label or icon), and three lens
+   colors for the three explanations. */
 :root{
-  --bg:#F6F7F9; --panel:#FFFFFF; --ink:#0F1B2D; --body:#334155; --muted:#64748B; --line:#E2E8F0;
-  --soft:#F1F5F9; --accent:#0D9488; --accent-soft:#E6F6F4;
-  --l1:#4F46E5; --l1s:#EEF0FF; --l2:#C2410C; --l2s:#FFF3EA; --l3:#0D9488; --l3s:#E6F6F4;
-  --crit:#B42318; --crits:#FEF0EE; --high:#B54708; --highs:#FFF6E5; --med:#475467; --meds:#F2F4F7;
-  --low:#0D9488; --lows:#E6F6F4; --code:#0F1B2D; --codeink:#D7E0EC; --hl:#3B2F0E;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  color-scheme: light;
+  --bg:#F5F5F2; --surface:#FFFFFF; --surface-2:#FAFAF8; --sunken:#EEEEEA; --hover:rgba(22,22,24,.045);
+  --ink:#161618; --ink-2:#46464C; --muted:#6E6E74; --faint:#A3A3A8;
+  --line:rgba(22,22,24,.09); --line-2:rgba(22,22,24,.16);
+  --accent:#2F5BEA; --accent-ink:#2148C9; --accent-soft:rgba(47,91,234,.09); --accent-line:rgba(47,91,234,.45);
+  --primary:#161618; --on-primary:#FFFFFF;
+  --good:#0CA30C; --warning:#FAB219; --serious:#EC835A; --critical:#D03B3B;
+  --good-soft:rgba(12,163,12,.11); --warning-soft:rgba(250,178,25,.17); --serious-soft:rgba(236,131,90,.16); --critical-soft:rgba(208,59,59,.11);
+  --good-ink:#0A7A0A; --warn-ink:#8A5A00; --crit-ink:#B02A2A;
+  --l1:#2F5BEA; --l1s:rgba(47,91,234,.08); --l2:#B8650A; --l2s:rgba(232,140,30,.10); --l3:#0B8466; --l3s:rgba(11,132,102,.09);
+  --fe:#2F5BEA; --be:#0B8466;
+  --code-bg:#151517; --code-ink:#E7E7E4; --code-dim:#6C6C72; --code-hl:rgba(255,181,71,.20); --code-flag:rgba(208,59,59,.32);
+  --shadow-1:0 1px 2px rgba(16,16,20,.05);
+  --shadow-2:0 1px 2px rgba(16,16,20,.04), 0 6px 20px -6px rgba(16,16,20,.10);
+  --shadow-3:0 1px 3px rgba(16,16,20,.06), 0 24px 56px -16px rgba(16,16,20,.30);
+  --ease:cubic-bezier(.2,.8,.2,1); --t:160ms;
+  --font:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --display:-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono:ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+:root[data-theme=dark]{
+  color-scheme: dark;
+  --bg:#0E0E10; --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
+  --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
+  --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
+  --accent:#7C9BFF; --accent-ink:#A3B8FF; --accent-soft:rgba(124,155,255,.14); --accent-line:rgba(124,155,255,.55);
+  --primary:#F3F3F1; --on-primary:#0E0E10;
+  --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
+  --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
+  --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3s:rgba(79,209,165,.11);
+  --fe:#8EA8FF; --be:#4FD1A5;
+  --code-bg:#0A0A0B;
+  --shadow-1:0 1px 2px rgba(0,0,0,.4);
+  --shadow-2:0 1px 2px rgba(0,0,0,.35), 0 8px 24px -8px rgba(0,0,0,.5);
+  --shadow-3:0 1px 3px rgba(0,0,0,.4), 0 24px 56px -16px rgba(0,0,0,.7);
 }
 @media (prefers-color-scheme: dark){
-  :root{
-    --bg:#0B1220; --panel:#111A2B; --ink:#E6EDF6; --body:#C2CCDA; --muted:#8A97AB; --line:#22304A;
-    --soft:#17223A; --accent:#2DD4BF; --accent-soft:#0E2E2B;
-    --l1:#A5B4FC; --l1s:#1C2148; --l2:#FDBA74; --l2s:#33200F; --l3:#5EEAD4; --l3s:#0E2E2B;
-    --crit:#FDA29B; --crits:#3A1512; --high:#FEC84B; --highs:#33240B; --med:#CBD5E1; --meds:#1E293B;
-    --low:#5EEAD4; --lows:#0E2E2B; --code:#070D18; --hl:#3B2F0E;
+  :root:not([data-theme=light]){
+    color-scheme: dark;
+    --bg:#0E0E10; --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
+    --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
+    --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
+    --accent:#7C9BFF; --accent-ink:#A3B8FF; --accent-soft:rgba(124,155,255,.14); --accent-line:rgba(124,155,255,.55);
+    --primary:#F3F3F1; --on-primary:#0E0E10;
+    --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
+    --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
+    --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3s:rgba(79,209,165,.11);
+    --fe:#8EA8FF; --be:#4FD1A5;
+    --code-bg:#0A0A0B;
+    --shadow-1:0 1px 2px rgba(0,0,0,.4);
+    --shadow-2:0 1px 2px rgba(0,0,0,.35), 0 8px 24px -8px rgba(0,0,0,.5);
+    --shadow-3:0 1px 3px rgba(0,0,0,.4), 0 24px 56px -16px rgba(0,0,0,.7);
   }
 }
+@media (prefers-reduced-motion: reduce){ *{transition:none !important;animation:none !important} }
+
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--body);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif}
+html,body{margin:0;background:var(--bg);color:var(--ink-2);font:14px/1.55 var(--font);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+body{height:100vh;height:100dvh;display:flex;flex-direction:column}
 button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
-a{color:var(--accent)}
-header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px}
-.brand{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.brand b{font-size:15px;color:var(--ink);letter-spacing:-.01em}
-.brand .repo{font-family:var(--mono);font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60vw}
-.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
-.chip{font-size:11.5px;padding:2px 8px;border-radius:999px;background:var(--soft);color:var(--body);border:1px solid var(--line);white-space:nowrap}
-.chip.crit{background:var(--crits);color:var(--crit);border-color:transparent}
-.chip.high{background:var(--highs);color:var(--high);border-color:transparent}
-nav.tabs{display:flex;gap:4px;margin-top:10px}
-nav.tabs button{padding:6px 12px;border-radius:8px;font-weight:600;font-size:13px;color:var(--muted)}
-nav.tabs button.on{background:var(--ink);color:var(--panel)}
-main{display:grid;grid-template-columns:280px minmax(0,1fr) 420px;gap:0;min-height:calc(100vh - 110px)}
-aside.left{border-right:1px solid var(--line);background:var(--panel);padding:12px;overflow:auto;max-height:calc(100vh - 110px);position:sticky;top:110px}
-section.center{padding:14px 16px;overflow:auto;min-width:0}
-aside.right{border-left:1px solid var(--line);background:var(--panel);overflow:auto;max-height:calc(100vh - 110px);position:sticky;top:110px}
-input.search{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
-.group{margin-top:12px}
-.group h4{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 4px}
-.ep{display:block;width:100%;text-align:left;padding:6px 8px;border-radius:7px;font-size:13px}
-.ep:hover{background:var(--soft)}
-.ep.on{background:var(--accent-soft);color:var(--ink)}
-.ep .d{display:block;font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
-.toolbar h2{margin:0;font-size:17px;color:var(--ink);letter-spacing:-.01em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.seg button{padding:5px 10px;font-size:12.5px;font-weight:600;color:var(--muted)}
-.seg button.on{background:var(--ink);color:var(--panel)}
-.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin:0 0 10px}
-.legend span{display:inline-flex;align-items:center;gap:5px}
-.ln{display:inline-block;width:22px;border-top:2px solid var(--body)}
-.ln.observed{border-top-width:3.5px;border-color:var(--accent)} .ln.inferred{border-top-style:dashed} .ln.possible{border-top-style:dotted}
+a{color:var(--accent-ink)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+code{font:12px var(--mono);background:var(--sunken);color:var(--ink);padding:1px 6px;border-radius:6px}
+.ic{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+
+/* ---------- header ---------- */
+header{flex:none;background:var(--surface);border-bottom:1px solid var(--line);z-index:5}
+.brand{display:flex;align-items:center;gap:10px;height:52px;padding:0 16px;border-bottom:1px solid var(--line)}
+.brand .mark{width:26px;height:26px;flex:none}
+.brand b{font:650 15px/1 var(--display);letter-spacing:-.02em;color:var(--ink)}
+.brand .repo{font:12px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.iconbtn{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;color:var(--muted)}
+.iconbtn:hover{background:var(--hover);color:var(--ink)}
+.iconbtn .ic{width:17px;height:17px}
+body.embed .brand{display:none}
+.bar2{display:flex;align-items:center;gap:16px;padding:0 16px;min-height:48px}
+nav.tabs{display:flex;gap:2px;flex:none}
+nav.tabs button{position:relative;display:flex;align-items:center;gap:6px;height:48px;padding:0 11px;font-weight:550;font-size:13.5px;color:var(--muted);transition:color var(--t) var(--ease)}
+nav.tabs button:hover{color:var(--ink)}
+nav.tabs button.on{color:var(--ink)}
+nav.tabs button.on::after{content:"";position:absolute;left:9px;right:9px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
+nav.tabs .n{font:600 11px/1 var(--font);padding:3px 6px;border-radius:99px;background:var(--hover);color:var(--ink-2)}
+nav.tabs .n.crit{background:var(--critical-soft);color:var(--ink)}
+.chips{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:center;margin-left:auto;justify-content:flex-end;padding:8px 0;min-width:0}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);white-space:nowrap}
+.chip b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.sev{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:550;color:var(--ink-2);padding:2px 9px 2px 7px;border-radius:99px;background:var(--hover);white-space:nowrap}
+.sev i{width:7px;height:7px;border-radius:99px;background:var(--faint);flex:none}
+.sev.critical{background:var(--critical-soft)} .sev.critical i{background:var(--critical)}
+.sev.high{background:var(--serious-soft)} .sev.high i{background:var(--serious)}
+.sev.medium{background:var(--warning-soft)} .sev.medium i{background:var(--warning)}
+.sev.low,.sev.good{background:var(--good-soft)} .sev.low i,.sev.good i{background:var(--good)}
+.sev.serious{background:var(--serious-soft)} .sev.serious i{background:var(--serious)}
+.sev.warning{background:var(--warning-soft)} .sev.warning i{background:var(--warning)}
+
+/* ---------- layout ---------- */
+main{flex:1;min-height:0;display:grid;grid-template-columns:280px minmax(0,1fr) 440px}
+main.noleft{grid-template-columns:minmax(0,1fr) 440px} main.noleft aside.left{display:none}
+aside.left{border-right:1px solid var(--line);background:var(--surface);overflow:auto;padding:14px 10px 24px}
+section.center{padding:20px 24px 40px;overflow:auto;min-width:0}
+aside.right{border-left:1px solid var(--line);background:var(--surface);overflow:auto}
+
+/* ---------- left: entry points ---------- */
+.searchbox{position:relative;margin:0 4px 6px}
+.searchbox .ic{position:absolute;left:11px;top:11px;color:var(--faint)}
+input.search{width:100%;height:36px;padding:0 10px 0 33px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface-2);color:var(--ink);font:inherit;font-size:13.5px;transition:border-color var(--t) var(--ease), box-shadow var(--t) var(--ease)}
+input.search:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft);background:var(--surface)}
+input.search::placeholder{color:var(--faint)}
+.group{margin-top:18px}
+.group h4{display:flex;justify-content:space-between;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 10px 6px}
+.group h4 span{font-weight:500;letter-spacing:0;color:var(--faint)}
+.ep{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:9px;font-size:13px;color:var(--ink);transition:background var(--t) var(--ease)}
+.ep:hover{background:var(--hover)}
+.ep.on{background:var(--accent-soft)}
+.ep .t{display:flex;align-items:center;gap:7px;min-width:0}
+.ep .t span.x{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12.5px}
+.ep .d{display:block;font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+.m{flex:none;display:inline-block;min-width:38px;text-align:center;font:700 9.5px/1 var(--mono);letter-spacing:.03em;padding:4px 5px;border-radius:5px;background:var(--hover);color:var(--ink-2)}
+.m.GET{background:var(--l1s);color:var(--l1)} .m.POST{background:var(--l3s);color:var(--l3)}
+.m.PUT,.m.PATCH{background:var(--l2s);color:var(--l2)} .m.DELETE{background:var(--critical-soft);color:var(--crit-ink)}
+.m.pg{background:var(--hover);color:var(--ink-2);font-family:var(--font);text-transform:lowercase}
+
+/* ---------- center: toolbar, legend ---------- */
+.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.toolbar h2{margin:0;font:700 22px/1.2 var(--display);letter-spacing:-.022em;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:10px}
+.toolbar h2 .m{font-size:11px;padding:5px 7px}
+.toolbar h2 .c{font-weight:500;color:var(--muted);font-size:18px}
+.seg{display:inline-flex;padding:3px;border-radius:10px;background:var(--hover);gap:2px}
+.seg button{height:28px;padding:0 11px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--muted);transition:color var(--t) var(--ease)}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:9px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);font-size:12.5px;font-weight:600;white-space:nowrap;transition:background var(--t) var(--ease), border-color var(--t) var(--ease)}
+.btn:hover{background:var(--surface-2);border-color:var(--faint)}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:var(--on-primary)}
+.btn:disabled{opacity:.45;cursor:default}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:0 0 14px;padding:0 0 14px;border-bottom:1px solid var(--line)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.ln{display:inline-block;width:22px;border-top:2px solid var(--ink-2)}
+.ln.observed{border-top-width:3px;border-color:var(--accent)} .ln.inferred{border-top-style:dashed} .ln.possible{border-top-style:dotted}
+.layer{display:inline-block;width:8px;height:8px;border-radius:3px;flex:none;background:var(--faint)}
+.layer.frontend{background:var(--fe)} .layer.backend{background:var(--be)} .layer.external{background:var(--line-2)}
+
+/* ---------- path tree ---------- */
 .tree{font-size:13.5px}
-.row{display:flex;align-items:flex-start;gap:6px;padding:3px 0}
+.row{display:flex;align-items:flex-start;gap:4px;padding:2px 0}
 .row .indent{flex:none;display:flex}
-.row .indent i{display:inline-block;width:18px;border-left:1px solid var(--line);height:26px}
-.tog{flex:none;width:20px;height:22px;color:var(--muted);font-size:11px}
-.conn{flex:none;width:18px;margin-top:11px}
-.node{flex:1;min-width:0;text-align:left;padding:3px 8px;border-radius:7px;border:1px solid transparent}
-.node:hover{background:var(--soft)}
-.node.on{background:var(--accent-soft);border-color:var(--accent)}
-.node .nm{font-family:var(--mono);font-size:12.5px;color:var(--ink);overflow-wrap:anywhere}
-.node .loc{font-size:11px;color:var(--muted)}
-.node .sum{display:block;font-size:12px;color:var(--body);margin-top:1px}
-.badge{display:inline-block;font-size:10.5px;font-weight:700;padding:0 6px;border-radius:999px;margin-left:4px;vertical-align:1px}
-.badge.critical{background:var(--crits);color:var(--crit)} .badge.high{background:var(--highs);color:var(--high)}
-.badge.medium{background:var(--meds);color:var(--med)} .badge.low{background:var(--lows);color:var(--low)}
-.badge.entry{background:var(--l1s);color:var(--l1)}
-.ext{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
-.hop{display:inline-block;font:600 10.5px var(--mono);color:var(--l2);background:var(--l2s);border-radius:999px;padding:1px 8px;margin:0 4px;white-space:nowrap}
-.hop.ui{color:var(--l1);background:var(--l1s);font-family:inherit}
-.hoprow{padding:0;margin:-2px 0 -2px}
-.layer{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:6px;vertical-align:1px;background:var(--muted)}
-.layer.frontend{background:var(--l1)} .layer.backend{background:var(--accent)} .layer.external{background:var(--line)}
+.row .indent i{display:inline-block;width:20px;border-left:1px solid var(--line-2);margin-left:9px;margin-right:-9px;height:34px}
+.tog{flex:none;display:grid;place-items:center;width:22px;height:30px;color:var(--muted);border-radius:6px}
+.tog:hover{color:var(--ink)}
+.tog .ic{width:13px;height:13px;transition:transform var(--t) var(--ease)}
+.tog.open .ic{transform:rotate(90deg)}
+.conn{flex:none;width:16px;margin-top:15px}
+.node{flex:1;min-width:0;text-align:left;padding:6px 10px;border-radius:10px;border:1px solid transparent;transition:background var(--t) var(--ease), border-color var(--t) var(--ease), box-shadow var(--t) var(--ease)}
+.node:hover{background:var(--surface);border-color:var(--line)}
+.node.on{background:var(--surface);border-color:var(--accent-line);box-shadow:0 0 0 4px var(--accent-soft)}
+.node .h{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.node .nm{font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--ink);overflow-wrap:anywhere}
+.node .loc{font:11px var(--mono);color:var(--muted)}
+.node .sum{display:block;font-size:12.5px;color:var(--ink-2);margin-top:3px;line-height:1.5}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:650;padding:1px 7px 1px 6px;border-radius:99px;background:var(--hover);color:var(--ink-2);text-transform:lowercase}
+.badge i{width:6px;height:6px;border-radius:99px;background:var(--faint)}
+.badge.critical{background:var(--critical-soft)} .badge.critical i{background:var(--critical)}
+.badge.high{background:var(--serious-soft)} .badge.high i{background:var(--serious)}
+.badge.medium{background:var(--warning-soft)} .badge.medium i{background:var(--warning)}
+.badge.low{background:var(--good-soft)} .badge.low i{background:var(--good)}
+.badge.entry{background:var(--l1s);color:var(--l1);padding-left:7px}
+.ext{display:block;font:11px var(--mono);color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.hop{display:inline-flex;align-items:center;gap:5px;font:600 10.5px var(--mono);color:var(--l2);background:var(--l2s);border-radius:99px;padding:2px 9px;margin:0 2px;white-space:nowrap}
+.hop.ui{color:var(--l1);background:var(--l1s);font-family:var(--font)}
+.hoprow{padding:0;margin:-1px 0}
 .again{font-size:11.5px;color:var(--muted);font-style:italic}
-.empty{color:var(--muted);padding:30px 10px;text-align:center}
-#chart{width:100%;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.empty{color:var(--muted);padding:48px 16px;text-align:center;line-height:1.6}
+.empty b{display:block;color:var(--ink);font:600 16px var(--display);margin-bottom:4px}
+.empty .art{width:52px;height:52px;display:block;margin:0 auto 12px}
+#chart{width:100%;overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface);
+  background-image:radial-gradient(var(--line) 1px, transparent 1px);background-size:18px 18px}
 #chart svg text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
-.detail{padding:16px}
-.detail h3{margin:0;font-family:var(--mono);font-size:14px;color:var(--ink);overflow-wrap:anywhere}
-.detail .meta{font-size:12px;color:var(--muted);margin:4px 0 10px}
-.sig{font-family:var(--mono);font-size:12px;background:var(--soft);padding:6px 8px;border-radius:6px;overflow-wrap:anywhere;color:var(--ink)}
-.lenses{display:flex;gap:4px;margin:14px 0 8px}
-.lenses button{flex:1;padding:7px 4px;border-radius:8px;font-size:12.5px;font-weight:700;border:1px solid var(--line);color:var(--muted)}
-.lenses button.on[data-l="1"]{background:var(--l1s);color:var(--l1);border-color:transparent}
-.lenses button.on[data-l="2"]{background:var(--l2s);color:var(--l2);border-color:transparent}
-.lenses button.on[data-l="3"]{background:var(--l3s);color:var(--l3);border-color:transparent}
-.lens{border-radius:10px;padding:12px;font-size:13.5px}
-.lens.l1{background:var(--l1s)} .lens.l2{background:var(--l2s)} .lens.l3{background:var(--l3s)}
-.lens dl{margin:8px 0 0} .lens dt{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:8px} .lens dd{margin:2px 0 0}
-.lens .k{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);display:block;margin-top:10px}
+#chart g[data-id]:hover rect.box{stroke:var(--accent-line)}
+
+/* ---------- right: detail ---------- */
+.detail{padding:20px}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 6px;display:flex;align-items:center;gap:8px}
+.detail h3{margin:0;font:650 15px/1.4 var(--mono);color:var(--ink);overflow-wrap:anywhere}
+.detail .meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font:12px var(--mono);color:var(--muted);margin:8px 0 12px}
+.sig{font:12px/1.5 var(--mono);background:var(--surface-2);border:1px solid var(--line);padding:9px 11px;border-radius:10px;overflow-wrap:anywhere;color:var(--ink)}
+.lenses{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;margin:18px 0 10px;padding:3px;border-radius:11px;background:var(--hover)}
+.lenses button{display:flex;align-items:center;justify-content:center;gap:7px;height:32px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--muted);transition:color var(--t) var(--ease)}
+.lenses button i{width:7px;height:7px;border-radius:99px}
+.lenses button[data-l="1"] i{background:var(--l1)} .lenses button[data-l="2"] i{background:var(--l2)} .lenses button[data-l="3"] i{background:var(--l3)}
+.lenses button:hover{color:var(--ink)}
+.lenses button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
+.lens{border-radius:12px;padding:14px 16px;font-size:13.5px;line-height:1.6;color:var(--ink);border-left:3px solid}
+.lens.l1{background:var(--l1s);border-color:var(--l1)} .lens.l2{background:var(--l2s);border-color:var(--l2)} .lens.l3{background:var(--l3s);border-color:var(--l3)}
+.lens dl{margin:6px 0 0} .lens dt{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-top:10px} .lens dd{margin:2px 0 0;color:var(--ink-2)}
+.lens .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:12px}
 mark.p{background:transparent;border-bottom:2px solid var(--l3);color:var(--ink);cursor:pointer;padding:0 1px}
-mark.p.on{background:var(--l3);color:var(--panel);border-radius:3px}
-.pairs{margin-top:10px;border-top:1px dashed var(--line)}
-.pair{display:grid;grid-template-columns:1fr 18px 1.2fr;gap:4px;padding:6px 4px;border-bottom:1px dashed var(--line);font-size:12.5px;border-radius:6px;cursor:pointer}
+mark.p.on{background:var(--l3);color:var(--surface);border-radius:4px}
+.pairs{margin-top:12px;border-top:1px solid var(--line)}
+.pair{display:grid;grid-template-columns:1fr 18px 1.2fr;gap:6px;padding:8px 6px;border-bottom:1px solid var(--line);font-size:12.5px;border-radius:8px;cursor:pointer;transition:background var(--t) var(--ease)}
+.pair:hover{background:var(--surface)}
 .pair .t{font-family:var(--mono);font-size:11.5px;color:var(--ink);overflow-wrap:anywhere}
 .pair .ar{color:var(--l3);font-weight:800;text-align:center}
 .pair .an{grid-column:3;font-size:10.5px;color:var(--muted)}
-.pair.on{background:var(--panel);outline:2px solid var(--l3)}
-.warn{background:var(--highs);color:var(--high);font-size:12px;padding:8px 10px;border-radius:8px;margin:8px 0}
-.note{font-size:12px;color:var(--muted)}
-pre.src{background:var(--code);color:var(--codeink);font:12px/1.5 var(--mono);padding:10px 0;border-radius:8px;overflow:auto;margin:10px 0}
-pre.src span{display:block;padding:0 10px;white-space:pre}
-pre.src span.f{background:#4A1F1A}
-pre.src span.h{background:var(--hl)}
-.links{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
-.links h5{margin:0 0 4px;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.links button{display:block;text-align:left;font-family:var(--mono);font-size:11.5px;color:var(--accent);padding:2px 0;overflow-wrap:anywhere}
-.fcard{border:1px solid var(--line);border-radius:10px;padding:12px;margin:0 0 10px;background:var(--panel)}
+.pair.on{background:var(--surface);box-shadow:0 0 0 2px var(--l3)}
+.warn{display:flex;gap:8px;background:var(--warning-soft);color:var(--ink);font-size:12.5px;padding:10px 12px;border-radius:10px;margin:10px 0}
+.warn .ic{color:var(--warn-ink);margin-top:1px}
+.note{font-size:12.5px;color:var(--muted)}
+.byline{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:10px}
+.unexplained{border:1px dashed var(--line-2);border-radius:12px;padding:14px 16px;color:var(--muted);font-size:13px}
+.unexplained .btn{margin-top:10px}
+pre.src{background:var(--code-bg);color:var(--code-ink);font:12px/1.65 var(--mono);padding:12px 0;border-radius:12px;overflow:auto;margin:14px 0}
+pre.src span{display:block;padding:0 14px;white-space:pre}
+pre.src span u{text-decoration:none;color:var(--code-dim);user-select:none}
+pre.src span.f{background:var(--code-flag);box-shadow:inset 3px 0 0 var(--critical)}
+pre.src span.h{background:var(--code-hl);box-shadow:inset 3px 0 0 #FFB547}
+.links{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+.links h5{margin:0 0 6px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.links button{display:block;max-width:100%;text-align:left;font:12px var(--mono);color:var(--accent-ink);padding:3px 0;overflow-wrap:anywhere}
+.links button:hover{text-decoration:underline}
+
+/* ---------- findings ---------- */
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.fchip{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border-radius:99px;border:1px solid var(--line-2);background:var(--surface);font-size:12.5px;font-weight:550;color:var(--ink-2);transition:all var(--t) var(--ease)}
+.fchip i{width:7px;height:7px;border-radius:99px;background:var(--faint)}
+.fchip.critical i{background:var(--critical)} .fchip.high i{background:var(--serious)} .fchip.medium i{background:var(--warning)} .fchip.low i{background:var(--good)}
+.fchip b{font-weight:650;color:var(--ink);font-variant-numeric:tabular-nums}
+.fchip:hover{border-color:var(--faint)}
+.fchip.on{background:var(--primary);border-color:var(--primary);color:var(--on-primary)} .fchip.on b{color:var(--on-primary)}
+.fcard{position:relative;border:1px solid var(--line);border-radius:14px;padding:16px 18px 16px 20px;margin:0 0 12px;background:var(--surface);box-shadow:var(--shadow-1);overflow:hidden}
+.fcard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--faint)}
+.fcard.critical::before{background:var(--critical)} .fcard.high::before{background:var(--serious)} .fcard.medium::before{background:var(--warning)} .fcard.low::before{background:var(--good)}
+.fcard.accepted{opacity:.72}
 .fcard .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.fcard .rule{font-family:var(--mono);font-size:12px;color:var(--muted)}
-.fcard h4{margin:6px 0 4px;font-size:14px;color:var(--ink)}
-.path{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-family:var(--mono);font-size:11.5px;margin-top:6px}
-.path button{color:var(--accent)}
-.kv{display:grid;grid-template-columns:160px 1fr;gap:4px 12px;font-size:13px}
-.kv div:nth-child(odd){color:var(--muted)}
-.about{max-width:760px}
-.about h3{color:var(--ink);font-size:15px;margin:18px 0 6px}
-.score{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:4px 0 14px}
-.score .big{font:800 44px/1 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;color:var(--ink)}
-.score .grade{font:800 22px/1 inherit;width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:var(--soft);color:var(--ink)}
-.score .grade.A,.score .grade.B{background:var(--lows);color:var(--low)} .score .grade.C{background:var(--meds);color:var(--med)}
-.score .grade.D{background:var(--highs);color:var(--high)} .score .grade.F{background:var(--crits);color:var(--crit)}
-.cat{border:1px solid var(--line);border-radius:10px;background:var(--panel);margin:0 0 8px}
-.cat summary{display:grid;grid-template-columns:1fr 120px 64px;gap:10px;align-items:center;padding:10px 12px;cursor:pointer;list-style:none}
+.fcard .rule{font:11.5px var(--mono);color:var(--muted)}
+.fcard h4{margin:10px 0 4px;font:650 15px/1.4 var(--display);letter-spacing:-.01em;color:var(--ink)}
+.fcard .acts{margin-top:12px;display:flex;gap:6px;flex-wrap:wrap}
+.tag{display:inline-flex;align-items:center;font-size:11px;font-weight:550;color:var(--ink-2);padding:1px 8px;border-radius:99px;border:1px solid var(--line-2);white-space:nowrap}
+.path{display:flex;flex-wrap:wrap;gap:5px;align-items:center;font:11.5px var(--mono);margin-top:10px}
+.path .note{font-family:var(--font);margin-right:2px}
+.path button{display:inline-flex;align-items:center;gap:6px;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);padding:2px 8px;border-radius:7px}
+.path button:hover{border-color:var(--accent-line);color:var(--accent-ink)}
+.path .sep{color:var(--faint)}
+.plain{margin-top:12px;padding:12px 14px;border-radius:10px;background:var(--l2s);border-left:3px solid var(--l2);color:var(--ink);font-size:13px}
+.fid{font:10.5px var(--mono);color:var(--faint);user-select:all;margin-left:auto}
+
+/* ---------- readiness and about ---------- */
+.page{max-width:880px;margin:0 auto}
+.scorehero{display:flex;align-items:center;gap:24px;flex-wrap:wrap;padding:22px 24px;border:1px solid var(--line);border-radius:18px;background:var(--surface);box-shadow:var(--shadow-1);margin:0 0 22px}
+.gauge{position:relative;width:112px;height:112px;flex:none}
+.gauge svg{width:112px;height:112px;transform:rotate(-90deg)}
+.gauge circle{fill:none;stroke-width:9}
+.gauge .fill{stroke-linecap:round}
+.gauge .v{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.gauge .v b{font:700 34px/1 var(--display);letter-spacing:-.03em;color:var(--ink);font-variant-numeric:tabular-nums}
+.gauge .v span{font-size:11.5px;color:var(--muted);margin-top:3px}
+.good .fill{stroke:var(--good)} .good .track{stroke:var(--good-soft)}
+.warning .fill{stroke:var(--warning)} .warning .track{stroke:var(--warning-soft)}
+.serious .fill{stroke:var(--serious)} .serious .track{stroke:var(--serious-soft)}
+.critical .fill{stroke:var(--critical)} .critical .track{stroke:var(--critical-soft)}
+.none .track{stroke:var(--sunken)}
+.scorehero .txt{flex:1;min-width:220px}
+.scorehero h2{margin:0 0 4px;font:700 20px/1.25 var(--display);letter-spacing:-.02em;color:var(--ink);display:flex;align-items:center;gap:10px}
+.grade{display:inline-grid;place-items:center;font:700 15px/1 var(--display);width:30px;height:30px;border-radius:9px;background:var(--hover);color:var(--ink)}
+.grade.A,.grade.B{background:var(--good-soft)} .grade.C{background:var(--warning-soft)} .grade.D{background:var(--serious-soft)} .grade.F{background:var(--critical-soft)}
+.page h3{color:var(--ink);font:650 16px/1.3 var(--display);letter-spacing:-.012em;margin:30px 0 8px}
+.page > p.note{margin:0 0 12px}
+.cat{border:1px solid var(--line);border-radius:14px;background:var(--surface);margin:0 0 8px;overflow:hidden;transition:border-color var(--t) var(--ease)}
+.cat[open]{box-shadow:var(--shadow-1)}
+.cat summary{display:grid;grid-template-columns:16px 1fr 150px 60px;gap:12px;align-items:center;padding:13px 16px;cursor:pointer;list-style:none}
 .cat summary::-webkit-details-marker{display:none}
-.cat summary b{color:var(--ink);font-size:13.5px}
-.bar{height:8px;border-radius:99px;background:var(--soft);overflow:hidden}.bar i{display:block;height:100%;background:var(--accent)}
-.cat .pts{font:12px var(--mono);color:var(--muted);text-align:right}
-.chk{display:grid;grid-template-columns:22px 1fr auto;gap:8px;padding:8px 12px;border-top:1px dashed var(--line);font-size:13px}
-.chk .ic{font-weight:800;text-align:center} .chk .ic.pass{color:var(--low)} .chk .ic.fail{color:var(--crit)} .chk .ic.partial{color:var(--high)} .chk .ic.skip{color:var(--muted)}
-.chk .ev{font-size:12px;color:var(--muted);overflow-wrap:anywhere} .chk .fx{font-size:12px;color:var(--body);margin-top:2px}
-pre.file{background:var(--code);color:var(--codeink);font:12px/1.5 var(--mono);padding:10px;border-radius:8px;overflow:auto;margin:6px 0 12px;white-space:pre}
-.ready-list{margin:6px 0 0;padding-left:18px} .ready-list li{margin:4px 0}
-.fid{font:11px var(--mono);color:var(--muted);user-select:all}
+.cat summary .ic{color:var(--muted);transition:transform var(--t) var(--ease)}
+.cat[open] summary .ic{transform:rotate(90deg)}
+.cat summary b{color:var(--ink);font-size:14px;font-weight:600}
+.meter{height:6px;border-radius:99px;background:var(--sunken);overflow:hidden}
+.meter i{display:block;height:100%;border-radius:99px;background:var(--faint)}
+.meter.good{background:var(--good-soft)} .meter.good i{background:var(--good)}
+.meter.warning{background:var(--warning-soft)} .meter.warning i{background:var(--warning)}
+.meter.serious{background:var(--serious-soft)} .meter.serious i{background:var(--serious)}
+.meter.critical{background:var(--critical-soft)} .meter.critical i{background:var(--critical)}
+.pts{font:12px var(--mono);color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.pts b{color:var(--ink);font-weight:600}
+.chk{display:grid;grid-template-columns:24px 1fr auto;gap:10px;padding:11px 16px;border-top:1px solid var(--line);font-size:13px}
+.chk > div > div:first-child{color:var(--ink)}
+.chk .ic{display:grid;place-items:center;width:20px;height:20px;border-radius:99px;font:800 11px/1 var(--font);margin-top:1px}
+.chk .ic.pass{background:var(--good-soft);color:var(--good-ink)} .chk .ic.fail{background:var(--critical-soft);color:var(--crit-ink)}
+.chk .ic.partial{background:var(--warning-soft);color:var(--warn-ink)} .chk .ic.skip{background:var(--hover);color:var(--muted)}
+.chk .ev{font-size:12px;color:var(--muted);overflow-wrap:anywhere;margin-top:2px} .chk .fx{font-size:12.5px;color:var(--ink-2);margin-top:4px}
+.panel{border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden}
+.panel .chk:first-child{border-top:0}
+.wins{list-style:none;margin:0;padding:0;counter-reset:w}
+.wins li{counter-increment:w;display:grid;grid-template-columns:28px 1fr auto;gap:12px;padding:12px 16px;border-top:1px solid var(--line);align-items:start}
+.wins li:first-child{border-top:0}
+.wins li::before{content:counter(w);display:grid;place-items:center;width:24px;height:24px;border-radius:8px;background:var(--hover);font:650 12px var(--display);color:var(--ink)}
+.wins b{color:var(--ink);font-weight:600}
+.gain{font:600 12px var(--mono);color:var(--good-ink);background:var(--good-soft);padding:2px 8px;border-radius:99px;white-space:nowrap}
+pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mono);padding:12px 14px;border-radius:12px;overflow:auto;margin:8px 0 16px;white-space:pre}
+.ready-list{margin:6px 0 0;padding-left:20px} .ready-list li{margin:6px 0}
+.filehead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
+.filehead b{font:600 12.5px var(--mono);color:var(--ink)}
+.kv{display:grid;grid-template-columns:200px 1fr;font-size:13px;border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden}
+.kv div{padding:9px 14px;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.kv div:nth-child(-n+2){border-top:0}
+.kv div:nth-child(odd){color:var(--muted);background:var(--surface-2)}
+.kv div:nth-child(even){color:var(--ink)}
+.page ul{padding-left:20px} .page li{margin:5px 0}
+.pagehead{margin:0 0 6px;font:700 22px/1.2 var(--display);letter-spacing:-.022em;color:var(--ink)}
 .closebtn{display:none}
 @media (max-width: 1100px){
-  main{grid-template-columns:240px minmax(0,1fr)}
-  aside.right{position:fixed;right:0;top:0;bottom:0;width:min(440px,100vw);max-height:none;z-index:20;transform:translateX(100%);transition:transform .2s;box-shadow:-10px 0 30px rgba(0,0,0,.15)}
+  main{grid-template-columns:250px minmax(0,1fr)}
+  main.noleft{grid-template-columns:minmax(0,1fr)}
+  aside.right{position:fixed;right:0;top:0;bottom:0;width:min(460px,100vw);z-index:20;transform:translateX(105%);transition:transform .28s var(--ease);box-shadow:var(--shadow-3)}
   aside.right.open{transform:none}
-  .closebtn{display:inline-block;float:right;font-size:20px;color:var(--muted);padding:0 4px}
+  .closebtn{display:grid;place-items:center;float:right;width:32px;height:32px;border-radius:99px;background:var(--hover);color:var(--ink-2);margin:-4px -4px 0 8px}
 }
 @media (max-width: 720px){
-  header{position:static}
+  body{height:auto;display:block}
+  .bar2{flex-wrap:wrap;gap:0;padding:0 8px}
+  nav.tabs{width:100%;overflow-x:auto}
+  .chips{display:none}
   main{display:block}
-  aside.left{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}
-  aside.left .groups{max-height:200px;overflow:auto}
-  aside.right{width:100vw;top:auto;height:85vh;transform:translateY(100%);border-radius:16px 16px 0 0}
+  aside.left{border-right:0;border-bottom:1px solid var(--line);overflow:visible}
+  aside.left .groups{max-height:220px;overflow:auto}
+  section.center{padding:16px}
+  aside.right{width:100vw;top:auto;height:86vh;transform:translateY(105%);border-radius:20px 20px 0 0}
   aside.right.open{transform:none}
+  .cat summary{grid-template-columns:16px 1fr 70px 52px}
+  .kv{grid-template-columns:1fr} .kv div:nth-child(even){border-top:0;padding-top:0}
 }
 </style>
 </head>
 <body>
 <header>
-  <div class="brand"><b>Lantern</b><span class="repo" id="repo"></span></div>
-  <div class="chips" id="chips"></div>
-  <nav class="tabs" id="tabs">
-    <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="ready">Readiness</button><button data-t="about">About</button>
-  </nav>
+  <div class="brand"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
+  <div class="bar2">
+    <nav class="tabs" id="tabs">
+      <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="ready">Readiness</button><button data-t="about">About</button>
+    </nav>
+    <div class="chips" id="chips"></div>
+  </div>
 </header>
 <main id="main">
   <aside class="left" id="left"></aside>
@@ -190,6 +374,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 // lookup keys go through cls()/pick(), so only known words come out; numbers used in styles go through pct().
 const RANKS = ['critical', 'high', 'medium', 'low'], STATUSES = ['pass', 'fail', 'partial', 'skip'];
 const CONFS = ['observed', 'resolved', 'inferred', 'possible'], GRADES = ['A', 'B', 'C', 'D', 'F'];
+const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'ANY', 'WS'];
 const cls = (v, set) => set.includes(v) ? v : '';
 const pick = (m, k) => Object.prototype.hasOwnProperty.call(m, k) ? m[k] : '';
 const pct = v => Math.max(0, Math.min(100, +v || 0));
@@ -204,26 +389,50 @@ const short = q => {
 const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : (id || '').startsWith('py:') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
-const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', open: new Set(), q: '', pair: null};
+const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', open: new Set(), q: '', pair: null, fsev: 'all'};
 try { S.lens = +localStorage.getItem('lantern.lens') || 1; } catch (e) {}
+// Icons and the status tone of a 0-100 value: fixed markup and fixed words, never data.
+const ICONS = {
+  search: '<circle cx="9" cy="9" r="5.5"/><path d="m13 13 3.5 3.5"/>', chev: '<path d="m7.5 4.5 5.5 5.5-5.5 5.5"/>',
+  close: '<path d="M5 5l10 10M15 5 5 15"/>', open: '<path d="M11 4h5v5M16 4l-7 7M14 12v3.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5H8"/>',
+  warn: '<path d="M10 3.5 17.5 16h-15z"/><path d="M10 8.5v3.5M10 14h.01"/>', sparkle: '<path d="M10 3v3M10 14v3M3 10h3M14 10h3M5.5 5.5l2 2M12.5 12.5l2 2M14.5 5.5l-2 2M7.5 12.5l-2 2"/>',
+  expand: '<path d="M4 8V4h4M16 8V4h-4M4 12v4h4M16 12v4h-4"/>', file: '<path d="M5 3h6.5L15 6.5V17H5z"/><path d="M11 3v4h4"/>',
+  sun: '<circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7l1.3 1.3M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/>',
+  moon: '<path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/>', auto: '<circle cx="10" cy="10" r="6.5"/><path d="M10 3.5v13a6.5 6.5 0 0 0 0-13z" fill="currentColor"/>',
+};
+const icon = n => `<svg class="ic" viewBox="0 0 20 20" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const toneOf = v => v === null || v === undefined || v === '' ? 'none' : pct(v) >= 80 ? 'good' : pct(v) >= 50 ? 'warning' : pct(v) >= 25 ? 'serious' : 'critical';
+const sevChip = r => `<span class="badge ${cls(r, RANKS)}"><i></i>${esc(r)}</span>`;
+
+// ---------- appearance: follows the Lantern app (same origin) or this file's own choice ----------
+const THEMES = ['auto', 'light', 'dark'];
+let THEME = 'auto';
+try { THEME = THEMES.includes(localStorage.getItem('lantern.theme')) ? localStorage.getItem('lantern.theme') : 'auto'; } catch (e) {}
+function applyTheme() {
+  if (THEME === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = THEME;
+  const b = document.getElementById('theme');
+  b.innerHTML = icon({auto: 'auto', light: 'sun', dark: 'moon'}[THEME]); b.title = `Appearance: ${THEME === 'auto' ? 'match this computer' : THEME}`;
+}
+document.getElementById('theme').onclick = () => { THEME = THEMES[(THEMES.indexOf(THEME) + 1) % 3]; try { localStorage.setItem('lantern.theme', THEME); } catch (e) {} applyTheme(); };
+applyTheme();
+// Inside the Lantern app the app's own bar already names the project, so the report drops its brand row.
+try { if (window.LANTERN_LIVE && window.self !== window.top) document.body.classList.add('embed'); } catch (e) {}
 
 // ---------- header ----------
 document.getElementById('repo').textContent = G.repo_root;
 const st = DATA.stats || {};
 const LANGS = G.meta.languages || {};
 const BR = G.meta.bridge;
-const chips = [
-  ...Object.entries(LANGS).map(([k, v]) => `${k === 'python' ? 'Python' : 'TypeScript/JS'} · ${v.files} files`),
-  `${(st.nodes || {}).callable ?? 0} functions`, `${st.entry_points ?? 0} entry points`,
-  ...(BR && BR.matched ? [`${BR.matched} frontend→backend calls linked`] : []),
-];
-let chipHtml = chips.map(c => `<span class="chip">${esc(c)}</span>`).join('');
-if (SEC.counts.critical) chipHtml += `<span class="chip crit">${esc(SEC.counts.critical)} critical</span>`;
-if (SEC.counts.high) chipHtml += `<span class="chip high">${esc(SEC.counts.high)} high</span>`;
+const chip = (v, label) => `<span class="chip"><b>${esc(v)}</b>${esc(label)}</span>`;
+let chipHtml = Object.entries(LANGS).map(([k, v]) => chip(v.files, (k === 'python' ? 'Python' : 'TS/JS') + ' files')).join('');
+chipHtml += chip((st.nodes || {}).callable ?? 0, 'functions') + chip(st.entry_points ?? 0, 'entry points');
+if (BR && BR.matched) chipHtml += chip(BR.matched, 'frontend→backend links');
 const nexp = Object.keys(EXP).length;
-chipHtml += `<span class="chip">${nexp ? nexp + ' explained' : 'no explanations yet'}</span>`;
-if (DATA.readiness) chipHtml += `<span class="chip">readiness ${esc(DATA.readiness.score)}/100 (${esc(DATA.readiness.grade)})</span>`;
+chipHtml += nexp ? chip(nexp, 'explained') : '<span class="chip">no explanations yet</span>';
+if (DATA.readiness) chipHtml += `<span class="sev ${toneOf(DATA.readiness.score)}" title="Deployment readiness"><i></i>Readiness ${esc(DATA.readiness.score)}/100 · ${esc(DATA.readiness.grade)}</span>`;
 document.getElementById('chips').innerHTML = chipHtml;
+const openCount = SEC.findings.filter(f => f.status !== 'accepted').length;
+if (openCount) document.querySelector('#tabs [data-t="findings"]').insertAdjacentHTML('beforeend', `<span class="n ${SEC.counts.critical ? 'crit' : ''}">${esc(openCount)}</span>`);
 document.getElementById('tabs').onclick = ev => {
   const t = ev.target.closest('button'); if (!t) return;
   S.tab = t.dataset.t;
@@ -233,26 +442,38 @@ document.getElementById('tabs').onclick = ev => {
 
 // ---------- left: entry points ----------
 const ENTRY_LABEL = {page: 'Pages and screens', route: 'API routes', cli: 'Command-line commands', main: 'App and program starts', script: 'Installed scripts', test: 'Tests'};
+// "GET /users/{id}" -> method tag + path; anything else stays one string
+function routeParts(detail) {
+  const m = /^([A-Z]+)\s+(.*)$/.exec(String(detail || ''));
+  return m && METHODS.includes(m[1]) ? [m[1], m[2]] : [null, String(detail || '')];
+}
+function epTitle(n, k) {
+  if (k === 'route') { const [m, p] = routeParts(n.entry.detail); return `${m ? `<span class="m ${cls(m, METHODS)}">${esc(m)}</span>` : ''}<span class="x">${esc(p)}</span>`; }
+  if (k === 'page') return `<span class="m pg">page</span><span class="x">${esc(n.entry.detail)}</span>`;
+  return `<span class="x">${esc(k === 'script' ? n.entry.detail : short(n.qualname))}</span>`;
+}
 function renderLeft() {
   const el = document.getElementById('left');
-  if (S.tab !== 'map') { el.innerHTML = `<div class="note" style="padding:6px">${{findings: 'Findings are ranked by severity and by whether an entry point can reach them.', ready: 'Every point has a reason. Checks that don\'t apply to this kind of project are skipped, not counted against it.', about: 'How this report was made.'}[S.tab]}</div>`; return; }
+  // the entry list only matters on the map; other tabs use the full width
+  document.getElementById('main').classList.toggle('noleft', S.tab !== 'map');
+  if (S.tab !== 'map') { el.innerHTML = ''; return; }
   const eps = G.nodes.filter(n => n.entry);
   const q = S.q.toLowerCase();
   const groups = {};
   for (const n of eps) (groups[n.entry.kind] ||= []).push(n);
-  let html = `<input class="search" id="q" placeholder="Search functions…" value="${esc(S.q)}">`;
+  let html = `<div class="searchbox">${icon('search')}<input class="search" id="q" placeholder="Search functions" value="${esc(S.q)}" spellcheck="false" autocomplete="off"></div>`;
   html += '<div class="groups">';
   if (q) {
     const hits = G.nodes.filter(n => n.kind === 'callable' && n.qualname.toLowerCase().includes(q)).slice(0, 60);
-    html += `<div class="group"><h4>Matches (${hits.length})</h4>` + hits.map(n =>
-      `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(short(n.qualname))}<span class="d">${esc(n.file)}:${esc(n.start_line)}</span></button>`).join('') + '</div>';
+    html += `<div class="group"><h4>Matches <span>${hits.length}</span></h4>` + hits.map(n =>
+      `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t"><span class="layer ${layer(n.id)}"></span><span class="x">${esc(short(n.qualname))}</span></span><span class="d">${esc(n.file)}:${esc(n.start_line)}</span></button>`).join('') + '</div>';
   } else {
     if (!eps.length) html += '<div class="empty">No entry points detected. Use search to start from any function.</div>';
     for (const k of ['page', 'route', 'main', 'cli', 'script', 'test']) {
       const list = groups[k]; if (!list) continue;
       list.sort((a, b) => (a.entry.detail || '').localeCompare(b.entry.detail || ''));
-      html += `<div class="group"><h4>${ENTRY_LABEL[k]} (${list.length})</h4>` + list.slice(0, 300).map(n =>
-        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}">${esc(['route', 'script', 'page'].includes(k) ? n.entry.detail : short(n.qualname))}<span class="d">${esc(short(n.qualname))}${isJS(n.id) ? ' · frontend' : LANGS['typescript/javascript'] ? ' · backend' : ''}</span></button>`).join('') + '</div>';
+      html += `<div class="group"><h4>${ENTRY_LABEL[k]} <span>${list.length}</span></h4>` + list.slice(0, 300).map(n =>
+        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t">${epTitle(n, k)}</span><span class="d">${esc(short(n.qualname))}${isJS(n.id) ? ' · frontend' : LANGS['typescript/javascript'] ? ' · backend' : ''}</span></button>`).join('') + '</div>';
     }
   }
   html += '</div>';
@@ -283,17 +504,17 @@ function renderTree() {
   return '<div class="tree">' + rows.map(r => {
     const n = N[r.id], w = worstRank(r.id);
     const indent = '<span class="indent">' + '<i></i>'.repeat(r.depth) + '</span>';
-    const tog = r.kids && !r.loop ? `<button class="tog" data-tog="${esc(r.id)}">${S.open.has(r.id) ? '▼' : '▶'}</button>` : '<span class="tog"></span>';
+    const tog = r.kids && !r.loop ? `<button class="tog ${S.open.has(r.id) ? 'open' : ''}" data-tog="${esc(r.id)}" aria-label="${S.open.has(r.id) ? 'Collapse' : 'Expand'}">${icon('chev')}</button>` : '<span class="tog"></span>';
     const conf = r.edge ? `<span class="conn ln ${cls(r.edge.confidence, CONFS)}" title="${esc(r.edge.confidence)} (${esc(r.edge.via || '')})"></span>` : '';
     const hop = r.edge && (r.edge.via || '').startsWith('http-') ? `<span class="hop">HTTP ${esc(r.edge.detail || '')}</span>`
       : r.edge && r.edge.detail ? `<span class="hop ui">${esc(UI_WORDS[r.edge.detail] || r.edge.detail)}</span>` : '';
     const sum = summaryOf(r.id);
-    const ext = r.exts.length ? `<span class="ext"> → ${r.exts.slice(0, 4).map(e => esc(e.dst.slice(4))).join(', ')}${r.exts.length > 4 ? '…' : ''}</span>` : '';
+    const ext = r.exts.length ? `<span class="ext">→ ${r.exts.slice(0, 4).map(e => esc(e.dst.slice(4))).join(', ')}${r.exts.length > 4 ? '…' : ''}</span>` : '';
     return `${hop ? `<div class="row hoprow">${indent}<span class="tog"></span>${hop}</div>` : ''}<div class="row">${indent}${tog}${conf}<button class="node ${S.sel === r.id ? 'on' : ''}" data-id="${esc(r.id)}">
-      <span class="layer ${layer(r.id)}"></span><span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? `<span class="badge ${cls(w, RANKS)}">${esc(w)}</span>` : ''}
-      ${r.loop ? '<span class="again"> ↻ already on this path</span>' : ''}
-      <span class="loc"> ${esc(n.file)}:${esc(n.start_line ?? '')}</span>${ext}
-      ${sum ? `<span class="sum">${esc(sum.length > 140 ? sum.slice(0, 140) + '…' : sum)}</span>` : ''}</button></div>`;
+      <span class="h"><span class="layer ${layer(r.id)}"></span><span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? sevChip(w) : ''}
+      ${r.loop ? '<span class="again">↻ already on this path</span>' : ''}
+      <span class="loc">${esc(n.file)}:${esc(n.start_line ?? '')}</span></span>${ext}
+      ${sum ? `<span class="sum">${esc(sum.length > 160 ? sum.slice(0, 160) + '…' : sum)}</span>` : ''}</button></div>`;
   }).join('') + '</div>';
 }
 
@@ -319,13 +540,14 @@ function renderChart() {
     const bc = id => { const ps = edges.filter(e => e.dst === id && depth[e.src] === d - 1).map(e => pos[e.src]); return ps.length ? ps.reduce((a, b) => a + b) / ps.length : pos[id]; };
     layers[d].sort((a, b) => bc(a) - bc(b)); layers[d].forEach((id, i) => pos[id] = i);
   }
-  const W = 170, H = 34, GX = 24, GY = 54;
+  const W = 180, H = 40, GX = 28, GY = 58;
   const widest = Math.max(...layers.map(l => l.length));
   const width = Math.max(widest * (W + GX) + GX, 400), height = layers.length * (H + GY) + GY;
   const xy = {};
   layers.forEach((l, d) => { const off = (width - (l.length * (W + GX) - GX)) / 2; l.forEach((id, i) => xy[id] = [off + i * (W + GX), GY / 2 + d * (H + GY)]); });
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker></defs>`;
+    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker>
+    <marker id="aho" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>`;
   for (const e of edges) {
     if (!(e.src in xy) || !(e.dst in xy)) continue;
     const [x1, y1] = xy[e.src], [x2, y2] = xy[e.dst];
@@ -334,34 +556,39 @@ function renderChart() {
     const d = back ? `M${sx} ${y1} C ${sx + 80} ${y1 - 40}, ${tx + 80} ${ty + H + 40}, ${tx + W / 2} ${ty + H / 2}`
                    : `M${sx} ${sy} C ${sx} ${sy + GY / 2}, ${tx} ${ty - GY / 2}, ${tx} ${ty - 2}`;
     const dash = e.confidence === 'inferred' ? '5 4' : e.confidence === 'possible' ? '1.5 3.5' : '';
-    const sw = e.confidence === 'observed' ? 2.6 : 1.3;
-    const col = e.confidence === 'observed' ? 'var(--accent)' : 'var(--muted)';
-    svg += `<path d="${d}" fill="none" stroke="${col}" stroke-width="${sw}" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#ah)"/>`;
+    const obs = e.confidence === 'observed';
+    svg += `<path d="${d}" fill="none" stroke="${obs ? 'var(--accent)' : 'var(--faint)'}" stroke-width="${obs ? 2.4 : 1.4}" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#${obs ? 'aho' : 'ah'})"/>`;
   }
   for (const id of order) {
     const [x, y] = xy[id], n = N[id], w = worstRank(id), on = S.sel === id;
-    const stroke = w === 'critical' ? 'var(--crit)' : w === 'high' ? 'var(--high)' : on ? 'var(--accent)' : 'var(--line)';
-    const label = short(n.qualname); const t = label.length > 24 ? label.slice(0, 23) + '…' : label;
-    svg += `<g data-id="${esc(id)}" style="cursor:pointer"><rect x="${x}" y="${y}" width="${W}" height="${H}" rx="8" fill="${on ? 'var(--accent-soft)' : 'var(--panel)'}" stroke="${stroke}" stroke-width="${w || on ? 2 : 1}"/>
-      <text x="${x + 10}" y="${y + 21}">${esc(t)}</text><title>${esc(n.qualname)}</title></g>`;
+    const stroke = on ? 'var(--accent)' : w === 'critical' ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : 'var(--line-2)';
+    const label = short(n.qualname); const t = label.length > 22 ? label.slice(0, 21) + '…' : label;
+    const lc = layer(id) === 'frontend' ? 'var(--fe)' : layer(id) === 'backend' ? 'var(--be)' : 'var(--faint)';
+    svg += `<g data-id="${esc(id)}" style="cursor:pointer"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="10" fill="var(--surface)" stroke="${stroke}" stroke-width="${w || on ? 2 : 1}"/>
+      ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="13" fill="none" stroke="var(--accent-soft)" stroke-width="4"/>` : ''}
+      <rect x="${x + 10}" y="${y + 16}" width="8" height="8" rx="2.5" fill="${lc}"/>
+      <text x="${x + 26}" y="${y + 24}">${esc(t)}</text>${w ? `<circle cx="${x + W - 14}" cy="${y + 20}" r="4" fill="${w === 'critical' ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : w === 'medium' ? 'var(--warning)' : 'var(--good)'}"/>` : ''}<title>${esc(n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use the tree view to go deeper.</div>` : '';
   return `<div id="chart">${svg}</div>${more}`;
 }
 
+const ART = '<svg class="art" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="35" r="24" fill="#FFB547" opacity=".14"/><path d="M26 13h12M25 51h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg>';
 function renderMap() {
   const el = document.getElementById('center');
   if (!S.entry) {
     const eps = G.nodes.filter(n => n.entry && n.entry.kind !== 'test');
-    el.innerHTML = `<div class="empty"><b>Pick a starting point.</b><br>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
+    el.innerHTML = `<div class="empty">${ART}<b>Pick a starting point</b>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
     return;
   }
   const n = N[S.entry];
-  const title = n.entry && (n.entry.kind === 'route' || n.entry.kind === 'script') ? n.entry.detail : short(n.qualname);
-  el.innerHTML = `<div class="toolbar"><h2>${esc(title)}</h2>
+  let title = esc(short(n.qualname));
+  if (n.entry && n.entry.kind === 'route') { const [m, p] = routeParts(n.entry.detail); title = `${m ? `<span class="m ${cls(m, METHODS)}">${esc(m)}</span>` : ''}${esc(p)}`; }
+  else if (n.entry && n.entry.kind === 'script') title = esc(n.entry.detail);
+  el.innerHTML = `<div class="toolbar"><h2>${title}</h2>
     <div class="seg"><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button></div>
-    <button class="chip" id="expand">Expand all</button></div>
+    <button class="btn" id="expand">${icon('expand')}Expand all</button></div>
     <div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>
     ${S.view === 'tree' ? renderTree() : renderChart()}`;
   el.querySelectorAll('.seg button').forEach(b => b.onclick = () => { S.view = b.dataset.v; renderMap(); });
@@ -372,29 +599,34 @@ function renderMap() {
 
 function renderFindings() {
   const el = document.getElementById('center');
-  const fs = SEC.findings;
-  if (!fs.length) { el.innerHTML = '<div class="empty">No findings from the scanners that ran. See About for which tools ran.</div>'; return; }
-  el.innerHTML = `<div class="toolbar"><h2>Security findings (${fs.length})</h2></div>` + fs.map(f => {
+  const all = SEC.findings;
+  if (!all.length) { el.innerHTML = `<div class="empty">${ART}<b>No findings</b>None from the scanners that ran. See About for which tools ran.</div>`; return; }
+  const by = r => all.filter(f => f.rank === r).length;
+  const fs = S.fsev === 'all' ? all : all.filter(f => f.rank === S.fsev);
+  const fchip = (k, label, n) => `<button class="fchip ${k === 'all' ? '' : k} ${S.fsev === k ? 'on' : ''}" data-sev="${k}">${k === 'all' ? '' : '<i></i>'}${label} <b>${esc(n)}</b></button>`;
+  el.innerHTML = `<div class="toolbar"><h2>Security findings <span class="c">${esc(all.length)}</span></h2></div>
+    <p class="note" style="margin:-6px 0 14px">Ranked by severity and by whether an entry point can reach them.</p><div class="filters">${fchip('all', 'All', all.length)}${RANKS.filter(by).map(r => fchip(r, r[0].toUpperCase() + r.slice(1), by(r))).join('')}</div>` + fs.map(f => {
     const chain = (label, ids) => `<div class="path"><span class="note">${label}</span>${ids.map((p, i) => {
       const n = N[p], e = i ? (OUT[ids[i - 1]] || []).find(x => x.dst === p) : null;
-      const sep = !i ? '' : e && (e.via || '').startsWith('http-') ? `<span class="hop">HTTP ${esc(e.detail || '')}</span>` : e && e.detail ? `<span class="hop ui">${esc(UI_WORDS[e.detail] || e.detail)}</span>` : '<span class="note">→</span>';
+      const sep = !i ? '' : e && (e.via || '').startsWith('http-') ? `<span class="hop">HTTP ${esc(e.detail || '')}</span>` : e && e.detail ? `<span class="hop ui">${esc(UI_WORDS[e.detail] || e.detail)}</span>` : '<span class="sep">→</span>';
       const nm = n && n.entry && n.entry.kind === 'page' ? `${n.entry.detail} page` : short((n || {}).qualname || p);
       return `${sep}<button data-id="${esc(p)}"><span class="layer ${layer(p)}"></span>${esc(nm)}</button>`; }).join('')}</div>`;
     const uiSame = f.ui_path && f.reachable && f.ui_path.join() === f.reachable.path.join();
-    let path = f.ui_path ? chain('From the app:', f.ui_path) : '';
-    if (f.reachable && !uiSame) path += chain(`Reachable from ${esc(f.reachable.kind)}:`, f.reachable.path);
-    if (!path) path = `<div class="note" style="margin-top:6px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
-    const heur = f.tool_confidence === 'LOW' ? '<span class="chip" title="Pattern-based check; review before acting">heuristic</span>' : '';
+    let path = f.ui_path ? chain('From the app', f.ui_path) : '';
+    if (f.reachable && !uiSame) path += chain(`Reachable from ${esc(f.reachable.kind)}`, f.reachable.path);
+    if (!path) path = `<div class="note" style="margin-top:8px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
+    const heur = f.tool_confidence === 'LOW' ? '<span class="tag" title="Pattern-based check; review before acting">heuristic</span>' : '';
     const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
-    const accepted = f.status === 'accepted' ? `<span class="chip" title="${esc((f.accepted || {}).reason)}">accepted risk</span>` : '';
-    return `<div class="fcard"${f.status === 'accepted' ? ' style="opacity:.75"' : ''}><div class="top"><span class="badge ${cls(f.rank, RANKS)}">${esc(f.rank)}</span><span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
-      ${f.status === 'accepted' ? `<div class="note">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
-      <h4>${esc(f.title)}</h4><div class="note">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${f.node && N[f.node] ? ' · in ' + esc(short(N[f.node].qualname)) : ''}</div>
+    const accepted = f.status === 'accepted' ? `<span class="tag" title="${esc((f.accepted || {}).reason)}">accepted risk</span>` : '';
+    return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
+      ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
+      <h4>${esc(f.title)}</h4><div class="note" style="font-family:var(--mono);font-size:11.5px">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${f.node && N[f.node] ? ' · in ' + esc(short(N[f.node].qualname)) : ''}</div>
       ${path}
-      ${f.input ? `<div class="note" style="margin-top:4px">Uses outside input: ${esc(f.input.via)}</div>` : f.input === false ? '<div class="note" style="margin-top:4px">Reachable, but no parameter or request data reaches this line inside this function (Lantern follows assignments within the function, not across functions), so it is not ranked critical.</div>' : ''}
-      ${ex ? `<div class="lens l2" style="margin-top:8px"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:6px">${esc(f.more_info)}</div>` : ''}
-      <div style="margin-top:6px;display:flex;gap:6px">${f.node ? `<button class="chip" data-id="${esc(f.node)}">Open function</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="chip" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div></div>`;
+      ${f.input ? `<div class="note" style="margin-top:8px">Uses outside input: ${esc(f.input.via)}</div>` : f.input === false ? '<div class="note" style="margin-top:8px">Reachable, but no parameter or request data reaches this line inside this function (Lantern follows assignments within the function, not across functions), so it is not ranked critical.</div>' : ''}
+      ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
+      <div class="acts">${f.node ? `<button class="btn" data-id="${esc(f.node)}">Open function</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div></div>`;
   }).join('');
+  el.querySelectorAll('[data-sev]').forEach(b => b.onclick = () => { S.fsev = b.dataset.sev; renderFindings(); });
   el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
   el.querySelectorAll("[data-accept]").forEach(b => b.onclick = () => acceptLive(b.dataset.accept));
 }
@@ -436,28 +668,33 @@ async function starterLive(name, btn) {
   try { await live('/starter', {name}); btn.textContent = 'Written ✓'; btn.disabled = true; } catch (e) { alert(e.message); }
 }
 
+function gauge(score, size = 112) {
+  const r = size / 2 - 7, c = 2 * Math.PI * r, n = pct(score);
+  return `<div class="gauge ${toneOf(score)}" role="img" aria-label="Readiness ${esc(score)} of 100"><svg viewBox="0 0 ${size} ${size}"><circle class="track" cx="${size / 2}" cy="${size / 2}" r="${r}"/><circle class="fill" cx="${size / 2}" cy="${size / 2}" r="${r}" stroke-dasharray="${(c * n / 100).toFixed(1)} ${c.toFixed(1)}"/></svg>
+    <div class="v"><b>${esc(score)}</b><span>of 100</span></div></div>`;
+}
 function renderReady() {
   const el = document.getElementById('center');
   const R = DATA.readiness;
   if (!R) { el.innerHTML = '<div class="empty">No readiness results. Run <code>lantern analyze</code> again to compute them.</div>'; return; }
-  const icon = {pass: '✓', fail: '✗', partial: '◐', skip: '–'};
+  const icon2 = {pass: '✓', fail: '✕', partial: '◐', skip: '–'};
   const label = {pass: 'passed', fail: 'failed', partial: 'partly', skip: 'skipped'};
-  const cats = arr(R.categories).map(c => `<details class="cat"${c.percent !== null && c.percent < 100 ? ' open' : ''}><summary><b>${esc(c.title)}</b>
-      <span class="bar" aria-hidden="true"><i style="width:${pct(c.percent)}%"></i></span>
-      <span class="pts">${c.score === null ? 'n/a' : esc(c.score) + '/' + esc(c.weight)}</span></summary>
-      ${arr(c.checks).map(k => `<div class="chk"><span class="ic ${cls(k.status, STATUSES)}" aria-label="${esc(pick(label, k.status))}">${esc(pick(icon, k.status))}</span><div><div>${esc(k.title)}</div><div class="ev">${esc(k.evidence)}${k.how && k.how !== 'file check' ? ` · <i>${esc(k.how)}</i>` : ''}</div>${k.fix ? `<div class="fx">${esc(k.fix)}</div>` : ''}</div><span class="pts">${k.status === 'skip' ? '' : esc((+k.earned).toFixed(k.earned % 1 ? 1 : 0)) + '/' + esc(k.points)}</span></div>`).join('')}
+  const cats = arr(R.categories).map(c => `<details class="cat"${c.percent !== null && c.percent < 100 ? ' open' : ''}><summary>${icon('chev')}<b>${esc(c.title)}</b>
+      <span class="meter ${c.percent === null ? '' : toneOf(c.percent)}" aria-hidden="true"><i style="width:${pct(c.percent)}%"></i></span>
+      <span class="pts">${c.score === null ? 'n/a' : `<b>${esc(c.score)}</b>/${esc(c.weight)}`}</span></summary>
+      ${arr(c.checks).map(k => `<div class="chk"><span class="ic ${cls(k.status, STATUSES)}" aria-label="${esc(pick(label, k.status))}">${esc(pick(icon2, k.status))}</span><div><div>${esc(k.title)}</div><div class="ev">${esc(k.evidence)}${k.how && k.how !== 'file check' ? ` · <i>${esc(k.how)}</i>` : ''}</div>${k.fix ? `<div class="fx">${esc(k.fix)}</div>` : ''}</div><span class="pts">${k.status === 'skip' ? '' : esc((+k.earned).toFixed(k.earned % 1 ? 1 : 0)) + '/' + esc(k.points)}</span></div>`).join('')}
     </details>`).join('');
-  const next = arr(R.next_steps).length ? `<h3>Biggest wins</h3><ol class="ready-list">${arr(R.next_steps).map(k => `<li><b>${esc(k.title)}</b> <span class="note">(+${esc(k.gain)} points, ${esc(k.category)})</span><br><span class="note">${esc(k.fix || k.evidence)}</span></li>`).join('')}</ol>` : '';
+  const next = arr(R.next_steps).length ? `<h3>Biggest wins</h3><div class="panel"><ol class="wins">${arr(R.next_steps).map(k => `<li><div><b>${esc(k.title)}</b> <span class="note">· ${esc(k.category)}</span><div class="note" style="margin-top:2px">${esc(k.fix || k.evidence)}</div></div><span class="gain">+${esc(k.gain)} pts</span></li>`).join('')}</ol></div>` : '';
   const prot = arr(R.protections);
   // status words: add (nothing found), check (an app-wide check exists but this route has none of its own), in place
-  const PROT = {add: ['fail', '✗', 'add this'], check: ['partial', '◐', 'check this'], 'in place': ['pass', '✓', 'in place']};
-  const protHtml = prot.length ? `<h3>Protections to add</h3><p class="note">What a senior engineer would add, shown only where the code gives a reason. These are heuristic checks: they don't change findings or the score.</p>${prot.map(p => { const [ic, sym, word] = pick(PROT, p.status) || PROT.check; return `<div class="chk"><span class="ic ${ic}" aria-label="${word}">${sym}</span><div><div><b>${esc(p.title)}</b> <span class="chip">${word}</span> <span class="chip" title="Pattern-based check; review before acting">heuristic</span></div><div class="ev">${esc(p.why)}</div>${arr(p.evidence).length ? `<div class="ev">Why Lantern thinks so: ${arr(p.evidence).map(esc).join(' · ')}</div>` : ''}${arr(p.found).length ? `<div class="ev">Found: ${arr(p.found).map(esc).join(' · ')}</div>` : ''}${word !== 'in place' ? `<div class="fx">${esc(p.how)}</div>` : ''}</div><span></span></div>`; }).join('')}` : '';
+  const PROT = {add: ['fail', '✕', 'add this'], check: ['partial', '◐', 'check this'], 'in place': ['pass', '✓', 'in place']};
+  const protHtml = prot.length ? `<h3>Protections to add</h3><p class="note">What a senior engineer would add, shown only where the code gives a reason. These are heuristic checks: they don't change findings or the score.</p><div class="panel">${prot.map(p => { const [ic, sym, word] = pick(PROT, p.status) || PROT.check; return `<div class="chk"><span class="ic ${ic}" aria-label="${word}">${sym}</span><div><div><b>${esc(p.title)}</b> <span class="tag">${word}</span> <span class="tag" title="Pattern-based check; review before acting">heuristic</span></div><div class="ev">${esc(p.why)}</div>${arr(p.evidence).length ? `<div class="ev">Why Lantern thinks so: ${arr(p.evidence).map(esc).join(' · ')}</div>` : ''}${arr(p.found).length ? `<div class="ev">Found: ${arr(p.found).map(esc).join(' · ')}</div>` : ''}${word !== 'in place' ? `<div class="fx">${esc(p.how)}</div>` : ''}</div><span></span></div>`; }).join('')}</div>` : '';
   const st = R.stack || {};
   const advisor = `<h3>Recommended deployment</h3><p class="note">Lantern reads this project as a <b>${esc(R.shape)}</b>${arr(st.frameworks).length ? ' using ' + esc(st.frameworks.join(', ')) : ''}${arr(st.deploy_targets).length ? '; deploy config found for ' + esc(st.deploy_targets.join(', ')) : ''}.</p><ul class="ready-list">${arr(R.advice).map(a => `<li>${esc(a)}</li>`).join('')}</ul>`;
-  const hot = arr(R.hotspots).length ? `<h3>Hotspots</h3><p class="note">Functions many others depend on. Changes here have the widest blast radius.</p><ul class="ready-list">${arr(R.hotspots).map(h => `<li><button class="chip" data-id="${esc(h.node)}">${esc(short(h.name))}</button> called from ${esc(h.callers)} places <span class="note">${esc(h.file)}:${esc(h.line)}</span></li>`).join('')}</ul>` : '';
+  const hot = arr(R.hotspots).length ? `<h3>Hotspots</h3><p class="note">Functions many others depend on. Changes here have the widest blast radius.</p><ul class="ready-list">${arr(R.hotspots).map(h => `<li><button class="btn" data-id="${esc(h.node)}" style="font-family:var(--mono)">${esc(short(h.name))}</button> called from ${esc(h.callers)} places <span class="note">${esc(h.file)}:${esc(h.line)}</span></li>`).join('')}</ul>` : '';
   const files = Object.entries(R.starter || {});
-  const starter = files.length ? `<h3>Starter files</h3><p class="note">Generated for this project. Nothing is written until you ${LIVE ? 'press Write' : 'run <code>lantern starter . --write NAME</code>'} (it never overwrites).</p>${files.map(([n, f]) => `<div><b style="font-family:var(--mono);font-size:12.5px;color:var(--ink)">${esc(n)}</b> <span class="note">${esc(f.why)}</span>${LIVE && !f.snippet ? ` <button class="chip" data-starter="${esc(n)}">Write file</button>` : ''}<pre class="file">${esc(f.content)}</pre></div>`).join('')}` : '';
-  el.innerHTML = `<div class="about" style="max-width:860px"><div class="score"><span class="big">${esc(R.score)}<span style="font-size:20px;color:var(--muted)">/100</span></span><span class="grade ${cls(R.grade, GRADES)}">${esc(R.grade)}</span><div class="note">Deployment readiness across ten categories.<br>A low score is shown plainly, with what to fix first.</div></div>
+  const starter = files.length ? `<h3>Starter files</h3><p class="note">Generated for this project. Nothing is written until you ${LIVE ? 'press Write' : 'run <code>lantern starter . --write NAME</code>'} (it never overwrites).</p>${files.map(([n, f]) => `<div><div class="filehead">${icon('file')}<b>${esc(n)}</b><span class="note">${esc(f.why)}</span>${LIVE && !f.snippet ? ` <button class="btn" data-starter="${esc(n)}">Write file</button>` : ''}</div><pre class="file">${esc(f.content)}</pre></div>`).join('')}` : '';
+  el.innerHTML = `<div class="page"><div class="scorehero">${gauge(R.score)}<div class="txt"><h2>Deployment readiness <span class="grade ${cls(R.grade, GRADES)}">${esc(R.grade)}</span></h2><div class="note">Scored across ten categories. A low score is shown plainly, with what to fix first. Checks that don't apply to this kind of project are skipped, not counted against it.</div></div></div>
     ${cats}${next}${protHtml}${advisor}${hot}${starter}</div>`;
   el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
   el.querySelectorAll('[data-starter]').forEach(b => b.onclick = () => starterLive(b.dataset.starter, b));
@@ -467,7 +704,7 @@ function renderAbout() {
   const el = document.getElementById('center');
   const tr = G.meta.trace;
   const exStats = (DATA.explanations || {}).stats;
-  el.innerHTML = `<div class="about"><h2 style="color:var(--ink);margin:0 0 6px">About this report</h2>
+  el.innerHTML = `<div class="page"><h2 class="pagehead">About this report</h2>
     <p class="note">Generated by Lantern ${esc(DATA.version)} on ${esc(DATA.generated_at)}. Schema ${esc(G.schema)}.</p>
     <h3>Map</h3><div class="kv">
       <div>Files / lines</div><div>${esc(G.meta.files)} / ${esc(G.meta.lines)}</div>
@@ -499,11 +736,11 @@ function select(id, open = true) {
 }
 
 function lensBody(r) {
-  if (!r && LIVE) return `<div class="note" style="margin-top:12px">Not explained yet.</div>${LIVE.model ? `<button class="chip" id="explainbtn" style="margin-top:6px">Explain with ${esc(LIVE.model)}</button>${LIVE.local ? '' : `<div class="note">This sends the function's code to ${esc(LIVE.model.split('/')[0])}.</div>`}` : '<div class="note">Choose a model in Lantern\'s Settings to explain functions.</div>'}<div id="explainmsg" class="note"></div>`;
-  if (!r) return `<div class="note" style="margin-top:12px">Not explained yet. Run <code>lantern explain</code> to add the three lenses for this function.</div>`;
-  if (r.error) return `<div class="warn">Explanation failed: ${esc(r.error)}</div>`;
-  const warn = r.validated ? '' : `<div class="warn">This explanation failed Lantern's checks and may be inaccurate:<br>${(r.validation_errors || []).map(esc).join('<br>')}</div>`;
-  const by = `<div class="note" style="margin-top:8px">Written by ${esc(r.model)} · metaphor: ${esc(r.metaphor_world)}</div>`;
+  if (!r && LIVE) return `<div class="unexplained">Not explained yet.${LIVE.model ? `<br><button class="btn primary" id="explainbtn">${icon('sparkle')}Explain with ${esc(LIVE.model)}</button>${LIVE.local ? '' : `<div class="note" style="margin-top:6px">This sends the function's code to ${esc(LIVE.model.split('/')[0])}.</div>`}` : '<div class="note" style="margin-top:4px">Choose a model in Lantern\'s Settings to explain functions.</div>'}<div id="explainmsg" class="note" style="margin-top:6px"></div></div>`;
+  if (!r) return `<div class="unexplained">Not explained yet. Run <code>lantern explain</code> to add the three lenses for this function.</div>`;
+  if (r.error) return `<div class="warn">${icon('warn')}<div>Explanation failed: ${esc(r.error)}</div></div>`;
+  const warn = r.validated ? '' : `<div class="warn">${icon('warn')}<div>This explanation failed Lantern's checks and may be inaccurate:<br>${(r.validation_errors || []).map(esc).join('<br>')}</div></div>`;
+  const by = `<div class="byline">${icon('sparkle')}Written by ${esc(r.model)} · metaphor: ${esc(r.metaphor_world)}</div>`;
   if (S.lens === 1) {
     const l = r.lens1 || {};
     const list = a => (Array.isArray(a) && a.length) ? '<ul style="margin:2px 0 0;padding-left:18px">' + a.map(x => `<li>${esc(x)}</li>`).join('') + '</ul>' : '<span class="note">none noted</span>';
@@ -539,7 +776,7 @@ function srcBlock(n) {
   const r = EXP[n.id];
   if (S.lens === 3 && S.pair !== null && r && r.lens3) { const a = (r.lens3.pairs[S.pair] || {}).anchor; if (a && a.type === 'lines') hi = [a.start, a.end]; }
   return `<pre class="src">${s.split('\n').map((ln, i) => { const no = (+n.start_line || 0) + i; const c = fl.has(no) ? 'f' : (hi && no >= hi[0] && no <= hi[1]) ? 'h' : '';
-    return `<span class="${c}">${String(no).padStart(4)}  ${esc(ln)}</span>`; }).join('')}</pre>`;
+    return `<span class="${c}"><u>${String(no).padStart(4)}</u>  ${esc(ln)}</span>`; }).join('')}</pre>`;
 }
 
 function renderRight() {
@@ -550,16 +787,17 @@ function renderRight() {
   const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
   const callees = (OUT[n.id] || []).map(e => e.dst).filter(x => N[x]);
   const fs = FIND_BY_NODE[n.id] || [];
-  el.innerHTML = `<div class="detail"><button class="closebtn" id="close">×</button>
+  el.innerHTML = `<div class="detail"><button class="closebtn" id="close" aria-label="Close">${icon('close')}</button>
+    <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(layer(n.id) === 'external' ? n.kind : layer(n.id))}${n.entry ? ` · <span class="badge entry">${esc(n.entry.kind)}</span>` : ''}</div>
     <h3>${esc(n.qualname)}</h3>
-    <div class="meta">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry ? ` · <span class="badge entry">${esc(n.entry.kind)}</span> ${esc(n.entry.detail || '')}` : ''}</div>
+    <div class="meta">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ` · ${esc(n.entry.detail)}` : ''}</div>
     <div class="sig">${esc(n.signature || n.kind)}</div>
-    <div class="lenses"><button data-l="1" class="${S.lens === 1 ? 'on' : ''}">1 · Technical</button><button data-l="2" class="${S.lens === 2 ? 'on' : ''}">2 · Everyday</button><button data-l="3" class="${S.lens === 3 ? 'on' : ''}">3 · Mapped</button></div>
+    <div class="lenses"><button data-l="1" class="${S.lens === 1 ? 'on' : ''}"><i></i>Technical</button><button data-l="2" class="${S.lens === 2 ? 'on' : ''}"><i></i>Everyday</button><button data-l="3" class="${S.lens === 3 ? 'on' : ''}"><i></i>Mapped</button></div>
     ${lensBody(r)}
-    ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard" style="margin-top:10px"><div class="top"><span class="badge ${cls(f.rank, RANKS)}">${esc(f.rank)}</span><span class="rule">${esc(f.rule)} · line ${esc(f.line ?? '–')}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
+    ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard ${cls(f.rank, RANKS)}" style="margin-top:12px"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.rule)} · line ${esc(f.line ?? '–')}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
     ${srcBlock(n)}
-    <div class="links"><div><h5>Called by (${callers.length})</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
-      <div><h5>Calls (${callees.length})</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div></div>`;
+    <div class="links"><div><h5>Called by · ${callers.length}</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
+      <div><h5>Calls · ${callees.length}</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div></div>`;
   el.querySelectorAll('.lenses button').forEach(b => b.onclick = () => { S.lens = +b.dataset.l; S.pair = null; try { localStorage.setItem('lantern.lens', S.lens); } catch (e) {} renderRight(); if (S.tab === 'map') renderMap(); });
   el.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const i = +b.dataset.p; S.pair = S.pair === i ? null : i; renderRight(); });
   el.querySelectorAll('.links [data-id]').forEach(b => b.onclick = () => select(b.dataset.id));

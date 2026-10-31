@@ -2,88 +2,300 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#0F1B2D">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F5F5F2" id="themecolor">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg">
 <title>Lantern</title>
 <style>
+/* Lantern design tokens. The same set lives in report.html and evidence.py (each page is self-contained).
+   Color jobs: ink for text and primary actions, one blue accent for selection and links, status colors
+   (good, warning, serious, critical) only for risk and results, always with a label. */
 :root{
-  --bg:#F6F7F9; --panel:#FFFFFF; --ink:#0F1B2D; --body:#334155; --muted:#64748B; --line:#E2E8F0;
-  --soft:#F1F5F9; --accent:#0D9488; --accent-soft:#E6F6F4; --warn:#B54708; --warns:#FFF6E5;
-  --crit:#B42318; --crits:#FEF0EE; --low:#0D9488; --lows:#E6F6F4; --meds:#F2F4F7; --med:#475467;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+  --bg:#F5F5F2; --glow:rgba(255,181,71,.16); --surface:#FFFFFF; --surface-2:#FAFAF8; --sunken:#EEEEEA; --hover:rgba(22,22,24,.045);
+  --ink:#161618; --ink-2:#46464C; --muted:#6E6E74; --faint:#A3A3A8;
+  --line:rgba(22,22,24,.09); --line-2:rgba(22,22,24,.16);
+  --accent:#2F5BEA; --accent-ink:#2148C9; --accent-soft:rgba(47,91,234,.09); --on-accent:#FFFFFF;
+  --primary:#161618; --primary-hover:#2C2C30; --on-primary:#FFFFFF;
+  --flame:#FFB547;
+  --good:#0CA30C; --warning:#FAB219; --serious:#EC835A; --critical:#D03B3B;
+  --good-soft:rgba(12,163,12,.11); --warning-soft:rgba(250,178,25,.17); --serious-soft:rgba(236,131,90,.16); --critical-soft:rgba(208,59,59,.11);
+  --good-ink:#0A7A0A; --warn-ink:#8A5A00; --crit-ink:#B02A2A;
+  --code-bg:#151517; --code-ink:#E7E7E4; --code-dim:#6C6C72;
+  --shadow-1:0 1px 2px rgba(16,16,20,.05);
+  --shadow-2:0 1px 2px rgba(16,16,20,.04), 0 6px 20px -6px rgba(16,16,20,.10);
+  --shadow-3:0 1px 3px rgba(16,16,20,.06), 0 24px 56px -16px rgba(16,16,20,.28);
+  --r-sm:7px; --r:10px; --r-lg:16px; --r-xl:22px;
+  --ease:cubic-bezier(.2,.8,.2,1); --t:160ms;
+  --font:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --display:-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono:ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+:root[data-theme=dark]{
+  color-scheme: dark;
+  --bg:#0E0E10; --glow:rgba(255,170,60,.09); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
+  --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
+  --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
+  --accent:#7C9BFF; --accent-ink:#A3B8FF; --accent-soft:rgba(124,155,255,.14); --on-accent:#0E0E10;
+  --primary:#F3F3F1; --primary-hover:#FFFFFF; --on-primary:#0E0E10;
+  --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
+  --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
+  --code-bg:#0A0A0B;
+  --shadow-1:0 1px 2px rgba(0,0,0,.4);
+  --shadow-2:0 1px 2px rgba(0,0,0,.35), 0 8px 24px -8px rgba(0,0,0,.5);
+  --shadow-3:0 1px 3px rgba(0,0,0,.4), 0 24px 56px -16px rgba(0,0,0,.7);
 }
 @media (prefers-color-scheme: dark){
-  :root{ --bg:#0B1220; --panel:#111A2B; --ink:#E6EDF6; --body:#C2CCDA; --muted:#8A97AB; --line:#22304A;
-    --soft:#17223A; --accent:#2DD4BF; --accent-soft:#0E2E2B; --warn:#FEC84B; --warns:#33240B;
-    --crit:#FDA29B; --crits:#3A1512; --low:#5EEAD4; --lows:#0E2E2B; --meds:#1E293B; --med:#CBD5E1; }
+  :root:not([data-theme=light]){
+    color-scheme: dark;
+    --bg:#0E0E10; --glow:rgba(255,170,60,.09); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
+    --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
+    --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
+    --accent:#7C9BFF; --accent-ink:#A3B8FF; --accent-soft:rgba(124,155,255,.14); --on-accent:#0E0E10;
+    --primary:#F3F3F1; --primary-hover:#FFFFFF; --on-primary:#0E0E10;
+    --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
+    --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
+    --code-bg:#0A0A0B;
+    --shadow-1:0 1px 2px rgba(0,0,0,.4);
+    --shadow-2:0 1px 2px rgba(0,0,0,.35), 0 8px 24px -8px rgba(0,0,0,.5);
+    --shadow-3:0 1px 3px rgba(0,0,0,.4), 0 24px 56px -16px rgba(0,0,0,.7);
+  }
 }
+@media (prefers-reduced-motion: reduce){ *{transition:none !important;animation:none !important} }
+
+/* ---------- base ---------- */
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--body);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif}
+html,body{margin:0;background:var(--bg);color:var(--ink-2);font:14px/1.55 var(--font);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+body{overflow-x:clip}
 button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}
-a{color:var(--accent)}
-header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
-header .logo{display:flex;align-items:center;gap:8px;font-weight:800;color:var(--ink);font-size:16px;background:none;border:0;padding:0}
-header .logo img{width:26px;height:26px}
-header nav{display:flex;gap:4px;margin-left:auto}
-header nav button{background:none;border:0;padding:6px 12px;border-radius:8px;font-weight:600;color:var(--muted)}
-header nav button.on{background:var(--ink);color:var(--panel)}
-main{max-width:1000px;margin:0 auto;padding:20px 16px 60px}
-main.wide{max-width:none;padding:0}
-h1{color:var(--ink);font-size:22px;margin:0 0 4px} h2{color:var(--ink);font-size:16px;margin:22px 0 8px}
+a{color:var(--accent-ink);text-decoration:none} a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+::selection{background:var(--accent-soft)}
+.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+code{font:12.5px var(--mono);background:var(--sunken);color:var(--ink);padding:1px 6px;border-radius:6px;overflow-wrap:anywhere}
+
+/* ---------- top bar ---------- */
+header.top{position:sticky;top:0;z-index:10;height:56px;display:flex;align-items:center;gap:16px;padding:0 20px;
+  background:color-mix(in srgb, var(--bg) 82%, transparent);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;background:none;border:0;padding:4px 6px 4px 0;font:600 16px/1 var(--display);letter-spacing:-.02em;color:var(--ink)}
+.brand img{width:28px;height:28px;border-radius:8px;box-shadow:0 0 0 1px var(--line), 0 4px 14px -4px rgba(255,170,60,.45)}
+.nav{display:flex;gap:2px;margin-left:auto;padding:3px;border-radius:12px;background:var(--hover)}
+.nav button{display:flex;align-items:center;gap:7px;background:none;border:0;padding:6px 12px;border-radius:9px;font-weight:550;font-size:13.5px;color:var(--muted);transition:color var(--t) var(--ease), background var(--t) var(--ease)}
+.nav button:hover{color:var(--ink)}
+.nav button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
+.iconbtn{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;border:0;background:none;color:var(--muted);transition:background var(--t) var(--ease), color var(--t) var(--ease)}
+.iconbtn:hover{background:var(--hover);color:var(--ink)}
+.iconbtn .ic{width:18px;height:18px}
+
+/* ---------- layout ---------- */
+main{max-width:1080px;margin:0 auto;padding:40px 24px 80px}
+.hero{position:relative;isolation:isolate;margin:0 0 28px}
+.hero::before{content:"";position:absolute;z-index:-1;left:-120px;top:-140px;width:520px;height:360px;background:radial-gradient(closest-side, var(--glow), transparent);pointer-events:none}
+h1{font:700 32px/1.15 var(--display);letter-spacing:-.028em;color:var(--ink);margin:0 0 8px}
+h2{font:650 17px/1.3 var(--display);letter-spacing:-.012em;color:var(--ink);margin:0}
+h3{font:650 15px/1.35 var(--display);letter-spacing:-.01em;color:var(--ink);margin:0}
+.lede{font-size:15.5px;line-height:1.6;color:var(--muted);max-width:680px;margin:0}
 .muted{color:var(--muted)} .small{font-size:12.5px}
-.btn{border:1px solid var(--line);background:var(--panel);padding:7px 14px;border-radius:9px;font-weight:600;color:var(--ink)}
-.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.btn:disabled{opacity:.5;cursor:default}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin:0 0 12px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
-.proj{display:flex;flex-direction:column;gap:8px}
-.proj .top{display:flex;align-items:center;gap:12px}
-.proj .name{font-weight:700;color:var(--ink);font-size:15px;overflow-wrap:anywhere}
-.proj .path{font:12px var(--mono);color:var(--muted);overflow-wrap:anywhere}
-.grade{flex:none;width:46px;height:46px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:20px;background:var(--soft);color:var(--muted)}
-.grade.A,.grade.B{background:var(--lows);color:var(--low)} .grade.C{background:var(--meds);color:var(--med)}
-.grade.D{background:var(--warns);color:var(--warn)} .grade.F{background:var(--crits);color:var(--crit)}
-.pills{display:flex;gap:6px;flex-wrap:wrap}
-.pill{font-size:11.5px;padding:1px 8px;border-radius:99px;background:var(--soft);border:1px solid var(--line)}
-.pill.crit{background:var(--crits);color:var(--crit);border-color:transparent} .pill.high{background:var(--warns);color:var(--warn);border-color:transparent}
+.eyebrow{display:block;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--muted);margin:0 0 10px}
+.sectionhead{display:flex;align-items:baseline;gap:10px;margin:36px 0 14px}
+.count{font:600 12px var(--font);color:var(--muted);background:var(--hover);padding:1px 8px;border-radius:99px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px;box-shadow:var(--shadow-1)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-input[type=text],input[type=password],select{width:100%;padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel)}
-label{display:block;font-weight:600;color:var(--ink);margin:12px 0 4px;font-size:13px}
-.note{font-size:12.5px;padding:10px 12px;border-radius:9px;background:var(--soft);margin:10px 0}
-.note.warn{background:var(--warns);color:var(--warn)} .note.ok{background:var(--accent-soft);color:var(--accent)}
-pre.log{background:#0F1B2D;color:#D7E0EC;font:12px/1.5 var(--mono);padding:10px;border-radius:9px;max-height:260px;overflow:auto;white-space:pre-wrap;margin:8px 0 0}
-.browser{border:1px solid var(--line);border-radius:9px;max-height:300px;overflow:auto;margin-top:8px;background:var(--panel)}
-.browser button{display:flex;gap:8px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:7px 10px}
-.browser button:hover{background:var(--soft)} .browser .p{margin-left:auto;font-size:11px;color:var(--accent)}
-.sub{display:flex;gap:4px;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line);align-items:center;flex-wrap:wrap}
-.sub button{background:none;border:0;padding:5px 12px;border-radius:8px;font-weight:600;color:var(--muted)}
-.sub button.on{background:var(--soft);color:var(--ink)}
-.sub .title{font-weight:700;color:var(--ink);margin-right:8px}
-iframe{border:0;width:100%;height:calc(100vh - 106px);display:block;background:var(--bg)}
-.empty{text-align:center;padding:40px 10px;color:var(--muted)}
-code{font:12.5px var(--mono);background:var(--soft);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
-pre.cmd{background:var(--soft);border:1px solid var(--line);font:12.5px/1.5 var(--mono);padding:8px 10px;border-radius:9px;overflow:auto;margin:8px 0;white-space:pre}
-.starter h3{margin:0;color:var(--ink);font-size:16px}
-.starter .meta{font-size:12.5px;color:var(--muted)}
-.bar{height:8px;border-radius:99px;background:var(--soft);overflow:hidden;margin:8px 0}
-.bar span{display:block;height:100%;background:var(--accent)}
-.step{display:flex;gap:12px}
-.step .num{flex:none;width:30px;height:30px;border-radius:99px;display:grid;place-items:center;font-weight:800;background:var(--soft);color:var(--muted)}
-.step.done .num{background:var(--accent);color:#fff}
-.step .stitle{font-weight:700;color:var(--ink);font-size:15px}
-.step p{margin:6px 0}
-.badge{font-size:11.5px;padding:1px 8px;border-radius:99px;margin-left:6px;font-weight:600;background:var(--soft);color:var(--muted)}
-.badge.done{background:var(--accent-soft);color:var(--accent)} .badge.todo{background:var(--warns);color:var(--warn)}
-.prompt{border-left:3px solid var(--accent);padding:6px 10px;background:var(--accent-soft);border-radius:0 9px 9px 0;margin:8px 0}
+.spacer{flex:1}
+.empty{text-align:center;padding:56px 16px;color:var(--muted)}
+.empty .art{width:56px;height:56px;margin:0 auto 14px;display:block;opacity:.9}
+.empty b{display:block;color:var(--ink);font:600 16px var(--display);margin-bottom:4px}
+
+/* ---------- buttons and fields ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface);
+  color:var(--ink);font-weight:600;font-size:13.5px;white-space:nowrap;text-decoration:none;transition:background var(--t) var(--ease), border-color var(--t) var(--ease), transform var(--t) var(--ease), box-shadow var(--t) var(--ease)}
+.btn:hover{background:var(--surface-2);border-color:var(--faint);text-decoration:none}
+.btn:active{transform:scale(.98)}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:var(--on-primary);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.btn.primary:hover{background:var(--primary-hover)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink-2);padding:0 10px} .btn.ghost:hover{background:var(--hover)}
+.btn.quiet{border-color:transparent;background:transparent;color:var(--muted);padding:0 10px} .btn.quiet:hover{background:var(--critical-soft);color:var(--crit-ink)}
+.btn.sm{height:28px;padding:0 10px;font-size:12.5px;border-radius:8px}
+.btn:disabled{opacity:.45;cursor:default;transform:none}
+input[type=text],input[type=password],select{width:100%;height:40px;padding:0 12px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface);color:var(--ink);transition:border-color var(--t) var(--ease), box-shadow var(--t) var(--ease)}
+input[type=text]:focus,input[type=password]:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+input::placeholder{color:var(--faint)}
+select{appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 18px) 17px,calc(100% - 13px) 17px;background-size:5px 5px;background-repeat:no-repeat;padding-right:34px}
+label{display:block;font-weight:600;color:var(--ink);margin:16px 0 6px;font-size:13px}
+.check{display:flex;gap:10px;align-items:flex-start;font-weight:400;color:var(--ink-2);margin:10px 0}
+.check input{margin:3px 0 0;accent-color:var(--primary)}
+.hint{font-size:12.5px;color:var(--muted);margin-top:10px;line-height:1.5}
+
+/* add bar */
+.addbar{padding:18px 18px 16px;box-shadow:var(--shadow-2)}
+.field{display:flex;align-items:center;gap:8px;padding:5px 5px 5px 14px;border:1px solid var(--line-2);border-radius:14px;background:var(--surface-2);transition:border-color var(--t) var(--ease), box-shadow var(--t) var(--ease)}
+.field:focus-within{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft);background:var(--surface)}
+.field .ic{color:var(--muted);width:18px;height:18px}
+.field input[type=text]{border:0;background:transparent;height:38px;padding:0 4px;box-shadow:none !important;min-width:0;flex:1}
+.browser{border:1px solid var(--line);border-radius:12px;max-height:320px;overflow:auto;margin-top:8px;background:var(--surface)}
+.browser button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:9px 12px;color:var(--ink-2)}
+.browser button:last-child{border-bottom:0}
+.browser button:hover{background:var(--hover);color:var(--ink)}
+.browser .ic{color:var(--muted)}
+.browser .use{color:var(--ink);font-weight:600} .browser .use .ic{color:var(--accent)}
+.browser .p{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--accent-ink);background:var(--accent-soft);padding:1px 8px;border-radius:99px}
+.crumb{font:12px var(--mono);color:var(--muted);margin-top:12px;overflow-wrap:anywhere}
+
+/* ---------- status: severity chips, notes ---------- */
+.sevs{display:flex;gap:6px;flex-wrap:wrap}
+.sev{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:550;color:var(--ink-2);padding:2px 9px 2px 7px;border-radius:99px;background:var(--hover);white-space:nowrap}
+.sev i{width:7px;height:7px;border-radius:99px;background:var(--faint)}
+.sev.critical{background:var(--critical-soft)} .sev.critical i{background:var(--critical)}
+.sev.high{background:var(--serious-soft)} .sev.high i{background:var(--serious)}
+.sev.medium{background:var(--warning-soft)} .sev.medium i{background:var(--warning)}
+.sev.ok{background:var(--good-soft)} .sev.ok i{background:var(--good)}
+.tag{display:inline-flex;align-items:center;font-size:12px;font-weight:500;color:var(--ink-2);padding:2px 9px;border-radius:99px;border:1px solid var(--line-2)}
+.note{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.5;padding:11px 14px;border-radius:12px;background:var(--hover);color:var(--ink-2);margin:12px 0}
+.note .ic{margin-top:1px;color:var(--muted)}
+.note.warn{background:var(--warning-soft);color:var(--ink)} .note.warn .ic{color:var(--warn-ink)}
+.note.err{background:var(--critical-soft);color:var(--ink)} .note.err .ic{color:var(--crit-ink)}
+.note.ok{background:var(--good-soft);color:var(--ink)} .note.ok .ic{color:var(--good-ink)}
+.note code{background:rgba(127,127,127,.14)}
+
+/* ---------- project cards ---------- */
+.proj{display:flex;flex-direction:column;gap:14px;transition:box-shadow var(--t) var(--ease), border-color var(--t) var(--ease), transform var(--t) var(--ease)}
+.proj:hover{box-shadow:var(--shadow-2);border-color:var(--line-2)}
+.proj .top{display:flex;align-items:flex-start;gap:14px}
+.proj .ident{min-width:0;flex:1}
+.proj .name{font:650 17px/1.25 var(--display);letter-spacing:-.015em;color:var(--ink);overflow-wrap:anywhere}
+.proj .path{font:12px/1.4 var(--mono);color:var(--muted);overflow-wrap:anywhere;margin-top:3px}
+.proj .meta{font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 12px}
+.proj .meta b{color:var(--ink);font-weight:600}
+.proj .actions{display:flex;gap:6px;align-items:center;flex-wrap:nowrap;padding-top:14px;border-top:1px solid var(--line);margin-top:auto}
+.ring{flex:none;position:relative;width:54px;height:54px}
+.ring svg{width:54px;height:54px;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:5}
+.ring .track{stroke:var(--sunken)}
+.ring .fill{stroke-linecap:round;transition:stroke-dasharray .6s var(--ease)}
+.ring b{position:absolute;inset:0;display:grid;place-items:center;font:700 18px/1 var(--display);color:var(--ink)}
+.ring.good .fill{stroke:var(--good)} .ring.good .track{stroke:var(--good-soft)}
+.ring.warning .fill{stroke:var(--warning)} .ring.warning .track{stroke:var(--warning-soft)}
+.ring.serious .fill{stroke:var(--serious)} .ring.serious .track{stroke:var(--serious-soft)}
+.ring.critical .fill{stroke:var(--critical)} .ring.critical .track{stroke:var(--critical-soft)}
+.ring.none b{color:var(--faint)}
+.working{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--ink)}
+.pulse{width:8px;height:8px;border-radius:99px;background:var(--accent);box-shadow:0 0 0 0 var(--accent-soft);animation:pulse 1.4s var(--ease) infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 var(--accent-soft)}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.indeterminate{height:3px;border-radius:99px;background:var(--accent-soft);overflow:hidden;position:relative}
+.indeterminate::after{content:"";position:absolute;inset:0 auto 0 0;width:35%;border-radius:99px;background:var(--accent);animation:slide 1.3s var(--ease) infinite}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+pre.log{background:var(--code-bg);color:var(--code-ink);font:11.5px/1.6 var(--mono);padding:12px 14px;border-radius:12px;max-height:220px;overflow:auto;white-space:pre-wrap;margin:0;border:1px solid var(--line)}
+pre.log:empty::before{content:"Starting…";color:var(--code-dim)}
+pre.cmd{background:var(--sunken);color:var(--ink);font:12.5px/1.6 var(--mono);padding:12px 14px;border-radius:12px;overflow:auto;margin:10px 0;white-space:pre}
+
+/* ---------- project bar ---------- */
+.sub{position:sticky;top:56px;z-index:9;display:flex;align-items:center;gap:12px;height:52px;padding:0 16px 0 12px;background:var(--surface);border-bottom:1px solid var(--line)}
+.sub .back{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;border:0;background:none;color:var(--muted)}
+.sub .back:hover{background:var(--hover);color:var(--ink)}
+.sub .title{font:650 15px/1 var(--display);letter-spacing:-.012em;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
+.sub .gchip{font:700 11.5px/1 var(--font);padding:4px 7px;border-radius:7px;background:var(--hover);color:var(--ink)}
+.sub .gchip.good{background:var(--good-soft)} .sub .gchip.warning{background:var(--warning-soft)} .sub .gchip.serious{background:var(--serious-soft)} .sub .gchip.critical{background:var(--critical-soft)}
+.tabs{display:flex;gap:2px;margin-left:8px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{position:relative;display:flex;align-items:center;gap:7px;height:52px;padding:0 12px;background:none;border:0;font-weight:550;font-size:13.5px;color:var(--muted);white-space:nowrap;transition:color var(--t) var(--ease)}
+.tabs button:hover{color:var(--ink)}
+.tabs button.on{color:var(--ink)}
+.tabs button.on::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
+iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px);display:block;background:var(--bg)}
+
+/* ---------- explain ---------- */
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 6px}
+.tile{padding:14px 16px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line)}
+.tile .lbl{font-size:12px;color:var(--muted);font-weight:500}
+.tile .val{font:650 24px/1.2 var(--display);letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums;margin-top:4px}
+.model{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);margin:14px 0}
+.model .ic{color:var(--muted)}
+.model b{color:var(--ink)}
+
+/* ---------- learn and guide ---------- */
+.starter h3{font-size:17px}
+.starter .meta{display:flex;gap:6px 14px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.starter .meta span{display:inline-flex;align-items:center;gap:5px}
+.starter details{font-size:13px;color:var(--ink-2)}
+.starter summary{cursor:pointer;color:var(--muted);font-weight:550}
+.starter ol{margin:8px 0 0;padding-left:20px} .starter li{margin:3px 0}
+.starter .actions{flex-wrap:wrap}
+.progress{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.progress .big{font:700 34px/1 var(--display);letter-spacing:-.03em;color:var(--ink);font-variant-numeric:tabular-nums}
+.progress .big span{font-size:17px;color:var(--muted);font-weight:600;letter-spacing:-.01em}
+.bar{height:6px;border-radius:99px;background:var(--accent-soft);overflow:hidden;margin:16px 0 12px}
+.bar span{display:block;height:100%;border-radius:99px;background:var(--accent);transition:width .6s var(--ease)}
+.steps{position:relative;margin-top:20px}
+.step{position:relative;display:flex;gap:16px;padding:0 0 14px}
+.step::before{content:"";position:absolute;left:15px;top:36px;bottom:0;width:2px;background:var(--line)}
+.step:last-child::before{display:none}
+.step .num{flex:none;position:relative;z-index:1;width:32px;height:32px;border-radius:99px;display:grid;place-items:center;font:650 13px var(--display);background:var(--surface);color:var(--muted);border:1.5px solid var(--line-2);margin-top:14px}
+.step.done .num{background:var(--good);border-color:var(--good);color:#fff}
+.step.done .num .ic{width:15px;height:15px;stroke-width:2.4}
+.step .card{flex:1;min-width:0;padding:16px 18px}
+.step .stitle{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font:650 15.5px/1.35 var(--display);letter-spacing:-.01em;color:var(--ink)}
+.step p{margin:8px 0;line-height:1.6}
+.status{display:inline-flex;align-items:center;gap:6px;font:600 11.5px var(--font);padding:2px 9px 2px 7px;border-radius:99px;background:var(--hover);color:var(--ink-2);letter-spacing:0}
+.status i{width:7px;height:7px;border-radius:99px;background:var(--faint)}
+.status.done{background:var(--good-soft)} .status.done i{background:var(--good)}
+.status.todo{background:var(--warning-soft)} .status.todo i{background:var(--warning)}
+.why{font:400 12.5px var(--font);color:var(--muted)}
+.prompt{border:1px solid var(--line);background:var(--surface-2);border-radius:12px;padding:12px 14px;margin:12px 0}
+.prompt .eyebrow{display:flex;align-items:center;gap:6px;margin:0 0 6px}
+.prompt .txt{color:var(--ink)}
+
+/* ---------- settings and help ---------- */
+.group{margin:0 0 20px}
+.group > h2{margin:0 0 4px}
+.group > .hint{margin:0 0 14px}
+.seg{display:inline-flex;padding:3px;border-radius:11px;background:var(--hover);gap:2px}
+.seg button{display:flex;align-items:center;gap:6px;height:30px;padding:0 12px;border:0;border-radius:8px;background:none;color:var(--muted);font-weight:550;font-size:13px}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
+.choice{display:flex;gap:12px;align-items:flex-start;padding:14px;border:1px solid var(--line-2);border-radius:12px;margin:8px 0;font-weight:400;color:var(--ink-2);cursor:pointer;transition:border-color var(--t) var(--ease), background var(--t) var(--ease)}
+.choice:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.choice input{margin:3px 0 0;accent-color:var(--accent)}
+.choice b{display:block;color:var(--ink);font-weight:600}
+.howto{list-style:none;padding:0;margin:0;display:grid;gap:12px}
+.howto li{display:flex;gap:14px;align-items:flex-start}
+.howto .n{flex:none;width:28px;height:28px;border-radius:9px;display:grid;place-items:center;font:650 13px var(--display);background:var(--hover);color:var(--ink)}
+.howto b{color:var(--ink)}
+.foot{font-size:12.5px;color:var(--muted);margin-top:18px}
+
+@media (max-width: 760px){
+  header.top{padding:0 12px;gap:8px}
+  .brand span{display:none}
+  .nav button{padding:6px 10px}
+  .nav button span{display:none}
+  main{padding:24px 16px 60px}
+  h1{font-size:26px}
+  .grid{grid-template-columns:1fr}
+  .field{flex-wrap:wrap;padding:6px}
+  .field input[type=text]{flex-basis:calc(100% - 30px)}
+  .field .btn{flex:1}
+  .sub{flex-wrap:wrap;height:auto;padding:0 8px;gap:0 6px}
+  .sub .back,.sub .title,.sub .gchip,.sub .newtab{margin:11px 0}
+  .sub .title{max-width:none;flex:1}
+  .sub .spacer,.sub .newtab span{display:none}
+  .tabs{order:3;width:100%;margin:0 -8px;padding:0 4px;border-top:1px solid var(--line)}
+  .tabs button{height:44px;padding:0 10px}
+  iframe{height:calc(100vh - 152px);height:calc(100dvh - 152px)}
+  .tiles{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
-<header>
-  <button class="logo" id="home"><img src="/icon.svg" alt="">Lantern</button>
-  <nav id="nav"><button data-v="home" class="on">Projects</button><button data-v="learn">Learn</button><button data-v="settings">Settings</button><button data-v="help">Help</button></nav>
+<header class="top">
+  <button class="brand" id="home" aria-label="Lantern home"><img src="/icon.svg" alt=""><span>Lantern</span></button>
+  <nav id="nav" class="nav" aria-label="Main">
+    <button data-v="home" class="on"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>Projects</span></button>
+    <button data-v="learn"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 5.5C8.5 4.3 6.3 3.8 3.5 4v11c2.8-.2 5 .3 6.5 1.5 1.5-1.2 3.7-1.7 6.5-1.5V4c-2.8-.2-5 .3-6.5 1.5zM10 5.5v11"/></svg><span>Learn</span></button>
+    <button data-v="settings"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg><span>Settings</span></button>
+    <button data-v="help"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M10 14h.01"/></svg><span>Help</span></button>
+  </nav>
+  <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
 </header>
 <div id="view"></div>
 <script>
@@ -102,8 +314,66 @@ const S = {view: 'home', state: null, project: null, tab: 'atlas', reportTab: nu
 const fmt = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
+// Icons: fixed markup, never data.
+const ICONS = {
+  folder: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h3.2l1.6 1.8h6.2A1.5 1.5 0 0 1 17 8.3v6.2a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 14.5z"/>',
+  up: '<path d="M10 15V5M5.5 9.5 10 5l4.5 4.5"/>',
+  check: '<path d="m4.5 10.5 3.5 3.5 7.5-8"/>',
+  trash: '<path d="M4 6h12M8 6V4.5h4V6M6 6l.7 9.5a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9L14 6"/>',
+  open: '<path d="M11 4h5v5M16 4l-7 7M14 12v3.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5H8"/>',
+  back: '<path d="M12.5 4.5 7 10l5.5 5.5"/>',
+  refresh: '<path d="M15.5 8A6 6 0 0 0 4.6 7M4.5 12a6 6 0 0 0 10.9 1"/><path d="M15.5 3.5V8H11M4.5 16.5V12H9"/>',
+  play: '<path d="M6.5 4.5v11l9-5.5z"/>',
+  info: '<circle cx="10" cy="10" r="7"/><path d="M10 9v4.5M10 6.5h.01"/>',
+  warn: '<path d="M10 3.5 17.5 16h-15z"/><path d="M10 8.5v3.5M10 14h.01"/>',
+  lock: '<rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V7a3 3 0 0 1 6 0v2"/>',
+  cloud: '<path d="M6 15.5a3.5 3.5 0 0 1-.4-7 4.5 4.5 0 0 1 8.7-.6A3.3 3.3 0 0 1 14 15.5z"/>',
+  copy: '<rect x="7" y="7" width="9" height="9" rx="1.8"/><path d="M13 7V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2"/>',
+  sparkle: '<path d="M10 3v3M10 14v3M3 10h3M14 10h3M5.5 5.5l2 2M12.5 12.5l2 2M14.5 5.5l-2 2M7.5 12.5l-2 2"/>',
+  clock: '<circle cx="10" cy="10" r="7"/><path d="M10 6v4l2.5 2"/>',
+  layers: '<path d="m10 3 7 4-7 4-7-4z"/><path d="m3 11 7 4 7-4"/>',
+  bolt: '<path d="M11 3 4.5 11H10l-1 6 6.5-8H10z"/>',
+  sun: '<circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7l1.3 1.3M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/>',
+  moon: '<path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/>',
+  auto: '<circle cx="10" cy="10" r="6.5"/><path d="M10 3.5v13a6.5 6.5 0 0 0 0-13z" fill="currentColor"/>',
+};
+const icon = n => `<svg class="ic" viewBox="0 0 20 20" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const LANTERN_ART = '<svg class="art" viewBox="0 0 64 64" aria-hidden="true"><defs><radialGradient id="lg" cx="50%" cy="55%" r="50%"><stop offset="0" stop-color="#FFC45C" stop-opacity=".55"/><stop offset="1" stop-color="#FFC45C" stop-opacity="0"/></radialGradient></defs><circle cx="32" cy="35" r="26" fill="url(#lg)"/><path d="M26 13h12M25 51h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg>';
+const note = (kind, html) => `<div class="note ${kind}">${icon({warn: 'warn', err: 'warn', ok: 'lock'}[kind] || 'info')}<div>${html}</div></div>`;
+// grade -> status color job (A/B good ... F critical); only these words reach a class name
+const GRADE_TONE = {A: 'good', B: 'good', C: 'warning', D: 'serious', F: 'critical'};
+const tone = g => Object.prototype.hasOwnProperty.call(GRADE_TONE, g) ? GRADE_TONE[g] : 'none';
+function ring(score, grade) {
+  const n = Math.max(0, Math.min(100, +score || 0)), c = 2 * Math.PI * 22, has = score != null;
+  return `<div class="ring ${has ? tone(grade) : 'none'}" role="img" aria-label="${has ? `Readiness ${esc(score)} of 100, grade ${esc(grade)}` : 'Not analyzed yet'}">
+    <svg viewBox="0 0 54 54"><circle class="track" cx="27" cy="27" r="22"/>${has ? `<circle class="fill" cx="27" cy="27" r="22" stroke-dasharray="${(c * n / 100).toFixed(1)} ${c.toFixed(1)}"/>` : ''}</svg><b>${esc(has ? grade : '–')}</b></div>`;
+}
+
+// ---------------------------------------------------------------- appearance
+const THEMES = ['auto', 'light', 'dark'];
+let THEME = 'auto';
+try { THEME = THEMES.includes(localStorage.getItem('lantern.theme')) ? localStorage.getItem('lantern.theme') : 'auto'; } catch (e) {}
+function themeOn(doc) {
+  const r = doc.documentElement;
+  if (THEME === 'auto') delete r.dataset.theme; else r.dataset.theme = THEME;
+}
+function applyTheme() {
+  themeOn(document);
+  // the report and Evidence Report are served from this origin, so they follow the app's choice
+  for (const f of document.querySelectorAll('iframe')) { try { themeOn(f.contentDocument); } catch (e) {} }
+  const dark = THEME === 'dark' || (THEME === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.getElementById('themecolor').content = dark ? '#0E0E10' : '#F5F5F2';
+  const b = document.getElementById('theme');
+  b.innerHTML = icon({auto: 'auto', light: 'sun', dark: 'moon'}[THEME]);
+  b.title = `Appearance: ${THEME === 'auto' ? 'match this computer' : THEME}. Click to change.`;
+}
+function setTheme(t) { THEME = t; try { localStorage.setItem('lantern.theme', t); } catch (e) {} applyTheme(); }
+document.getElementById('theme').onclick = () => { setTheme(THEMES[(THEMES.indexOf(THEME) + 1) % 3]); if (S.view === 'settings') render(); };
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
+applyTheme();
+
 async function refresh() { S.state = await api('/api/state'); render(); }
-function go(view, extra = {}) { Object.assign(S, {view}, extra); for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); }
+function go(view, extra = {}) { Object.assign(S, {view}, extra); for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
 document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); };
 document.getElementById('home').onclick = () => go('home');
 
@@ -124,13 +394,13 @@ function watch(jobId, pid) {
 
 // ---------------------------------------------------------------- home
 function counts(c) {
-  if (!c) return '<span class="pill">not scanned</span>';
+  if (!c) return '<span class="sev"><i></i>Not scanned</span>';
   const parts = [];
-  if (c.critical) parts.push(`<span class="pill crit">${esc(c.critical)} critical</span>`);
-  if (c.high) parts.push(`<span class="pill high">${esc(c.high)} high</span>`);
-  if (c.medium) parts.push(`<span class="pill">${esc(c.medium)} medium</span>`);
-  if (c.accepted) parts.push(`<span class="pill">${esc(c.accepted)} accepted</span>`);
-  return parts.join('') || '<span class="pill">no open critical, high, or medium</span>';
+  if (c.critical) parts.push(`<span class="sev critical"><i></i>${esc(c.critical)} critical</span>`);
+  if (c.high) parts.push(`<span class="sev high"><i></i>${esc(c.high)} high</span>`);
+  if (c.medium) parts.push(`<span class="sev medium"><i></i>${esc(c.medium)} medium</span>`);
+  if (c.accepted) parts.push(`<span class="sev"><i></i>${esc(c.accepted)} accepted</span>`);
+  return parts.join('') || '<span class="sev ok"><i></i>No open critical, high, or medium</span>';
 }
 function renderHome(el) {
   const ps = S.state.projects;
@@ -138,30 +408,37 @@ function renderHome(el) {
     const job = S.jobs[p.id];
     const running = p.job || (job && job.status === 'running');
     if (p.job && !job) watch(p.job, p.id);
-    return `<div class="card proj"><div class="top"><span class="grade ${esc(p.grade || '')}">${esc(p.grade || '–')}</span>
-      <div style="min-width:0"><div class="name">${esc(p.name)}</div><div class="path">${esc(p.path)}</div></div></div>
-      <div class="small muted">${p.score != null ? `Readiness ${esc(p.score)}/100 · ${esc(p.shape)}` : 'Not analyzed yet'}${p.finished_at ? ' · last run ' + esc(p.finished_at) : ''}${p.explained ? ` · ${esc(p.explained)} explained` : ''}</div>
-      <div class="pills">${counts(p.counts)}</div>
-      ${!p.exists ? '<div class="note warn">This folder no longer exists.</div>' : ''}
-      <div class="row">${p.has_report ? `<button class="btn primary" data-open="${p.id}">Open</button>` : ''}${p.starter ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}
-        <button class="btn" data-run="${p.id}" ${running || !p.exists ? 'disabled' : ''}>${running ? 'Analyzing…' : p.has_report ? 'Re-analyze' : 'Analyze'}</button>
-        <button class="btn" data-del="${p.id}" title="Remove from this list (files are not touched)" style="margin-left:auto">Remove</button></div>
+    const meta = p.score != null
+      ? `<span>Readiness <b>${esc(p.score)}</b>/100</span><span>${esc(p.shape)}</span>`
+      : '<span>Not analyzed yet</span>';
+    return `<article class="card proj"><div class="top"><div class="ident"><div class="name">${esc(p.name)}</div><div class="path">${esc(p.path)}</div></div>${ring(p.score, p.grade)}</div>
+      <div class="meta">${meta}${p.finished_at ? `<span>${icon('clock')} ${esc(p.finished_at)}</span>` : ''}${p.explained ? `<span>${esc(p.explained)} explained</span>` : ''}</div>
+      <div class="sevs">${counts(p.counts)}</div>
+      ${!p.exists ? note('warn', 'This folder no longer exists.') : ''}
+      ${running ? `<div class="working"><span class="pulse"></span>Analyzing…</div><div class="indeterminate"></div>` : ''}
       ${running || (job && job.status === 'error') ? `<pre class="log" id="log-${p.id}">${esc((job && job.log || []).join('\n'))}</pre>` : ''}
-      ${job && job.status === 'error' ? `<div class="note warn">${esc(job.error)}</div>` : ''}</div>`;
+      ${job && job.status === 'error' ? note('err', esc(job.error)) : ''}
+      <div class="actions">${p.has_report ? `<button class="btn primary" data-open="${p.id}">Open</button>` : ''}${p.starter ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}
+        <button class="btn ${p.has_report ? 'ghost' : 'primary'}" data-run="${p.id}" ${running || !p.exists ? 'disabled' : ''}>${icon('refresh')}${running ? 'Analyzing…' : p.has_report ? 'Re-analyze' : 'Analyze'}</button>
+        <span class="spacer"></span>
+        <button class="btn quiet" data-del="${p.id}" title="Remove from this list (files are not touched)" aria-label="Remove from this list">${icon('trash')}</button></div></article>`;
   }).join('');
-  el.innerHTML = `<main><h1>Projects</h1><p class="muted">Lantern maps every path through your code, checks it for security problems, grades how ready it is to ship, and writes evidence you can hand to a reviewer. Everything runs on this computer.</p>
-    <div class="card"><label for="addpath" style="margin-top:0">Add a project folder, or paste a GitHub link</label>
-      <div class="row"><input type="text" id="addpath" placeholder="/path/to/your/app  or  https://github.com/you/your-app" style="flex:1;min-width:200px"><button class="btn primary" id="add">Add and analyze</button><button class="btn" id="browsebtn">Browse…</button></div>
-      <div class="small muted">Any folder with a Python or TypeScript/JavaScript app works, including one you built long ago. A link is cloned into Lantern's own folder (<code>~/.lantern/repos</code>) and analyzed like a folder.</div>
+  el.innerHTML = `<main><section class="hero"><h1>Projects</h1><p class="lede">Lantern maps every path through your code, checks it for security problems, grades how ready it is to ship, and writes evidence you can hand to a reviewer. Everything runs on this computer.</p></section>
+    <div class="card addbar"><label for="addpath" class="eyebrow">Add a project folder, or paste a GitHub link</label>
+      <div class="field">${icon('folder')}<input type="text" id="addpath" placeholder="/path/to/your/app  or  https://github.com/you/your-app" autocomplete="off" spellcheck="false"><button class="btn ghost" id="browsebtn">Browse…</button><button class="btn primary" id="add">Add and analyze</button></div>
+      <div class="hint">Any folder with a Python or TypeScript/JavaScript app works, including one you built long ago. A link is cloned into Lantern's own folder (<code>~/.lantern/repos</code>) and analyzed like a folder.</div>
       <div id="browse"></div><div id="adderr"></div></div>
-    ${ps.length ? `<div class="grid">${cards}</div>` : '<div class="empty">No projects yet. Add a folder above.</div>'}</main>`;
+    ${ps.length ? `<div class="sectionhead"><h2>Your projects</h2><span class="count">${ps.length}</span></div><div class="grid">${cards}</div>`
+      : `<div class="empty">${LANTERN_ART}<b>No projects yet</b>Add a folder above, or try a starter app in <a href="#" id="tolearn">Learn</a>.</div>`}</main>`;
+  const tl = el.querySelector('#tolearn'); if (tl) tl.onclick = e => { e.preventDefault(); go('learn'); };
+  el.querySelector('#addpath').onkeydown = e => { if (e.key === 'Enter') el.querySelector('#add').click(); };
   el.querySelector('#add').onclick = async () => {
     const path = el.querySelector('#addpath').value.trim();
     try {
       const r = await api('/api/projects', {method: 'POST', body: {path}});
       if (r.job) { watch(r.job.id, r.project.id); await refresh(); return; }   // a link: cloned, then analyzed, in one job
       const j = await api(`/api/projects/${r.id}/analyze`, {method: 'POST'}); watch(j.id, r.id); await refresh();
-    } catch (e) { el.querySelector('#adderr').innerHTML = `<div class="note warn">${esc(e.message)}</div>`; }
+    } catch (e) { el.querySelector('#adderr').innerHTML = note('err', esc(e.message)); }
   };
   el.querySelector('#browsebtn').onclick = () => browse(el.querySelector('#addpath').value || '');
   el.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => {
@@ -173,10 +450,10 @@ function renderHome(el) {
 async function browse(path) {
   const box = document.getElementById('browse');
   const d = await api('/api/fs?path=' + encodeURIComponent(path));
-  box.innerHTML = `<div class="small muted" style="margin-top:8px">${esc(d.path)}</div><div class="browser">
-    ${d.parent ? `<button data-b="${esc(d.parent)}">↑ Up</button>` : ''}
-    <button data-pick="${esc(d.path)}"><b>Use this folder</b></button>
-    ${d.dirs.map(x => `<button data-b="${esc(x.path)}">📁 ${esc(x.name)}${x.project ? '<span class="p">looks like a project</span>' : ''}</button>`).join('')}</div>`;
+  box.innerHTML = `<div class="crumb">${esc(d.path)}</div><div class="browser">
+    ${d.parent ? `<button data-b="${esc(d.parent)}">${icon('up')}Up one folder</button>` : ''}
+    <button data-pick="${esc(d.path)}" class="use">${icon('check')}Use this folder</button>
+    ${d.dirs.map(x => `<button data-b="${esc(x.path)}">${icon('folder')}${esc(x.name)}${x.project ? '<span class="p">looks like a project</span>' : ''}</button>`).join('')}</div>`;
   box.querySelectorAll('[data-b]').forEach(b => b.onclick = () => browse(b.dataset.b));
   box.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { document.getElementById('addpath').value = b.dataset.pick; box.innerHTML = ''; });
 }
@@ -186,13 +463,13 @@ function renderProject(el) {
   const p = S.state.projects.find(x => x.id === S.project);
   if (!p) return go('home');
   if (S.tab === 'guide' && !p.starter) S.tab = 'atlas';
-  el.innerHTML = `<div class="sub"><span class="title">${esc(p.name)}</span>
-    ${p.starter ? `<button data-t="guide" class="${S.tab === 'guide' ? 'on' : ''}">Guide</button>` : ''}
-    <button data-t="atlas" class="${S.tab === 'atlas' ? 'on' : ''}">Atlas</button>
-    <button data-t="evidence" class="${S.tab === 'evidence' ? 'on' : ''}">Evidence Report</button>
-    <button data-t="explain" class="${S.tab === 'explain' ? 'on' : ''}">Explanations</button>
-    <span style="margin-left:auto" class="row"><a class="btn" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener">Open in new tab</a></span></div>
+  const tab = (t, label) => `<button data-t="${t}" class="${S.tab === t ? 'on' : ''}">${label}</button>`;
+  el.innerHTML = `<div class="sub"><button class="back" id="back" aria-label="Back to projects">${icon('back')}</button><span class="title">${esc(p.name)}</span>
+    ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100">${esc(p.grade)}</span>` : ''}
+    <div class="tabs" role="tablist">${p.starter ? tab('guide', 'Guide') : ''}${tab('atlas', 'Atlas')}${tab('evidence', 'Evidence Report')}${tab('explain', 'Explanations')}</div>
+    <span class="spacer"></span><a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a></div>
     <div id="pbody"></div>`;
+  el.querySelector('#back').onclick = () => go('home');
   el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; renderProject(el); });
   const body = el.querySelector('#pbody');
   if (S.tab === 'guide') return renderGuide(body, p);
@@ -200,29 +477,36 @@ function renderProject(el) {
     body.innerHTML = `<iframe src="/p/${p.id}/report.html" title="Atlas"></iframe>`;
     const want = S.reportTab;
     // The report is served from this app's origin, so a step's "Show me" can open its Findings or Readiness tab.
-    if (want) body.querySelector('iframe').onload = e => { try { e.target.contentDocument.querySelector(`[data-t="${want}"]`)?.click(); } catch (err) {} };
+    body.querySelector('iframe').onload = e => { try { themeOn(e.target.contentDocument); if (want) e.target.contentDocument.querySelector(`[data-t="${want}"]`)?.click(); } catch (err) {} };
   }
-  else if (S.tab === 'evidence') body.innerHTML = `<iframe src="/p/${p.id}/evidence.html" title="Evidence Report"></iframe>`;
+  else if (S.tab === 'evidence') {
+    body.innerHTML = `<iframe src="/p/${p.id}/evidence.html" title="Evidence Report"></iframe>`;
+    body.querySelector('iframe').onload = e => { try { themeOn(e.target.contentDocument); } catch (err) {} };
+  }
   else renderExplain(body, p);
 }
 async function renderExplain(body, p) {
   const s = S.state.settings, prov = S.state.providers.find(x => x.name === s.provider) || {};
   const job = S.jobs[p.id];
-  body.innerHTML = `<main><h1>Three-Lens explanations</h1>
-    <p class="muted">A model writes each explanation three ways: technical, everyday, and a 1:1 map between them. Lantern checks every phrase anchors to real code and rejects ones that don't. Models never create or close findings.</p>
-    <div class="card" id="plan">Working out what to explain…</div></main>`;
+  body.innerHTML = `<main><section class="hero"><h1>Three-Lens explanations</h1>
+    <p class="lede">A model writes each explanation three ways: technical, everyday, and a 1:1 map between them. Lantern checks every phrase anchors to real code and rejects ones that don't. Models never create or close findings.</p></section>
+    <div class="card" id="plan"><div class="working"><span class="pulse"></span>Working out what to explain…</div></div></main>`;
   let plan;
-  try { plan = await api(`/api/projects/${p.id}/plan?depth=3&limit=40`); } catch (e) { body.querySelector('#plan').innerHTML = `<div class="note warn">${esc(e.message)}</div>`; return; }
+  try { plan = await api(`/api/projects/${p.id}/plan?depth=3&limit=40`); } catch (e) { body.querySelector('#plan').innerHTML = note('err', esc(e.message)); return; }
   const cloud = prov.local === false || (prov.local === null && !/localhost|127\.0\.0\.1/.test(s.base_url || ''));
   const ready = s.model && (!prov.needs_key || prov.key);
-  body.querySelector('#plan').innerHTML = `<div><b>${plan.nodes}</b> functions: entry points and what they call, up to 3 levels deep. About <b>${plan.input_tokens.toLocaleString()}</b> input and <b>${plan.output_tokens.toLocaleString()}</b> output tokens. <span class="muted small">${esc(plan.note)}</span></div>
-    <div class="note">${s.model ? `Model: <b>${esc(s.provider)}/${esc(s.model)}</b>` : 'No model chosen yet.'} <a href="#" id="toset">Change in Settings</a></div>
-    ${s.model && cloud ? `<div class="note warn">The source code of these functions will be sent to ${esc(s.provider)} to write the explanations. To keep everything on this computer, choose Ollama or LM Studio in Settings.</div>` : ''}
-    ${s.model && !cloud ? '<div class="note ok">Local model: your code stays on this computer.</div>' : ''}
-    ${s.model && prov.needs_key && !prov.key ? `<div class="note warn">Add your ${esc(s.provider)} API key in Settings first.</div>` : ''}
-    <div class="row"><button class="btn primary" id="go" ${!ready || (job && job.status === 'running') ? 'disabled' : ''}>Explain ${plan.nodes} functions</button>
+  const num = v => esc((+v || 0).toLocaleString());
+  body.querySelector('#plan').innerHTML = `<div class="tiles"><div class="tile"><div class="lbl">Functions to explain</div><div class="val">${num(plan.nodes)}</div></div>
+      <div class="tile"><div class="lbl">Input tokens, about</div><div class="val">${num(plan.input_tokens)}</div></div>
+      <div class="tile"><div class="lbl">Output tokens, about</div><div class="val">${num(plan.output_tokens)}</div></div></div>
+    <div class="hint">Entry points and what they call, up to 3 levels deep. ${esc(plan.note)}</div>
+    <div class="model">${icon('sparkle')}<div>${s.model ? `Model <b>${esc(s.provider)}/${esc(s.model)}</b>` : 'No model chosen yet.'}</div><span class="spacer"></span><a href="#" id="toset">Change in Settings</a></div>
+    ${s.model && cloud ? note('warn', `The source code of these functions will be sent to ${esc(s.provider)} to write the explanations. To keep everything on this computer, choose Ollama or LM Studio in Settings.`) : ''}
+    ${s.model && !cloud ? note('ok', 'Local model: your code stays on this computer.') : ''}
+    ${s.model && prov.needs_key && !prov.key ? note('warn', `Add your ${esc(s.provider)} API key in Settings first.`) : ''}
+    <div class="row" style="margin-top:16px"><button class="btn primary" id="go" ${!ready || (job && job.status === 'running') ? 'disabled' : ''}>${icon('sparkle')}Explain ${num(plan.nodes)} functions</button>
     <span class="small muted">You can also explain one function at a time from the Atlas.</span></div>
-    ${job ? `<pre class="log" id="log-${p.id}">${esc((job.log || []).join('\n'))}</pre>${job.status === 'error' ? `<div class="note warn">${esc(job.error)}</div>` : ''}` : ''}`;
+    ${job ? `<div style="margin-top:14px"><pre class="log" id="log-${p.id}">${esc((job.log || []).join('\n'))}</pre></div>${job.status === 'error' ? note('err', esc(job.error)) : ''}` : ''}`;
   body.querySelector('#toset').onclick = e => { e.preventDefault(); go('settings'); };
   body.querySelector('#go').onclick = async () => {
     try { const j = await api(`/api/projects/${p.id}/explain`, {method: 'POST', body: {depth: 3, limit: 40}}); watch(j.id, p.id); renderExplain(body, p); }
@@ -234,18 +518,19 @@ async function renderExplain(body, p) {
 async function renderLearn(el) {
   if (!S.starters) { el.innerHTML = '<div class="empty">Loading…</div>'; S.starters = await api('/api/starters'); }
   const d = S.starters;
-  el.innerHTML = `<main><h1>Learn Lantern by fixing a real app</h1>
-    <p class="muted">Each starter is a small, working app written the way an AI assistant often writes a first draft, with real problems in it. Lantern creates it in a folder, analyzes it, and a step-by-step guide walks you through every feature: following paths in the Atlas, explanations, findings and why some are critical, dependency checks, protections, readiness, and the Evidence Report you can hand to an engineer. <b>Check my progress</b> re-analyzes your copy and ticks off each step once the problem is really fixed.</p>
-    <div class="card"><label for="parent" style="margin-top:0">Create starter apps in this folder</label>
-      <input type="text" id="parent" value="${esc(d.default_parent)}"><div class="small muted" style="margin-top:4px">Each one gets its own subfolder. Lantern never overwrites existing files.</div><div id="lerr"></div></div>
-    <div class="grid">${d.starters.map(s => `<div class="card starter proj"><h3>${esc(s.title)}</h3>
-      <div class="meta">${esc(s.stack)} · ${esc(s.level)} · about ${esc(s.minutes)} minutes</div>
+  el.innerHTML = `<main><section class="hero"><h1>Learn Lantern by fixing a real app</h1>
+    <p class="lede">Each starter is a small, working app written the way an AI assistant often writes a first draft, with real problems in it. Lantern creates it in a folder, analyzes it, and a step-by-step guide walks you through every feature: following paths in the Atlas, explanations, findings and why some are critical, dependency checks, protections, readiness, and the Evidence Report you can hand to an engineer. <b>Check my progress</b> re-analyzes your copy and ticks off each step once the problem is really fixed.</p></section>
+    <div class="card addbar"><label for="parent" class="eyebrow">Create starter apps in this folder</label>
+      <div class="field">${icon('folder')}<input type="text" id="parent" value="${esc(d.default_parent)}" spellcheck="false"></div><div class="hint">Each one gets its own subfolder. Lantern never overwrites existing files.</div><div id="lerr"></div></div>
+    <div class="sectionhead"><h2>Starter apps</h2><span class="count">${d.starters.length}</span></div>
+    <div class="grid">${d.starters.map(s => `<article class="card starter proj"><h3>${esc(s.title)}</h3>
+      <div class="meta"><span>${icon('layers')}${esc(s.stack)}</span><span>${icon('bolt')}${esc(s.level)}</span><span>${icon('clock')}about ${esc(s.minutes)} min</span></div>
       <div>${fmt(s.summary)}</div>
-      <div class="pills">${s.teaches.map(t => `<span class="pill">${esc(t)}</span>`).join('')}</div>
-      <details class="small"><summary>${esc(s.steps.length)} steps</summary><ol>${s.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol></details>
-      <div class="row"><button class="btn primary" data-make="${esc(s.id)}">Create this app</button>
-      ${S.state.projects.filter(p => p.starter === s.id).map(p => `<button class="btn" data-guide="${esc(p.id)}">Continue ${esc(p.name)}</button>`).join('')}</div></div>`).join('')}</div>
-    <p class="small muted">Command line: <code>lantern learn</code> lists them, <code>lantern learn notes-api</code> creates one, <code>lantern learn --check FOLDER</code> shows your progress.</p></main>`;
+      <div class="sevs">${s.teaches.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>
+      <details><summary>${esc(s.steps.length)} steps</summary><ol>${s.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol></details>
+      <div class="actions"><button class="btn primary" data-make="${esc(s.id)}">${icon('play')}Create this app</button>
+      ${S.state.projects.filter(p => p.starter === s.id).map(p => `<button class="btn" data-guide="${esc(p.id)}">Continue ${esc(p.name)}</button>`).join('')}</div></article>`).join('')}</div>
+    <p class="foot">Command line: <code>lantern learn</code> lists them, <code>lantern learn notes-api</code> creates one, <code>lantern learn --check FOLDER</code> shows your progress.</p></main>`;
   el.querySelectorAll('[data-guide]').forEach(b => b.onclick = () => go('project', {project: b.dataset.guide, tab: 'guide'}));
   el.querySelectorAll('[data-make]').forEach(b => b.onclick = async () => {
     b.disabled = true; b.textContent = 'Creating…';
@@ -254,7 +539,7 @@ async function renderLearn(el) {
       await refresh();
       go('project', {project: r.project.id, tab: 'guide'});
       watch(r.job.id, r.project.id);
-    } catch (e) { b.disabled = false; b.textContent = 'Create this app'; el.querySelector('#lerr').innerHTML = `<div class="note warn">${esc(e.message)}</div>`; }
+    } catch (e) { b.disabled = false; b.innerHTML = icon('play') + 'Create this app'; el.querySelector('#lerr').innerHTML = note('err', esc(e.message)); }
   });
 }
 const STATUS = {done: ['done', 'Done'], todo: ['todo', 'To do'], unknown: ['', "Can't tell yet"], read: ['', 'Explore']};
@@ -265,27 +550,27 @@ async function renderGuide(body, p) {
   const job = S.jobs[p.id], running = p.job || (job && job.status === 'running');
   const st = (pr && pr.steps) || [];
   const pct = pr && pr.total ? Math.round(100 * pr.done / pr.total) : 0;
-  body.innerHTML = `<main><h1>${esc(s.title)}</h1><p class="muted">${fmt(s.summary)}</p>
-    <div class="card"><div class="row"><b>${pr ? `${esc(pr.done)} of ${esc(pr.total)} checked steps done${pr.explore ? ` · ${esc(pr.explore)} to explore on your own` : ''}` : 'Not analyzed yet'}</b>
-      <button class="btn primary" id="check" style="margin-left:auto" ${running ? 'disabled' : ''}>${running ? 'Analyzing…' : 'Check my progress'}</button></div>
-      <div class="bar"><span style="width:${pct}%"></span></div>
+  body.innerHTML = `<main><section class="hero"><h1>${esc(s.title)}</h1><p class="lede">${fmt(s.summary)}</p></section>
+    <div class="card"><div class="progress">${pr ? `<div class="big">${esc(pr.done)}<span> of ${esc(pr.total)} steps done</span></div>${pr.explore ? `<span class="small muted">${esc(pr.explore)} to explore on your own</span>` : ''}` : '<div class="big"><span>Not analyzed yet</span></div>'}
+      <span class="spacer"></span><button class="btn primary" id="check" ${running ? 'disabled' : ''}>${icon('refresh')}${running ? 'Analyzing…' : 'Check my progress'}</button></div>
+      <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
       <div class="small muted">Folder: <code>${esc(p.path)}</code>. Open it in your editor or AI assistant, make each fix there, then press Check my progress.</div>
-      ${running ? `<pre class="log" id="log-${p.id}">${esc((job && job.log || []).join('\n'))}</pre>` : ''}
-      ${s.run && s.run.length ? `<details class="small" style="margin-top:8px"><summary>Run the app yourself (optional)</summary><pre class="cmd">${esc(s.run.join('\n'))}</pre></details>` : ''}</div>
-    ${s.steps.map((x, i) => { const r = st[i] || {status: x.check ? 'unknown' : 'read', why: ''}; const [cls, label] = STATUS[r.status] || STATUS.unknown;
-      return `<div class="card step ${r.status === 'done' ? 'done' : ''}"><div class="num">${r.status === 'done' ? '✓' : i + 1}</div><div style="min-width:0;flex:1">
-      <div class="stitle">${esc(x.title)}<span class="badge ${cls}">${esc(label)}</span>${r.why && r.status !== 'done' ? `<span class="small muted"> · ${esc(r.why)}</span>` : ''}</div>
+      ${running ? `<div style="margin-top:12px"><pre class="log" id="log-${p.id}">${esc((job && job.log || []).join('\n'))}</pre></div>` : ''}
+      ${s.run && s.run.length ? `<details class="small" style="margin-top:12px"><summary class="muted" style="cursor:pointer">Run the app yourself (optional)</summary><pre class="cmd">${esc(s.run.join('\n'))}</pre></details>` : ''}</div>
+    <div class="steps">${s.steps.map((x, i) => { const r = st[i] || {status: x.check ? 'unknown' : 'read', why: ''}; const [cls, label] = STATUS[r.status] || STATUS.unknown;
+      return `<div class="step ${r.status === 'done' ? 'done' : ''}"><div class="num">${r.status === 'done' ? icon('check') : i + 1}</div><div class="card">
+      <div class="stitle">${esc(x.title)}<span class="status ${cls}"><i></i>${esc(label)}</span>${r.why && r.status !== 'done' ? `<span class="why">${esc(r.why)}</span>` : ''}</div>
       ${x.body.map(t => `<p>${fmt(t)}</p>`).join('')}
-      ${x.prompt ? `<div class="prompt"><div class="small muted">Ask your AI assistant</div>${esc(x.prompt)} <button class="btn" data-copy="${i}" style="padding:2px 10px;font-size:12px">Copy</button></div>` : ''}
+      ${x.prompt ? `<div class="prompt"><div class="eyebrow">${icon('sparkle')}Ask your AI assistant<span class="spacer"></span><button class="btn sm" data-copy="${i}">${icon('copy')}Copy</button></div><div class="txt">${esc(x.prompt)}</div></div>` : ''}
       ${x.commands ? `<pre class="cmd">${esc(x.commands.join('\n'))}</pre>` : ''}
-      <div class="row">${SHOW[x.feature] ? `<button class="btn" data-show="${esc(x.feature)}">${esc(SHOW[x.feature])}</button>` : ''}
-        ${(x.fix_files || []).map(f => `<button class="btn" data-fix="${esc(f)}">Show the fix: ${esc(f)}</button>`).join('')}</div>
-      <div id="fix-${i}"></div></div></div>`; }).join('')}</main>`;
+      <div class="row" style="margin-top:10px">${SHOW[x.feature] ? `<button class="btn" data-show="${esc(x.feature)}">${esc(SHOW[x.feature])}</button>` : ''}
+        ${(x.fix_files || []).map(f => `<button class="btn ghost" data-fix="${esc(f)}">Show the fix: ${esc(f)}</button>`).join('')}</div>
+      <div id="fix-${i}"></div></div></div>`; }).join('')}</div></main>`;
   body.querySelector('#check').onclick = async () => {
     try { const j = await api(`/api/projects/${p.id}/analyze`, {method: 'POST'}); watch(j.id, p.id); renderGuide(body, p); }
     catch (e) { alert(e.message); }
   };
-  body.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => navigator.clipboard?.writeText(s.steps[+b.dataset.copy].prompt).then(() => { b.textContent = 'Copied'; }, () => {}));
+  body.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => navigator.clipboard?.writeText(s.steps[+b.dataset.copy].prompt).then(() => { b.innerHTML = icon('check') + 'Copied'; }, () => {}));
   body.querySelectorAll('[data-show]').forEach(b => b.onclick = () => {
     const f = b.dataset.show;
     if (f === 'settings') return go('settings');
@@ -296,8 +581,8 @@ async function renderGuide(body, p) {
   body.querySelectorAll('[data-fix]').forEach(b => b.onclick = async () => {
     const box = b.closest('.step').querySelector('[id^=fix-]');
     try { const r = await api(`/api/starters/${encodeURIComponent(p.starter)}/fix?file=${encodeURIComponent(b.dataset.fix)}`);
-      box.innerHTML = `<div class="small muted" style="margin-top:8px">Fixed version of <code>${esc(b.dataset.fix)}</code>. Compare it with yours, or paste it in.</div><pre class="cmd">${esc(r.text)}</pre>`; }
-    catch (e) { box.innerHTML = `<div class="note warn">${esc(e.message)}</div>`; }
+      box.innerHTML = `<div class="hint">Fixed version of <code>${esc(b.dataset.fix)}</code>. Compare it with yours, or paste it in.</div><pre class="cmd">${esc(r.text)}</pre>`; }
+    catch (e) { box.innerHTML = note('err', esc(e.message)); }
   });
 }
 
@@ -306,29 +591,33 @@ function renderSettings(el) {
   const s = S.state.settings, provs = S.state.providers;
   const draw = () => {
     const name = el.querySelector('#prov').value, pr = provs.find(x => x.name === name) || {};
-    el.querySelector('#provinfo').innerHTML = (pr.local ? '<div class="note ok">Runs on this computer: your code never leaves it. Start the model server first (for Ollama: <code>ollama serve</code>, then <code>ollama pull &lt;model&gt;</code>).</div>'
-      : pr.local === false ? `<div class="note warn">Cloud model: when you ask for explanations, the code of each explained function is sent to ${esc(name)}. Lantern itself has no server and never sees your code or key.</div>`
-      : '<div class="note">Any OpenAI-compatible endpoint. If it runs on this computer, your code stays here.</div>')
-      + (pr.needs_key ? `<div class="small muted">${pr.key ? 'Key: set (' + esc(pr.key) + ')' : `No key yet. Paste one below, or set ${esc(pr.env)} before starting Lantern.`}</div>` : '');
+    el.querySelector('#provinfo').innerHTML = (pr.local ? note('ok', 'Runs on this computer: your code never leaves it. Start the model server first (for Ollama: <code>ollama serve</code>, then <code>ollama pull &lt;model&gt;</code>).')
+      : pr.local === false ? note('warn', `Cloud model: when you ask for explanations, the code of each explained function is sent to ${esc(name)}. Lantern itself has no server and never sees your code or key.`)
+      : note('', 'Any OpenAI-compatible endpoint. If it runs on this computer, your code stays here.'))
+      + (pr.needs_key ? `<div class="hint">${pr.key ? 'Key: set (' + esc(pr.key) + ')' : `No key yet. Paste one below, or set ${esc(pr.env)} before starting Lantern.`}</div>` : '');
     el.querySelector('#keyrow').style.display = pr.needs_key || name === 'openai-compatible' ? '' : 'none';
     el.querySelector('#urlrow').style.display = name === 'openai-compatible' || pr.local ? '' : 'none';
     el.querySelector('#url').placeholder = pr.default_url || 'http://localhost:8000/v1';
   };
-  el.innerHTML = `<main><h1>Settings</h1>
-    <div class="card"><h2 style="margin-top:0">Model for explanations</h2>
+  const themeBtn = (t, ic, label) => `<button data-theme="${t}" class="${THEME === t ? 'on' : ''}">${icon(ic)}${label}</button>`;
+  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>Settings</h1><p class="lede">Choose the model that writes explanations, and how much of your code a report carries.</p></section>
+    <div class="card group"><h2>Model for explanations</h2><div class="hint">Lantern works without a model. A model only adds the three-lens explanations.</div>
       <label for="prov">Provider</label><select id="prov">${provs.map(p => `<option value="${esc(p.name)}" ${p.name === s.provider ? 'selected' : ''}>${esc(p.name)}${p.local ? ' (local)' : ''}</option>`).join('')}</select>
       <div id="provinfo"></div>
-      <label for="model">Model name</label><input type="text" id="model" value="${esc(s.model)}" placeholder="the provider's model id, e.g. from its model list">
-      <div id="urlrow"><label for="url">Base URL (optional)</label><input type="text" id="url" value="${esc(s.base_url)}"></div>
+      <label for="model">Model name</label><input type="text" id="model" value="${esc(s.model)}" placeholder="the provider's model id, e.g. from its model list" spellcheck="false">
+      <div id="urlrow"><label for="url">Base URL (optional)</label><input type="text" id="url" value="${esc(s.base_url)}" spellcheck="false"></div>
       <div id="keyrow"><label for="key">API key</label><input type="password" id="key" autocomplete="off" placeholder="paste to set or replace">
-        <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="checkbox" id="remember"> Remember on this computer (saved in ~/.lantern/keys.json, readable only by you). Otherwise kept in memory until Lantern stops.</label>
-        <button class="btn" id="forget" type="button">Forget saved key</button></div>
-      <h2>Privacy</h2>
-      <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="radio" name="priv" value="full" ${s.privacy !== 'structure' ? 'checked' : ''}> Full: reports include each function's source, for the code panel</label>
-      <label style="font-weight:400;display:flex;gap:6px;align-items:center"><input type="radio" name="priv" value="structure" ${s.privacy === 'structure' ? 'checked' : ''}> Structure only: reports leave source code out (safer to share)</label>
-      <div class="row" style="margin-top:14px"><button class="btn primary" id="save">Save</button><span id="saved" class="small muted"></span></div></div>
-    <p class="small muted">Lantern ${esc(VERSION)} · settings live in ~/.lantern on this computer.</p></main>`;
+        <label class="check"><input type="checkbox" id="remember"><span>Remember on this computer (saved in ~/.lantern/keys.json, readable only by you). Otherwise kept in memory until Lantern stops.</span></label>
+        <button class="btn sm" id="forget" type="button">Forget saved key</button></div></div>
+    <div class="card group"><h2>Privacy</h2><div class="hint">Applies to reports written from now on.</div>
+      <label class="choice"><input type="radio" name="priv" value="full" ${s.privacy !== 'structure' ? 'checked' : ''}><span><b>Full</b>Reports include each function's source, for the code panel.</span></label>
+      <label class="choice"><input type="radio" name="priv" value="structure" ${s.privacy === 'structure' ? 'checked' : ''}><span><b>Structure only</b>Reports leave source code out (safer to share).</span></label>
+      <div class="row" style="margin-top:18px"><button class="btn primary" id="save">Save</button><span id="saved" class="small muted"></span></div></div>
+    <div class="card group"><h2>Appearance</h2><div class="hint">Saved in this browser right away.</div>
+      <div class="seg" id="themeseg">${themeBtn('auto', 'auto', 'Match computer')}${themeBtn('light', 'sun', 'Light')}${themeBtn('dark', 'moon', 'Dark')}</div></div>
+    <p class="foot">Lantern ${esc(VERSION)} · settings live in ~/.lantern on this computer.</p></main>`;
   el.querySelector('#prov').onchange = draw; draw();
+  el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
   const save = async (extra = {}) => {
     const body = {provider: el.querySelector('#prov').value, model: el.querySelector('#model').value, base_url: el.querySelector('#url').value,
       privacy: el.querySelector('input[name=priv]:checked').value, key: el.querySelector('#key').value || undefined, remember: el.querySelector('#remember').checked, ...extra};
@@ -340,15 +629,17 @@ function renderSettings(el) {
 }
 
 function renderHelp(el) {
-  el.innerHTML = `<main><h1>How to use Lantern</h1><div class="card">
-    <p>New to this? The <b>Learn</b> tab has starter apps with real problems in them and a guide that walks you through every feature.</p>
-    <ol><li><b>Add a project</b>: any folder with a Python or TypeScript/JavaScript app, new or years old, or a GitHub link to one (Lantern clones it into <code>~/.lantern/repos</code>). Lantern reads the code; it never runs it.</li>
-    <li><b>Open the Atlas</b>: pick a page or API route on the left and follow the path, from button clicks through HTTP calls to the backend. Lines show how sure Lantern is about each link.</li>
-    <li><b>Findings</b>: security problems ranked by how bad they are and whether a user can reach them. Fix them, or accept a risk with a written reason.</li>
-    <li><b>Readiness</b>: a 0–100 grade across ten areas, with what to fix first and starter files (Dockerfile, CI, .env.example) you can write with one click.</li>
-    <li><b>Explanations</b>: add your own model key (or a local model) in Settings to get every function explained three ways.</li>
-    <li><b>Evidence Report</b>: a commit-pinned summary to share with an engineer. They can re-run <code>lantern verify</code> to check it.</li></ol>
-    <p class="muted small">Command line: <code>lantern analyze PATH</code>, <code>lantern explain PATH --model provider/model</code>, <code>lantern verify PATH --report evidence.html</code>. Run <code>lantern --help</code> for all commands.</p></div></main>`;
+  const steps = [
+    ['Add a project', 'Any folder with a Python or TypeScript/JavaScript app, new or years old, or a GitHub link to one (Lantern clones it into <code>~/.lantern/repos</code>). Lantern reads the code; it never runs it.'],
+    ['Open the Atlas', 'Pick a page or API route on the left and follow the path, from button clicks through HTTP calls to the backend. Lines show how sure Lantern is about each link.'],
+    ['Findings', 'Security problems ranked by how bad they are and whether a user can reach them. Fix them, or accept a risk with a written reason.'],
+    ['Readiness', 'A 0–100 grade across ten areas, with what to fix first and starter files (Dockerfile, CI, .env.example) you can write with one click.'],
+    ['Explanations', 'Add your own model key (or a local model) in Settings to get every function explained three ways.'],
+    ['Evidence Report', 'A commit-pinned summary to share with an engineer. They can re-run <code>lantern verify</code> to check it.'],
+  ];
+  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>How to use Lantern</h1><p class="lede">New to this? The <b>Learn</b> tab has starter apps with real problems in them and a guide that walks you through every feature.</p></section>
+    <div class="card"><ol class="howto">${steps.map(([t, d], i) => `<li><span class="n">${i + 1}</span><div><b>${t}</b><div>${d}</div></div></li>`).join('')}</ol></div>
+    <p class="foot">Command line: <code>lantern analyze PATH</code>, <code>lantern explain PATH --model provider/model</code>, <code>lantern verify PATH --report evidence.html</code>. Run <code>lantern --help</code> for all commands.</p></main>`;
 }
 
 function render() {

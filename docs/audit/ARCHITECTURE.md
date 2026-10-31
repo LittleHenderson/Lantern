@@ -47,8 +47,8 @@ lines and the server streams them to the browser.
 | `providers.py` | Anthropic, OpenAI-compatible presets, fixture stub | `make_provider` |
 | `report.py` | Bundle data into `viewer/report.html` | `write_report`, `collect_sources` |
 | `server.py` | Local HTTP app, jobs, settings and keys store | `serve`, `Handler`, `Store`, `Jobs` |
-| `viewer/app.html` | App shell: Projects, project tabs, Explanations, Settings, Help | vanilla JS |
-| `viewer/report.html` | Atlas: map (path tree + flowchart), Findings, Readiness, About, node detail with lenses | vanilla JS |
+| `viewer/app.html` | App shell: Projects, project tabs, Explanations, Learn and Guide, Settings (with Appearance), Help | vanilla JS |
+| `viewer/report.html` | Atlas: map (path tree + flowchart), Findings (with severity filter), Readiness, About, node detail with lenses. Drops its own brand row when framed by the app | vanilla JS |
 
 ## Output files (in `PATH/.lantern/`, git-ignored by default)
 
@@ -93,3 +93,13 @@ Browser → `GET /?token=…` sets an HttpOnly SameSite=Strict cookie → `GET /
 the page → reads use the cookie, writes also send `X-Lantern-Token`. Long work (`analyze`, `explain`, `accept`)
 starts a thread job (one per project at a time) and returns `202 {id}`; the page polls `/api/jobs/{id}`.
 `/p/{id}/report.html` is the saved report with `window.LANTERN_LIVE` injected, which turns on the live buttons.
+
+## Look and feel
+
+`app.html`, `report.html` and `evidence.py` each carry the same design tokens (CSS custom properties), since every
+page must stand alone. Ink for text and primary buttons, one blue accent for selection and links, and the status
+colors good / warning / serious / critical only for risk and results, always next to a word or icon. Light and dark
+both exist: `prefers-color-scheme` by default, or a choice saved as `lantern.theme` in `localStorage`. The app sets
+`data-theme` on the documents of its same-origin frames (report, Evidence Report), so the Evidence Report follows it
+without running any script. Icons are inline SVG from fixed strings in the templates; no fonts or images load from
+the network.

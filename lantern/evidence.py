@@ -368,34 +368,44 @@ def render_html(ev: dict) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Evidence Report · {E(h['name'])}</title>
 <style>
-:root{{--bg:#F6F7F9;--panel:#fff;--ink:#0F1B2D;--body:#334155;--muted:#64748B;--line:#E2E8F0;--soft:#F1F5F9;--accent:#0D9488;
---crit:#B42318;--crits:#FEF0EE;--high:#B54708;--highs:#FFF6E5;--med:#475467;--meds:#F2F4F7;--low:#0D9488;--lows:#E6F6F4}}
-@media (prefers-color-scheme: dark){{:root{{--bg:#0B1220;--panel:#111A2B;--ink:#E6EDF6;--body:#C2CCDA;--muted:#8A97AB;--line:#22304A;--soft:#17223A;
---accent:#2DD4BF;--crit:#FDA29B;--crits:#3A1512;--high:#FEC84B;--highs:#33240B;--med:#CBD5E1;--meds:#1E293B;--low:#5EEAD4;--lows:#0E2E2B}}}}
-*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--body);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif}}
-main{{max-width:860px;margin:0 auto;padding:24px 16px 60px}}
-section{{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:0 0 14px}}
-h1{{color:var(--ink);font-size:22px;margin:0 0 4px}} h2{{color:var(--ink);font-size:15px;margin:0 0 10px;letter-spacing:.01em}}
-h2 small{{color:var(--muted);font-weight:500}} h4{{color:var(--ink);margin:12px 0 4px}}
-code{{font:12.5px ui-monospace,"SF Mono",Menlo,Consolas,monospace;background:var(--soft);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}}
-.muted{{color:var(--muted)}} .warn{{color:var(--high)}}
-.kv{{display:grid;grid-template-columns:150px 1fr;gap:4px 12px}} .kv div:nth-child(odd){{color:var(--muted)}}
-.score{{display:flex;gap:18px;align-items:center;flex-wrap:wrap}} .big{{font-size:46px;font-weight:800;color:var(--ink);line-height:1}}
-.grade{{font-size:22px;font-weight:800;width:46px;height:46px;border-radius:12px;display:grid;place-items:center;background:var(--soft);color:var(--ink)}}
-table{{width:100%;border-collapse:collapse}} td{{padding:6px 6px;border-top:1px solid var(--line);vertical-align:top}}
-td.num{{text-align:right;white-space:nowrap;width:70px;font-variant-numeric:tabular-nums}}
-.bar{{display:block;height:8px;border-radius:99px;background:var(--soft);overflow:hidden;min-width:80px}} .bar i{{display:block;height:100%;background:var(--accent)}}
-.sev{{display:inline-block;font-size:11px;font-weight:700;padding:0 7px;border-radius:99px;white-space:nowrap}}
-.sev.critical{{background:var(--crits);color:var(--crit)}} .sev.high{{background:var(--highs);color:var(--high)}}
-.sev.medium{{background:var(--meds);color:var(--med)}} .sev.low{{background:var(--lows);color:var(--low)}}
-.tag{{display:inline-block;font-size:11px;padding:0 7px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}} .tag.ok{{color:var(--low);border-color:var(--low)}}
-.path{{font:11.5px ui-monospace,Menlo,monospace;color:var(--accent)}} .reason{{margin-top:4px;padding:6px 8px;background:var(--soft);border-radius:6px}}
-ul{{padding-left:20px;margin:6px 0}} li{{margin:3px 0}}
-.digest{{font:12px ui-monospace,Menlo,monospace;overflow-wrap:anywhere;color:var(--ink)}}
-.diagram{{color:var(--ink);margin:10px 0}}
-button.print{{float:right;font:inherit;font-size:12.5px;padding:6px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}}
-@media print{{body{{background:#fff}} section{{break-inside:avoid;border-color:#ccc}} button.print{{display:none}}}}
-@media (max-width:560px){{.kv{{grid-template-columns:1fr}} .kv div:nth-child(odd){{margin-top:6px}}}}
+:root{{color-scheme:light;--bg:#F5F5F2;--panel:#FFFFFF;--panel-2:#FAFAF8;--ink:#161618;--body:#46464C;--muted:#6E6E74;--faint:#A3A3A8;--line:rgba(22,22,24,.09);--line-2:rgba(22,22,24,.16);--soft:#EEEEEA;--hover:rgba(22,22,24,.045);
+--accent:#2F5BEA;--accent-ink:#2148C9;--good:#0CA30C;--warning:#FAB219;--serious:#EC835A;--critical:#D03B3B;
+--good-soft:rgba(12,163,12,.11);--warning-soft:rgba(250,178,25,.17);--serious-soft:rgba(236,131,90,.16);--critical-soft:rgba(208,59,59,.11);--good-ink:#0A7A0A;--warn-ink:#8A5A00;
+--font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+--display:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI Variable Display","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+--mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace}}
+:root[data-theme=dark]{{color-scheme:dark;--bg:#0E0E10;--panel:#161618;--panel-2:#1B1B1E;--ink:#F3F3F1;--body:#BEBEC3;--muted:#8C8C92;--faint:#5E5E64;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.15);--soft:#0A0A0B;--hover:rgba(255,255,255,.05);
+--accent:#7C9BFF;--accent-ink:#A3B8FF;--good-soft:rgba(12,163,12,.20);--warning-soft:rgba(250,178,25,.18);--serious-soft:rgba(236,131,90,.20);--critical-soft:rgba(208,59,59,.22);--good-ink:#5BD15B;--warn-ink:#FAC55A}}
+@media (prefers-color-scheme: dark){{:root:not([data-theme=light]){{color-scheme:dark;--bg:#0E0E10;--panel:#161618;--panel-2:#1B1B1E;--ink:#F3F3F1;--body:#BEBEC3;--muted:#8C8C92;--faint:#5E5E64;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.15);--soft:#0A0A0B;--hover:rgba(255,255,255,.05);
+--accent:#7C9BFF;--accent-ink:#A3B8FF;--good-soft:rgba(12,163,12,.20);--warning-soft:rgba(250,178,25,.18);--serious-soft:rgba(236,131,90,.20);--critical-soft:rgba(208,59,59,.22);--good-ink:#5BD15B;--warn-ink:#FAC55A}}}}
+*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--body);font:14px/1.6 var(--font);-webkit-font-smoothing:antialiased}}
+main{{max-width:880px;margin:0 auto;padding:40px 20px 80px}}
+section{{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px 26px;margin:0 0 16px;box-shadow:0 1px 2px rgba(16,16,20,.05)}}
+section:first-child{{position:relative;overflow:hidden}}
+section:first-child::after{{content:"";position:absolute;right:-80px;top:-120px;width:320px;height:260px;background:radial-gradient(closest-side,rgba(255,181,71,.18),transparent);pointer-events:none}}
+h1{{color:var(--ink);font:700 30px/1.15 var(--display);letter-spacing:-.028em;margin:0 0 6px}} h2{{color:var(--ink);font:650 17px/1.3 var(--display);letter-spacing:-.012em;margin:0 0 14px}}
+h2 small{{color:var(--muted);font:400 13px var(--font);letter-spacing:0}} h4{{color:var(--ink);font:650 14.5px var(--display);margin:20px 0 8px}}
+code{{font:12.5px var(--mono);background:var(--soft);color:var(--ink);padding:1px 6px;border-radius:6px;overflow-wrap:anywhere}}
+.muted{{color:var(--muted)}} .warn{{color:var(--warn-ink)}}
+.kv{{display:grid;grid-template-columns:160px 1fr;gap:8px 16px}} .kv div:nth-child(odd){{color:var(--muted)}} .kv div:nth-child(even){{color:var(--ink)}}
+.score{{display:flex;gap:20px;align-items:center;flex-wrap:wrap}} .big{{font:700 52px/1 var(--display);letter-spacing:-.035em;color:var(--ink);font-variant-numeric:tabular-nums}}
+.grade{{font:700 20px/1 var(--display);width:46px;height:46px;border-radius:13px;display:grid;place-items:center;background:var(--hover);color:var(--ink)}}
+.grade.A,.grade.B{{background:var(--good-soft)}} .grade.C{{background:var(--warning-soft)}} .grade.D{{background:var(--serious-soft)}} .grade.F{{background:var(--critical-soft)}}
+table{{width:100%;border-collapse:collapse}} td{{padding:10px 8px;border-top:1px solid var(--line);vertical-align:top}} tr:first-child td{{border-top:0}}
+td.num{{text-align:right;white-space:nowrap;width:76px;font:12.5px var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}}
+.bar{{display:block;height:6px;border-radius:99px;background:var(--soft);overflow:hidden;min-width:80px;margin-top:8px}} .bar i{{display:block;height:100%;border-radius:99px;background:var(--ink)}}
+.sev{{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:1px 9px 1px 7px;border-radius:99px;white-space:nowrap;background:var(--hover);color:var(--ink)}}
+.sev::before{{content:"";width:7px;height:7px;border-radius:99px;background:var(--faint)}}
+.sev.critical{{background:var(--critical-soft)}} .sev.critical::before{{background:var(--critical)}} .sev.high{{background:var(--serious-soft)}} .sev.high::before{{background:var(--serious)}}
+.sev.medium{{background:var(--warning-soft)}} .sev.medium::before{{background:var(--warning)}} .sev.low{{background:var(--good-soft)}} .sev.low::before{{background:var(--good)}}
+.tag{{display:inline-block;font-size:11px;font-weight:550;padding:1px 8px;border-radius:99px;border:1px solid var(--line-2);color:var(--body)}} .tag.ok{{color:var(--good-ink);border-color:var(--good);background:var(--good-soft)}}
+.path{{font:11.5px var(--mono);color:var(--accent-ink)}} .reason{{margin-top:6px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px}}
+ul{{padding-left:20px;margin:8px 0}} li{{margin:4px 0}}
+.digest{{font:12px var(--mono);overflow-wrap:anywhere;color:var(--ink);background:var(--soft);padding:2px 6px;border-radius:6px}}
+.diagram{{color:var(--ink);margin:12px 0}}
+button.print{{float:right;position:relative;z-index:1;font:inherit;font-size:12.5px;font-weight:600;height:32px;padding:0 14px;border-radius:9px;border:1px solid var(--line-2);background:var(--panel);color:var(--ink);cursor:pointer}}
+@media print{{body{{background:#fff}} section{{break-inside:avoid;border-color:#ccc;box-shadow:none}} section:first-child::after{{display:none}} button.print{{display:none}}}}
+@media (max-width:560px){{main{{padding:20px 12px 60px}} section{{padding:18px}} .kv{{grid-template-columns:1fr;gap:2px}} .kv div:nth-child(odd){{margin-top:8px}}}}
 </style></head><body><main>
 <section><button class="print" onclick="window.print()">Save as PDF</button>
 <h1>Evidence Report</h1><div class="muted">{E(h['name'])} · made with Lantern {E(__version__)}</div>
@@ -405,7 +415,7 @@ button.print{{float:right;font:inherit;font-size:12.5px;padding:6px 12px;border-
 <div>Privacy level</div><div>{E(h['privacy'])}</div></div></section>
 
 <section><h2>1 · Scorecard</h2>
-{f'''<div class="score"><span class="big">{E(rd["score"])}<span style="font-size:20px" class="muted">/100</span></span><span class="grade">{E(rd["grade"])}</span>
+{f'''<div class="score"><span class="big">{E(rd["score"])}<span style="font-size:20px" class="muted">/100</span></span><span class="grade {rd["grade"] if rd.get("grade") in ("A", "B", "C", "D", "F") else ""}">{E(rd["grade"])}</span>
 <div class="muted">Deployment readiness for a {E(rd["shape"])}.<br>Checks that don't apply are skipped, not counted.</div></div>
 <table style="margin-top:12px">{cats}</table>''' if rd else '<p class="muted">Readiness was not computed.</p>'}
 <div class="kv" style="margin-top:14px"><div>Open findings now</div><div>{cnt(sc['now'])}</div>
