@@ -30,6 +30,9 @@ def out_dir(repo: Path, out: str | Path | None = None) -> Path:
 def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] | None = None,
             no_scan: bool = False, log: Log = print, offline: bool | None = None) -> dict:
     """Graph -> (trace) -> scan -> readiness -> report -> evidence. Returns a short summary."""
+    from . import remote
+    if remote.is_clone(repo):   # a clone whose checkout could not be completed would report on part of a repository
+        remote.check_complete(repo)
     from .engine import build_graph
     from .readiness import assess
     from .report import write_report

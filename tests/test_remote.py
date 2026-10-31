@@ -269,3 +269,61 @@ def test_an_earlier_clone_with_files_missing_is_repaired(tmp_path):
     log.clear()
     remote.clone("https://github.com/o/r", log=log.append, dest=dest)
     assert log == [f"updating {dest}"]
+
+
+def test_a_clone_with_files_missing_is_not_analyzed(tmp_path, monkeypatch, capsys):
+    """A clone whose repair was refused stays on disk with its project card. Analyzing it again (the CLI, Re-analyze)
+    is refused with the same kind of message, instead of a clean-looking report of part of the repository."""
+    from lantern import pipeline
+    src = _git_repo(tmp_path / "src")
+    (src / "sub").mkdir()
+    (src / "sub" / "c.py").write_text("import os\nos.system(input())\n", encoding="utf-8")
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."], cwd=src, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "two"], cwd=src, check=True)
+    dest = tmp_path / "dest"
+    remote.fetch(src.as_uri(), dest)
+    assert remote.is_clone(dest)
+    shutil.rmtree(dest / "sub")
+    (dest / "sub").write_text("a file where the folder belongs", encoding="utf-8")   # the repair cannot write sub/c.py
+    with pytest.raises(RuntimeError, match=r"could not restore 1 missing file\(s\), starting with sub/c.py"):
+        remote.clone("https://github.com/o/r", dest=dest)
+    with pytest.raises(RuntimeError, match=r"this clone has 1 missing file\(s\), starting with sub/c.py"):
+        pipeline.analyze(dest, tmp_path / "out", log=lambda m: None)
+    assert not (tmp_path / "out" / "report.html").exists()
+    assert main(["analyze", str(dest), "--offline", "--out", str(tmp_path / "out")]) == 2
+    assert "this clone has 1 missing file(s)" in capsys.readouterr().err
+    # complete again: analyzed as usual
+    (dest / "sub").unlink()
+    remote.clone("https://github.com/o/r", dest=dest)
+    assert main(["analyze", str(dest), "--offline", "--no-scan", "--out", str(tmp_path / "out")]) == 0
+
+
+def test_missing_files_is_fail_closed(tmp_path, monkeypatch):
+    """When git cannot list the files, the answer is "not known", never "nothing missing"; a clone is then refused."""
+    from lantern import pipeline
+    dest = tmp_path / "dest"
+    remote.fetch(_git_repo(tmp_path / "src").as_uri(), dest)
+    assert remote.missing_files(dest) == []
+    real = remote._git
+    monkeypatch.setattr(remote, "_git", lambda args, cwd, timeout=900: subprocess.CompletedProcess(args, 128, "", "fatal: index file corrupt")
+                        if args[0] == "ls-files" else real(args, cwd, timeout))
+    assert remote.missing_files(dest) is None
+    with pytest.raises(RuntimeError, match="git could not list the files"):
+        pipeline.analyze(dest, tmp_path / "out", log=lambda m: None)
+    with pytest.raises(RuntimeError, match="git could not list the files"):
+        remote.clone("https://github.com/o/r", dest=dest)
+
+
+def test_your_own_git_folder_with_a_deleted_file_is_analyzed(tmp_path, monkeypatch):
+    """Only folders Lantern cloned are checked: in a repository of your own, a deleted file is your change."""
+    from lantern import pipeline
+    monkeypatch.setenv("LANTERN_HOME", str(tmp_path / "home"))
+    mine = _git_repo(tmp_path / "mine")
+    (mine / "app.py").unlink()
+    (mine / "new.py").write_text("def g():\n    return 2\n", encoding="utf-8")
+    assert not remote.is_clone(mine) and remote.missing_files(mine) == ["app.py"]
+    pipeline.analyze(mine, pipeline.out_dir(mine, tmp_path / "out"), no_scan=True, log=lambda m: None)
+    assert (tmp_path / "out" / "graph.json").exists()
+    # an older clone under LANTERN_HOME/repos, made before the mark, still counts as Lantern's
+    old = _git_repo(tmp_path / "home" / "repos" / "github.com" / "o" / "r")
+    assert remote.is_clone(old)

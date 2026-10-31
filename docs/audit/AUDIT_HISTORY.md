@@ -137,3 +137,20 @@ neither a defect, applied in PR #17.
 
 Still untested: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine digests, flask
 and rich benchmarks, real cross-origin CSRF in a browser, server concurrency.
+
+## 2026-10-31 · re-audit of commit 402a1c0
+
+The same auditor confirmed both round-seven changes: `verify_api_key`, `check_api_key`, `require_api_key` and
+`validate_api_key` give `in place`, `get_api_key` and `create_api_key` give `add`, and all twelve words fixed in rounds
+four to six still behave. A real part-way checkout (index populated, two of four files present, one edited by hand) was
+repaired with only the missing files written and the edited one kept, and a repair that cannot write a file (a file
+standing where its folder belongs) was refused with the file named (194 tests on Windows and Linux, self-audit 97/100 A,
+`tools/audit.sh` ALL PASS, CI green on all five jobs). One low finding. Fixed in PR #18.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| U1 | A clone whose repair was refused stays on disk, and the app keeps its card, because `clone_project` forgets a project only when `has_files()` is false. Re-analyze, or `lantern analyze <folder>`, then analyzed the incomplete tree with no warning and exit 0 (`graph 1 files`, `sub/c.py` still missing): a missing file is a place a finding could have been. Related: `missing_files()` returned `[]` when `git ls-files` itself failed, which reads as "nothing missing" | low | Fixed: `pipeline.analyze` starts by refusing a folder Lantern cloned whose files are not all there ("this clone has 1 missing file(s), starting with sub/c.py. Remove … and try again, or clone it yourself and add the folder"), which covers the CLI, Re-analyze and every other analysis path; the CLI prints it and exits 2. `missing_files()` returns `None` when git cannot list the files, and both the repair and `analyze` refuse in that case. Only Lantern's clones are checked (`remote.is_clone`: a `.git/lantern-clone` mark written at clone time, or a folder under `LANTERN_HOME/repos` for clones made before the mark), because in a git folder of your own a deleted file is your change and is analyzed as it is. Tests: `tests/test_remote.py` |
+| – | Process: the 402a1c0 packet still did not reach the auditor's Downloads folder | note | The reply names the three attached files to save into `C:\Users\wakil\Downloads` |
+
+Still untested: Firefox and Safari handling of the report's Content-Security-Policy meta, cross-machine digests, flask
+and rich benchmarks, real cross-origin CSRF in a browser, server concurrency, a clone that is genuinely slow.
