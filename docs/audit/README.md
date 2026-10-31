@@ -12,7 +12,7 @@ Read the files in this order:
 | [`TEST_PLAN.md`](TEST_PLAN.md) | What the automated tests cover, manual and browser tests, adversarial cases to try, pass criteria |
 | [`AUDIT_HISTORY.md`](AUDIT_HISTORY.md) | Earlier outside audits, what they found, and what changed |
 
-The product spec is [`../Lantern_Product_Spec_v0.2.pdf`](../Lantern_Product_Spec_v0.2.pdf). Contributor notes are in
+The product spec is [`../Lantern_Product_Spec_v0.3.pdf`](../Lantern_Product_Spec_v0.3.pdf). Contributor notes are in
 [`../../CLAUDE.md`](../../CLAUDE.md); accuracy measurements are in [`../../bench/README.md`](../../bench/README.md).
 
 ## What Lantern is, in one paragraph

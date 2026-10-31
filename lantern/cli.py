@@ -4,7 +4,9 @@
   lantern learn [NAME [DIR]]                              create a starter app to learn Lantern step by step
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
   lantern trace PATH -- python -m pytest -q               record what actually runs
-  lantern explain PATH --model anthropic/<model>          add Three-Lens explanations
+  lantern explain PATH                                    add Three-Lens explanations (DeepSeek by default)
+  lantern login --token TOKEN                             use the free hosted allowance
+  lantern allowance                                       see how much of it is left
   lantern report PATH                                     rebuild report.html from saved results
   lantern accept PATH FINDING_ID --reason "..."           record an accepted risk (committed in the repo)
   lantern starter PATH [--write NAME]                     show or write generated starter files
@@ -158,7 +160,7 @@ def cmd_trace(a, trace_cmd: list[str]) -> int:
 
 def cmd_explain(a) -> int:
     from .pipeline import explain, plan_explain
-    from .providers import make_provider
+    from .providers import ensure_consent, make_provider, resolve_default
     repo = Path(a.path).resolve()
     out = _out(repo, a.out)
     if not (out / "graph.json").exists():
@@ -169,7 +171,16 @@ def cmd_explain(a) -> int:
           f"{plan['output_tokens']:,} output tokens. {plan['note']}")
     if a.estimate:
         return 0
-    provider = make_provider(a.model, base_url=a.base_url)
+    try:
+        spec, why = resolve_default(a.model)
+        provider = make_provider(spec, base_url=a.base_url)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    print(f"model   {provider.label} ({why})")
+    if not ensure_consent(provider, assume_yes=a.yes):
+        print("Stopped: nothing was sent.", file=sys.stderr)
+        return 3
     g = Graph.load(out / "graph.json")
 
     def progress(i, n, nid, rec):
@@ -181,7 +192,12 @@ def cmd_explain(a) -> int:
     print(f"explain {st['validated']} validated ({st['first_try']} first try), {st['failed']} failed, "
           f"{st['cached']} from cache. Tokens: {st['usage']['input_tokens']:,} in, "
           f"{st['usage']['output_tokens']:,} out. Metaphor: {res['metaphor']['world']}")
+    rem = getattr(provider, "remaining", None)
+    if rem and rem.get("requests") is not None:
+        print(f"allowance {rem['requests']} free explanations left")
     print(f"report  {out / 'report.html'}")
+    if st.get("stopped"):
+        print(f"\nStopped early: {st['stopped']}", file=sys.stderr)
     return 0
 
 
@@ -336,13 +352,21 @@ def main(argv: list[str] | None = None) -> int:
 
     sp = sub.add_parser("explain", help="add Three-Lens explanations")
     common(sp)
-    sp.add_argument("--model", help="PROVIDER/MODEL, e.g. anthropic/<model>, openai/<model>, ollama/<model>")
+    sp.add_argument("--model", help="PROVIDER/MODEL. Default: deepseek/deepseek-flash with DEEPSEEK_API_KEY, "
+                    "else the free allowance after `lantern login`. Others: ollama/<model> (local), "
+                    "anthropic/<model>, openai/<model>, gemini/<model>, openrouter/<model>")
+    sp.add_argument("--yes", action="store_true", help="agree to send function source to the chosen provider")
     sp.add_argument("--base-url", help="for openai-compatible endpoints")
     sp.add_argument("--depth", type=int, default=3, help="call depth from entry points (default 3)")
     sp.add_argument("--max-nodes", type=int, default=40, help="cap on functions explained (default 40)")
     sp.add_argument("--node", action="append", help="explain just this qualname (repeatable)")
     sp.add_argument("--metaphor", help='fix the metaphor world, e.g. "a hotel"')
     sp.add_argument("--estimate", action="store_true", help="show the token estimate and stop")
+
+    sp = sub.add_parser("login", help="save a free-allowance token (DeepSeek, hosted by Lantern)")
+    sp.add_argument("--token", required=True)
+
+    sub.add_parser("allowance", help="show what's left of the free allowance")
 
     sp = sub.add_parser("report", help="rebuild report.html")
     common(sp)
@@ -401,9 +425,22 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "trace":
         return cmd_trace(a, trace_cmd)
     if a.cmd == "explain":
-        if not a.estimate and not a.model:
-            p.error("--model is required (or use --estimate)")
         return cmd_explain(a)
+    if a.cmd == "login":
+        from .providers import save_token
+        print(f"saved   {save_token(a.token)}  (the default model now uses the free allowance)")
+        return 0
+    if a.cmd == "allowance":
+        from .providers import ProviderError, allowance_status
+        try:
+            st = allowance_status()
+        except ProviderError as e:
+            print(f"{e}. Run `lantern login --token <token>` first.", file=sys.stderr)
+            return 2
+        print(f"used    {st['used_requests']} of {st['limit_requests']} explanations "
+              f"({st['used_tokens']:,} of {st['limit_tokens']:,} tokens); "
+              f"{st['remaining_requests']} left, {st['remaining_today']} today")
+        return 0
     if a.cmd == "accept":
         return cmd_accept(a)
     if a.cmd == "starter":
