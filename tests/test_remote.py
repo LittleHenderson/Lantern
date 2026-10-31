@@ -242,3 +242,30 @@ def test_an_earlier_clone_without_files_is_checked_out(tmp_path, monkeypatch):
     assert remote.clone("https://github.com/o/r", log=log.append, dest=dest) == dest
     assert (dest / "app.py").exists() and remote.has_files(dest)
     assert log[-1] == "the earlier clone has no files yet; checking them out"
+
+
+def test_an_earlier_clone_with_files_missing_is_repaired(tmp_path):
+    """A checkout that stopped part-way (some files written, some not) is not complete just because the folder has
+    files: the missing ones are written on the next attempt, and a file the user edited is left as it is."""
+    src = _git_repo(tmp_path / "src")
+    (src / "more.py").write_text("x = 1\n", encoding="utf-8")
+    (src / "pkg").mkdir()
+    (src / "pkg" / "deep.py").write_text("y = 2\n", encoding="utf-8")
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."], cwd=src, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "two"], cwd=src, check=True)
+    dest, log = tmp_path / "dest", []
+    remote.fetch(src.as_uri(), dest)
+    (dest / "more.py").unlink()
+    (dest / "pkg" / "deep.py").unlink()
+    (dest / "app.py").write_text("# edited by the user\n", encoding="utf-8")
+    assert remote.has_files(dest) and sorted(remote.missing_files(dest)) == ["more.py", "pkg/deep.py"]
+    assert remote.clone("https://github.com/o/r", log=log.append, dest=dest) == dest
+    assert (dest / "more.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert (dest / "pkg" / "deep.py").read_text(encoding="utf-8") == "y = 2\n"
+    assert (dest / "app.py").read_text(encoding="utf-8") == "# edited by the user\n"
+    assert remote.missing_files(dest) == []
+    assert log[-1] == "2 file(s) were missing from the earlier checkout; restoring them"
+    # a complete clone is left alone
+    log.clear()
+    remote.clone("https://github.com/o/r", log=log.append, dest=dest)
+    assert log == [f"updating {dest}"]
