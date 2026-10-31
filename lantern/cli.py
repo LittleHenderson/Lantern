@@ -47,7 +47,11 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
     from .pipeline import analyze
     repo = Path(a.path).resolve()
     out = _out(repo, a.out)
-    res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan, offline=a.offline or None)
+    try:
+        res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan, offline=a.offline or None)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     if a.fail_on and res["counts"]:
         levels = RANKS[:RANKS.index(a.fail_on) + 1]
         n = sum(res["counts"].get(k, 0) for k in levels)

@@ -63,7 +63,9 @@ page, or a link to any host other than the public forges (`https://127.0.0.1/o/r
 server unless it is in `LANTERN_GIT_HOSTS`) must be refused with a message that says why. With
 `LANTERN_CLONE_MAX_MB=1`, a repository with a 2 MB file must be refused before any file is written. A clone whose
 checkout failed (nothing but `.git` left) or stopped part-way (tracked files missing) must be completed on the next
-attempt, with a file you edited in it left as it is. Measured 2026-10-30 on a 2-core container: the template clones
+attempt, with a file you edited in it left as it is. When that repair is refused (a file standing where a folder
+belongs), the clone stays listed, and analyzing it again, from Re-analyze or `lantern analyze <folder>`, must be refused
+with the missing file named, not produce a report; a git folder of your own with a file deleted is analyzed as it is. Measured 2026-10-30 on a 2-core container: the template clones
 and analyzes in 3 s; Django (2,984 files, 33,000 functions) in about 90 s plus the clone (graph 24 s, scanners
 56 s, readiness 2 s). Its report embeds every function's source and is 74 MB, so for a repository that size set
 privacy to "structure" (Settings, or `--privacy structure`).

@@ -91,10 +91,8 @@ def clone(link: str, log=None, dest: Path | None = None, root: Path | None = Non
             if missing:   # an earlier checkout stopped part-way: write the missing files, touch nothing else
                 log(f"{len(missing)} file(s) were missing from the earlier checkout; restoring them")
                 _git(["checkout-index", "-a"], cwd=dest)   # writes only files that do not exist yet (exit 1 otherwise)
-                still = missing_files(dest)
-                if still:
-                    raise RuntimeError(f"could not restore {len(still)} missing file(s), starting with {still[0]}. "
-                                       f"Remove {dest} and try again, or clone it yourself and add the folder.")
+            check_complete(dest, "could not restore")
+        _mark(dest)
         return dest
     if dest.exists() and any(dest.iterdir()):
         raise RuntimeError(f"{dest} already exists and is not a git clone. Add it as a folder, or remove it.")
@@ -139,6 +137,7 @@ def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900) -
             remove_tree(dest)
         raise RuntimeError("could not clone it: " + _tail(r.stderr) +
                            ". If the repository is private, clone it yourself and add the folder.")
+    _mark(dest)
     _checkout(dest, timeout)
 
 
@@ -147,11 +146,49 @@ def has_files(dest: Path) -> bool:
     return dest.is_dir() and any(p.name != ".git" for p in dest.iterdir())
 
 
-def missing_files(dest: Path) -> list[str]:
+def missing_files(dest: Path) -> list[str] | None:
     """Files in the clone's index that are not in its working tree: what a checkout that stopped part-way left out
-    (edited files are not missing, and are never touched)."""
+    (edited files are not missing, and are never touched). None when git cannot list them, which callers treat as
+    "not known to be complete" rather than "nothing missing"."""
     r = _git(["ls-files", "--deleted", "-z"], cwd=dest)
-    return [p for p in r.stdout.split("\0") if p] if r.returncode == 0 else []
+    return [p for p in r.stdout.split("\0") if p] if r.returncode == 0 else None
+
+
+MARK = "lantern-clone"   # a file in .git naming a folder Lantern cloned (git leaves unknown files in .git alone)
+
+
+def _mark(dest: Path) -> None:
+    try:
+        (dest / ".git" / MARK).write_text("cloned by Lantern\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def is_clone(folder: Path) -> bool:
+    """Whether Lantern cloned this folder: marked at clone time, or kept under LANTERN_HOME/repos (clones made before
+    the mark). A folder of your own that happens to be a git repository is not one: a file you deleted there is yours
+    to delete, and is analyzed as it is."""
+    folder = Path(folder)
+    if not (folder / ".git").is_dir():
+        return False
+    if (folder / ".git" / MARK).exists():
+        return True
+    try:
+        return folder.resolve().is_relative_to(repos_dir().resolve())
+    except OSError:
+        return False
+
+
+def check_complete(dest: Path, what: str = "this clone has") -> None:
+    """Refuse a clone with files missing from its checkout, or whose files git cannot list: a missing file is a place
+    a finding could have been, so analyzing what is there would give a clean-looking report of part of a repository."""
+    still = missing_files(dest)
+    if still is None:
+        raise RuntimeError(f"git could not list the files of {dest}, so they cannot be checked for missing ones. "
+                           "Remove it and try again, or clone it yourself and add the folder.")
+    if still:
+        raise RuntimeError(f"{what} {len(still)} missing file(s), starting with {still[0]}. "
+                           f"Remove {dest} and try again, or clone it yourself and add the folder.")
 
 
 def _checkout(dest: Path, timeout: int = 900) -> None:
