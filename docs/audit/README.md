@@ -35,6 +35,9 @@ pip install -e ".[scan,dev]"
 Optional, for browser tests: Node 18+ and `npm i -g playwright && npx playwright install chromium`.
 No API key is needed: `tools/fake_model.py` is an offline OpenAI-compatible model for end-to-end runs.
 
+To audit a specific commit, check it out (`git checkout <commit>`) and read this folder there: these six files are
+the whole audit package, and the source is the repository itself. No separate packet or source bundle is produced.
+
 ## The one-command check
 
 ```bash
