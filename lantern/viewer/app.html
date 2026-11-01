@@ -619,6 +619,9 @@ function renderSettings(el) {
       <label class="choice"><input type="radio" name="priv" value="full" ${s.privacy !== 'structure' ? 'checked' : ''}><span><b>Full</b>Reports include each function's source, for the code panel.</span></label>
       <label class="choice"><input type="radio" name="priv" value="structure" ${s.privacy === 'structure' ? 'checked' : ''}><span><b>Structure only</b>Reports leave source code out (safer to share).</span></label>
       <div class="row" style="margin-top:18px"><button class="btn primary" id="save">Save</button><span id="saved" class="small muted"></span></div></div>
+    <div class="card group"><h2>Anonymous usage counts</h2><div class="hint">Off unless you turn it on. When on, Lantern sends at most once a day: a random install id, its version, your operating system name, and how many times each feature was used (for example "analyze: 3, explain: 1"). Never project names, files, code, findings or keys. It helps show which parts of Lantern people actually use.</div>
+      <label class="check"><input type="checkbox" id="share" ${s.share_usage ? 'checked' : ''}><span><b>Share anonymous usage counts</b></span></label>
+      <div id="usageinfo" class="hint"></div></div>
     <div class="card group" id="conns"><h2>Connections</h2><div class="hint">Lantern works inside Claude, ChatGPT, Cursor and Claude Code as a connector (MCP). An assistant can read findings, paths, readiness and explanations, re-analyze, re-check a fix, and verify an Evidence Report. It can never accept or close a finding; that stays with you, with a written reason.</div>
       <div id="connlist"><div class="working"><span class="pulse"></span>Looking…</div></div></div>
     <div class="card group"><h2>Appearance</h2><div class="hint">Saved in this browser right away.</div>
@@ -636,11 +639,17 @@ function renderSettings(el) {
   el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
   const save = async (extra = {}) => {
     const body = {provider: el.querySelector('#prov').value, model: el.querySelector('#model').value, base_url: el.querySelector('#url').value,
-      privacy: el.querySelector('input[name=priv]:checked').value, key: el.querySelector('#key').value || undefined, remember: el.querySelector('#remember').checked, ...extra};
+      privacy: el.querySelector('input[name=priv]:checked').value, key: el.querySelector('#key').value || undefined, remember: el.querySelector('#remember').checked,
+      share_usage: el.querySelector('#share').checked, ...extra};
     try { const r = await api('/api/settings', {method: 'POST', body}); S.state.settings = r.settings; S.state.providers = r.providers; el.querySelector('#key').value = ''; draw(); el.querySelector('#saved').textContent = 'Saved.'; }
     catch (e) { el.querySelector('#saved').textContent = e.message; }
   };
   el.querySelector('#save').onclick = () => save();
+  const usageInfo = () => api('/api/usage').then(u => { el.querySelector('#usageinfo').innerHTML = u.enabled
+    ? (u.pending.length ? `Next ping: <code>${esc(JSON.stringify(u.pending[u.pending.length - 1]))}</code>` : 'On. Nothing waiting to be sent yet.') + (u.gateway ? '' : ' <span class="muted">(no gateway configured in this build, so nothing is sent)</span>')
+    : 'Off. Nothing is sent anywhere.'; }).catch(() => {});
+  usageInfo();
+  el.querySelector('#share').onchange = async () => { await save(); usageInfo(); };
   el.querySelector('#forget').onclick = () => save({forget_key: true, key: undefined});
 }
 

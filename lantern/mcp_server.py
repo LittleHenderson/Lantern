@@ -26,7 +26,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import __version__, pipeline
+from . import __version__, pipeline, usage
 from .graph import Graph
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -587,6 +587,7 @@ class Server:
         if method == "initialize":
             self.client = params.get("clientInfo") or {}
             record_connection(self.P.store, self.client)
+            usage.record("mcp_connect")
             return self._ok(mid, {"protocolVersion": params.get("protocolVersion") or PROTOCOL_VERSION,
                                   "capabilities": {"tools": {"listChanged": False}},
                                   "serverInfo": {"name": "lantern", "version": __version__},
@@ -604,6 +605,7 @@ class Server:
                                  if name and ("accept" in name or "close" in name or "dismiss" in name)
                                  else f"unknown tool {name!r}")
             record_connection(self.P.store, self.client, name)
+            usage.record("mcp_call")
             args = params.get("arguments") or {}
             try:
                 r = TOOL_INDEX[name][0](self.P, args if isinstance(args, dict) else {})
