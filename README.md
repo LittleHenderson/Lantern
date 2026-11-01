@@ -161,7 +161,7 @@ The assistant can then ask "what calls this function, and can a user reach it?" 
 finding's file, line, click path and fix, re-check after writing a fix, and verify an Evidence Report. It can
 never accept or close a finding; that stays with you, with a written reason. Each finding in the report has a
 **Send to…** button that hands Claude or ChatGPT a reference the assistant resolves through the connector.
-Settings › Connections shows which assistants have used Lantern. Details: [`docs/connectors.md`](docs/connectors.md).
+Settings › Connections shows which assistants have used Lantern. Details: [`docs/connectors.md`](docs/connectors.md). Building a UI against the local server: [`docs/api.md`](docs/api.md).
 
 Extending Lantern has three seams: [analysis packs](docs/packs.md) (JSON rule and framework patterns, not
 code; a Django pack is built in), explanation providers (any OpenAI-compatible endpoint), and exporters
