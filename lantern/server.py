@@ -32,7 +32,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__, learn, pipeline, remote, usage
-from .providers import PRESETS
+from .providers import DEFAULT_MODEL_NAME, DEFAULT_PROVIDER, PRESETS
 from .readiness import SHAPES
 
 VIEWER = Path(__file__).parent / "viewer"
@@ -169,7 +169,7 @@ class Store:
 
     # settings and keys
     def settings(self) -> dict:
-        return {"provider": "deepseek", "model": "deepseek-flash", "base_url": "", "privacy": "full",
+        return {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL_NAME, "base_url": "", "privacy": "full",
                 "share_usage": False, **self._read("settings.json", {})}
 
     def save_settings(self, s: dict) -> None:
@@ -304,7 +304,7 @@ class App:
             key = self.store.key_source(name)
             row = {"name": name, "local": name in LOCAL_PROVIDERS, "needs_key": bool(env), "env": env,
                    "default_url": url, "key": key, "notice": DATA_NOTICES.get(name, "")}
-            if name == "deepseek":
+            if name == DEFAULT_PROVIDER:
                 # No key needed while the free allowance lasts; the user's own key, once added, wins.
                 row["default"] = True
                 row["allowance"] = allowance and not key
@@ -322,11 +322,11 @@ class App:
         if not s.get("model"):
             raise ValueError("Choose a model in Settings first.")
         key = self.store.key_for(s["provider"])
-        if s["provider"] == "deepseek" and not key:
+        if s["provider"] == DEFAULT_PROVIDER and not key:
             from .providers import gateway_url, load_token
             if load_token() and gateway_url():
                 return make_provider(f"lantern/{s['model']}")   # the free allowance
-            raise ValueError("Add a DeepSeek key in Settings, or run `lantern login --token <token>` "
+            raise ValueError(f"Add an {DEFAULT_PROVIDER} key in Settings, or run `lantern login --token <token>` "
                              "for the free allowance.")
         return make_provider(f"{s['provider']}/{s['model']}", base_url=s.get("base_url") or None, api_key=key)
 

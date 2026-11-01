@@ -65,7 +65,7 @@ def free_port():
 @pytest.fixture
 def gateway(tmp_path):
     log = []
-    settings = Settings(upstream_url="https://api.deepseek.test", upstream_key="sk-owner", admin_secret=ADMIN,
+    settings = Settings(primary="deepseek", deepseek_url="https://api.deepseek.test", deepseek_key="sk-owner", admin_secret=ADMIN,
                         db_path=str(tmp_path / "gw.db"), free_requests=4, free_tokens=10**7, daily_requests=50)
     app = create_app(settings, transport=fake_deepseek(log))
     port = free_port()
@@ -88,6 +88,7 @@ def test_free_allowance_then_own_key(gateway, tmp_path, monkeypatch):
     monkeypatch.setenv("LANTERN_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("LANTERN_GATEWAY_URL", url)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("LANTERN_TOKEN", raising=False)
     monkeypatch.delenv("LANTERN_MODEL", raising=False)
 
@@ -95,7 +96,7 @@ def test_free_allowance_then_own_key(gateway, tmp_path, monkeypatch):
         providers.resolve_default()
     providers.save_token(tok)
     spec, why = providers.resolve_default()
-    assert spec == "lantern/deepseek-flash" and "allowance" in why
+    assert spec == "lantern/claude-haiku-5-5" and "allowance" in why
 
     g = build_graph(FIX)
     findings = scan(g)["findings"]
@@ -105,25 +106,26 @@ def test_free_allowance_then_own_key(gateway, tmp_path, monkeypatch):
     res = run(g, hosted, findings, tmp_path / "cache", nids, metaphor="a hotel")
     st = res["stats"]
     assert st["generated"] == 4 and st["validated"] == 4          # 4 free requests, then stop
-    assert "free Lantern allowance" in st["stopped"] and "DEEPSEEK_API_KEY" in st["stopped"]
+    assert "free Lantern allowance" in st["stopped"] and "ANTHROPIC_API_KEY" in st["stopped"]
     assert hosted.remaining["requests"] == "0"
     assert providers.allowance_status()["remaining_requests"] == 0
-    assert all(b["model"] == "deepseek-flash" for b in log)
+    assert all(b["model"] == "deepseek-flash" for b in log)   # this test's gateway is set to DeepSeek-first
 
-    # The user adds their own key; the default switches to it and cached work isn't re-billed.
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-user")
+    # The user adds their own Anthropic key; the default switches to it and cached work isn't re-billed,
+    # because the allowance and an own key for the same model share one cache key.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-user")
     spec2, why2 = providers.resolve_default()
-    assert spec2 == "deepseek/deepseek-flash" and "your DeepSeek key" in why2
+    assert spec2 == "anthropic/claude-haiku-5-5" and "your Anthropic key" in why2
     own = providers.make_provider(spec2)
+    assert own.label == hosted.cache_model
     sent = []
 
-    def fake_send(body):
-        sent.append(body)
-        user = body["messages"][-1]["content"]
-        return {"choices": [{"message": {"content": good_answer(user)}}], "usage": {}}, {}
-    monkeypatch.setattr(own, "_send", fake_send)
+    def fake_post(url, headers, body, **kw):
+        sent.append((url, headers, body))
+        return {"content": [{"type": "text", "text": good_answer(body["messages"][-1]["content"])}],
+                "usage": {"input_tokens": 1, "output_tokens": 1}}
+    monkeypatch.setattr(providers, "_post", fake_post)
     res2 = run(g, own, findings, tmp_path / "cache", nids, metaphor="a hotel")
     assert res2["stats"]["cached"] == 4 and res2["stats"]["generated"] == len(nids) - 4
     assert res2["stats"]["stopped"] is None
-    assert sent and all(b["thinking"] == {"type": "disabled"} and b["response_format"] == {"type": "json_object"}
-                        for b in sent)
+    assert sent and all(u.endswith("/v1/messages") and h["x-api-key"] == "sk-ant-user" for u, h, b in sent)

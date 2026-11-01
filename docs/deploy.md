@@ -4,12 +4,12 @@ Two hosted pieces, two hosts. Everything else runs on people's own computers.
 
 | Piece | Host | Why |
 |---|---|---|
-| **Gateway** (free DeepSeek allowance, owner dashboard, usage counts) | Fly.io | One small always-on server with a disk; the Dockerfile deploys as is. About $2–4/month plus the DeepSeek bill, which the gateway caps at `LANTERN_GLOBAL_DAILY_USD` per day |
+| **Gateway** (free allowance on Claude Haiku with DeepSeek as fallback, owner dashboard, usage counts) | Fly.io | One small always-on server with a disk; the Dockerfile deploys as is. About $2–4/month plus the DeepSeek bill, which the gateway caps at `LANTERN_GLOBAL_DAILY_USD` per day |
 | **Landing page** (public website) | Cloudflare Pages | Static files, free, deploys from GitHub; Cloudflare Web Analytics (free, no cookies) for visitor numbers |
 
 ## Gateway on Fly.io
 
-You need: a Fly.io account with a card, your DeepSeek API key, and the `fly` command installed
+You need: a Fly.io account with a card, your Anthropic API key (and optionally a DeepSeek key for the fallback), and the `fly` command installed
 (`curl -L https://fly.io/install.sh | sh` on Mac/Linux; `pwsh -Command "iwr https://fly.io/install.ps1 -useb | iex"` on Windows).
 
 From the repository root:
@@ -25,8 +25,9 @@ fly launch --copy-config --no-deploy
 # 2. The disk that keeps the counters across restarts (one, in San Jose: Fly has no Seattle region; `sjc` is the nearest).
 fly volumes create lantern_data --region sjc --size 1
 
-# 3. The two secrets. The DeepSeek key is typed here, by you, and nowhere else.
-fly secrets set DEEPSEEK_API_KEY=sk-...
+# 3. The secrets. Model keys are typed here (or on the Fly website, app > Secrets), by you, and nowhere else.
+fly secrets set ANTHROPIC_API_KEY=sk-ant-...
+fly secrets set DEEPSEEK_API_KEY=sk-...          # optional fallback
 fly secrets set LANTERN_ADMIN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 #    Copy the admin secret somewhere safe: it opens the dashboard and mints tokens.
 #    To see it again later: fly secrets list shows only names; run `fly ssh console -C "printenv LANTERN_ADMIN_SECRET"`.
@@ -36,7 +37,7 @@ fly deploy
 
 # 5. Check.
 curl https://lantern-gateway.fly.dev/v1/health
-#    -> {"ok": true, "model": "deepseek-flash", "configured": true}
+#    -> {"ok": true, "model": "claude-haiku-5-5", "configured": true, "primary": "anthropic", "fallback": "deepseek-flash"}
 ```
 
 Then:
@@ -49,7 +50,7 @@ Then:
   `LANTERN_GATEWAY_URL` overrides it (tests and a second gateway).
 
 **Deployed 2026-11-01** in the Little Henderson organization, region `sjc`, machine `shared-cpu-1x` 256 MB, volume
-`lantern_data` 1 GB. Secrets are set on the Fly website (app → Secrets): `DEEPSEEK_API_KEY`, `LANTERN_ADMIN_SECRET`.
+`lantern_data` 1 GB. Secrets are set on the Fly website (app → Secrets): `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `LANTERN_ADMIN_SECRET`.
 Note: `fly deploy` from a machine behind a TLS-inspecting proxy fails on Fly's default (Depot) builder; `fly deploy
 --depot=false` uses the classic builder and works.
 
@@ -60,7 +61,8 @@ What can go wrong and what it looks like:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `health` says `"configured": false` | DeepSeek key not set | step 3 |
+| `health` says `"configured": false` | No model key set | step 3 |
+| A secret saved on the website shows "Staged" | Fly saved it without restarting the app | click **Deploy Secrets** on that page, or `fly secrets deploy` |
 | Explanations return "allowance paused" | The global daily dollar cap was reached | wait for 00:00 UTC, or raise `LANTERN_GLOBAL_DAILY_USD` |
 | Dashboard says "That secret was not accepted" | Wrong admin secret | `fly ssh console -C "printenv LANTERN_ADMIN_SECRET"` |
 | Counters reset after a deploy | Volume not mounted | `fly volumes list` should show `lantern_data` attached |

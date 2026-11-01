@@ -4,7 +4,7 @@
   lantern learn [NAME [DIR]]                              create a starter app to learn Lantern step by step
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
   lantern trace PATH -- python -m pytest -q               record what actually runs
-  lantern explain PATH                                    add Three-Lens explanations (DeepSeek by default)
+  lantern explain PATH                                    add Three-Lens explanations (Claude Haiku by default)
   lantern login --token TOKEN                             use the free hosted allowance
   lantern allowance                                       see how much of it is left
   lantern report PATH                                     rebuild report.html from saved results
@@ -365,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sp = sub.add_parser("explain", help="add Three-Lens explanations")
     common(sp)
-    sp.add_argument("--model", help="PROVIDER/MODEL. Default: deepseek/deepseek-flash with DEEPSEEK_API_KEY, "
+    sp.add_argument("--model", help="PROVIDER/MODEL. Default: anthropic/claude-haiku-5-5 with ANTHROPIC_API_KEY, "
                     "else the free allowance after `lantern login`. Others: ollama/<model> (local), "
                     "anthropic/<model>, openai/<model>, gemini/<model>, openrouter/<model>")
     sp.add_argument("--yes", action="store_true", help="agree to send function source to the chosen provider")
@@ -376,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--metaphor", help='fix the metaphor world, e.g. "a hotel"')
     sp.add_argument("--estimate", action="store_true", help="show the token estimate and stop")
 
-    sp = sub.add_parser("login", help="save a free-allowance token (DeepSeek, hosted by Lantern)")
+    sp = sub.add_parser("login", help="save a free-allowance token (Claude Haiku, hosted by Lantern)")
     sp.add_argument("--token", required=True)
 
     sub.add_parser("allowance", help="show what's left of the free allowance")

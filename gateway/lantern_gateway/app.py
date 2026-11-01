@@ -1,6 +1,6 @@
 """Lantern gateway: the free allowance.
 
-Holds the project's DeepSeek key on the server (never in the client), and gives each user a metered
+Holds the project's model keys on the server (never in the client), and gives each user a metered
 allowance through an OpenAI-compatible endpoint. When a user's allowance runs out they get HTTP 402
 and the Lantern CLI tells them how to add their own key.
 
@@ -13,7 +13,8 @@ Guarantees, in order of importance:
   4. No code is stored: only token hashes, counts, and costs. Request and response bodies are never
      logged or written to disk.
 
-Run:  DEEPSEEK_API_KEY=... LANTERN_ADMIN_SECRET=... uvicorn lantern_gateway.app:create_app --factory
+Run:  ANTHROPIC_API_KEY=... DEEPSEEK_API_KEY=... LANTERN_ADMIN_SECRET=... uvicorn lantern_gateway.app:create_app --factory
+Claude Haiku 5.5 (Anthropic) answers first; DeepSeek answers when Anthropic fails. LANTERN_PRIMARY=deepseek swaps them.
 """
 
 from __future__ import annotations
@@ -49,9 +50,21 @@ def _env_float(name: str, default: float) -> float:
 
 @dataclass
 class Settings:
-    upstream_url: str = field(default_factory=lambda: os.environ.get("UPSTREAM_URL", "https://api.deepseek.com").rstrip("/"))
-    upstream_key: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_API_KEY", ""))
-    model: str = field(default_factory=lambda: os.environ.get("LANTERN_MODEL_ID", "deepseek-flash"))
+    # Two providers. `primary` answers first; the other one answers when the primary fails (no balance, rate
+    # limited, down, unreachable). Either may be left without a key; then it is simply not used.
+    primary: str = field(default_factory=lambda: os.environ.get("LANTERN_PRIMARY", "anthropic"))
+    anthropic_url: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_URL", "https://api.anthropic.com").rstrip("/"))
+    anthropic_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
+    anthropic_model: str = field(default_factory=lambda: os.environ.get("LANTERN_ANTHROPIC_MODEL", "claude-haiku-5-5"))
+    # Claude Haiku 5.5 standard rates (prompts under 100k tokens), per 1M tokens
+    anthropic_usd_in: float = field(default_factory=lambda: _env_float("LANTERN_ANTHROPIC_USD_PER_M_INPUT", 0.10))
+    anthropic_usd_out: float = field(default_factory=lambda: _env_float("LANTERN_ANTHROPIC_USD_PER_M_OUTPUT", 0.50))
+    deepseek_url: str = field(default_factory=lambda: os.environ.get("UPSTREAM_URL", "https://api.deepseek.com").rstrip("/"))
+    deepseek_key: str = field(default_factory=lambda: os.environ.get("DEEPSEEK_API_KEY", ""))
+    deepseek_model: str = field(default_factory=lambda: os.environ.get("LANTERN_MODEL_ID", "deepseek-flash"))
+    # deepseek-flash *peak* rates (conservative)
+    deepseek_usd_in: float = field(default_factory=lambda: _env_float("LANTERN_USD_PER_M_INPUT", 0.30))
+    deepseek_usd_out: float = field(default_factory=lambda: _env_float("LANTERN_USD_PER_M_OUTPUT", 1.20))
     admin_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_ADMIN_SECRET", ""))
     db_path: str = field(default_factory=lambda: os.environ.get("LANTERN_DB", "lantern_gateway.db"))
     # Per user. ~300 explanations is a few full runs on a typical app.
@@ -62,16 +75,23 @@ class Settings:
     global_daily_usd: float = field(default_factory=lambda: _env_float("LANTERN_GLOBAL_DAILY_USD", 10.0))
     max_tokens_cap: int = field(default_factory=lambda: _env_int("LANTERN_MAX_TOKENS", 3000))
     max_body_bytes: int = field(default_factory=lambda: _env_int("LANTERN_MAX_BODY", 250_000))
-    # Price per 1M tokens used for the spend cap. Defaults: deepseek-flash *peak* rates (conservative).
-    usd_per_m_input: float = field(default_factory=lambda: _env_float("LANTERN_USD_PER_M_INPUT", 0.30))
-    usd_per_m_output: float = field(default_factory=lambda: _env_float("LANTERN_USD_PER_M_OUTPUT", 1.20))
-    # Fallback: Anthropic, used only when DeepSeek fails (no balance, rate limited, down, unreachable). Off until
-    # ANTHROPIC_API_KEY is set. Prices default to Claude Haiku 5.5 standard rates (prompts under 100k tokens).
-    fallback_url: str = field(default_factory=lambda: os.environ.get("FALLBACK_URL", "https://api.anthropic.com").rstrip("/"))
-    fallback_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
-    fallback_model: str = field(default_factory=lambda: os.environ.get("LANTERN_FALLBACK_MODEL", "claude-haiku-5-5"))
-    fallback_usd_per_m_input: float = field(default_factory=lambda: _env_float("LANTERN_FALLBACK_USD_PER_M_INPUT", 0.10))
-    fallback_usd_per_m_output: float = field(default_factory=lambda: _env_float("LANTERN_FALLBACK_USD_PER_M_OUTPUT", 0.50))
+
+    def provider(self, name: str) -> dict:
+        if name == "anthropic":
+            return {"name": name, "kind": "anthropic", "url": self.anthropic_url, "key": self.anthropic_key,
+                    "model": self.anthropic_model, "usd_in": self.anthropic_usd_in, "usd_out": self.anthropic_usd_out}
+        return {"name": "deepseek", "kind": "openai", "url": self.deepseek_url, "key": self.deepseek_key,
+                "model": self.deepseek_model, "usd_in": self.deepseek_usd_in, "usd_out": self.deepseek_usd_out}
+
+    def order(self) -> list[dict]:
+        """Providers to try, in order, keys present only."""
+        first = "anthropic" if self.primary == "anthropic" else "deepseek"
+        second = "deepseek" if first == "anthropic" else "anthropic"
+        return [p for p in (self.provider(first), self.provider(second)) if p["key"]]
+
+    @property
+    def model(self) -> str:
+        return self.order()[0]["model"] if self.order() else self.provider(self.primary)["model"]
 
 
 # The only feature names a usage ping may carry. Counts per name per day; never file names, paths or code.
@@ -204,33 +224,47 @@ class Store:
         }
 
 
-async def _anthropic(transport, s: "Settings", out: dict) -> dict | None:
-    """The same narrowed request against Anthropic's Messages API, answered in OpenAI shape. None on any failure."""
-    system = "\n\n".join(m["content"] for m in out["messages"] if m["role"] == "system")
-    msgs = [{"role": m["role"], "content": m["content"]} for m in out["messages"] if m["role"] != "system"]
-    if not msgs or msgs[0]["role"] != "user":
-        msgs.insert(0, {"role": "user", "content": "(see system prompt)"})
-    body = {"model": s.fallback_model, "max_tokens": out["max_tokens"], "messages": msgs}
-    if system:
-        body["system"] = system
+async def _call(transport, prov: dict, out: dict) -> tuple[dict | None, object]:
+    """One provider, one narrowed request. Returns (answer in OpenAI shape, None) or (None, reason)."""
     try:
         async with httpx.AsyncClient(transport=transport, timeout=120) as client:
-            r = await client.post(f"{s.fallback_url}/v1/messages", json=body,
-                                  headers={"x-api-key": s.fallback_key, "anthropic-version": "2023-06-01"})
-        if r.status_code != 200:
-            return None
+            if prov["kind"] == "anthropic":
+                system = "\n\n".join(m["content"] for m in out["messages"] if m["role"] == "system")
+                msgs = [{"role": m["role"], "content": m["content"]} for m in out["messages"] if m["role"] != "system"]
+                if not msgs or msgs[0]["role"] != "user":
+                    msgs.insert(0, {"role": "user", "content": "(see system prompt)"})
+                body = {"model": prov["model"], "max_tokens": out["max_tokens"], "messages": msgs}
+                if system:
+                    body["system"] = system
+                r = await client.post(f"{prov['url']}/v1/messages", json=body,
+                                      headers={"x-api-key": prov["key"], "anthropic-version": "2023-06-01"})
+            else:
+                body = {**out, "model": prov["model"], "thinking": {"type": "disabled"}}
+                r = await client.post(f"{prov['url']}/chat/completions", json=body,
+                                      headers={"authorization": f"Bearer {prov['key']}"})
+    except httpx.HTTPError:
+        return None, "unreachable"
+    if r.status_code != 200:
+        return None, r.status_code
+    try:
         d = r.json()
-    except (httpx.HTTPError, ValueError):
-        return None
+    except ValueError:
+        return None, 502
+    if prov["kind"] != "anthropic":
+        return d, None
     text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
     if out.get("response_format", {}).get("type") == "json_object":
         i, j = text.find("{"), text.rfind("}")   # Anthropic has no JSON mode; trim any prose around the object
         if i >= 0 and j > i:
             text = text[i:j + 1]
     u = d.get("usage") or {}
-    return {"id": d.get("id"), "model": d.get("model", s.fallback_model),
+    return {"id": d.get("id"), "model": d.get("model", prov["model"]),
             "choices": [{"index": 0, "finish_reason": d.get("stop_reason"), "message": {"role": "assistant", "content": text}}],
-            "usage": {"prompt_tokens": int(u.get("input_tokens") or 0), "completion_tokens": int(u.get("output_tokens") or 0)}}
+            "usage": {"prompt_tokens": int(u.get("input_tokens") or 0), "completion_tokens": int(u.get("output_tokens") or 0)}}, None
+
+
+def _retryable(err) -> bool:
+    return err == "unreachable" or err in (401, 402, 403, 429) or (isinstance(err, int) and err >= 500)
 
 
 def _err(status: int, kind: str, message: str, **extra) -> JSONResponse:
@@ -263,8 +297,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
     @app.get("/v1/health")
     def health():
-        return {"ok": True, "model": s.model, "configured": bool(s.upstream_key),
-                "fallback": s.fallback_model if s.fallback_key else None}
+        order = s.order()
+        return {"ok": True, "model": s.model, "configured": bool(order),
+                "primary": order[0]["name"] if order else None,
+                "fallback": order[1]["model"] if len(order) > 1 else None}
 
     def admin(authorization: str | None) -> None:
         if not s.admin_secret or not authorization or not hmac.compare_digest(
@@ -357,47 +393,36 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if store.spend_today(day) >= s.global_daily_usd:
             return _err(503, "allowance_paused",
                         "The free allowance is paused for today because it reached its daily budget.")
-        if not s.upstream_key:
-            return _err(503, "not_configured", "The gateway has no upstream key configured.")
+        if not s.order():
+            return _err(503, "not_configured", "The gateway has no model key configured.")
         msgs = body.get("messages")
         if not isinstance(msgs, list) or not msgs or len(msgs) > 4 or not all(
                 isinstance(m, dict) and m.get("role") in ("system", "user", "assistant")
                 and isinstance(m.get("content"), str) for m in msgs):
             return _err(400, "bad_request", "Only plain chat messages are accepted.")
         # Narrow the request to what Lantern needs; ignore everything else the client sent.
-        out = {"model": s.model, "messages": [{"role": m["role"], "content": m["content"]} for m in msgs],
-               "max_tokens": max(1, min(int(body.get("max_tokens") or s.max_tokens_cap), s.max_tokens_cap)),
-               "thinking": {"type": "disabled"}}
+        out = {"messages": [{"role": m["role"], "content": m["content"]} for m in msgs],
+               "max_tokens": max(1, min(int(body.get("max_tokens") or s.max_tokens_cap), s.max_tokens_cap))}
         if isinstance(body.get("response_format"), dict) and body["response_format"].get("type") == "json_object":
             out["response_format"] = {"type": "json_object"}
-        used_model, data, err = s.model, None, None
-        try:
-            async with httpx.AsyncClient(transport=transport, timeout=120) as client:
-                resp = await client.post(f"{s.upstream_url}/chat/completions", json=out,
-                                         headers={"authorization": f"Bearer {s.upstream_key}"})
-            if resp.status_code == 200:
-                data = resp.json()
-            else:
-                err = resp.status_code
-        except httpx.HTTPError:
-            err = "unreachable"
-        # DeepSeek failed. Its own account problems (no balance, rate limit, outage) must not take the free
-        # allowance down, so hand the same request to the fallback when one is configured.
-        if data is None and s.fallback_key and (err == "unreachable" or err in (401, 402, 403, 429) or int(err) >= 500):
-            fb = await _anthropic(transport, s, out)
-            if fb is not None:
-                data, used_model, err = fb, s.fallback_model, None
+        data, err, used = None, None, None
+        for prov in s.order():
+            data, err = await _call(transport, prov, out)
+            if data is not None:
+                used = prov
+                break
+            if not _retryable(err):   # a bad request is bad for every provider
+                break
         if data is None:
             if err == "unreachable":
                 return _err(502, "upstream_unreachable", "Could not reach the model provider. Try again shortly.")
             # Never echo upstream bodies: they can include account details.
             return _err(502 if err >= 500 or err in (401, 402, 403) else err,
                         "upstream_error", f"The model provider returned HTTP {err}.")
+        used_model = used["model"]
         usage = data.get("usage") or {}
         tin, tout = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
-        pin, pout = ((s.fallback_usd_per_m_input, s.fallback_usd_per_m_output) if used_model == s.fallback_model
-                     else (s.usd_per_m_input, s.usd_per_m_output))
-        usd = tin / 1e6 * pin + tout / 1e6 * pout
+        usd = tin / 1e6 * used["usd_in"] + tout / 1e6 * used["usd_out"]
         store.record(u["hash"], day, tin + tout, usd, used_model)
         after = remaining(store.user(authorization[7:].strip()), day)
         clean = {"id": data.get("id"), "object": "chat.completion", "model": data.get("model", used_model),

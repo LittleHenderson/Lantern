@@ -1,10 +1,10 @@
 # Lantern gateway
 
-Hosts Lantern's free DeepSeek allowance. Users get a token; the gateway holds the owner's DeepSeek
-key, forwards narrowed requests, and meters each user. When a user's allowance is used up they get
+Hosts Lantern's free allowance. Users get a token; the gateway holds the owner's model keys (Anthropic for
+Claude Haiku 5.5, DeepSeek as the fallback), forwards narrowed requests, and meters each user. When a user's allowance is used up they get
 HTTP 402 and the Lantern CLI/app tells them how to add their own key.
 
-**Never put the DeepSeek key in the Lantern app or CLI.** The client is open source; a shipped key
+**Never put a model key in the Lantern app or CLI.** The client is open source; a shipped key
 can be extracted and spent by anyone. It belongs here, in the gateway's environment, only.
 
 ## Run
@@ -43,22 +43,25 @@ The user runs `lantern login --token lt_...`. Next step for a public launch: iss
 | `LANTERN_GLOBAL_DAILY_USD` | 10 | Total spend per UTC day; the allowance pauses for everyone when reached |
 | `LANTERN_MAX_TOKENS` | 3000 | Cap on `max_tokens` per request |
 | `LANTERN_MAX_BODY` | 250000 | Max request body in bytes |
-| `LANTERN_USD_PER_M_INPUT` / `_OUTPUT` | 0.30 / 1.20 | Prices used for the spend cap (deepseek-flash peak rates, Oct 2026) |
-| `LANTERN_MODEL_ID` | deepseek-flash | The only model the gateway will call |
-| `UPSTREAM_URL` | https://api.deepseek.com | Any OpenAI-compatible host serving the model |
+| `LANTERN_PRIMARY` | anthropic | Which provider answers first: `anthropic` or `deepseek`; the other is the fallback |
+| `ANTHROPIC_API_KEY`, `LANTERN_ANTHROPIC_MODEL` | –, claude-haiku-5-5 | Anthropic key and model |
+| `LANTERN_ANTHROPIC_USD_PER_M_INPUT` / `_OUTPUT` | 0.10 / 0.50 | Haiku 5.5 standard rates (prompts under 100k tokens) |
+| `DEEPSEEK_API_KEY`, `LANTERN_MODEL_ID`, `UPSTREAM_URL` | –, deepseek-flash, https://api.deepseek.com | DeepSeek key, model, host |
+| `LANTERN_USD_PER_M_INPUT` / `_OUTPUT` | 0.30 / 1.20 | deepseek-flash peak rates |
 | `LANTERN_DB` | lantern_gateway.db | SQLite file: token hashes and counters only |
 
-An explanation costs about $0.0015 at peak prices, so a full 300-explanation allowance is about
-$0.45–0.90 and the default $10/day cap covers roughly 3,000–6,000 explanations a day.
+An explanation on Haiku 5.5 costs about $0.0007 (roughly 1,000 input and 1,000 output tokens), so a full
+300-explanation allowance is about $0.20 and the default $10/day cap covers roughly 14,000 explanations a day.
+On DeepSeek at peak prices it is about $0.0015.
 
-## Fallback model (Anthropic)
+## Primary and fallback
 
-Set `ANTHROPIC_API_KEY` and the gateway answers with **Claude Haiku 5.5** whenever DeepSeek fails: no balance,
-rate limited, down, or unreachable. DeepSeek is always tried first; a healthy DeepSeek means the fallback is
-never called. Which model answered is in the `x-lantern-model` header and on the dashboard ("Which model
-answered"), billed at its own prices (`LANTERN_FALLBACK_USD_PER_M_INPUT` / `_OUTPUT`, default 0.10 / 0.50; the
-same global daily cap applies). `LANTERN_FALLBACK_MODEL` changes the model. The client's consent text says the
-fallback exists.
+The primary provider (Anthropic by default) answers every request. When it fails (no balance, rate limited,
+5xx, unreachable) the same narrowed request goes to the other provider, if its key is set. A healthy primary
+means the fallback is never called. The `x-lantern-model` header and the dashboard's "Which model answered"
+table say which one did; each is billed at its own prices under the same global daily cap. Anthropic has no
+JSON mode, so prose around the JSON object is trimmed; the client's validator and retry still apply. The
+client's consent text names both providers.
 
 ## Owner dashboard
 
