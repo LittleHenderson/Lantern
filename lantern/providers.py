@@ -57,7 +57,8 @@ DATA_NOTICES = {
                  "China and may use inputs to improve its models."),
     "lantern": ("The free allowance runs on DeepSeek through the Lantern gateway. The gateway counts "
                 "usage and does not store your code; DeepSeek's privacy policy says it stores data in "
-                "the People's Republic of China and may use inputs to improve its models."),
+                "the People's Republic of China and may use inputs to improve its models. When DeepSeek "
+                "is unavailable the gateway sends the same request to Anthropic (Claude Haiku, US) instead."),
 }
 
 

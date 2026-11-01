@@ -65,6 +65,13 @@ class Settings:
     # Price per 1M tokens used for the spend cap. Defaults: deepseek-flash *peak* rates (conservative).
     usd_per_m_input: float = field(default_factory=lambda: _env_float("LANTERN_USD_PER_M_INPUT", 0.30))
     usd_per_m_output: float = field(default_factory=lambda: _env_float("LANTERN_USD_PER_M_OUTPUT", 1.20))
+    # Fallback: Anthropic, used only when DeepSeek fails (no balance, rate limited, down, unreachable). Off until
+    # ANTHROPIC_API_KEY is set. Prices default to Claude Haiku 5.5 standard rates (prompts under 100k tokens).
+    fallback_url: str = field(default_factory=lambda: os.environ.get("FALLBACK_URL", "https://api.anthropic.com").rstrip("/"))
+    fallback_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
+    fallback_model: str = field(default_factory=lambda: os.environ.get("LANTERN_FALLBACK_MODEL", "claude-haiku-5-5"))
+    fallback_usd_per_m_input: float = field(default_factory=lambda: _env_float("LANTERN_FALLBACK_USD_PER_M_INPUT", 0.10))
+    fallback_usd_per_m_output: float = field(default_factory=lambda: _env_float("LANTERN_FALLBACK_USD_PER_M_OUTPUT", 0.50))
 
 
 # The only feature names a usage ping may carry. Counts per name per day; never file names, paths or code.
@@ -91,6 +98,8 @@ class Store:
             create table if not exists daily (
               day text, token_hash text, requests integer default 0, primary key (day, token_hash));
             create table if not exists spend (day text primary key, usd real default 0, requests integer default 0);
+            create table if not exists models (
+              day text, model text, requests integer default 0, usd real default 0, primary key (day, model));
             create table if not exists installs (
               install text primary key, first_seen text, last_seen text, version text, os text);
             create table if not exists usage (
@@ -121,8 +130,12 @@ class Store:
         row = self.db.execute("select usd from spend where day = ?", (day,)).fetchone()
         return row[0] if row else 0.0
 
-    def record(self, h: str, day: str, tokens: int, usd: float) -> None:
+    def record(self, h: str, day: str, tokens: int, usd: float, model: str = "") -> None:
         with self.lock:
+            if model:
+                self.db.execute("insert into models (day, model, requests, usd) values (?, ?, 1, ?) "
+                                "on conflict(day, model) do update set usd = usd + excluded.usd, requests = requests + 1",
+                                (day, model, usd))
             self.db.execute("update users set used_requests = used_requests + 1, used_tokens = used_tokens + ? "
                             "where token_hash = ?", (tokens, h))
             self.db.execute("insert into daily (day, token_hash, requests) values (?, ?, 1) "
@@ -169,6 +182,9 @@ class Store:
                 "disabled": one("select count(*) from users where disabled = 1"),
                 "daily": [{"day": d, "requests": r, "usd": round(u, 4)} for d, r, u in
                           rows("select day, requests, usd from spend where day >= ? order by day", since)],
+                "by_model": [{"model": m, "requests": r, "usd": round(u, 4)} for m, r, u in
+                             rows("select model, sum(requests), sum(usd) from models where day >= ? group by model "
+                                  "order by sum(requests) desc", since)],
                 "top_users": [{"label": lb or "(no label)", "requests": r, "tokens": t} for lb, r, t in
                               rows("select label, used_requests, used_tokens from users order by used_requests desc limit 10")],
             },
@@ -186,6 +202,35 @@ class Store:
                 "os": [{"os": o, "installs": n} for o, n in rows("select os, count(*) from installs group by os order by count(*) desc")],
             },
         }
+
+
+async def _anthropic(transport, s: "Settings", out: dict) -> dict | None:
+    """The same narrowed request against Anthropic's Messages API, answered in OpenAI shape. None on any failure."""
+    system = "\n\n".join(m["content"] for m in out["messages"] if m["role"] == "system")
+    msgs = [{"role": m["role"], "content": m["content"]} for m in out["messages"] if m["role"] != "system"]
+    if not msgs or msgs[0]["role"] != "user":
+        msgs.insert(0, {"role": "user", "content": "(see system prompt)"})
+    body = {"model": s.fallback_model, "max_tokens": out["max_tokens"], "messages": msgs}
+    if system:
+        body["system"] = system
+    try:
+        async with httpx.AsyncClient(transport=transport, timeout=120) as client:
+            r = await client.post(f"{s.fallback_url}/v1/messages", json=body,
+                                  headers={"x-api-key": s.fallback_key, "anthropic-version": "2023-06-01"})
+        if r.status_code != 200:
+            return None
+        d = r.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+    if out.get("response_format", {}).get("type") == "json_object":
+        i, j = text.find("{"), text.rfind("}")   # Anthropic has no JSON mode; trim any prose around the object
+        if i >= 0 and j > i:
+            text = text[i:j + 1]
+    u = d.get("usage") or {}
+    return {"id": d.get("id"), "model": d.get("model", s.fallback_model),
+            "choices": [{"index": 0, "finish_reason": d.get("stop_reason"), "message": {"role": "assistant", "content": text}}],
+            "usage": {"prompt_tokens": int(u.get("input_tokens") or 0), "completion_tokens": int(u.get("output_tokens") or 0)}}
 
 
 def _err(status: int, kind: str, message: str, **extra) -> JSONResponse:
@@ -218,7 +263,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
     @app.get("/v1/health")
     def health():
-        return {"ok": True, "model": s.model, "configured": bool(s.upstream_key)}
+        return {"ok": True, "model": s.model, "configured": bool(s.upstream_key),
+                "fallback": s.fallback_model if s.fallback_key else None}
 
     def admin(authorization: str | None) -> None:
         if not s.admin_secret or not authorization or not hmac.compare_digest(
@@ -324,23 +370,37 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                "thinking": {"type": "disabled"}}
         if isinstance(body.get("response_format"), dict) and body["response_format"].get("type") == "json_object":
             out["response_format"] = {"type": "json_object"}
+        used_model, data, err = s.model, None, None
         try:
             async with httpx.AsyncClient(transport=transport, timeout=120) as client:
                 resp = await client.post(f"{s.upstream_url}/chat/completions", json=out,
                                          headers={"authorization": f"Bearer {s.upstream_key}"})
+            if resp.status_code == 200:
+                data = resp.json()
+            else:
+                err = resp.status_code
         except httpx.HTTPError:
-            return _err(502, "upstream_unreachable", "Could not reach the model provider. Try again shortly.")
-        if resp.status_code != 200:
+            err = "unreachable"
+        # DeepSeek failed. Its own account problems (no balance, rate limit, outage) must not take the free
+        # allowance down, so hand the same request to the fallback when one is configured.
+        if data is None and s.fallback_key and (err == "unreachable" or err in (401, 402, 403, 429) or int(err) >= 500):
+            fb = await _anthropic(transport, s, out)
+            if fb is not None:
+                data, used_model, err = fb, s.fallback_model, None
+        if data is None:
+            if err == "unreachable":
+                return _err(502, "upstream_unreachable", "Could not reach the model provider. Try again shortly.")
             # Never echo upstream bodies: they can include account details.
-            return _err(502 if resp.status_code >= 500 or resp.status_code in (401, 402, 403) else resp.status_code,
-                        "upstream_error", f"The model provider returned HTTP {resp.status_code}.")
-        data = resp.json()
+            return _err(502 if err >= 500 or err in (401, 402, 403) else err,
+                        "upstream_error", f"The model provider returned HTTP {err}.")
         usage = data.get("usage") or {}
         tin, tout = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
-        usd = tin / 1e6 * s.usd_per_m_input + tout / 1e6 * s.usd_per_m_output
-        store.record(u["hash"], day, tin + tout, usd)
+        pin, pout = ((s.fallback_usd_per_m_input, s.fallback_usd_per_m_output) if used_model == s.fallback_model
+                     else (s.usd_per_m_input, s.usd_per_m_output))
+        usd = tin / 1e6 * pin + tout / 1e6 * pout
+        store.record(u["hash"], day, tin + tout, usd, used_model)
         after = remaining(store.user(authorization[7:].strip()), day)
-        clean = {"id": data.get("id"), "object": "chat.completion", "model": data.get("model", s.model),
+        clean = {"id": data.get("id"), "object": "chat.completion", "model": data.get("model", used_model),
                  "choices": [{"index": c.get("index", 0), "finish_reason": c.get("finish_reason"),
                               "message": {"role": "assistant", "content": (c.get("message") or {}).get("content")}}
                              for c in data.get("choices", [])],
@@ -348,7 +408,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return JSONResponse(clean, headers={
             "x-lantern-remaining-requests": str(after["requests"]),
             "x-lantern-remaining-tokens": str(after["tokens"]),
-            "x-lantern-remaining-today": str(after["today"])})
+            "x-lantern-remaining-today": str(after["today"]),
+            "x-lantern-model": used_model})
 
     return app
 

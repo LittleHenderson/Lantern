@@ -97,3 +97,61 @@ def test_store_keeps_no_code(gw, tmp_path):
     chat(client, tok, messages=[{"role": "user", "content": "SECRET_SOURCE_CODE_MARKER"}])
     assert b"SECRET_SOURCE_CODE_MARKER" not in Path(s.db_path).read_bytes()
     assert tok.encode() not in Path(s.db_path).read_bytes()             # only the token's hash is stored
+
+
+def _two_upstreams(deepseek_status, calls):
+    """DeepSeek answers with `deepseek_status`; Anthropic answers a Messages-API reply with prose around the JSON."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        calls.append({"host": request.url.host, "body": body, "headers": dict(request.headers)})
+        if request.url.host == "upstream.test":
+            if deepseek_status == "down":
+                raise httpx.ConnectError("no route")
+            return httpx.Response(deepseek_status, json={"error": {"message": "Insufficient Balance", "account": "secret"}})
+        return httpx.Response(200, json={"id": "msg_1", "model": "claude-haiku-5-5", "stop_reason": "end_turn",
+                                         "content": [{"type": "text", "text": 'Here you go:\n{"ok": 2}\nDone.'}],
+                                         "usage": {"input_tokens": 1000, "output_tokens": 2000}})
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.parametrize("deepseek_status", [402, 429, 503, "down"])
+def test_fallback_to_anthropic_when_deepseek_fails(tmp_path, deepseek_status):
+    calls = []
+    s = Settings(upstream_url="https://upstream.test", upstream_key="sk-owner", model="deepseek-flash", admin_secret=ADMIN,
+                 db_path=str(tmp_path / "g.db"), fallback_url="https://anthropic.test", fallback_key="sk-ant-owner")
+    client = TestClient(create_app(s, transport=_two_upstreams(deepseek_status, calls)))
+    tok = client.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
+    r = chat(client, tok)
+    assert r.status_code == 200, r.text
+    assert r.json()["choices"][0]["message"]["content"] == '{"ok": 2}'     # prose trimmed, JSON kept
+    assert r.json()["model"] == "claude-haiku-5-5" and r.headers["x-lantern-model"] == "claude-haiku-5-5"
+    assert [c["host"] for c in calls] == ["upstream.test", "anthropic.test"]
+    ant = calls[1]
+    assert ant["headers"]["x-api-key"] == "sk-ant-owner" and "authorization" not in ant["headers"]
+    assert ant["body"]["system"] == "json please" and ant["body"]["messages"] == [{"role": "user", "content": "explain f"}]
+    assert ant["body"]["max_tokens"] == 3000 and "tools" not in ant["body"]
+    assert "secret" not in r.text                                              # DeepSeek's error body never leaks
+    st = client.get("/v1/admin/stats", headers={"authorization": f"Bearer {ADMIN}"}).json()["allowance"]
+    assert st["by_model"] == [{"model": "claude-haiku-5-5", "requests": 1, "usd": round(1000 / 1e6 * 0.10 + 2000 / 1e6 * 0.50, 4)}]
+    assert st["requests_today"] == 1
+
+
+def test_no_fallback_without_a_key_and_none_when_deepseek_works(tmp_path):
+    calls = []
+    s = Settings(upstream_url="https://upstream.test", upstream_key="sk-owner", model="deepseek-flash", admin_secret=ADMIN,
+                 db_path=str(tmp_path / "g.db"), fallback_key="")
+    client = TestClient(create_app(s, transport=_two_upstreams(402, calls)))
+    tok = client.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
+    r = chat(client, tok)
+    assert r.status_code == 502 and r.json()["error"]["type"] == "upstream_error"
+    assert [c["host"] for c in calls] == ["upstream.test"]
+    assert client.get("/v1/health").json()["fallback"] is None
+    # DeepSeek healthy: the fallback is never touched even when configured
+    calls2 = []
+    s2 = Settings(upstream_url="https://upstream.test", upstream_key="sk-owner", model="deepseek-flash", admin_secret=ADMIN,
+                  db_path=str(tmp_path / "g2.db"), fallback_key="sk-ant-owner")
+    client2 = TestClient(create_app(s2, transport=upstream(calls2)))
+    tok2 = client2.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
+    r2 = chat(client2, tok2)
+    assert r2.status_code == 200 and r2.headers["x-lantern-model"] == "deepseek-flash" and len(calls2) == 1
+    assert client2.get("/v1/health").json()["fallback"] == "claude-haiku-5-5"
