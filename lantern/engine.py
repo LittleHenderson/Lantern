@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, js_frontend, python_frontend
+from . import bridge, js_frontend, packs, python_frontend
 from .graph import Graph
 
 
@@ -23,5 +23,10 @@ def build_graph(repo: str | Path) -> Graph:
         "lines": py["lines"] + js.get("lines", 0),
         "language": " + ".join(langs) or "none",
     })
+    # Analysis packs (pattern files) can add entry points for frameworks without built-in support, before the
+    # bridge links frontend calls to them.
+    loaded, _ = packs.load_all(Path(repo))
+    if loaded:
+        packs.apply_entries(g, Path(repo), loaded)
     bridge.link(g)
     return g

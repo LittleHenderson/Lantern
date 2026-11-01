@@ -496,8 +496,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, render_html(ev), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
             if name == "badge.svg":
                 rd = _load(f) or {}
+                ev = _load(f.with_name("evidence.json")) or {}
                 grade = rd.get("grade") if rd.get("grade") in ("A", "B", "C", "D", "F") else "?"
-                return self._send(200, badge_svg(_int(rd.get("score")) or 0, grade), "image/svg+xml",
+                # only the fields the badge shows are read back from the (plantable) file, and each is coerced
+                now = (ev.get("scorecard") or {}).get("now") if isinstance(ev.get("scorecard"), dict) else {}
+                safe = {"header": {"commit": re.sub(r"[^0-9a-f]", "", str((ev.get("header") or {}).get("commit") or ""))[:40] or None,
+                                   "generated_at": _str((ev.get("header") or {}).get("generated_at"))},
+                        "scorecard": {"now": {k: _int((now or {}).get(k)) or 0 for k in ("critical", "high")} if now else {}}}
+                return self._send(200, badge_svg(_int(rd.get("score")) or 0, grade, safe), "image/svg+xml",
                                   {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
             return self._send(200, json.dumps(_load(f)), "application/json")
         except Exception as exc:  # noqa: BLE001: a damaged or hand-made file
@@ -511,6 +517,13 @@ class Handler(BaseHTTPRequestHandler):
             s = app.store.settings()
             return self._json({"version": __version__, "projects": [app.summary(p) for p in app.store.projects()],
                                "settings": s, "providers": app.provider_info()})
+        if path == "/api/connections":
+            import shutil
+            from .mcp_server import connections
+            cmd = shutil.which("lantern") or "lantern"
+            return self._json({"connections": connections(app.store), "now": int(time.time()),
+                               "setup": {"claude_code": f"claude mcp add lantern -- {cmd} mcp",
+                                         "json": {"mcpServers": {"lantern": {"command": cmd, "args": ["mcp"]}}}}})
         if path == "/api/allowance":
             from .providers import ProviderError, allowance_status, gateway_url, load_token
             if not (load_token() and gateway_url()):

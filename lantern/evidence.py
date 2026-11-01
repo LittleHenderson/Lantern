@@ -206,10 +206,67 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         "understanding": narratives,
         "provenance": {"tools": tool_versions(sec), "models": models,
                        "rules": ["bandit default profile", "lantern-web LW-*/LJ-* rules", "lantern secret patterns",
-                                 f"readiness checks v{(rd or {}).get('version', '-')}", f"graph schema {SCHEMA_VERSION}"]},
+                                 f"readiness checks v{(rd or {}).get('version', '-')}", f"graph schema {SCHEMA_VERSION}"]
+                       + [f"analysis pack {t['tool'].split(':', 1)[1]} v{t.get('version', '-')} ({t.get('status', '')})"
+                          for t in (sec or {}).get("tools", []) if str(t.get("tool", "")).startswith("lantern-pack:")]},
         "limits": limits(g, sec, rd, run_meta, privacy, exp),
         "digest": digest(payload), "payload": payload,
     }
+
+
+def read_digest(report: Path) -> tuple[str | None, dict | None]:
+    """The digest named in an evidence.html or evidence.json, and the payload when the .json is beside it."""
+    m = re.search(r"sha256:[0-9a-f]{64}", report.read_text(encoding="utf-8", errors="replace"))
+    want = m.group(0) if m else None
+    old = None
+    jp = report if report.suffix == ".json" else report.with_suffix(".json")
+    if jp.exists():
+        try:
+            old = json.loads(jp.read_text(encoding="utf-8")).get("payload") or {}
+        except (OSError, json.JSONDecodeError, AttributeError):
+            old = None
+    return want, old
+
+
+def verify(repo: Path, want: str, old: dict | None, trace_cmd: list[str] | None = None, no_scan: bool = False,
+           offline: bool = False) -> dict:
+    """Re-run the analysis on `repo` the way the report was made and compare digests.
+
+    Scanning on/off and offline are copied from the report's recorded options; a trace command never is, because a
+    trace runs the project's code. The caller types it, and it must match what the report recorded, or the result
+    is `refused` with the command to check. Returns match, both digests, the options used, and which payload
+    sections differ (when the report's payload is available)."""
+    from .engine import build_graph
+    from .readiness import assess
+    from .security import scan
+    from .trace import merge_trace, run_trace
+    run = (old or {}).get("run") or {}
+    do_scan = run.get("scan", not no_scan) and not no_scan
+    want_trace = run.get("trace")
+    trace_cmd = trace_cmd or []
+    if want_trace and trace_cmd != want_trace:
+        return {"match": False, "refused": "This report was made with a trace, which runs the project's code. "
+                "Lantern won't run a command taken from a report; check it and pass it yourself.",
+                "trace_command": want_trace, "report": want}
+    offline = bool(run.get("offline")) or offline
+    g = build_graph(repo)
+    run_meta: dict = {"offline": offline}
+    if trace_cmd:
+        tm = merge_trace(g, run_trace(repo, trace_cmd))
+        run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}
+    sec = scan(g, offline) if do_scan else None
+    rd = assess(g, sec, run_meta)
+    gi = git_info(repo)
+    new = digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False), run_options(sec, run_meta))
+    got = digest(new)
+    differs = [k for k in new if old is not None and old.get(k) != new[k]] if old is not None else None
+    return {"match": got == want, "report": want, "rerun": got, "commit": gi.get("commit"), "dirty": bool(gi.get("dirty")),
+            "options": {"scan": do_scan, "trace": trace_cmd or None, "dependency_audit": not offline},
+            "differs": differs,
+            "note": None if got == want else ("Check out the report's commit, install the same scanner versions (see "
+                                              "Provenance), and make sure lantern-accepted.json matches. Dependency "
+                                              "findings come from live vulnerability databases, so new advisories "
+                                              "alone can make a later run differ.")}
 
 
 def compare_baseline(findings: list[dict], baseline: dict | None) -> tuple[list[dict], list[dict]]:
@@ -245,15 +302,44 @@ def baseline_from(sec: dict | None, commit: str | None) -> dict:
 
 # ---------------------------------------------------------------------------- render
 
-def badge_svg(score: int, grade: str) -> str:
-    color = {"A": "#0D9488", "B": "#0D9488", "C": "#64748B", "D": "#B54708", "F": "#B42318"}.get(grade, "#64748B")
-    right = f"{score}/100 {grade}"
-    w1, w2 = 62, 12 + 7 * len(right)
+def badge_text(ev: dict | None) -> str:
+    """What the badge says, and nothing more: the commit, the open critical count, and the date. Never "verified"
+    or "secure": no tool can promise that, and an engineer will pick at it. The badge links to the full report,
+    whose Limits section says what was not checked."""
+    ev = ev or {}
+    h, now = ev.get("header") or {}, (ev.get("scorecard") or {}).get("now") or {}
+    parts = []
+    commit = re.sub(r"[^0-9a-f]", "", str(h.get("commit") or ""))
+    if commit:
+        parts.append(f"commit {commit[:7]}")
+    crit = now.get("critical")
+    if isinstance(crit, int) and not isinstance(crit, bool):
+        parts.append(f"{crit} critical")
+    when = str(h.get("generated_at") or "")[:10]
+    if when:
+        try:
+            parts.append(dt.date.fromisoformat(when).strftime("%b %d").replace(" 0", " "))
+        except ValueError:
+            pass
+    return " · ".join(parts) or "no analysis yet"
+
+
+def badge_svg(score: int | None = None, grade: str | None = None, ev: dict | None = None) -> str:
+    """`Lantern · commit 1a2b3c · 0 critical · Oct 31`. Color follows the open findings (none critical or high:
+    good), not the readiness score, which stays in the tooltip."""
+    now = ((ev or {}).get("scorecard") or {}).get("now") or {}
+    crit = now.get("critical") if isinstance(now.get("critical"), int) else 0
+    high = now.get("high") if isinstance(now.get("high"), int) else 0
+    color = "#B42318" if crit else "#B54708" if high else "#0D9488" if now else "#64748B"
+    right = badge_text(ev)
+    title = f"Lantern: {right}" + (f"; readiness {score}/100 {grade}" if score is not None and grade else "")
+    w1, w2 = 58, 12 + round(6.3 * len(right))
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w1 + w2}" height="20" role="img" '
-            f'aria-label="Lantern readiness: {right}"><rect width="{w1}" height="20" fill="#0F1B2D"/>'
-            f'<rect x="{w1}" width="{w2}" height="20" fill="{color}"/>'
+            f'aria-label="{html.escape(title, quote=True)}"><title>{html.escape(title)}</title>'
+            f'<rect width="{w1}" height="20" rx="3" fill="#0F1B2D"/>'
+            f'<rect x="{w1}" width="{w2}" height="20" fill="{color}"/><rect x="{w1}" width="3" height="20" fill="{color}"/>'
             f'<g fill="#fff" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11">'
-            f'<text x="8" y="14">lantern</text><text x="{w1 + 6}" y="14">{right}</text></g></svg>')
+            f'<text x="7" y="14">Lantern</text><text x="{w1 + 6}" y="14">{html.escape(right)}</text></g></svg>')
 
 
 def E(v) -> str:
@@ -451,7 +537,8 @@ button.print{{float:right;position:relative;z-index:1;font:inherit;font-size:12.
 <section><h2>7 · Verify it yourself</h2>
 <p>Results digest: <span class="digest">{E(ev['digest'])}</span></p>
 <p class="muted">This is a SHA-256 hash of the deterministic results above (graph, findings, readiness checks, tool versions) and the commit. Re-running the open-source analyzer on the same commit with the same tool versions gives the same digest. It shows the results match the code; it is not a signature of who made the report.</p>
-<p><code>{E(verify)}</code></p></section>
+<p><code>{E(verify)}</code></p>
+<p style="margin-top:14px"><b>Badge.</b> <code>badge.svg</code> beside this report reads <span class="digest">Lantern · {E(badge_text(ev))}</span>: the commit, the open critical count, and the date. It never says "verified" or "secure", because no tool can promise that. Link it to this report so a reader lands on the Limits section: <code>[![Lantern](.lantern/badge.svg)](.lantern/evidence.html)</code></p></section>
 </main></body></html>"""
 
 
@@ -462,5 +549,5 @@ def write(out_dir: Path, ev: dict) -> dict[str, Path]:
     rd = ev["scorecard"]["readiness"]
     if rd:
         paths["badge"] = out_dir / "badge.svg"
-        paths["badge"].write_text(badge_svg(rd["score"], rd["grade"]), encoding="utf-8")
+        paths["badge"].write_text(badge_svg(rd["score"], rd["grade"], ev), encoding="utf-8")
     return paths

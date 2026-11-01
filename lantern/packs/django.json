@@ -1,0 +1,41 @@
+{
+ "pack": "django",
+ "version": "1",
+ "about": "Django: URL registrations become route entry points (so click paths, reachability and the login check cover Django views); settings that must not reach production.",
+ "homepage": "https://docs.djangoproject.com/en/stable/howto/deployment/checklist/",
+ "requires": {"text": ["django"]},
+ "rules": [
+  {"id": "LP-DJANGO-DEBUG", "title": "Django DEBUG is on (stack traces and settings shown to visitors)",
+   "severity": "MEDIUM", "cwe": 489, "files": ["**/settings*.py", "**/settings/*.py"],
+   "pattern": "^\\s*DEBUG\\s*=\\s*True\\b", "confidence": "HIGH",
+   "fix": "Read it from the environment: DEBUG = os.environ.get(\"DJANGO_DEBUG\") == \"1\", and leave it unset in production.",
+   "more": "With DEBUG on, any error page lists settings, environment variables and source lines."},
+  {"id": "LP-DJANGO-HOSTS-ANY", "title": "Django ALLOWED_HOSTS accepts every host name",
+   "severity": "LOW", "cwe": 16, "files": ["**/settings*.py", "**/settings/*.py"],
+   "pattern": "^\\s*ALLOWED_HOSTS\\s*=\\s*\\[\\s*['\"]\\*['\"]", "confidence": "HIGH",
+   "fix": "List your real domains: ALLOWED_HOSTS = [\"example.com\", \"www.example.com\"].",
+   "more": "A wildcard lets Host-header attacks build password-reset links that point at an attacker's site."},
+  {"id": "LP-DJANGO-SECRET-INLINE", "title": "Django SECRET_KEY is written in settings.py",
+   "severity": "HIGH", "cwe": 798, "files": ["**/settings*.py", "**/settings/*.py"],
+   "pattern": "^\\s*SECRET_KEY\\s*=\\s*['\"][^'\"]{8,}['\"]", "unless": "environ|getenv|config\\(|env\\(", "confidence": "HIGH",
+   "fix": "SECRET_KEY = os.environ[\"DJANGO_SECRET_KEY\"]; rotate the old key, since it is in git history.",
+   "more": "The secret key signs sessions and password-reset tokens. Anyone who reads the repo can forge them."},
+  {"id": "LP-DJANGO-CSRF-EXEMPT", "title": "View opts out of CSRF protection (@csrf_exempt)",
+   "severity": "MEDIUM", "cwe": 352, "files": ["**/*.py"],
+   "pattern": "@csrf_exempt\\b|csrf_exempt\\(",
+   "fix": "Remove the exemption; for APIs called by scripts, authenticate with a token instead and keep CSRF for browser sessions.",
+   "more": "Heuristic: some webhook receivers must be exempt. Check that the view verifies the caller another way."},
+  {"id": "LP-DJANGO-RAW-SQL", "title": "Raw SQL built with string formatting",
+   "severity": "HIGH", "cwe": 89, "files": ["**/*.py"],
+   "pattern": "\\.(?:raw|execute)\\(\\s*(?:f['\"]|['\"][^'\"]*['\"]\\s*%|['\"][^'\"]*['\"]\\s*\\+|.*\\.format\\()",
+   "fix": "Pass values as parameters: cursor.execute(\"... WHERE id = %s\", [id]) or Model.objects.raw(sql, [params]).",
+   "more": "Heuristic: a pattern match on the line, not a data-flow check. The Python scanner (Bandit) reports the certain cases as B608."}
+ ],
+ "entries": [
+  {"kind": "route", "files": ["**/urls.py"],
+   "pattern": "\\b(?:path|re_path|url)\\(\\s*r?['\"]([^'\"]*)['\"]\\s*,\\s*([\\w.]+(?:\\.as_view\\(\\))?)",
+   "detail": "ANY /{1}", "handler": "{2}"},
+  {"kind": "cli", "files": ["**/management/commands/*.py"],
+   "pattern": "^class\\s+(Command)\\s*\\(", "detail": "manage.py command", "handler": "{1}"}
+ ]
+}
