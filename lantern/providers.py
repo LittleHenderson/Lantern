@@ -34,7 +34,7 @@ DEFAULT_MODEL = "deepseek/deepseek-flash"
 
 # Where the hosted free allowance lives. Set at release time once the gateway is deployed;
 # LANTERN_GATEWAY_URL overrides it (self-hosting, staging, tests).
-DEFAULT_GATEWAY_URL = ""
+DEFAULT_GATEWAY_URL = "https://lantern-gateway.fly.dev/v1"
 
 PRESETS = {
     # name: (adapter, base_url, env var for key)

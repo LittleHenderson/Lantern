@@ -68,6 +68,11 @@ function draw(d) {
   <h2>Heaviest users (by label; labels are what you typed when minting the token)</h2>
   <div class="card"><table><tr><th>Label</th><th class="num">Explanations</th><th class="num">Tokens</th></tr>
   ${a.top_users.map(u => `<tr><td>${esc(u.label)}</td><td class="num">${num(u.requests)}</td><td class="num">${num(u.tokens)}</td></tr>`).join('') || '<tr><td colspan=3 class="small">No usage yet.</td></tr>'}</table></div>
+  <h2>Give someone a free allowance</h2>
+  <div class="card"><label for="label">Label (who it's for, e.g. a GitHub name; only you see it)</label>
+  <div class="row"><input id="label" placeholder="github:octocat"><button id="mint">Create token</button></div>
+  <div id="minted" class="small" style="margin-top:8px"></div>
+  <p class="small">The token is shown once; only its hash is kept. They run <code>lantern login --token lt_…</code>. Limits: ${num(d.limits.requests)} explanations, ${num(d.limits.per_day)} per day.</p></div>
   <h2>The app · opt-in usage counts</h2>
   <p class="small">Only from people who turned on "Share anonymous usage counts" in Settings. One random id per install, the app version and operating system, and how many times each feature was used per day. Nothing else is accepted.</p>
   <div class="grid">${tile(p.installs_total, 'installs that ever reported')}${tile(p.installs_active_7d, 'active in the last 7 days')}${tile(p.installs_active_30d, 'active in the last ' + d.days + ' days')}</div>
@@ -78,5 +83,14 @@ function draw(d) {
   <div class="card" style="flex:1"><b>Operating systems</b><table>${p.os.map(v => `<tr><td>${esc(v.os || '?')}</td><td class="num">${num(v.installs)}</td></tr>`).join('')}</table></div></div>
   <p class="small">Numbers come from this server's own counters. Explanations count model calls through the allowance; spend is computed from token counts at the configured prices, so it can differ slightly from the provider's invoice.</p>`;
 }
+document.addEventListener('click', async e => {
+  if (e.target.id !== 'mint') return;
+  const label = $('#label').value.trim(); const out = $('#minted');
+  const r = await fetch('/v1/tokens', {method: 'POST', headers: {authorization: 'Bearer ' + SECRET, 'content-type': 'application/json'}, body: JSON.stringify({label})});
+  if (!r.ok) { out.textContent = 'Could not create a token (HTTP ' + r.status + ').'; return; }
+  const j = await r.json();
+  out.innerHTML = `Token for <b>${esc(label || '(no label)')}</b>, shown once: <code style="user-select:all">${esc(j.token)}</code>`;
+  $('#label').value = '';
+});
 $('#go').onclick = load; $('#secret').addEventListener('keydown', e => { if (e.key === 'Enter') load(); }); $('#days').onchange = () => { if (SECRET) load(); };
 </script></body></html>"""

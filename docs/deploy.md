@@ -22,8 +22,8 @@ fly auth login                          # opens the browser once
 fly launch --copy-config --no-deploy
 #    If "lantern-gateway" is taken, pick another name here and tell Claude so the app's default URL matches.
 
-# 2. The disk that keeps the counters across restarts (one, in Seattle).
-fly volumes create lantern_data --region sea --size 1
+# 2. The disk that keeps the counters across restarts (one, in San Jose: Fly has no Seattle region; `sjc` is the nearest).
+fly volumes create lantern_data --region sjc --size 1
 
 # 3. The two secrets. The DeepSeek key is typed here, by you, and nowhere else.
 fly secrets set DEEPSEEK_API_KEY=sk-...
@@ -42,17 +42,16 @@ curl https://lantern-gateway.fly.dev/v1/health
 Then:
 
 * **Dashboard:** open `https://lantern-gateway.fly.dev/v1/admin` and enter the admin secret.
-* **Your first token:**
-  ```bash
-  curl -X POST https://lantern-gateway.fly.dev/v1/tokens \
-       -H "Authorization: Bearer <admin secret>" -H "content-type: application/json" \
-       -d '{"label": "wakil"}'
-  lantern login --token lt_...
-  lantern explain tests/fixtures/shop          # uses the free allowance; `lantern allowance` shows what's left
-  ```
-* **Make it the default for everyone:** set `DEFAULT_GATEWAY_URL = "https://lantern-gateway.fly.dev/v1"` in
-  `lantern/providers.py` (Claude does this once you confirm the URL). Until then, people can set
-  `LANTERN_GATEWAY_URL` themselves.
+* **Your first token:** on the dashboard, "Give someone a free allowance" → type a label → Create token. Then
+  `lantern login --token lt_...` and `lantern explain tests/fixtures/shop` (`lantern allowance` shows what's left).
+  From a terminal instead: `curl -X POST .../v1/tokens -H "Authorization: Bearer <admin secret>" -H "content-type: application/json" -d '{"label": "wakil"}'`.
+* **Default for everyone:** `DEFAULT_GATEWAY_URL` in `lantern/providers.py` is `https://lantern-gateway.fly.dev/v1`.
+  `LANTERN_GATEWAY_URL` overrides it (tests and a second gateway).
+
+**Deployed 2026-11-01** in the Little Henderson organization, region `sjc`, machine `shared-cpu-1x` 256 MB, volume
+`lantern_data` 1 GB. Secrets are set on the Fly website (app → Secrets): `DEEPSEEK_API_KEY`, `LANTERN_ADMIN_SECRET`.
+Note: `fly deploy` from a machine behind a TLS-inspecting proxy fails on Fly's default (Depot) builder; `fly deploy
+--depot=false` uses the classic builder and works.
 
 Changing a limit later: `fly secrets set LANTERN_GLOBAL_DAILY_USD=20` (any variable from `gateway/README.md`),
 which restarts the machine. Logs: `fly logs`. Updating the code: `fly deploy` again from `gateway/`.
