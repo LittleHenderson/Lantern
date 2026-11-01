@@ -37,6 +37,13 @@ GLOSSARY = {
     "validation", "authentication", "authorization", "session", "cookie", "password hash", "salt",
     "md5", "sha256", "bcrypt", "argon2", "cli", "command-line argument", "test", "assertion",
     "side effect", "state", "global variable", "scope", "closure", "lambda", "type hint",
+    # web and app vocabulary the explanations keep reaching for
+    "sanitization", "sanitize", "escaping", "escape", "input validation", "xss", "cross-site scripting",
+    "html", "dom", "render", "rendering", "component", "props", "hook", "event handler", "click handler",
+    "fetch", "request", "response", "url", "header", "headers", "payload", "form", "button", "page",
+    "redirect", "command", "process", "secret", "api key", "credential", "credentials", "login", "logout",
+    "user", "record", "row", "table", "schema", "backup", "archive", "parameter binding", "placeholder",
+    "injection", "hard-coded", "hardcoded", "plaintext", "entry point", "main", "startup",
     # web / full stack
     "component", "react component", "hook", "props", "render", "jsx", "event handler", "click handler",
     "fetch", "promise", "api route", "api call", "mutation", "form", "form submission", "page", "router",
@@ -56,10 +63,14 @@ types...") and one analogy drawn ONLY from the metaphor world given. Short sente
 LENS 3 - MAPPED: rewrite the Lens 2 explanation as `text`, then list `pairs`. Each pair maps one
 plain phrase that appears VERBATIM in `text` to the exact technical thing it stands for. Every pair
 needs an anchor:
-  {"type":"symbol","id":"<an id from ALLOWED SYMBOLS>"}
+  {"type":"symbol","id":"<an id from ALLOWED SYMBOLS; external calls like ext:... are symbols too>"}
   {"type":"lines","start":N,"end":M}   (within the unit's line range)
-  {"type":"term","term":"<a whole word or name from the code (3+ characters), or a standard CS term>"}
-Use 4-8 pairs covering the main ideas. Plain phrases must be short (1-6 words) and distinct.
+  {"type":"term","term":"<a whole word or name that appears in the CODE lines shown, or a standard CS term>"}
+A `term` must be visible in this unit's own CODE lines. For anything that lives in another function
+or file (a callee, a caller, a library), anchor with its symbol id instead.
+Before you answer, check every pair: find its `plain` inside `text` with an exact search. If it is
+not there, change `plain` to words that are, or drop the pair.
+Use exactly 4 or 5 pairs covering the main ideas. Plain phrases must be short (1-6 words) and distinct.
 
 If SECURITY FINDINGS are listed, add `findings` explaining each one in lens1 and lens2 terms,
 including why it matters and the safest fix in one sentence. Do not judge whether a finding is a
@@ -169,12 +180,14 @@ def render_prompt(ctx: Context, g: Graph) -> str:
             lines.append(f"  - {g.nodes[c].qualname}" + (f": {s}" if s else ""))
         parts.append("CALLS:\n" + "\n".join(lines))
     parts.append("ALLOWED SYMBOLS (for symbol anchors):\n" +
-                 "\n".join(f"  {k}  ({v})" for k, v in ctx.allowed_symbols.items()))
+                 "\n".join(f"  {k}" for k in ctx.allowed_symbols))
     if ctx.findings:
         parts.append("SECURITY FINDINGS (from scanners, already verified as present):\n" + "\n".join(
             f"  - id={f['id']} [{f['rank']}] {f['rule']}: {f['title']} (line {f['line']})" +
             (f"; reachable via {' -> '.join(g.nodes[p].qualname for p in f['reachable']['path'] if p in g.nodes)}"
-             if f.get("reachable") else "") for f in ctx.findings))
+             if f.get("reachable") else "") for f in ctx.findings) +
+            "\nYour `findings` array must have exactly these entries, with these ids copied as-is: " +
+            json.dumps([{"id": f["id"], "lens1": "...", "lens2": "...", "fix": "..."} for f in ctx.findings]))
     return "\n\n".join(parts)
 
 
@@ -242,6 +255,8 @@ def validate(rec: dict, ctx: Context) -> list[str]:
             continue
         t = anc.get("type")
         if t == "symbol":
+            if isinstance(anc.get("id"), str):
+                anc["id"] = anc["id"].split()[0] if anc["id"].split() else anc["id"]   # "id  (name)" copied from a listing
             if anc.get("id") not in ctx.allowed_symbols:
                 errs.append(f"{tag} anchors to unknown symbol '{anc.get('id')}'")
         elif t == "lines":

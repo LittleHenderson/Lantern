@@ -242,9 +242,10 @@ async def _call(transport, prov: dict, out: dict) -> tuple[dict | None, object]:
                 if out.get("response_format", {}).get("type") == "json_object":
                     # Anthropic has no JSON mode. A forced tool call is the equivalent: the API itself guarantees the
                     # answer is a well-formed JSON object (free text can carry an unescaped quote and fail to parse).
-                    body["tools"] = [{"name": "answer", "description": "Return the complete answer as one JSON object.",
+                    body["tools"] = [{"name": "json", "description": "The JSON object the prompt asks for, with its keys "
+                                      "(lens1, lens2, ...) at the top level of the input, not wrapped in another key.",
                                       "input_schema": {"type": "object", "additionalProperties": True}}]
-                    body["tool_choice"] = {"type": "tool", "name": "answer"}
+                    body["tool_choice"] = {"type": "tool", "name": "json"}
                 r = await client.post(f"{prov['url']}/v1/messages", json=body,
                                       headers={"x-api-key": prov["key"], "anthropic-version": "2023-06-01"})
             else:
@@ -267,7 +268,8 @@ async def _call(transport, prov: dict, out: dict) -> tuple[dict | None, object]:
         return d, None
     tool = next((b for b in d.get("content", []) if b.get("type") == "tool_use" and isinstance(b.get("input"), dict)), None)
     if tool is not None:
-        text = json.dumps(tool["input"], ensure_ascii=False)
+        obj = _unwrap(tool["input"])
+        text = json.dumps(obj, ensure_ascii=False)
     else:
         text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
         if out.get("response_format", {}).get("type") == "json_object":
@@ -278,6 +280,23 @@ async def _call(transport, prov: dict, out: dict) -> tuple[dict | None, object]:
     return {"id": d.get("id"), "model": d.get("model", prov["model"]),
             "choices": [{"index": 0, "finish_reason": d.get("stop_reason"), "message": {"role": "assistant", "content": text}}],
             "usage": {"prompt_tokens": int(u.get("input_tokens") or 0), "completion_tokens": int(u.get("output_tokens") or 0)}}, None
+
+
+def _unwrap(obj: dict) -> dict:
+    """Normalize what a forced tool call hands back. Seen from Haiku 5.5: the answer wrapped in one extra key
+    ({"answer": {...}}), and nested objects sent as JSON strings ("lens3": "{\"text\": ...}"), sometimes both."""
+    for _ in range(3):
+        for k, v in list(obj.items()):
+            if isinstance(v, str) and v.lstrip()[:1] in ("{", "["):
+                try:
+                    obj[k] = json.loads(v)
+                except ValueError:
+                    pass
+        if len(obj) == 1 and isinstance(next(iter(obj.values())), dict):
+            obj = next(iter(obj.values()))
+            continue
+        break
+    return obj
 
 
 def _retryable(err) -> bool:
