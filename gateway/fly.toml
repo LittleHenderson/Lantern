@@ -1,0 +1,41 @@
+# Fly.io config for the Lantern gateway: one small always-on machine with a persistent disk for the counters.
+# Deploy steps: docs/deploy.md. The DeepSeek key and the admin secret are Fly secrets, never in this file.
+app = "lantern-gateway"
+primary_region = "sea"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  LANTERN_DB = "/home/app/data/lantern_gateway.db"
+  LANTERN_FREE_REQUESTS = "300"
+  LANTERN_DAILY_REQUESTS = "120"
+  LANTERN_GLOBAL_DAILY_USD = "10"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"     # always on: a stopped machine would make the first explanation of the day wait
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 50
+    hard_limit = 100
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/v1/health"
+
+[mounts]
+  source = "lantern_data"
+  destination = "/home/app/data"
+  initial_size = "1gb"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

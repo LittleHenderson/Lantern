@@ -114,7 +114,7 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 
 ## Backlog (priority order)
 
-0. **Ship the allowance:** deploy `gateway/` behind HTTPS, set `DEFAULT_GATEWAY_URL`, issue tokens through
+0. **Ship the allowance:** deploy `gateway/` on Fly.io (`gateway/fly.toml`, steps in `docs/deploy.md`), set `DEFAULT_GATEWAY_URL`, issue tokens through
    "Sign in with GitHub" (one per account). Then the spec chapter 19 order: wallet-drain check, "Prove it" live
    checks (domain verification and consent first), Ask Lantern with screenshots, What changed, data-flow map.
    Done: the MCP connector (`lantern mcp`) with the fix-and-verify loop (`lantern_recheck`), "Send to…",
