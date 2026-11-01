@@ -501,7 +501,7 @@ async function renderExplain(body, p) {
       <div class="tile"><div class="lbl">Output tokens, about</div><div class="val">${num(plan.output_tokens)}</div></div></div>
     <div class="hint">Entry points and what they call, up to 3 levels deep. ${esc(plan.note)}</div>
     <div class="model">${icon('sparkle')}<div>${s.model ? `Model <b>${esc(s.provider)}/${esc(s.model)}</b>` : 'No model chosen yet.'}</div><span class="spacer"></span><a href="#" id="toset">Change in Settings</a></div>
-    ${s.model && cloud ? note('warn', `The source code of these functions will be sent to ${esc(s.provider)} to write the explanations. To keep everything on this computer, choose Ollama or LM Studio in Settings.`) : ''}
+    ${s.model && cloud ? note('warn', `The source code of these functions will be sent to ${esc(prov.allowance ? 'DeepSeek (free allowance, through Lantern)' : s.provider)} to write the explanations. ${esc(prov.notice || '')} To keep everything on this computer, choose Ollama or LM Studio in Settings.`) : ''}
     ${s.model && !cloud ? note('ok', 'Local model: your code stays on this computer.') : ''}
     ${s.model && prov.needs_key && !prov.key ? note('warn', `Add your ${esc(s.provider)} API key in Settings first.`) : ''}
     <div class="row" style="margin-top:16px"><button class="btn primary" id="go" ${!ready || (job && job.status === 'running') ? 'disabled' : ''}>${icon('sparkle')}Explain ${num(plan.nodes)} functions</button>
@@ -592,7 +592,9 @@ function renderSettings(el) {
   const draw = () => {
     const name = el.querySelector('#prov').value, pr = provs.find(x => x.name === name) || {};
     el.querySelector('#provinfo').innerHTML = (pr.local ? note('ok', 'Runs on this computer: your code never leaves it. Start the model server first (for Ollama: <code>ollama serve</code>, then <code>ollama pull &lt;model&gt;</code>).')
-      : pr.local === false ? note('warn', `Cloud model: when you ask for explanations, the code of each explained function is sent to ${esc(name)}. Lantern itself has no server and never sees your code or key.`)
+      : pr.local === false ? note('warn', pr.allowance
+          ? `Free allowance: no key needed. Explanations go through Lantern's gateway to DeepSeek; the gateway counts usage and stores no code. ${esc(pr.notice || '')} Add your own DeepSeek key below to remove the limit.`
+          : `Cloud model: when you ask for explanations, the code of each explained function is sent to ${esc(name)}. Lantern never sees your code or key. ${esc(pr.notice || '')}`)
       : note('', 'Any OpenAI-compatible endpoint. If it runs on this computer, your code stays here.'))
       + (pr.needs_key ? `<div class="hint">${pr.key ? 'Key: set (' + esc(pr.key) + ')' : `No key yet. Paste one below, or set ${esc(pr.env)} before starting Lantern.`}</div>` : '');
     el.querySelector('#keyrow').style.display = pr.needs_key || name === 'openai-compatible' ? '' : 'none';

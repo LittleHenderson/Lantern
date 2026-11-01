@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 scan = ["bandit>=1.7", "pip-audit>=2.7"]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.29"]
 
 [project.scripts]
 lantern = "lantern.cli:main"

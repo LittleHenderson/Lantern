@@ -5,7 +5,7 @@
 them, explains each function three ways, and audits it with security checks ranked by whether a user
 can actually reach the problem.
 
-> Working title. Built from the product spec in [`docs/`](docs/Lantern_Product_Spec_v0.2.pdf). Status: v0.1, the local
+> Working title. Built from the product spec in [`docs/`](docs/Lantern_Product_Spec_v0.3.pdf). Status: v0.1, the local
 > product: map, Three-Lens explanations with your own key, security audit, readiness grade, and Evidence Report, all in a
 > local app. Cloud mode and device pairing are not built yet.
 
@@ -124,18 +124,27 @@ Attach your own walkthroughs of key flows by writing `lantern-narratives.md` at 
 
 Record what actually runs (Python): `lantern analyze path/to/repo --trace -- python -m pytest -q`
 
-Add Three-Lens explanations with your own key or a local model:
+Add Three-Lens explanations. The default model is **DeepSeek** (`deepseek-flash`), in the app and the CLI:
 
 ```bash
-lantern explain path/to/repo --estimate                          # token estimate, no calls
-export ANTHROPIC_API_KEY=...
-lantern explain path/to/repo --model anthropic/<model-name>
-lantern explain path/to/repo --model ollama/<model-name>          # local, nothing leaves your machine
+lantern explain path/to/repo --estimate          # token estimate, no calls
+
+lantern login --token <token>                    # free allowance (hosted by Lantern), or...
+export DEEPSEEK_API_KEY=sk-...                   # ...your own DeepSeek key, no Lantern limit
+lantern explain path/to/repo                     # uses whichever is set up
+lantern allowance                                # free explanations left
+
+lantern explain path/to/repo --model ollama/<model>      # local: code never leaves your machine
+lantern explain path/to/repo --model anthropic/<model>   # or openai/, gemini/, mistral/, openrouter/
 ```
 
-Providers: `anthropic`, `openai`, `openrouter`, `mistral`, `gemini`, `deepseek` (keys from `<NAME>_API_KEY`),
-`ollama`, `lmstudio`, and any `openai-compatible` endpoint (`--base-url`). Explanations are cached by a
-hash of each function's code.
+Before code leaves your machine, Lantern asks once per provider and says where it goes (DeepSeek's
+privacy policy says it stores data in China). Local models and `localhost` endpoints never ask. When
+the free allowance runs out, the run stops cleanly, keeps everything finished, and shows how to add
+your own key; re-running bills only what's left. Explanations are cached by a hash of each function's code.
+
+The free allowance runs through [`gateway/`](gateway/), a small metered proxy that holds the owner's
+DeepSeek key on the server, never in the client, with per-user, per-day, and global spend caps.
 
 Try it without a key: `python examples/make_demo.py demo-out` builds the report for the sample
 full-stack app with hand-written explanations that pass the same validator.

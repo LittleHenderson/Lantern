@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.2.pdf`.
+Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.3.pdf`.
 This repo is Phase 0 plus the full-stack layer: Python and TypeScript/JavaScript engines, the API bridge
 between them, scanners, the Three-Lens explainer, and a static HTML report.
 
@@ -57,7 +57,8 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/readiness.py` | Deployment Readiness Score (spec 10): ten weighted categories of deterministic checks (`pass/fail/partial/skip`, skip leaves the denominator), shape advisor, fan-in hotspots, starter files. Accepted risks: `lantern-accepted.json` via `lantern accept` |
 | `lantern/evidence.py` | Evidence Report (spec 11): commit-pinned HTML/JSON, baseline → fixed findings, provenance, Limits, SHA-256 results digest checked by `lantern verify`, badge |
 | `lantern/explain.py` | Prompt (language-aware, includes HTTP links), `validate()`, retry, bottom-up `select_nodes`, cache |
-| `lantern/providers.py` | Anthropic, OpenAI-compatible (OpenAI, OpenRouter, Mistral, Gemini, DeepSeek, Ollama, LM Studio, vLLM), fixture stub |
+| `lantern/providers.py` | Default `deepseek/deepseek-flash`; `resolve_default()` (--model > LANTERN_MODEL > DEEPSEEK_API_KEY > allowance token); `LanternHostedProvider` (402 → `AllowanceExhausted`; run stops cleanly, cache shared with the user's own key via `cache_model`); `ensure_consent()` once per provider before code leaves the machine (local presets and localhost endpoints never ask); Anthropic and OpenAI-compatible adapters. `_post` returns the body; `_post_full` also returns headers |
+| `gateway/` | Separate deployable (FastAPI, `create_app --factory`) hosting the free allowance. The owner's DeepSeek key lives only here; per-user lifetime and daily limits, global daily dollar cap, narrowed requests (one model, capped tokens and body), token hashes and counters only, never bodies. Tests: `tests/test_gateway.py`, `tests/test_allowance_flow.py` (live local gateway, end to end) |
 | `lantern/report.py` + `viewer/report.html` | One self-contained HTML file (vanilla JS): pages/routes, path tree with HTTP and click hops, flowchart, lenses, findings with UI paths |
 | `lantern/pipeline.py` | analyze / explain / rebuild as functions with a `log` callback; used by the CLI and the server |
 | `lantern/server.py` + `viewer/app.html` | `lantern serve`: stdlib HTTP app (Home, Atlas iframe with live actions, Evidence, Explanations, Settings), jobs in threads, token + Host checks, keys in memory or `~/.lantern/keys.json` (0600); `Store` writes under `FileLock` (`store.lock`, held across processes) with a unique temp file per write; PWA manifest + service worker |
@@ -98,7 +99,20 @@ To add a rule (either language): write a failing test with a tiny repo via `_wri
 (`tests/test_frontend.py` for Python, `tests/test_fullstack.py` for JS/bridge/web security), give the
 edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before choosing its confidence.
 
+## Default model and free allowance
+
+DeepSeek is the default in the CLI and in `lantern serve` (Settings defaults to `deepseek` / `deepseek-flash`).
+**Never put a provider key in the client or this repo**: the free allowance works only through `gateway/`.
+Without an own key, `App.make_provider` uses the allowance when `lantern login` saved a token and a gateway URL
+is configured (`DEFAULT_GATEWAY_URL` or `LANTERN_GATEWAY_URL`); otherwise it says how to get one. `/api/allowance`
+reports what's left. Screen states and copy for Settings, consent, and errors are in spec section 8.5.
+
 ## Backlog (priority order)
+
+0. **Ship the allowance:** deploy `gateway/` behind HTTPS, set `DEFAULT_GATEWAY_URL`, issue tokens through
+   "Sign in with GitHub" (one per account). Then the spec chapter 19 order: wallet-drain check, fix-and-verify
+   loop, Lantern skill + MCP server for AI assistants, "Prove it" live checks (domain verification and consent
+   first), Ask Lantern with screenshots, What changed, data-flow map.
 
 1. **Run real models through `lantern explain`** on the benchmark repos with two providers; record the
    first-try anchor pass rate (target 90%). Tune `SYSTEM` from failures, especially on JS components.

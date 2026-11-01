@@ -19,9 +19,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .graph import Graph, Node
-from .providers import Provider, ProviderError
+from .providers import AllowanceExhausted, Provider, ProviderError
 
-PROMPT_VERSION = "lens-v2"
+PROMPT_VERSION = "lens-v3"
 
 # Technical vocabulary a Lens 3 "term" anchor may use even if it doesn't appear verbatim in the code.
 GLOSSARY = {
@@ -65,7 +65,7 @@ If SECURITY FINDINGS are listed, add `findings` explaining each one in lens1 and
 including why it matters and the safest fix in one sentence. Do not judge whether a finding is a
 false positive.
 
-Respond with ONLY a JSON object, no markdown fences:
+Respond with ONLY a json object (valid JSON), no markdown fences:
 {"lens1":{"summary":str,"inputs":[str],"outputs":str,"side_effects":[str],"errors":[str],"role":str},
  "lens2":{"text":str,"example":str,"analogy":str},
  "lens3":{"text":str,"pairs":[{"plain":str,"technical":str,"anchor":{...}}]},
@@ -74,7 +74,7 @@ Respond with ONLY a JSON object, no markdown fences:
 METAPHOR_SYSTEM = """Pick ONE everyday setting to use as a consistent metaphor world for explaining
 this whole codebase to a non-programmer (examples: a restaurant kitchen, a hotel, a post office,
 a library, an airport, a factory line). Choose the one whose roles best match what the code does.
-Respond with ONLY JSON: {"world": str, "why": str, "roles": {"<code concept>": "<metaphor role>"}}"""
+Respond with ONLY json: {"world": str, "why": str, "roles": {"<code concept>": "<metaphor role>"}}"""
 
 
 # --------------------------------------------------------------------------------------------
@@ -379,6 +379,8 @@ def choose_metaphor(provider: Provider, g: Graph) -> dict:
     user = "ENTRY POINTS:\n" + "\n".join(entries) + "\n\nMODULES:\n" + "\n".join(mods)
     try:
         rec = parse_json(provider.complete(METAPHOR_SYSTEM, user, max_tokens=400)) or {}
+    except AllowanceExhausted:
+        raise
     except ProviderError:
         rec = {}
     if not isinstance(rec.get("world"), str) or not rec["world"].strip():
@@ -396,6 +398,8 @@ def explain_node(provider: Provider, g: Graph, ctx: Context, retries: int = 1) -
                    "return the full JSON again:\n- " + "\n- ".join(errors))
         try:
             raw = provider.complete(SYSTEM, prompt, max_tokens=2500)
+        except AllowanceExhausted:
+            raise
         except ProviderError as e:
             return {"error": str(e), "validated": False, "attempts": attempt + 1}
         rec = parse_json(raw)
@@ -412,17 +416,28 @@ def explain_node(provider: Provider, g: Graph, ctx: Context, retries: int = 1) -
 def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nids: list[str],
         metaphor: str | None = None, progress=None) -> dict:
     cache = Cache(cache_dir)
-    world = {"world": metaphor, "why": "chosen by user", "roles": {}} if metaphor else choose_metaphor(provider, g)
     done: dict[str, dict] = {}
-    stats = {"generated": 0, "cached": 0, "validated": 0, "failed": 0, "first_try": 0}
+    stats = {"generated": 0, "cached": 0, "validated": 0, "failed": 0, "first_try": 0, "stopped": None}
+    # the same model gives the same cache entries whether billed to the allowance or your own key
+    model_id = getattr(provider, "cache_model", provider.label)
+    try:
+        world = {"world": metaphor, "why": "chosen by user", "roles": {}} if metaphor else choose_metaphor(provider, g)
+    except AllowanceExhausted as e:
+        stats["stopped"] = str(e)
+        world = {"world": "a restaurant", "why": "default", "roles": {}}
+        nids = []
     for i, nid in enumerate(nids):
         ctx = build_context(g, nid, findings, done, world["world"])
-        k = cache.key(ctx, provider.label)
+        k = cache.key(ctx, model_id)
         rec = cache.get(k)
         if rec is not None:
             stats["cached"] += 1
         else:
-            rec = explain_node(provider, g, ctx)
+            try:
+                rec = explain_node(provider, g, ctx)
+            except AllowanceExhausted as e:
+                stats["stopped"] = str(e)   # keep everything finished so far
+                break
             stats["generated"] += 1
             if "error" not in rec:
                 cache.put(k, rec)

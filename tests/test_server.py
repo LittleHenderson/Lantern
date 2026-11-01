@@ -276,3 +276,23 @@ def test_remembered_keys_stay_private(tmp_path):
     if os.name != "nt":   # the temporary file is created 0600; only keys.json keeps that
         assert stat.S_IMODE((store.root / "keys.json").stat().st_mode) == 0o600
         assert stat.S_IMODE((store.root / "projects.json").stat().st_mode) == 0o644
+
+
+def test_deepseek_default_and_free_allowance(tmp_path, monkeypatch):
+    from lantern.providers import LanternHostedProvider
+    for v in ("DEEPSEEK_API_KEY", "LANTERN_TOKEN", "LANTERN_GATEWAY_URL"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("LANTERN_CONFIG_DIR", str(tmp_path / "cfg"))
+    app = App(Store(tmp_path / "home"), "tok", 0)
+    assert app.store.settings()["provider"] == "deepseek" and app.store.settings()["model"] == "deepseek-flash"
+    ds = next(r for r in app.provider_info() if r["name"] == "deepseek")
+    assert ds["default"] and not ds["allowance"] and ds["needs_key"]
+    with pytest.raises(ValueError, match="free allowance"):
+        app.make_provider()                                   # no key, no allowance: clear next step
+    monkeypatch.setenv("LANTERN_TOKEN", "lt_test")
+    monkeypatch.setenv("LANTERN_GATEWAY_URL", "https://gateway.test/v1")
+    ds = next(r for r in app.provider_info() if r["name"] == "deepseek")
+    assert ds["allowance"] and not ds["needs_key"] and "gateway" in ds["notice"]
+    assert isinstance(app.make_provider(), LanternHostedProvider)
+    app.store.set_key("deepseek", "sk-own", remember=False)  # the user's own key wins
+    assert not isinstance(app.make_provider(), LanternHostedProvider)

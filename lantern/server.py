@@ -169,7 +169,7 @@ class Store:
 
     # settings and keys
     def settings(self) -> dict:
-        return {"provider": "anthropic", "model": "", "base_url": "", "privacy": "full",
+        return {"provider": "deepseek", "model": "deepseek-flash", "base_url": "", "privacy": "full",
                 **self._read("settings.json", {})}
 
     def save_settings(self, s: dict) -> None:
@@ -294,10 +294,21 @@ class App:
         return {"job": job, "project": self.summary(p)}
 
     def provider_info(self) -> list[dict]:
+        from .providers import DATA_NOTICES, gateway_url, load_token
+        allowance = bool(load_token() and gateway_url())
         rows = []
         for name, (_, url, env) in PRESETS.items():
-            rows.append({"name": name, "local": name in LOCAL_PROVIDERS, "needs_key": bool(env), "env": env,
-                         "default_url": url, "key": self.store.key_source(name)})
+            key = self.store.key_source(name)
+            row = {"name": name, "local": name in LOCAL_PROVIDERS, "needs_key": bool(env), "env": env,
+                   "default_url": url, "key": key, "notice": DATA_NOTICES.get(name, "")}
+            if name == "deepseek":
+                # No key needed while the free allowance lasts; the user's own key, once added, wins.
+                row["default"] = True
+                row["allowance"] = allowance and not key
+                if row["allowance"]:
+                    row["needs_key"] = False
+                    row["notice"] = DATA_NOTICES["lantern"]
+            rows.append(row)
         rows.append({"name": "openai-compatible", "local": None, "needs_key": False, "env": "LANTERN_API_KEY",
                      "default_url": "", "key": self.store.key_source("openai-compatible")})
         return rows
@@ -307,8 +318,14 @@ class App:
         s = self.store.settings()
         if not s.get("model"):
             raise ValueError("Choose a model in Settings first.")
-        return make_provider(f"{s['provider']}/{s['model']}", base_url=s.get("base_url") or None,
-                             api_key=self.store.key_for(s["provider"]))
+        key = self.store.key_for(s["provider"])
+        if s["provider"] == "deepseek" and not key:
+            from .providers import gateway_url, load_token
+            if load_token() and gateway_url():
+                return make_provider(f"lantern/{s['model']}")   # the free allowance
+            raise ValueError("Add a DeepSeek key in Settings, or run `lantern login --token <token>` "
+                             "for the free allowance.")
+        return make_provider(f"{s['provider']}/{s['model']}", base_url=s.get("base_url") or None, api_key=key)
 
 
 def _same(given, token: str) -> bool:
@@ -494,6 +511,14 @@ class Handler(BaseHTTPRequestHandler):
             s = app.store.settings()
             return self._json({"version": __version__, "projects": [app.summary(p) for p in app.store.projects()],
                                "settings": s, "providers": app.provider_info()})
+        if path == "/api/allowance":
+            from .providers import ProviderError, allowance_status, gateway_url, load_token
+            if not (load_token() and gateway_url()):
+                return self._json({"available": False})
+            try:
+                return self._json({"available": True, **allowance_status()})
+            except ProviderError as e:
+                return self._json({"available": False, "error": str(e)[:200]})
         m = re.fullmatch(r"/api/jobs/(\w+)", path)
         if m:
             j = app.jobs.jobs.get(m.group(1))
@@ -617,6 +642,11 @@ class Handler(BaseHTTPRequestHandler):
                 st = res["stats"]
                 log(f"done: {st['validated']} validated, {st['failed']} failed, {st['cached']} from cache; "
                     f"{st['usage']['input_tokens']:,} tokens in, {st['usage']['output_tokens']:,} out")
+                rem = getattr(provider, "remaining", None)
+                if rem and rem.get("requests") is not None:
+                    log(f"free explanations left: {rem['requests']}")
+                if st.get("stopped"):
+                    log(f"stopped early: {st['stopped']}")
                 return {"stats": st}
             return self._json(app.jobs.start(p["id"], "explain", work), 202)
         if action == "accept":
