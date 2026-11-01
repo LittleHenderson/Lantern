@@ -65,6 +65,10 @@ function draw(d) {
   ${tile(a.tokens_issued, 'sign-ups (tokens issued)')}${tile(a.users_ever_used, 'ever used it')}${tile(a.users_exhausted, 'used up the free allowance', a.users_exhausted ? 'warn' : '')}${tile(a.disabled, 'disabled')}</div>
   <div class="card" style="margin-top:10px"><b>Explanations per day</b>${bars(a.daily, 'requests', v => v + ' explanations')}
   <b style="display:block;margin-top:14px">Spend per day</b>${bars(a.daily, 'usd', v => '$' + v.toFixed(2))}</div>
+  <h2>Which model answered</h2>
+  <div class="card"><table><tr><th>Model</th><th class="num">Explanations</th><th class="num">Spend</th></tr>
+  ${(a.by_model || []).map(m => `<tr><td>${esc(m.model)}</td><td class="num">${num(m.requests)}</td><td class="num">$${m.usd.toFixed(2)}</td></tr>`).join('') || '<tr><td colspan=3 class="small">No model calls yet.</td></tr>'}</table>
+  <p class="small">DeepSeek answers first. If DeepSeek has no balance, is rate-limited or down, the fallback model answers the same request so nobody waits.</p></div>
   <h2>Heaviest users (by label; labels are what you typed when minting the token)</h2>
   <div class="card"><table><tr><th>Label</th><th class="num">Explanations</th><th class="num">Tokens</th></tr>
   ${a.top_users.map(u => `<tr><td>${esc(u.label)}</td><td class="num">${num(u.requests)}</td><td class="num">${num(u.tokens)}</td></tr>`).join('') || '<tr><td colspan=3 class="small">No usage yet.</td></tr>'}</table></div>

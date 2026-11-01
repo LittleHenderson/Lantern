@@ -50,6 +50,15 @@ The user runs `lantern login --token lt_...`. Next step for a public launch: iss
 An explanation costs about $0.0015 at peak prices, so a full 300-explanation allowance is about
 $0.45–0.90 and the default $10/day cap covers roughly 3,000–6,000 explanations a day.
 
+## Fallback model (Anthropic)
+
+Set `ANTHROPIC_API_KEY` and the gateway answers with **Claude Haiku 5.5** whenever DeepSeek fails: no balance,
+rate limited, down, or unreachable. DeepSeek is always tried first; a healthy DeepSeek means the fallback is
+never called. Which model answered is in the `x-lantern-model` header and on the dashboard ("Which model
+answered"), billed at its own prices (`LANTERN_FALLBACK_USD_PER_M_INPUT` / `_OUTPUT`, default 0.10 / 0.50; the
+same global daily cap applies). `LANTERN_FALLBACK_MODEL` changes the model. The client's consent text says the
+fallback exists.
+
 ## Owner dashboard
 
 Open `https://<gateway>/v1/admin` and enter the admin secret (it stays in that browser tab; nothing stores it).
