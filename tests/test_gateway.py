@@ -108,9 +108,12 @@ def _two_upstreams(deepseek_status, calls):
             if deepseek_status == "down":
                 raise httpx.ConnectError("no route")
             return httpx.Response(deepseek_status, json={"error": {"message": "Insufficient Balance", "account": "secret"}})
+        if body.get("tool_choice") == {"type": "tool", "name": "answer"}:   # JSON mode -> forced tool call
+            content = [{"type": "tool_use", "id": "t1", "name": "answer", "input": {"ok": 2}}]
+        else:
+            content = [{"type": "text", "text": 'Here you go:\n{"ok": 2}\nDone.'}]
         return httpx.Response(200, json={"id": "msg_1", "model": "claude-haiku-5-5", "stop_reason": "end_turn",
-                                         "content": [{"type": "text", "text": 'Here you go:\n{"ok": 2}\nDone.'}],
-                                         "usage": {"input_tokens": 1000, "output_tokens": 2000}})
+                                         "content": content, "usage": {"input_tokens": 1000, "output_tokens": 2000}})
     return httpx.MockTransport(handler)
 
 
@@ -129,7 +132,8 @@ def test_fallback_to_anthropic_when_deepseek_fails(tmp_path, deepseek_status):
     ant = calls[1]
     assert ant["headers"]["x-api-key"] == "sk-ant-owner" and "authorization" not in ant["headers"]
     assert ant["body"]["system"] == "json please" and ant["body"]["messages"] == [{"role": "user", "content": "explain f"}]
-    assert ant["body"]["max_tokens"] == 3000 and "tools" not in ant["body"]
+    assert ant["body"]["max_tokens"] == 3000 and ant["body"]["tools"][0]["name"] == "answer"
+    assert ant["body"]["thinking"] == {"type": "disabled"} and "function" not in json.dumps(ant["body"]["tools"])
     assert "secret" not in r.text                                              # DeepSeek's error body never leaks
     st = client.get("/v1/admin/stats", headers={"authorization": f"Bearer {ADMIN}"}).json()["allowance"]
     assert st["by_model"] == [{"model": "claude-haiku-5-5", "requests": 1, "usd": round(1000 / 1e6 * 0.10 + 2000 / 1e6 * 0.50, 4)}]
@@ -175,10 +179,11 @@ def test_default_order_is_anthropic_first_then_deepseek(tmp_path):
     def both(request):
         calls2.append(request.url.host)
         if request.url.host == "anthropic.test":
-            return httpx.Response(529, json={"error": "overloaded"})
+            return httpx.Response(400, json={"type": "error", "error": {"type": "invalid_request_error",
+                                             "message": "Your credit balance is too low to access the Anthropic API."}})
         return upstream([]).handler(request)
     client2 = TestClient(create_app(s, transport=httpx.MockTransport(both)))
     tok2 = client2.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
     r2 = chat(client2, tok2)
     assert r2.status_code == 200 and r2.headers["x-lantern-model"] == "deepseek-flash" and calls2 == ["anthropic.test", "upstream.test"]
-    assert "overloaded" not in r2.text
+    assert "credit balance" not in r2.text

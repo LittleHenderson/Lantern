@@ -233,9 +233,18 @@ async def _call(transport, prov: dict, out: dict) -> tuple[dict | None, object]:
                 msgs = [{"role": m["role"], "content": m["content"]} for m in out["messages"] if m["role"] != "system"]
                 if not msgs or msgs[0]["role"] != "user":
                     msgs.insert(0, {"role": "user", "content": "(see system prompt)"})
-                body = {"model": prov["model"], "max_tokens": out["max_tokens"], "messages": msgs}
+                # Thinking off: the answer is a fixed JSON shape, and thinking tokens would eat the max_tokens budget
+                # and cut the JSON short (seen with Haiku 5.5: 2,500 output tokens billed, 700 visible).
+                body = {"model": prov["model"], "max_tokens": out["max_tokens"], "messages": msgs,
+                        "thinking": {"type": "disabled"}}
                 if system:
                     body["system"] = system
+                if out.get("response_format", {}).get("type") == "json_object":
+                    # Anthropic has no JSON mode. A forced tool call is the equivalent: the API itself guarantees the
+                    # answer is a well-formed JSON object (free text can carry an unescaped quote and fail to parse).
+                    body["tools"] = [{"name": "answer", "description": "Return the complete answer as one JSON object.",
+                                      "input_schema": {"type": "object", "additionalProperties": True}}]
+                    body["tool_choice"] = {"type": "tool", "name": "answer"}
                 r = await client.post(f"{prov['url']}/v1/messages", json=body,
                                       headers={"x-api-key": prov["key"], "anthropic-version": "2023-06-01"})
             else:
@@ -245,6 +254,10 @@ async def _call(transport, prov: dict, out: dict) -> tuple[dict | None, object]:
     except httpx.HTTPError:
         return None, "unreachable"
     if r.status_code != 200:
+        # Server log only (never the client): enough to diagnose a rejected request, never the prompt.
+        print(f"upstream {prov['name']} HTTP {r.status_code}: {r.text[:300]!r}", flush=True)
+        if r.status_code == 400 and "credit balance" in r.text.lower():
+            return None, 402   # Anthropic reports an empty account as 400; treat it as "no balance" so the fallback answers
         return None, r.status_code
     try:
         d = r.json()
@@ -252,11 +265,15 @@ async def _call(transport, prov: dict, out: dict) -> tuple[dict | None, object]:
         return None, 502
     if prov["kind"] != "anthropic":
         return d, None
-    text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
-    if out.get("response_format", {}).get("type") == "json_object":
-        i, j = text.find("{"), text.rfind("}")   # Anthropic has no JSON mode; trim any prose around the object
-        if i >= 0 and j > i:
-            text = text[i:j + 1]
+    tool = next((b for b in d.get("content", []) if b.get("type") == "tool_use" and isinstance(b.get("input"), dict)), None)
+    if tool is not None:
+        text = json.dumps(tool["input"], ensure_ascii=False)
+    else:
+        text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+        if out.get("response_format", {}).get("type") == "json_object":
+            i, j = text.find("{"), text.rfind("}")   # trim any prose around the object
+            if i >= 0 and j > i:
+                text = text[i:j + 1]
     u = d.get("usage") or {}
     return {"id": d.get("id"), "model": d.get("model", prov["model"]),
             "choices": [{"index": 0, "finish_reason": d.get("stop_reason"), "message": {"role": "assistant", "content": text}}],
