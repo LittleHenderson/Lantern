@@ -199,7 +199,9 @@ code; a Django pack is built in), explanation providers (any OpenAI-compatible e
 
 ## Privacy
 
-Everything runs locally. `report.html` embeds function source by default; use
+Everything runs locally. Lantern sends nothing anywhere unless you turn on "Share anonymous usage counts"
+in Settings (off by default; then it sends a random install id, the version, your OS name and per-feature
+counts, at most once a day, and `lantern usage --show` prints exactly what). See [`docs/analytics.md`](docs/analytics.md). `report.html` embeds function source by default; use
 `lantern analyze --privacy structure` to leave it out. With a cloud model, the source of each explained
 function is sent to that provider; use a local model to keep it on your machine.
 

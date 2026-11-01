@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, learn, pipeline, remote
+from . import __version__, learn, pipeline, remote, usage
 from .providers import PRESETS
 from .readiness import SHAPES
 
@@ -170,12 +170,15 @@ class Store:
     # settings and keys
     def settings(self) -> dict:
         return {"provider": "deepseek", "model": "deepseek-flash", "base_url": "", "privacy": "full",
-                **self._read("settings.json", {})}
+                "share_usage": False, **self._read("settings.json", {})}
 
     def save_settings(self, s: dict) -> None:
         keep = {k: s.get(k) for k in ("provider", "model", "base_url", "privacy")}
+        keep["share_usage"] = bool(s.get("share_usage"))
         with self.lock:
             self._write("settings.json", keep)
+        if keep["share_usage"]:
+            usage.install_id()
 
     def key_for(self, provider: str) -> str | None:
         env = (PRESETS.get(provider) or (None, None, "LANTERN_API_KEY"))[2]
@@ -485,6 +488,7 @@ class Handler(BaseHTTPRequestHandler):
                               {"Content-Security-Policy": _csp(None)})
         try:
             if name == "report.html":
+                usage.record("report_open")
                 s = self.app.store.settings()
                 live = {"api": f"/api/projects/{p['id']}", "token": self.app.token, "model": s.get("model") and
                         f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS}
@@ -517,6 +521,10 @@ class Handler(BaseHTTPRequestHandler):
             s = app.store.settings()
             return self._json({"version": __version__, "projects": [app.summary(p) for p in app.store.projects()],
                                "settings": s, "providers": app.provider_info()})
+        if path == "/api/usage":
+            from .providers import gateway_url
+            return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
+                               "features": sorted(usage.FEATURES), "text": usage.describe()})
         if path == "/api/connections":
             import shutil
             from .mcp_server import connections
@@ -587,6 +595,7 @@ class Handler(BaseHTTPRequestHandler):
             if not raw:
                 raise ValueError("give a folder path or a repository link")
             if remote.looks_like_url(raw):
+                usage.record("analyze_link")
                 return self._json(app.clone_project(raw), 202)
             d = Path(os.path.expanduser(raw))
             if not d.is_dir():
@@ -613,7 +622,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("unknown provider")
             if s["privacy"] not in ("full", "structure"):
                 raise ValueError("privacy is full or structure")
+            if "share_usage" in b:
+                s["share_usage"] = bool(b["share_usage"])
             app.store.save_settings(s)
+            usage.record("settings_save")
             if b.get("key"):
                 app.store.set_key(s["provider"], str(b["key"]).strip(), bool(b.get("remember")))
             if b.get("forget_key"):
@@ -631,10 +643,12 @@ class Handler(BaseHTTPRequestHandler):
             app.store.remove_project(p["id"])
             return self._json({"ok": True, "note": "Removed from the list. Files were not touched."})
         if action == "analyze":
+            usage.record("analyze")
             privacy = app.store.settings().get("privacy", "full")
             job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log))
             return self._json(job, 202)
         if action == "explain":
+            usage.record("explain_one" if b.get("nodes") else "explain")
             provider = app.make_provider()
             nodes = b.get("nodes")
             if nodes is not None and (not isinstance(nodes, list) or not all(isinstance(n, str) for n in nodes)):
@@ -663,6 +677,7 @@ class Handler(BaseHTTPRequestHandler):
                 return {"stats": st}
             return self._json(app.jobs.start(p["id"], "explain", work), 202)
         if action == "accept":
+            usage.record("accept")
             from .security import load_accepted, reason_ok, save_accepted
             fid, reason = str(b.get("finding") or ""), str(b.get("reason") or "").strip()
             if b.get("remove"):
@@ -684,6 +699,7 @@ class Handler(BaseHTTPRequestHandler):
             job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log))
             return self._json(job, 202)
         if action == "starter":
+            usage.record("starter")
             rd = _load(out / "readiness.json") or {}
             name = str(b.get("name") or "")
             f = (rd.get("starter") or {}).get(name)
@@ -719,6 +735,17 @@ LOCKED_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" cont
 <title>Lantern</title><body style="font:15px/1.5 system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 16px">
 <h1 style="font-size:20px">Lantern is running</h1><p>For safety, open the link that <code>lantern serve</code> printed
 in your terminal (it contains a one-time token). Run <code>lantern serve</code> again to get a new link.</p></body>"""
+
+
+def _usage_sender() -> None:
+    """Send opt-in usage counts now and then every six hours, in the background, never blocking the app."""
+    from .providers import gateway_url
+
+    def loop():
+        while True:
+            usage.send(gateway_url())
+            time.sleep(6 * 3600)
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def _unspecified(host: str) -> bool:
@@ -758,6 +785,8 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
                            lambda log, repo=repo: pipeline.analyze(repo, pipeline.out_dir(repo), privacy, log=log))
     url = f"http://{'127.0.0.1' if _unspecified(host) else host}:{port}/?token={token}"
     print(f"Lantern {__version__} is running. Open:\n\n  {url}\n\nPress Ctrl-C to stop.", flush=True)
+    usage.record("serve")
+    _usage_sender()
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:

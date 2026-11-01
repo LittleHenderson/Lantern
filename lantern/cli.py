@@ -15,6 +15,7 @@
   lantern mcp [PATH ...] [--setup]                        serve Lantern to AI assistants (Claude, ChatGPT, Cursor)
   lantern packs PATH                                      list and check the analysis packs a project uses
   lantern export PATH --sarif out.sarif                   findings as SARIF (GitHub code scanning and others)
+  lantern usage [--on | --off | --show]                   anonymous usage counts (off by default; --show prints the ping)
 
 Results live in PATH/.lantern/ (override with --out).
 """
@@ -415,6 +416,11 @@ def main(argv: list[str] | None = None) -> int:
     common(sp)
     sp.add_argument("--sarif", metavar="FILE", default="-", help="write here (default: stdout)")
 
+    sp = sub.add_parser("usage", help="anonymous usage counts: off by default; --show prints exactly what would be sent")
+    sp.add_argument("--on", action="store_true")
+    sp.add_argument("--off", action="store_true")
+    sp.add_argument("--show", action="store_true")
+
     sp = sub.add_parser("learn", help="list starter apps, create one to learn Lantern, or check your progress")
     sp.add_argument("name", nargs="?", help="starter to create (omit to list them)")
     sp.add_argument("dir", nargs="?", help="folder to create it in (default ./NAME); with --check/--show-fix, the app's folder")
@@ -441,6 +447,13 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    from . import usage
+    usage.record({"analyze": "analyze", "trace": "trace", "explain": "explain", "verify": "verify", "export": "export_sarif",
+                  "packs": "packs", "learn": "learn", "evidence": "evidence", "accept": "accept", "starter": "starter"}.get(a.cmd, ""))
+    if a.cmd != "serve" and usage.enabled():
+        import atexit
+        from .providers import gateway_url
+        atexit.register(usage.send, gateway_url(), 3.0)
     if a.cmd == "analyze":
         return cmd_analyze(a, trace_cmd if a.trace else [])
     if a.cmd == "trace":
@@ -470,6 +483,14 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_evidence(a)
     if a.cmd == "verify":
         return cmd_verify(a, trace_cmd)
+    if a.cmd == "usage":
+        from . import usage
+        if a.on:
+            usage.set_enabled(True)
+        if a.off:
+            usage.set_enabled(False)
+        print(usage.describe())
+        return 0
     if a.cmd == "packs":
         return cmd_packs(a)
     if a.cmd == "export":
