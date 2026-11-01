@@ -114,7 +114,7 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 
 ## Backlog (priority order)
 
-0. **Ship the allowance:** deploy `gateway/` behind HTTPS, set `DEFAULT_GATEWAY_URL`, issue tokens through
+0. **Ship the allowance:** the gateway is live at `https://lantern-gateway.fly.dev` (Fly.io, org Little Henderson, region sjc; `gateway/fly.toml`, `docs/deploy.md`; deploy with `fly deploy --depot=false` from behind a TLS-inspecting proxy) and `DEFAULT_GATEWAY_URL` points at it. Left: the owner's secrets on Fly, then issue tokens through
    "Sign in with GitHub" (one per account). Then the spec chapter 19 order: wallet-drain check, "Prove it" live
    checks (domain verification and consent first), Ask Lantern with screenshots, What changed, data-flow map.
    Done: the MCP connector (`lantern mcp`) with the fix-and-verify loop (`lantern_recheck`), "Send to…",

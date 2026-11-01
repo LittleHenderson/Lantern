@@ -17,7 +17,8 @@ uvicorn lantern_gateway.app:create_app --factory --port 8080
 # or: docker build -t lantern-gateway gateway/ && docker run -p 8080:8080 -e DEEPSEEK_API_KEY -e LANTERN_ADMIN_SECRET -v lantern-data:/home/app/data lantern-gateway
 ```
 
-Put it behind HTTPS (any host with TLS termination: Fly.io, Render, Railway, a VPS with Caddy).
+Put it behind HTTPS (any host with TLS termination: Fly.io, Render, Railway, a VPS with Caddy). The Fly.io
+setup, step by step, is in [`../docs/deploy.md`](../docs/deploy.md) (`fly.toml` is beside this file).
 Then set `DEFAULT_GATEWAY_URL` in `lantern/providers.py` to `https://<your-host>/v1` for releases,
 or have users set `LANTERN_GATEWAY_URL`.
 
