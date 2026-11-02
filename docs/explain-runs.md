@@ -96,7 +96,34 @@ the allowance's daily cap it was resumed from the cache with another token; resu
 saved by REPAIR; 11 pairs dropped; 0 UNDETERMINED; 0 invented findings reached a reader (hard gate passed on every
 run).** On Lantern's own fixtures the same version did 37 / 37 and 30 first try (81.1%).
 
-**Claim ceiling: BENCH_7_SINGLE_RUN.** One run per repo, 25 functions each (5 for requests), one model, one
+### Pass 2 (2026-11-01, same prompt, same settings, fresh cache)
+
+| Repo | Validated | First try | Repaired | Pairs dropped | Undetermined | Invented dropped | Tokens in / out | Notes |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| fastapi-template | **25 / 25** | 18 | 5 | 2 | 0 | 0 | 75,494 / 33,989 | |
+| taxonomy | **25 / 25** | 15 | 3 | 2 | 0 | 0 | 85,797 / 37,310 | pass 1's `CardTitle` read-back miss did not recur |
+| click | 24 / 25 | 20 | 3 | 0 | 0 | 0 | 75,938 / 34,078 | resumed after the daily cap (12 from cache). Miss: two scanner findings left unexplained in `Editor.edit_file`, twice |
+| flask | **25 / 25** | 19 | 4 | 2 | 0 | 0 | 75,114 / 32,307 | |
+| rich | **25 / 25** | 20 | 4 | 2 | 0 | 0 | 96,652 / 32,292 | |
+| requests | **5 / 5** | 3 | 1 | 1 | 0 | 0 | 15,970 / 6,131 | |
+| httpie | 24 / 25 | 18 | 5 | 2 | 1 | 0 | 71,633 / 36,683 | resumed after the cap. Miss: two findings left unexplained in `docs.contributors.fetch.fetch`, twice. One honest UNDETERMINED |
+
+**Pass 2 totals: 153 / 155 validated (98.7%); 113 / 155 first try (72.9%); 25 REPAIRs; 11 pairs dropped; 1
+UNDETERMINED; 0 invented findings shown.**
+
+**Run-to-run swing, measured.** Pass 1 → pass 2 per repo, first try: fastapi-template 19 → 18, taxonomy 14 → 15,
+click 20 → 20, flask 16 → 19, rich 20 → 20, requests 4 → 3, httpie 20 → 18. Largest per-repo swing: 3 (flask). The
+totals landed on the same number both times (113 of 155 first try); end rate 98.1% → 98.7%. Both passes' misses
+are the same kind: the model leaves two of the scanner's findings unexplained and does so again on the full retry.
+That is not a pair problem, so REPAIR does not fire; a targeted "explain only these findings" repair is the obvious
+next fix.
+
+**Claim ceiling: BENCH_7_TWO_RUNS.** Two independent full passes, one model, one metaphor, 25 functions per repo
+(5 for requests). What may be claimed: "on seven public repositories, in two separate runs, 98% of explanations
+passed every anchor check and 73% passed on the first try, with Claude Haiku 5.5; 0 model-invented findings were
+shown; the per-repository first-try swing between runs was at most 3 of 25." The 90% first-try target is not met.
+
+(Pass 1 ceiling, superseded.) **Claim ceiling: BENCH_7_SINGLE_RUN.** One run per repo, 25 functions each (5 for requests), one model, one
 metaphor. Run-to-run variance was ±3 on the fixtures and is not yet measured on the benchmark; a second full pass is
 the next step before any number goes in the README. What may be claimed now: "on seven public repositories, 98% of
 explanations passed every anchor check and 73% passed on the first try, with Claude Haiku 5.5; 0 model-invented
