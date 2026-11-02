@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, js_frontend, packs, python_frontend
+from . import bridge, go_frontend, js_frontend, packs, python_frontend
 from .graph import Graph
 
 
@@ -12,15 +12,18 @@ def build_graph(repo: str | Path) -> Graph:
     g = python_frontend.build_graph(repo)
     py = {"files": g.meta.get("files", 0), "lines": g.meta.get("lines", 0)}
     js = js_frontend.add_js(g, repo)
+    go = go_frontend.add_go(g, repo)
     langs = {}
     if py["files"]:
         langs["python"] = py
     if js.get("files"):
         langs["typescript/javascript"] = js
+    if go.get("files"):
+        langs["go"] = go
     g.meta.update({
         "languages": langs,
-        "files": py["files"] + js.get("files", 0),
-        "lines": py["lines"] + js.get("lines", 0),
+        "files": py["files"] + js.get("files", 0) + go.get("files", 0),
+        "lines": py["lines"] + js.get("lines", 0) + go.get("lines", 0),
         "language": " + ".join(langs) or "none",
     })
     # Analysis packs (pattern files) can add entry points for frameworks without built-in support, before the
