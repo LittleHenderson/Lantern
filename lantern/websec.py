@@ -12,6 +12,7 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
   LW-AUTH-MISSING    route that changes data, called by the UI, with no login check found
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
+  LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
 """
 
 from __future__ import annotations
@@ -55,6 +56,17 @@ JS_RULES = [
      "Turns off HTTPS certificate checks", 295),
     ("LJ-TOKEN-STORAGE", re.compile(r"localStorage\.setItem\(\s*['\"][^'\"]*(?:token|jwt|auth|session)[^'\"]*['\"]", re.I),
      "LOW", "Stores a login token in localStorage, where any injected script can read it", 922),
+]
+
+RUST_RULES = [
+    ("LR-SQL-FORMAT", re.compile(r"format!\(\s*r?#*\"[^\"]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b[^\"]*\{", re.I), "HIGH",
+     "Builds SQL from variables with format! (SQL injection risk)", 89),
+    ("LR-EXEC-FORMAT", re.compile(r"Command::new\([^)\n]*format!|\.args?\(\s*&?(?:format!|\[?\s*format!)"), "HIGH",
+     "Builds a shell command from variables (command injection risk)", 78),
+    ("LR-TLS-OFF", re.compile(r"danger_accept_invalid_(?:certs|hostnames)\(\s*true\s*\)"), "MEDIUM",
+     "Turns off HTTPS certificate checks", 295),
+    ("LR-WEAK-HASH", re.compile(r"\b(?:md5::compute|Md5::new|Sha1::new)\b"), "MEDIUM", "Uses a weak hash (MD5/SHA-1)", 328),
+    ("LR-UNSAFE", re.compile(r"\bunsafe\s*\{"), "LOW", "Uses an unsafe block", 242),
 ]
 
 GO_RULES = [
@@ -172,13 +184,22 @@ def js_rules(repo: Path) -> list[dict]:
 
 
 def go_rules(repo: Path) -> list[dict]:
+    return _pattern_rules(repo, {".go"}, GO_RULES, skip=lambda rel: rel.endswith("_test.go"))
+
+
+def rust_rules(repo: Path) -> list[dict]:
+    return _pattern_rules(repo, {".rs"}, RUST_RULES, skip=lambda rel: rel.startswith("tests/") or "/tests/" in rel)
+
+
+def _pattern_rules(repo: Path, exts: set[str], rules, skip) -> list[dict]:
+    """Line patterns over one language's files; `skip` takes the repo-relative path."""
     out = []
-    for p in _files(repo, {".go"}):
-        if p.name.endswith("_test.go"):
+    for p in _files(repo, exts):
+        rel = p.relative_to(repo).as_posix()
+        if skip(rel):
             continue
         text = _read(p)
-        rel = p.relative_to(repo).as_posix()
-        for rule, rx, sev, title, cwe in GO_RULES:
+        for rule, rx, sev, title, cwe in rules:
             for m in rx.finditer(text):
                 ln = _line_of(text, m.start())
                 src_line = text.splitlines()[ln - 1] if text else ""
@@ -554,7 +575,7 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
 def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
     its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
-    js = not n.id.startswith("py:")      # JS and Go name things in camelCase
+    js = n.id.startswith(("js:", "go:"))      # JS and Go name things in camelCase; Python and Rust use snake_case
     for d in n.decorators:
         if auth_ident(d, js):
             return f"decorator @{d.split('(')[0]}"
@@ -569,7 +590,7 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
                 if v in seen:
                     continue
                 seen.add(v)
-                if auth_word(_func_name(g, v), not v.startswith("py:")):
+                if auth_word(_func_name(g, v), v.startswith(("js:", "go:"))):
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt
@@ -638,7 +659,7 @@ def missing_auth(g: Graph) -> list[dict]:
 
 def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
-    findings = js_rules(repo) + go_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
+    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]
