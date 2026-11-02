@@ -57,7 +57,8 @@ You write three lenses for ONE code unit, grounded ONLY in the context provided.
 functions, files or behavior that the context does not show. If something is unknown, say so.
 
 LENS 1 - TECHNICAL: precise, for an engineer. What it does, inputs, outputs, side effects, errors,
-and its role in the call path.
+and its role in the call path. Name only functions that appear in the CODE, CALLS, CALLED BY or
+ALLOWED SYMBOLS; never a function the context does not show.
 LENS 2 - EVERYDAY: zero jargon and no code identifiers. Include one concrete example ("if someone
 types...") and one analogy drawn ONLY from the metaphor world given. Short sentences.
 LENS 3 - MAPPED: rewrite the Lens 2 explanation as `text`, then list `pairs`. Each pair maps one
@@ -76,8 +77,15 @@ If SECURITY FINDINGS are listed, add `findings` explaining each one in lens1 and
 including why it matters and the safest fix in one sentence. Do not judge whether a finding is a
 false positive.
 
+Rarely, this unit's own CODE lines are not enough to explain it honestly (the body is cut off, or it
+is empty). Then do not guess: return lens1 for what is visible and `"undetermined": "<one sentence
+saying what is missing>"` instead of lens2 and lens3. Callees whose bodies you cannot see are NOT a
+reason: their one-line summaries under CALLS are what you explain them by. An honest "cannot tell"
+beats an invented explanation, but a visible body always gets lens2 and lens3.
+
 Respond with ONLY a json object (valid JSON), no markdown fences:
 {"lens1":{"summary":str,"inputs":[str],"outputs":str,"side_effects":[str],"errors":[str],"role":str},
+ "undetermined": str (only instead of lens2 and lens3, see above),
  "lens2":{"text":str,"example":str,"analogy":str},
  "lens3":{"text":str,"pairs":[{"plain":str,"technical":str,"anchor":{...}}]},
  "findings":[{"id":str,"lens1":str,"lens2":str,"fix":str}]}"""
@@ -208,6 +216,36 @@ def _code_identifiers(ctx: Context) -> set[str]:
     return out
 
 
+_NAME_RE = re.compile(r"\b(?:[A-Za-z_][\w]*\.)+[A-Za-z_]\w*\b|\b[a-z]+_[a-z_\d]+\b|\b[a-z]+[A-Z]\w+\b|\b[A-Za-z_]\w*(?=\()")
+_NAME_SKIP = {"e.g", "i.e", "vs", "etc"}
+
+
+def _unknown_names_in_lens1(l1: dict, ctx: Context) -> list[str]:
+    """Code-looking names in Lens 1 (dotted, snake_case, camelCase, or called with parentheses) that appear nowhere
+    in the unit's own code, its allowed symbols (callers, callees, parent), or the glossary."""
+    blob = " ".join(str(l1.get(k, "")) for k in ("summary", "role", "outputs")) + " " + " ".join(
+        str(x) for k in ("inputs", "side_effects", "errors") for x in (l1.get(k) or []) if isinstance(l1.get(k), list))
+    # Everything the model was shown counts as context: this unit's code, the names of its callers, callees and
+    # parent, the one-line summaries of its callees (which legitimately mention what those call), and its file.
+    known = " ".join([ctx.source, ctx.node.file or "", *ctx.allowed_symbols.values(),
+                      *ctx.callee_summaries.values()]).lower()
+    out = []
+    for m in _NAME_RE.finditer(blob):
+        name = re.sub(r"^(?:self|this|cls)\.", "", m.group(0).strip("."))
+        low = name.lower()
+        if low in _NAME_SKIP or low in GLOSSARY or len(name) < 3:
+            continue
+        if re.search(r"\.(?:py|js|jsx|ts|tsx|json|db|sqlite|txt|md|html|css|yml|yaml|toml|env|csv|tgz|gz|zip)$", low):
+            continue   # a file name, not a function
+        last = low.rsplit(".", 1)[-1]
+        if last in known or low in known:   # the whole dotted name, or its last segment, is in the code or map
+            continue
+        if re.search(r"(?<![\w])" + re.escape(last) + r"(?![\w])", known):
+            continue
+        out.append(name)
+    return sorted(set(out))
+
+
 def validate(rec: dict, ctx: Context) -> list[str]:
     errs: list[str] = []
     if not isinstance(rec, dict):
@@ -215,6 +253,24 @@ def validate(rec: dict, ctx: Context) -> list[str]:
     l1, l2, l3 = rec.get("lens1"), rec.get("lens2"), rec.get("lens3")
     if not isinstance(l1, dict) or not str(l1.get("summary", "")).strip():
         errs.append("lens1.summary is missing")
+    else:
+        # Read-back (HELM's round trip, the light form): every code name Lens 1 mentions must exist in this
+        # unit's code or among its callers, callees and parent. A technical lens that names a function the
+        # context does not show is describing code that is not there.
+        unknown = _unknown_names_in_lens1(l1, ctx)
+        if unknown:
+            errs.append("lens1 names code that is not in this function or its callers/callees: " + ", ".join(unknown[:5]))
+    und = rec.get("undetermined")
+    if isinstance(und, str) and und.strip() and not isinstance(l2, dict) and not isinstance(l3, dict):
+        if len(und.strip()) < 25 or " " not in und.strip():
+            errs.append("undetermined needs a real one-sentence reason (what is missing), or lens2 and lens3")
+            return errs
+        # The model declined to explain in plain words rather than guess. Lens 1 still had to pass.
+        rec["findings"] = [f for f in rec.get("findings") or [] if isinstance(f, dict) and f.get("id") in {x["id"] for x in ctx.findings}]
+        missing = {f["id"] for f in ctx.findings} - {f.get("id") for f in rec["findings"]}
+        if missing:
+            errs.append(f"findings not explained: {', '.join(sorted(missing))}")
+        return errs
     if not isinstance(l2, dict) or not str(l2.get("text", "")).strip():
         errs.append("lens2.text is missing")
     else:
@@ -408,11 +464,82 @@ def choose_metaphor(provider: Provider, g: Graph) -> dict:
     return rec
 
 
+REPAIR_SYSTEM = """You fix one part of an answer you gave before. Return ONLY a json object. Follow the
+instructions exactly; change nothing that was not asked about."""
+
+_PAIR_ERR = re.compile(r"^lens3\.pairs\[(\d+)\]")
+
+
+def _repairable(errors: list[str]) -> bool:
+    """Only pair-level problems: the rest of the answer passed, so a small targeted fix beats a full retry."""
+    return bool(errors) and all(_PAIR_ERR.match(e) or e.startswith("lens3.pairs needs") for e in errors)
+
+
+def repair_pairs(provider: Provider, ctx: Context, rec: dict, errors: list[str]) -> dict | None:
+    """HELM's RPM Gate has PROCEED, REPAIR and REFUSE. This is REPAIR: send back only the failing pairs with their
+    reasons and the text they must be copied from; keep every pair that passed."""
+    l3 = rec.get("lens3") or {}
+    bad = sorted({int(m.group(1)) for e in errors for m in [_PAIR_ERR.match(e)] if m})
+    user = ("TEXT (every pair's \"plain\" must be copied from here letter for letter, apostrophes included; "
+            "do not reword it):\n" + str(l3.get("text", "")) +
+            "\n\nPAIRS:\n" + json.dumps(l3.get("pairs") or [], ensure_ascii=False) +
+            "\n\nPROBLEMS:\n- " + "\n- ".join(errors) +
+            "\n\nALLOWED SYMBOLS:\n" + "\n".join(ctx.allowed_symbols) +
+            f"\n\nLINE RANGE: {ctx.line_range[0]}-{ctx.line_range[1]}" +
+            f"\n\nFix only pairs {bad} (or drop them), keep the others exactly as they are, keep at least 3 pairs, "
+            "and return ONLY {\"pairs\": [...]} as json.")
+    try:
+        fixed = parse_json(provider.complete(REPAIR_SYSTEM, user, max_tokens=900))
+    except AllowanceExhausted:
+        raise
+    except ProviderError:
+        return None
+    if not isinstance(fixed, dict) or not isinstance(fixed.get("pairs"), list):
+        return None
+    out = json.loads(json.dumps(rec))
+    out["lens3"]["pairs"] = fixed["pairs"]
+    return out
+
+
+def drop_bad_pairs(rec: dict, errors: list[str], ctx: Context) -> dict | None:
+    """Last resort after a failed REPAIR: a pair that cannot be anchored or highlighted is removed, not shown.
+
+    Deterministic, never adds anything: the text and every other pair stay as the model wrote them. Only when
+    every error names a pair and at least 3 pairs survive; the removed pairs are kept in `dropped_pairs` for the
+    record. Mirrors how model-invented findings are handled (dropped and counted, never displayed)."""
+    bad = {int(m.group(1)) for e in errors for m in [_PAIR_ERR.match(e)] if m}
+    if not bad or len(bad) != len(errors):
+        return None
+    pairs = (rec.get("lens3") or {}).get("pairs") or []
+    keep = [p for i, p in enumerate(pairs) if i not in bad]
+    if len(keep) < 3:
+        return None
+    out = json.loads(json.dumps(rec))
+    out["lens3"]["pairs"] = keep
+    out["dropped_pairs"] = [{"pair": pairs[i], "reason": e} for i, e in zip(sorted(bad), errors)]
+    return out if not validate(out, ctx) else None
+
+
 def explain_node(provider: Provider, g: Graph, ctx: Context, retries: int = 1) -> dict:
     user = render_prompt(ctx, g)
     errors: list[str] = []
     rec: dict | None = None
+    repaired = False
     for attempt in range(retries + 1):
+        if attempt and rec is not None and _repairable(errors) and not repaired:
+            fixed = repair_pairs(provider, ctx, rec, errors)      # REPAIR: cheap, targeted
+            repaired = True
+            if fixed is not None:
+                e2 = validate(fixed, ctx)
+                if not e2:
+                    rec, errors = fixed, []
+                    break
+                dropped = drop_bad_pairs(fixed, e2, ctx)
+                if dropped is not None:
+                    rec, errors = dropped, []
+                    break
+                rec, errors = fixed, e2
+                continue
         prompt = user if not errors else (
             user + "\n\nYOUR PREVIOUS ANSWER FAILED VALIDATION. Fix exactly these problems and "
                    "return the full JSON again:\n- " + "\n- ".join(errors))
@@ -429,7 +556,10 @@ def explain_node(provider: Provider, g: Graph, ctx: Context, retries: int = 1) -
     rec = rec if isinstance(rec, dict) else {}
     rec.update({"node_id": ctx.node.id, "code_hash": ctx.node.fingerprint, "model": provider.label,
                 "prompt_version": PROMPT_VERSION, "metaphor_world": ctx.metaphor,
-                "validated": not errors, "validation_errors": errors, "attempts": attempt + 1})
+                "validated": not errors, "validation_errors": errors, "attempts": attempt + 1,
+                "repaired": repaired and not errors})
+    if rec.get("undetermined") and not errors:
+        rec["undetermined"] = str(rec["undetermined"])[:300]
     return rec
 
 
@@ -437,8 +567,8 @@ def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nid
         metaphor: str | None = None, progress=None) -> dict:
     cache = Cache(cache_dir)
     done: dict[str, dict] = {}
-    stats = {"generated": 0, "cached": 0, "validated": 0, "failed": 0, "first_try": 0, "invented_findings": 0,
-             "stopped": None}
+    stats = {"generated": 0, "cached": 0, "validated": 0, "failed": 0, "first_try": 0, "repaired": 0,
+             "pairs_dropped": 0, "undetermined": 0, "invented_findings": 0, "stopped": None}
     # the same model gives the same cache entries whether billed to the allowance or your own key
     model_id = getattr(provider, "cache_model", provider.label)
     try:
@@ -464,6 +594,9 @@ def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nid
                 cache.put(k, rec)
         done[nid] = rec
         stats["invented_findings"] += len(rec.get("dropped_findings") or [])
+        stats["repaired"] += 1 if rec.get("repaired") else 0
+        stats["pairs_dropped"] += len(rec.get("dropped_pairs") or [])
+        stats["undetermined"] += 1 if rec.get("undetermined") else 0
         if rec.get("validated"):
             stats["validated"] += 1
             if rec.get("attempts") == 1:

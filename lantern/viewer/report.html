@@ -781,6 +781,9 @@ function lensBody(r) {
     return warn + `<div class="lens l1">${esc(l.summary)}<dl><dt>Inputs</dt><dd>${list(l.inputs)}</dd><dt>Output</dt><dd>${esc(l.outputs) || '<span class="note">none noted</span>'}</dd>
       <dt>Side effects</dt><dd>${list(l.side_effects)}</dd><dt>Errors</dt><dd>${list(l.errors)}</dd><dt>Role in the path</dt><dd>${esc(l.role)}</dd></dl></div>` + by;
   }
+  if (r.undetermined && S.lens !== 1) {
+    return warn + `<div class="lens l2"><b>No plain-words explanation.</b> The model said it could not explain this honestly from what it was shown: ${esc(r.undetermined)}<br><span class="note">Lantern asks a model to say so rather than guess. The technical lens is still here, and so is the code.</span></div>` + by;
+  }
   if (S.lens === 2) {
     const l = r.lens2 || {};
     return warn + `<div class="lens l2">${esc(l.text)}<span class="k">Example</span>${esc(l.example)}<span class="k">Analogy</span>${esc(l.analogy)}</div>` + by;
@@ -800,7 +803,8 @@ function lensBody(r) {
   text = text.replace(/\u0000(\d+)\u0000/g, (_, k) => tokens[+k]);
   const anc = a => !a ? '' : a.type === 'symbol' ? `symbol · ${esc(short((N[a.id] || {}).qualname || a.id))}` : a.type === 'lines' ? `lines ${esc(a.start)}–${esc(a.end)}` : `term · ${esc(a.term)}`;
   return warn + `<div class="lens l3">${text}<div class="pairs">${pairs.map((p, i) =>
-    `<div class="pair ${S.pair === i ? 'on' : ''}" data-p="${i}"><span>${esc(p.plain)}</span><span class="ar">↔</span><span class="t">${esc(p.technical)}</span><span class="an">${anc(p.anchor)}</span></div>`).join('')}</div></div>` + by;
+    `<div class="pair ${S.pair === i ? 'on' : ''}" data-p="${i}"><span>${esc(p.plain)}</span><span class="ar">↔</span><span class="t">${esc(p.technical)}</span><span class="an">${anc(p.anchor)}</span></div>`).join('')}</div>${
+    (r.dropped_pairs || []).length ? `<div class="note" style="margin-top:6px">${r.dropped_pairs.length === 1 ? 'One highlight the model offered was removed' : r.dropped_pairs.length + ' highlights the model offered were removed'} because Lantern could not match ${r.dropped_pairs.length === 1 ? 'it' : 'them'} to this code. Nothing was added.</div>` : ''}</div>` + by;
 }
 
 function srcBlock(n) {
