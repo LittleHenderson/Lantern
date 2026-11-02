@@ -131,7 +131,7 @@ header.top,#view{position:relative;z-index:1}
 .seg{display:inline-flex;gap:2px;padding:3px;border-radius:9px;background:var(--sunken);border:1px solid var(--line)}
 .seg button{padding:4px 10px;border-radius:6px;border:0;cursor:pointer;font:600 12px var(--font);background:transparent;color:var(--muted)}
 .seg button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1)}
-@media (max-width:760px){.seg{display:none}}
+@media (max-width:760px){#viewmode{display:none !important}}
 header.top{position:sticky;top:0;z-index:10;height:56px;display:flex;align-items:center;gap:16px;padding:0 20px;
   background:color-mix(in srgb, var(--bg) 82%, transparent);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:10px;background:none;border:0;padding:4px 6px 4px 0;font:600 16px/1 var(--display);letter-spacing:-.02em;color:var(--ink)}
@@ -470,7 +470,9 @@ iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px
   .sub{flex-wrap:wrap;height:auto;padding:0 8px;gap:0 6px}
   .sub .back,.sub .title,.sub .gchip,.sub .newtab{margin:11px 0}
   .sub .title{max-width:none;flex:1}
-  .sub .spacer,.sub .newtab span{display:none}
+  .sub .spacer,.sub .newtab span,.sub #termbtn span,.sub #watchtests span{display:none}
+  .sub .btn.sm{height:32px;padding:0 9px;margin:9px 0}
+  .fixgrid{grid-template-columns:1fr}
   .tabs{order:3;width:100%;margin:0 -8px;padding:0 4px;border-top:1px solid var(--line)}
   .tabs button{height:44px;padding:0 10px}
   iframe{height:calc(100vh - 152px);height:calc(100dvh - 152px)}
