@@ -545,6 +545,7 @@ function viewMode() { return (S.state && S.state.settings && S.state.settings.vi
 function drawViewMode() {
   for (const b of document.querySelectorAll('#viewmode button')) b.classList.toggle('on', b.dataset.m === viewMode());
   document.body.dataset.mode = viewMode();
+  try { localStorage.setItem('lantern.simple', viewMode() === 'simple' ? '1' : '0'); } catch (e) {}   // the Atlas (report.html, same origin) follows
 }
 document.getElementById('viewmode').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
