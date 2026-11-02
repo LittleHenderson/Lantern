@@ -356,7 +356,7 @@ def _same(given, token: str) -> bool:
 
 def _csp(nonce: str | None) -> str:
     """Only our own scripts run on Lantern's pages: inline ones carry this response's nonce, and pages without
-    a nonce (Evidence Report, messages) run none at all."""
+    a nonce (messages) run none at all."""
     script = f"'nonce-{nonce}'" if nonce else "'none'"
     # Google Fonts is the one outside origin: the design's typefaces (DM Sans, Lora, JetBrains Mono). Offline, the
     # system fallbacks render and nothing else changes; the browser sends no cookies to it.
@@ -523,7 +523,8 @@ class Handler(BaseHTTPRequestHandler):
                                   {"Content-Security-Policy": _csp(nonce)})
             if name == "evidence.html":
                 ev = _load(f.with_suffix(".json"))
-                return self._send(200, render_html(ev), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
+                nonce = secrets.token_urlsafe(16)   # the page's one script: Simple/Advanced, copy the verify command
+                return self._send(200, render_html(ev, nonce), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)})
             if name == "badge.svg":
                 rd = _load(f) or {}
                 ev = _load(f.with_name("evidence.json")) or {}

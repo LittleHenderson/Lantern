@@ -212,6 +212,13 @@ code.cmd{font:11.5px var(--mono);color:var(--muted);background:var(--hover);padd
 .xprov{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:14px;font-size:13px}
 .xprov dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 10px} .xprov dt{color:var(--muted)} .xprov dd{margin:0;color:var(--ink)}
 @media (max-width:1000px){.xgrid,.xgrid.three{grid-template-columns:1fr}.three{grid-template-columns:1fr}.xside{max-height:300px}}
+
+.btn.help{font-weight:700;color:var(--muted);border-color:transparent;background:var(--hover)} .btn.help span{font-weight:600;font-size:12.5px} .btn.help:hover{color:var(--ink)}
+.btn.ask{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)} .btn.ask .ic{width:15px;height:15px}
+.helppanel{margin:0 0 14px;padding:14px 16px;border:1px solid var(--accent);border-radius:14px;background:var(--surface);box-shadow:0 0 0 4px var(--accent-soft);max-width:760px}
+.helppanel .hh{display:flex;align-items:center;gap:10px;margin-bottom:6px} .helppanel .hh b{font-size:15px;color:var(--ink)} .helppanel .x{margin-left:auto;background:none;border:0;font-size:18px;color:var(--muted);cursor:pointer}
+.helppanel p{margin:6px 0;font-size:13.5px;line-height:1.6;color:var(--ink-2)}
+@media (max-width:760px){.btn.help span{display:none}}
 .detail .acts{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 
 /* ---------- left: entry points ---------- */
@@ -890,8 +897,8 @@ function renderMap() {
   const el = document.getElementById('center');
   if (!S.entry) {
     const eps = G.nodes.filter(n => n.entry && n.entry.kind !== 'test');
-    el.innerHTML = `<div class="empty">${ART}<b>Pick a starting point</b>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
-    return;
+    el.innerHTML = `<div class="toolbar" style="justify-content:flex-end">${helpBtns()}</div><div class="empty">${ART}<b>Pick a starting point</b>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
+    wireHelp(el); return;
   }
   const n = N[S.entry];
   let title = esc(short(n.qualname));
@@ -899,12 +906,13 @@ function renderMap() {
   else if (n.entry && n.entry.kind === 'script') title = esc(n.entry.detail);
   el.innerHTML = `<div class="toolbar"><h2>${title}</h2>
     <div class="seg"><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button><button data-v="graph" class="${S.view === 'graph' ? 'on' : ''}">Graph</button></div>
-    ${S.view === 'graph' ? `<div class="seg mode" title="What the colours mean"><button data-m="risk" class="${S.mode === 'risk' ? 'on' : ''}">Risk</button><button data-m="confidence" class="${S.mode === 'confidence' ? 'on' : ''}">Confidence</button><button data-m="fanin" class="${S.mode === 'fanin' ? 'on' : ''}">Fan-in</button></div>` : `<button class="btn" id="expand">${icon('expand')}Expand all</button>`}</div>
+    ${S.view === 'graph' ? `<div class="seg gmode" title="What the colours mean"><button data-m="risk" class="${S.mode === 'risk' ? 'on' : ''}">Risk</button><button data-m="confidence" class="${S.mode === 'confidence' ? 'on' : ''}">Confidence</button><button data-m="fanin" class="${S.mode === 'fanin' ? 'on' : ''}">Fan-in</button></div>` : `<button class="btn" id="expand">${icon('expand')}Expand all</button>`}${helpBtns()}</div>
     ${S.view === 'graph' ? '' : `<div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>`}
     ${S.view === 'tree' ? renderTree() : S.view === 'chart' ? renderChart() : renderGraph()}`;
   el.querySelectorAll('.seg [data-v]').forEach(b => b.onclick = () => { S.view = b.dataset.v; try { localStorage.setItem('lantern.view', S.view); } catch (e) {} renderMap(); });
   el.querySelectorAll('.seg [data-m]').forEach(b => b.onclick = () => { S.mode = b.dataset.m; renderMap(); });
   if (S.view === 'graph') wireGraph(el);
+  wireHelp(el);
   const ex = document.getElementById('expand'); if (ex) ex.onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
   el.querySelectorAll('[data-tog]').forEach(b => b.onclick = ev => { ev.stopPropagation(); const id = b.dataset.tog; S.open.has(id) ? S.open.delete(id) : S.open.add(id); renderMap(); });
   el.querySelectorAll('.node, g[data-id]').forEach(b => b.onclick = () => { const id = b.dataset.id; if (!S.open.has(id)) S.open.add(id); select(id); renderMap(); });
@@ -951,8 +959,42 @@ function wireFindings(el) {
   el.querySelectorAll('[data-accept]').forEach(b => b.onclick = () => acceptLive(b.dataset.accept));
   el.querySelectorAll('[data-send]').forEach(b => b.onclick = () => sendMenu(b));
 }
-function modeSeg() { return `<div class="seg mode" title="Pick how much detail you want to see"><button data-vm="simple" class="${S.simple ? 'on' : ''}">Simple</button><button data-vm="advanced" class="${S.simple ? '' : 'on'}">Advanced</button></div>`; }
-function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { S.simple = b.dataset.vm === 'simple'; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); }); }
+// Plain-word help for each page, for someone who has never seen a tool like this. Shown by the "?" button on every
+// page; inside the app the "Ask Lantern" button next to it opens the assistant on that page with fitting questions.
+const PAGE_HELP = {
+  map: {t: 'What am I looking at?', p: ['This is a map of your app. On the left are the places a visitor (or a command) can start: pages, API routes, program starts.',
+    'Pick one and the middle shows every step the code takes from there, like following a phone call through an office: who picks up, who they call next. Path lists the steps, Flowchart draws them, Graph shows the whole app at once.',
+    'Click any step to see what it does on the right. Colours mean: red or orange is a security finding inside that function; teal lines were seen running under your tests; dashed lines are Lantern’s best guess (“likely” or “possible”), never a certainty.']},
+  findings: {t: 'What is a finding?', p: ['A finding is a specific line of your code that a scanner flagged as a security problem, with the file and line number.',
+    'Lantern ranks each one by two questions: can a visitor reach it (is there a path from a page or route to that line)? and does it use something the visitor typed? Both yes = critical. That is what “reachable” and “uses input” mean.',
+    'Start at the top. Each one shows the path a visitor would take to reach it, a plain-words explanation when a model has written one, and how to fix it. “Accept risk with a reason” is for when you have decided it is fine and want that written down.']},
+  prot: {t: 'What are protections?', p: ['These are the things a careful engineer adds so an app can be on the internet safely: a login check on routes that change data, a limit on how fast one person can hit a route, security headers, slow password hashing.',
+    'The top list is what Lantern found already in place. The other list is what it looked for and did not find, with how to add each one.',
+    'They are labelled “heuristic” because Lantern looks for known patterns and can be wrong; they lower the readiness score a little but are never counted as hard failures.']},
+  ready: {t: 'What does the score mean?', p: ['The readiness score is a 0–100 number for “could a senior engineer ship this today?”, made of ten areas such as security findings, secrets, tests, dependencies and deployment files, each with a weight.',
+    'Every point has a written reason. A hard failure is a critical finding that a visitor can reach and that uses their input; those cap the grade until fixed.',
+    'The “moves” list is sorted by how many points each fix is worth, so doing them in order raises the grade fastest. Checks that do not apply to your kind of app are skipped, not counted against you.']},
+  xp: {t: 'What are explanations?', p: ['An explanation is a model’s description of one function, written three ways: Technical (for an engineer), Everyday (for anyone, with an example and an analogy) and Mapped (each everyday phrase tied to the exact code it means).',
+    'Lantern checks every phrase against your real code before showing it. If a phrase does not match anything, it is removed and you are told. The model only explains; it can never create, close or accept a finding.',
+    '“Explain” sends that one function’s code to the model you chose in Settings (or none leaves this computer with a local model). Pick a function on the left to read or request its explanation.']},
+  about: {t: 'What is this page?', p: ['What was analyzed, which tools ran with which versions, and what Lantern could not follow. The numbers here are the honest limits of the report.']},
+};
+function helpBtns() {
+  const inApp = (() => { try { return window.self !== window.top && typeof window.parent.askAbout === 'function'; } catch (e) { return false; } })();
+  return `<button class="btn help" id="pagehelp" title="Plain-word help for this page">?<span> What am I looking at</span></button>${inApp ? `<button class="btn ask" id="pageask">${icon('sparkle')}Ask Lantern</button>` : ''}`;
+}
+function wireHelp(el) {
+  const h = el.querySelector('#pagehelp'); if (h) h.onclick = () => {
+    const old = document.getElementById('helppanel'); if (old) { old.remove(); return; }
+    const d = PAGE_HELP[S.tab] || PAGE_HELP.about;
+    const box = document.createElement('div'); box.id = 'helppanel'; box.className = 'helppanel';
+    box.innerHTML = `<div class="hh"><b>${esc(d.t)}</b><button class="x" aria-label="Close">×</button></div>${d.p.map(x => `<p>${esc(x)}</p>`).join('')}<div class="note">Still unsure? ${h.nextElementSibling && h.nextElementSibling.id === 'pageask' ? 'Press <b>Ask Lantern</b> and ask in your own words.' : 'Open this project in the Lantern app and press Ask Lantern.'}</div>`;
+    h.parentElement.after(box); box.querySelector('.x').onclick = () => box.remove();
+  };
+  const a = el.querySelector('#pageask'); if (a) a.onclick = () => { try { window.parent.askAbout({tab: S.tab, page: TAB_WORDS[S.simple ? 'simple' : 'advanced'][S.tab], node: S.tab === 'xp' ? S.xsel : S.sel, finding: S.fsel}); } catch (e) {} };
+}
+function modeSeg() { return `<div class="seg mode" title="Pick how much detail you want to see"><button data-vm="simple" class="${S.simple ? 'on' : ''}">Simple</button><button data-vm="advanced" class="${S.simple ? '' : 'on'}">Advanced</button></div>${helpBtns()}`; }
+function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { S.simple = b.dataset.vm === 'simple'; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); }); wireHelp(el); }
 function renderFindings() {
   const el = document.getElementById('center');
   const all = SEC.findings;

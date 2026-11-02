@@ -317,22 +317,23 @@ def _w(n: int, cap: bool = False) -> str:
 def _memo(ev: dict) -> dict:
     """The sentences at the top of the report (design 4b): what changed since the baseline and what is open."""
     h, sc, se = ev["header"], ev["scorecard"], ev["security"]
-    rd, base = sc.get("readiness"), sc.get("baseline_readiness") or {}
+    rd = sc.get("readiness") if isinstance(sc.get("readiness"), dict) else None
+    base = sc.get("baseline_readiness") if isinstance(sc.get("baseline_readiness"), dict) else {}
     now_open = len(se["open"])
     crit = sum(1 for f in se["open"] if f["rank"] == "critical")
     high = sum(1 for f in se["open"] if f["rank"] == "high")
-    name = h["name"]
-    since = sc.get("baseline_date")
+    name = E(h["name"])
+    since = E(sc.get("baseline_date") or "")
     same_day = since == dt.date.today().isoformat()
     title = (f"What changed in {name} since {since}, and what is still open." if since and not same_day
              else f"Where {name} stands today, and what is still open.")
     parts = []
     if rd:
-        if base.get("score") is not None and base.get("score") != rd["score"] and not same_day:
-            parts.append(f"Readiness moved from <b>{base['score']} to {rd['score']}</b> out of 100 "
-                         f"({base.get('grade', '?')} to {rd['grade']}).")
+        if isinstance(base.get("score"), (int, float)) and isinstance(rd["score"], (int, float)) and base["score"] != rd["score"] and not same_day:
+            parts.append(f"Readiness moved from <b>{E(base['score'])} to {E(rd['score'])}</b> out of 100 "
+                         f"({E(base.get('grade', '?'))} to {E(rd['grade'])}).")
         else:
-            parts.append(f"Readiness is <b>{rd['score']} of 100</b> (grade {rd['grade']}).")
+            parts.append(f"Readiness is <b>{E(rd['score'])} of 100</b> (grade {E(rd['grade'])}).")
     if se["fixed"] or se["accepted"]:
         bits = []
         if se["fixed"]:
@@ -370,7 +371,10 @@ def _memo(ev: dict) -> dict:
                  f"{'' if now_open != 1 else 's'} open, listed below with their paths.")
     else:
         still = "Nothing is open. The scanners that ran and what they could not check are listed under Provenance and Limits."
-    delta = (rd["score"] - base["score"]) if rd and base.get("score") is not None and not same_day else None
+    try:
+        delta = (float(rd["score"]) - float(base["score"])) if rd and base.get("score") is not None and not same_day else None
+    except (TypeError, ValueError):
+        delta = None
     return {"title": title, "lead": " ".join(parts), "still": still, "delta": delta,
             "crit": crit, "high": high, "open": now_open}
 
@@ -472,7 +476,7 @@ def _narratives_html(text: str) -> str:
     return "".join(out)
 
 
-def render_html(ev: dict) -> str:
+def render_html(ev: dict, nonce: str | None = None) -> str:
     h, sc, ar, se = ev["header"], ev["scorecard"], ev["architecture"], ev["security"]
     rd = sc["readiness"]
     commit = h.get("commit")
@@ -526,11 +530,11 @@ def render_html(ev: dict) -> str:
     verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern\" "
               f"&& lantern verify . --report evidence.html{_trace_suffix(ev)}") if commit else "Commit your changes and regenerate the report to make it verifiable."
     memo = _memo(ev)
-    base_rd = sc.get("baseline_readiness") or {}
-    base_cats = base_rd.get("categories") or {}
+    base_rd = sc.get("baseline_readiness") if isinstance(sc.get("baseline_readiness"), dict) else {}
+    base_cats = base_rd.get("categories") if isinstance(base_rd.get("categories"), dict) else {}
     same_day = sc.get("baseline_date") == dt.date.today().isoformat()
     d_html = (f"<span class='delta {'up' if memo['delta'] > 0 else 'down'}'>{'↑' if memo['delta'] > 0 else '↓'} {abs(memo['delta'])}</span>"
-              if memo["delta"] else "")
+              if memo.get("delta") else "")
     tiles = (f"<div class='tiles'>"
              f"<div><div class='v'>{E(rd['score']) if rd else '–'} {d_html}</div><div class='k'>Readiness, grade {E(rd['grade']) if rd else '–'}</div></div>"
              f"<div><div class='v'>{len(se['fixed'])}</div><div class='k'>Fixed since baseline</div></div>"
@@ -544,7 +548,10 @@ def render_html(ev: dict) -> str:
         b = base_cats.get(c["title"])
         now = "n/a" if c["score"] is None else f"{E(c['score'])}/{E(c['weight'])}"
         before = "–" if b is None or same_day else f"{E(b)}/{E(c['weight'])}"
-        dl = "" if b is None or c["score"] is None or same_day else (f"+{round(c['score'] - b, 1)}" if c["score"] > b else f"{round(c['score'] - b, 1)}" if c["score"] < b else "0")
+        try:
+            dl = "" if b is None or c["score"] is None or same_day else (f"+{round(c['score'] - b, 1)}" if c["score"] > b else f"{round(c['score'] - b, 1)}" if c["score"] < b else "0")
+        except TypeError:
+            dl = ""
         return (f"<tr><td>{E(c['title'])}</td><td class='num'>{before}</td><td class='num'>{now}</td>"
                 f"<td class='num {'good' if dl.startswith('+') else 'bad' if dl.startswith('-') else ''}'>{dl}</td>"
                 f"<td><span class='bar'><i style='width:{_pct(c.get('percent'))}%'></i></span></td></tr>")
@@ -680,7 +687,7 @@ body[data-mode=simple] .adv{{display:none}} body[data-mode=advanced] .simp{{disp
 <p class="muted">This is a SHA-256 hash of the deterministic results above (graph, findings, readiness checks, tool versions) and the commit. Re-running the open-source analyzer on the same commit with the same tool versions gives the same digest. It shows the results match the code; it is not a signature of who made the report.</p>
 <p><code>{E(verify)}</code></p>
 <p style="margin-top:14px"><b>Badge.</b> <code>badge.svg</code> beside this report reads <span class="digest">Lantern · {E(badge_text(ev))}</span>: the commit, the open critical count, and the date. It never says "verified" or "secure", because no tool can promise that. Link it to this report so a reader lands on the Limits section: <code>[![Lantern](.lantern/badge.svg)](.lantern/evidence.html)</code></p></section>
-</main><script>
+</main><script{(' nonce="' + E(nonce) + '"') if nonce else ''}>
 (function () {{
   var body = document.body, seg = document.getElementById('mode');
   try {{ if (localStorage.getItem('lantern.simple') === '0') body.dataset.mode = 'advanced'; }} catch (e) {{}}
@@ -688,7 +695,7 @@ body[data-mode=simple] .adv{{display:none}} body[data-mode=advanced] .simp{{disp
   seg.onclick = function (e) {{ var b = e.target.closest('button'); if (!b) return; body.dataset.mode = b.dataset.m; try {{ localStorage.setItem('lantern.simple', b.dataset.m === 'simple' ? '1' : '0'); }} catch (x) {{}} draw(); }};
   window.setSimple = function (v) {{ body.dataset.mode = v ? 'simple' : 'advanced'; draw(); }};
   draw();
-  var cv = document.getElementById('copyverify'), cmd = {verify!r};
+  var cv = document.getElementById('copyverify'), cmd = {json.dumps(verify).replace('<', '\\u003c')};
   cv.onclick = function () {{ if (navigator.clipboard) navigator.clipboard.writeText(cmd); cv.textContent = 'Copied'; }};
   try {{ if (window.self !== window.top) document.querySelector('.topbar .seg').style.display = 'none'; }} catch (e) {{}}
 }})();

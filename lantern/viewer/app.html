@@ -522,7 +522,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyThe
 applyTheme();
 
 async function refresh() { S.state = await api('/api/state'); render(); }
-function go(view, extra = {}) { Object.assign(S, {view}, extra); for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
+function go(view, extra = {}) { Object.assign(S, {view}, extra); ASK.page = null; for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
 document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); };
 document.getElementById('home').onclick = () => { go('home'); refresh().catch(() => {}); };
 
@@ -563,13 +563,24 @@ document.getElementById('viewmode').addEventListener('click', async e => {
 const ASK = {open: false, opacity: 1, log: [], busy: false, shot: null};
 const MARK = document.querySelector('.brand .mark').outerHTML;
 function askContext() {
-  if (S.view === 'project' && S.project) { const p = (S.state.projects || []).find(x => x.id === S.project); return (p ? p.name : 'this project') + ' · ' + (S.tab || 'atlas'); }
+  if (S.view === 'project' && S.project) { const p = (S.state.projects || []).find(x => x.id === S.project); const pg = ASK.page && ASK.page.page ? ASK.page.page : (S.tab || 'atlas'); const nd = ASK.page && ASK.page.node ? ' · ' + ASK.page.node.split('::').pop().split('.').slice(-2).join('.') : ''; return (p ? p.name : 'this project') + ' · ' + pg + nd; }
   return {home: 'My projects', learn: 'Learn', settings: 'Settings', help: 'Help'}[S.view] || 'Lantern';
 }
 function askModel() { const s = S.state && S.state.settings; return s && s.model ? s.model.split('/').pop() : 'no model yet'; }
+const PAGE_CHIPS = {
+  map: ['What am I looking at?', 'What is a hop?', 'What does “likely” mean?'],
+  findings: ['Which one should I fix first?', 'What does “reachable” mean?', 'How do I fix the top one?'],
+  prot: ['What is a protection?', 'Which missing one matters most?', 'What does “heuristic” mean?'],
+  ready: ['What does the score mean?', 'Why is it this grade?', 'What is a hard failure?'],
+  xp: ['What does this function do, in plain words?', 'What does “anchored to your code” mean?', 'Why does this function matter?'],
+  about: ['What did Lantern check?', 'What could it not follow?'],
+};
+// The report viewer's "Ask Lantern" button (same origin) opens the assistant on that page, with its selection as the focus.
+window.askAbout = ctx => { ASK.page = ctx || null; ASK.open = true; renderAsk(); };
 function renderAsk() {
   const el = document.getElementById('ask');
-  const chips = S.view === 'project' ? ['What should I fix first?', 'Why is it critical?', 'Summarize this project'] : ['What does Lantern check?', 'What is "likely"?', 'How do I add a project?'];
+  const pageTab = ASK.page && ASK.page.tab;
+  const chips = pageTab && PAGE_CHIPS[pageTab] ? PAGE_CHIPS[pageTab] : S.view === 'project' ? ['What should I fix first?', 'Why is it critical?', 'Summarize this project'] : ['What does Lantern check?', 'What is "likely"?', 'How do I add a project?'];
   const msgs = ASK.log.map(m => m.role === 'me' ? `<div class="me">${esc(m.text)}</div>` :
     `<div class="bot ${m.wait ? 'wait' : ''}">${fmtAsk(m.text)}${(m.cited || []).length ? `<div class="cites">${m.cited.map(c => `<button data-cite="${esc(c)}" title="Open this finding">${esc(c)}</button>`).join('')}</div>` : ''}</div>`).join('');
   el.innerHTML = (ASK.open ? `<div class="win" style="opacity:${ASK.opacity}">
@@ -591,7 +602,8 @@ async function askSend(text) {
   if (!text || ASK.busy) return;
   ASK.log.push({role: 'me', text}); ASK.log.push({role: 'bot', text: 'Thinking…', wait: true}); ASK.busy = true; renderAsk();
   const focus = {};
-  if (S.view === 'project' && S.sel) focus.node = S.sel;
+  if (S.view === 'project' && (ASK.page && ASK.page.node || S.sel)) focus.node = (ASK.page && ASK.page.node) || S.sel;
+  if (ASK.page && ASK.page.page) text = `(I am on the “${ASK.page.page}” page.) ` + text;
   if (ASK.shot && ASK.shot.text) text += '\n\nScreenshot text (read on this computer):\n' + ASK.shot.text;
   try {
     const r = await api('/api/ask', {method: 'POST', body: {project: S.view === 'project' ? S.project : null, question: text, focus}});
@@ -813,7 +825,7 @@ function renderProject(el) {
     <span class="spacer"></span><a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a></div>
     <div id="pbody"></div>`;
   el.querySelector('#back').onclick = () => go('home');
-  el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; renderProject(el); });
+  el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; ASK.page = null; if (ASK.open) renderAsk(); renderProject(el); });
   const body = el.querySelector('#pbody');
   if (S.tab === 'guide') return renderGuide(body, p);
   if (REPORT_TABS[S.tab]) {
