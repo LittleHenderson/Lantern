@@ -553,6 +553,10 @@ def explain_node(provider: Provider, g: Graph, ctx: Context, retries: int = 1) -
         errors = validate(rec, ctx) if rec is not None else ["response was not valid JSON"]
         if not errors:
             break
+    if errors and isinstance(rec, dict) and attempt == retries:      # out of tries: the same last resort
+        dropped = drop_bad_pairs(rec, errors, ctx)
+        if dropped is not None:
+            rec, errors = dropped, []
     rec = rec if isinstance(rec, dict) else {}
     rec.update({"node_id": ctx.node.id, "code_hash": ctx.node.fingerprint, "model": provider.label,
                 "prompt_version": PROMPT_VERSION, "metaphor_world": ctx.metaphor,

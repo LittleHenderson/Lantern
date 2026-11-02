@@ -36,7 +36,15 @@ explanation", never as a failure.
 | 2026-11-01 | claude-haiku-5-5 (gateway) | 20 / 25 | 15 | 4 | 0 | 3 | 66,824 / 34,139 | read-back knows callee names, file name, `self.`/`this.`; UNDETERMINED needs a sentence and callee bodies are not an excuse |
 | 2026-11-01 | claude-haiku-5-5 (gateway) | 9 / 10 (nextapp, **partial**) | 7 | 2 | 0 | 0 | 24,019 / 11,904 | same; the free allowance ran out after 10 of 12 functions (stopped cleanly, work kept). 2 functions NOT RUN |
 
-Re-scored offline from the stored answers of the last two runs, with the pair-drop rule added afterwards (a pair the
+| 2026-11-01 | claude-haiku-5-5 (gateway) | **25 / 25** | **20** | 4 | 0 | 4 | 58,443 / 28,423 | pair-drop on (after a failed REPAIR). 0 pairs dropped: REPAIR fixed them. First run with every function passing |
+| 2026-11-01 | claude-haiku-5-5 (gateway) | 11 / 12 (nextapp) | 10 | 1 | 0 | 0 | 27,878 / 14,052 | pair-drop on; the one miss took the full-retry path, which did not reach the drop step |
+| 2026-11-01 | claude-haiku-5-5 (gateway) | **12 / 12** (nextapp) | **10** | 1 | 0 | 0 | 27,906 / 14,345 | pair-drop also applied when the last retry ends on a pair error. 0 pairs dropped |
+
+**Best complete pair of runs so far (lens-v5 + REPAIR + pair-drop): shop 25 / 25 validated, 20 first try (80%);
+nextapp 12 / 12, 10 first try (83%).** One run each, so run-to-run variance (seen at ±3 with lens-v4) is not yet
+measured on this version. The first-try target of 90% is not met.
+
+Re-scored offline from the stored answers of the two runs before those, with the pair-drop rule added afterwards (a pair the
 REPAIR still could not anchor is removed and recorded in `dropped_pairs`; at least 3 pairs must remain; nothing is
 added): shop would be 23 / 25, nextapp 10 / 10 of those run. This is a re-score of the same model output, not a new
 run; it is listed so the next real run has a number to beat.
