@@ -75,3 +75,33 @@ The model keeps inventing a security finding when it sees an obvious problem the
 `stats["invented_findings"]`; the explanation itself still has to pass every anchor check. Remaining misses: a nested
 object sent as a JSON string with a stray trailing brace (now parsed leniently at the gateway), and a paraphrased
 pair phrase now and then. Next: the bench repos; the first-try target is 90%. See the lens-v5 section above.
+
+## Benchmark repos (code nobody on this project wrote)
+
+The seven `bench/` repositories, `lantern explain --max-nodes 25` (entry points plus 3 call levels, bottom-up),
+lens-v5 with REPAIR and pair-drop, Claude Haiku 5.5 through the gateway, one run each on 2026-11-01. Where a run hit
+the allowance's daily cap it was resumed from the cache with another token; resumed runs are marked.
+
+| Repo | Validated | First try | Repaired | Pairs dropped | Undetermined | Invented dropped | Tokens in / out | Notes |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| fastapi-template (Python + React/TS) | **25 / 25** | 19 | 5 | 4 | 0 | 0 | 72,743 / 32,745 | 441 functions, 109 entry points. Dropped pairs were paraphrases (`'a fresh notepad'` for "a notebook") and one duplicate |
+| taxonomy (Next.js/TS) | 24 / 25 | 14 | 5 | 0 | 0 | 0 | 56,709 / 24,547 + 28,264 / 14,423 | resumed after the daily cap. Miss: Lens 1 of `CardTitle` named `onClick`, which the component does not have (read-back rejection) |
+| click (Python CLI library) | 24 / 25 | 20 | 4 | 1 | 0 | 0 | 72,775 / 32,711 | 1,238 functions. Miss: a paraphrased pair phrase that survived REPAIR with too few pairs left to drop |
+| flask (Python web framework) | **25 / 25** | 16 | 7 | 4 | 0 | 0 | 78,680 / 32,756 | 1,432 functions. Most REPAIRs of any repo |
+| rich (Python terminal library) | **25 / 25** | 20 | 4 | 1 | 0 | 0 | 114,668 / 34,940 | 1,816 functions; the longest functions in the set |
+| requests (Python HTTP library) | **5 / 5** | 4 | 0 | 0 | 0 | 0 | 13,118 / 4,557 | only 5 functions selected: the library has no app entry points, so the selection is its test-free public surface |
+| httpie (Python CLI) | 24 / 25 | 20 | 4 | 1 | 0 | 0 | 67,821 / 34,857 | 1,073 functions. Miss: the model left two scanner findings unexplained in `build_packages`, twice |
+
+**Totals across the 7 repos: 152 / 155 explanations validated (98.1%); 113 / 155 on the first try (72.9%); 29
+saved by REPAIR; 11 pairs dropped; 0 UNDETERMINED; 0 invented findings reached a reader (hard gate passed on every
+run).** On Lantern's own fixtures the same version did 37 / 37 and 30 first try (81.1%).
+
+**Claim ceiling: BENCH_7_SINGLE_RUN.** One run per repo, 25 functions each (5 for requests), one model, one
+metaphor. Run-to-run variance was ±3 on the fixtures and is not yet measured on the benchmark; a second full pass is
+the next step before any number goes in the README. What may be claimed now: "on seven public repositories, 98% of
+explanations passed every anchor check and 73% passed on the first try, with Claude Haiku 5.5; 0 model-invented
+findings were shown." The 90% first-try target is not met.
+
+The three misses are three different kinds: one true read-back catch (the model described a prop the component does
+not have), one paraphrase with too few pairs to drop, one refusal to explain findings it was handed twice. None is a
+false pass.
