@@ -260,12 +260,15 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
       <g stroke="var(--accent)" stroke-opacity=".3" stroke-width="1" fill="var(--accent)" opacity=".7"><line x1="300" y1="640" x2="400" y2="690"/><line x1="400" y1="690" x2="480" y2="630"/><line x1="400" y1="690" x2="430" y2="770"/><circle cx="300" cy="640" r="3.5" fill-opacity=".7"/><circle cx="400" cy="690" r="5" fill-opacity=".9"/><circle cx="480" cy="630" r="3" fill-opacity=".6"/><circle cx="430" cy="770" r="3" fill-opacity=".6"/></g>
       <g stroke="var(--ink)" stroke-opacity=".25" stroke-width="1" fill="var(--ink)" opacity=".7"><line x1="880" y1="620" x2="980" y2="560"/><line x1="980" y1="560" x2="1090" y2="610"/><line x1="980" y1="560" x2="1000" y2="470"/><circle cx="880" cy="620" r="3" fill-opacity=".5"/><circle cx="980" cy="560" r="4.5" fill-opacity=".7"/><circle cx="1090" cy="610" r="3" fill-opacity=".5"/><circle cx="1000" cy="470" r="2.5" fill-opacity=".5"/></g>`);
 
-  // Intro: 20 s, plays once per visitor (skip anywhere, Replay in the header), tones muted by default.
+  // Intro: 20 s, plays on a visitor's first three visits (skip anywhere, Replay in the header any time), tones muted by default.
   const intro = document.getElementById('intro');
   let state = 'hidden', sound = false, root = null;
   const control = React.createRef();
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let seen = false; try { seen = localStorage.getItem('lantern-intro-seen') === '1'; } catch (e) {}
+  const INTRO_PLAYS = 3;
+  let visits = 0; try { visits = parseInt(localStorage.getItem('lantern-intro-visits') || (localStorage.getItem('lantern-intro-seen') === '1' ? '1' : '0'), 10) || 0; } catch (e) {}
+  const seen = visits >= INTRO_PLAYS;
+  try { localStorage.setItem('lantern-intro-visits', String(visits + 1)); } catch (e) {}
   function mount() {
     if (!window.LanternIntro || !window.ReactDOM) return false;
     if (!root) root = ReactDOM.createRoot(document.getElementById('stage'));
@@ -280,7 +283,6 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
   function finish() {
     if (state !== 'playing') return;
     state = 'fading'; intro.className = 'fading';
-    try { localStorage.setItem('lantern-intro-seen', '1'); } catch (e) {}
     setTimeout(() => { if (state === 'fading') { state = 'hidden'; intro.className = 'hidden'; } }, 950);
   }
   document.getElementById('skipzone').onclick = finish;
