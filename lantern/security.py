@@ -400,6 +400,11 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     wf, wt = scan_web(g)
     findings += wf
     tools += wt
+    from .aiapp import scan_ai
+    af, ai = scan_ai(g)
+    findings += af
+    tools.append({"tool": "lantern-ai", "status": "ok" + ("" if ai["calls"] else " (no model, vector or paid API calls found)"),
+                  "version": "0.1"})
     from .packs import load_all, scan_packs
     loaded, skipped = load_all(repo)
     if loaded:
@@ -436,4 +441,5 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     counts["in_tests"] = sum(1 for f in findings if f["in_tests"])
     counts["accepted"] = sum(1 for f in findings if f["status"] == "accepted")
     return {"findings": findings, "tools": tools, "counts": counts, "id_version": ID_VERSION,
-            "reachable_nodes": len(reach), "total_callables": sum(1 for n in g.nodes.values() if n.kind == "callable")}
+            "reachable_nodes": len(reach), "total_callables": sum(1 for n in g.nodes.values() if n.kind == "callable"),
+            "ai": ai}

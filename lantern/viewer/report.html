@@ -175,6 +175,8 @@ input.search::placeholder{color:var(--faint)}
 .badge.medium{background:var(--warning-soft)} .badge.medium i{background:var(--warning)}
 .badge.low{background:var(--good-soft)} .badge.low i{background:var(--good)}
 .badge.entry{background:var(--l1s);color:var(--l1);padding-left:7px}
+.badge.ai{background:var(--l3s);color:var(--l3);padding-left:7px;margin-left:4px}
+.badge.ai.payment,.badge.ai.email,.badge.ai.sms{background:var(--l2s);color:var(--l2)}
 .ext{display:block;font:11px var(--mono);color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
 .hop{display:inline-flex;align-items:center;gap:5px;font:600 10.5px var(--mono);color:var(--l2);background:var(--l2s);border-radius:99px;padding:2px 9px;margin:0 2px;white-space:nowrap}
 .hop.ui{color:var(--l1);background:var(--l1s);font-family:var(--font)}
@@ -371,6 +373,11 @@ for (const e of G.edges) {
 }
 const FIND_BY_NODE = {};
 for (const f of SEC.findings) if (f.node) (FIND_BY_NODE[f.node] ||= []).push(f);
+const AI = SEC.ai || {}, AI_BY_NODE = AI.by_node || {};
+const AI_WORDS = {model: 'model call', embedding: 'embedding', image: 'image generation', speech: 'speech API', vector: 'vector store', payment: 'payment API', email: 'sends email', sms: 'sends SMS'};
+const AI_KINDS = Object.keys(AI_WORDS);
+// a small chip naming what a function calls that costs money or talks to a model; one per kind
+const aiChips = id => { const ks = [...new Set((AI_BY_NODE[id] || []).map(c => cls(c.kind, AI_KINDS)).filter(Boolean))]; return ks.map(k => `<span class="badge ai ${k}" title="${esc((AI_BY_NODE[id] || []).filter(c => c.kind === k).map(c => c.provider + ' (line ' + c.line + ')').join(', '))}">${esc(AI_WORDS[k])}</span>`).join(''); };
 const RANK = {critical: 0, high: 1, medium: 2, low: 3};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // Every value from the data goes through esc() before it reaches innerHTML. Values used as CSS class names or as
@@ -431,6 +438,7 @@ const LANG_NAMES = {python: 'Python', 'typescript/javascript': 'TS/JS', go: 'Go'
 let chipHtml = Object.entries(LANGS).map(([k, v]) => chip(v.files, (LANG_NAMES[k] || k) + ' files')).join('');
 chipHtml += chip((st.nodes || {}).callable ?? 0, 'functions') + chip(st.entry_points ?? 0, 'entry points');
 if (BR && BR.matched) chipHtml += chip(BR.matched, 'frontend→backend links');
+if (AI.is_ai_app) chipHtml += chip((AI.calls || []).filter(c => c.kind === 'model').length, 'model calls') + ((AI.notebooks || []).length ? chip((AI.notebooks || []).length, 'notebooks') : '');
 const nexp = Object.keys(EXP).length;
 chipHtml += nexp ? chip(nexp, 'explained') : '<span class="chip">no explanations yet</span>';
 if (DATA.readiness) chipHtml += `<span class="sev ${toneOf(DATA.readiness.score)}" title="Deployment readiness"><i></i>Readiness ${esc(DATA.readiness.score)}/100 · ${esc(DATA.readiness.grade)}</span>`;
@@ -515,7 +523,7 @@ function renderTree() {
     const sum = summaryOf(r.id);
     const ext = r.exts.length ? `<span class="ext">→ ${r.exts.slice(0, 4).map(e => esc(e.dst.slice(4))).join(', ')}${r.exts.length > 4 ? '…' : ''}</span>` : '';
     return `${hop ? `<div class="row hoprow">${indent}<span class="tog"></span>${hop}</div>` : ''}<div class="row">${indent}${tog}${conf}<button class="node ${S.sel === r.id ? 'on' : ''}" data-id="${esc(r.id)}">
-      <span class="h"><span class="layer ${layer(r.id)}"></span><span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${w ? sevChip(w) : ''}
+      <span class="h"><span class="layer ${layer(r.id)}"></span><span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${aiChips(r.id)}${w ? sevChip(w) : ''}
       ${r.loop ? '<span class="again">↻ already on this path</span>' : ''}
       <span class="loc">${esc(n.file)}:${esc(n.start_line ?? '')}</span></span>${ext}
       ${sum ? `<span class="sum">${esc(sum.length > 160 ? sum.slice(0, 160) + '…' : sum)}</span>` : ''}</button></div>`;
@@ -827,7 +835,7 @@ function renderRight() {
   const callees = (OUT[n.id] || []).map(e => e.dst).filter(x => N[x]);
   const fs = FIND_BY_NODE[n.id] || [];
   el.innerHTML = `<div class="detail"><button class="closebtn" id="close" aria-label="Close">${icon('close')}</button>
-    <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(layer(n.id) === 'external' ? n.kind : layer(n.id))}${n.entry ? ` · <span class="badge entry">${esc(n.entry.kind)}</span>` : ''}</div>
+    <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(layer(n.id) === 'external' ? n.kind : layer(n.id))}${n.entry ? ` · <span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${AI_BY_NODE[n.id] ? ' · ' + aiChips(n.id) : ''}</div>
     <h3>${esc(n.qualname)}</h3>
     <div class="meta">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ` · ${esc(n.entry.detail)}` : ''}</div>
     <div class="sig">${esc(n.signature || n.kind)}</div>
