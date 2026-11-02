@@ -21,6 +21,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import threading
 import time
 import traceback
@@ -354,6 +355,40 @@ def _same(given, token: str) -> bool:
     return isinstance(given, str) and hmac.compare_digest(given.encode("utf-8"), token.encode("utf-8"))
 
 
+def _python_test_command(words: list[str]) -> bool:
+    """Only a Python test runner, so 'Watch my tests run' never becomes 'run anything'."""
+    head = Path(words[0]).name.lower()
+    if head in ("pytest", "py.test"):
+        return True
+    if head.startswith("python"):
+        rest = words[1:]
+        return bool(rest) and (rest[0] == "-m" and len(rest) > 1 and rest[1] in ("pytest", "unittest")
+                               or rest[0].endswith(".py") and "test" in rest[0].lower())
+    return False
+
+
+def detect_test_command(repo: Path) -> dict:
+    """The command the sheet shows first: read from the project, editable before it runs."""
+    py = any((repo / f).exists() for f in ("pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "requirements.txt"))
+    has_tests = any(d.is_dir() for d in (repo / "tests", repo / "test")) or any(repo.glob("test_*.py")) or any(repo.glob("*/tests"))
+    pkg = repo / "package.json"
+    js_test = None
+    if pkg.exists():
+        try:
+            js_test = (json.loads(pkg.read_text(encoding="utf-8")).get("scripts") or {}).get("test")
+        except (OSError, ValueError):
+            js_test = None
+    if py or has_tests:
+        return {"command": "python -m pytest -q", "how": "pyproject.toml / tests folder", "supported": True,
+                "note": "Python tests are recorded function by function. JavaScript tests are not traced yet."}
+    if js_test:
+        return {"command": f"npm test", "how": "package.json scripts.test", "supported": False,
+                "note": "This project's tests are JavaScript. Lantern cannot record JavaScript calls yet, so watching them "
+                        "would change nothing. Python tests are supported today."}
+    return {"command": "python -m pytest -q", "how": "default", "supported": False,
+            "note": "No test setup was found. Add a tests folder with pytest tests, then try again."}
+
+
 def _csp(nonce: str | None) -> str:
     """Only our own scripts run on Lantern's pages: inline ones carry this response's nonce, and pages without
     a nonce (messages) run none at all."""
@@ -606,6 +641,12 @@ class Handler(BaseHTTPRequestHandler):
             if not sid:
                 return self._err(404, "this project wasn't created from a starter")
             return self._json(learn.progress(sid, Path(p["path"]), app.out(p)))
+        m = re.fullmatch(r"/api/projects/(\w+)/testcmd", path)
+        if m:
+            p = app.store.project(m.group(1))
+            if not p:
+                return self._err(404, "unknown project")
+            return self._json(detect_test_command(Path(p["path"])))
         m = re.fullmatch(r"/api/projects/(\w+)/plan", path)
         if m:
             p = app.store.project(m.group(1)) or {}
@@ -716,6 +757,28 @@ class Handler(BaseHTTPRequestHandler):
             privacy = app.store.settings().get("privacy", "full")
             job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log))
             return self._json(job, 202)
+        if action == "trace":
+            # "Watch my tests run": Lantern runs the test command you confirmed, in the project folder, with the
+            # call recorder attached, then analyzes again so the edges that ran become "seen running".
+            usage.record("trace")
+            cmd = str(b.get("command") or "").strip()
+            words = shlex.split(cmd, posix=os.name != "nt") if cmd else []
+            if not words or not _python_test_command(words):
+                raise ValueError("Lantern can watch Python tests only for now: the command must start with python, "
+                                 "python -m pytest, or pytest (JavaScript test tracing is not built yet)")
+            privacy = app.store.settings().get("privacy", "full")
+            before = _load(out / "readiness.json") or {}
+            before_score = _int(before.get("score"))
+
+            def work(log):
+                log(f"running: {' '.join(words)}   (in {repo}, as you; Lantern records which functions run)")
+                res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log)
+                run = _load(out / "run.json") or {}
+                tr = run.get("trace") or {}
+                after = _load(out / "readiness.json") or {}
+                return {"returncode": tr.get("returncode"), "observed": tr.get("observed_edges"), "recall": tr.get("recall"),
+                        "score_before": before_score, "score_after": _int(after.get("score")), "summary": res}
+            return self._json(app.jobs.start(p["id"], "trace", work), 202)
         if action == "explain":
             usage.record("explain_one" if b.get("nodes") else "explain")
             provider = app.make_provider()

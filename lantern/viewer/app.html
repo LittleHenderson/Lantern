@@ -276,6 +276,15 @@ pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--co
 .gwhy{font-size:12.5px;color:var(--muted);flex-basis:100%}
 .gbody p{margin:10px 0 0;font-size:14px;line-height:1.6;color:var(--ink-2)}
 @media (max-width:860px){.gsplit{grid-template-columns:1fr}}
+
+/* Watch my tests run: sheet + toast */
+.sheetwrap{position:fixed;inset:0;z-index:30;background:rgba(14,14,16,.45);display:grid;place-items:center;padding:20px}
+.sheet{width:min(620px,100%);background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px 24px;box-shadow:0 20px 60px -20px rgba(0,0,0,.5)}
+.sheet .sh{display:flex;align-items:flex-start;gap:12px} .sheet h2{font:650 19px/1.3 var(--display);margin:0;flex:1} .sheet .x{background:none;border:0;font-size:22px;color:var(--muted);cursor:pointer}
+.rewards{display:flex;flex-direction:column;gap:8px;margin-top:14px} .rewards>div{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--ink-2)} .rewards .ic{width:16px;height:16px;color:var(--good);flex:none;margin-top:2px}
+#toast:empty{display:none} #toast{position:sticky;top:108px;z-index:8;padding:8px 16px;background:var(--bg)}
+.toastin{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:12px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-2);font-size:13.5px;color:var(--ink-2)} .toastin.ok{border-color:var(--good);background:var(--good-soft)} .toastin.bad{border-color:var(--critical);background:var(--critical-soft);align-items:flex-start}
+.toastin .ic{width:18px;height:18px;color:var(--good-ink);flex:none} .toastin>div{flex:1;min-width:0} .toastin b{color:var(--ink)}
 /* ---------- buttons and fields ---------- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface);
   color:var(--ink);font-weight:600;font-size:13.5px;white-space:nowrap;text-decoration:none;transition:background var(--t) var(--ease), border-color var(--t) var(--ease), transform var(--t) var(--ease), box-shadow var(--t) var(--ease)}
@@ -599,6 +608,49 @@ document.addEventListener('keydown', e => {
   if (S.view === 'project' && /^[1-6]$/.test(e.key)) { const tabs = document.querySelectorAll('.sub .tabs [data-t]'); const b = tabs[+e.key - 1]; if (b) b.click(); }
 });
 
+
+// ---------------------------------------------------------------- Watch my tests run (design 6a/6b/8f)
+async function watchTestsSheet(p) {
+  let d = {command: 'python -m pytest -q', how: '', supported: true, note: ''};
+  try { d = await api(`/api/projects/${p.id}/testcmd`); } catch (e) {}
+  const el = document.createElement('div'); el.className = 'sheetwrap'; el.id = 'sheet';
+  el.innerHTML = `<div class="sheet" role="dialog" aria-label="Watch my tests run"><div class="sh"><h2>Lantern will run your tests, not your app.</h2><button class="x" id="shx" aria-label="Close">×</button></div>
+    <label for="testcmd">The exact command${d.how ? ` <span class="muted">(from ${esc(d.how)}; change it if yours is different)</span>` : ''}</label>
+    <input type="text" id="testcmd" value="${esc(d.command)}" spellcheck="false">
+    ${d.note ? `<div class="hint">${esc(d.note)}</div>` : ''}
+    ${note('warn', `It runs in <code>${esc(p.path)}</code> as you, with a call recorder attached, exactly like running it yourself. Only a Python test runner is accepted (<code>python -m pytest</code>, <code>pytest</code>, <code>python -m unittest</code>); nothing else is run. It is not sandboxed yet, so only run tests you would run anyway.`)}
+    <div class="rewards"><div>${icon('check')}<span>Dashed “likely” lines that your tests go through turn solid: <b>seen running</b>.</span></div><div>${icon('check')}<span>Functions and routes your tests reach get the <b>seen running</b> mark.</span></div><div>${icon('check')}<span>Readiness can only go up: the tests check earns its points.</span></div></div>
+    <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn" id="shskip">Skip</button><button class="btn primary" id="shrun" ${d.supported ? '' : 'disabled'}>${icon('play')}Run the tests</button></div></div>`;
+  document.body.appendChild(el);
+  const close = () => el.remove();
+  el.querySelector('#shx').onclick = close; el.querySelector('#shskip').onclick = close; el.addEventListener('click', e => { if (e.target === el) close(); });
+  el.querySelector('#shrun').onclick = async () => {
+    const command = el.querySelector('#testcmd').value.trim();
+    try {
+      const j = await api(`/api/projects/${p.id}/trace`, {method: 'POST', body: {command}});
+      close();
+      S.toast = {pid: p.id, html: `<div class="toastin"><span class="pulse"></span>Running <code>${esc(command)}</code>… you can keep browsing; the Atlas updates when it finishes.</div>`};
+      renderProject(document.getElementById('view'));
+      watchTrace(j.id, p, command);
+    } catch (e) { el.querySelector('.sheet').insertAdjacentHTML('beforeend', note('err', esc(e.message))); }
+  };
+}
+async function watchTrace(jobId, p, command) {
+  let j;
+  for (;;) { try { j = await api('/api/jobs/' + jobId); } catch (e) { await new Promise(r => setTimeout(r, 2000)); continue; } if (j.status !== 'running') break; await new Promise(r => setTimeout(r, 1000)); }
+  const r = j.result || {};
+  const tail = (j.log || []).slice(-6).join('\n');
+  if (j.status === 'error' || (r.returncode !== undefined && r.returncode !== 0 && !r.observed)) {
+    const code = r.returncode !== undefined ? r.returncode : '?';
+    const likely = /No module named|ModuleNotFoundError/.test(tail + (j.error || '')) ? 'A package your tests import is not installed in the Python that runs Lantern.' : /not recognized|No such file|command not found/.test(tail + (j.error || '')) ? 'The command was not found. Is pytest installed?' : /collected 0 items|no tests ran/.test(tail) ? 'No tests were found by that command.' : 'Look at the last lines below.';
+    S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests didn’t finish, so nothing changed.</b> Exit code ${esc(code)}. ${esc(likely)}<pre class="log" style="margin-top:8px;max-height:120px">${esc(j.error || tail)}</pre></div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn sm" data-retry>Change the command</button><button class="btn ghost sm" data-dismiss>Skip</button></div>`};
+  } else {
+    const d = r.score_after != null && r.score_before != null ? r.score_after - r.score_before : null;
+    S.toast = {pid: p.id, html: `<div class="toastin ok">${icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}.</b> ${esc(r.observed || 0)} call${r.observed === 1 ? '' : 's'} seen running${r.recall != null ? `, ${Math.round(r.recall * 100)}% of them already on the map` : ''}.${d == null ? '' : d > 0 ? ` Readiness up ${d}, now ${r.score_after}.` : ` Readiness unchanged at ${r.score_after}.`} The edges your tests went through are now solid in the Atlas.</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+  }
+  S.frame = null; await refresh();
+}
+
 // ---------------------------------------------------------------- Ask Lantern
 const ASK = {open: false, opacity: 1, log: [], busy: false, shot: null};
 const MARK = document.querySelector('.brand .mark').outerHTML;
@@ -862,9 +914,12 @@ function renderProject(el) {
   el.innerHTML = `<div class="sub"><button class="back" id="back" aria-label="Back to projects">${icon('back')}</button><span class="title">${esc(p.name)}</span>
     ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100">${esc(p.grade)}${simple ? '' : ' · ' + esc(p.score)}</span>` : ''}
     <div class="tabs" role="tablist">${p.starter ? tab('guide', W.guide) : ''}${['atlas', 'findings', 'prot', 'ready', 'evidence', 'explain'].map(t => tab(t, W[t])).join('')}</div>
-    <span class="spacer"></span><a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a></div>
+    <span class="spacer"></span>${p.has_report ? `<button class="btn sm" id="watchtests" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a></div>
+    <div id="toast"></div>
     <div id="pbody"></div>`;
   el.querySelector('#back').onclick = () => go('home');
+  const wt = el.querySelector('#watchtests'); if (wt) wt.onclick = () => watchTestsSheet(p);
+  if (S.toast && S.toast.pid === p.id) { el.querySelector('#toast').innerHTML = S.toast.html; el.querySelector('#toast').onclick = e => { if (e.target.closest('[data-dismiss]')) { S.toast = null; el.querySelector('#toast').innerHTML = ''; } if (e.target.closest('[data-retry]')) watchTestsSheet(p); }; }
   el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; ASK.page = null; if (ASK.open) renderAsk(); renderProject(el); });
   const body = el.querySelector('#pbody');
   if (S.tab === 'guide') return renderGuide(body, p);
