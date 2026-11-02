@@ -233,6 +233,36 @@ pre.oneline{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:var(--c
 .paste{padding:14px 16px;margin-bottom:14px;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)} .paste p{margin:0;font-size:14px;line-height:1.6;color:var(--ink)}
 .fixbanner{margin:0 0 16px;padding:12px 16px;border-radius:12px;background:var(--critical-soft);color:var(--ink);font-size:14px} .fixbanner.ok{background:var(--good-soft)}
 @media (max-width:900px){.fixgrid,.fixtwo{grid-template-columns:1fr}}
+/* Ask Lantern pill + window (same look as the app) */
+#ask{position:fixed;right:20px;bottom:20px;z-index:60;display:flex;flex-direction:column;align-items:flex-end;gap:10px;font-family:var(--font);color:var(--ink-2)}
+#ask .win{width:340px;height:580px;max-height:calc(100vh - 100px);max-width:calc(100vw - 32px);display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line-2);border-radius:18px;box-shadow:0 1px 3px rgba(16,16,20,.08),0 24px 56px -16px rgba(16,16,20,.35);overflow:hidden;transition:opacity .15s}
+#ask .hd{display:flex;align-items:center;gap:10px;padding:12px 12px 12px 14px;border-bottom:1px solid var(--line)}
+#ask .hd .t{font:600 13.5px var(--font);color:var(--ink);line-height:1.2}#ask .hd .s{font:11px var(--font);color:var(--muted);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#ask .hd input[type=range]{width:64px;accent-color:var(--accent);margin:0}
+#ask .x{width:26px;height:26px;border-radius:7px;border:0;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center;font:400 16px/1 var(--font)}#ask .x:hover{background:var(--hover);color:var(--ink)}
+#ask .log{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:10px}
+#ask .ctx{align-self:center;font:11px var(--font);color:var(--faint);white-space:nowrap}#ask .ctx b{color:var(--muted);font-weight:600}
+#ask .me{align-self:flex-end;max-width:85%;padding:8px 12px;border-radius:14px 14px 4px 14px;background:var(--primary);color:var(--on-primary);font:13px/1.45 var(--font);white-space:pre-wrap}
+#ask .bot{align-self:flex-start;max-width:92%;padding:10px 12px;border-radius:14px 14px 14px 4px;background:var(--surface-2);border:1px solid var(--line);font:13px/1.5 var(--font);color:var(--ink-2);white-space:pre-wrap;overflow-wrap:anywhere}
+#ask .bot code{font:11.5px var(--mono);background:var(--sunken);padding:0 4px;border-radius:4px;color:var(--ink)}
+#ask .bot .cites{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}#ask .bot .cites button{font:600 10.5px var(--mono);padding:2px 7px;border-radius:99px;background:var(--accent-soft);color:var(--accent-ink);border:0;cursor:pointer}
+#ask .bot.wait{color:var(--muted)}
+#ask .ft{padding:10px 12px 12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+#ask .chips{display:flex;gap:6px;flex-wrap:wrap}#ask .chips button{font:500 11.5px var(--font);padding:4px 9px;border-radius:99px;border:1px solid var(--line-2);background:transparent;color:var(--ink-2);white-space:nowrap;cursor:pointer}#ask .chips button:hover{background:var(--hover)}
+#ask .shot{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:12px;border:1px dashed var(--accent);background:var(--accent-soft)}#ask .shot .nm{font:600 12.5px var(--font);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#ask .shot .sm{font:11px var(--font);color:var(--muted)}#ask .shot button{font:600 11.5px var(--font);color:var(--ink-2);padding:4px 8px;border-radius:7px;border:1px solid var(--line-2);background:transparent;cursor:pointer}
+#ask .comp{display:flex;align-items:center;gap:6px;padding:6px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface)}
+#ask .comp .att{width:30px;height:30px;border-radius:9px;border:0;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center;flex:none}#ask .comp .att:hover{background:var(--hover);color:var(--ink)}
+#ask .comp textarea{flex:1;resize:none;border:0;outline:0;background:transparent;font:13px/1.4 var(--font);color:var(--ink);min-height:20px;max-height:90px;padding:4px 2px}
+#ask .comp .send{width:30px;height:30px;border-radius:9px;border:0;background:var(--primary);color:var(--on-primary);display:grid;place-items:center;flex:none;cursor:pointer}
+#ask .asknote{font:10.5px var(--font);color:var(--faint);text-align:center}
+#ask .peek{padding:8px 12px;border-radius:12px 12px 4px 12px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-2);font:12.5px/1.4 var(--font);color:var(--ink);max-width:230px}
+#ask .pill{display:flex;align-items:center;gap:8px;height:48px;padding:0 12px;border-radius:99px;border:0;background:var(--primary);color:var(--on-primary);cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.18),0 10px 28px -8px rgba(255,170,60,.55);transition:padding .15s,transform .15s;font:600 13.5px var(--font)}
+#ask .pill:hover{transform:translateY(-1px)}#ask .pill .lbl{display:none}#ask .pill:hover .lbl{display:inline}#ask .pill:hover{padding:0 14px 0 12px}
+#ask .pill .mark{width:24px;height:24px;border-radius:8px;box-shadow:none}
+@media (max-width:760px){#ask .win{width:calc(100vw - 32px);height:min(580px,calc(100vh - 90px))}}
+#ask .pill .mark{display:inline-block;width:24px;height:24px;border-radius:8px;background:#141416;position:relative;overflow:hidden}
+#ask .pill .mark svg{position:absolute;inset:0;width:100%;height:100%}
+body.embed #ask{display:none}
 .detail .acts{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 
 /* ---------- left: entry points ---------- */
@@ -483,6 +513,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
   <section class="center" id="center"><div class="empty">If this stays empty, the report's script did not run: the file was changed after Lantern wrote it (its content policy allows only the original script), or the browser blocked it. Run <code>lantern report</code> to write it again.</div></section>
   <aside class="right" id="right"><div class="empty">Select a function to see what it does.</div></aside>
 </main>
+<div id="ask"></div>
 <script type="application/json" id="lantern-data">/*__LANTERN_DATA__*/null</script>
 <script>
 const DATA = JSON.parse(document.getElementById('lantern-data').textContent);
@@ -1456,8 +1487,74 @@ function renderRight() {
 const TAB_WORDS = {simple: {map: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', xp: 'What does this do?', about: 'About'},
                    advanced: {map: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', xp: 'Explanations', about: 'About'}};
 function tabWords() { for (const b of document.querySelectorAll('#tabs button:not([hidden])')) { b.classList.toggle('on', b.dataset.t === (S.tab === 'fix' ? 'findings' : S.tab)); const n = b.querySelector('.n'); b.textContent = TAB_WORDS[S.simple ? 'simple' : 'advanced'][b.dataset.t] || b.textContent; if (n) b.appendChild(n); } }
+
+// ---------- Ask Lantern on the standalone report ----------
+// Served by the app (a report opened in its own tab): the real assistant through /api/ask. Opened as a file or
+// on the website: a built-in guide that answers from this page's help and a short FAQ, with no model, and says so.
+const RASK = {open: false, log: [], busy: false};
+const RFAQ = [
+  ['leave my computer|upload|private|privacy', 'Nothing of yours is read or uploaded by this page. Analysis runs on the computer where Lantern is installed; the only things that ever leave it are the functions you choose to explain, and only with a model you picked.'],
+  ['critical|severity|rank', 'A finding is critical when two things are true: a page or route leads to that line (reachable), and the line uses something the visitor typed (input). Reachable but no input is high; not reachable stays low.'],
+  ['reachable|reach', 'Reachable means Lantern found a path from a place a visitor can start (a page, a route, a command) to the function holding the finding. The path is drawn on the finding.'],
+  ['likely|possible|dashed|dotted|confidence|sure', 'Teal lines were seen running under tests. Solid lines are confirmed by reading the code. Dashed means likely (about 90% right across the benchmark). Dotted means possible. What Lantern could not follow is counted on the About page, never guessed.'],
+  ['hop', 'A hop is one step along a path: a click handler, a function call, an HTTP request from the browser to a route, a call into a library.'],
+  ['score|readiness|grade', 'Readiness is a 0–100 score over ten weighted areas (security findings, secrets, input handling, dependencies, tests, observability, packaging, CI, resilience, documentation). Every point has a written reason; checks that do not apply are skipped. Hard failures (critical, reachable, uses input) cap the grade.'],
+  ['heuristic', 'Heuristic checks look for known patterns (missing login check, CORS, rate limit) and can misfire. They say so, never count as hard failures, and ask you to look before acting.'],
+  ['accept', 'Accept risk with a reason records that you decided a finding is fine, with the reason written down. It is committed in lantern-accepted.json and shown in the Evidence Report; it is never silent.'],
+  ['explain|explanation|lens|anchor', 'An explanation is a model’s description of one function, written three ways (Technical, Everyday, Mapped). Lantern checks every phrase against the real code; unmatched phrases are removed. The model only explains, never creates or closes a finding.'],
+  ['fix', 'Open a finding and press Fix this: you get the exact file and line, why it matters, and a prompt to paste into your AI assistant. In the Lantern app, “I fixed it, check again” re-reads the project and says whether it is gone.'],
+  ['install|download|get lantern|start', 'Install with pip (Python 3.11+): pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern", then run lantern serve and add your app’s folder or GitHub link.'],
+  ['evidence|report|proof|verify', 'The Evidence Report is a commit-pinned summary a reviewer can print: what was checked, found, fixed and accepted, with provenance, limits and a digest they can re-verify with lantern verify.'],
+];
+function rAnswer(q) {
+  const t = q.toLowerCase();
+  if (/what am i looking|this page|what is this/.test(t)) { const d = PAGE_HELP[S.tab] || PAGE_HELP.about; return d.p.join(' '); }
+  for (const [k, a] of RFAQ) if (new RegExp(k).test(t)) return a;
+  const n = N[S.sel || S.xsel]; const r = n && EXP[n.id];
+  if (n && /this function|what does (it|this) do|selected/.test(t)) return r && r.lens2 ? `${short(n.qualname)}: ${r.lens2.text}` : `${short(n.qualname)} has no explanation on this page yet. Technical facts: ${n.file}:${n.start_line}–${n.end_line}, ${(IN[n.id] || []).length} callers, ${(OUT[n.id] || []).length} calls.`;
+  return 'This page has no model behind it, so I can only answer from the built-in guide: what each page shows, what critical, reachable, likely, hop, heuristic and readiness mean, how to fix or accept a finding, and how to install Lantern. Open the project in the Lantern app for answers about your own code.';
+}
+function renderRAsk() {
+  const el = document.getElementById('ask'); if (!el) return;
+  const live = !!(LIVE && LIVE.api);
+  const chips = (PAGE_HELP[S.tab] ? {map: ['What am I looking at?', 'What does “likely” mean?', 'What is a hop?'], findings: ['What makes a finding critical?', 'What does “reachable” mean?', 'How do I fix one?'], prot: ['What is a protection?', 'What does “heuristic” mean?'], ready: ['What does the score mean?', 'What is a hard failure?'], xp: ['What does this function do?', 'What is an explanation?', 'What does “anchored” mean?'], fix: ['How do I fix this?', 'What does “accept with a reason” mean?'], about: ['What did Lantern check?']}[S.tab] : null) || ['What am I looking at?', 'How do I get Lantern?'];
+  const msgs = RASK.log.map(m => m.role === 'me' ? `<div class="me">${esc(m.text)}</div>` : `<div class="bot ${m.wait ? 'wait' : ''}">${esc(m.text)}</div>`).join('');
+  const mark = `<span class="mark"><svg viewBox="0 0 64 64"><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg></span>`;
+  el.innerHTML = (RASK.open ? `<div class="win"><div class="hd">${mark}<div style="flex:1;min-width:0"><div class="t">Ask Lantern</div><div class="s">${live ? `Facts from your analysis · words from ${esc((LIVE.model || 'your model').split('/').pop())}` : 'Built-in guide · no model on this page'}</div></div><button class="x" id="raskclose" aria-label="Close">×</button></div>
+    <div class="log" id="rasklog"><div class="ctx">Looking at <b>${esc(PROJECT)} · ${esc(TAB_WORDS[S.simple ? 'simple' : 'advanced'][S.tab] || S.tab)}</b></div>${msgs || `<div class="bot">${live ? 'Ask anything about this page or your project. I answer from Lantern’s own results and never guess.' : 'This is a sample report with no model behind it. I can explain what each page shows and what the words mean; for answers about your own code, open your project in the Lantern app.'}</div>`}</div>
+    <div class="ft"><div class="chips">${chips.map(c => `<button data-rchip="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+      <div class="comp"><textarea id="raskin" rows="1" placeholder="Ask in your own words…"></textarea><button class="send" id="rasksend" aria-label="Send"><svg viewBox="0 0 20 20" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M10 15V5M5.5 9.5 10 5l4.5 4.5"/></svg></button></div>
+      <div class="asknote">${live ? 'Answers cite your code. The agent cannot create, close or accept findings.' : 'No model here: answers come from Lantern’s built-in guide.'}</div></div></div>` : '') +
+    `<button class="pill" id="raskpill" aria-label="Ask Lantern">${mark}<span class="lbl">Ask Lantern</span></button>`;
+  const log = el.querySelector('#rasklog'); if (log) log.scrollTop = log.scrollHeight;
+  const ta = el.querySelector('#raskin'); if (ta && RASK.open) ta.focus();
+}
+async function rAskSend(text) {
+  if (!text || RASK.busy) return;
+  RASK.log.push({role: 'me', text}); RASK.busy = true;
+  if (LIVE && LIVE.api) {
+    RASK.log.push({role: 'bot', text: 'Thinking…', wait: true}); renderRAsk();
+    try {
+      const r = await fetch('/api/ask', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lantern-Token': LIVE.token}, credentials: 'same-origin',
+        body: JSON.stringify({project: LIVE.api.split('/').pop(), question: `(I am on the “${TAB_WORDS[S.simple ? 'simple' : 'advanced'][S.tab] || S.tab}” page.) ` + text, focus: S.sel || S.xsel ? {node: S.sel || S.xsel} : {}})});
+      const d = await r.json(); RASK.log.pop(); RASK.log.push({role: 'bot', text: d.answer || d.error || 'No answer.'});
+    } catch (e) { RASK.log.pop(); RASK.log.push({role: 'bot', text: 'I could not answer: ' + e.message}); }
+  } else RASK.log.push({role: 'bot', text: rAnswer(text)});
+  RASK.busy = false; renderRAsk();
+}
+(function wireRAsk() {
+  const el = document.getElementById('ask'); if (!el) return;
+  el.addEventListener('click', e => { const t = e.target.closest('button'); if (!t) return;
+    if (t.id === 'raskpill') { RASK.open = !RASK.open; renderRAsk(); }
+    else if (t.id === 'raskclose') { RASK.open = false; renderRAsk(); }
+    else if (t.id === 'rasksend') { const ta = document.getElementById('raskin'); const v = ta.value.trim(); ta.value = ''; rAskSend(v); }
+    else if (t.dataset.rchip) rAskSend(t.dataset.rchip); });
+  el.addEventListener('keydown', e => { if (e.target.id === 'raskin' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('rasksend').click(); } });
+})();
+
 window.setSimple = v => { S.simple = !!v; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); };
 function render() {
+  renderRAsk();
   renderLeft();
   if (S.tab === 'map') renderMap(); else if (S.tab === 'findings') renderFindings(); else if (S.tab === 'prot') renderProtections(); else if (S.tab === 'ready') renderReady(); else if (S.tab === 'xp') renderExplanations(); else if (S.tab === 'fix') renderFix(); else renderAbout();
   tabWords();

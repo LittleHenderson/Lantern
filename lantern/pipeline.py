@@ -53,7 +53,8 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
         t = time.perf_counter()
         m = merge_trace(g, run_trace(repo, trace_cmd))
         timings["trace"] = round(time.perf_counter() - t, 2)
-        run_meta["trace"] = {"command": trace_cmd, "returncode": m["returncode"]}
+        run_meta["trace"] = {"command": trace_cmd, "returncode": m["returncode"], "observed_edges": m["observed_edges"],
+                             "recall": m["recall"], "stderr_tail": (m.get("stderr_tail") or "")[-600:]}
         log(f"trace   {m['observed_edges']} calls seen running, recall {m['recall']}, "
             f"{m['runtime_only']} runtime-only (exit {m['returncode']})")
     sec = None

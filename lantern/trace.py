@@ -138,6 +138,7 @@ def merge_trace(g: Graph, data: dict) -> dict:
         "confirmed_static_edges": confirmed,
         "unmapped_pairs": unmapped,
         "returncode": data.get("returncode"),
+        "stderr_tail": (data.get("stderr_tail") or "")[-600:],
     }
     g.meta["trace"] = metrics
     return metrics
