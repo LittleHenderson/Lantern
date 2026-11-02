@@ -106,10 +106,10 @@ run).** On Lantern's own fixtures the same version did 37 / 37 and 30 first try 
 | flask | **25 / 25** | 19 | 4 | 2 | 0 | 0 | 75,114 / 32,307 | |
 | rich | **25 / 25** | 20 | 4 | 2 | 0 | 0 | 96,652 / 32,292 | |
 | requests | **5 / 5** | 3 | 1 | 1 | 0 | 0 | 15,970 / 6,131 | |
-| httpie | 24 / 25 | 18 | 5 | 2 | 1 | 0 | 71,633 / 36,683 | resumed after the cap. Miss: two findings left unexplained in `docs.contributors.fetch.fetch`, twice. One honest UNDETERMINED |
+| httpie | 24 / 25 | 18 | 5 | 2 | 0 | 0 | 71,633 / 36,683 | resumed after the cap. Miss: two findings left unexplained in `docs.contributors.fetch.fetch`, twice (that answer also carried a rejected one-word UNDETERMINED, "none": the validator refused it as it should) |
 
-**Pass 2 totals: 153 / 155 validated (98.7%); 113 / 155 first try (72.9%); 25 REPAIRs; 11 pairs dropped; 1
-UNDETERMINED; 0 invented findings shown.**
+**Pass 2 totals: 153 / 155 validated (98.7%); 113 / 155 first try (72.9%); 25 REPAIRs; 11 pairs dropped; 0
+UNDETERMINED accepted; 0 invented findings shown.**
 
 **Run-to-run swing, measured.** Pass 1 → pass 2 per repo, first try: fastapi-template 19 → 18, taxonomy 14 → 15,
 click 20 → 20, flask 16 → 19, rich 20 → 20, requests 4 → 3, httpie 20 → 18. Largest per-repo swing: 3 (flask). The
