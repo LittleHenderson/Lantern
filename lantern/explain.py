@@ -570,7 +570,7 @@ def explain_node(provider: Provider, g: Graph, ctx: Context, retries: int = 1) -
 
 
 def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nids: list[str],
-        metaphor: str | None = None, progress=None) -> dict:
+        metaphor: str | None = None, progress=None, fresh: bool = False) -> dict:
     cache = Cache(cache_dir)
     done: dict[str, dict] = {}
     stats = {"generated": 0, "cached": 0, "validated": 0, "failed": 0, "first_try": 0, "repaired": 0,
@@ -586,7 +586,7 @@ def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nid
     for i, nid in enumerate(nids):
         ctx = build_context(g, nid, findings, done, world["world"])
         k = cache.key(ctx, model_id)
-        rec = cache.get(k)
+        rec = None if fresh else cache.get(k)   # fresh: 'Re-explain' asks the model again and overwrites the cache
         if rec is not None:
             stats["cached"] += 1
         else:

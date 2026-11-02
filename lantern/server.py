@@ -732,7 +732,7 @@ class Handler(BaseHTTPRequestHandler):
                                                               else "rejected by the anchor check")
                     log(f"[{i}/{n}] {nid.split(':', 1)[-1]}  {flag}")
 
-                res = pipeline.explain(out, provider, ids, progress=progress)
+                res = pipeline.explain(out, provider, ids, progress=progress, fresh=bool(b.get("fresh")) and bool(nodes))
                 st = res["stats"]
                 log(f"done: {st['validated']} validated, {st['failed']} failed, {st['cached']} from cache; "
                     f"{st['usage']['input_tokens']:,} tokens in, {st['usage']['output_tokens']:,} out")

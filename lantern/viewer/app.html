@@ -343,6 +343,10 @@ pre.cmd{background:var(--sunken);color:var(--ink);font:12.5px/1.6 var(--mono);pa
 .tabs button.on{color:var(--ink)}
 .tabs button.on::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
 iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px);display:block;background:var(--bg)}
+.withbar iframe{height:calc(100vh - 164px);height:calc(100dvh - 164px)}
+.xbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:56px;padding:8px 20px;background:var(--surface);border-bottom:1px solid var(--line);font-size:13px}
+.xbar>.ic{width:18px;height:18px;color:var(--accent);flex:none} .xbar .t{flex:1;min-width:240px} .xbar .t b{color:var(--ink)} .xbar .d{font-size:12px;color:var(--muted);margin-top:2px}
+.xbar .xlog{flex-basis:100%;max-height:140px;margin:0}
 
 /* ---------- explain ---------- */
 .tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 6px}
@@ -638,6 +642,7 @@ function watch(jobId, pid) {
       if (el) { const t = el.querySelector('.t'); el.textContent = j.log.join('\n'); if (t) el.prepend(t); el.scrollTop = el.scrollHeight; }
       const line = document.querySelector(`[data-last="${pid}"]`); if (line && j.log.length) line.textContent = j.log[j.log.length - 1];
       if (j.status === 'running') return setTimeout(tick, 700);
+      S.frame = null;   // results changed: the embedded report is rebuilt on the next render
       await refresh();
     } catch (e) { setTimeout(tick, 2000); }
   };
@@ -799,7 +804,7 @@ function renderProject(el) {
   const simple = viewMode() === 'simple';
   const W = simple ? {atlas: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', evidence: 'Report', explain: 'Explanations', guide: 'Guide'}
                    : {atlas: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', evidence: 'Evidence', explain: 'Explanations', guide: 'Guide'};
-  const REPORT_TABS = {atlas: 'map', findings: 'findings', prot: 'prot', ready: 'ready'};
+  const REPORT_TABS = {atlas: 'map', findings: 'findings', prot: 'prot', ready: 'ready', explain: 'xp'};
   const c = p.counts || {}, nf = (c.critical || 0) + (c.high || 0) + (c.medium || 0);
   const tab = (t, label) => `<button data-t="${t}" class="${S.tab === t ? 'on' : ''}">${label}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${nf}</span>` : ''}</button>`;
   el.innerHTML = `<div class="sub"><button class="back" id="back" aria-label="Back to projects">${icon('back')}</button><span class="title">${esc(p.name)}</span>
@@ -814,49 +819,48 @@ function renderProject(el) {
   if (REPORT_TABS[S.tab]) {
     const want = S.reportTab || REPORT_TABS[S.tab];
     const old = S.frame && S.frame.pid === p.id ? S.frame.el : null;
+    const bar = S.tab === 'explain' ? '<div class="xbar" id="xbar"></div>' : '';
+    body.classList.toggle('withbar', S.tab === 'explain');
     if (old && old.contentDocument && old.contentDocument.querySelector('#tabs')) {
       // Same project: keep the loaded report and switch its tab, so the Atlas state (selection, zoom) survives.
-      body.replaceChildren(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
+      body.innerHTML = bar; body.appendChild(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
     } else {
-      body.innerHTML = `<iframe src="/p/${p.id}/report.html" title="${esc(W[S.tab])}"></iframe>`;
+      body.innerHTML = `${bar}<iframe src="/p/${p.id}/report.html" title="${esc(W[S.tab])}"></iframe>`;
       const fr = body.querySelector('iframe'); S.frame = {pid: p.id, el: fr};
       // The report is served from this app's origin, so the app can open it on a tab and keep the theme in step.
       fr.onload = e => { try { themeOn(e.target.contentDocument); e.target.contentDocument.body.classList.add('embed'); e.target.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {} };
     }
   }
-  else if (S.tab === 'evidence') {
+  if (S.tab === 'explain') renderExplain(body.querySelector('#xbar'), p);
+  if (REPORT_TABS[S.tab]) return;
+  if (S.tab === 'evidence') {
     body.innerHTML = `<iframe src="/p/${p.id}/evidence.html" title="Evidence Report"></iframe>`;
     body.querySelector('iframe').onload = e => { try { themeOn(e.target.contentDocument); } catch (err) {} };
   }
   else renderExplain(body, p);
 }
-async function renderExplain(body, p) {
+async function renderExplain(bar, p) {
+  // The batch control from the design's Explanations header: "Explain 98 unexplained · est. 6 min · $0.00".
   const s = S.state.settings, prov = S.state.providers.find(x => x.name === s.provider) || {};
   const job = S.jobs[p.id];
-  body.innerHTML = `<main><section class="hero"><h1>Three-Lens explanations</h1>
-    <p class="lede">A model writes each explanation three ways: technical, everyday, and a 1:1 map between them. Lantern checks every phrase anchors to real code and rejects ones that don't. Models never create or close findings.</p></section>
-    <div class="card" id="plan"><div class="working"><span class="pulse"></span>Working out what to explain…</div></div></main>`;
+  bar.innerHTML = `<span class="working"><span class="pulse"></span>Working out what to explain…</span>`;
   let plan;
-  try { plan = await api(`/api/projects/${p.id}/plan?depth=3&limit=40`); } catch (e) { body.querySelector('#plan').innerHTML = note('err', esc(e.message)); return; }
+  try { plan = await api(`/api/projects/${p.id}/plan?depth=3&limit=40`); } catch (e) { bar.innerHTML = note('err', esc(e.message)); return; }
   const cloud = prov.local === false || (prov.local === null && !/localhost|127\.0\.0\.1/.test(s.base_url || ''));
   const ready = s.model && (!prov.needs_key || prov.key);
-  const num = v => esc((+v || 0).toLocaleString());
-  body.querySelector('#plan').innerHTML = `<div class="tiles"><div class="tile"><div class="lbl">Functions to explain</div><div class="val">${num(plan.nodes)}</div></div>
-      <div class="tile"><div class="lbl">Input tokens, about</div><div class="val">${num(plan.input_tokens)}</div></div>
-      <div class="tile"><div class="lbl">Output tokens, about</div><div class="val">${num(plan.output_tokens)}</div></div></div>
-    <div class="hint">Entry points and what they call, up to 3 levels deep. ${esc(plan.note)}</div>
-    <div class="model">${icon('sparkle')}<div>${s.model ? `Model <b>${esc(s.provider)}/${esc(s.model)}</b>` : 'No model chosen yet.'}</div><span class="spacer"></span><a href="#" id="toset">Change in Settings</a></div>
-    ${s.model && cloud ? note('warn', `The source code of these functions will be sent to ${esc(prov.allowance ? 'Claude Haiku (free allowance, through Lantern)' : s.provider)} to write the explanations. ${esc(prov.notice || '')} To keep everything on this computer, choose Ollama or LM Studio in Settings.`) : ''}
-    ${s.model && !cloud ? note('ok', 'Local model: your code stays on this computer.') : ''}
-    ${s.model && prov.needs_key && !prov.key ? note('warn', `Add your ${esc(s.provider)} API key in Settings first.`) : ''}
-    <div class="row" style="margin-top:16px"><button class="btn primary" id="go" ${!ready || (job && job.status === 'running') ? 'disabled' : ''}>${icon('sparkle')}Explain ${num(plan.nodes)} functions</button>
-    <span class="small muted">You can also explain one function at a time from the Atlas.</span></div>
-    ${job ? `<div style="margin-top:14px"><pre class="log" id="log-${p.id}">${esc((job.log || []).join('\n'))}</pre></div>${job.status === 'error' ? note('err', esc(job.error)) : ''}` : ''}`;
-  body.querySelector('#toset').onclick = e => { e.preventDefault(); go('settings'); };
-  body.querySelector('#go').onclick = async () => {
-    try { const j = await api(`/api/projects/${p.id}/explain`, {method: 'POST', body: {depth: 3, limit: 40}}); watch(j.id, p.id); renderExplain(body, p); }
+  const num = v => (+v || 0).toLocaleString();
+  const mins = Math.max(1, Math.round(plan.nodes * 6 / 60));
+  const cost = !s.model ? '' : !cloud ? 'free, local' : prov.allowance ? 'free allowance' : `about ${num(plan.input_tokens)} tokens in, ${num(plan.output_tokens)} out`;
+  const running = job && job.status === 'running';
+  bar.innerHTML = `${icon('sparkle')}<div class="t"><b>${plan.nodes ? `Explain ${num(plan.nodes)} unexplained` : 'Everything on the main paths is explained'}</b>${plan.nodes ? ` · est. ${mins} min · ${esc(cost || 'choose a model in Settings')}` : ''}<div class="d">${esc(plan.note || '')} ${s.model ? `Model <b>${esc(s.provider)}/${esc(s.model)}</b>${cloud ? ' — the code of these functions is sent to ' + esc(prov.allowance ? 'Claude Haiku through the free allowance' : s.provider) + '.' : ' — stays on this computer.'}` : 'No model chosen yet.'} <a href="#" id="toset">Settings</a></div></div>
+    ${running ? `<span class="working"><span class="pulse"></span>Explaining…</span><button class="btn sm" id="showlog">Log</button>` : plan.nodes ? `<button class="btn primary" id="go" ${!ready ? 'disabled' : ''}>${icon('sparkle')}Explain ${num(plan.nodes)} functions</button>` : ''}
+    ${job && job.status === 'error' ? note('err', esc(job.error)) : ''}<pre class="log xlog" id="log-${p.id}" ${running ? '' : 'hidden'}>${esc((job && job.log || []).join('\n'))}</pre>`;
+  bar.querySelector('#toset').onclick = e => { e.preventDefault(); go('settings'); };
+  const g = bar.querySelector('#go'); if (g) g.onclick = async () => {
+    try { const j = await api(`/api/projects/${p.id}/explain`, {method: 'POST', body: {depth: 3, limit: 40}}); watch(j.id, p.id); renderExplain(bar, p); }
     catch (e) { alert(e.message); }
   };
+  const sl = bar.querySelector('#showlog'); if (sl) sl.onclick = () => { const l = bar.querySelector('.xlog'); l.hidden = !l.hidden; };
 }
 
 // ---------------------------------------------------------------- learn
