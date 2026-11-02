@@ -141,12 +141,12 @@
         "inputs": [
           "user_id: any string"
         ],
-        "outputs": "sqlite3.Cursor for the query",
+        "outputs": "the database cursor for the query",
         "side_effects": [
           "Executes SQL against the connected database"
         ],
         "errors": [
-          "sqlite3.OperationalError on malformed SQL, which attacker input can trigger on purpose"
+          "a database error on malformed SQL, which attacker input can trigger on purpose"
         ],
         "role": "Data-access leaf. The untrusted value from GET /users/{user_id} ends up inside the SQL text here."
       },

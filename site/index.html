@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lantern — Ship your vibe-coded app like a senior engineer built it</title>
+<meta name="description" content="Lantern maps every path a visitor can take through your app, from a click in the browser to the line on your server, finds what can hurt you, explains it in plain words and proves the fix. Runs on your computer; your code never leaves it.">
+<meta property="og:title" content="Lantern">
+<meta property="og:description" content="Build with vibes. Ship with confidence.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#F5F5F2;--surface:#FFFFFF;--ink:#161618;--ink-2:#46464C;--muted:#6E6E74;--line:rgba(22,22,24,.09);--line-2:rgba(22,22,24,.16);--hover:rgba(22,22,24,.045);
+--accent:#0F7B74;--accent-soft:rgba(15,123,116,.12);--flame:#FFB547;--glow:rgba(255,181,71,.2);
+--font:"DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#0E0E10;--surface:#161618;--ink:#F3F3F1;--ink-2:#BEBEC3;--muted:#8C8C92;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.16);--hover:rgba(255,255,255,.05);--accent:#4FC3BA;--accent-soft:rgba(79,195,186,.14)}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 var(--font)}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+button{font-family:var(--font)}
+.page{min-height:100vh;display:flex;flex-direction:column;position:relative;z-index:1}
+
+/* Backdrop: the design's three slow-drifting geometric layers (same code as the app). */
+#bg{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;opacity:.55}
+#bg svg{position:absolute;inset:0;width:100%;height:100%;will-change:transform}
+#bg .la{animation:drift1 22s cubic-bezier(.45,0,.55,1) 0s infinite}#bg .lb{animation:drift2 26s cubic-bezier(.45,0,.55,1) 3s infinite}#bg .lc{animation:drift3 30s cubic-bezier(.45,0,.55,1) 6s infinite}
+@keyframes drift1{0%,100%{transform:translate(0,0) rotate(0)}50%{transform:translate(18px,-26px) rotate(6deg)}}
+@keyframes drift2{0%,100%{transform:translate(0,0)}50%{transform:translate(-24px,18px)}}
+@keyframes drift3{0%,100%{transform:translate(0,0) rotate(0)}50%{transform:translate(14px,22px) rotate(-8deg)}}
+
+/* Lantern mark with a flickering flame */
+@keyframes flame{0%{transform:scale(1,1) skewX(0)}22%{transform:scale(.93,1.09) skewX(-4deg)}48%{transform:scale(1.05,.94) skewX(3deg)}71%{transform:scale(.96,1.06) skewX(-2deg)}100%{transform:scale(1,1) skewX(0)}}
+@keyframes flame2{0%{transform:scale(1,1) skewX(0)}30%{transform:scale(.88,1.14) skewX(4deg)}60%{transform:scale(1.08,.9) skewX(-3deg)}100%{transform:scale(1,1) skewX(0)}}
+@keyframes flameglow{0%,100%{opacity:.5}40%{opacity:.9}70%{opacity:.65}}
+.mark{width:34px;height:34px;border-radius:10px;flex:none;position:relative;display:inline-block;background:#141416;overflow:hidden;box-shadow:0 0 0 1px rgba(22,22,24,.09),0 4px 14px -4px rgba(255,170,60,.5)}
+.mark i{position:absolute;left:17%;top:22%;width:66%;height:66%;border-radius:99px;background:radial-gradient(closest-side,rgba(255,196,92,.6),rgba(255,196,92,0));animation:flameglow 1.4s ease-in-out infinite}
+.mark svg{position:absolute;inset:0;width:100%;height:100%}
+.mark .fl{transform-origin:50% 61%;animation:flame 1.1s ease-in-out infinite}.mark .fl2{transform-origin:50% 61%;animation:flame2 .75s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){#bg svg,.mark i,.mark .fl,.mark .fl2{animation:none !important}}
+
+header{height:72px;display:flex;align-items:center;gap:12px;padding:0 clamp(20px,5vw,64px)}
+header .name{font:600 18px var(--font);letter-spacing:-.01em}
+header .sp{flex:1}
+header nav{display:flex;gap:4px;align-items:center}
+header nav a{color:var(--ink-2);font:500 14px var(--font);padding:7px 10px;border-radius:9px}
+header nav a:hover{background:var(--hover);color:var(--ink);text-decoration:none}
+.ghost{height:34px;padding:0 12px;border-radius:9px;border:1px solid var(--line-2);background:transparent;color:var(--ink-2);cursor:pointer;font:500 13px var(--font);white-space:nowrap}
+.ghost:hover{background:var(--hover);color:var(--ink)}
+@media (max-width:640px){header nav a.hide{display:none}}
+
+main{flex:1;display:flex;flex-direction:column;align-items:center;text-align:center;padding:clamp(72px,14vh,160px) 24px 96px;position:relative}
+.halo{position:absolute;left:50%;top:-240px;width:900px;height:520px;transform:translateX(-50%);background:radial-gradient(closest-side,var(--glow),transparent);pointer-events:none}
+h1{position:relative;margin:0;max-width:1000px;font:500 clamp(28px,3.6vw,46px)/1.3 var(--font);letter-spacing:-.02em;color:var(--ink);text-wrap:pretty}
+.sub{position:relative;margin:18px 0 0;font:500 clamp(17px,1.6vw,22px)/1.4 var(--font);color:var(--muted)}
+.cta{position:relative;margin-top:40px;height:54px;padding:0 26px;border-radius:14px;border:0;background:var(--ink);color:var(--bg);cursor:pointer;font:600 16px var(--font);white-space:nowrap;box-shadow:0 1px 2px rgba(16,16,20,.08),0 10px 28px -10px rgba(16,16,20,.35);transition:transform .15s}
+.cta:hover{transform:translateY(-1px)}
+.cta.alt{background:transparent;color:var(--ink);border:1px solid var(--line-2);box-shadow:none}
+.ctas{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.ctas .cta{margin-top:0}
+.ctas{margin-top:40px}
+.tiny{position:relative;margin:16px 0 0;font:13px var(--font);color:var(--muted)}
+
+section{padding:88px clamp(20px,5vw,64px) 140px;border-top:1px solid var(--line)}
+section .in{max-width:1100px;margin:0 auto}
+.eyebrow{font:600 12px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:36px}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:40px 32px}
+.step{display:flex;flex-direction:column;gap:14px}
+.step b{display:grid;place-items:center;width:34px;height:34px;border-radius:99px;background:var(--hover);color:var(--ink);font:600 15px var(--font)}
+.step h2{margin:0;font:600 22px/1.25 var(--font);letter-spacing:-.015em;color:var(--ink);text-wrap:pretty}
+.step p{margin:0;font:16px/1.6 var(--font);color:var(--ink-2);text-wrap:pretty}
+
+.get{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px 22px 20px;display:flex;flex-direction:column;gap:10px;transition:box-shadow .2s,border-color .2s,transform .15s}
+.card:hover{border-color:var(--line-2);box-shadow:0 1px 2px rgba(16,16,20,.06),0 12px 32px -14px rgba(16,16,20,.3);transform:translateY(-1px)}
+.card h3{margin:0;font:600 18px/1.3 var(--font);letter-spacing:-.01em}
+.card p{margin:0;font:15px/1.55 var(--font);color:var(--ink-2)}
+.card .sp{flex:1}
+pre.cmd{margin:6px 0 0;padding:12px 14px;border-radius:10px;background:var(--bg);border:1px solid var(--line);font:500 13px/1.6 var(--mono);color:var(--ink);overflow:auto;white-space:pre}
+pre.cmd span{color:var(--muted);user-select:none}
+.card .btn{align-self:flex-start;height:38px;padding:0 14px;border-radius:10px;background:var(--ink);color:var(--bg);font:600 14px var(--font);display:inline-flex;align-items:center;gap:8px;text-decoration:none}
+.card .btn:hover{text-decoration:none;filter:brightness(1.1)}
+.langs{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.langs span{font:600 11px var(--mono);letter-spacing:.04em;padding:3px 8px;border-radius:5px;background:var(--hover);color:var(--ink-2)}
+
+.howto{margin:10px 0 0;padding-left:22px;display:flex;flex-direction:column;gap:10px;font:14.5px/1.55 var(--font);color:var(--ink-2)}
+.howto b{color:var(--ink)} .howto pre.cmd{margin:6px 0}
+.risks{margin:4px 0 10px;padding-left:20px;display:flex;flex-direction:column;gap:8px;font:14.5px/1.55 var(--font);color:var(--ink-2)}
+.risks b{color:var(--ink)}
+.fine{font-size:13px !important;color:var(--muted) !important}
+#privacy .get{grid-template-columns:repeat(auto-fit,minmax(360px,1fr))}
+.promise{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:28px 32px}
+.promise h3{margin:0 0 8px;font:600 17px var(--font)}
+.promise p{margin:0;font:15px/1.6 var(--font);color:var(--ink-2)}
+
+footer{padding:28px clamp(20px,5vw,64px);border-top:1px solid var(--line);display:flex;gap:16px;flex-wrap:wrap;align-items:center;font:13px var(--font);color:var(--muted)}
+footer .sp{flex:1}
+footer a{color:var(--ink-2)}
+
+/* Intro overlay: plays once, click anywhere to skip */
+#intro{position:fixed;inset:0;z-index:40;background:#0E0E10;transition:opacity .9s ease,visibility .9s}
+#intro.fading{opacity:0}#intro.hidden{opacity:0;visibility:hidden}
+#stage{position:absolute;inset:0}
+#skipzone{position:absolute;left:0;right:0;top:0;bottom:44px;z-index:2;cursor:pointer}
+#introbar{position:absolute;top:18px;right:20px;z-index:3;display:flex;gap:8px;align-items:center}
+.pillbtn{height:36px;padding:0 14px;border-radius:99px;border:1px solid rgba(255,255,255,.18);background:rgba(14,14,16,.6);color:#BEBEC3;cursor:pointer;display:inline-flex;align-items:center;gap:8px;font:500 13px var(--font);white-space:nowrap;backdrop-filter:blur(6px)}
+.pillbtn:hover{color:#F3F3F1;border-color:rgba(255,255,255,.35)}
+.pillbtn svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+</style>
+</head>
+<body>
+<div id="bg" aria-hidden="true"></div>
+
+<div id="intro" class="hidden" aria-label="Intro">
+  <div id="stage"></div>
+  <div id="skipzone" title="Click anywhere to skip"></div>
+  <div id="introbar">
+    <button class="pillbtn" id="soundbtn" title="Unmute (subtle tones)"><svg viewBox="0 0 20 20"><path d="M3 8v4h3l4 3V5L6 8z"/><path id="snd-on" d="M13 7.5a3.5 3.5 0 0 1 0 5M15 5a7 7 0 0 1 0 10" style="display:none"/><path id="snd-off" d="M13 8l4 4M17 8l-4 4"/></svg><span id="soundlabel">Sound off</span></button>
+    <button class="pillbtn" id="skipbtn">Skip intro</button>
+  </div>
+</div>
+
+<div class="page">
+<header>
+  <a href="./" style="display:flex;align-items:center;gap:12px;color:inherit;text-decoration:none">
+    <span class="mark" aria-hidden="true"><i></i><svg viewBox="0 0 64 64"><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/></svg><svg class="fl" viewBox="0 0 64 64"><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><svg class="fl2" viewBox="0 0 64 64"><path d="M32 30.5c1.6 1.9 2.4 3.3 2.4 4.6a2.4 2.4 0 0 1-4.8 0c0-1.3.8-2.7 2.4-4.6z" fill="#FFE3A6"/></svg></span>
+    <span class="name">Lantern</span>
+  </a>
+  <span class="sp"></span>
+  <nav>
+    <a class="hide" href="#how">How it works</a>
+    <a class="hide" href="demo/report.html">Live example</a>
+    <a href="#get">Get Lantern</a>
+    <a href="#privacy">Privacy</a>
+    <a class="hide" href="https://github.com/LittleHenderson/Lantern" rel="noopener">GitHub</a>
+  </nav>
+  <button class="ghost" id="replay">Replay intro</button>
+</header>
+
+<main>
+  <div class="halo"></div>
+  <h1>Ship your vibe-coded app like a senior engineer built it.</h1>
+  <p class="sub">Build with vibes. Ship with confidence.</p>
+  <div class="ctas">
+    <button class="cta" id="gosteps">See how it works</button>
+    <a class="cta alt" href="demo/report.html" style="display:inline-flex;align-items:center">Open a live example</a>
+  </div>
+  <p class="tiny">Runs on your computer. Your code never leaves it. <a href="#privacy">How to keep it that way →</a></p>
+</main>
+
+<section id="how">
+  <div class="in">
+    <div class="eyebrow">How it works</div>
+    <div class="steps">
+      <div class="step"><b>1</b><h2>Add your app</h2><p>Drop a folder or paste a GitHub link. Lantern reads your code the way a senior engineer reads a pull request, so nothing can go wrong on your machine and nothing leaves it.</p></div>
+      <div class="step"><b>2</b><h2>Lantern maps every path a visitor can take</h2><p>From a click in the browser to the line on your server that handles it, every hop drawn and every call checked for problems.</p></div>
+      <div class="step"><b>3</b><h2>Fix what it finds, with a guide and proof</h2><p>Each problem in plain words, ranked by whether a visitor can reach it. When it's gone, an evidence packet pinned to your commit says so.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="get">
+  <div class="in">
+    <div class="eyebrow">Get Lantern</div>
+    <div class="get">
+      <div class="card">
+        <h3>Open the app on your computer</h3>
+        <p>One install, then <code style="font-family:var(--mono);font-size:13px">lantern serve</code> opens Lantern in your browser. Add a folder or a GitHub link and press Analyze.</p>
+        <pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"
+<span>$ </span>lantern serve</pre>
+        <div class="langs"><span>TypeScript</span><span>JavaScript</span><span>Python</span><span>Go</span><span>Rust</span><span>Java</span></div>
+        <div class="sp"></div>
+        <a class="btn" href="https://github.com/LittleHenderson/Lantern#readme" rel="noopener">Install guide</a>
+      </div>
+      <div class="card">
+        <h3>See a finished report first</h3>
+        <p>A sample shop app (React + FastAPI) with planted problems, analyzed and explained. Every screen of the report works in this browser tab, nothing to install. It is a sample: nothing of yours is read or uploaded here.</p>
+        <div class="sp"></div>
+        <a class="btn" href="demo/report.html">Open the live example</a>
+      </div>
+      <div class="card">
+        <h3>Plain-word explanations, free</h3>
+        <p>Sign in with GitHub or Google inside the app and Lantern explains your code with Claude Haiku on a free allowance of about 300 explanations per account. Or use your own key, or none at all; the map and the findings never need a model. Explanations send the piece being explained to the model provider, so they are <a href="#privacy">optional and at your own risk</a>.</p>
+        <div class="sp"></div>
+        <a class="btn" href="https://lantern-gateway.fly.dev/v1/login" rel="noopener">Get a free allowance</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="in">
+    <div class="eyebrow">Your code, your choice</div>
+    <div class="get">
+      <div class="card" style="border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)">
+        <h3>Best for privacy: download it and run it on your computer</h3>
+        <p>Everything Lantern does by itself (the map of your app, the security findings, the readiness grade, the evidence report) runs on your own machine. No account, no upload, no server of ours ever sees your code. This is the recommended way to use Lantern, and the only way we can promise that nothing leaves your computer.</p>
+        <ol class="howto">
+          <li><b>Install Python 3.11 or newer</b> from <a href="https://www.python.org/downloads/" rel="noopener">python.org</a> (on Windows, tick "Add python.exe to PATH").</li>
+          <li><b>Install Lantern</b> in a terminal (PowerShell on Windows, Terminal on Mac):<pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"</pre></li>
+          <li><b>Open it:</b><pre class="cmd"><span>$ </span>lantern serve</pre>Your browser opens Lantern at a local address (127.0.0.1) that only your computer can reach.</li>
+          <li><b>Add your app</b>: Browse… to its folder, or paste a GitHub link. A link is cloned onto <em>your</em> computer, not onto a server, and analyzed there.</li>
+        </ol>
+        <p class="fine">Model explanations are off until you turn them on. With a key or a sign-in set up, Lantern still asks you once, and tells you what will be sent, before any code leaves the machine.</p>
+      </div>
+      <div class="card">
+        <h3>Optional, at your own risk: anything that uses an outside model</h3>
+        <p>Two features talk to a model provider on the internet, and only if you switch them on:</p>
+        <ul class="risks">
+          <li><b>Plain-word explanations.</b> The function being explained (its code, and the names of what calls it and what it calls) is sent to the provider you chose: Anthropic through the free allowance, DeepSeek, Anthropic or an OpenAI-compatible service with your own key, or a model running on your own machine (Ollama, LM Studio), which sends nothing anywhere.</li>
+          <li><b>Ask Lantern.</b> Your question, plus the project's results that the answer needs (finding titles, file names and line numbers, readiness checks, the selected function's explanation), goes to the same provider. A screenshot you drop in is read on your computer; the picture itself is not uploaded.</li>
+        </ul>
+        <p>What that provider does with the text is governed by its own terms, not by Lantern. The free allowance goes through a small gateway we run; it keeps a count of requests per account and never stores code or prompts, but it is still a server on the internet between you and the model. If your code is confidential, use a local model or leave explanations off: every finding, path and grade works without them.</p>
+        <p class="fine">There is no cloud version of Lantern that holds your repository. The "live example" on this site is a sample report built from a demo app, not a place to upload yours.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="in">
+    <div class="eyebrow">What Lantern promises</div>
+    <div class="promise">
+      <div><h3>Facts from tools, words from models</h3><p>Every path, link and finding comes from code that reads your code. A model only explains; it never invents, hides or closes a finding.</p></div>
+      <div><h3>Shows its confidence</h3><p>Every connection says how sure Lantern is (seen · resolved · likely · possible) and how it was found. What it could not follow is counted, not guessed.</p></div>
+      <div><h3>Your code stays yours</h3><p>Analysis runs on your computer. Nothing is uploaded unless you turn on explanations, and then only the pieces being explained, after you say yes.</p></div>
+      <div><h3>Proof you can hand over</h3><p>An evidence report pinned to a commit, with what was checked, what was found, what was fixed, and the limits, in words a skeptical engineer accepts.</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span>Lantern · open source · runs on your computer</span>
+  <span class="sp"></span>
+  <a href="https://github.com/LittleHenderson/Lantern" rel="noopener">Source</a>
+  <a href="https://github.com/LittleHenderson/Lantern/issues" rel="noopener">Report a problem</a>
+  <a href="demo/report.html">Live example</a>
+  <a href="#privacy">Privacy</a>
+</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script>
+window.OM_SCENES = [{"name":"Dark","dur":3},{"name":"Click","dur":5},{"name":"Lit","dur":5},{"name":"Ready","dur":5},{"name":"Tagline","dur":2}];
+window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
+</script>
+<script src="intro/runtime.js"></script>
+<script src="intro/intro.js"></script>
+<script>
+(function () {
+  // Backdrop (the same three layers as the app).
+  const hex = (cx, cy, r) => Array.from({length: 6}, (_, i) => `${(cx + r * Math.cos(Math.PI / 3 * i - Math.PI / 6)).toFixed(1)},${(cy + r * Math.sin(Math.PI / 3 * i - Math.PI / 6)).toFixed(1)}`).join(' ');
+  const st = 'fill="none" stroke-width="1.2" vector-effect="non-scaling-stroke"';
+  const layer = (cls, inner) => `<svg class="${cls}" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice">${inner}</svg>`;
+  document.getElementById('bg').innerHTML =
+    layer('la', `<polygon points="${hex(1010, 140, 150)}" ${st} stroke="var(--line-2)"/><polygon points="760,80 830,200 690,200" ${st} stroke="var(--line-2)"/><circle cx="260" cy="300" r="6" fill="var(--flame)" fill-opacity=".6"/><polygon points="${hex(620, 330, 44)}" ${st} stroke="var(--line-2)"/>`) +
+    layer('lb', `<circle cx="130" cy="690" r="170" ${st} stroke="var(--line-2)"/><circle cx="130" cy="690" r="118" ${st} stroke="var(--flame)" stroke-opacity=".5" stroke-dasharray="2 14"/><rect x="560" y="560" width="110" height="110" rx="14" ${st} stroke="var(--accent)" stroke-opacity=".4" transform="rotate(18 615 615)"/><rect x="584" y="584" width="62" height="62" rx="8" fill="var(--accent-soft)" transform="rotate(18 615 615)"/>`) +
+    layer('lc', `<polygon points="${hex(1010, 140, 108)}" ${st} stroke="var(--accent)" stroke-opacity=".35" stroke-dasharray="6 10"/><circle cx="700" cy="420" r="4" fill="var(--accent)" fill-opacity=".55"/>
+      <g stroke="var(--accent)" stroke-opacity=".3" stroke-width="1" fill="var(--accent)" opacity=".7"><line x1="300" y1="640" x2="400" y2="690"/><line x1="400" y1="690" x2="480" y2="630"/><line x1="400" y1="690" x2="430" y2="770"/><circle cx="300" cy="640" r="3.5" fill-opacity=".7"/><circle cx="400" cy="690" r="5" fill-opacity=".9"/><circle cx="480" cy="630" r="3" fill-opacity=".6"/><circle cx="430" cy="770" r="3" fill-opacity=".6"/></g>
+      <g stroke="var(--ink)" stroke-opacity=".25" stroke-width="1" fill="var(--ink)" opacity=".7"><line x1="880" y1="620" x2="980" y2="560"/><line x1="980" y1="560" x2="1090" y2="610"/><line x1="980" y1="560" x2="1000" y2="470"/><circle cx="880" cy="620" r="3" fill-opacity=".5"/><circle cx="980" cy="560" r="4.5" fill-opacity=".7"/><circle cx="1090" cy="610" r="3" fill-opacity=".5"/><circle cx="1000" cy="470" r="2.5" fill-opacity=".5"/></g>`);
+
+  // Intro: 20 s, plays once per visitor (skip anywhere, Replay in the header), tones muted by default.
+  const intro = document.getElementById('intro');
+  let state = 'hidden', sound = false, root = null;
+  const control = React.createRef();
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let seen = false; try { seen = localStorage.getItem('lantern-intro-seen') === '1'; } catch (e) {}
+  function mount() {
+    if (!window.LanternIntro || !window.ReactDOM) return false;
+    if (!root) root = ReactDOM.createRoot(document.getElementById('stage'));
+    root.render(React.createElement(window.LanternIntro, { sound, control, onDone: finish }));
+    return true;
+  }
+  function play() {
+    if (!mount()) return;
+    state = 'playing'; intro.className = '';
+    if (control.current) control.current.restart();
+  }
+  function finish() {
+    if (state !== 'playing') return;
+    state = 'fading'; intro.className = 'fading';
+    try { localStorage.setItem('lantern-intro-seen', '1'); } catch (e) {}
+    setTimeout(() => { if (state === 'fading') { state = 'hidden'; intro.className = 'hidden'; } }, 950);
+  }
+  document.getElementById('skipzone').onclick = finish;
+  document.getElementById('skipbtn').onclick = finish;
+  document.getElementById('replay').onclick = () => { window.scrollTo({top: 0}); play(); };
+  document.getElementById('soundbtn').onclick = () => {
+    sound = !sound;
+    document.getElementById('snd-on').style.display = sound ? '' : 'none';
+    document.getElementById('snd-off').style.display = sound ? 'none' : '';
+    document.getElementById('soundlabel').textContent = sound ? 'Sound on' : 'Sound off';
+    document.getElementById('soundbtn').title = sound ? 'Mute' : 'Unmute (subtle tones)';
+    if (state === 'playing') mount();
+  };
+  if (!seen && !reduced) play();
+
+  document.getElementById('gosteps').onclick = () => {
+    const el = document.getElementById('how');
+    window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 24, behavior: 'smooth' });
+  };
+})();
+</script>
+</body>
+</html>
