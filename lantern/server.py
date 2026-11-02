@@ -547,7 +547,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             s = app.store.settings()
             return self._json({"version": __version__, "projects": [app.summary(p) for p in app.store.projects()],
-                               "settings": s, "providers": app.provider_info()})
+                               "settings": s, "providers": app.provider_info(),
+                               "default_model": {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL_NAME}})
         if path == "/api/usage":
             from .providers import gateway_url
             return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),

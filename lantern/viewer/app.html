@@ -246,6 +246,20 @@ h3{font:650 15px/1.35 var(--display);letter-spacing:-.01em;color:var(--ink);marg
 @media (max-width:1100px){.apps{grid-template-columns:repeat(2,1fr)}.strip{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:760px){.apps,.firstrun{grid-template-columns:1fr}.simplehome h1{font-size:28px}.dropzone{flex-wrap:wrap;padding:12px}.dropzone input[type=text]{width:100%;flex:1 0 100%}.steps3{gap:14px;flex-direction:column;align-items:flex-start}.strip{grid-template-columns:1fr 1fr}}
 
+
+.choice.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.tag.priv{font:600 10px var(--font);letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:99px;background:var(--good-soft);color:var(--good-ink);margin-left:8px;vertical-align:middle}
+.subrow{margin:-6px 0 12px 34px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)} .subrow label{margin-top:0}
+.alsorow{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-top:1px solid var(--line)} .alsorow:first-of-type{border-top:0} .alsorow .hint{margin-top:2px}
+
+.fchip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:99px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);font:500 12.5px var(--font);cursor:pointer} .fchip.on{background:var(--primary);color:var(--on-primary);border-color:var(--primary)} .fchip .ic{width:14px;height:14px}
+.faq{display:flex;flex-direction:column;gap:8px}
+.qa{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:12px 16px;cursor:pointer;transition:border-color var(--t) var(--ease),box-shadow var(--t) var(--ease)} .qa:hover{border-color:var(--line-2);box-shadow:var(--shadow-2)} .qa.open{border-color:var(--accent)}
+.qa .qh{display:flex;align-items:center;gap:10px} .qa .g{font:600 10.5px var(--font);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);width:76px;flex:none} .qa .q{flex:1;font-weight:600;color:var(--ink);font-size:14.5px} .qa .pm{color:var(--muted);font-size:18px}
+.qa p{margin:10px 0 0 86px;font-size:14px;line-height:1.6;color:var(--ink-2)}
+pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--code-bg);color:var(--code-ink);font:12.5px/1.7 var(--mono);white-space:pre-wrap} pre.cli .c{color:var(--code-dim)}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:8px 14px;align-items:center;font-size:13.5px;color:var(--ink-2)} kbd{font:600 11.5px var(--mono);padding:2px 7px;border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink)}
+@media (max-width:640px){.qa p{margin-left:0}.qa .g{display:none}}
 /* ---------- buttons and fields ---------- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface);
   color:var(--ink);font-weight:600;font-size:13.5px;white-space:nowrap;text-decoration:none;transition:background var(--t) var(--ease), border-color var(--t) var(--ease), transform var(--t) var(--ease), box-shadow var(--t) var(--ease)}
@@ -481,7 +495,7 @@ const ICONS = {
   sparkle: '<path d="M10 3v3M10 14v3M3 10h3M14 10h3M5.5 5.5l2 2M12.5 12.5l2 2M14.5 5.5l-2 2M7.5 12.5l-2 2"/>',
   clock: '<circle cx="10" cy="10" r="7"/><path d="M10 6v4l2.5 2"/>',
   layers: '<path d="m10 3 7 4-7 4-7-4z"/><path d="m3 11 7 4 7-4"/>',
-  bolt: '<path d="M11 3 4.5 11H10l-1 6 6.5-8H10z"/>',
+  bolt: '<path d="M11 3 4.5 11H10l-1 6 6.5-8H10z"/>', search: '<circle cx="9" cy="9" r="5.5"/><path d="m13 13 3.5 3.5"/>',
   sun: '<circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7l1.3 1.3M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/>',
   moon: '<path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/>',
   auto: '<circle cx="10" cy="10" r="6.5"/><path d="M10 3.5v13a6.5 6.5 0 0 0 0-13z" fill="currentColor"/>',
@@ -948,6 +962,47 @@ async function renderGuide(body, p) {
 }
 
 // ---------------------------------------------------------------- settings
+
+// Settings, Simple (design 7b): three choices that matter; everything else keeps a sensible default.
+function renderSettingsSimple(el, s, provs, themeBtn) {
+  const anth = provs.find(x => x.name === 'anthropic') || {};
+  const isLocal = ['ollama', 'lmstudio'].includes(s.provider), isNone = !s.model;
+  const choice = isNone ? 'none' : isLocal ? 'local' : 'cloud';
+  const cloudWord = anth.allowance ? 'Claude Haiku, through the free allowance' : anth.key ? 'Claude, with your key' : 'Claude (cloud)';
+  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>Settings</h1><p class="lede">Three choices that matter. Everything else has a sensible default.</p></section>
+    <div class="card group"><h2>Who writes the explanations</h2>
+      <label class="choice ${choice === 'local' ? 'on' : ''}"><input type="radio" name="who" value="local" ${choice === 'local' ? 'checked' : ''}><span><b>A local model on this computer <span class="tag priv">Private</span></b>${isLocal && s.model ? `${esc(s.provider)} · ${esc(s.model)}. ` : 'Ollama or LM Studio. '}Nothing leaves your machine. Explanations take a little longer.</span></label>
+      <div id="localrow" class="subrow" ${choice === 'local' ? '' : 'hidden'}><label for="lmodel">Model name</label><div class="row"><select id="lprov"><option value="ollama" ${s.provider === 'lmstudio' ? '' : 'selected'}>Ollama</option><option value="lmstudio" ${s.provider === 'lmstudio' ? 'selected' : ''}>LM Studio</option></select><input type="text" id="lmodel" value="${esc(isLocal ? s.model : '')}" placeholder="llama3.2" spellcheck="false" style="flex:1"></div><div class="hint">Start the model server first (for Ollama: <code>ollama pull llama3.2</code>, then it runs by itself).</div></div>
+      <label class="choice ${choice === 'cloud' ? 'on' : ''}"><input type="radio" name="who" value="cloud" ${choice === 'cloud' ? 'checked' : ''}><span><b>${esc(cloudWord)}</b>Faster and sharper. The source of each function you ask about is sent to Anthropic; Lantern tells you before it happens.${anth.can_sign_in ? ' Sign in once for a free allowance of about 300 explanations.' : ''}</span></label>
+      <div id="cloudrow" class="subrow" ${choice === 'cloud' || anth.can_sign_in ? '' : 'hidden'}>${anth.can_sign_in ? `<div class="row"><button class="btn" data-signin="github">Sign in with GitHub</button><button class="btn" data-signin="google">Sign in with Google</button></div><div id="signinmsg" class="hint"></div><div class="hint">Or paste your own Anthropic key in Advanced.</div>` : anth.allowance ? '<div class="hint">Signed in. The free allowance is ready; your own key (in Advanced) would remove the limit.</div>' : anth.key ? `<div class="hint">Using your Anthropic key (${esc(anth.key)}).</div>` : '<div class="hint">No key yet: add one in Advanced, or sign in for the free allowance when the gateway is reachable.</div>'}</div>
+      <label class="choice ${choice === 'none' ? 'on' : ''}"><input type="radio" name="who" value="none" ${choice === 'none' ? 'checked' : ''}><span><b>No model</b>Everything still works: the map, findings, readiness and the report. You just read the code yourself.</span></label>
+      <div id="whomsg" class="hint"></div></div>
+    <div class="card group"><h2>Appearance</h2><div class="row" style="justify-content:space-between"><div><b>Theme</b></div><div class="seg" id="themeseg">${themeBtn('light', 'sun', 'Light')}${themeBtn('dark', 'moon', 'Dark')}${themeBtn('auto', 'auto', 'System')}</div></div>
+      <div class="row" style="justify-content:space-between;margin-top:12px"><div><b>Moving shapes in the background</b></div><div class="seg" id="bdseg">${['off', 'subtle', 'bold'].map(v => `<button data-bd="${v}" class="${(s.backdrop || 'subtle') === v ? 'on' : ''}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div></div></div>
+    <div class="card group"><h2>Also</h2>
+      <div class="alsorow"><div><b>Connections</b><div class="hint" id="connhint">Looking…</div></div><button class="btn" id="toconn">Open</button></div>
+      <div class="alsorow"><div><b>Privacy of reports</b><div class="hint">${s.privacy === 'structure' ? 'Reports leave source code out.' : 'Reports include each function’s source so the code panel works.'}</div></div><button class="btn" id="topriv">Change</button></div>
+      <div class="alsorow"><div><b>Everything else</b><div class="hint">Keys, base URLs, usage counts, default view.</div></div><button class="btn" id="toadv">Advanced</button></div></div>
+    <p class="foot">Lantern listens on this computer only (127.0.0.1) and has no telemetry unless you turn usage counts on. The only network calls are dependency checks and the model you choose above.</p></main>`;
+  const save = async body => { try { const r = await api('/api/settings', {method: 'POST', body}); S.state.settings = r.settings; S.state.providers = r.providers; return true; } catch (e) { el.querySelector('#whomsg').textContent = e.message; return false; } };
+  const pick = async v => {
+    el.querySelectorAll('.choice').forEach(c => c.classList.toggle('on', c.querySelector('input').value === v));
+    el.querySelector('#localrow').hidden = v !== 'local'; el.querySelector('#cloudrow').hidden = v !== 'cloud' && !anth.can_sign_in;
+    if (v === 'none') { if (await save({provider: s.provider, model: ''})) el.querySelector('#whomsg').textContent = 'Saved: no model. Nothing is sent anywhere.'; }
+    if (v === 'cloud') { if (await save({provider: 'anthropic', model: s.provider === 'anthropic' && s.model ? s.model : ((S.state.default_model || {}).model || 'claude-haiku-5-5')})) el.querySelector('#whomsg').textContent = anth.allowance || anth.key ? 'Saved: Claude writes the explanations.' : 'Saved. Sign in above, or add a key in Advanced, before the first explanation.'; }
+    if (v === 'local') { const m = el.querySelector('#lmodel').value.trim(); if (m && await save({provider: el.querySelector('#lprov').value, model: m, base_url: ''})) el.querySelector('#whomsg').textContent = `Saved: ${m} on this computer.`; else if (!m) el.querySelector('#whomsg').textContent = 'Type the model name (for example llama3.2), then press Enter.'; }
+  };
+  el.querySelectorAll('input[name=who]').forEach(r => r.onchange = () => pick(r.value));
+  el.querySelector('#lmodel').onkeydown = e => { if (e.key === 'Enter') pick('local'); };
+  el.querySelector('#lmodel').onblur = () => { if (el.querySelector('input[name=who]:checked').value === 'local') pick('local'); };
+  el.querySelector('#lprov').onchange = () => pick('local');
+  el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
+  el.querySelector('#bdseg').onclick = async e => { const b = e.target.closest('button'); if (!b) return; await save({backdrop: b.dataset.bd}); for (const x of el.querySelectorAll('#bdseg button')) x.classList.toggle('on', x === b); setBackdrop(); };
+  const toAdv = async (anchor) => { try { const r = await api('/api/settings', {method: 'POST', body: {view_mode: 'advanced'}}); S.state.settings = r.settings; } catch (e) {} drawViewMode(); render(); if (anchor) { const a = document.getElementById(anchor); if (a) a.scrollIntoView({behavior: 'smooth'}); } };
+  el.querySelector('#toconn').onclick = () => toAdv('conns'); el.querySelector('#topriv').onclick = () => toAdv('privcard'); el.querySelector('#toadv').onclick = () => toAdv();
+  api('/api/connections').then(c => { el.querySelector('#connhint').textContent = c.connections.length ? c.connections.map(x => x.name).slice(0, 3).join(', ') + ' have called' : 'No assistant has connected yet (Claude Code, Cursor, ChatGPT can).'; }).catch(() => { el.querySelector('#connhint').textContent = ''; });
+}
+
 function renderSettings(el) {
   const s = S.state.settings, provs = S.state.providers;
   const draw = () => {
@@ -981,7 +1036,8 @@ function renderSettings(el) {
     } catch (err) { msg.textContent = 'Sign-in failed: ' + (err.message || err); }
   });
   const themeBtn = (t, ic, label) => `<button data-theme="${t}" class="${THEME === t ? 'on' : ''}">${icon(ic)}${label}</button>`;
-  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>Settings</h1><p class="lede">Choose the model that writes explanations, and how much of your code a report carries.</p></section>
+  if (viewMode() === 'simple') return renderSettingsSimple(el, s, provs, themeBtn);
+  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>Settings</h1><p class="lede">Every setting Lantern has. The Simple view shows the three that matter.</p></section>
     <div class="card group"><h2>Model for explanations</h2><div class="hint">Lantern works without a model. A model only adds the three-lens explanations.</div>
       <label for="prov">Provider</label><select id="prov">${provs.map(p => `<option value="${esc(p.name)}" ${p.name === s.provider ? 'selected' : ''}>${esc(p.name)}${p.local ? ' (local)' : ''}</option>`).join('')}</select>
       <div id="provinfo"></div>
@@ -990,7 +1046,7 @@ function renderSettings(el) {
       <div id="keyrow"><label for="key">API key</label><input type="password" id="key" autocomplete="off" placeholder="paste to set or replace">
         <label class="check"><input type="checkbox" id="remember"><span>Remember on this computer (saved in ~/.lantern/keys.json, readable only by you). Otherwise kept in memory until Lantern stops.</span></label>
         <button class="btn sm" id="forget" type="button">Forget saved key</button></div></div>
-    <div class="card group"><h2>Privacy</h2><div class="hint">Applies to reports written from now on.</div>
+    <div class="card group" id="privcard"><h2>Privacy</h2><div class="hint">Applies to reports written from now on.</div>
       <label class="choice"><input type="radio" name="priv" value="full" ${s.privacy !== 'structure' ? 'checked' : ''}><span><b>Full</b>Reports include each function's source, for the code panel.</span></label>
       <label class="choice"><input type="radio" name="priv" value="structure" ${s.privacy === 'structure' ? 'checked' : ''}><span><b>Structure only</b>Reports leave source code out (safer to share).</span></label>
       <div class="row" style="margin-top:18px"><button class="btn primary" id="save">Save</button><span id="saved" class="small muted"></span></div></div>
@@ -1036,18 +1092,52 @@ function renderSettings(el) {
   el.querySelector('#forget').onclick = () => save({forget_key: true, key: undefined});
 }
 
+const FAQ = [
+  ['Safety', 'Does my code leave my computer?', 'No, unless you turn on explanations or Ask Lantern with a cloud model. Analysis (the map, findings, readiness, the Evidence Report) runs here. A GitHub link is cloned onto this computer, not a server. With a local model (Ollama, LM Studio) nothing leaves either. Lantern tells you once, before the first time code would be sent.'],
+  ['Safety', 'Does Lantern run my app or my tests?', 'It reads your code; it never runs your app. Tests run only if you ask (“Watch my tests run” or <code>lantern analyze --trace -- pytest</code>), with your own test command, shown first.'],
+  ['Safety', 'What does the free allowance store?', 'A hash of your sign-in token and request counts. No code, no prompts, no email address. Each account gets one token; signing in again rotates it.'],
+  ['Findings', 'What makes a finding critical?', 'Two yes answers: a page or route leads to that line (reachable), and the line uses something the visitor sent (input). Reachable but no input is high; not reachable stays low even when the scanner says high.'],
+  ['Findings', 'What does “reachable” mean?', 'Lantern found a path from a place a visitor can start (a page, a route, a command) to the function that holds the finding. The path is drawn on the finding so you can follow it.'],
+  ['Findings', 'What is “accept risk with a reason”?', 'When you have decided a finding is fine (a fixed list, admin-only, a test fixture), write why. The reason is committed in <code>lantern-accepted.json</code> and shown in the Evidence Report; it is never silent.'],
+  ['Findings', 'Why are some findings labelled heuristic?', 'Those come from pattern checks that can misfire (missing login check, CORS, rate limit). They say so, never count as hard failures, and ask you to look before acting.'],
+  ['Atlas', 'What do the line styles mean?', 'Teal: seen running under your tests. Solid: confirmed by reading the code. Dashed: likely (about 90% right across our benchmark). Dotted: possible. What Lantern could not follow is counted on the About page, never guessed.'],
+  ['Atlas', 'What is a hop?', 'One step along a path: a click handler, a function call, an HTTP request from the browser to a route, a call into a library. “Seven hops” means seven such steps from the page to the flagged line.'],
+  ['Atlas', 'Why is a function missing from the map?', 'Either nothing reachable calls it (it is counted as hidden in the Graph view), or the call went through something Lantern cannot follow yet: hook results, framework dispatch, dynamic names. The About page lists what was unresolved.'],
+  ['Readiness', 'How is the score made?', 'Ten weighted areas (security findings, secrets, input handling, dependencies, tests, observability, packaging, CI, resilience, documentation). Every point has a written reason. Checks that do not apply are skipped, not counted against you.'],
+  ['Readiness', 'What is a hard failure?', 'A critical finding a visitor can reach that uses their input. Those cap the grade until fixed; nothing else does.'],
+  ['Readiness', 'Will Lantern overwrite my files?', 'Never. Starter files (Dockerfile, CI, .env.example, SECURITY.md) are written only when you press Write, and only where no file exists.'],
+  ['Setup', 'How do I add an app?', 'My projects → Browse… to its folder, or paste a GitHub link, then Check my app. Python, TypeScript/JavaScript, Go, Rust and Java apps work today.'],
+  ['Setup', 'How do explanations work, and what do they cost?', 'A model writes each function three ways and Lantern checks every phrase against your code. Sign in for a free allowance (about 300 explanations), use your own key, or run a local model for free. The Explanations tab shows the estimate before you press Explain.'],
+  ['Setup', 'How do I use Lantern from Claude Code, Cursor or ChatGPT?', 'Settings → Connections shows the one-line setup. The assistant can read findings, paths and readiness and re-check a fix; it can never accept or close a finding.'],
+  ['Setup', 'Where are my results stored?', 'In a <code>.lantern</code> folder inside the analyzed project (report, evidence, baseline) and <code>~/.lantern</code> for settings and keys (keys only if you tick “remember”).'],
+];
+const CLI_REF = [
+  ['# open the app for a project', 'lantern serve path/to/app', 'lantern serve https://github.com/you/app'],
+  ['# check without the app (CI, scripts)', 'lantern analyze . --fail-on high', 'lantern analyze . --trace -- pytest -q'],
+  ['# record a decision, prove a fix', 'lantern accept . FINDING_ID --reason "…"', 'lantern verify . --report evidence.html'],
+  ['# explanations and learning', 'lantern explain . --model ollama/llama3.2', 'lantern learn notes-api ~/notes-api', 'lantern starter . --write dockerfile ci'],
+  ['# free allowance, connectors', 'lantern login --github', 'lantern mcp --setup'],
+];
 function renderHelp(el) {
-  const steps = [
-    ['Add a project', 'Any folder with a Python or TypeScript/JavaScript app, new or years old, or a GitHub link to one (Lantern clones it into <code>~/.lantern/repos</code>). Lantern reads the code; it never runs it.'],
-    ['Open the Atlas', 'Pick a page or API route on the left and follow the path, from button clicks through HTTP calls to the backend. Lines show how sure Lantern is about each link.'],
-    ['Findings', 'Security problems ranked by how bad they are and whether a user can reach them. Fix them, or accept a risk with a written reason.'],
-    ['Readiness', 'A 0–100 grade across ten areas, with what to fix first and starter files (Dockerfile, CI, .env.example) you can write with one click.'],
-    ['Explanations', 'Add your own model key (or a local model) in Settings to get every function explained three ways.'],
-    ['Evidence Report', 'A commit-pinned summary to share with an engineer. They can re-run <code>lantern verify</code> to check it.'],
-  ];
-  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>How to use Lantern</h1><p class="lede">New to this? The <b>Learn</b> tab has starter apps with real problems in them and a guide that walks you through every feature.</p></section>
-    <div class="card"><ol class="howto">${steps.map(([t, d], i) => `<li><span class="n">${i + 1}</span><div><b>${t}</b><div>${d}</div></div></li>`).join('')}</ol></div>
-    <p class="foot">Command line: <code>lantern analyze PATH</code>, <code>lantern explain PATH --model provider/model</code>, <code>lantern verify PATH --report evidence.html</code>. Run <code>lantern --help</code> for all commands.</p></main>`;
+  const H = S.help || (S.help = {q: '', group: 'All', cli: false, open: null});
+  const groups = ['All', ...new Set(FAQ.map(f => f[0]))];
+  const q = H.q.toLowerCase();
+  const list = FAQ.map((f, i) => [i, ...f]).filter(([, g, qq, a]) => (H.group === 'All' || g === H.group) && (!q || (qq + ' ' + a).toLowerCase().includes(q)));
+  el.innerHTML = `<main style="max-width:820px"><section class="hero" style="text-align:center"><h1>How can we help?</h1><p class="lede" style="margin:0 auto">Ship your vibe-coded app like a senior engineer built it. Build with vibes. Ship with confidence.</p></section>
+    <div class="dropzone" style="margin-bottom:14px">${icon('search')}<input type="text" id="hq" placeholder="Search questions, like “does my code leave my computer”" value="${esc(H.q)}" autocomplete="off"><button class="btn primary" id="hgo">Search</button></div>
+    <div class="row" style="margin-bottom:16px">${groups.map(g => `<button class="fchip ${!H.cli && H.group === g ? 'on' : ''}" data-g="${esc(g)}">${esc(g)}</button>`).join('')}<span class="spacer"></span><button class="fchip ${H.cli ? 'on' : ''}" id="hcli">${icon('bolt')}Command line</button></div>
+    ${H.cli ? `<div class="card"><h2>Everything the app does, from a terminal</h2><pre class="cli">${CLI_REF.map(([c, ...cmds]) => `<span class="c">${esc(c)}</span>\n${cmds.map(esc).join('\n')}`).join('\n\n')}</pre>
+        <div class="hint">Every command prints what it will read before it starts. Add <code>--help</code> to any of them for the full list.</div></div>
+      <div class="card" style="margin-top:14px"><h2>Keyboard</h2><div class="keys"><kbd>/</kbd><span>Search functions (Atlas)</span><kbd>?</kbd><span>Open help</span><kbd>1–6</kbd><span>Switch project tab</span><kbd>⇧ D</kbd><span>Toggle appearance</span></div>
+        <div class="hint" style="margin-top:10px"><b>Something wrong?</b> <code>python -m pytest -q</code> in a checkout runs every automated check; <code>lantern analyze . --fail-on medium</code> is the self-audit.</div></div>`
+      : `<div class="faq">${list.map(([i, g, qq, a]) => `<div class="qa ${H.open === i ? 'open' : ''}" data-i="${i}"><div class="qh"><span class="g">${esc(g)}</span><span class="q">${esc(qq)}</span><span class="pm">${H.open === i ? '−' : '+'}</span></div>${H.open === i ? `<p>${a}</p>` : ''}</div>`).join('') || '<div class="empty">No question matches. Ask Lantern (bottom right) in your own words.</div>'}</div>`}
+    <p class="foot">Still stuck? Press the lantern button bottom-right and ask in your own words. New to all this? <a href="#" id="tolearn2">Learn</a> has a practice app with a step-by-step guide.</p></main>`;
+  const hq = el.querySelector('#hq'); hq.oninput = () => { H.q = hq.value; H.cli = false; renderHelp(el); const z = document.getElementById('hq'); z.focus(); z.setSelectionRange(z.value.length, z.value.length); };
+  el.querySelector('#hgo').onclick = () => { H.q = hq.value; renderHelp(el); };
+  el.querySelectorAll('[data-g]').forEach(b => b.onclick = () => { H.group = b.dataset.g; H.cli = false; renderHelp(el); });
+  el.querySelector('#hcli').onclick = () => { H.cli = !H.cli; renderHelp(el); };
+  el.querySelectorAll('.qa').forEach(d => d.onclick = () => { const i = +d.dataset.i; H.open = H.open === i ? null : i; renderHelp(el); });
+  const tl = el.querySelector('#tolearn2'); if (tl) tl.onclick = e => { e.preventDefault(); go('learn'); };
 }
 
 function render() {
