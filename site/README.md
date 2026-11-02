@@ -9,8 +9,8 @@ The landing page from the Claude Design handoff (`Lantern Landing.dc.html`), as 
   Click, Lit, Ready, Tagline). Plays once per visitor (remembered in the browser), skip anywhere, "Replay intro"
   in the header, tones muted by default, off under reduced motion. `intro/runtime.js` is the small stage/clock
   it runs on (React 18 from cdnjs).
-- `demo/report.html` — the live example: `python examples/make_demo.py` output for the shop fixture. Rebuild it
-  when the report changes.
+- `demo/report.html` — the live example, built by the workflow at publish time (`python examples/make_demo.py`)
+  so it always matches the current viewer; not committed.
 - `icon.svg` — the lantern mark.
 
 Published by `.github/workflows/site.yml` to GitHub Pages on every push to `main` that touches `site/`.

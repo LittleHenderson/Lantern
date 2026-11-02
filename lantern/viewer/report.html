@@ -114,6 +114,7 @@ aside.left{position:relative}
 /* Retracting side panels (design 3c): a 30px rail with a vertical label and the same toggle. */
 main.lrail{grid-template-columns:30px minmax(0,1fr) 440px} main.rrail{grid-template-columns:280px minmax(0,1fr) 30px} main.lrail.rrail{grid-template-columns:30px minmax(0,1fr) 30px}
 main.noleft.rrail{grid-template-columns:minmax(0,1fr) 30px}
+main.noright{grid-template-columns:280px minmax(0,1fr)} main.noleft.noright{grid-template-columns:minmax(0,1fr)} main.noright aside.right{display:none}
 aside .edge{position:absolute;top:50%;width:18px;height:40px;margin-top:-20px;border:1px solid var(--line-2);background:var(--surface);color:var(--muted);border-radius:7px;display:grid;place-items:center;padding:0;z-index:3;opacity:.7;transition:opacity var(--t) var(--ease), color var(--t) var(--ease)}
 aside .edge:hover{opacity:1;color:var(--ink)} aside .edge .ic{width:14px;height:14px}
 aside.left .edge{right:-9px} aside.right .edge{left:-9px}
@@ -140,6 +141,26 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 .langline{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);margin:0 0 12px}
 .langline .lang{font:600 10px var(--mono);padding:2px 6px;border-radius:5px;background:var(--hover);color:var(--ink-2)}
 .fcard.flash{animation:flash 1.6s var(--ease)} @keyframes flash{0%{box-shadow:0 0 0 4px var(--accent-soft)}100%{box-shadow:none}}
+
+/* Findings (design 4a): Simple audit memo grouped by severity; Advanced table + detail panel */
+.countrow{display:flex;gap:18px;margin:0 0 18px;font-size:13px;color:var(--muted)} .countrow b{font:600 15px var(--font);color:var(--ink);margin-right:5px}
+.sevhead{display:flex;align-items:center;gap:8px;font:600 12px var(--font);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:22px 0 10px}
+.sevhead i{width:8px;height:8px;border-radius:99px;background:var(--faint)} .sevhead.critical i{background:var(--critical)} .sevhead.high i{background:var(--serious)} .sevhead.medium i{background:var(--warning)} .sevhead.low i{background:var(--good)}
+.fdesc{margin:6px 0 0;font-size:13.5px;line-height:1.55;color:var(--ink-2)} .fdesc code{font:12px var(--mono);background:var(--hover);padding:1px 5px;border-radius:5px}
+.btn.quietlink{border-color:transparent;background:transparent;color:var(--muted)} .btn.quietlink:hover{color:var(--ink);background:var(--hover)}
+.srcslot:not(:empty){margin-top:10px}
+.fsel{height:28px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface);color:var(--ink-2);font:500 12.5px var(--font);padding:0 8px}
+.ftable{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden;margin-top:12px}
+.ftable .r{display:grid;grid-template-columns:92px minmax(220px,1.6fr) minmax(180px,1fr) 130px 70px 100px;gap:0 12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;cursor:pointer}
+.ftable .r:last-child{border-bottom:0} .ftable .r:not(.h):hover{background:var(--hover)} .ftable .r.on{background:var(--accent-soft)} .ftable .r.acc{opacity:.6}
+.ftable .r.h{cursor:default;background:var(--surface-2);font:600 11px var(--font);letter-spacing:.04em;text-transform:uppercase;color:var(--muted);padding:8px 14px}
+.ftable .sv{display:flex;align-items:center;gap:6px;font-weight:600;text-transform:capitalize} .ftable .dot{width:8px;height:8px;border-radius:99px;background:var(--faint)} .ftable .dot.critical{background:var(--critical)} .ftable .dot.high{background:var(--serious)} .ftable .dot.medium{background:var(--warning)} .ftable .dot.low{background:var(--good)}
+.ftable .t{font-weight:600;color:var(--ink)} .ftable .d{font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px} .ftable .w{font:12px var(--mono);color:var(--ink-2)}
+.lang{font:600 9px var(--mono);padding:1px 4px;border-radius:4px;background:var(--hover);color:var(--muted);vertical-align:middle}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.tiles>div{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface-2)} .tiles .k{font:600 10.5px var(--font);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)} .tiles .v{font:600 14px var(--font);color:var(--ink);margin-top:3px} .tiles .d{font-size:11.5px;color:var(--muted);margin-top:2px}
+.k2{font:600 11px var(--font);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+.detail p{margin:0;font-size:13.5px;line-height:1.55;color:var(--ink-2)}
 .detail .acts{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 
 /* ---------- left: entry points ---------- */
@@ -434,8 +455,8 @@ const short = q => {
 const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv):/.test(id || '') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
-const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false};
-try { S.view = ['tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : 'tree'; S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
+const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: ''};
+try { S.simple = localStorage.getItem('lantern.simple') !== '0'; S.view = ['tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : 'tree'; S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
 try { S.lens = +localStorage.getItem('lantern.lens') || 1; } catch (e) {}
 // Icons and the status tone of a 0-100 value: fixed markup and fixed words, never data.
 const ICONS = {
@@ -760,41 +781,103 @@ function renderMap() {
   el.querySelectorAll('.node, g[data-id]').forEach(b => b.onclick = () => { const id = b.dataset.id; if (!S.open.has(id)) S.open.add(id); select(id); renderMap(); });
 }
 
+const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const countWord = n => n < WORDS.length ? WORDS[n][0].toUpperCase() + WORDS[n].slice(1) : String(n);
+function chainHtml(label, ids) {
+  return `<div class="path">${label ? `<span class="note">${label}</span>` : ''}${ids.map((p, i) => {
+    const n = N[p], e = i ? (OUT[ids[i - 1]] || []).find(x => x.dst === p) : null;
+    const sep = !i ? '' : e && (e.via || '').startsWith('http-') ? `<span class="hop">HTTP ${esc(e.detail || '')}</span>` : e && e.detail ? `<span class="hop ui">${esc(UI_WORDS[e.detail] || e.detail)}</span>` : '<span class="sep">→</span>';
+    const nm = n && n.entry && n.entry.kind === 'page' ? `${n.entry.detail} page` : short((n || {}).qualname || p);
+    return `${sep}<button data-id="${esc(p)}"><span class="layer ${layer(p)}"></span>${esc(nm)}</button>`; }).join('')}</div>`;
+}
+function pathsHtml(f) {
+  const uiSame = f.ui_path && f.reachable && f.ui_path.join() === f.reachable.path.join();
+  let path = f.ui_path ? chainHtml('From the app', f.ui_path) : '';
+  if (f.reachable && !uiSame) path += chainHtml(`Reachable from ${esc(f.reachable.kind)}`, f.reachable.path);
+  return path || `<div class="note" style="margin-top:8px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
+}
+const hops = f => (f.ui_path || (f.reachable || {}).path || []).length;
+const seenHops = f => { const ids = f.ui_path || (f.reachable || {}).path || []; let n = 0; for (let i = 1; i < ids.length; i++) if (((OUT[ids[i - 1]] || []).find(x => x.dst === ids[i]) || {}).confidence === 'observed') n++; return n; };
+const entryOf = f => { const ids = f.ui_path || (f.reachable || {}).path || []; const n = N[ids[0]]; return n ? (n.entry && n.entry.detail ? n.entry.detail : short(n.qualname)) : null; };
+function findingCard(f) {
+  const heur = f.tool_confidence === 'LOW' ? '<span class="tag" title="Pattern-based check; review before acting">heuristic</span>' : '';
+  const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
+  const accepted = f.status === 'accepted' ? `<span class="tag" title="${esc((f.accepted || {}).reason)}">accepted risk</span>` : '';
+  const where = `<code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${f.node && N[f.node] ? ' in <code>' + esc(short(N[f.node].qualname)) + '</code>' : ''}`;
+  const reach = f.ui_path ? ` Reached from the <b>${esc(entryOf(f))}</b> page in ${esc(WORDS[hops(f)] || hops(f))} hop${hops(f) === 1 ? '' : 's'}${seenHops(f) ? `; ${esc(WORDS[seenHops(f)] || seenHops(f))} of them seen running under the test suite` : ''}.` : f.reachable ? ` Reachable from ${esc(f.reachable.kind)} <b>${esc(entryOf(f))}</b>.` : '';
+  const input = f.input ? ` Uses outside input: ${esc(f.input.via)}.` : f.input === false ? ' Reachable, but no parameter or request data reaches this line inside this function, so it is not ranked critical.' : '';
+  return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
+    ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
+    <h4>${esc(f.title)}</h4><p class="fdesc">${where}.${reach}${input}</p>
+    ${pathsHtml(f)}
+    ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
+    <div class="srcslot" id="src-${esc(f.id)}"></div>
+    <div class="acts">${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">Open in Atlas</button>` : ''}${f.node && SRC[f.node] ? `<button class="btn" data-lines="${esc(f.id)}">Show the lines</button>` : ''}${f.status !== 'accepted' ? `<button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn quietlink" data-accept="${esc(f.id)}">Accept risk with a reason…</button>` : ''}</div><div class="sendslot"></div></div>`;
+}
+function wireFindings(el) {
+  el.querySelectorAll('[data-sev]').forEach(b => b.onclick = () => { S.fsev = b.dataset.sev; renderFindings(); });
+  el.querySelectorAll('.path [data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
+  el.querySelectorAll('[data-atlas]').forEach(b => b.onclick = () => { const id = b.dataset.atlas; S.tab = 'map'; for (const x of document.querySelectorAll('#tabs button')) x.classList.toggle('on', x.dataset.t === 'map'); const f = SEC.findings.find(q => q.node === id && (q.ui_path || q.reachable)); const ids = f ? (f.ui_path || f.reachable.path) : null; if (ids) { S.entry = ids[0]; S.open = new Set(ids); } S.open.add(id); select(id, false); render(); });
+  el.querySelectorAll('[data-lines]').forEach(b => b.onclick = () => { const f = SEC.findings.find(q => q.id === b.dataset.lines); const slot = document.getElementById('src-' + f.id); if (slot.innerHTML) { slot.innerHTML = ''; b.textContent = 'Show the lines'; } else { slot.innerHTML = srcBlock(N[f.node]); b.textContent = 'Hide the lines'; } });
+  el.querySelectorAll('[data-accept]').forEach(b => b.onclick = () => acceptLive(b.dataset.accept));
+  el.querySelectorAll('[data-send]').forEach(b => b.onclick = () => sendMenu(b));
+}
+function modeSeg() { return `<div class="seg mode" title="Pick how much detail you want to see"><button data-vm="simple" class="${S.simple ? 'on' : ''}">Simple</button><button data-vm="advanced" class="${S.simple ? '' : 'on'}">Advanced</button></div>`; }
+function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { S.simple = b.dataset.vm === 'simple'; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); }); }
 function renderFindings() {
   const el = document.getElementById('center');
   const all = SEC.findings;
   if (!all.length) { el.innerHTML = `<div class="empty">${ART}<b>No findings</b>None from the scanners that ran. See About for which tools ran.</div>`; return; }
-  const by = r => all.filter(f => f.rank === r).length;
-  const fs = S.fsev === 'all' ? all : all.filter(f => f.rank === S.fsev);
+  const open = all.filter(f => f.status !== 'accepted');
+  const by = r => all.filter(f => f.rank === r && f.status !== 'accepted').length;
+  const acc = all.length - open.length;
+  if (S.simple) {
+    const sevs = RANKS.filter(by);
+    el.innerHTML = `<div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
+      <p class="lede">${countWord(open.length)} open. Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.</p></div>${modeSeg()}</div>
+      <div class="countrow">${RANKS.map(r => `<span><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>
+      ${sevs.map(r => `<div class="sevhead ${r}"><i></i>${r[0].toUpperCase() + r.slice(1)}</div>${open.filter(f => f.rank === r).map(findingCard).join('')}`).join('')}
+      ${acc ? `<div class="sevhead"><i></i>Accepted with a reason</div>${all.filter(f => f.status === 'accepted').map(findingCard).join('')}` : ''}`;
+    wireFindings(el); wireMode(el); return;
+  }
+  let fs = S.fsev === 'all' ? all : all.filter(f => f.rank === S.fsev);
+  if (S.freach) fs = fs.filter(f => f.reachable || f.ui_path);
+  if (S.finput) fs = fs.filter(f => f.input);
+  if (S.ftool) fs = fs.filter(f => f.tool === S.ftool);
+  const tools = [...new Set(all.map(f => f.tool))];
   const fchip = (k, label, n) => `<button class="fchip ${k === 'all' ? '' : k} ${S.fsev === k ? 'on' : ''}" data-sev="${k}">${k === 'all' ? '' : '<i></i>'}${label} <b>${esc(n)}</b></button>`;
-  el.innerHTML = `<div class="toolbar"><h2>Security findings <span class="c">${esc(all.length)}</span></h2></div>
-    <p class="note" style="margin:-6px 0 14px">Ranked by severity and by whether an entry point can reach them.</p><div class="filters">${fchip('all', 'All', all.length)}${RANKS.filter(by).map(r => fchip(r, r[0].toUpperCase() + r.slice(1), by(r))).join('')}</div>` + fs.map(f => {
-    const chain = (label, ids) => `<div class="path"><span class="note">${label}</span>${ids.map((p, i) => {
-      const n = N[p], e = i ? (OUT[ids[i - 1]] || []).find(x => x.dst === p) : null;
-      const sep = !i ? '' : e && (e.via || '').startsWith('http-') ? `<span class="hop">HTTP ${esc(e.detail || '')}</span>` : e && e.detail ? `<span class="hop ui">${esc(UI_WORDS[e.detail] || e.detail)}</span>` : '<span class="sep">→</span>';
-      const nm = n && n.entry && n.entry.kind === 'page' ? `${n.entry.detail} page` : short((n || {}).qualname || p);
-      return `${sep}<button data-id="${esc(p)}"><span class="layer ${layer(p)}"></span>${esc(nm)}</button>`; }).join('')}</div>`;
-    const uiSame = f.ui_path && f.reachable && f.ui_path.join() === f.reachable.path.join();
-    let path = f.ui_path ? chain('From the app', f.ui_path) : '';
-    if (f.reachable && !uiSame) path += chain(`Reachable from ${esc(f.reachable.kind)}`, f.reachable.path);
-    if (!path) path = `<div class="note" style="margin-top:8px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
-    const heur = f.tool_confidence === 'LOW' ? '<span class="tag" title="Pattern-based check; review before acting">heuristic</span>' : '';
-    const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
-    const accepted = f.status === 'accepted' ? `<span class="tag" title="${esc((f.accepted || {}).reason)}">accepted risk</span>` : '';
-    return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
-      ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
-      <h4>${esc(f.title)}</h4><div class="note" style="font-family:var(--mono);font-size:11.5px">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${f.node && N[f.node] ? ' · in ' + esc(short(N[f.node].qualname)) : ''}</div>
-      ${path}
-      ${f.input ? `<div class="note" style="margin-top:8px">Uses outside input: ${esc(f.input.via)}</div>` : f.input === false ? '<div class="note" style="margin-top:8px">Reachable, but no parameter or request data reaches this line inside this function (Lantern follows assignments within the function, not across functions), so it is not ranked critical.</div>' : ''}
-      ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
-      <div class="acts">${f.node ? `<button class="btn" data-id="${esc(f.node)}">Open function</button>` : ''}${f.status !== 'accepted' ? `<button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div><div class="sendslot"></div></div>`;
-  }).join('');
-  el.querySelectorAll('[data-sev]').forEach(b => b.onclick = () => { S.fsev = b.dataset.sev; renderFindings(); });
-  el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
-  el.querySelectorAll("[data-accept]").forEach(b => b.onclick = () => acceptLive(b.dataset.accept));
-  el.querySelectorAll("[data-send]").forEach(b => b.onclick = () => sendMenu(b));
+  el.innerHTML = `<div class="toolbar"><h2>Security findings <span class="c">${esc(open.length)}</span></h2>${modeSeg()}<button class="btn" id="exportjson">Export JSON</button></div>
+    <div class="filters">${fchip('all', 'All', all.length)}${RANKS.filter(r => all.some(f => f.rank === r)).map(r => fchip(r, r[0].toUpperCase() + r.slice(1), all.filter(f => f.rank === r).length)).join('')}<span class="spacer"></span>
+      <button class="fchip ${S.freach ? 'on' : ''}" id="freach">Reachable only</button><button class="fchip ${S.finput ? 'on' : ''}" id="finput">Uses input</button>
+      <select id="ftool" class="fsel" aria-label="Tool"><option value="">Tool ▾</option>${tools.map(t => `<option value="${esc(t)}" ${S.ftool === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
+      <span class="note">Showing ${fs.length} · sorted by rank</span></div>
+    <div class="ftable"><div class="r h"><span>Severity</span><span>Finding</span><span>Where</span><span>Reach</span><span>Input</span><span>Id</span></div>
+    ${fs.map(f => `<div class="r ${S.fsel === f.id ? 'on' : ''}${f.status === 'accepted' ? ' acc' : ''}" data-f="${esc(f.id)}"><span class="sv"><i class="dot ${cls(f.rank, RANKS)}"></i>${esc(f.rank)}</span>
+      <div><div class="t">${esc(f.title)}</div><div class="d">${f.ui_path ? esc((f.ui_path || []).map(p => N[p] && N[p].entry && N[p].entry.detail ? N[p].entry.detail : short((N[p] || {}).qualname || p)).join(' → ')) : f.reachable ? esc(f.reachable.path.map(p => short((N[p] || {}).qualname || p)).join(' → ')) : f.status === 'accepted' ? 'accepted: ' + esc((f.accepted || {}).reason) : 'not reached from an entry point'}</div></div>
+      <div><div class="w">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div><div class="d">${esc(f.tool)} · ${esc(f.rule)}</div></div>
+      <span>${f.ui_path ? `yes · ${esc(entryOf(f))}` : f.reachable ? `yes · ${esc(f.reachable.kind)}` : f.reachable_from_tests_only ? 'tests only' : 'no'}</span><span>${f.input ? 'yes' : f.input === false ? 'no' : '–'}</span><span class="fid">${esc(f.id)}</span></div>`).join('')}</div>`;
+  wireMode(el); wireFindings(el);
+  el.querySelector('#freach').onclick = () => { S.freach = !S.freach; renderFindings(); };
+  el.querySelector('#finput').onclick = () => { S.finput = !S.finput; renderFindings(); };
+  el.querySelector('#ftool').onchange = e => { S.ftool = e.target.value; renderFindings(); };
+  el.querySelector('#exportjson').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify({findings: all, counts: SEC.counts}, null, 2)], {type: 'application/json'})); a.download = 'lantern-findings.json'; a.click(); URL.revokeObjectURL(a.href); };
+  el.querySelectorAll('.ftable [data-f]').forEach(r => r.onclick = () => { S.fsel = r.dataset.f; S.sel = null; renderFindings(); renderRight(); document.getElementById('right').classList.add('open'); });
 }
-
+function findingPanel(f) {
+  const n = N[f.node], ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
+  const raised = f.rank === 'critical' && f.input && (f.ui_path || f.reachable);
+  return `<div class="detail"><div class="top" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${f.tool_confidence === 'LOW' ? '<span class="tag">heuristic</span>' : ''}<span class="fid" style="margin-left:auto">${esc(f.id)}</span></div>
+    <h3 style="font-family:var(--display);font-size:17px">${esc(f.title)}</h3>
+    <div class="meta">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${n ? ` · in ${esc(short(n.qualname))}` : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div>
+    <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'no entry point leads here'}</div></div>
+      <div><div class="k">Uses input</div><div class="v">${f.input ? 'Yes' : f.input === false ? 'No' : 'Unknown'}</div><div class="d">${f.input ? esc(f.input.via) : f.input === false ? 'nothing from the request reaches this line' : 'not tracked for this rule'}</div></div></div>
+    ${f.ui_path || f.reachable ? `<div class="k2">Path from the app</div>${chainHtml('', f.ui_path || f.reachable.path)}` : ''}
+    ${n ? srcBlock(n) : ''}
+    ${f.status === 'accepted' ? `<div class="k2">Accepted</div><p>By ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</p>` : ''}
+    <div class="k2">What ${esc(f.tool)} says</div><p>${esc(f.title)}${f.tool_confidence ? ` Confidence ${esc(f.tool_confidence)}` : ''}${f.tool_severity ? `, severity ${esc(f.tool_severity)}` : ''}.${raised ? ' Lantern ranks it critical because the line uses request data and a page reaches it.' : f.tool_confidence === 'LOW' ? ' A pattern-based check: review before acting.' : ''}</p>
+    ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}
+    <div class="acts">${f.node ? `<button class="btn primary" data-atlas="${esc(f.node)}">Open in Atlas</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div></div>`;
+}
 // ---------- "Send to…": hand a finding to an AI assistant as a reference, not a pasted blob ----------
 // With the Lantern connector installed (`lantern mcp --setup`), the assistant pulls the exact file, line, click path
 // and fix from Lantern itself, so nothing goes stale or gets edited in transit, and re-checks the fix the same way.
@@ -983,8 +1066,12 @@ function renderRight() {
   const kindWord = n ? (n.entry ? ({page: 'page', route: 'route', cli: 'command', main: 'program start', test: 'test', script: 'script'}[n.entry.kind] || n.entry.kind) : layer(n.id) === 'external' ? 'library' : (isJS(n.id) ? 'component' : 'function')) : '';
   const railLabel = n ? `${layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : 'Library'} · ${kindWord}` : 'Details';
   const chrome = railChrome(railLabel, 'r');
+  // The Simple findings memo and the Readiness/About pages use the full width unless a function is open.
+  document.getElementById('main').classList.toggle('noright', !n && ((S.tab === 'findings' && (S.simple || !S.fsel)) || S.tab === 'ready' || S.tab === 'about'));
   el.classList.toggle('rail', S.rrail); document.getElementById('main').classList.toggle('rrail', S.rrail);
   const wire = () => { el.querySelector('.edge').onclick = () => { S.rrail = !S.rrail; try { localStorage.setItem('lantern.rrail', S.rrail ? '1' : '0'); } catch (e) {} renderRight(); }; };
+  const fsel = S.tab === 'findings' && !n && S.fsel ? SEC.findings.find(f => f.id === S.fsel) : null;
+  if (fsel && !S.rrail) { el.innerHTML = chrome + findingPanel(fsel); wire(); wireFindings(el); const c = el.querySelector('.closebtn'); if (c) c.onclick = () => el.classList.remove('open'); return; }
   if (!n) { el.innerHTML = chrome + '<div class="empty">Select a function to see what it does.</div>'; wire(); return; }
   if (S.rrail) { el.innerHTML = chrome; wire(); return; }
   const r = EXP[n.id];
