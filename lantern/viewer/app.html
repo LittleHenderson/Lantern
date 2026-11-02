@@ -600,11 +600,29 @@ function renderSettings(el) {
           ? `Free allowance: no key needed. Explanations go through Lantern's gateway to Claude Haiku; the gateway counts usage and stores no code. ${esc(pr.notice || '')} Add your own Anthropic key below to remove the limit.`
           : `Cloud model: when you ask for explanations, the code of each explained function is sent to ${esc(name)}. Lantern never sees your code or key. ${esc(pr.notice || '')}`)
       : note('', 'Any OpenAI-compatible endpoint. If it runs on this computer, your code stays here.'))
-      + (pr.needs_key ? `<div class="hint">${pr.key ? 'Key: set (' + esc(pr.key) + ')' : `No key yet. Paste one below, or set ${esc(pr.env)} before starting Lantern.`}</div>` : '');
+      + (pr.needs_key ? `<div class="hint">${pr.key ? 'Key: set (' + esc(pr.key) + ')' : `No key yet. Paste one below, or set ${esc(pr.env)} before starting Lantern.`}</div>` : '')
+      + (pr.can_sign_in ? `<div class="hint" id="signin"><b>No key? Get a free allowance</b> (about 300 explanations with Claude Haiku): sign in once in your browser. Lantern's gateway keeps a hash of the token and usage counts; no code and no email address.<div class="row" style="margin-top:8px"><button class="btn" data-signin="github">Sign in with GitHub</button><button class="btn" data-signin="google">Sign in with Google</button></div><div id="signinmsg" class="hint"></div></div>` : '');
     el.querySelector('#keyrow').style.display = pr.needs_key || name === 'openai-compatible' ? '' : 'none';
     el.querySelector('#urlrow').style.display = name === 'openai-compatible' || pr.local ? '' : 'none';
     el.querySelector('#url').placeholder = pr.default_url || 'http://localhost:8000/v1';
   };
+  el.addEventListener('click', async e => {
+    const b = e.target.closest('[data-signin]'); if (!b) return;
+    const msg = el.querySelector('#signinmsg'); msg.textContent = 'Opening the sign-in page…';
+    try {
+      const st = await api('/api/login/start', { method: 'POST', body: { provider: b.dataset.signin } });
+      window.open(st.url, '_blank', 'noopener');
+      msg.innerHTML = `Finish signing in in the new tab. If it did not open: <a href="${esc(st.url)}" target="_blank" rel="noopener">open the sign-in page</a>.`;
+      const until = Date.now() + 5 * 60 * 1000;
+      while (Date.now() < until) {
+        await new Promise(r => setTimeout(r, 2000));
+        const r = await api('/api/login/poll?cli=' + encodeURIComponent(st.cli));
+        if (r.error) { msg.textContent = 'Could not reach the gateway: ' + r.error; return; }
+        if (r.done) { msg.textContent = 'Signed in. The free allowance is ready.'; await refresh(); return; }
+      }
+      msg.textContent = 'That took too long. Click the button again to retry.';
+    } catch (err) { msg.textContent = 'Sign-in failed: ' + (err.message || err); }
+  });
   const themeBtn = (t, ic, label) => `<button data-theme="${t}" class="${THEME === t ? 'on' : ''}">${icon(ic)}${label}</button>`;
   el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>Settings</h1><p class="lede">Choose the model that writes explanations, and how much of your code a report carries.</p></section>
     <div class="card group"><h2>Model for explanations</h2><div class="hint">Lantern works without a model. A model only adds the three-lens explanations.</div>

@@ -62,7 +62,7 @@ function draw(d) {
   <div class="grid">${tile(a.users_active_today, 'people used it today')}${tile(a.users_active_7d, 'people in the last 7 days')}${tile(a.users_active_30d, 'people in the last ' + d.days + ' days')}
   ${tile(a.requests_today, 'explanations today')}${tile(a.requests_30d, 'explanations, ' + d.days + ' days')}
   ${tile('$' + a.usd_today.toFixed(2), 'spent today', paused ? 'crit' : '')}${tile('$' + a.usd_30d.toFixed(2), 'spent, ' + d.days + ' days')}
-  ${tile(a.tokens_issued, 'sign-ups (tokens issued)')}${tile(a.users_ever_used, 'ever used it')}${tile(a.users_exhausted, 'used up the free allowance', a.users_exhausted ? 'warn' : '')}${tile(a.disabled, 'disabled')}</div>
+  ${tile(a.tokens_issued, 'tokens issued')}${tile(a.accounts ?? 0, 'signed-in accounts')}${tile(a.accounts_github ?? 0, 'via GitHub')}${tile(a.accounts_google ?? 0, 'via Google')}${tile(a.users_ever_used, 'ever used it')}${tile(a.users_exhausted, 'used up the free allowance', a.users_exhausted ? 'warn' : '')}${tile(a.disabled, 'disabled')}</div>
   <div class="card" style="margin-top:10px"><b>Explanations per day</b>${bars(a.daily, 'requests', v => v + ' explanations')}
   <b style="display:block;margin-top:14px">Spend per day</b>${bars(a.daily, 'usd', v => '$' + v.toFixed(2))}</div>
   <h2>Which model answered</h2>
@@ -72,7 +72,8 @@ function draw(d) {
   <h2>Heaviest users (by label; labels are what you typed when minting the token)</h2>
   <div class="card"><table><tr><th>Label</th><th class="num">Explanations</th><th class="num">Tokens</th></tr>
   ${a.top_users.map(u => `<tr><td>${esc(u.label)}</td><td class="num">${num(u.requests)}</td><td class="num">${num(u.tokens)}</td></tr>`).join('') || '<tr><td colspan=3 class="small">No usage yet.</td></tr>'}</table></div>
-  <h2>Give someone a free allowance</h2>
+  <h2>Give someone a free allowance by hand</h2>
+  <p class="small">People can also sign in themselves at <code>/v1/login</code> (GitHub or Google) when those are configured; each account gets one token and signing in again rotates it without resetting the count.</p>
   <div class="card"><label for="label">Label (who it's for, e.g. a GitHub name; only you see it)</label>
   <div class="row"><input id="label" placeholder="github:octocat"><button id="mint">Create token</button></div>
   <div id="minted" class="small" style="margin-top:8px"></div>

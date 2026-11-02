@@ -27,6 +27,7 @@ import os
 import secrets
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -66,6 +67,13 @@ class Settings:
     deepseek_usd_in: float = field(default_factory=lambda: _env_float("LANTERN_USD_PER_M_INPUT", 0.30))
     deepseek_usd_out: float = field(default_factory=lambda: _env_float("LANTERN_USD_PER_M_OUTPUT", 1.20))
     admin_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_ADMIN_SECRET", ""))
+    # Sign in with GitHub / Google: OAuth apps whose callback is <public_url>/v1/auth/<provider>/callback
+    public_url: str = field(default_factory=lambda: os.environ.get("LANTERN_PUBLIC_URL", "https://lantern-gateway.fly.dev").rstrip("/"))
+    github_client_id: str = field(default_factory=lambda: os.environ.get("GITHUB_CLIENT_ID", ""))
+    github_client_secret: str = field(default_factory=lambda: os.environ.get("GITHUB_CLIENT_SECRET", ""))
+    google_client_id: str = field(default_factory=lambda: os.environ.get("GOOGLE_CLIENT_ID", ""))
+    google_client_secret: str = field(default_factory=lambda: os.environ.get("GOOGLE_CLIENT_SECRET", ""))
+    auth_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_AUTH_SECRET", ""))
     db_path: str = field(default_factory=lambda: os.environ.get("LANTERN_DB", "lantern_gateway.db"))
     # Per user. ~300 explanations is a few full runs on a typical app.
     free_requests: int = field(default_factory=lambda: _env_int("LANTERN_FREE_REQUESTS", 300))
@@ -75,6 +83,19 @@ class Settings:
     global_daily_usd: float = field(default_factory=lambda: _env_float("LANTERN_GLOBAL_DAILY_USD", 10.0))
     max_tokens_cap: int = field(default_factory=lambda: _env_int("LANTERN_MAX_TOKENS", 3000))
     max_body_bytes: int = field(default_factory=lambda: _env_int("LANTERN_MAX_BODY", 250_000))
+
+    def oauth(self, provider: str) -> tuple[str, str] | None:
+        """(client id, client secret) when that sign-in is configured."""
+        cid, sec = {"github": (self.github_client_id, self.github_client_secret),
+                    "google": (self.google_client_id, self.google_client_secret)}.get(provider, ("", ""))
+        return (cid, sec) if cid and sec else None
+
+    def sign_in_providers(self) -> list[str]:
+        return [p for p in ("github", "google") if self.oauth(p)]
+
+    @property
+    def state_secret(self) -> str:
+        return self.auth_secret or (hashlib.sha256(("state:" + self.admin_secret).encode()).hexdigest() if self.admin_secret else "")
 
     def provider(self, name: str) -> dict:
         if name == "anthropic":
@@ -124,6 +145,10 @@ class Store:
               install text primary key, first_seen text, last_seen text, version text, os text);
             create table if not exists usage (
               day text, install text, feature text, count integer default 0, primary key (day, install, feature));
+            create table if not exists accounts (
+              account text primary key, token_hash text, label text, created text, last_signin text, signins integer default 0);
+            create table if not exists pending (
+              cli_hash text primary key, token text, created real);
         """)
         self.db.commit()
 
@@ -134,6 +159,50 @@ class Store:
                             (_hash(token), label[:100], dt.datetime.now(dt.UTC).isoformat()))
             self.db.commit()
         return token
+
+    def sign_in(self, account: str, label: str) -> str:
+        """One token per account. A first sign-in mints it; a later one rotates it (the old token stops working)
+        and carries the lifetime and today's counters over, so signing in again is never a fresh allowance."""
+        token = "lt_" + secrets.token_urlsafe(32)
+        now = dt.datetime.now(dt.UTC)
+        today = now.date().isoformat()
+        with self.lock:
+            row = self.db.execute("select token_hash from accounts where account = ?", (account,)).fetchone()
+            old = row[0] if row else None
+            used_req = used_tok = today_req = 0
+            if old:
+                u = self.db.execute("select used_requests, used_tokens, disabled from users where token_hash = ?", (old,)).fetchone()
+                if u:
+                    used_req, used_tok = u[0], u[1]
+                d = self.db.execute("select requests from daily where day = ? and token_hash = ?", (today, old)).fetchone()
+                today_req = d[0] if d else 0
+                self.db.execute("update users set disabled = 1 where token_hash = ?", (old,))
+            self.db.execute("insert into users (token_hash, label, created, used_requests, used_tokens) values (?, ?, ?, ?, ?)",
+                            (_hash(token), label[:100], now.isoformat(), used_req, used_tok))
+            if today_req:
+                self.db.execute("insert into daily (day, token_hash, requests) values (?, ?, ?)", (today, _hash(token), today_req))
+            self.db.execute("insert into accounts (account, token_hash, label, created, last_signin, signins) values (?, ?, ?, ?, ?, 1) "
+                            "on conflict(account) do update set token_hash = excluded.token_hash, label = excluded.label, "
+                            "last_signin = excluded.last_signin, signins = signins + 1",
+                            (account, _hash(token), label[:100], now.isoformat(), now.isoformat()))
+            self.db.commit()
+        return token
+
+    def park(self, cli: str, token: str) -> None:
+        with self.lock:
+            self.db.execute("delete from pending where created < ?", (time.time() - 600,))
+            self.db.execute("insert or replace into pending (cli_hash, token, created) values (?, ?, ?)",
+                            (_hash(cli), token, time.time()))
+            self.db.commit()
+
+    def claim(self, cli: str) -> str | None:
+        with self.lock:
+            row = self.db.execute("select token, created from pending where cli_hash = ?", (_hash(cli),)).fetchone()
+            if not row:
+                return None
+            self.db.execute("delete from pending where cli_hash = ?", (_hash(cli),))
+            self.db.commit()
+        return row[0] if time.time() - row[1] <= 600 else None
 
     def user(self, token: str) -> dict | None:
         row = self.db.execute("select token_hash, used_requests, used_tokens, disabled from users where token_hash = ?",
@@ -190,6 +259,9 @@ class Store:
             "today": today, "days": days,
             "allowance": {
                 "tokens_issued": one("select count(*) from users"),
+                "accounts": one("select count(*) from accounts"),
+                "accounts_github": one("select count(*) from accounts where account like 'github:%'"),
+                "accounts_google": one("select count(*) from accounts where account like 'google:%'"),
                 "users_ever_used": one("select count(*) from users where used_requests > 0"),
                 "users_active_today": one("select count(distinct token_hash) from daily where day = ?", today),
                 "users_active_7d": one("select count(distinct token_hash) from daily where day >= ?", week),
@@ -349,6 +421,61 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         admin(authorization)
         return {"token": store.mint(str(payload.get("label", ""))), "limits": {
             "requests": s.free_requests, "tokens": s.free_tokens, "per_day": s.daily_requests}}
+
+    # ---- Sign in with GitHub / Google ----
+    from . import auth as oauth
+    from fastapi.responses import HTMLResponse, RedirectResponse
+    page_headers = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'", "Referrer-Policy": "no-referrer",
+                    "Cache-Control": "no-store"}
+
+    @app.get("/v1/auth/providers")
+    def auth_providers():
+        return {"providers": s.sign_in_providers(), "login_url": f"{s.public_url}/v1/login"}
+
+    @app.get("/v1/login")
+    def login(cli: str | None = None, provider: str | None = None):
+        return HTMLResponse(oauth.login_page(s.sign_in_providers(), oauth.valid_cli(cli), provider), headers=page_headers)
+
+    @app.get("/v1/auth/{provider}/start")
+    def auth_start(provider: str, cli: str | None = None):
+        if not s.oauth(provider) or not s.state_secret:
+            raise HTTPException(404, "that sign-in is not configured")
+        cid, _ = s.oauth(provider)
+        state = oauth.sign_state(s.state_secret, provider, oauth.valid_cli(cli))
+        return RedirectResponse(oauth.authorize_url(provider, cid, f"{s.public_url}/v1/auth/{provider}/callback", state),
+                                status_code=302, headers={"Cache-Control": "no-store"})
+
+    @app.get("/v1/auth/{provider}/callback")
+    async def auth_callback(provider: str, code: str | None = None, state: str | None = None, error: str | None = None):
+        if not s.oauth(provider) or not s.state_secret:
+            raise HTTPException(404, "that sign-in is not configured")
+        st = oauth.read_state(s.state_secret, state or "")
+        if st is None or st.get("p") != provider:
+            return HTMLResponse(oauth.error_page("This sign-in link has expired or was not started here. Go back and try again."),
+                                status_code=400, headers=page_headers)
+        if error or not code:
+            return HTMLResponse(oauth.error_page("Sign-in was cancelled or refused by the provider."), status_code=400, headers=page_headers)
+        cid, sec = s.oauth(provider)
+        who = await oauth.exchange(provider, cid, sec, code, f"{s.public_url}/v1/auth/{provider}/callback", transport)
+        if who is None:
+            return HTMLResponse(oauth.error_page("The provider did not confirm the sign-in. Try again."), status_code=502, headers=page_headers)
+        account, label = who
+        token = store.sign_in(account, label)
+        cli = st.get("c") or ""
+        if cli:
+            store.park(cli, token)
+        return HTMLResponse(oauth.done_page(token, label, bool(cli)), headers=page_headers)
+
+    @app.get("/v1/auth/claim")
+    def auth_claim(cli: str | None = None):
+        """The client collects the token parked for its cli code: once, within ten minutes of the sign-in."""
+        if not oauth.valid_cli(cli):
+            raise HTTPException(400, "bad cli code")
+        tok = store.claim(cli)
+        if tok is None:
+            return JSONResponse({"pending": True}, status_code=404, headers={"Cache-Control": "no-store"})
+        return JSONResponse({"token": tok, "limits": {"requests": s.free_requests, "tokens": s.free_tokens, "per_day": s.daily_requests}},
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/v1/admin/stats")
     def admin_stats(authorization: str | None = Header(default=None), days: int = 30):
