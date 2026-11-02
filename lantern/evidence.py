@@ -20,6 +20,7 @@ from pathlib import Path
 from . import SCHEMA_VERSION, __version__
 from .depaudit import NOTHING_TO_CHECK
 from .graph import Graph
+from .lanes import LANE_WORDS, LANES
 from .security import ID_VERSION
 
 EVIDENCE_VERSION = 1
@@ -290,7 +291,7 @@ def compare_baseline(findings: list[dict], baseline: dict | None) -> tuple[list[
 
 
 def _f(f: dict) -> dict:
-    return {k: f.get(k) for k in ("id", "rank", "rule", "tool", "title", "file", "line", "tool_confidence")} | {
+    return {k: f.get(k) for k in ("id", "rank", "rule", "tool", "title", "file", "line", "tool_confidence", "hot_lane", "lanes")} | {
         "path": f.get("ui_path") or (f.get("reachable") or {}).get("path")}
 
 
@@ -497,11 +498,22 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     bridge = (f"<p>{E(br.get('matched', 0))} of {E(br.get('http_calls', 0))} frontend HTTP calls are linked to a backend "
               f"route in this repo; {E(br.get('external', 0))} go to external services.</p>" if br.get("http_calls") else "")
 
+    def glyph(f):
+        # the stack strip's 4-dot glyph (design 11c): filled = the path goes there, coloured = where the problem lives
+        hot = f.get("hot_lane") if f.get("hot_lane") in LANE_WORDS else None
+        lit = {l for l in (f.get("lanes") or []) if isinstance(l, str) and l in LANE_WORDS}
+        if not hot and not lit:
+            return ""
+        words = " → ".join(LANE_WORDS[l] for l in LANES if l in lit)
+        dots = "".join(f"<i class='{'hot ' + E(f.get('rank') or '') if l == hot else 'lit' if l in lit else ''}'></i>" for l in LANES)
+        return (f"<span class='glyph' title='{E(words)}'>{dots}</span>"
+                + (f"<span class='onlane'>On the <b>{E(LANE_WORDS[hot])}</b></span>" if hot else ""))
+
     def frow(f, extra=""):
         path = " → ".join(E(p.split("::")[-1].split(".")[-1]) for p in (f.get("path") or [])[:8])
         heur = " <span class='tag'>heuristic</span>" if f.get("tool_confidence") == "LOW" else ""
         return (f"<tr><td><span class='sev {E(f['rank'])}'>{E(f['rank'])}</span></td><td><b>{E(f['title'])}</b>{heur}<br>"
-                f"<span class='muted'>{E(f.get('tool') or '')} {E(f['rule'])} · {E(f['file'] or '')}:{E(f.get('line') or '')}"
+                f"<span class='muted'>{glyph(f)}{E(f.get('tool') or '')} {E(f['rule'])} · {E(f['file'] or '')}:{E(f.get('line') or '')}"
                 f"</span>{'<br><span class=path>' + path + '</span>' if path else ''}{extra}</td></tr>")
 
     open_rows = "".join(frow(f) for f in se["open"]) or "<tr><td colspan=2 class='muted'>None.</td></tr>"
@@ -603,7 +615,7 @@ td.num{{text-align:right;white-space:nowrap;width:76px;font:12.5px var(--mono);f
 .sev.critical{{background:var(--critical-soft)}} .sev.critical::before{{background:var(--critical)}} .sev.high{{background:var(--serious-soft)}} .sev.high::before{{background:var(--serious)}}
 .sev.medium{{background:var(--warning-soft)}} .sev.medium::before{{background:var(--warning)}} .sev.low{{background:var(--good-soft)}} .sev.low::before{{background:var(--good)}}
 .tag{{display:inline-block;font-size:11px;font-weight:550;padding:1px 8px;border-radius:99px;border:1px solid var(--line-2);color:var(--body)}} .tag.ok{{color:var(--good-ink);border-color:var(--good);background:var(--good-soft)}}
-.path{{font:11.5px var(--mono);color:var(--accent-ink)}} .reason{{margin-top:6px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px}}
+.path{{font:11.5px var(--mono);color:var(--accent-ink)}} .glyph{{display:inline-flex;gap:3px;vertical-align:middle;margin-right:6px}} .glyph i{{width:7px;height:7px;border-radius:99px;border:1.2px solid var(--line-2);display:inline-block}} .glyph i.lit{{background:var(--body);border-color:var(--body)}} .glyph i.hot{{background:var(--accent);border-color:var(--accent)}} .glyph i.hot.critical,.glyph i.hot.high{{background:var(--critical);border-color:var(--critical)}} .onlane{{margin-right:8px}} .onlane b{{color:var(--ink)}} .reason{{margin-top:6px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px}}
 ul{{padding-left:20px;margin:8px 0}} li{{margin:4px 0}}
 .digest{{font:12px var(--mono);overflow-wrap:anywhere;color:var(--ink);background:var(--soft);padding:2px 6px;border-radius:6px}}
 .diagram{{color:var(--ink);margin:12px 0}}

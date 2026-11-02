@@ -70,3 +70,15 @@ def test_lane_survives_json_round_trip(tmp_path):
     g.save(tmp_path / "g.json")
     g2 = Graph.load(tmp_path / "g.json")
     assert {n.lane for n in g2.nodes.values()} >= {"browser", "frontend", "server", "data"}
+
+
+def test_evidence_rows_carry_the_glyph_escaped():
+    from lantern import evidence
+    g = engine.build_graph("tests/fixtures/shop")
+    sec = security.scan(g, offline=True)
+    f = next(x for x in sec["findings"] if x["rank"] == "critical" and x["file"] == "shop/app.py")
+    f["hot_lane"] = "server<img src=x onerror=alert(1)>"     # a planted lane is ignored, never rendered
+    html = evidence.render_html(evidence.build(g, sec, None, None, None, None))
+    assert "<span class='glyph' title='Browser → Frontend → Server → Data'>" in html
+    assert "On the <b>Server</b>" in html
+    assert "onerror" not in html

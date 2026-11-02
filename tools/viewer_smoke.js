@@ -27,6 +27,8 @@ const { chromium } = require('playwright');
     await pwned('load');
     if (await p.$('#expand')) { await p.click('#expand'); await p.waitForTimeout(150); }
     await p.screenshot({ path: `${out}-${name}-map.png` });
+    // Simple opens the Lanes view (an SVG); the rest of the smoke walks the Path list, so switch to it
+    if (await p.$('.seg [data-v="lanes"].on') && !(await p.$('.node'))) { await p.click('.seg [data-v="tree"]'); await p.waitForTimeout(150); if (await p.$('#expand')) { await p.click('#expand'); await p.waitForTimeout(150); } }
     const nodes = await p.$$('.node');
     if (!nodes.length) errs.push(`${name}: the map is empty (did the report's data load?)`);
     if (nodes.length) {
