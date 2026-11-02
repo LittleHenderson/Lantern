@@ -124,6 +124,32 @@ aside.rail .raillabel{position:absolute;left:0;right:0;top:62px;text-align:left;
 aside.left.rail .edge{right:auto;left:50%;margin-left:-9px;top:12px;margin-top:0} aside.right.rail .edge{left:50%;margin-left:-9px;top:12px;margin-top:0}
 aside.rail .edge .ic{transform:rotate(180deg)}
 .ep .d b{font-weight:600} .ep .d b.critical{color:var(--crit-ink)} .ep .d b.high{color:var(--warn-ink)}
+/* Stack strip (design 11): four fixed stops, Browser → Frontend → Server → Data, the same words everywhere */
+.strip{position:relative;display:inline-flex;align-items:center;flex-wrap:wrap;gap:10px;padding:8px 16px;border:1px solid var(--line);border-radius:99px;background:var(--surface);font-size:13px;color:var(--muted);max-width:100%;margin:0 0 12px}
+.strip .yah{font:600 10.5px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-right:4px;white-space:nowrap}
+.strip .stop{position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;cursor:help;color:var(--faint)}
+.strip .stop i{width:9px;height:9px;border-radius:99px;border:1.5px solid var(--faint);background:transparent;flex:none}
+.strip .stop.lit{color:var(--ink-2)} .strip .stop.lit i{background:var(--muted);border-color:var(--muted)}
+.strip .stop.here{color:var(--ink);font-weight:600} .strip .stop.here i{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.strip .stop.bad i{background:var(--critical);border-color:var(--critical)}
+.strip .ln2{width:52px;height:1px;background:var(--line-2);flex:none} .strip .ln2.lit{background:var(--muted)}
+.strip .stop[data-def]:hover::after,.strip .stop[data-def]:focus::after{content:attr(data-def);display:block;position:absolute;left:0;top:calc(100% + 8px);z-index:5;width:220px;white-space:normal;font:400 12px var(--font);line-height:1.4;color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.14)}
+.strip.legend2{border:0;background:none;padding:0 0 0 0;margin:0 0 14px} .strip.legend2 .yah{margin-right:8px}
+.lanesay{font-size:14px;color:var(--ink-2);margin:0 0 18px;line-height:1.5} .lanesay b{color:var(--ink)}
+.lanewalk{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0 0 16px}
+.lanewalk .lw{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:12px 14px;font-size:13px;color:var(--ink-2);line-height:1.45;min-width:0}
+.lanewalk .lw .k{display:flex;align-items:center;gap:6px;font:600 10.5px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px} .lanewalk .lw .k i{width:7px;height:7px;border-radius:99px;background:var(--faint)}
+.lanewalk .lw.lit .k i{background:var(--muted)} .lanewalk .lw.here{border-color:var(--accent-line);box-shadow:0 0 0 1px var(--accent-line)} .lanewalk .lw.here .k{color:var(--accent-ink)} .lanewalk .lw.here .k i{background:var(--accent)}
+.lanewalk .lw.bad .k i{background:var(--critical)} .lanewalk .lw.off{opacity:.5} .lanewalk .lw code{font:500 12px var(--mono)}
+.glyph{display:inline-flex;gap:3px;align-items:center;vertical-align:middle;flex:none} .glyph i{width:7px;height:7px;border-radius:99px;border:1.2px solid var(--faint);background:transparent}
+.glyph i.lit{background:var(--muted);border-color:var(--muted)} .glyph i.hot{background:var(--accent);border-color:var(--accent)}
+.glyph i.hot.critical{background:var(--critical);border-color:var(--critical)} .glyph i.hot.high{background:var(--serious);border-color:var(--serious)} .glyph i.hot.medium{background:var(--warning);border-color:var(--warning)} .glyph i.hot.low{background:var(--good);border-color:var(--good)}
+.onlane{font-size:12.5px;color:var(--muted);white-space:nowrap} .onlane b{color:var(--ink);font-weight:600}
+.ep .glyph{margin-right:7px} .ftable .glyph{margin-right:6px}
+.lanehead{display:flex;flex-direction:column;gap:2px;margin:0 0 10px} .lanehead .eyebrow{font:600 11px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+#chart.lanes{background:var(--surface-2)} #chart.lanes svg .lanename{font:600 11px var(--font);letter-spacing:.08em;text-transform:uppercase;fill:var(--ink)} #chart.lanes svg .lanedef{font:400 11.5px var(--font);fill:var(--muted)}
+#chart.lanes svg .sub{font:400 11px var(--font);fill:var(--muted)}
+@media (max-width:720px){.lanewalk{grid-template-columns:1fr 1fr}.strip{gap:7px;padding:7px 12px}.strip .ln2{width:18px}.strip .yah{display:none}.onlane{display:none}}
 /* Graph view: the whole app in five columns, risk as heat */
 #graph{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden;min-height:420px}
 #graph .vp{overflow:auto;height:calc(100vh - 260px);min-height:400px;cursor:grab} #graph .vp.drag{cursor:grabbing}
@@ -560,7 +586,7 @@ const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv):/.test(id || '') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
 const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
-try { S.simple = localStorage.getItem('lantern.simple') !== '0'; S.view = ['tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : 'tree'; S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
+try { S.simple = localStorage.getItem('lantern.simple') !== '0'; S.view = ['lanes', 'tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : (S.simple ? 'lanes' : 'tree'); S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
 try { S.lens = +localStorage.getItem('lantern.lens') || 1; } catch (e) {}
 // Icons and the status tone of a 0-100 value: fixed markup and fixed words, never data.
 const ICONS = {
@@ -647,7 +673,7 @@ function renderLeft() {
       const list = groups[k]; if (!list) continue;
       list.sort((a, b) => (a.entry.detail || '').localeCompare(b.entry.detail || ''));
       html += `<div class="group"><h4>${ENTRY_LABEL[k]} <span>${list.length}</span></h4>` + list.slice(0, 300).map(n =>
-        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t">${epTitle(n, k)}</span><span class="d">${esc(short(n.qualname))}${isJS(n.id) ? ' · frontend' : LANGS['typescript/javascript'] ? ' · backend' : ''}${entryCounts(n.id) ? ' · ' + entryCounts(n.id) : ''}</span></button>`).join('') + '</div>';
+        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t">${entryGlyph(n.id)}${epTitle(n, k)}</span><span class="d">${esc(short(n.qualname))}${isJS(n.id) ? ' · frontend' : LANGS['typescript/javascript'] ? ' · backend' : ''}${entryCounts(n.id) ? ' · ' + entryCounts(n.id) : ''}</span></button>`).join('') + '</div>';
     }
   }
   html += '</div>';
@@ -751,6 +777,74 @@ function renderChart() {
   return `<div id="chart">${svg}</div>${more}`;
 }
 
+
+// Lanes view (design 11b): one horizontal lane per stop of the stack; every function sits in the lane it runs in, so a
+// path reads top-left to bottom-right across the stack. Lanes the path never touches stay dim. The hop into a function
+// with a critical or high finding, and from it into Data, is red.
+function renderLanes() {
+  const LIMIT = 28, MAXD = 6;
+  const depth = {[S.entry]: 0}, order = [S.entry], edges = [];
+  for (let i = 0; i < order.length && order.length < LIMIT; i++) {
+    const id = order[i];
+    if (depth[id] >= MAXD) continue;
+    for (const e of (OUT[id] || [])) {
+      const isExt = e.dst.startsWith('ext:');
+      if (isExt && laneOf(e.dst) !== 'data') continue;
+      if (!(e.dst in depth)) { if (order.length >= LIMIT) continue; depth[e.dst] = depth[id] + 1; order.push(e.dst); }
+      edges.push(e);
+    }
+  }
+  const placed = order.filter(id => laneOf(id));
+  if (!placed.length) return `<div class="empty">${ART}<b>Nothing to place</b>This report carries no stack lanes for these functions (an older analysis, or data Lantern could not read). Use Path or Flowchart.</div>`;
+  // staircase layout: each function steps right of its callers; boxes in different lanes may overlap in x, boxes
+  // in the same lane take a sub-row when they would collide, so a long path still fits on one screen
+  const LBL = 150, W = 222, H = 52, STEP = 64, GX = 18, RH = H + 12, MINLH = 96;
+  const col = {}, row = {}, taken = {browser: [], frontend: [], server: [], data: []};
+  for (const id of placed) {
+    const l = laneOf(id); let c = 0;
+    for (const e of edges) if (e.dst === id && e.src in col) c = Math.max(c, col[e.src] + 1);
+    let r = 0; while ((taken[l][r] || []).some(c2 => Math.abs(c2 - c) * STEP < W + GX)) r++;
+    col[id] = c; row[id] = r; (taken[l][r] ||= []).push(c);
+  }
+  const laneH = {}, laneY = {}; let yy = 0;
+  for (const l of LANES) { laneY[l] = yy; laneH[l] = Math.max(MINLH, 22 + (taken[l].length || 1) * RH); yy += laneH[l]; }
+  const ncols = Math.max(1, ...placed.map(id => col[id] + 1));
+  const width = LBL + GX + (ncols - 1) * STEP + W + GX, height = yy;
+  const lit = new Set(placed.map(laneOf));
+  const xy = id => [LBL + GX + col[id] * STEP, laneY[laneOf(id)] + 22 + row[id] * RH];
+  const hot = id => { const w = worstRank(id); return w === 'critical' || w === 'high'; };
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`;
+  LANES.forEach(l => {
+    const y = laneY[l], on = lit.has(l);
+    svg += `<g opacity="${on ? 1 : .45}"><line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="var(--line)"/><circle cx="16" cy="${y + 22}" r="4" fill="${on ? 'var(--accent)' : 'var(--faint)'}"/><text class="lanename" x="28" y="${y + 26}">${LANE_WORD[l]}</text>${LANE_DEF[l].split(': ')[1].match(/.{1,24}(\s|$)/g).slice(0, 4).map((t, k) => `<text class="lanedef" x="16" y="${y + 46 + k * 15}">${esc(t.trim())}</text>`).join('')}<title>${esc(LANE_DEF[l])}</title></g>`;
+  });
+  for (const e of edges) {
+    if (!(e.src in col) || !(e.dst in col)) continue;
+    const [x1, y1] = xy(e.src), [x2, y2] = xy(e.dst);
+    const bad = hot(e.dst) || (laneOf(e.dst) === 'data' && hot(e.src));
+    const down = y2 >= y1;
+    const sx = x1 + W * .6, tx = x2 + W * .35;
+    const d = down ? `M${sx} ${y1 + H} C ${sx} ${y1 + H + 36}, ${tx} ${y2 - 36}, ${tx} ${y2}` : `M${sx} ${y1} C ${sx} ${y1 - 36}, ${tx} ${y2 + H + 36}, ${tx} ${y2 + H}`;
+    const dash = e.confidence === 'inferred' ? '5 4' : e.confidence === 'possible' ? '1.5 3.5' : '';
+    svg += `<path d="${d}" fill="none" stroke="${bad ? 'var(--critical)' : e.confidence === 'observed' ? 'var(--accent)' : 'var(--line-2)'}" stroke-width="${bad ? 2 : 1.4}" ${dash ? `stroke-dasharray="${dash}"` : ''}><title>${esc(e.confidence)}${e.via ? ` (${esc(e.via)})` : ''}${e.detail ? ` · ${esc(e.detail)}` : ''}</title></path>`;
+  }
+  for (const id of placed) {
+    const [x, y] = xy(id), n = N[id], w = worstRank(id), on = S.sel === id, ext = id.startsWith('ext:');
+    const stroke = on ? 'var(--accent)' : w === 'critical' || (ext && hot(S.sel)) ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : 'var(--line-2)';
+    const label = ext ? id.slice(4) : n.entry && n.entry.kind === 'page' ? `${n.entry.detail} · ${short(n.qualname)}` : `${(n.file || '').split('/').pop()} :: ${short(n.qualname)}`;
+    const t = label.length > 27 ? label.slice(0, 26) + '…' : label;
+    const sub0 = ext ? 'runs with what arrived' : (summaryOf(id) || (n.entry ? (n.entry.kind === 'page' ? 'a page the visitor opens' : n.entry.kind === 'route' ? `answers ${n.entry.detail}` : n.entry.detail) : (w ? `${w} finding here` : '')) || '');
+    const sub = sub0.length > 32 ? sub0.slice(0, 31) + '…' : sub0;
+    const lang = n && n.file ? n.file.split('.').pop() : '';
+    svg += `<g data-id="${esc(id)}" style="cursor:pointer"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="12" fill="var(--surface)" stroke="${stroke}" stroke-width="${w || on ? 2 : 1}"/>
+      ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="15" fill="none" stroke="var(--accent-soft)" stroke-width="4"/><text class="sub" x="${x + W + 10}" y="${y + H / 2 + 4}" fill="var(--accent)" style="fill:var(--accent);font-weight:600">← you are here</text>` : ''}
+      <text x="${x + 12}" y="${y + 21}">${esc(t)}</text>${lang ? `<text class="sub" x="${x + W - 12}" y="${y + 21}" text-anchor="end">${esc(lang)}</text>` : ''}
+      ${sub ? `<text class="sub" x="${x + 12}" y="${y + 40}">${esc(sub)}</text>` : ''}<title>${esc(ext ? id.slice(4) : n.qualname)}${w ? ` (${esc(w)} finding)` : ''} · ${esc(LANE_DEF[laneOf(id)])}</title></g>`;
+  }
+  svg += '</svg>';
+  const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use Path to go deeper.</div>` : '';
+  return `<div id="chart" class="lanes">${svg}</div>${more}`;
+}
 
 // ---------- Graph view (design 3c): the whole app in five columns, risk as heat ----------
 // Columns: Pages · Components · HTTP · Routes · Data/system. Every reachable function from every entry point is
@@ -977,9 +1071,10 @@ function renderFix() {
   el.innerHTML = `<div class="page wide"><div class="toolbar"><button class="btn" id="backfind">${icon('left')}All findings</button>${modeSeg()}</div>${banner}
     <div class="fixgrid"><aside class="fixq"><div class="k2" style="margin-top:0">Your queue · worst first</div>${queueHtml || '<div class="note">Nothing left in the queue.</div>'}
       ${lows.length ? `<div class="note" style="margin-top:10px">${lows.length} low-risk item${lows.length === 1 ? '' : 's'} hidden. <button class="linkbtn" data-q="${esc(lows[0].id)}">Show ${lows.length === 1 ? 'it' : 'them'}</button></div>` : ''}</aside>
-    <div class="fixmain"><div class="sevline ${cls(f.rank, RANKS)}"><i></i>${esc(RANK_WORD[f.rank] || f.rank)}${idx >= 0 ? ` · ${idx + 1} of ${queue.length}` : ''}</div>
+    <div class="fixmain">${hotLane(f) ? laneStrip(hotLane(f), fLanes(f)) + laneSentence(f) : ''}<div class="sevline ${cls(f.rank, RANKS)}"><i></i>${esc(RANK_WORD[f.rank] || f.rank)}${idx >= 0 ? ` · ${idx + 1} of ${queue.length}` : ''}</div>
       <h1>${esc(plainTitle(f))}</h1>
       <p class="lede">${ex && ex.lens2 && ex.lens2 !== plainTitle(f) ? esc(ex.lens2) + ' ' : ''}${f.ui_path ? `A visitor reaches it from the <b>${esc(pageWord)}</b>${f.input ? ', and what they type reaches this line' : ''}.` : f.reachable ? `Reachable from ${esc(f.reachable.kind)} <b>${esc(entry)}</b>.` : 'Not reached from any page or route today; it becomes serious the day something calls it.'} <span class="note">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span></p>
+      ${hotLane(f) ? laneWalk(f) : ''}
       <div class="fixtwo"><div class="card"><div class="k2" style="margin-top:0">Why it’s ${esc(f.rank)}</div><div class="why">${why}</div></div>
         <div class="card"><div class="k2" style="margin-top:0">Where</div><div>${esc(f.file)}${f.line ? `, line ${esc(f.line)}` : ''}${n ? ` · in <code>${esc(short(n.qualname))}</code>` : ''}</div>${srcLine ? `<pre class="oneline">${esc(srcLine)}</pre>` : ''}</div></div>
       <div class="card paste"><div class="k2" style="margin-top:0">Paste this into your AI assistant</div><p>${esc(prompt)}</p></div>
@@ -1024,11 +1119,12 @@ function renderMap() {
   let title = esc(short(n.qualname));
   if (n.entry && n.entry.kind === 'route') { const [m, p] = routeParts(n.entry.detail); title = `${m ? `<span class="m ${cls(m, METHODS)}">${esc(m)}</span>` : ''}${esc(p)}`; }
   else if (n.entry && n.entry.kind === 'script') title = esc(n.entry.detail);
-  el.innerHTML = `<div class="toolbar"><h2>${title}</h2>
-    <div class="seg"><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button><button data-v="graph" class="${S.view === 'graph' ? 'on' : ''}">Graph</button></div>
+  const lanesHead = (() => { if (S.view !== 'lanes') return ''; const ls = LANES.filter(l => entryLanes(n.id).has(l)); const eps = G.nodes.filter(x => x.entry && x.entry.kind !== 'test'); const k = eps.findIndex(x => x.id === n.id); return `<div class="lanehead"><span class="eyebrow">${k >= 0 ? `Path ${k + 1} of ${eps.length} · ` : ''}${ls.length > 1 ? `starts in the ${LANE_WORD[ls[0]]}, ends in ${LANE_WORD[ls[ls.length - 1]]}` : ls.length ? `stays on the ${LANE_WORD[ls[0]]}` : 'not placed in the stack'}</span></div>`; })();
+  el.innerHTML = `${lanesHead}<div class="toolbar"><h2>${title}</h2>
+    <div class="seg"><button data-v="lanes" class="${S.view === 'lanes' ? 'on' : ''}" title="One lane per stop of the stack">Lanes</button><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button><button data-v="graph" class="${S.view === 'graph' ? 'on' : ''}">Graph</button></div>
     ${S.view === 'graph' ? `<div class="seg gmode" title="What the colours mean"><button data-m="risk" class="${S.mode === 'risk' ? 'on' : ''}">Risk</button><button data-m="confidence" class="${S.mode === 'confidence' ? 'on' : ''}">Confidence</button><button data-m="fanin" class="${S.mode === 'fanin' ? 'on' : ''}">Fan-in</button></div>` : `<button class="btn" id="expand">${icon('expand')}Expand all</button>`}${helpBtns()}</div>
-    ${S.view === 'graph' ? '' : `<div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>`}
-    ${S.view === 'tree' ? renderTree() : S.view === 'chart' ? renderChart() : renderGraph()}`;
+    ${S.view === 'graph' || S.view === 'lanes' ? '' : `<div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>`}
+    ${S.view === 'tree' ? renderTree() : S.view === 'chart' ? renderChart() : S.view === 'lanes' ? renderLanes() : renderGraph()}`;
   el.querySelectorAll('.seg [data-v]').forEach(b => b.onclick = () => { S.view = b.dataset.v; try { localStorage.setItem('lantern.view', S.view); } catch (e) {} renderMap(); });
   el.querySelectorAll('.seg [data-m]').forEach(b => b.onclick = () => { S.mode = b.dataset.m; renderMap(); });
   if (S.view === 'graph') wireGraph(el);
@@ -1056,6 +1152,68 @@ function pathsHtml(f) {
 const hops = f => (f.ui_path || (f.reachable || {}).path || []).length;
 const seenHops = f => { const ids = f.ui_path || (f.reachable || {}).path || []; let n = 0; for (let i = 1; i < ids.length; i++) if (((OUT[ids[i - 1]] || []).find(x => x.dst === ids[i]) || {}).confidence === 'observed') n++; return n; };
 const entryOf = f => { const ids = f.ui_path || (f.reachable || {}).path || []; const n = N[ids[0]]; return n ? (n.entry && n.entry.detail ? n.entry.detail : short(n.qualname)) : null; };
+// ---------- Stack strip (design 11): where in the stack you are standing ----------
+// Four fixed stops in a fixed order. The lane of every node comes from the engine (node.lane, lanes.py); the viewer
+// never guesses one. A finding carries hot_lane (where it lives) and lanes (every stop its path crosses).
+const LANES = ['browser', 'frontend', 'server', 'data'];
+const LANE_WORD = {browser: 'Browser', frontend: 'Frontend', server: 'Server', data: 'Data'};
+const LANE_DEF = {browser: 'Browser: what the visitor sees and clicks.', frontend: 'Frontend: your pages and screens, the code that builds what the browser shows.',
+  server: 'Server: code that runs on a machine you pay for, not the visitor’s.', data: 'Data: where things are kept or sent — the database, files, shell commands, outside services.'};
+// values from the data are checked against the four known stops before they pick a lane (a planted lane is ignored)
+const laneOk = l => LANES.includes(l) ? l : null;
+const laneOf = id => laneOk((N[id] || {}).lane);
+const hotLane = f => laneOk(f.hot_lane);
+const laneSet = ids => { const s = new Set(); for (const id of ids || []) { const l = laneOf(id); if (l) s.add(l); } return s; };
+const fLanes = f => new Set((Array.isArray(f.lanes) ? f.lanes : [f.hot_lane]).map(laneOk).filter(Boolean));
+// The strip. here = the lit stop ("You are here"), lit = stops the path crosses, bad = a stop drawn red (the problem's lane).
+function laneStrip(here, lit, opts = {}) {
+  lit = lit || new Set();
+  const stops = LANES.map((l, i) => `${i ? `<span class="ln2 ${lit.has(l) && lit.has(LANES[i - 1]) ? 'lit' : ''}"></span>` : ''}<span class="stop ${l === here ? 'here' : ''} ${lit.has(l) ? 'lit' : ''} ${opts.bad === l ? 'bad' : ''}" data-def="${esc(LANE_DEF[l])}" title="${esc(LANE_DEF[l])}" tabindex="0"><i></i>${LANE_WORD[l]}</span>`).join('');
+  return `<div class="strip ${opts.legend ? 'legend2' : ''}" role="group" aria-label="Where in the stack"><span class="yah">${opts.legend ? 'The stack' : 'You are here'}</span>${stops}</div>`;
+}
+// The four-dot glyph for list rows: crossed stops filled, the hot stop coloured by rank.
+function laneGlyph(lit, hot, rank) {
+  const words = LANES.filter(l => lit.has(l)).map(l => LANE_WORD[l]).join(' → ');
+  return `<span class="glyph" title="${esc(words || 'not placed in the stack')}${hot ? ` · on the ${esc(LANE_WORD[hot])}` : ''}" aria-label="${esc(words)}">${LANES.map(l => `<i class="${l === hot ? 'hot ' + cls(rank || '', RANKS) : lit.has(l) ? 'lit' : ''}"></i>`).join('')}</span>`;
+}
+const onLane = f => hotLane(f) ? `<span class="onlane">On the <b>${LANE_WORD[hotLane(f)]}</b></span>` : '';
+// One plain sentence: where it lives, where its path starts and ends.
+function laneSentence(f) {
+  const hl = hotLane(f); if (!hl) return '';
+  const ls = LANES.filter(l => fLanes(f).has(l));
+  const ids = f.ui_path || (f.reachable || {}).path || [];
+  const first = N[ids[0]], last = (() => { const n = N[f.node]; const d = n && (OUT[n.id] || []).find(e => laneOf(e.dst) === 'data'); return d ? N[d.dst] : null; })();
+  const startWhy = first && first.entry && first.entry.kind === 'page' ? `someone opens <code>${esc(first.entry.detail)}</code>` : first && first.entry ? `the ${esc(first.entry.kind)} <code>${esc(first.entry.detail || short(first.qualname))}</code>` : '';
+  const endWhy = last ? `<code>${esc(last.id.slice(4))}</code>` : '';
+  let t = `This problem lives on the <b>${LANE_WORD[hl]}</b>.`;
+  if (ls.length > 1) t += ` It starts in the <b>${LANE_WORD[ls[0]]}</b>${startWhy ? ` (${startWhy})` : ''} and ends in <b>${LANE_WORD[ls[ls.length - 1]]}</b>${endWhy && ls[ls.length - 1] === 'data' ? ` (${endWhy})` : ''}.`;
+  t += ` ${esc(countWord(ls.length))} stop${ls.length === 1 ? '' : 's'}${ls.length > 1 ? `, ${esc(WORDS[ls.length - 1] || ls.length - 1)} hop${ls.length === 2 ? '' : 's'}` : ''}.`;
+  return `<p class="lanesay">${t}</p>`;
+}
+// The four-card walk: what happens at each stop, from the path the engine found. Facts only: names, hops, files.
+function laneWalk(f) {
+  const ids = f.ui_path || (f.reachable || {}).path || [];
+  const lit = fLanes(f), n = N[f.node];
+  const by = {browser: [], frontend: [], server: [], data: []};
+  ids.forEach((id, i) => { const l = laneOf(id); if (l) by[l].push({id, i}); });
+  if (n && n.lane && !by[n.lane].some(x => x.id === n.id)) by[n.lane].push({id: n.id, i: ids.length});
+  if (n) for (const e of OUT[n.id] || []) if (laneOf(e.dst) === 'data' && !by.data.some(x => x.id === e.dst)) by.data.push({id: e.dst, i: ids.length + 1, e});
+  const chip = id => { const x = N[id]; return x && x.file ? `<span class="lang">${esc(x.file.split('.').pop())}</span>` : ''; };
+  const hopOut = id => { const k = ids.indexOf(id); const e = k >= 0 && k + 1 < ids.length ? (OUT[id] || []).find(x => x.dst === ids[k + 1]) : null; return e ? ((e.via || '').startsWith('http-') ? ` sends it to <code>${esc(e.detail || 'the server')}</code>` : e.detail ? ` ${esc(UI_WORDS[e.detail] || e.detail)}` : '') : ''; };
+  const text = l => {
+    const xs = by[l]; if (!xs.length) return l === 'browser' ? 'Not started from a page a visitor opens.' : l === 'data' ? 'No database, file, shell or outside call seen from here.' : 'Nothing on this stop.';
+    if (l === 'browser') { const x = N[xs[0].id]; const d = x.entry ? x.entry.detail : short(x.qualname); return `Someone on <code>${esc(d)}</code>${hopOut(xs[0].id) || ' starts here'}.`; }
+    if (l === 'data') return xs.map(x => `<code>${esc(x.id.slice(4))}</code> runs with what arrived`).join('. ') + '.';
+    return xs.slice(0, 3).map(x => { const o = N[x.id]; return `<code>${esc(short(o.qualname))}</code> ${chip(x.id)}${x.id === f.node ? ` — line ${esc(f.line || '?')}` : hopOut(x.id)}`; }).join(', then ') + (xs.length > 3 ? ` and ${xs.length - 3} more` : '') + '.';
+  };
+  return `<div class="lanewalk">${LANES.map(l => `<div class="lw ${lit.has(l) ? 'lit' : 'off'} ${l === hotLane(f) ? 'here' : ''} ${l === 'data' && by.data.length && f.rank === 'critical' ? 'bad' : ''}" title="${esc(LANE_DEF[l])}"><div class="k"><i></i>${LANE_WORD[l]}${l === hotLane(f) ? ' · here' : ''}</div>${text(l)}</div>`).join('')}</div>`;
+}
+// Lanes crossed from an entry point: every function it can reach (bounded), plus its findings' lanes.
+const entryLanes = (() => { const memo = {}; return id => { if (memo[id]) return memo[id]; const seen = new Set([id]), st = [id]; const lit = new Set(); while (st.length && seen.size < 400) { const x = st.pop(); const l = laneOf(x); if (l) lit.add(l); for (const e of OUT[x] || []) if (!seen.has(e.dst)) { seen.add(e.dst); if (!e.dst.startsWith('ext:')) st.push(e.dst); else if (laneOf(e.dst)) lit.add('data'); } } for (const f of FIND_BY_ENTRY[id] || []) for (const l of fLanes(f)) lit.add(l); return memo[id] = lit; }; })();
+function entryGlyph(id) {
+  const fs = SEC.findings.filter(f => f.status !== 'accepted' && ((f.reachable && f.reachable.entry === id) || (f.ui_path && f.ui_path[0] === id))); let w = null; for (const f of fs) if (!w || RANK[f.rank] < RANK[w.rank]) w = f;
+  return laneGlyph(entryLanes(id), w ? hotLane(w) : null, w ? w.rank : null);
+}
 function findingCard(f) {
   const heur = f.tool_confidence === 'LOW' ? '<span class="tag" title="Pattern-based check; review before acting">heuristic</span>' : '';
   const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
@@ -1064,6 +1222,7 @@ function findingCard(f) {
   const reach = f.ui_path ? ` Reached from the <b>${esc(entryOf(f))}</b> page in ${esc(WORDS[hops(f)] || hops(f))} hop${hops(f) === 1 ? '' : 's'}${seenHops(f) ? `; ${esc(WORDS[seenHops(f)] || seenHops(f))} of them seen running under the test suite` : ''}.` : f.reachable ? ` Reachable from ${esc(f.reachable.kind)} <b>${esc(entryOf(f))}</b>.` : '';
   const input = f.input ? ` Uses outside input: ${esc(f.input.via)}.` : f.input === false ? ' Reachable, but no parameter or request data reaches this line inside this function, so it is not ranked critical.' : '';
   return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
+    ${hotLane(f) ? `<div class="top" style="margin-top:8px;gap:10px">${laneGlyph(fLanes(f), hotLane(f), f.rank)}${onLane(f)}</div>` : ''}
     ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
     <h4>${esc(f.title)}</h4><p class="fdesc">${where}.${reach}${input}</p>
     ${pathsHtml(f)}
@@ -1128,6 +1287,7 @@ function renderFindings() {
     el.innerHTML = `<div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
       <p class="lede">${countWord(open.length)} open. Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.</p></div>${modeSeg()}</div>
       <div class="countrow">${RANKS.map(r => `<span><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>
+      <p class="note" style="margin:-8px 0 10px">Each one says which part of your app it lives on. Hover a stop to learn what that part does.</p>${laneStrip(null, new Set(), {legend: true})}
       ${sevs.map(r => `<div class="sevhead ${r}"><i></i>${r[0].toUpperCase() + r.slice(1)}</div>${open.filter(f => f.rank === r).map(findingCard).join('')}`).join('')}
       ${acc ? `<div class="sevhead"><i></i>Accepted with a reason</div>${all.filter(f => f.status === 'accepted').map(findingCard).join('')}` : ''}`;
     wireFindings(el); wireMode(el); return;
@@ -1146,7 +1306,7 @@ function renderFindings() {
     <div class="ftable"><div class="r h"><span>Severity</span><span>Finding</span><span>Where</span><span>Reach</span><span>Input</span><span>Id</span></div>
     ${fs.map(f => `<div class="r ${S.fsel === f.id ? 'on' : ''}${f.status === 'accepted' ? ' acc' : ''}" data-f="${esc(f.id)}"><span class="sv"><i class="dot ${cls(f.rank, RANKS)}"></i>${esc(f.rank)}</span>
       <div><div class="t">${esc(f.title)}</div><div class="d">${f.ui_path ? esc((f.ui_path || []).map(p => N[p] && N[p].entry && N[p].entry.detail ? N[p].entry.detail : short((N[p] || {}).qualname || p)).join(' → ')) : f.reachable ? esc(f.reachable.path.map(p => short((N[p] || {}).qualname || p)).join(' → ')) : f.status === 'accepted' ? 'accepted: ' + esc((f.accepted || {}).reason) : 'not reached from an entry point'}</div></div>
-      <div><div class="w">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div><div class="d">${esc(f.tool)} · ${esc(f.rule)}</div></div>
+      <div><div class="w">${hotLane(f) ? laneGlyph(fLanes(f), hotLane(f), f.rank) : ''}${esc(f.file)}${f.line ? ':' + esc(f.line) : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div><div class="d">${hotLane(f) ? `on the ${LANE_WORD[hotLane(f)]} · ` : ''}${esc(f.tool)} · ${esc(f.rule)}</div></div>
       <span>${f.ui_path ? `yes · ${esc(entryOf(f))}` : f.reachable ? `yes · ${esc(f.reachable.kind)}` : f.reachable_from_tests_only ? 'tests only' : 'no'}</span><span>${f.input ? 'yes' : f.input === false ? 'no' : '–'}</span><span class="fid">${esc(f.id)}</span></div>`).join('')}</div>`;
   wireMode(el); wireFindings(el);
   el.querySelector('#freach').onclick = () => { S.freach = !S.freach; renderFindings(); };
@@ -1158,7 +1318,7 @@ function renderFindings() {
 function findingPanel(f) {
   const n = N[f.node], ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
   const raised = f.rank === 'critical' && f.input && (f.ui_path || f.reachable);
-  return `<div class="detail"><div class="top" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${f.tool_confidence === 'LOW' ? '<span class="tag">heuristic</span>' : ''}<span class="fid" style="margin-left:auto">${esc(f.id)}</span></div>
+  return `<div class="detail">${hotLane(f) ? laneStrip(hotLane(f), fLanes(f)) : ''}<div class="top" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${f.tool_confidence === 'LOW' ? '<span class="tag">heuristic</span>' : ''}<span class="fid" style="margin-left:auto">${esc(f.id)}</span></div>
     <h3 style="font-family:var(--display);font-size:17px">${esc(f.title)}</h3>
     <div class="meta">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${n ? ` · in ${esc(short(n.qualname))}` : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div>
     <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'no entry point leads here'}</div></div>
@@ -1466,6 +1626,7 @@ function renderRight() {
     <h3>${esc(n.qualname)}</h3>
     <div class="meta">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ` · ${esc(n.entry.detail)}` : ''}</div>
     ${status ? `<div class="statusrow">${status}</div>` : ''}
+    ${laneOf(n.id) ? laneStrip(laneOf(n.id), (() => { const f = fs.find(x => x.ui_path || x.reachable); const lit = f ? fLanes(f) : laneSet([S.entry, n.id]); lit.add(laneOf(n.id)); for (const e of OUT[n.id] || []) if (laneOf(e.dst) === 'data') lit.add('data'); return lit; })()) : ''}
     ${lw ? `<div class="langline"><span class="lang">${lw[0]}</span>Written in ${lw[1]}</div>` : ''}
     <div class="sig">${esc(n.signature || n.kind)}</div>
     <div class="lenses"><button data-l="1" class="${S.lens === 1 ? 'on' : ''}"><i></i>Technical</button><button data-l="2" class="${S.lens === 2 ? 'on' : ''}"><i></i>Everyday</button><button data-l="3" class="${S.lens === 3 ? 'on' : ''}"><i></i>Mapped</button></div>

@@ -11,6 +11,8 @@ import json
 import re
 from pathlib import Path
 
+from .lanes import LANE_WORDS  # the four stack stops: Browser, Frontend, Server, Data
+
 SYSTEM = """You are Lantern's assistant inside the Lantern app. Lantern maps an app's code (every path from a
 click to the database), finds security problems, grades readiness to ship, and writes evidence for reviewers.
 Answer the person's question in plain, short language (a few sentences, bullets when listing). Rules:
@@ -50,7 +52,11 @@ def facts(project_dir: Path, focus: dict | None = None, limit: int = 40) -> str:
     for f in fs:
         path = " → ".join(_short(x) for x in (f.get("ui_path") or [])[:5])
         inp = (f.get("input") or {}).get("via") if isinstance(f.get("input"), dict) else None
+        lane = f.get("hot_lane") if f.get("hot_lane") in LANE_WORDS else None
+        crossed = [l for l in (f.get("lanes") or []) if l in LANE_WORDS]
         lines.append(f"- [{f.get('id')}] {f.get('rank')}: {f.get('title')} at {f.get('file')}:{f.get('line')}"
+                     + (f"; lives on the {LANE_WORDS[lane]}" if lane else "")
+                     + (f" (path crosses {' → '.join(LANE_WORDS[l] for l in crossed)})" if len(crossed) > 1 else "")
                      + (f"; reachable via {path}" if path else "; not reached from any entry point")
                      + (f"; uses {inp}" if inp else "") + (f"; fix: {str(f.get('fix') or '')[:120]}" if f.get("fix") else ""))
     ai = sec.get("ai") or {}
