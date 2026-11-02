@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, go_frontend, java_frontend, js_frontend, packs, python_frontend, rust_frontend
+from . import bridge, go_frontend, java_frontend, js_frontend, lanes, packs, python_frontend, rust_frontend
 from .graph import Graph
 
 
@@ -38,4 +38,5 @@ def build_graph(repo: str | Path) -> Graph:
     if loaded:
         packs.apply_entries(g, Path(repo), loaded)
     bridge.link(g)
+    lanes.assign(g)
     return g

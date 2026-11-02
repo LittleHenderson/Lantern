@@ -355,6 +355,123 @@ def _same(given, token: str) -> bool:
     return isinstance(given, str) and hmac.compare_digest(given.encode("utf-8"), token.encode("utf-8"))
 
 
+def write_starter_file(repo: Path, out: Path, name: str) -> str:
+    """Write one generated starter file next to the code; never over an existing file, never outside the repo."""
+    rd = _load(out / "readiness.json") or {}
+    f = (rd.get("starter") or {}).get(name)
+    if not f or f.get("snippet"):
+        raise ValueError(f"not a writable starter file: {name or '(none)'}; the names are those under Readiness → Starter files")
+    dest = (repo / name).resolve()
+    if repo.resolve() not in dest.parents:
+        raise ValueError("outside the project")
+    if dest.exists():
+        raise ValueError(f"{name} already exists; Lantern never overwrites files")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(f["content"], encoding="utf-8")
+    return name
+
+
+TERMINAL_HELP = """Lantern commands only (the app runs them the same way its buttons do):
+  analyze [--offline]                 read the project again and rebuild every result
+  accept FINDING_ID --reason "..."    record an accepted risk (shown in the Evidence Report)
+  unaccept FINDING_ID                 remove an accepted risk
+  explain [NODE_ID ...]               explain the main paths (or the given functions) with the model in Settings
+  starter NAME                        write one starter file (Dockerfile, .env.example, ci, SECURITY.md, ...)
+  verify                              re-run the analysis and compare it with this project's Evidence Report
+  findings [critical|high|medium|low] list open findings with ids
+  learn                               show the guide's progress for a starter app
+  help                                this list
+Anything else (shell commands, python, rm, curl) is refused: this drawer never runs your code."""
+
+
+def run_terminal_command(app, p: dict, repo: Path, out: Path, line: str) -> dict:
+    """Parse one drawer line. Returns a job (for long commands) or {"output": ...} for instant ones. Every
+    branch calls the same function the matching button calls, so there is nothing here that the UI cannot do."""
+    words = shlex.split(line, posix=os.name != "nt") if line.strip() else []
+    if words and words[0] == "lantern":
+        words = words[1:]
+    if not words or words[0] in ("help", "?"):
+        return {"output": TERMINAL_HELP}
+    verb, args = words[0], words[1:]
+    privacy = app.store.settings().get("privacy", "full")
+    if verb == "analyze":
+        offline = "--offline" in args
+        job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log, offline=offline))
+        return {"job": job}
+    if verb in ("accept", "unaccept"):
+        from .security import load_accepted, reason_ok, save_accepted
+        fid = args[0] if args else ""
+        if verb == "unaccept":
+            acc = load_accepted(repo)
+            if fid not in acc:
+                raise ValueError(f"{fid or '(no id)'} is not an accepted risk")
+            acc.pop(fid)
+            save_accepted(repo, acc)
+        else:
+            reason = ""
+            if "--reason" in args:
+                i = args.index("--reason")
+                reason = " ".join(args[i + 1:]).strip()
+            if not fid or fid.startswith("--"):
+                raise ValueError('usage: accept FINDING_ID --reason "why this risk is acceptable"')
+            if not reason_ok(reason):
+                raise ValueError("write a real reason (a sentence of at least 10 letters); it appears in the Evidence Report")
+            sec = _load(out / "security.json") or {"findings": []}
+            f = next((x for x in sec["findings"] if x["id"] == fid), None)
+            if not f:
+                raise ValueError(f"unknown finding {fid}; `findings` lists the open ids")
+            acc = load_accepted(repo)
+            acc[fid] = {"id": fid, "rule": f["rule"], "file": f["file"], "line": f["line"], "title": f["title"],
+                        "reason": reason, "by": "me", "date": time.strftime("%Y-%m-%d")}
+            save_accepted(repo, acc)
+        job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log))
+        return {"job": job, "output": f"{'accepted' if verb == 'accept' else 'removed'} {fid}; re-analyzing so the score and the Evidence Report follow"}
+    if verb == "explain":
+        provider = app.make_provider()
+        if not (out / "graph.json").exists():
+            raise ValueError("analyze the project first")
+        nodes = [a for a in args if not a.startswith("--")] or None
+
+        def work(log):
+            ids = nodes or pipeline.plan_explain(out, 3, 40)["nodes"]
+            log(f"explaining {len(ids)} function(s) with {provider.label}")
+            res = pipeline.explain(out, provider, ids, progress=lambda i, n, nid, rec: log(f"[{i}/{n}] {nid.split(':', 1)[-1]}  {'ok' if rec.get('validated') else 'rejected'}"))
+            return {"stats": res["stats"]}
+        return {"job": app.jobs.start(p["id"], "explain", work)}
+    if verb == "starter":
+        if not args:
+            raise ValueError("usage: starter NAME   (names: see Readiness → Starter files)")
+        return {"output": f"wrote {write_starter_file(repo, out, args[0])}"}
+    if verb == "verify":
+        from . import evidence
+        ev = out / "evidence.json"
+        if not ev.exists():
+            raise ValueError("this project has no Evidence Report yet; run analyze first")
+        want, old = evidence.read_digest(ev)
+
+        def work(log):
+            r = evidence.verify(repo, want, old, trace_cmd=None, offline=False)
+            log(f"{'MATCH' if r.get('match') else 'DIFFERENT'}: report {r.get('report')}  rerun {r.get('rerun')}")
+            if not r.get("match"):
+                log(str(r.get("note") or r.get("refused") or ""))
+            return r
+        return {"job": app.jobs.start(p["id"], "verify", work)}
+    if verb == "findings":
+        sec = _load(out / "security.json") or {"findings": []}
+        want = args[0] if args else None
+        rows = [f for f in sec["findings"] if f.get("status") == "open" and not f.get("in_tests") and (not want or f.get("rank") == want)]
+        lines = [f"{f['id']}  {f['rank']:<8} {f['file']}:{f.get('line') or ''}  {f['title']}" for f in rows] or ["no open findings"]
+        return {"output": "\n".join(lines)}
+    if verb == "learn":
+        from . import learn
+        sid = learn.starter_of(repo)
+        if not sid:
+            return {"output": "this project is not a starter app; Learn → Create one"}
+        pr = learn.progress(sid, repo, out)
+        return {"output": f"{sid}: {pr.get('done', 0)} of {pr.get('total', 0)} steps done"}
+    raise ValueError(f"'{verb}' is not a Lantern command; type help. This drawer never runs shell commands or your code.")
+
+
 def _python_test_command(words: list[str]) -> bool:
     """Only a Python test runner, so 'Watch my tests run' never becomes 'run anything'."""
     head = Path(words[0]).name.lower()
@@ -757,6 +874,9 @@ class Handler(BaseHTTPRequestHandler):
             privacy = app.store.settings().get("privacy", "full")
             job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log))
             return self._json(job, 202)
+        if action == "cmd":
+            # The terminal drawer: Lantern commands only, run through the same code paths as the buttons.
+            return self._json(run_terminal_command(app, p, repo, out, str(b.get("line") or "")), 202)
         if action == "trace":
             # "Watch my tests run": Lantern runs the test command you confirmed, in the project folder, with the
             # call recorder attached, then analyzes again so the edges that ran become "seen running".
@@ -832,19 +952,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(job, 202)
         if action == "starter":
             usage.record("starter")
-            rd = _load(out / "readiness.json") or {}
-            name = str(b.get("name") or "")
-            f = (rd.get("starter") or {}).get(name)
-            if not f or f.get("snippet"):
-                raise ValueError("not a writable starter file")
-            dest = (repo / name).resolve()
-            if repo.resolve() not in dest.parents:
-                raise ValueError("outside the project")
-            if dest.exists():
-                raise ValueError(f"{name} already exists; Lantern never overwrites files")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(f["content"], encoding="utf-8")
-            return self._json({"ok": True, "wrote": name})
+            return self._json({"ok": True, "wrote": write_starter_file(repo, out, str(b.get("name") or ""))})
         return self._err(404, "not found")
 
 

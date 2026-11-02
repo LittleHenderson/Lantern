@@ -102,14 +102,35 @@ The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`
 
 * Node: `id`, `kind` (`module`|`class`|`callable`|`external`), `name`, `qualname`, `file`, `start_line`, `end_line`,
   `parent`, `signature`, `docstring`, `decorators`, `entry` (null or `{"kind": "page"|"route"|"main"|"cli"|"script"|"test",
-  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?}`).
+  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?}`), `lane` (the stack strip stop the
+  node lives on: `browser`|`frontend`|`server`|`data`, or null for an external that is not a data hop — see
+  **Stack lanes** below).
 * Edge: `src`, `dst`, `kind` (`calls`|`may_call`|`contains`|`implements`), `confidence`
   (`observed` > `resolved` > `inferred` > `possible`; the UI words are seen running / certain / likely / possible),
   `lines`, `via` (how it was resolved; `http-*` for a frontend→backend hop), `detail` (`PUT /api/items/{id}` on an
   HTTP edge, `onClick` on a UI edge).
 * Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.name>`; external `ext:<pkg.member>`
   or `ext:HTTP <METHOD> <path>`.
-* `meta`: `files`, `lines`, `languages`, `bridge` (link counts), `http_calls`, `packs` (`{added, ambiguous, unresolved, packs}`).
+* `meta`: `files`, `lines`, `languages`, `bridge` (link counts), `http_calls`, `packs` (`{added, ambiguous, unresolved, packs}`),
+  `lanes` (`{browser, frontend, server, data}` node counts).
+
+#### Stack lanes (the stack strip)
+
+Four fixed stops, always in this order: **Browser → Frontend → Server → Data**. The UI draws them as the strip at the
+top of every finding, function and path ("You are here: Server"), as swimlanes in the Path view (Simple default), and
+as a four-dot glyph on list rows. `lantern/lanes.py` assigns them from the node id, file path and entry kind only — no
+model, no extra analysis — so the UI never guesses:
+
+| Lane | Rule | Hover definition |
+|---|---|---|
+| `browser` | a `page` entry point, or an `app start` main (the client bundle's root) | What the visitor sees and clicks. |
+| `frontend` | any other JS/TS node in a client-side module | Your pages and screens: the code that builds what the browser shows. |
+| `server` | every Python/Go/Rust/Java node; a JS/TS module that holds a route handler or a server start, or lives under `app/**/route.*`, `pages/api/`, `api/`, `server/`, `backend/`, `functions/`, `netlify/`, `supabase/functions/`, `workers/`, `middleware.*`; an `ext:HTTP` call whose target starts with `/` (the app's own API) | Code that runs on a machine you pay for, not the visitor's. |
+| `data` | an external node that reaches a database, a file, the shell or an outside service (`sqlite3`, `psycopg`, `prisma`, `supabase`, `fs`, `subprocess`, `child_process`, `fetch`/`axios`/`requests` to another host, `stripe`, `openai`, `boto3`, …; the full list is `lanes.DATA_RE`); an `ext:HTTP` call to a host | Where things are kept or sent: the database, files, shell commands, outside services. |
+| null | any other external (`json.dumps`, `hashlib.md5`) — not part of the stack picture | — |
+
+The UI must keep the four stops in that order and use the same four words everywhere; a lane with no nodes in the
+project is still drawn, dimmed.
 
 ### `security.json`
 
@@ -121,7 +142,11 @@ Finding: `id` (stable across moves: tool, rule, file and the flagged line's text
 (`LOW` = show "heuristic"), `file`, `line`, `cwe`, `more_info`, `snippet`, `category`, `in_tests`, `node`,
 `reachable` (null or `{"entry", "kind", "path": [node ids]}`), `reachable_from_tests_only`, `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`), `rank` (`critical`|`high`|`medium`|`low`),
-`status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted).
+`status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted), `hot_lane` (the lane the problem
+lives on: the pinned node's `lane`, or from the file for a finding with no node, e.g. a secret in `settings.py` →
+`server`), `lanes` (every lane the finding's path crosses, in strip order, de-duplicated: the `ui_path` (or `reachable`
+path) nodes' lanes, plus `hot_lane`, plus `data` when the pinned node calls a data-lane external — the glyph fills these
+dots and colours the `hot_lane` dot by rank).
 
 ### `readiness.json`
 
@@ -161,6 +186,10 @@ phrase to the anchored code.
   without reload; remove never deletes files.
 * **Atlas**: pick a page or route, follow the path through click and HTTP hops to the backend; every edge shows its
   confidence word; unresolved count visible; works in the app iframe and opened from disk; phone layout.
+* **Stack strip** (every screen that shows a finding, function or path): the four stops in order, "You are here"
+  lit, the stops the path crosses filled, hover definitions in plain words; Path view has a Lanes mode (Simple default)
+  where each node sits in its lane and the bad hop is red; list rows carry the four-dot glyph and "On the Server" in words,
+  with the legend once above the list.
 * **Findings / Finding**: ranked list with filters; click path from the page; "uses outside input"; heuristic tag;
   Open function; Accept risk asks for a reason and shows it afterwards; **Send to…** with Claude, ChatGPT, Copy.
 * **Readiness / Protections**: score ring, categories, "do first" list, protections with add / check / in place,
