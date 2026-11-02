@@ -81,6 +81,7 @@ def test_go_rules_find_the_planted_problems_and_rank_by_reach(goapp):
     _, sec = goapp
     by = {f["rule"]: f for f in sec["findings"]}
     assert by["LG-SQL-CONCAT"]["rank"] == "critical" and by["LG-SQL-CONCAT"]["reachable"]["kind"] == "route"
+    assert by["LG-SQL-CONCAT"]["input"]["via"] == "parameter `id`"                   # not the receiver `s`
     assert by["LG-EXEC"]["rank"] == "critical" and by["LG-EXEC"]["reachable"]["entry"].endswith("createNote")
     assert by["LW-AUTH-MISSING"]["file"] == "handlers.go"                 # the DELETE route has no login check
     assert "LW-AUTH-MISSING" not in {f["rule"] for f in sec["findings"] if f["line"] == 19}   # createNote checks

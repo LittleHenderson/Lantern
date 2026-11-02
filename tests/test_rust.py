@@ -82,6 +82,7 @@ def test_rust_rules_find_the_planted_problems_and_rank_by_reach(rustapp):
     _, sec = rustapp
     by = {f["rule"]: f for f in sec["findings"]}
     assert by["LR-SQL-FORMAT"]["rank"] == "critical" and by["LR-SQL-FORMAT"]["reachable"]["entry"].endswith("get_note")
+    assert by["LR-SQL-FORMAT"]["input"]["via"] == "parameter `id`"
     assert by["LR-EXEC-FORMAT"]["rank"] == "critical" and by["LR-EXEC-FORMAT"]["reachable"]["entry"].endswith("create_note")
     assert by["LW-AUTH-MISSING"]["line"] == 29                    # delete_note has no login check; create_note does
 

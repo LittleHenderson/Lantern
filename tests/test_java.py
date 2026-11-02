@@ -82,8 +82,9 @@ def test_js_frontend_links_to_spring_routes(javaapp):
 def test_java_rules_find_the_planted_problems(javaapp):
     _, sec = javaapp
     by = {f["rule"]: f for f in sec["findings"]}
-    assert by["LV-SQL-CONCAT"]["reachable"]["entry"].endswith("getNote") and by["LV-SQL-CONCAT"]["rank"] in ("critical", "high")
-    assert by["LV-EXEC-CONCAT"]["reachable"]["entry"].endswith("createNote")
+    assert by["LV-SQL-CONCAT"]["reachable"]["entry"].endswith("getNote") and by["LV-SQL-CONCAT"]["rank"] == "critical"
+    assert by["LV-SQL-CONCAT"]["input"]["via"] == "parameter `id`"                   # `String id`: the name, not the type
+    assert by["LV-EXEC-CONCAT"]["reachable"]["entry"].endswith("createNote") and by["LV-EXEC-CONCAT"]["rank"] == "critical"
     assert by["LW-AUTH-MISSING"]["line"] == 36                             # deleteNote; createNote checks the session
 
 

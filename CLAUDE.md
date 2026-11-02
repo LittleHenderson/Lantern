@@ -158,15 +158,16 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 * Java: no runtime tracing, no SpotBugs/dependency-check yet (only the `LV-*` patterns); generics are looked through
   (a `List<Note>` receiver is `List`, external); overloads share a node so a call lands on the group, not the exact
   overload; Spring's `@Autowired` field injection is typed by the field's declared type (an interface → `possible`
-  edges to every implementation); lambdas are attributed to the enclosing method; "uses outside input" does not yet
-  read Java parameters, so a reachable finding ranks `high`, not `critical`, until that is taught. Confidence levels
-  are not yet backed by a Java benchmark.
+  edges to every implementation); lambdas are attributed to the enclosing method. Confidence levels are not yet backed by a Java benchmark.
 * JS: hook results (`const m = useMutation(...)`, `m.mutate()`) and destructured hook returns are
   unresolved; React Query `mutationFn`/`queryFn` callbacks are linked, which covers most real paths.
 * Calls into libraries that call back into the repo (framework dispatch) only show when traced (Python).
 * Dependency audits need exact versions: Python ranges without a lock file, and pnpm/yarn/bun lock files, are reported as not checked.
 * "Uses input" follows assignments inside one function, in order (parameters, request data, and variables set
-  from them), not across functions, branches, or loops. A value that arrives through another function's return
+  from them), not across functions, branches, or loops. Parameters are read from the signature per language (Java/Kotlin/C#:
+  the last identifier of each `Type name`; Go: without the receiver; Rust: the pattern before `:`, unwrapping
+  `State(x)`/`Path(x)`/`Json(x)`); request data patterns cover Flask/Django/Express/Next, Go's net/http, gin, echo,
+  fiber and chi, and Java servlets. A value that arrives through another function's return
   value is missed; a parameter that is always a constant is over-ranked. A plain `x = <safe value>` at the same
   block level clears `x`; a default inside an `if` (`if not x: x = "ls"`) does not, and neither does `x += ...`,
   so a value that is always replaced inside a branch stays ranked critical (the safe direction).
