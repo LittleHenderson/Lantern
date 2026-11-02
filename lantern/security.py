@@ -122,7 +122,13 @@ def _tool_version(cmd: list[str]) -> str | None:
 
 REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|values|files|data|cookies|headers|"
                           r"get_json|path_params|query_params|POST|GET|FILES|META)\b|\bsearchParams\b|\bformData\b|"
-                          r"\bsys\.argv\b|\binput\(|\bevent\[|\bctx\.(query|params|request)\b")
+                          r"\bsys\.argv\b|\binput\(|\bevent\[|\bctx\.(query|params|request)\b|"
+                          # Go: net/http, gin, echo, fiber, chi
+                          r"\b[rc]\.(PathValue|FormValue|PostFormValue|Body|Header|Cookie|Param|Params|Query|QueryParam|"
+                          r"PostForm|BindJSON|ShouldBind\w*|Bind|GetHeader|FormFile|URL\.Query)\b|\bchi\.URLParam\(|"
+                          # Java: servlet / Spring
+                          r"\.(getParameter|getParameterMap|getHeader|getInputStream|getReader|getCookies|getQueryString|"
+                          r"getPathInfo|getRequestURI)\(")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
@@ -198,8 +204,25 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         return False
     js = not f["file"].endswith(".py")
     sig = n.signature or ""
-    params = re.findall(r"[(,{]\s*\*{0,2}(?:\.\.\.)?([A-Za-z_$][\w$]*)", sig[sig.find("("):] if "(" in sig else "")
-    tainted = {name: f"parameter `{name}`" for name in params if name not in ("self", "cls")}
+    if f["file"].endswith(".go"):
+        sig = re.sub(r"^func\s*\([^)]*\)\s*", "func ", sig)      # the receiver is not input
+    plist = sig[sig.find("("):] if "(" in sig else ""
+    if f["file"].endswith(".rs"):
+        inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
+        params = []
+        for piece in re.split(r",(?![^<(]*[>)])", inner):
+            pat = piece.split(":", 1)[0].strip().replace("&", "").replace("mut ", "").strip()
+            m = re.fullmatch(r"\w+\((\w+)\)", pat)             # State(state), Path(id), Json(body)
+            params.append(m.group(1) if m else pat)
+        params = [x for x in params if re.fullmatch(r"[A-Za-z_]\w*", x)]
+    elif f["file"].endswith((".java", ".kt", ".cs")):
+        # `Type name` order: the last identifier of each parameter (annotations and generics stripped)
+        inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
+        inner = re.sub(r"<[^<>]*>", "", re.sub(r"@\w+(\([^)]*\))?", "", inner))
+        params = [m.group(1) for piece in inner.split(",") for m in [re.search(r"([A-Za-z_$][\w$]*)\s*$", piece.strip())] if m]
+    else:
+        params = re.findall(r"[(,{]\s*\*{0,2}(?:\.\.\.)?([A-Za-z_$][\w$]*)", plist)
+    tainted = {name: f"parameter `{name}`" for name in params if name not in ("self", "cls", "this")}
     stmts = _statements(src, n.start_line, max(n.end_line or n.start_line, line + 3), js)
     flagged = next((st for st in stmts if st[0] <= line <= st[1]), None)
     if flagged is None:
