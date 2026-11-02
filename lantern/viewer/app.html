@@ -178,6 +178,7 @@ h3{font:650 15px/1.35 var(--display);letter-spacing:-.01em;color:var(--ink);marg
 .steps3{display:flex;justify-content:center;gap:40px;margin:22px 0 40px;font:13.5px var(--font);color:var(--muted);flex-wrap:wrap}
 .steps3 span{display:flex;align-items:center;gap:8px}
 .steps3 b{display:grid;place-items:center;width:22px;height:22px;border-radius:99px;background:var(--hover);color:var(--ink);font:600 12px var(--font)}
+.privline{display:flex;gap:8px;align-items:flex-start;max-width:720px;margin:-18px auto 36px;font:13px/1.5 var(--font);color:var(--muted)}.privline .ic{width:15px;height:15px;flex:none;margin-top:2px;color:var(--accent)}
 .apps-head{display:flex;align-items:baseline;gap:10px;margin:0 0 14px}
 .apps-head h2{font:600 18px var(--font);letter-spacing:-.01em}
 .apps-head span{font:13px var(--font);color:var(--muted)}
@@ -719,6 +720,7 @@ function renderHome(el) {
     <div class="dropzone">${icon('folder')}<input type="text" id="addpath" placeholder="Drop a folder here, or paste a GitHub link" autocomplete="off" spellcheck="false" aria-label="Folder path or GitHub link"><button class="btn ghost" id="browsebtn">Browse…</button><button class="btn primary" id="add">Check my app</button></div>
     <div id="browse" style="max-width:720px;margin:0 auto"></div><div id="adderr" style="max-width:720px;margin:0 auto"></div>
     <div class="steps3"><span><b>1</b>Add your app</span><span><b>2</b>Lantern maps every path a visitor can take</span><span><b>3</b>Fix what it finds, with a guide and proof</span></div>
+    <p class="privline">${icon('lock')}Everything here runs on this computer; your code is not uploaded. Plain-word explanations and Ask Lantern are off until you turn them on in Settings, and send the piece being explained to the model you pick, at your own risk.</p>
     ${ps.length ? `<div class="apps-head"><h2>Your apps</h2><span>${checked} checked${running ? `, ${running} checking now` : ''}</span></div><div class="apps">${cards}</div>`
       : `<div class="firstrun"><div class="card"><div class="k">No app handy?</div><h3>Try the practice app</h3><p>notes-api is a small Python app with real problems planted on purpose. Fix them with a guide; Lantern checks each one is really gone.</p><a href="#" id="tolearn" class="btn primary">Create notes-api · 35 min</a></div>
          <div class="card"><div class="k">What happens next</div><div class="li">${icon('clock')}Reading usually takes under a minute</div><div class="li">${icon('check')}You get a map, a list of what to fix, and a grade</div><div class="li">${icon('layers')}Python, TypeScript, Go, Rust and Java apps work today</div></div></div>`}</main>`;
