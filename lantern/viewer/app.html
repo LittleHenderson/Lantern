@@ -260,6 +260,22 @@ h3{font:650 15px/1.35 var(--display);letter-spacing:-.01em;color:var(--ink);marg
 pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--code-bg);color:var(--code-ink);font:12.5px/1.7 var(--mono);white-space:pre-wrap} pre.cli .c{color:var(--code-dim)}
 .keys{display:grid;grid-template-columns:auto 1fr;gap:8px 14px;align-items:center;font-size:13.5px;color:var(--ink-2)} kbd{font:600 11.5px var(--mono);padding:2px 7px;border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink)}
 @media (max-width:640px){.qa p{margin-left:0}.qa .g{display:none}}
+
+/* Guide (design 4c) */
+.gmain{max-width:1120px}
+.gsplit{display:grid;grid-template-columns:minmax(260px,360px) minmax(0,1fr);gap:32px;align-items:start}
+.gside .k{font:600 12px var(--font);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.gside h1{font:650 26px/1.2 var(--display);letter-spacing:-.02em;margin:0 0 8px}
+.gsteps{display:flex;flex-direction:column;gap:10px}
+.gstep{display:flex;gap:14px;padding:14px 16px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow-1);transition:border-color var(--t) var(--ease),box-shadow var(--t) var(--ease)}
+.gstep.open{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)} .gstep:not(.open):hover{border-color:var(--line-2)}
+.gnum{flex:none;width:30px;height:30px;border-radius:99px;display:grid;place-items:center;font:650 13px var(--display);background:var(--hover);color:var(--ink)} .gstep.done .gnum{background:var(--good);color:#fff} .gnum .ic{width:15px;height:15px}
+.gbody{flex:1;min-width:0} .ghead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer;min-height:30px}
+.gt{font:600 15px var(--display);color:var(--ink)} .glabel{font:600 10.5px var(--font);letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:99px;background:var(--hover);color:var(--muted)}
+.glabel.done{background:var(--good-soft);color:var(--good-ink)} .glabel.todo{background:var(--warning-soft);color:var(--warn-ink)} .glabel.last{background:var(--accent-soft);color:var(--accent-ink)}
+.gwhy{font-size:12.5px;color:var(--muted);flex-basis:100%}
+.gbody p{margin:10px 0 0;font-size:14px;line-height:1.6;color:var(--ink-2)}
+@media (max-width:860px){.gsplit{grid-template-columns:1fr}}
 /* ---------- buttons and fields ---------- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface);
   color:var(--ink);font-weight:600;font-size:13.5px;white-space:nowrap;text-decoration:none;transition:background var(--t) var(--ease), border-color var(--t) var(--ease), transform var(--t) var(--ease), box-shadow var(--t) var(--ease)}
@@ -536,7 +552,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyThe
 applyTheme();
 
 async function refresh() { S.state = await api('/api/state'); render(); }
-function go(view, extra = {}) { Object.assign(S, {view}, extra); ASK.page = null; for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
+function go(view, extra = {}) { if (extra.project && extra.project !== S.project) S.guide = null; Object.assign(S, {view}, extra); ASK.page = null; for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
 document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); };
 document.getElementById('home').onclick = () => { go('home'); refresh().catch(() => {}); };
 
@@ -571,6 +587,16 @@ document.getElementById('viewmode').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
   try { const r = await api('/api/settings', {method: 'POST', body: {view_mode: b.dataset.m}}); S.state.settings = r.settings; } catch (err) { /* keep going with the old value */ }
   drawViewMode(); render();
+});
+
+// Keyboard (listed under Help → Command line): / search, ? help, 1–6 project tabs, Shift+D appearance.
+document.addEventListener('keydown', e => {
+  const t = e.target, typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === '?') { e.preventDefault(); go('help'); return; }
+  if (e.key === 'D' && e.shiftKey) { e.preventDefault(); setTheme(THEMES[(THEMES.indexOf(THEME) + 1) % 3]); return; }
+  if (e.key === '/') { e.preventDefault(); const fr = S.view === 'project' && S.frame && S.frame.el.contentDocument; const q = fr ? fr.querySelector('#q, #xq') : document.getElementById('addpath') || document.getElementById('hq'); if (q) q.focus(); return; }
+  if (S.view === 'project' && /^[1-6]$/.test(e.key)) { const tabs = document.querySelectorAll('.sub .tabs [data-t]'); const b = tabs[+e.key - 1]; if (b) b.click(); }
 });
 
 // ---------------------------------------------------------------- Ask Lantern
@@ -925,22 +951,30 @@ async function renderGuide(body, p) {
   const job = S.jobs[p.id], running = p.job || (job && job.status === 'running');
   const st = (pr && pr.steps) || [];
   const pct = pr && pr.total ? Math.round(100 * pr.done / pr.total) : 0;
-  body.innerHTML = `<main><section class="hero"><h1>${esc(s.title)}</h1><p class="lede">${fmt(s.summary)}</p></section>
-    <div class="card"><div class="progress">${pr ? `<div class="big">${esc(pr.done)}<span> of ${esc(pr.total)} steps done</span></div>${pr.explore ? `<span class="small muted">${esc(pr.explore)} to explore on your own</span>` : ''}` : '<div class="big"><span>Not analyzed yet</span></div>'}
-      <span class="spacer"></span><button class="btn primary" id="check" ${running ? 'disabled' : ''}>${icon('refresh')}${running ? 'Analyzing…' : 'Check my progress'}</button></div>
-      <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
-      <div class="small muted">Folder: <code>${esc(p.path)}</code>. Open it in your editor or AI assistant, make each fix there, then press Check my progress.</div>
-      ${running ? `<div style="margin-top:12px"><pre class="log" id="log-${p.id}">${esc((job && job.log || []).join('\n'))}</pre></div>` : ''}
-      ${s.run && s.run.length ? `<details class="small" style="margin-top:12px"><summary class="muted" style="cursor:pointer">Run the app yourself (optional)</summary><pre class="cmd">${esc(s.run.join('\n'))}</pre></details>` : ''}</div>
-    <div class="steps">${s.steps.map((x, i) => { const r = st[i] || {status: x.check ? 'unknown' : 'read', why: ''}; const [cls, label] = STATUS[r.status] || STATUS.unknown;
-      return `<div class="step ${r.status === 'done' ? 'done' : ''}"><div class="num">${r.status === 'done' ? icon('check') : i + 1}</div><div class="card">
-      <div class="stitle">${esc(x.title)}<span class="status ${cls}"><i></i>${esc(label)}</span>${r.why && r.status !== 'done' ? `<span class="why">${esc(r.why)}</span>` : ''}</div>
-      ${x.body.map(t => `<p>${fmt(t)}</p>`).join('')}
-      ${x.prompt ? `<div class="prompt"><div class="eyebrow">${icon('sparkle')}Ask your AI assistant<span class="spacer"></span><button class="btn sm" data-copy="${i}">${icon('copy')}Copy</button></div><div class="txt">${esc(x.prompt)}</div></div>` : ''}
-      ${x.commands ? `<pre class="cmd">${esc(x.commands.join('\n'))}</pre>` : ''}
-      <div class="row" style="margin-top:10px">${SHOW[x.feature] ? `<button class="btn" data-show="${esc(x.feature)}">${esc(SHOW[x.feature])}</button>` : ''}
-        ${(x.fix_files || []).map(f => `<button class="btn ghost" data-fix="${esc(f)}">Show the fix: ${esc(f)}</button>`).join('')}</div>
-      <div id="fix-${i}"></div></div></div>`; }).join('')}</div></main>`;
+  const G = S.guide || (S.guide = {open: null});
+  if (G.open === null || (!G.user && (st[G.open] || {}).status === 'done')) { const first = s.steps.findIndex((x, i) => (st[i] || {}).status !== 'done' && x.check); G.open = first >= 0 ? first : 0; }
+  const LABEL = {done: 'done', todo: 'to do', unknown: 'to do', read: 'explore'};
+  const simple = viewMode() === 'simple';
+  const stepRow = (x, i) => {
+    const r = st[i] || {status: x.check ? 'unknown' : 'read', why: ''}; const open = G.open === i, last = i === s.steps.length - 1;
+    const lab = last && r.status !== 'done' ? 'last' : LABEL[r.status] || 'to do';
+    return `<div class="gstep ${r.status === 'done' ? 'done' : ''} ${open ? 'open' : ''}" data-i="${i}"><div class="gnum">${r.status === 'done' ? icon('check') : i + 1}</div><div class="gbody">
+      <div class="ghead"><span class="gt">${esc(x.title)}</span><span class="glabel ${lab.replace(' ', '')}">${esc(lab)}</span>${r.why && r.status !== 'done' && !open ? `<span class="gwhy">${esc(r.why)}</span>` : ''}</div>
+      ${open ? `${x.body.map(t => `<p>${fmt(t)}</p>`).join('')}${r.why && r.status !== 'done' ? `<div class="hint">Lantern’s check: ${esc(r.why)}</div>` : ''}
+        ${x.prompt ? `<div class="prompt"><div class="eyebrow">${icon('sparkle')}Paste into your assistant</div><div class="txt">${esc(x.prompt)}</div></div>` : ''}
+        ${x.commands ? `<pre class="cmd">${esc(x.commands.join('\n'))}</pre>` : ''}
+        <div class="row" style="margin-top:12px">${SHOW[x.feature] ? `<button class="btn primary" data-show="${esc(x.feature)}">${esc(simple ? SHOW[x.feature].replace('Open the Atlas', 'Show me').replace('Open ', 'Show me: ') : SHOW[x.feature])}</button>` : ''}${x.prompt ? `<button class="btn" data-copy="${i}">${icon('copy')}Copy prompt</button>` : ''}
+          ${(x.fix_files || []).map(f => `<button class="btn ghost" data-fix="${esc(f)}">Show me the fixed <code>${esc(f.split('/').pop())}</code></button>`).join('')}</div><div id="fix-${i}"></div>` : ''}</div></div>`;
+  };
+  const aside = `<aside class="gside"><div class="k">${simple ? 'Your first fix-up' : 'Starter · ' + esc(s.stack)}</div><h1>${esc(s.title)}</h1><p class="lede" style="font-size:14.5px">${fmt(s.summary)}</p>
+      <div class="card" style="margin-top:14px"><div class="progress">${pr ? `<div class="big">${esc(pr.done)}<span> of ${esc(pr.total)} done</span></div>` : '<div class="big"><span>Not analyzed yet</span></div>'}<span class="spacer"></span><button class="btn primary sm" id="check" ${running ? 'disabled' : ''}>${icon('refresh')}${running ? 'Analyzing…' : 'Check my progress'}</button></div>
+        <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
+        <div class="small muted" style="margin-top:8px">${p.score != null ? `Readiness is ${esc(p.score)} of 100 now; it climbs as you fix things.` : 'Readiness appears after the first check.'}${pr && pr.explore ? ` ${esc(pr.explore)} step${pr.explore === 1 ? ' is' : 's are'} just for exploring.` : ''}</div>
+        ${running ? `<pre class="log" id="log-${p.id}" style="margin-top:10px">${esc((job && job.log || []).join('\n'))}</pre>` : ''}</div>
+      <div class="small muted" style="margin-top:12px">Folder <code>${esc(p.path)}</code><br>Fix each step in your editor or with your AI assistant, then press Check my progress. Stuck? Every step has the fixed file.</div>
+      ${s.run && s.run.length ? `<details class="small" style="margin-top:12px"><summary class="muted" style="cursor:pointer">Run the app yourself (optional)</summary><pre class="cmd">${esc(s.run.join('\n'))}</pre></details>` : ''}</aside>`;
+  body.innerHTML = `<main class="gmain"><div class="gsplit">${aside}<div class="gsteps">${s.steps.map(stepRow).join('')}</div></div></main>`;
+  body.querySelectorAll('.gstep .ghead').forEach(h => h.onclick = () => { const i = +h.closest('.gstep').dataset.i; G.open = G.open === i ? -1 : i; G.user = true; renderGuide(body, p); });
   body.querySelector('#check').onclick = async () => {
     try { const j = await api(`/api/projects/${p.id}/analyze`, {method: 'POST'}); watch(j.id, p.id); renderGuide(body, p); }
     catch (e) { alert(e.message); }
@@ -949,12 +983,11 @@ async function renderGuide(body, p) {
   body.querySelectorAll('[data-show]').forEach(b => b.onclick = () => {
     const f = b.dataset.show;
     if (f === 'settings') return go('settings');
-    S.reportTab = f === 'findings' || f === 'ready' ? f : null;
-    S.tab = f === 'evidence' || f === 'explain' ? f : 'atlas';
+    S.tab = f === 'evidence' || f === 'explain' ? f : f === 'findings' ? 'findings' : f === 'ready' ? 'ready' : 'atlas';
     render();
   });
   body.querySelectorAll('[data-fix]').forEach(b => b.onclick = async () => {
-    const box = b.closest('.step').querySelector('[id^=fix-]');
+    const box = b.closest('.gstep').querySelector('[id^=fix-]');
     try { const r = await api(`/api/starters/${encodeURIComponent(p.starter)}/fix?file=${encodeURIComponent(b.dataset.fix)}`);
       box.innerHTML = `<div class="hint">Fixed version of <code>${esc(b.dataset.fix)}</code>. Compare it with yours, or paste it in.</div><pre class="cmd">${esc(r.text)}</pre>`; }
     catch (e) { box.innerHTML = note('err', esc(e.message)); }
