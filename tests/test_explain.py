@@ -266,3 +266,24 @@ def test_unfixable_pair_is_dropped_after_repair_not_the_whole_answer(gs, tmp_pat
     assert rec["validated"] and rec["attempts"] == 2 and len(rec["lens3"]["pairs"]) == 3
     assert rec["dropped_pairs"][0]["pair"]["plain"] == "the chef" and "verbatim" in rec["dropped_pairs"][0]["reason"]
     assert out["stats"]["pairs_dropped"] == 1 and out["stats"]["validated"] == 1
+
+
+def test_pair_drop_also_applies_when_the_full_retry_ends_on_a_pair_error(gs, tmp_path):
+    """First answer fails structurally (full retry, no REPAIR); the retry fails on one pair: drop it, keep the rest."""
+    g, findings = gs
+    n = {"i": 0}
+
+    def model(system, user):
+        if system.startswith("Pick ONE everyday setting"):
+            return '{"world": "a hotel"}'
+        n["i"] += 1
+        rec = good_record(user)
+        if n["i"] == 1:
+            del rec["lens2"]
+        else:
+            rec["lens3"]["pairs"].append({"plain": "the chef", "technical": "t", "anchor": {"type": "term", "term": "argument"}})
+        return json.dumps(rec)
+
+    out = run(g, FixtureProvider(model), findings, tmp_path, ["py:shop.repo.UserRepo.get"])
+    rec = out["explanations"]["py:shop.repo.UserRepo.get"]
+    assert rec["validated"] and rec["attempts"] == 2 and len(rec["lens3"]["pairs"]) == 3 and len(rec["dropped_pairs"]) == 1
