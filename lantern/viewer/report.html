@@ -128,8 +128,8 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 .strip{position:relative;display:inline-flex;align-items:center;flex-wrap:wrap;gap:10px;padding:8px 16px;border:1px solid var(--line);border-radius:99px;background:var(--surface);font-size:13px;color:var(--muted);max-width:100%;margin:0 0 12px}
 .strip .yah{font:600 10.5px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-right:4px;white-space:nowrap}
 .strip .stop{position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;cursor:help;color:var(--faint)}
-.strip .stop i{width:9px;height:9px;border-radius:99px;border:1.5px solid var(--faint);background:transparent;flex:none}
-.strip .stop.lit{color:var(--ink-2)} .strip .stop.lit i{background:var(--muted);border-color:var(--muted)}
+.strip .stop i{width:9px;height:9px;border-radius:99px;border:1.5px solid var(--line-2);background:transparent;flex:none}
+.strip .stop.lit{color:var(--ink-2)} .strip .stop.lit i{background:var(--ink-2);border-color:var(--ink-2)}
 .strip .stop.here{color:var(--ink);font-weight:600} .strip .stop.here i{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .strip .stop.bad i{background:var(--critical);border-color:var(--critical)}
 .strip .ln2{width:52px;height:1px;background:var(--line-2);flex:none} .strip .ln2.lit{background:var(--muted)}
@@ -141,15 +141,16 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 .lanewalk .lw .k{display:flex;align-items:center;gap:6px;font:600 10.5px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px} .lanewalk .lw .k i{width:7px;height:7px;border-radius:99px;background:var(--faint)}
 .lanewalk .lw.lit .k i{background:var(--muted)} .lanewalk .lw.here{border-color:var(--accent-line);box-shadow:0 0 0 1px var(--accent-line)} .lanewalk .lw.here .k{color:var(--accent-ink)} .lanewalk .lw.here .k i{background:var(--accent)}
 .lanewalk .lw.bad .k i{background:var(--critical)} .lanewalk .lw.off{opacity:.5} .lanewalk .lw code{font:500 12px var(--mono)}
-.glyph{display:inline-flex;gap:3px;align-items:center;vertical-align:middle;flex:none} .glyph i{width:7px;height:7px;border-radius:99px;border:1.2px solid var(--faint);background:transparent}
-.glyph i.lit{background:var(--muted);border-color:var(--muted)} .glyph i.hot{background:var(--accent);border-color:var(--accent)}
+.glyph{display:inline-flex;gap:3px;align-items:center;vertical-align:middle;flex:none} .glyph i{width:7px;height:7px;border-radius:99px;border:1.2px solid var(--line-2);background:transparent}
+.glyph i.lit{background:var(--ink-2);border-color:var(--ink-2)} .glyph i.hot{background:var(--accent);border-color:var(--accent)}
 .glyph i.hot.critical{background:var(--critical);border-color:var(--critical)} .glyph i.hot.high{background:var(--serious);border-color:var(--serious)} .glyph i.hot.medium{background:var(--warning);border-color:var(--warning)} .glyph i.hot.low{background:var(--good);border-color:var(--good)}
 .onlane{font-size:12.5px;color:var(--muted);white-space:nowrap} .onlane b{color:var(--ink);font-weight:600}
 .ep .glyph{margin-right:7px} .ftable .glyph{margin-right:6px}
 .lanehead{display:flex;flex-direction:column;gap:2px;margin:0 0 10px} .lanehead .eyebrow{font:600 11px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 #chart.lanes{background:var(--surface-2)} #chart.lanes svg .lanename{font:600 11px var(--font);letter-spacing:.08em;text-transform:uppercase;fill:var(--ink)} #chart.lanes svg .lanedef{font:400 11.5px var(--font);fill:var(--muted)}
 #chart.lanes svg .sub{font:400 11px var(--font);fill:var(--muted)}
-@media (max-width:720px){.lanewalk{grid-template-columns:1fr 1fr}.strip{gap:7px;padding:7px 12px}.strip .ln2{width:18px}.strip .yah{display:none}.onlane{display:none}}
+.strip .mini{display:none;align-items:center;gap:8px}
+@media (max-width:720px){.lanewalk{grid-template-columns:1fr 1fr}.strip:not(.legend2) .stop,.strip:not(.legend2) .ln2,.strip:not(.legend2) .yah{display:none}.strip:not(.legend2) .mini{display:inline-flex}.strip.legend2{gap:7px}.strip.legend2 .ln2{width:18px}.strip.legend2 .yah{display:none}}
 /* Graph view: the whole app in five columns, risk as heat */
 #graph{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden;min-height:420px}
 #graph .vp{overflow:auto;height:calc(100vh - 260px);min-height:400px;cursor:grab} #graph .vp.drag{cursor:grabbing}
@@ -1071,7 +1072,7 @@ function renderFix() {
   el.innerHTML = `<div class="page wide"><div class="toolbar"><button class="btn" id="backfind">${icon('left')}All findings</button>${modeSeg()}</div>${banner}
     <div class="fixgrid"><aside class="fixq"><div class="k2" style="margin-top:0">Your queue · worst first</div>${queueHtml || '<div class="note">Nothing left in the queue.</div>'}
       ${lows.length ? `<div class="note" style="margin-top:10px">${lows.length} low-risk item${lows.length === 1 ? '' : 's'} hidden. <button class="linkbtn" data-q="${esc(lows[0].id)}">Show ${lows.length === 1 ? 'it' : 'them'}</button></div>` : ''}</aside>
-    <div class="fixmain">${hotLane(f) ? laneStrip(hotLane(f), fLanes(f)) + laneSentence(f) : ''}<div class="sevline ${cls(f.rank, RANKS)}"><i></i>${esc(RANK_WORD[f.rank] || f.rank)}${idx >= 0 ? ` · ${idx + 1} of ${queue.length}` : ''}</div>
+    <div class="fixmain">${hotLane(f) ? laneStrip(hotLane(f), fLanes(f), {rank: f.rank}) + laneSentence(f) : ''}<div class="sevline ${cls(f.rank, RANKS)}"><i></i>${esc(RANK_WORD[f.rank] || f.rank)}${idx >= 0 ? ` · ${idx + 1} of ${queue.length}` : ''}</div>
       <h1>${esc(plainTitle(f))}</h1>
       <p class="lede">${ex && ex.lens2 && ex.lens2 !== plainTitle(f) ? esc(ex.lens2) + ' ' : ''}${f.ui_path ? `A visitor reaches it from the <b>${esc(pageWord)}</b>${f.input ? ', and what they type reaches this line' : ''}.` : f.reachable ? `Reachable from ${esc(f.reachable.kind)} <b>${esc(entry)}</b>.` : 'Not reached from any page or route today; it becomes serious the day something calls it.'} <span class="note">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span></p>
       ${hotLane(f) ? laneWalk(f) : ''}
@@ -1157,8 +1158,8 @@ const entryOf = f => { const ids = f.ui_path || (f.reachable || {}).path || []; 
 // never guesses one. A finding carries hot_lane (where it lives) and lanes (every stop its path crosses).
 const LANES = ['browser', 'frontend', 'server', 'data'];
 const LANE_WORD = {browser: 'Browser', frontend: 'Frontend', server: 'Server', data: 'Data'};
-const LANE_DEF = {browser: 'Browser: what the visitor sees and clicks.', frontend: 'Frontend: your pages and screens, the code that builds what the browser shows.',
-  server: 'Server: code that runs on a machine you pay for, not the visitor’s.', data: 'Data: where things are kept or sent — the database, files, shell commands, outside services.'};
+const LANE_DEF = {browser: 'Browser: what the visitor sees and clicks. Runs on their phone or laptop.', frontend: 'Frontend: your pages and screens, the code that builds what the browser shows.',
+  server: 'Server: code that runs on a machine you pay for, not the visitor’s. This is where secrets live.', data: 'Data: where things are kept or sent — the database, files, shell commands, outside services.'};
 // values from the data are checked against the four known stops before they pick a lane (a planted lane is ignored)
 const laneOk = l => LANES.includes(l) ? l : null;
 const laneOf = id => laneOk((N[id] || {}).lane);
@@ -1169,7 +1170,8 @@ const fLanes = f => new Set((Array.isArray(f.lanes) ? f.lanes : [f.hot_lane]).ma
 function laneStrip(here, lit, opts = {}) {
   lit = lit || new Set();
   const stops = LANES.map((l, i) => `${i ? `<span class="ln2 ${lit.has(l) && lit.has(LANES[i - 1]) ? 'lit' : ''}"></span>` : ''}<span class="stop ${l === here ? 'here' : ''} ${lit.has(l) ? 'lit' : ''} ${opts.bad === l ? 'bad' : ''}" data-def="${esc(LANE_DEF[l])}" title="${esc(LANE_DEF[l])}" tabindex="0"><i></i>${LANE_WORD[l]}</span>`).join('');
-  return `<div class="strip ${opts.legend ? 'legend2' : ''}" role="group" aria-label="Where in the stack"><span class="yah">${opts.legend ? 'The stack' : 'You are here'}</span>${stops}</div>`;
+  const mini = here ? `<span class="mini">${laneGlyph(lit, here, opts.rank)}<span class="onlane">On the <b>${LANE_WORD[here]}</b></span></span>` : '';
+  return `<div class="strip ${opts.legend ? 'legend2' : ''}" role="group" aria-label="Where in the stack"><span class="yah">${opts.legend ? 'The stack' : 'You are here'}</span>${stops}${mini}</div>`;
 }
 // The four-dot glyph for list rows: crossed stops filled, the hot stop coloured by rank.
 function laneGlyph(lit, hot, rank) {
@@ -1318,7 +1320,7 @@ function renderFindings() {
 function findingPanel(f) {
   const n = N[f.node], ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
   const raised = f.rank === 'critical' && f.input && (f.ui_path || f.reachable);
-  return `<div class="detail">${hotLane(f) ? laneStrip(hotLane(f), fLanes(f)) : ''}<div class="top" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${f.tool_confidence === 'LOW' ? '<span class="tag">heuristic</span>' : ''}<span class="fid" style="margin-left:auto">${esc(f.id)}</span></div>
+  return `<div class="detail">${hotLane(f) ? laneStrip(hotLane(f), fLanes(f), {rank: f.rank}) : ''}<div class="top" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${f.tool_confidence === 'LOW' ? '<span class="tag">heuristic</span>' : ''}<span class="fid" style="margin-left:auto">${esc(f.id)}</span></div>
     <h3 style="font-family:var(--display);font-size:17px">${esc(f.title)}</h3>
     <div class="meta">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${n ? ` · in ${esc(short(n.qualname))}` : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div>
     <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'no entry point leads here'}</div></div>
