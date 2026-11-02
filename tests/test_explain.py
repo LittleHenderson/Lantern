@@ -153,6 +153,12 @@ def test_retry_fixes_invalid_answer(gs, tmp_path):
         if system.startswith("Pick ONE everyday setting"):
             return '{"world": "a hotel"}'
         state["n"] += 1
+        if system.startswith("You fix one part"):          # the REPAIR request: only the failing pair comes back fixed
+            pairs = json.loads(re.search(r"PAIRS:\n(.*?)\n\nPROBLEMS", user, re.S).group(1))
+            sym = re.search(r"ALLOWED SYMBOLS:\n(\S+)", user).group(1)
+            pairs[0]["anchor"] = {"type": "symbol", "id": sym}
+            state["repair_prompt"] = user
+            return json.dumps({"pairs": pairs})
         rec = good_record(user)
         if state["n"] == 1:
             rec["lens3"]["pairs"][0]["anchor"]["id"] = "py:made.up"
@@ -160,7 +166,65 @@ def test_retry_fixes_invalid_answer(gs, tmp_path):
 
     out = run(g, FixtureProvider(flaky), findings, tmp_path, ["py:shop.repo.UserRepo.get"])
     rec = out["explanations"]["py:shop.repo.UserRepo.get"]
-    assert rec["validated"] and rec["attempts"] == 2
+    assert rec["validated"] and rec["attempts"] == 2 and rec["repaired"] is True
+    assert out["stats"]["repaired"] == 1 and "py:made.up" in state["repair_prompt"]
+    assert "Fix only pairs [0]" in state["repair_prompt"]
+
+
+def test_structural_failure_gets_a_full_retry_not_a_repair(gs, tmp_path):
+    g, findings = gs
+    systems = []
+
+    def flaky(system, user):
+        if system.startswith("Pick ONE everyday setting"):
+            return '{"world": "a hotel"}'
+        systems.append(system[:12])
+        rec = good_record(user)
+        if len(systems) == 1:
+            del rec["lens2"]                                    # not a pair problem: the whole answer is re-asked
+        return json.dumps(rec)
+
+    out = run(g, FixtureProvider(flaky), findings, tmp_path, ["py:shop.repo.UserRepo.get"])
+    rec = out["explanations"]["py:shop.repo.UserRepo.get"]
+    assert rec["validated"] and rec["attempts"] == 2 and rec["repaired"] is False
+    assert systems == ["You explain ", "You explain "]
+
+
+def test_lens1_read_back_rejects_names_not_in_the_map(gs):
+    """HELM's round trip, light form: Lens 1 may only name code the context shows."""
+    from lantern.explain import build_context, validate
+    g, findings = gs
+    ctx = build_context(g, "py:shop.repo.UserRepo.get", [], {}, "a hotel")
+    lo, hi = ctx.line_range
+    sym = next(iter(ctx.allowed_symbols))
+    text = "The helper takes a request and hands back an answer."
+    base = {"lens2": {"text": text, "example": "e", "analogy": "a"},
+            "lens3": {"text": text, "pairs": [
+                {"plain": "The helper", "technical": "t", "anchor": {"type": "symbol", "id": sym}},
+                {"plain": "takes a request", "technical": "t", "anchor": {"type": "term", "term": "argument"}},
+                {"plain": "hands back an answer", "technical": "t", "anchor": {"type": "lines", "start": lo, "end": hi}}]}}
+    ok = {**base, "lens1": {"summary": "Runs a SELECT through self.execute() and returns one row.", "role": "r"}}
+    assert validate(ok, ctx) == []
+    bad = {**base, "lens1": {"summary": "Calls fetch_profile_cache() and then self.execute().", "role": "r"}}
+    errs = validate(bad, ctx)
+    assert errs and "fetch_profile_cache" in errs[0] and "not in this function" in errs[0]
+
+
+def test_undetermined_is_an_honest_answer(gs, tmp_path):
+    g, findings = gs
+
+    def model(system, user):
+        if system.startswith("Pick ONE everyday setting"):
+            return '{"world": "a hotel"}'
+        return json.dumps({"lens1": {"summary": "Executes a query via self.execute().", "inputs": [], "outputs": "a row",
+                                     "side_effects": [], "errors": [], "role": "data access"},
+                           "undetermined": "The body only forwards to execute(), whose behavior is not shown."})
+
+    out = run(g, FixtureProvider(model), [], tmp_path, ["py:shop.repo.UserRepo.get"])
+    rec = out["explanations"]["py:shop.repo.UserRepo.get"]
+    assert rec["validated"], rec["validation_errors"]
+    assert rec["attempts"] == 1 and rec["undetermined"].startswith("The body only")
+    assert "lens2" not in rec and out["stats"]["undetermined"] == 1
 
 
 def test_model_invented_findings_are_dropped_not_shown(tmp_path):
@@ -180,3 +244,25 @@ def test_model_invented_findings_are_dropped_not_shown(tmp_path):
            "findings": [{"id": "hardcoded-password", "lens1": "x", "lens2": "y", "fix": "z"}]}
     assert validate(rec, ctx) == []
     assert rec["findings"] == [] and rec["dropped_findings"][0]["id"] == "hardcoded-password"
+
+
+def test_unfixable_pair_is_dropped_after_repair_not_the_whole_answer(gs, tmp_path):
+    """REPAIR gets one chance; if a pair still cannot be highlighted it is removed and recorded, the rest stands."""
+    g, findings = gs
+
+    def model(system, user):
+        if system.startswith("Pick ONE everyday setting"):
+            return '{"world": "a hotel"}'
+        if system.startswith("You fix one part"):
+            pairs = json.loads(re.search(r"PAIRS:\n(.*?)\n\nPROBLEMS", user, re.S).group(1))
+            return json.dumps({"pairs": pairs})                 # the model "fixes" nothing
+        rec = good_record(user)
+        rec["lens3"]["pairs"].append({"plain": "the chef", "technical": "t",
+                                      "anchor": {"type": "term", "term": "argument"}})   # not in the text
+        return json.dumps(rec)
+
+    out = run(g, FixtureProvider(model), findings, tmp_path, ["py:shop.repo.UserRepo.get"])
+    rec = out["explanations"]["py:shop.repo.UserRepo.get"]
+    assert rec["validated"] and rec["attempts"] == 2 and len(rec["lens3"]["pairs"]) == 3
+    assert rec["dropped_pairs"][0]["pair"]["plain"] == "the chef" and "verbatim" in rec["dropped_pairs"][0]["reason"]
+    assert out["stats"]["pairs_dropped"] == 1 and out["stats"]["validated"] == 1
