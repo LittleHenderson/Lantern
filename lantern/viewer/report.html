@@ -219,6 +219,20 @@ code.cmd{font:11.5px var(--mono);color:var(--muted);background:var(--hover);padd
 .helppanel .hh{display:flex;align-items:center;gap:10px;margin-bottom:6px} .helppanel .hh b{font-size:15px;color:var(--ink)} .helppanel .x{margin-left:auto;background:none;border:0;font-size:18px;color:var(--muted);cursor:pointer}
 .helppanel p{margin:6px 0;font-size:13.5px;line-height:1.6;color:var(--ink-2)}
 @media (max-width:760px){.btn.help span{display:none}}
+
+/* Fix (design 1k) */
+.fixgrid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:28px;align-items:start}
+.fixq{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:12px}
+.qrow{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:9px 8px;border-radius:10px;background:none;border:0;color:var(--ink)} .qrow:hover{background:var(--hover)} .qrow.on{background:var(--accent-soft)}
+.qrow b{flex:none;width:22px;height:22px;border-radius:99px;display:grid;place-items:center;font:600 12px var(--font);background:var(--hover);color:var(--ink)} .qrow .t{font-weight:600;font-size:13.5px;line-height:1.3} .qrow .d{font-size:11.5px;color:var(--muted);margin-top:2px}
+.fixmain{min-width:0} .sevline{display:flex;align-items:center;gap:8px;font:600 12px var(--font);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)} .sevline i{width:8px;height:8px;border-radius:99px;background:var(--faint)}
+.sevline.critical{color:var(--crit-ink)} .sevline.critical i{background:var(--critical)} .sevline.high{color:var(--warn-ink)} .sevline.high i{background:var(--serious)} .sevline.medium i{background:var(--warning)} .sevline.low i{background:var(--good)}
+.fixmain h1{font:650 26px/1.25 var(--display);letter-spacing:-.02em;margin:8px 0 8px;text-wrap:pretty} .fixmain .lede{font-size:15px}
+.fixtwo{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0} .fixtwo .card{padding:14px 16px} .why{display:flex;flex-direction:column;gap:6px;font-size:13.5px;color:var(--ink-2)} .why b{display:inline-block;width:18px;color:var(--good-ink)}
+pre.oneline{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:var(--code-bg);color:var(--code-ink);font:12px var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.paste{padding:14px 16px;margin-bottom:14px;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)} .paste p{margin:0;font-size:14px;line-height:1.6;color:var(--ink)}
+.fixbanner{margin:0 0 16px;padding:12px 16px;border-radius:12px;background:var(--critical-soft);color:var(--ink);font-size:14px} .fixbanner.ok{background:var(--good-soft)}
+@media (max-width:900px){.fixgrid,.fixtwo{grid-template-columns:1fr}}
 .detail .acts{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 
 /* ---------- left: entry points ---------- */
@@ -459,7 +473,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
   <div class="brand"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
   <div class="bar2">
     <nav class="tabs" id="tabs">
-      <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="xp">Explanations</button><button data-t="about">About</button>
+      <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="xp">Explanations</button><button data-t="about">About</button><button data-t="fix" hidden></button>
     </nav>
     <div class="chips" id="chips"></div>
   </div>
@@ -892,6 +906,80 @@ function renderExplanations() {
   const xc = el.querySelector('#xcopy'); if (xc) xc.onclick = () => { const t = [`Technical: ${(r.lens1 || {}).summary || ''}`, `Everyday: ${(r.lens2 || {}).text || ''}`, `Mapped: ${(r.lens3 || {}).text || ''}`].join('\n\n'); navigator.clipboard?.writeText(t); xc.textContent = 'Copied'; };
 }
 
+
+// ---------- Fix (design 1k): one finding, the queue beside it, and "I fixed it, check again" ----------
+const RANK_WORD = {critical: 'Critical · fix this first', high: 'High · fix this soon', medium: 'Medium · worth fixing', low: 'Low · when you get to it'};
+function plainTitle(f) {
+  const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
+  return ex && ex.lens2 && ex.lens2.length < 90 ? ex.lens2.replace(/\.$/, '') : f.title.replace(/\.$/, '');
+}
+function fixPrompt(f) {
+  const n = N[f.node], ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
+  const where = `${f.file}${f.line ? ', line ' + f.line : ''}`;
+  const fn = n ? ` in \`${short(n.qualname)}\`` : '';
+  const what = ex && ex.fix ? ex.fix : f.more_info && !String(f.more_info).startsWith('http') ? f.more_info : `Fix the ${f.rule} problem that ${f.tool} reports there`;
+  const input = f.input ? ` The value ${f.input.via.replace(/^parameter /, '')} comes from the request, so validate it before use.` : '';
+  return `In \`${where}\`${fn}: ${f.title.replace(/\.$/, '')}. ${what.replace(/\.$/, '')}.${input} Keep the behaviour the same for valid input, and do not touch other files. Afterwards I will run Lantern again to check the finding is gone.`;
+}
+function renderFix() {
+  const el = document.getElementById('center');
+  const open = SEC.findings.filter(f => f.status !== 'accepted' && !f.in_tests);
+  const queue = open.filter(f => f.rank !== 'low'), lows = open.filter(f => f.rank === 'low');
+  let f = SEC.findings.find(x => x.id === S.fsel) || queue[0];
+  if (!f) { el.innerHTML = `<div class="empty">${ART}<b>Nothing to fix</b>No open findings outside tests.</div>`; return; }
+  const idx = queue.findIndex(x => x.id === f.id);
+  const n = N[f.node], ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
+  const entry = entryOf(f), pageN = f.ui_path ? N[f.ui_path[0]] : null;
+  const pageWord = pageN && pageN.entry && pageN.entry.kind === 'page' ? `${pageN.entry.detail} page` : f.reachable ? `${f.reachable.kind} ${entry}` : 'nothing a visitor can reach';
+  const seen = seenHops(f), hopsN = hops(f);
+  const srcLine = (() => { const sr = n && SRC[n.id]; if (!sr || !f.line) return ''; const i = f.line - (+n.start_line || 0); const ls = sr.split('\n'); return ls[i] !== undefined ? ls[i].trim() : ''; })();
+  const why = [
+    f.ui_path || f.reachable ? `<span><b>✓</b>A visitor can reach it from <code>${esc(entry)}</code></span>` : `<span><b>–</b>Not reached from any page or route (so it is ranked ${esc(f.rank)}, not critical)</span>`,
+    f.input ? `<span><b>✓</b>It uses what they typed (<code>${esc(f.input.via.replace(/^parameter /, ''))}</code>)</span>` : f.input === false ? '<span><b>–</b>Nothing from the request reaches this line</span>' : '',
+    seen ? `<span><b>✓</b>${esc(countWord(seen))} hop${seen === 1 ? '' : 's'} seen running in your tests</span>` : hopsN ? `<span><b>–</b>${esc(countWord(hopsN))} hop${hopsN === 1 ? '' : 's'}, none seen running yet</span>` : '',
+    f.tool_confidence === 'LOW' ? '<span><b>?</b>Heuristic check: look before you act</span>' : '',
+  ].filter(Boolean).join('');
+  const prompt = fixPrompt(f);
+  const queueHtml = queue.map((q, i) => `<button class="qrow ${q.id === f.id ? 'on' : ''}" data-q="${esc(q.id)}"><b>${i + 1}</b><div><div class="t">${esc(plainTitle(q))}</div><div class="d">${esc(q.rank)} · ${esc(q.ui_path && N[q.ui_path[0]] && N[q.ui_path[0]].entry && N[q.ui_path[0]].entry.kind === 'page' ? N[q.ui_path[0]].entry.detail + ' page' : q.reachable ? entryOf(q) : q.file.split('/').pop())}</div></div></button>`).join('');
+  const banner = S.fixBanner ? `<div class="fixbanner ${S.fixBanner.ok ? 'ok' : ''}">${S.fixBanner.html}</div>` : '';
+  el.innerHTML = `<div class="page wide"><div class="toolbar"><button class="btn" id="backfind">${icon('left')}All findings</button>${modeSeg()}</div>${banner}
+    <div class="fixgrid"><aside class="fixq"><div class="k2" style="margin-top:0">Your queue · worst first</div>${queueHtml || '<div class="note">Nothing left in the queue.</div>'}
+      ${lows.length ? `<div class="note" style="margin-top:10px">${lows.length} low-risk item${lows.length === 1 ? '' : 's'} hidden. <button class="linkbtn" data-q="${esc(lows[0].id)}">Show ${lows.length === 1 ? 'it' : 'them'}</button></div>` : ''}</aside>
+    <div class="fixmain"><div class="sevline ${cls(f.rank, RANKS)}"><i></i>${esc(RANK_WORD[f.rank] || f.rank)}${idx >= 0 ? ` · ${idx + 1} of ${queue.length}` : ''}</div>
+      <h1>${esc(plainTitle(f))}</h1>
+      <p class="lede">${ex && ex.lens2 && ex.lens2 !== plainTitle(f) ? esc(ex.lens2) + ' ' : ''}${f.ui_path ? `A visitor reaches it from the <b>${esc(pageWord)}</b>${f.input ? ', and what they type reaches this line' : ''}.` : f.reachable ? `Reachable from ${esc(f.reachable.kind)} <b>${esc(entry)}</b>.` : 'Not reached from any page or route today; it becomes serious the day something calls it.'} <span class="note">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span></p>
+      <div class="fixtwo"><div class="card"><div class="k2" style="margin-top:0">Why it’s ${esc(f.rank)}</div><div class="why">${why}</div></div>
+        <div class="card"><div class="k2" style="margin-top:0">Where</div><div>${esc(f.file)}${f.line ? `, line ${esc(f.line)}` : ''}${n ? ` · in <code>${esc(short(n.qualname))}</code>` : ''}</div>${srcLine ? `<pre class="oneline">${esc(srcLine)}</pre>` : ''}</div></div>
+      <div class="card paste"><div class="k2" style="margin-top:0">Paste this into your AI assistant</div><p>${esc(prompt)}</p></div>
+      <div class="acts"><button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button><button class="btn" id="copyprompt">Copy the prompt</button>${LIVE ? `<button class="btn primary" id="recheck">${icon('check')}I fixed it, check again</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">See the path</button>` : ''}<span class="spacer"></span>${LIVE ? `<span class="note">Not a problem? <button class="linkbtn" data-accept="${esc(f.id)}">Accept with a reason</button></span>` : ''}</div><div class="sendslot"></div><div id="recheckmsg" class="note"></div></div></div></div>`;
+  wireMode(el); wireFindings(el);
+  el.querySelector('#backfind').onclick = () => { S.tab = 'findings'; render(); };
+  el.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { S.fsel = b.dataset.q; S.fixBanner = null; renderFix(); });
+  el.querySelector('#copyprompt').onclick = e => { navigator.clipboard?.writeText(prompt); e.target.textContent = 'Copied'; };
+  const rc = el.querySelector('#recheck'); if (rc) rc.onclick = async () => {
+    rc.disabled = true; const msg = el.querySelector('#recheckmsg'); msg.textContent = 'Reading your files again… this usually takes under a minute.';
+    try {
+      const before = {score: (DATA.readiness || {}).score, open: open.length, id: f.id, title: plainTitle(f)};
+      sessionStorage.setItem('lantern.recheck', JSON.stringify(before));
+      const job = await live('/analyze', {});
+      const j = await waitJob(job.id, log => { msg.textContent = log[log.length - 1] || 'Working…'; });
+      if (j.status === 'error') throw new Error(j.error);
+      location.reload();
+    } catch (e) { msg.textContent = e.message; rc.disabled = false; }
+  };
+}
+// After "I fixed it, check again" the page reloads with fresh results: say what changed, in one line.
+function recheckBanner() {
+  let b = null; try { b = JSON.parse(sessionStorage.getItem('lantern.recheck') || 'null'); sessionStorage.removeItem('lantern.recheck'); } catch (e) {}
+  if (!b) return;
+  const still = SEC.findings.find(f => f.id === b.id && f.status === 'open');
+  const now = (DATA.readiness || {}).score, d = now != null && b.score != null ? now - b.score : null;
+  const dTxt = d == null ? '' : d > 0 ? ` Readiness went up ${d} to ${now}.` : d < 0 ? ` Readiness went down ${-d} to ${now}.` : ` Readiness is still ${now}.`;
+  S.tab = 'fix'; S.fsel = still ? b.id : null;
+  S.fixBanner = still ? {ok: false, html: `<b>Still open.</b> “${esc(b.title)}” is still reported on the same line.${esc(dTxt)} Check the fix landed in the right file, then try again.`}
+                      : {ok: true, html: `<b>Fixed.</b> “${esc(b.title)}” is gone from this commit.${esc(dTxt)}`};
+}
+
 const ART = '<svg class="art" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="35" r="24" fill="#FFB547" opacity=".14"/><path d="M26 13h12M25 51h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg>';
 function renderMap() {
   const el = document.getElementById('center');
@@ -949,10 +1037,11 @@ function findingCard(f) {
     ${pathsHtml(f)}
     ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
     <div class="srcslot" id="src-${esc(f.id)}"></div>
-    <div class="acts">${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">Open in Atlas</button>` : ''}${f.node && SRC[f.node] ? `<button class="btn" data-lines="${esc(f.id)}">Show the lines</button>` : ''}${f.status !== 'accepted' ? `<button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn quietlink" data-accept="${esc(f.id)}">Accept risk with a reason…</button>` : ''}</div><div class="sendslot"></div></div>`;
+    <div class="acts">${f.status !== 'accepted' ? `<button class="btn primary" data-fix="${esc(f.id)}">Fix this</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">Open in Atlas</button>` : ''}${f.node && SRC[f.node] ? `<button class="btn" data-lines="${esc(f.id)}">Show the lines</button>` : ''}${f.status !== 'accepted' ? `<button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn quietlink" data-accept="${esc(f.id)}">Accept risk with a reason…</button>` : ''}</div><div class="sendslot"></div></div>`;
 }
 function wireFindings(el) {
   el.querySelectorAll('[data-sev]').forEach(b => b.onclick = () => { S.fsev = b.dataset.sev; renderFindings(); });
+  el.querySelectorAll('[data-fix]').forEach(b => b.onclick = () => { S.fsel = b.dataset.fix; S.tab = 'fix'; S.sel = null; render(); scrollTo(0, 0); });
   el.querySelectorAll('.path [data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
   el.querySelectorAll('[data-atlas]').forEach(b => b.onclick = () => { const id = b.dataset.atlas; S.tab = 'map'; for (const x of document.querySelectorAll('#tabs button')) x.classList.toggle('on', x.dataset.t === 'map'); const f = SEC.findings.find(q => q.node === id && (q.ui_path || q.reachable)); const ids = f ? (f.ui_path || f.reachable.path) : null; if (ids) { S.entry = ids[0]; S.open = new Set(ids); } S.open.add(id); select(id, false); render(); });
   el.querySelectorAll('[data-lines]').forEach(b => b.onclick = () => { const f = SEC.findings.find(q => q.id === b.dataset.lines); const slot = document.getElementById('src-' + f.id); if (slot.innerHTML) { slot.innerHTML = ''; b.textContent = 'Show the lines'; } else { slot.innerHTML = srcBlock(N[f.node]); b.textContent = 'Hide the lines'; } });
@@ -1047,7 +1136,7 @@ function findingPanel(f) {
     ${f.status === 'accepted' ? `<div class="k2">Accepted</div><p>By ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</p>` : ''}
     <div class="k2">What ${esc(f.tool)} says</div><p>${esc(f.title)}${f.tool_confidence ? ` Confidence ${esc(f.tool_confidence)}` : ''}${f.tool_severity ? `, severity ${esc(f.tool_severity)}` : ''}.${raised ? ' Lantern ranks it critical because the line uses request data and a page reaches it.' : f.tool_confidence === 'LOW' ? ' A pattern-based check: review before acting.' : ''}</p>
     ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}
-    <div class="acts">${f.node ? `<button class="btn primary" data-atlas="${esc(f.node)}">Open in Atlas</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div></div>`;
+    <div class="acts">${f.status !== 'accepted' ? `<button class="btn primary" data-fix="${esc(f.id)}">Fix this</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">Open in Atlas</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div></div>`;
 }
 // ---------- "Send to…": hand a finding to an AI assistant as a reference, not a pasted blob ----------
 // With the Lantern connector installed (`lantern mcp --setup`), the assistant pulls the exact file, line, click path
@@ -1315,7 +1404,7 @@ function renderRight() {
   const railLabel = n ? `${layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : 'Library'} · ${kindWord}` : 'Details';
   const chrome = railChrome(railLabel, 'r');
   // The Simple findings memo and the Readiness/About pages use the full width unless a function is open.
-  document.getElementById('main').classList.toggle('noright', !n && ((S.tab === 'findings' && (S.simple || !S.fsel)) || S.tab === 'ready' || S.tab === 'prot' || S.tab === 'xp' || S.tab === 'about'));
+  document.getElementById('main').classList.toggle('noright', !n && ((S.tab === 'findings' && (S.simple || !S.fsel)) || S.tab === 'ready' || S.tab === 'prot' || S.tab === 'xp' || S.tab === 'fix' || S.tab === 'about'));
   el.classList.toggle('rail', S.rrail); document.getElementById('main').classList.toggle('rrail', S.rrail);
   const wire = () => { el.querySelector('.edge').onclick = () => { S.rrail = !S.rrail; try { localStorage.setItem('lantern.rrail', S.rrail ? '1' : '0'); } catch (e) {} renderRight(); }; };
   const fsel = S.tab === 'findings' && !n && S.fsel ? SEC.findings.find(f => f.id === S.fsel) : null;
@@ -1366,11 +1455,11 @@ function renderRight() {
 
 const TAB_WORDS = {simple: {map: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', xp: 'What does this do?', about: 'About'},
                    advanced: {map: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', xp: 'Explanations', about: 'About'}};
-function tabWords() { for (const b of document.querySelectorAll('#tabs button')) { const n = b.querySelector('.n'); b.textContent = TAB_WORDS[S.simple ? 'simple' : 'advanced'][b.dataset.t] || b.textContent; if (n) b.appendChild(n); } }
+function tabWords() { for (const b of document.querySelectorAll('#tabs button:not([hidden])')) { b.classList.toggle('on', b.dataset.t === (S.tab === 'fix' ? 'findings' : S.tab)); const n = b.querySelector('.n'); b.textContent = TAB_WORDS[S.simple ? 'simple' : 'advanced'][b.dataset.t] || b.textContent; if (n) b.appendChild(n); } }
 window.setSimple = v => { S.simple = !!v; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); };
 function render() {
   renderLeft();
-  if (S.tab === 'map') renderMap(); else if (S.tab === 'findings') renderFindings(); else if (S.tab === 'prot') renderProtections(); else if (S.tab === 'ready') renderReady(); else if (S.tab === 'xp') renderExplanations(); else renderAbout();
+  if (S.tab === 'map') renderMap(); else if (S.tab === 'findings') renderFindings(); else if (S.tab === 'prot') renderProtections(); else if (S.tab === 'ready') renderReady(); else if (S.tab === 'xp') renderExplanations(); else if (S.tab === 'fix') renderFix(); else renderAbout();
   tabWords();
   renderRight();
 }
@@ -1378,6 +1467,7 @@ function render() {
 const EP_ORDER = ['page', 'route', 'cli', 'main', 'script'];
 const firstEp = G.nodes.filter(n => n.entry && n.entry.kind !== 'test').sort((a, b) => EP_ORDER.indexOf(a.entry.kind) - EP_ORDER.indexOf(b.entry.kind) || (a.entry.detail || '').length - (b.entry.detail || '').length)[0];
 if (firstEp) { S.entry = firstEp.id; S.open = new Set([firstEp.id]); }
+recheckBanner();
 render();
 </script>
 </body>
