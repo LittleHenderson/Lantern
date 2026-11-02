@@ -109,7 +109,38 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:280px minmax(0,1fr) 
 main.noleft{grid-template-columns:minmax(0,1fr) 440px} main.noleft aside.left{display:none}
 aside.left{border-right:1px solid var(--line);background:var(--surface);overflow:auto;padding:14px 10px 24px}
 section.center{padding:20px 24px 40px;overflow:auto;min-width:0}
-aside.right{border-left:1px solid var(--line);background:var(--surface);overflow:auto}
+aside.right{border-left:1px solid var(--line);background:var(--surface);overflow:auto;position:relative}
+aside.left{position:relative}
+/* Retracting side panels (design 3c): a 30px rail with a vertical label and the same toggle. */
+main.lrail{grid-template-columns:30px minmax(0,1fr) 440px} main.rrail{grid-template-columns:280px minmax(0,1fr) 30px} main.lrail.rrail{grid-template-columns:30px minmax(0,1fr) 30px}
+main.noleft.rrail{grid-template-columns:minmax(0,1fr) 30px}
+aside .edge{position:absolute;top:50%;width:18px;height:40px;margin-top:-20px;border:1px solid var(--line-2);background:var(--surface);color:var(--muted);border-radius:7px;display:grid;place-items:center;padding:0;z-index:3;opacity:.7;transition:opacity var(--t) var(--ease), color var(--t) var(--ease)}
+aside .edge:hover{opacity:1;color:var(--ink)} aside .edge .ic{width:14px;height:14px}
+aside.left .edge{right:-9px} aside.right .edge{left:-9px}
+aside.rail{padding:0;overflow:hidden} aside.rail>*:not(.edge):not(.raillabel){display:none}
+aside:not(.rail) .raillabel{display:none}
+aside.rail .raillabel{position:absolute;left:0;right:0;top:62px;text-align:left;writing-mode:vertical-rl;white-space:nowrap;font:600 11px var(--font);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);line-height:30px}
+aside.left.rail .edge{right:auto;left:50%;margin-left:-9px;top:12px;margin-top:0} aside.right.rail .edge{left:50%;margin-left:-9px;top:12px;margin-top:0}
+aside.rail .edge .ic{transform:rotate(180deg)}
+.ep .d b{font-weight:600} .ep .d b.critical{color:var(--crit-ink)} .ep .d b.high{color:var(--warn-ink)}
+/* Graph view: the whole app in five columns, risk as heat */
+#graph{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden;min-height:420px}
+#graph .vp{overflow:auto;height:calc(100vh - 260px);min-height:400px;cursor:grab} #graph .vp.drag{cursor:grabbing}
+#graph svg{display:block;transform-origin:0 0}
+#graph svg text{font-family:var(--mono);font-size:11.5px;fill:var(--ink)} #graph svg text.col{font-family:var(--font);font-size:11px;font-weight:600;letter-spacing:.06em;fill:var(--muted)}
+#graph svg text.sub{font-family:var(--font);font-size:10.5px;fill:var(--muted)} #graph svg text.lb{font-size:9px;fill:var(--muted)}
+#graph g[data-id]{cursor:pointer} #graph g[data-id]:hover rect.box{stroke:var(--accent-line)}
+#graph .glegend{position:absolute;left:12px;bottom:12px;display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);background:color-mix(in srgb, var(--surface) 88%, transparent);padding:6px 10px;border-radius:9px;border:1px solid var(--line)}
+#graph .glegend span{display:inline-flex;align-items:center;gap:6px} #graph .glegend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+#graph .zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:4px;padding:3px;border-radius:9px;background:var(--surface);border:1px solid var(--line)}
+#graph .zoom button{width:28px;height:26px;border-radius:6px;border:0;background:none;color:var(--ink-2);font:600 13px var(--font)} #graph .zoom button:hover{background:var(--hover);color:var(--ink)}
+.toolbar .seg.mode button{font-size:12px}
+.statusrow{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.statusrow .badge{padding:3px 8px} .statusrow .badge.neutral{background:var(--hover);color:var(--ink-2)} .statusrow .badge.good{background:var(--good-soft);color:var(--good-ink)}
+.langline{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);margin:0 0 12px}
+.langline .lang{font:600 10px var(--mono);padding:2px 6px;border-radius:5px;background:var(--hover);color:var(--ink-2)}
+.fcard.flash{animation:flash 1.6s var(--ease)} @keyframes flash{0%{box-shadow:0 0 0 4px var(--accent-soft)}100%{box-shadow:none}}
+.detail .acts{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 
 /* ---------- left: entry points ---------- */
 .searchbox{position:relative;margin:0 4px 6px}
@@ -379,6 +410,10 @@ const AI_KINDS = Object.keys(AI_WORDS);
 // a small chip naming what a function calls that costs money or talks to a model; one per kind
 const aiChips = id => { const ks = [...new Set((AI_BY_NODE[id] || []).map(c => cls(c.kind, AI_KINDS)).filter(Boolean))]; return ks.map(k => `<span class="badge ai ${k}" title="${esc((AI_BY_NODE[id] || []).filter(c => c.kind === k).map(c => c.provider + ' (line ' + c.line + ')').join(', '))}">${esc(AI_WORDS[k])}</span>`).join(''); };
 const RANK = {critical: 0, high: 1, medium: 2, low: 3};
+// Findings a visitor can reach from each entry point (security.json says which entry each reachable finding starts from).
+const FIND_BY_ENTRY = {};
+for (const f of SEC.findings) { const r = f.reachable; if (r && r.entry && f.status !== 'accepted') (FIND_BY_ENTRY[r.entry] ||= []).push(f); }
+const entryCounts = id => { const c = {}; for (const f of FIND_BY_ENTRY[id] || []) c[f.rank] = (c[f.rank] || 0) + 1; return ['critical', 'high', 'medium'].filter(k => c[k]).map(k => `<b class="${k}">${c[k]} ${k}</b>`).join(' · '); };
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // Every value from the data goes through esc() before it reaches innerHTML. Values used as CSS class names or as
 // lookup keys go through cls()/pick(), so only known words come out; numbers used in styles go through pct().
@@ -399,14 +434,15 @@ const short = q => {
 const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv):/.test(id || '') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
-const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', open: new Set(), q: '', pair: null, fsev: 'all'};
+const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false};
+try { S.view = ['tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : 'tree'; S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
 try { S.lens = +localStorage.getItem('lantern.lens') || 1; } catch (e) {}
 // Icons and the status tone of a 0-100 value: fixed markup and fixed words, never data.
 const ICONS = {
   search: '<circle cx="9" cy="9" r="5.5"/><path d="m13 13 3.5 3.5"/>', chev: '<path d="m7.5 4.5 5.5 5.5-5.5 5.5"/>',
   close: '<path d="M5 5l10 10M15 5 5 15"/>', open: '<path d="M11 4h5v5M16 4l-7 7M14 12v3.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5H8"/>',
   warn: '<path d="M10 3.5 17.5 16h-15z"/><path d="M10 8.5v3.5M10 14h.01"/>', sparkle: '<path d="M10 3v3M10 14v3M3 10h3M14 10h3M5.5 5.5l2 2M12.5 12.5l2 2M14.5 5.5l-2 2M7.5 12.5l-2 2"/>',
-  expand: '<path d="M4 8V4h4M16 8V4h-4M4 12v4h4M16 12v4h-4"/>', file: '<path d="M5 3h6.5L15 6.5V17H5z"/><path d="M11 3v4h4"/>',
+  expand: '<path d="M4 8V4h4M16 8V4h-4M4 12v4h4M16 12v4h-4"/>', left: '<path d="m12 5-5 5 5 5"/>', right: '<path d="m8 5 5 5-5 5"/>', file: '<path d="M5 3h6.5L15 6.5V17H5z"/><path d="M11 3v4h4"/>',
   sun: '<circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7l1.3 1.3M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/>',
   moon: '<path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/>', auto: '<circle cx="10" cy="10" r="6.5"/><path d="M10 3.5v13a6.5 6.5 0 0 0 0-13z" fill="currentColor"/>',
 };
@@ -464,6 +500,7 @@ function epTitle(n, k) {
   if (k === 'page') return `<span class="m pg">page</span><span class="x">${esc(n.entry.detail)}</span>`;
   return `<span class="x">${esc(k === 'script' ? n.entry.detail : short(n.qualname))}</span>`;
 }
+const railChrome = (label, side) => `<button class="edge" title="${S[side + 'rail'] ? 'Show panel' : 'Hide panel'}" aria-label="${S[side + 'rail'] ? 'Show panel' : 'Hide panel'}">${icon(side === 'l' ? 'left' : 'right')}</button><span class="raillabel">${esc(label)}</span>`;
 function renderLeft() {
   const el = document.getElementById('left');
   // the entry list only matters on the map; other tabs use the full width
@@ -485,11 +522,14 @@ function renderLeft() {
       const list = groups[k]; if (!list) continue;
       list.sort((a, b) => (a.entry.detail || '').localeCompare(b.entry.detail || ''));
       html += `<div class="group"><h4>${ENTRY_LABEL[k]} <span>${list.length}</span></h4>` + list.slice(0, 300).map(n =>
-        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t">${epTitle(n, k)}</span><span class="d">${esc(short(n.qualname))}${isJS(n.id) ? ' · frontend' : LANGS['typescript/javascript'] ? ' · backend' : ''}</span></button>`).join('') + '</div>';
+        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t">${epTitle(n, k)}</span><span class="d">${esc(short(n.qualname))}${isJS(n.id) ? ' · frontend' : LANGS['typescript/javascript'] ? ' · backend' : ''}${entryCounts(n.id) ? ' · ' + entryCounts(n.id) : ''}</span></button>`).join('') + '</div>';
     }
   }
   html += '</div>';
-  el.innerHTML = html;
+  el.innerHTML = railChrome('Search functions', 'l') + html;
+  el.classList.toggle('rail', S.lrail); document.getElementById('main').classList.toggle('lrail', S.lrail && S.tab === 'map');
+  el.querySelector('.edge').onclick = () => { S.lrail = !S.lrail; try { localStorage.setItem('lantern.lrail', S.lrail ? '1' : '0'); } catch (e) {} renderLeft(); };
+  if (S.lrail) return;
   const qi = document.getElementById('q');
   qi.oninput = () => { S.q = qi.value; renderLeft(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
   el.querySelectorAll('.ep').forEach(b => b.onclick = () => { S.entry = b.dataset.id; S.open = new Set([S.entry]); select(S.entry, false); render(); });
@@ -586,6 +626,115 @@ function renderChart() {
   return `<div id="chart">${svg}</div>${more}`;
 }
 
+
+// ---------- Graph view (design 3c): the whole app in five columns, risk as heat ----------
+// Columns: Pages · Components · HTTP · Routes · Data/system. Every reachable function from every entry point is
+// placed by what it is, not by depth, so the picture reads left to right like a request does. Functions that
+// nothing reaches are counted as "hidden", never guessed into a column.
+function graphModel() {
+  const cols = {pages: [], comps: [], http: [], routes: [], server: [], data: []};
+  const seen = new Set(), httpNodes = {}, edges = [];
+  const entries = G.nodes.filter(n => n.entry && n.entry.kind !== 'test');
+  const q = entries.map(n => n.id); for (const id of q) seen.add(id);
+  for (let i = 0; i < q.length && q.length < 400; i++) {
+    for (const e of (OUT[q[i]] || [])) {
+      const v = (e.via || '');
+      if (v.startsWith('http-') && e.detail) {   // the HTTP hop between a frontend call and a backend route
+        const hid = 'http:' + e.detail; if (!httpNodes[hid]) { httpNodes[hid] = {id: hid, label: e.detail}; cols.http.push(hid); }
+        edges.push({src: q[i], dst: hid, confidence: e.confidence, via: e.via}); if (!e.dst.startsWith('ext:')) edges.push({src: hid, dst: e.dst, confidence: e.confidence, via: e.via});
+      } else edges.push({src: q[i], dst: e.dst, confidence: e.confidence, via: e.via, detail: e.detail});
+      if (seen.has(e.dst)) continue;
+      if (e.dst.startsWith('ext:')) { if (!(FIND_BY_NODE[q[i]] || []).length && !e.dst.startsWith('ext:HTTP')) continue; }
+      seen.add(e.dst); q.push(e.dst);
+    }
+  }
+  for (const id of seen) {
+    const n = N[id]; if (!n) continue;
+    if (n.entry && n.entry.kind === 'page') cols.pages.push(id);
+    else if (n.entry && n.entry.kind === 'route') cols.routes.push(id);
+    else if (id.startsWith('ext:')) cols.data.push(id);
+    else if (isJS(id)) cols.comps.push(id);
+    else if (n.entry) cols.routes.push(id);
+    else cols.server.push(id);
+  }
+  const hidden = G.nodes.filter(n => n.kind === 'callable' && !seen.has(n.id)).length;
+  const fanin = {}; for (const e of edges) fanin[e.dst] = (fanin[e.dst] || 0) + 1;
+  return {cols, edges, httpNodes, hidden, fanin};
+}
+function renderGraph() {
+  const {cols, edges, httpNodes, hidden, fanin} = graphModel();
+  const order = ['pages', 'comps', 'http', 'routes', 'server', 'data'], titles = {pages: 'PAGES', comps: 'COMPONENTS', http: 'HTTP', routes: 'ROUTES · STARTS', server: 'SERVER FUNCTIONS', data: 'DATA · SYSTEM'};
+  const W = 176, H = 44, GX = 70, GY = 16, TOP = 44;
+  const present = order.filter(k => cols[k].length);
+  if (!present.length) return `<div class="empty">${ART}<b>Nothing to draw yet</b>No entry points were found, so there is no path to start from.</div>`;
+  const xy = {}, colOf = {};
+  const rows = Math.max(...present.map(k => cols[k].length));
+  present.forEach((k, ci) => {
+    const list = cols[k]; const off = TOP + ((rows - list.length) * (H + GY)) / 2;
+    list.forEach((id, i) => { xy[id] = [24 + ci * (W + GX), off + i * (H + GY)]; colOf[id] = k; });
+  });
+  const width = 24 + present.length * (W + GX) - GX + 24, height = TOP + rows * (H + GY) + 24;
+  const sevColor = w => w === 'critical' ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : w === 'medium' ? 'var(--warning)' : w === 'low' ? 'var(--good)' : null;
+  const sevSoft = w => w === 'critical' ? 'var(--critical-soft)' : w === 'high' ? 'var(--serious-soft)' : w === 'medium' ? 'var(--warning-soft)' : 'var(--surface)';
+  const confColor = c => c === 'observed' ? 'var(--accent)' : c === 'resolved' ? 'var(--ink)' : c === 'inferred' ? 'var(--muted)' : 'var(--faint)';
+  const maxFan = Math.max(1, ...Object.values(fanin));
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    <defs><marker id="ga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--faint)"/></marker>
+    <marker id="gao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>`;
+  present.forEach((k, ci) => { svg += `<text class="col" x="${24 + ci * (W + GX)}" y="22">${titles[k]}</text>`; });
+  for (const e of edges) {
+    if (!(e.src in xy) || !(e.dst in xy)) continue;
+    const [x1, y1] = xy[e.src], [x2, y2] = xy[e.dst];
+    const fwd = x2 > x1;
+    const sx = fwd ? x1 + W : x1 + W / 2, sy = fwd ? y1 + H / 2 : y1 + H, tx = fwd ? x2 : x2 + W / 2, ty = fwd ? y2 + H / 2 : y2;
+    const d = fwd ? `M${sx} ${sy} C ${sx + GX / 2} ${sy}, ${tx - GX / 2} ${ty}, ${tx - 2} ${ty}` : `M${sx} ${sy} C ${sx} ${sy + 30}, ${tx} ${ty - 30}, ${tx} ${ty - 2}`;
+    const obs = e.confidence === 'observed';
+    const dash = e.confidence === 'inferred' ? '5 4' : e.confidence === 'possible' ? '1.5 3.5' : '';
+    const stroke = S.mode === 'confidence' ? confColor(e.confidence) : obs ? 'var(--accent)' : 'var(--faint)';
+    svg += `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${obs ? 2.2 : 1.3}" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#${obs ? 'gao' : 'ga'})" opacity="${S.mode === 'fanin' ? .5 : .9}"><title>${esc(e.confidence)}${e.via ? ' · ' + esc(e.via) : ''}</title></path>`;
+  }
+  for (const id in xy) {
+    const [x, y] = xy[id], k = colOf[id], n = N[id] || null, w = n ? worstRank(id) : null, on = S.sel === id;
+    const isHttp = k === 'http';
+    let label = isHttp ? httpNodes[id].label : n.entry && n.entry.kind === 'page' ? n.entry.detail : n.entry && n.entry.kind === 'route' ? n.entry.detail : short(id.startsWith('ext:') ? id.slice(4) : n.qualname);
+    if (label.length > 24) label = label.slice(0, 23) + '…';
+    const f0 = (FIND_BY_NODE[id] || []).find(f => f.rank === w);
+    const paths = n && n.entry && n.entry.kind === 'page' ? edges.filter(e => e.src === id).length : 0;
+    const inUi = n ? (IN[id] || []).map(e => e.detail && UI_WORDS[e.detail]).find(Boolean) : '';
+    const inConf = n ? ((IN[id] || [])[0] || {}).confidence : '';
+    const sub = isHttp ? '' : w && f0 ? `${w} · ${(f0.rule || '').toLowerCase().slice(0, 18)}` : n.entry && n.entry.kind === 'page' ? `page · ${paths} path${paths === 1 ? '' : 's'}` : inUi ? inUi : (IN[id] || []).some(e => e.confidence === 'observed') ? 'seen running' : fanin[id] > 1 ? `fan-in ${fanin[id]}` : inConf === 'inferred' ? 'likely' : inConf === 'possible' ? 'possible' : '';
+    const lang = isHttp || !n ? '' : id.startsWith('js:') ? 'ts' : id.startsWith('py:') ? 'py' : id.startsWith('go:') ? 'go' : id.startsWith('rs:') ? 'rs' : id.startsWith('jv:') ? 'java' : '';
+    let fill = isHttp ? 'var(--surface-2)' : 'var(--surface)', stroke = 'var(--line-2)', sw = 1;
+    if (S.mode === 'risk' && w) { fill = sevSoft(w); stroke = sevColor(w); sw = 1.5; }
+    if (S.mode === 'confidence' && n) { stroke = confColor(inConf || 'resolved'); sw = 1.5; }
+    if (S.mode === 'fanin' && fanin[id]) { const t = fanin[id] / maxFan; fill = `color-mix(in srgb, var(--accent) ${Math.round(8 + 42 * t)}%, var(--surface))`; }
+    if (on) { stroke = 'var(--accent)'; sw = 2; }
+    svg += `<g data-id="${esc(id)}" data-http="${isHttp ? 1 : 0}"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="${isHttp ? 22 : 9}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>
+      ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="13" fill="none" stroke="var(--accent-soft)" stroke-width="4"/>` : ''}
+      <text x="${x + 12}" y="${y + (sub ? 19 : 27)}" ${isHttp ? 'font-weight="600"' : ''}>${esc(label)}</text>${sub ? `<text class="sub" x="${x + 12}" y="${y + 34}" fill="${w && S.mode === 'risk' ? sevColor(w) : 'var(--muted)'}">${esc(sub)}</text>` : ''}
+      ${lang ? `<text class="lb" x="${x + W - 10}" y="${y + 15}" text-anchor="end">${lang}</text>` : ''}<title>${esc(isHttp ? httpNodes[id].label : n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
+  }
+  svg += '</svg>';
+  const legend = S.mode === 'risk'
+    ? `<span><i style="background:var(--critical)"></i>critical</span><span><i style="background:var(--serious)"></i>high</span><span><i style="background:var(--warning)"></i>medium</span><span><i style="background:var(--accent)"></i>seen running</span><span>· ${hidden} hidden</span>`
+    : S.mode === 'confidence' ? `<span><i style="background:var(--accent)"></i>seen running</span><span><i style="background:var(--ink)"></i>confirmed</span><span><i style="background:var(--muted)"></i>likely</span><span><i style="background:var(--faint)"></i>possible</span><span>· ${hidden} hidden</span>`
+    : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`;
+  return `<div id="graph"><div class="vp">${svg}</div><div class="glegend">${legend}</div><div class="zoom"><button data-z="in" title="Zoom in">+</button><button data-z="out" title="Zoom out">−</button><button data-z="fit" title="Fit">fit</button></div></div>`;
+}
+function wireGraph(el) {
+  const g = el.querySelector('#graph'), vp = g.querySelector('.vp'), svg = g.querySelector('svg');
+  const w0 = +svg.getAttribute('width'), h0 = +svg.getAttribute('height');
+  const apply = () => { svg.style.transform = `scale(${S.zoom})`; svg.style.width = w0 + 'px'; vp.style.setProperty('--w', w0 * S.zoom + 'px'); svg.parentElement.style.minWidth = (w0 * S.zoom) + 'px'; svg.parentElement.style.minHeight = (h0 * S.zoom) + 'px'; };
+  const fit = () => { S.zoom = Math.max(.35, Math.min(1.4, Math.min((vp.clientWidth - 8) / w0, (vp.clientHeight - 8) / h0))); apply(); };
+  if (S.zoom === 1 && w0 > vp.clientWidth) fit(); else apply();
+  g.querySelectorAll('[data-z]').forEach(b => b.onclick = () => { if (b.dataset.z === 'fit') return fit(); S.zoom = Math.max(.35, Math.min(2.5, S.zoom * (b.dataset.z === 'in' ? 1.2 : 1 / 1.2))); apply(); });
+  let drag = null;
+  vp.onmousedown = e => { if (e.target.closest('g[data-id]')) return; drag = {x: e.clientX, y: e.clientY, l: vp.scrollLeft, t: vp.scrollTop}; vp.classList.add('drag'); };
+  window.addEventListener('mousemove', e => { if (!drag) return; vp.scrollLeft = drag.l - (e.clientX - drag.x); vp.scrollTop = drag.t - (e.clientY - drag.y); });
+  window.addEventListener('mouseup', () => { drag = null; vp.classList.remove('drag'); });
+  g.querySelectorAll('g[data-id]').forEach(b => b.onclick = () => { if (b.dataset.http === '1') return; const id = b.dataset.id; if (N[id] && N[id].entry) { S.entry = id; S.open = new Set([id]); } select(id); renderMap(); });
+}
+
 const ART = '<svg class="art" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="35" r="24" fill="#FFB547" opacity=".14"/><path d="M26 13h12M25 51h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg>';
 function renderMap() {
   const el = document.getElementById('center');
@@ -599,12 +748,14 @@ function renderMap() {
   if (n.entry && n.entry.kind === 'route') { const [m, p] = routeParts(n.entry.detail); title = `${m ? `<span class="m ${cls(m, METHODS)}">${esc(m)}</span>` : ''}${esc(p)}`; }
   else if (n.entry && n.entry.kind === 'script') title = esc(n.entry.detail);
   el.innerHTML = `<div class="toolbar"><h2>${title}</h2>
-    <div class="seg"><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button></div>
-    <button class="btn" id="expand">${icon('expand')}Expand all</button></div>
-    <div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>
-    ${S.view === 'tree' ? renderTree() : renderChart()}`;
-  el.querySelectorAll('.seg button').forEach(b => b.onclick = () => { S.view = b.dataset.v; renderMap(); });
-  document.getElementById('expand').onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
+    <div class="seg"><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button><button data-v="graph" class="${S.view === 'graph' ? 'on' : ''}">Graph</button></div>
+    ${S.view === 'graph' ? `<div class="seg mode" title="What the colours mean"><button data-m="risk" class="${S.mode === 'risk' ? 'on' : ''}">Risk</button><button data-m="confidence" class="${S.mode === 'confidence' ? 'on' : ''}">Confidence</button><button data-m="fanin" class="${S.mode === 'fanin' ? 'on' : ''}">Fan-in</button></div>` : `<button class="btn" id="expand">${icon('expand')}Expand all</button>`}</div>
+    ${S.view === 'graph' ? '' : `<div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>`}
+    ${S.view === 'tree' ? renderTree() : S.view === 'chart' ? renderChart() : renderGraph()}`;
+  el.querySelectorAll('.seg [data-v]').forEach(b => b.onclick = () => { S.view = b.dataset.v; try { localStorage.setItem('lantern.view', S.view); } catch (e) {} renderMap(); });
+  el.querySelectorAll('.seg [data-m]').forEach(b => b.onclick = () => { S.mode = b.dataset.m; renderMap(); });
+  if (S.view === 'graph') wireGraph(el);
+  const ex = document.getElementById('expand'); if (ex) ex.onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
   el.querySelectorAll('[data-tog]').forEach(b => b.onclick = ev => { ev.stopPropagation(); const id = b.dataset.tog; S.open.has(id) ? S.open.delete(id) : S.open.add(id); renderMap(); });
   el.querySelectorAll('.node, g[data-id]').forEach(b => b.onclick = () => { const id = b.dataset.id; if (!S.open.has(id)) S.open.add(id); select(id); renderMap(); });
 }
@@ -630,7 +781,7 @@ function renderFindings() {
     const heur = f.tool_confidence === 'LOW' ? '<span class="tag" title="Pattern-based check; review before acting">heuristic</span>' : '';
     const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
     const accepted = f.status === 'accepted' ? `<span class="tag" title="${esc((f.accepted || {}).reason)}">accepted risk</span>` : '';
-    return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
+    return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
       ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
       <h4>${esc(f.title)}</h4><div class="note" style="font-family:var(--mono);font-size:11.5px">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${f.node && N[f.node] ? ' · in ' + esc(short(N[f.node].qualname)) : ''}</div>
       ${path}
@@ -829,22 +980,48 @@ function srcBlock(n) {
 function renderRight() {
   const el = document.getElementById('right');
   const n = N[S.sel];
-  if (!n) { el.innerHTML = '<div class="empty">Select a function to see what it does.</div>'; return; }
+  const kindWord = n ? (n.entry ? ({page: 'page', route: 'route', cli: 'command', main: 'program start', test: 'test', script: 'script'}[n.entry.kind] || n.entry.kind) : layer(n.id) === 'external' ? 'library' : (isJS(n.id) ? 'component' : 'function')) : '';
+  const railLabel = n ? `${layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : 'Library'} · ${kindWord}` : 'Details';
+  const chrome = railChrome(railLabel, 'r');
+  el.classList.toggle('rail', S.rrail); document.getElementById('main').classList.toggle('rrail', S.rrail);
+  const wire = () => { el.querySelector('.edge').onclick = () => { S.rrail = !S.rrail; try { localStorage.setItem('lantern.rrail', S.rrail ? '1' : '0'); } catch (e) {} renderRight(); }; };
+  if (!n) { el.innerHTML = chrome + '<div class="empty">Select a function to see what it does.</div>'; wire(); return; }
+  if (S.rrail) { el.innerHTML = chrome; wire(); return; }
   const r = EXP[n.id];
   const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
   const callees = (OUT[n.id] || []).map(e => e.dst).filter(x => N[x]);
   const fs = FIND_BY_NODE[n.id] || [];
-  el.innerHTML = `<div class="detail"><button class="closebtn" id="close" aria-label="Close">${icon('close')}</button>
-    <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(layer(n.id) === 'external' ? n.kind : layer(n.id))}${n.entry ? ` · <span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${AI_BY_NODE[n.id] ? ' · ' + aiChips(n.id) : ''}</div>
+  const worst = worstRank(n.id), reach = fs.map(f => f.reachable).find(r => r && r.entry && N[r.entry]);
+  const reachFrom = reach ? (N[reach.entry].entry && N[reach.entry].entry.detail ? N[reach.entry].entry.detail : short(N[reach.entry].qualname)) : null;
+  const inputs = fs.map(f => f.input && f.input.via).filter(Boolean);
+  const seen = (IN[n.id] || []).some(e => e.confidence === 'observed') || (OUT[n.id] || []).some(e => e.confidence === 'observed');
+  const protections = arr((DATA.readiness || {}).protections).filter(p => p.status === 'add' && arr(p.evidence).some(ev => String(ev).includes(n.file + ':' + n.start_line) || (n.entry && n.entry.detail && String(ev).includes(n.entry.detail))));
+  const status = [
+    seen ? '<span class="badge good"><i></i>seen running</span>' : '',
+    worst ? `<span class="badge ${cls(worst, RANKS)}"><i></i>${fs.filter(f => f.rank === worst).length} ${esc(worst)} inside</span>` : '',
+    reachFrom ? `<span class="badge neutral">reachable from ${esc(reachFrom)}</span>` : '',
+    inputs.length ? `<span class="badge neutral">uses outside input · ${esc(inputs[0])}</span>` : '',
+    ...protections.slice(0, 2).map(p => `<span class="badge neutral">${esc(p.title.toLowerCase().replace('login check on routes that change data', 'no login check'))}${p.heuristic ? ' · heuristic' : ''}</span>`),
+  ].filter(Boolean).join('');
+  const LANGW = {js: ['ts', 'TypeScript or JavaScript · runs in the visitor\'s browser'], py: ['py', 'Python · runs on your server, not in the browser'], go: ['go', 'Go · runs on your server'], rs: ['rs', 'Rust · runs on your server'], jv: ['java', 'Java · runs on your server']};
+  const lw = LANGW[(n.id.split(':')[0])];
+  el.innerHTML = `<div class="detail">${chrome}<button class="closebtn" id="close" aria-label="Close">${icon('close')}</button>
+    <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(layer(n.id) === 'external' ? 'library' : layer(n.id))} · ${esc(kindWord)}${AI_BY_NODE[n.id] ? ' · ' + aiChips(n.id) : ''}</div>
     <h3>${esc(n.qualname)}</h3>
     <div class="meta">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ` · ${esc(n.entry.detail)}` : ''}</div>
+    ${status ? `<div class="statusrow">${status}</div>` : ''}
+    ${lw ? `<div class="langline"><span class="lang">${lw[0]}</span>Written in ${lw[1]}</div>` : ''}
     <div class="sig">${esc(n.signature || n.kind)}</div>
     <div class="lenses"><button data-l="1" class="${S.lens === 1 ? 'on' : ''}"><i></i>Technical</button><button data-l="2" class="${S.lens === 2 ? 'on' : ''}"><i></i>Everyday</button><button data-l="3" class="${S.lens === 3 ? 'on' : ''}"><i></i>Mapped</button></div>
     ${lensBody(r)}
     ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard ${cls(f.rank, RANKS)}" style="margin-top:12px"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.rule)} · line ${esc(f.line ?? '–')}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
     ${srcBlock(n)}
     <div class="links"><div><h5>Called by · ${callers.length}</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
-      <div><h5>Calls · ${callees.length}</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div></div>`;
+      <div><h5>Calls · ${callees.length}</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div>
+    <div class="acts">${fs.length ? `<button class="btn primary" id="openfinding">Open finding</button>` : ''}${LIVE && LIVE.model && r ? `<button class="btn" id="reexplain">${icon('sparkle')}Re-explain</button>` : ''}</div></div>`;
+  wire();
+  const of = document.getElementById('openfinding'); if (of) of.onclick = () => { S.tab = 'findings'; S.fsev = 'all'; for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b.dataset.t === 'findings'); render(); const card = document.getElementById('f-' + fs[0].id); if (card) { card.scrollIntoView({behavior: 'smooth', block: 'center'}); card.classList.add('flash'); } };
+  const re = document.getElementById('reexplain'); if (re) re.onclick = () => explainLive(S.sel, true);
   el.querySelectorAll('.lenses button').forEach(b => b.onclick = () => { S.lens = +b.dataset.l; S.pair = null; try { localStorage.setItem('lantern.lens', S.lens); } catch (e) {} renderRight(); if (S.tab === 'map') renderMap(); });
   el.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const i = +b.dataset.p; S.pair = S.pair === i ? null : i; renderRight(); });
   el.querySelectorAll('.links [data-id]').forEach(b => b.onclick = () => select(b.dataset.id));

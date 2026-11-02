@@ -121,7 +121,10 @@ def test_state_round_trip_and_expiry():
     st = auth.sign_state("s3cret", "github", CLI)
     assert auth.read_state("s3cret", st) == {"t": auth.read_state("s3cret", st)["t"], "p": "github", "c": CLI}
     assert auth.read_state("other", st) is None
-    assert auth.read_state("s3cret", st[:-2] + "zz") is None
+    # Tamper with a byte in the middle of the signature (the last base64 character carries only a few bits, so
+    # replacing it can decode to the same bytes once in a while).
+    i = len(st) - 8
+    assert auth.read_state("s3cret", st[:i] + ("A" if st[i] != "A" else "B") + st[i + 1:]) is None
 
 
 def test_cli_login_polls_and_saves(gw, monkeypatch, tmp_path):
