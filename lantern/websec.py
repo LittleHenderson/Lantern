@@ -13,6 +13,7 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
   LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
+  LV-*               Java code patterns (SQL/shell from variables, TLS off, weak hashes, ObjectInputStream, CORS *)
 """
 
 from __future__ import annotations
@@ -56,6 +57,18 @@ JS_RULES = [
      "Turns off HTTPS certificate checks", 295),
     ("LJ-TOKEN-STORAGE", re.compile(r"localStorage\.setItem\(\s*['\"][^'\"]*(?:token|jwt|auth|session)[^'\"]*['\"]", re.I),
      "LOW", "Stores a login token in localStorage, where any injected script can read it", 922),
+]
+
+JAVA_RULES = [
+    ("LV-SQL-CONCAT", re.compile(r"(?:executeQuery|executeUpdate|execute|createQuery|createNativeQuery|prepareStatement|query|queryForObject|queryForList|update)\s*\(\s*(?:\"[^\"]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b[^\"]*\"\s*\+|String\.format\(\s*\"[^\"]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b)", re.I), "HIGH",
+     "Builds SQL from variables (SQL injection risk)", 89),
+    ("LV-EXEC-CONCAT", re.compile(r"(?:Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder)\s*\([^)\n]*(?:\+|String\.format)"), "HIGH",
+     "Builds a shell command from variables (command injection risk)", 78),
+    ("LV-TLS-OFF", re.compile(r"setHostnameVerifier\s*\(\s*\([^)]*\)\s*->\s*true|ALLOW_ALL_HOSTNAME_VERIFIER|checkServerTrusted\s*\([^)]*\)\s*\{\s*\}"), "MEDIUM",
+     "Turns off HTTPS certificate checks", 295),
+    ("LV-WEAK-HASH", re.compile(r"MessageDigest\.getInstance\(\s*\"(?:MD5|SHA-?1)\"", re.I), "MEDIUM", "Uses a weak hash (MD5/SHA-1)", 328),
+    ("LV-DESERIALIZE", re.compile(r"new\s+ObjectInputStream\s*\("), "MEDIUM", "Deserializes Java objects from a stream (untrusted data can run code)", 502),
+    ("LV-CORS-ALL", re.compile(r"@CrossOrigin\s*\(\s*(?:origins\s*=\s*)?\"\*\""), "MEDIUM", "Allows any website to call this API (CORS *)", 942),
 ]
 
 RUST_RULES = [
@@ -189,6 +202,10 @@ def go_rules(repo: Path) -> list[dict]:
 
 def rust_rules(repo: Path) -> list[dict]:
     return _pattern_rules(repo, {".rs"}, RUST_RULES, skip=lambda rel: rel.startswith("tests/") or "/tests/" in rel)
+
+
+def java_rules(repo: Path) -> list[dict]:
+    return _pattern_rules(repo, {".java"}, JAVA_RULES, skip=lambda rel: "/src/test/" in rel or rel.startswith("src/test/"))
 
 
 def _pattern_rules(repo: Path, exts: set[str], rules, skip) -> list[dict]:
@@ -575,7 +592,7 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
 def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
     its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
-    js = n.id.startswith(("js:", "go:"))      # JS and Go name things in camelCase; Python and Rust use snake_case
+    js = n.id.startswith(("js:", "go:", "jv:"))      # JS, Go and Java use camelCase; Python and Rust snake_case
     for d in n.decorators:
         if auth_ident(d, js):
             return f"decorator @{d.split('(')[0]}"
@@ -590,7 +607,7 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
                 if v in seen:
                     continue
                 seen.add(v)
-                if auth_word(_func_name(g, v), v.startswith(("js:", "go:"))):
+                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:"))):
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt
@@ -659,7 +676,7 @@ def missing_auth(g: Graph) -> list[dict]:
 
 def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
-    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
+    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]

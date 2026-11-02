@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.4.pdf`.
-This repo is Phase 0 plus the full-stack layer: Python, TypeScript/JavaScript, Go and Rust engines, the API bridge
+This repo is Phase 0 plus the full-stack layer: Python, TypeScript/JavaScript, Go, Rust and Java engines, the API bridge
 between them, scanners, the Three-Lens explainer, and a static HTML report.
 
 **Audience:** AI-assisted ("vibe") coders whose apps are usually full stack, often TypeScript. The
@@ -44,18 +44,19 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 
 | File | Role |
 |---|---|
-| `lantern/engine.py` | **Entry point for analysis**: Python frontend → JS/TS frontend → Go frontend → Rust frontend → packs → bridge. Use `engine.build_graph`, not the per-language builders. |
+| `lantern/engine.py` | **Entry point for analysis**: Python frontend → JS/TS frontend → Go frontend → Rust frontend → Java frontend → packs → bridge. Use `engine.build_graph`, not the per-language builders. |
 | `lantern/graph.py` | Unified Code Graph: `Node`, `Edge` (`via`, `detail`), confidence ranks, JSON round-trip, `stats()` |
 | `lantern/python_frontend.py` | Python: discover → tree-sitter parse (`_visit_body`, `CallSite`s) → `Resolver` |
 | `lantern/js_frontend.py` | TS/JS: `Walker` (defs, imports/exports, refs, HTTP calls, route/page registrations) → `SpecResolver` (relative, tsconfig paths, `@/`) → `JSResolver` (barrels, classes, `this`) → entries |
 | `lantern/go_frontend.py` | Go: packages from `go.mod`, functions/methods/structs/interfaces, calls resolved by `name`, `import`, `receiver-type` (written types and repo function results; types stored by import path so every file reads them alike), `embedded`, `interface` (one `possible` edge per repo type implementing the whole interface), `callback`; routes for net/http (Go 1.22 `"GET /p"` patterns), gin/echo/fiber/chi/gorilla with `Group`/`Route`/`PathPrefix().Subrouter()` prefixes; outgoing `http.Get`/`NewRequest`/client calls to `meta["http_calls"]`. Untyped receivers go to `graph.unresolved`. Sample: `tests/fixtures/goapp` (Go API + React, planted SQL/shell concatenation, unprotected DELETE) |
 | `lantern/rust_frontend.py` | Rust: crates from every `Cargo.toml` `[package]` (workspaces), modules from file paths and inline `mod`, functions, `impl` blocks, traits; calls resolved by `name`, `use` (`crate::`/`self::`/`super::`/child modules/globs), `assoc` (`Type::f()`), `receiver-type` (params incl. `State(state): State<Arc<T>>` patterns, fields, `let`, return types; types canonicalised to `[crate, mod…, Name]`), `trait` (`dyn`/`impl`/`T: Trait` → one `possible` edge per `impl Trait for X`), `callback`; routes for axum (`.route("/p", get(h).post(h2))`, `.nest("/api", f())` and inline nests), actix (`#[get("/p")]`, `web::scope`, `.service`, `.route(p, web::get().to(h))`), rocket (`#[get]`, `.mount("/api", routes![…])`); outgoing `reqwest`/`ureq`/client calls with `format!` and consts folded. Untyped receivers go to `graph.unresolved`; chains on foreign calls are not counted. Sample: `tests/fixtures/rustapp` (axum + React, planted `format!` SQL/shell, unprotected DELETE) |
+| `lantern/java_frontend.py` | Java: packages, classes (nested as `Outer.Inner`), interfaces, enums, records, methods (overloads share one node; constructor is `Class.Class`); calls resolved by `name`, `inherited` (`extends` chain, interface default methods), `static` (`Class.m()`), `receiver-type` (fields incl. `= new T()`, params, locals, try-resources, `var` from `new`/return types), `interface` (one `possible` edge per class that implements/extends the interface or abstract class), `constructor`, `callback` (`Class::m`); routes for Spring (`@RequestMapping` class prefix, `@GetMapping`…, `@RequestMapping(method=…)`), JAX-RS (`@Path` + `@GET`…), Micronaut, Javalin/Spark (`app.get("/p", Class::h)`); outgoing `RestTemplate`, `WebClient.get().uri()`, `HttpRequest.newBuilder().uri()`, OkHttp `Request.Builder().url()`. Imports: explicit, wildcard (repo packages), static. Sample: `tests/fixtures/javaapp` (Spring Boot + React, planted SQL/shell concatenation, unprotected DELETE) |
 | `lantern/bridge.py` | Links `g.meta["http_calls"]` to route entry points by method + path segments; exact / suffix / unknown-prefix / ambiguous |
 | `lantern/tracehook.py`, `trace.py` | Python runtime tracing (`sys.monitoring`), wrapper-hop collapse, upgrade edges to `observed` |
 | `lantern/security.py` | Bandit, dependency audits, secrets → `websec.scan_web` → stable ids (line text, not number) → pin to nodes → reachability + `ui_path` → `input` on the flagged line → rank |
 | `lantern/depaudit.py` | pip-audit (lock files, `==` pins, pyproject) and `npm audit --package-lock-only`; the only network calls in `analyze`; `--offline` / `LANTERN_OFFLINE` skips them; tests run offline (`tests/conftest.py`) |
 | `lantern/protections.py` | Spec 9.4 "protections to add": rate limiting, headers, SSRF allow-list, password hashing, route auth, uploads; heuristic, never changes findings or score |
-| `lantern/websec.py` | Full-stack rules: `LW-*` (public-env secrets, service-role JWT, CORS, Firebase, Supabase RLS, missing auth), `LJ-*` JS patterns, `LG-*` Go patterns and `LR-*` Rust patterns (`_pattern_rules`) |
+| `lantern/websec.py` | Full-stack rules: `LW-*` (public-env secrets, service-role JWT, CORS, Firebase, Supabase RLS, missing auth), `LJ-*` JS, `LG-*` Go, `LR-*` Rust and `LV-*` Java patterns (`_pattern_rules`) |
 | `lantern/readiness.py` | Deployment Readiness Score (spec 10): ten weighted categories of deterministic checks (`pass/fail/partial/skip`, skip leaves the denominator), shape advisor, fan-in hotspots, starter files. Accepted risks: `lantern-accepted.json` via `lantern accept` |
 | `lantern/evidence.py` | Evidence Report (spec 11): commit-pinned HTML/JSON, baseline → fixed findings, provenance (including analysis packs), Limits, SHA-256 results digest; `verify()` re-runs and compares (used by the CLI and the connector; never replays a trace command); badge reads `Lantern · commit 1a2b3c · 0 critical · Oct 31`, never "verified" or "secure" |
 | `lantern/explain.py` | Prompt (language-aware, includes HTTP links), `validate()`, retry, bottom-up `select_nodes`, cache |
@@ -80,6 +81,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.name>` (module: `js:<path>`);
 Go `go:<import path>::<Func>` / `go:<import path>::<Type>.<Method>` (file module: `go:<path>.go`);
 Rust `rs:<crate>::<mod path>::<fn>` / `rs:<crate>::<mod path>::<Type>::<method>` (file module: `rs:<path>.rs`);
+Java `jv:<package>.<Class>.<method>` (class: `jv:<package>.<Class>`, file module: `jv:<path>.java`);
 external `ext:<pkg.member>` or `ext:HTTP <METHOD> <path-or-host>`.
 
 ## How Python resolution works
@@ -139,9 +141,9 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
    precision measurement Python has.
 5. **Cloud mode + local agent pairing** (spec sections 5 and 12): accounts, GitHub App, remote "analyze now",
    WebGL network view (Sigma.js) for very large graphs. The local app (`lantern serve`) is the base.
-6. **Java/Kotlin, then C++** frontends (spec 6.3), reusing the same graph, bridge, and viewer, the way
-   `go_frontend.py` and `rust_frontend.py` do (both added 2026-11-01; their edge confidences are provisional until
-   a Go/Rust benchmark exists).
+6. **Kotlin, C#, PHP, Ruby, then C++** frontends (spec 6.3), reusing the same graph, bridge, and viewer, the way
+   `go_frontend.py`, `rust_frontend.py` and `java_frontend.py` do (all added 2026-11-01; their edge confidences are
+   provisional until a benchmark per language exists).
 7. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
 
 ## Known gaps
@@ -153,6 +155,12 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   `routes!` are opaque (a route declared inside a macro is missed); closures stored in variables, trait objects
   built through generic constructors, and associated types are unresolved; `impl Trait for X` matching is by trait
   name, not path. Confidence levels are not yet backed by a Rust benchmark.
+* Java: no runtime tracing, no SpotBugs/dependency-check yet (only the `LV-*` patterns); generics are looked through
+  (a `List<Note>` receiver is `List`, external); overloads share a node so a call lands on the group, not the exact
+  overload; Spring's `@Autowired` field injection is typed by the field's declared type (an interface → `possible`
+  edges to every implementation); lambdas are attributed to the enclosing method; "uses outside input" does not yet
+  read Java parameters, so a reachable finding ranks `high`, not `critical`, until that is taught. Confidence levels
+  are not yet backed by a Java benchmark.
 * JS: hook results (`const m = useMutation(...)`, `m.mutate()`) and destructured hook returns are
   unresolved; React Query `mutationFn`/`queryFn` callbacks are linked, which covers most real paths.
 * Calls into libraries that call back into the repo (framework dispatch) only show when traced (Python).

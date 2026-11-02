@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, go_frontend, js_frontend, packs, python_frontend, rust_frontend
+from . import bridge, go_frontend, java_frontend, js_frontend, packs, python_frontend, rust_frontend
 from .graph import Graph
 
 
@@ -14,6 +14,7 @@ def build_graph(repo: str | Path) -> Graph:
     js = js_frontend.add_js(g, repo)
     go = go_frontend.add_go(g, repo)
     rs = rust_frontend.add_rust(g, repo)
+    jv = java_frontend.add_java(g, repo)
     langs = {}
     if py["files"]:
         langs["python"] = py
@@ -23,10 +24,12 @@ def build_graph(repo: str | Path) -> Graph:
         langs["go"] = go
     if rs.get("files"):
         langs["rust"] = rs
+    if jv.get("files"):
+        langs["java"] = jv
     g.meta.update({
         "languages": langs,
-        "files": py["files"] + js.get("files", 0) + go.get("files", 0) + rs.get("files", 0),
-        "lines": py["lines"] + js.get("lines", 0) + go.get("lines", 0) + rs.get("lines", 0),
+        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv)),
+        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv)),
         "language": " + ".join(langs) or "none",
     })
     # Analysis packs (pattern files) can add entry points for frameworks without built-in support, before the
