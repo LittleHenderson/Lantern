@@ -75,3 +75,19 @@ The model keeps inventing a security finding when it sees an obvious problem the
 `stats["invented_findings"]`; the explanation itself still has to pass every anchor check. Remaining misses: a nested
 object sent as a JSON string with a stray trailing brace (now parsed leniently at the gateway), and a paraphrased
 pair phrase now and then. Next: the bench repos; the first-try target is 90%. See the lens-v5 section above.
+
+## Benchmark repos (code nobody on this project wrote)
+
+The seven `bench/` repositories, `lantern explain --max-nodes 25`, lens-v5 with REPAIR and pair-drop, Claude Haiku 5.5
+through the gateway, one run each. The free allowance's 120-a-day cap stopped the second repo part-way.
+
+| Date | Repo | Validated | First try | Repaired | Pairs dropped | Undetermined | Invented dropped | Tokens in / out | Notes |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 2026-11-01 | fastapi-template (Python + React/TS) | **25 / 25** | 19 | 5 | 4 | 0 | 0 | 72,743 / 32,745 | 441 functions, 109 entry points. The 4 dropped pairs were all paraphrased phrases (`'a fresh notepad'` for a text that said "a notebook"), one a duplicate |
+| 2026-11-01 | taxonomy (Next.js/TS) | 17 / 17 (**partial**) | 11 | 4 | 0 | 0 | 0 | 56,709 / 24,547 | 229 functions. Daily allowance cap hit after 17 of 25; stopped cleanly. 8 NOT RUN |
+| – | click, flask, rich, requests, httpie | NOT RUN | – | – | – | – | – | – | waiting on allowance |
+
+**Claim ceiling: BENCH_PARTIAL** (2 of 7 repos, one of them cut short). Across the 42 benchmark functions run so far:
+42 / 42 validated, 30 first try (71%). On the fixtures the same version did 37 / 37, 30 first try (81%). The
+first-try rate on other people's code is lower, as expected; the end rate after REPAIR and pair-drop held at 100%
+in both. The 90% first-try target is not met anywhere yet.
