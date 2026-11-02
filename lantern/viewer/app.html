@@ -164,6 +164,88 @@ h3{font:650 15px/1.35 var(--display);letter-spacing:-.01em;color:var(--ink);marg
 .empty .art{width:56px;height:56px;margin:0 auto 14px;display:block;opacity:.9}
 .empty b{display:block;color:var(--ink);font:600 16px var(--display);margin-bottom:4px}
 
+
+/* ---------- Projects (design 3b/8a/8b): Simple hero + app cards, Advanced strip + table ---------- */
+.simplehome{max-width:1040px;padding-top:36px}
+.simplehome h1{font:700 36px/1.15 var(--font);letter-spacing:-.025em;text-align:center;margin:0 0 10px}
+.simplehome .lede{text-align:center;max-width:520px;margin:0 auto 28px;font-size:16px}
+.dropzone{max-width:720px;margin:0 auto;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:10px 10px 10px 20px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow-2);transition:border-color var(--t) var(--ease), box-shadow var(--t) var(--ease)}
+.dropzone:focus-within,.dropzone.over{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+.dropzone .ic{width:20px;height:20px;color:var(--muted);flex:none}
+.dropzone input[type=text]{flex:1;border:0;background:transparent;height:40px;padding:0;font-size:16px;box-shadow:none !important;min-width:0}
+.dropzone .btn.ghost{height:40px;border-radius:12px;font-size:14px}
+.dropzone .btn.primary{height:44px;padding:0 20px;border-radius:13px;font-size:15px}
+.steps3{display:flex;justify-content:center;gap:40px;margin:22px 0 40px;font:13.5px var(--font);color:var(--muted);flex-wrap:wrap}
+.steps3 span{display:flex;align-items:center;gap:8px}
+.steps3 b{display:grid;place-items:center;width:22px;height:22px;border-radius:99px;background:var(--hover);color:var(--ink);font:600 12px var(--font)}
+.privline{display:flex;gap:8px;align-items:flex-start;max-width:720px;margin:-18px auto 36px;font:13px/1.5 var(--font);color:var(--muted)}.privline .ic{width:15px;height:15px;flex:none;margin-top:2px;color:var(--accent)}
+.apps-head{display:flex;align-items:baseline;gap:10px;margin:0 0 14px}
+.apps-head h2{font:600 18px var(--font);letter-spacing:-.01em}
+.apps-head span{font:13px var(--font);color:var(--muted)}
+.apps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.app{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:14px;box-shadow:var(--shadow-1);transition:box-shadow var(--t) var(--ease), border-color var(--t) var(--ease)}
+.app:hover{box-shadow:var(--shadow-2);border-color:var(--line-2)}
+.app .top{display:flex;align-items:flex-start;gap:14px}
+.app .name{font:600 19px/1.2 var(--font);color:var(--ink);letter-spacing:-.01em;overflow-wrap:anywhere}
+.app .path{font:12px var(--mono);color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.app .sentence{margin:0;font:14.5px/1.5 var(--font);color:var(--ink-2)}
+.app .sentence b.bad{color:var(--crit-ink)} .app .sentence b{color:var(--ink)}
+.app .actions{display:flex;gap:8px;margin-top:auto;align-items:center}
+.app .actions .btn{height:36px;border-radius:10px;font-size:14px}
+.app .checking{display:flex;align-items:center;gap:8px;font:600 14px var(--font);color:var(--ink)}
+.app .checking i{width:8px;height:8px;border-radius:99px;background:var(--accent);animation:pulse 1.4s var(--ease) infinite}
+.app .indeterminate{height:4px}
+.app .lastline{margin:0;font:13.5px/1.5 var(--font);color:var(--muted);overflow-wrap:anywhere}
+.app .ring{width:56px;height:56px}.app .ring svg{width:56px;height:56px}
+.firstrun{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:860px;margin:0 auto}
+.firstrun .card{border-radius:18px}
+.firstrun .k{font:600 12px var(--font);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.firstrun h3{font:600 18px/1.3 var(--font);margin:0 0 8px}
+.firstrun p{margin:0 0 14px;font:14.5px/1.55 var(--font);color:var(--ink-2)}
+.firstrun .li{display:flex;align-items:center;gap:10px;font:14px var(--font);color:var(--ink-2);padding:7px 0}
+.firstrun .li .ic{width:16px;height:16px;color:var(--accent)}
+.running-steps{margin-top:14px;display:flex;flex-direction:column;gap:10px}
+.running-steps .st{display:flex;gap:12px;align-items:flex-start;font-size:13.5px;color:var(--muted)}
+.running-steps .st.done{color:var(--ink-2)} .running-steps .st.now{color:var(--ink)}
+.running-steps .st .dot{flex:none;width:18px;height:18px;border-radius:99px;border:1.5px solid var(--line-2);margin-top:1px;display:grid;place-items:center}
+.running-steps .st.done .dot{border-color:var(--good);background:var(--good-soft);color:var(--good-ink)} .running-steps .st.done .dot .ic{width:11px;height:11px}
+.running-steps .st.now .dot{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.running-steps .st b{display:block;font-weight:600}
+/* Advanced */
+.prohome{max-width:none;padding:0;font:13px/1.45 var(--font)}
+.strip{display:grid;grid-template-columns:repeat(5,1fr);border-bottom:1px solid var(--line);background:var(--surface-2)}
+.strip>div{padding:14px 20px;border-right:1px solid var(--line)} .strip>div:last-child{border-right:0}
+.strip .k{font:500 11px var(--font);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.strip .v{font:600 24px/1.2 var(--font);color:var(--ink);font-variant-numeric:tabular-nums}
+.strip .v.bad{color:var(--crit-ink)} .strip .v small{font:12px var(--font);color:var(--muted);margin-left:8px}
+.probar{padding:14px 16px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.probar .ttl{font:600 13px var(--font);color:var(--ink)}
+.probar .seg{margin-left:8px;padding:2px;border-radius:7px} .probar .seg button{padding:3px 8px;border-radius:5px;font:500 11.5px var(--font)} .probar .seg button.on{font-weight:600}
+.probar .addf{display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface-2);width:360px;font-size:12.5px}
+.probar .addf:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.probar .addf input[type=text]{border:0;background:transparent;height:28px;padding:0;font-size:12.5px;box-shadow:none !important;min-width:0;flex:1}
+.probar .addf .ic{width:14px;height:14px;color:var(--muted)}
+.probar .addf .btn{height:22px;padding:0 8px;font-size:11px;border-radius:5px}
+.probar .btn.sm{height:26px;font-weight:500;font-size:12px;color:var(--muted)}
+.ptable{margin:12px 16px 0;border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:auto}
+.ptable .r{display:grid;grid-template-columns:180px 150px 140px 46px 46px 46px 56px 84px 112px minmax(160px,1fr);gap:0 12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;min-width:1000px}
+.ptable .r:last-child{border-bottom:0}
+.ptable .r.h{padding:8px 14px;background:var(--surface-2);font:600 11px var(--font);color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.ptable .r.h button{background:none;border:0;padding:0;font:inherit;color:inherit;text-align:inherit;cursor:pointer;text-transform:inherit;letter-spacing:inherit}
+.ptable .r:not(.h):hover{background:var(--hover)}
+.ptable .n{font-weight:600;color:var(--ink)} .ptable .p{font:11px var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ptable .num{text-align:right} .ptable .num.bad{color:var(--crit-ink);font-weight:600} .ptable .dash{color:var(--faint)}
+.ptable .rd{display:flex;align-items:center;gap:8px} .ptable .rd .bar{flex:1;height:4px;border-radius:99px;background:var(--sunken);overflow:hidden} .ptable .rd .bar i{display:block;height:100%;border-radius:99px}
+.ptable .rd .g{font:600 11px var(--font);padding:1px 6px;border-radius:5px}
+.ptable .acts{display:flex;gap:6px;justify-content:flex-end} .ptable .acts .btn{height:26px;font-size:12px;padding:0 10px;border-radius:7px}
+.ptable .tag{font:600 9px var(--mono);letter-spacing:.04em;padding:1px 5px;border-radius:4px;background:var(--accent-soft);color:var(--accent-ink);margin-left:6px;vertical-align:middle}
+.prolog{margin:12px 16px 16px;padding:12px 14px;border-radius:10px;background:var(--code-bg);color:var(--code-ink);font:11.5px/1.6 var(--mono);border:1px solid var(--line);max-height:220px;overflow:auto;white-space:pre-wrap}
+.prolog .t{color:var(--muted);margin-bottom:4px}
+.tone-good{background:var(--good-soft);color:var(--good-ink)} .tone-warning{background:var(--warning-soft);color:var(--warn-ink)} .tone-serious{background:var(--serious-soft);color:var(--warn-ink)} .tone-critical{background:var(--critical-soft);color:var(--crit-ink)}
+.bar-good{background:var(--good)} .bar-warning{background:var(--warning)} .bar-serious{background:var(--serious)} .bar-critical{background:var(--critical)}
+@media (max-width:1100px){.apps{grid-template-columns:repeat(2,1fr)}.strip{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:760px){.apps,.firstrun{grid-template-columns:1fr}.simplehome h1{font-size:28px}.dropzone{flex-wrap:wrap;padding:12px}.dropzone input[type=text]{width:100%;flex:1 0 100%}.steps3{gap:14px;flex-direction:column;align-items:flex-start}.strip{grid-template-columns:1fr 1fr}}
+
 /* ---------- buttons and fields ---------- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface);
   color:var(--ink);font-weight:600;font-size:13.5px;white-space:nowrap;text-decoration:none;transition:background var(--t) var(--ease), border-color var(--t) var(--ease), transform var(--t) var(--ease), box-shadow var(--t) var(--ease)}
@@ -550,7 +632,8 @@ function watch(jobId, pid) {
       const j = await api('/api/jobs/' + jobId);
       S.jobs[pid] = j;
       const el = document.getElementById('log-' + pid);
-      if (el) { el.textContent = j.log.join('\n'); el.scrollTop = el.scrollHeight; }
+      if (el) { const t = el.querySelector('.t'); el.textContent = j.log.join('\n'); if (t) el.prepend(t); el.scrollTop = el.scrollHeight; }
+      const line = document.querySelector(`[data-last="${pid}"]`); if (line && j.log.length) line.textContent = j.log[j.log.length - 1];
       if (j.status === 'running') return setTimeout(tick, 700);
       await refresh();
     } catch (e) { setTimeout(tick, 2000); }
@@ -568,50 +651,130 @@ function counts(c) {
   if (c.accepted) parts.push(`<span class="sev"><i></i>${esc(c.accepted)} accepted</span>`);
   return parts.join('') || '<span class="sev ok"><i></i>No open critical, high, or medium</span>';
 }
-function renderHome(el) {
-  const ps = S.state.projects;
-  const cards = ps.map(p => {
-    const job = S.jobs[p.id];
-    const running = p.job || (job && job.status === 'running');
-    if (p.job && !job) watch(p.job, p.id);
-    const meta = p.score != null
-      ? `<span>Readiness <b>${esc(p.score)}</b>/100</span><span>${esc(p.shape)}</span>`
-      : '<span>Not analyzed yet</span>';
-    return `<article class="card proj"><div class="top"><div class="ident"><div class="name">${esc(p.name)}</div><div class="path">${esc(p.path)}</div></div>${ring(p.score, p.grade)}</div>
-      <div class="meta">${meta}${p.finished_at ? `<span>${icon('clock')} ${esc(p.finished_at)}</span>` : ''}${p.explained ? `<span>${esc(p.explained)} explained</span>` : ''}</div>
-      <div class="sevs">${counts(p.counts)}</div>
-      ${!p.exists ? note('warn', 'This folder no longer exists.') : ''}
-      ${running ? `<div class="working"><span class="pulse"></span>Analyzing…</div><div class="indeterminate"></div>` : ''}
-      ${running || (job && job.status === 'error') ? `<pre class="log" id="log-${p.id}">${esc((job && job.log || []).join('\n'))}</pre>` : ''}
-      ${job && job.status === 'error' ? note('err', esc(job.error)) : ''}
-      <div class="actions">${p.has_report ? `<button class="btn primary" data-open="${p.id}">Open</button>` : ''}${p.starter ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}
-        <button class="btn ${p.has_report ? 'ghost' : 'primary'}" data-run="${p.id}" ${running || !p.exists ? 'disabled' : ''}>${icon('refresh')}${running ? 'Analyzing…' : p.has_report ? 'Re-analyze' : 'Analyze'}</button>
-        <span class="spacer"></span>
-        <button class="btn quiet" data-del="${p.id}" title="Remove from this list (files are not touched)" aria-label="Remove from this list">${icon('trash')}</button></div></article>`;
-  }).join('');
-  el.innerHTML = `<main><section class="hero"><h1>Projects</h1><p class="lede">Lantern maps every path through your code, checks it for security problems, grades how ready it is to ship, and writes evidence you can hand to a reviewer. Everything runs on this computer.</p></section>
-    <div class="card addbar"><label for="addpath" class="eyebrow">Add a project folder, or paste a GitHub link</label>
-      <div class="field">${icon('folder')}<input type="text" id="addpath" placeholder="/path/to/your/app  or  https://github.com/you/your-app" autocomplete="off" spellcheck="false"><button class="btn ghost" id="browsebtn">Browse…</button><button class="btn primary" id="add">Add and analyze</button></div>
-      <div class="hint">Any folder with a Python or TypeScript/JavaScript app works, including one you built long ago. A link is cloned into Lantern's own folder (<code>~/.lantern/repos</code>) and analyzed like a folder.</div>
-      <div id="browse"></div><div id="adderr"></div></div>
-    ${ps.length ? `<div class="sectionhead"><h2>Your projects</h2><span class="count">${ps.length}</span></div><div class="grid">${cards}</div>`
-      : `<div class="empty">${LANTERN_ART}<b>No projects yet</b>Add a folder above, or try a starter app in <a href="#" id="tolearn">Learn</a>.</div>`}</main>`;
-  const tl = el.querySelector('#tolearn'); if (tl) tl.onclick = e => { e.preventDefault(); go('learn'); };
-  el.querySelector('#addpath').onkeydown = e => { if (e.key === 'Enter') el.querySelector('#add').click(); };
+function sentence(p) {
+  // One plain sentence per app (design 3b): what a visitor could reach, the smaller ones, the readiness number.
+  const c = p.counts || {}; if (p.score == null) return 'Not checked yet.';
+  const parts = [];
+  if (p.reachable_critical) parts.push(`<b class="bad">${esc(p.reachable_critical)} serious problem${p.reachable_critical > 1 ? 's' : ''}</b> a visitor could reach${p.top_page ? ` from the ${esc(p.top_page)} page` : ''}`);
+  else if (c.critical) parts.push(`<b class="bad">${esc(c.critical)} serious problem${c.critical > 1 ? 's' : ''}</b>, none a visitor can reach`);
+  const smaller = (c.high || 0) + (c.medium || 0);
+  if (parts.length && smaller) parts[0] += `, and ${smaller} smaller one${smaller > 1 ? 's' : ''}`;
+  else if (!parts.length) {
+    const bits = []; if (c.high) bits.push(`${c.high} high`); if (c.medium) bits.push(`${c.medium} medium`);
+    parts.push(bits.length ? `No serious problems. <b>${esc(bits.join(' and '))}</b> to look at` : 'No open problems a visitor could reach');
+  }
+  if (c.accepted) parts[0] += `, and ${c.accepted} risk${c.accepted > 1 ? 's' : ''} you accepted with a reason`;
+  return parts.join('') + `. Readiness ${esc(p.score)} of 100.`;
+}
+function addControls(el) {
+  const input = el.querySelector('#addpath'), err = el.querySelector('#adderr');
+  input.onkeydown = e => { if (e.key === 'Enter') el.querySelector('#add').click(); };
   el.querySelector('#add').onclick = async () => {
-    const path = el.querySelector('#addpath').value.trim();
+    const path = input.value.trim(); if (!path) { input.focus(); return; }
     try {
       const r = await api('/api/projects', {method: 'POST', body: {path}});
       if (r.job) { watch(r.job.id, r.project.id); await refresh(); return; }   // a link: cloned, then analyzed, in one job
       const j = await api(`/api/projects/${r.id}/analyze`, {method: 'POST'}); watch(j.id, r.id); await refresh();
-    } catch (e) { el.querySelector('#adderr').innerHTML = note('err', esc(e.message)); }
+    } catch (e) { err.innerHTML = note('err', esc(e.message)); }
   };
-  el.querySelector('#browsebtn').onclick = () => browse(el.querySelector('#addpath').value || '');
+  const bb = el.querySelector('#browsebtn'); if (bb) bb.onclick = () => browse(input.value || '');
+  const zone = el.querySelector('.dropzone');
+  if (zone) {
+    zone.ondragover = e => { e.preventDefault(); zone.classList.add('over'); };
+    zone.ondragleave = () => zone.classList.remove('over');
+    zone.ondrop = e => {
+      e.preventDefault(); zone.classList.remove('over');
+      const text = e.dataTransfer.getData('text/plain').trim();
+      if (/^https?:\/\//.test(text) || /^[\/~]|^[A-Za-z]:\\/.test(text)) { input.value = text; return; }
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      const name = f ? (f.webkitRelativePath || f.name).split('/')[0] : '';
+      err.innerHTML = note('info', `The browser does not tell Lantern where ${name ? '<b>' + esc(name) + '</b>' : 'that folder'} lives on this computer. Press <b>Browse…</b> to pick it, or paste its path or GitHub link.`);
+    };
+  }
   el.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => {
     try { const j = await api(`/api/projects/${b.dataset.run}/analyze`, {method: 'POST'}); watch(j.id, b.dataset.run); render(); } catch (e) { alert(e.message); } });
-  el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => go('project', {project: b.dataset.open, tab: 'atlas'}));
+  el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => go('project', {project: b.dataset.open, tab: 'atlas', reportTab: b.dataset.rt || null}));
   el.querySelectorAll('[data-guide]').forEach(b => b.onclick = () => go('project', {project: b.dataset.guide, tab: 'guide'}));
   el.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (confirm('Remove this project from the list? Its files and results are not deleted.')) { await api('/api/projects/' + b.dataset.del, {method: 'DELETE'}); refresh(); } });
+  const tl = el.querySelector('#tolearn'); if (tl) tl.onclick = e => { e.preventDefault(); go('learn'); };
+}
+function isRunning(p) { const job = S.jobs[p.id]; if (p.job && !job) watch(p.job, p.id); return !!(p.job || (job && job.status === 'running')); }
+function lastLine(p) { const job = S.jobs[p.id]; const l = job && job.log && job.log.length ? job.log[job.log.length - 1] : ''; return l || 'Reading your files…'; }
+function renderHome(el) {
+  const ps = S.state.projects;
+  if (viewMode() === 'advanced') return renderHomePro(el, ps);
+  const running = ps.filter(isRunning).length, checked = ps.filter(p => p.score != null).length;
+  const cards = ps.map(p => {
+    const job = S.jobs[p.id], run = isRunning(p);
+    return `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(p.name)}${p.starter ? ' <span class="tag">starter</span>' : ''}</div><div class="path">${esc(p.path)}</div></div>${ring(p.score, p.grade)}</div>
+      ${run ? `<div class="checking"><i></i>Checking… ${p.score != null ? 'usually under a minute' : 'about a minute'}</div><div class="indeterminate"></div><p class="lastline" data-last="${p.id}">${esc(lastLine(p))}</p>`
+        : `<p class="sentence">${sentence(p)}</p>`}
+      ${!p.exists ? note('warn', 'This folder no longer exists.') : ''}
+      ${job && job.status === 'error' ? note('err', esc(job.error)) : ''}
+      <div class="actions">${run ? '' : p.has_report ? `<button class="btn primary" data-open="${p.id}" data-rt="findings">Show me what to fix</button>` : ''}${p.starter && !run ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}
+        ${run ? '' : `<button class="btn ${p.has_report ? '' : 'primary'}" data-run="${p.id}" ${!p.exists ? 'disabled' : ''}>${p.has_report ? 'Re-check' : 'Check my app'}</button>`}
+        <span class="spacer"></span><button class="btn quiet sm" data-del="${p.id}" title="Remove from this list (files are not touched)" aria-label="Remove from this list">${icon('trash')}</button></div></article>`;
+  }).join('');
+  el.innerHTML = `<main class="simplehome"><h1>${ps.length ? 'What would you like to check?' : 'Which app should we check first?'}</h1>
+    <p class="lede">Point Lantern at any app you built. It reads your code like a reviewer, and nothing leaves this computer.</p>
+    <div class="dropzone">${icon('folder')}<input type="text" id="addpath" placeholder="Drop a folder here, or paste a GitHub link" autocomplete="off" spellcheck="false" aria-label="Folder path or GitHub link"><button class="btn ghost" id="browsebtn">Browse…</button><button class="btn primary" id="add">Check my app</button></div>
+    <div id="browse" style="max-width:720px;margin:0 auto"></div><div id="adderr" style="max-width:720px;margin:0 auto"></div>
+    <div class="steps3"><span><b>1</b>Add your app</span><span><b>2</b>Lantern maps every path a visitor can take</span><span><b>3</b>Fix what it finds, with a guide and proof</span></div>
+    <p class="privline">${icon('lock')}Everything here runs on this computer; your code is not uploaded. Plain-word explanations and Ask Lantern are off until you turn them on in Settings, and send the piece being explained to the model you pick, at your own risk.</p>
+    ${ps.length ? `<div class="apps-head"><h2>Your apps</h2><span>${checked} checked${running ? `, ${running} checking now` : ''}</span></div><div class="apps">${cards}</div>`
+      : `<div class="firstrun"><div class="card"><div class="k">No app handy?</div><h3>Try the practice app</h3><p>notes-api is a small Python app with real problems planted on purpose. Fix them with a guide; Lantern checks each one is really gone.</p><a href="#" id="tolearn" class="btn primary">Create notes-api · 35 min</a></div>
+         <div class="card"><div class="k">What happens next</div><div class="li">${icon('clock')}Reading usually takes under a minute</div><div class="li">${icon('check')}You get a map, a list of what to fix, and a grade</div><div class="li">${icon('layers')}Python, TypeScript, Go, Rust and Java apps work today</div></div></div>`}</main>`;
+  addControls(el);
+}
+function renderHomePro(el, ps) {
+  const sort = S.sort || 'risk';
+  const rows = ps.slice().sort((a, b) => {
+    if (sort === 'name') return a.name.localeCompare(b.name);
+    if (sort === 'recent') return (b.finished_at || '').localeCompare(a.finished_at || '');
+    return (a.score == null ? 101 : a.score) - (b.score == null ? 101 : b.score);
+  });
+  const scored = ps.filter(p => p.score != null).map(p => p.score).sort((a, b) => a - b);
+  const median = scored.length ? scored[Math.floor((scored.length - 1) / 2)] : null;
+  const sum = k => ps.reduce((n, p) => n + ((p.counts || {})[k] || 0), 0);
+  const rc = ps.reduce((n, p) => n + (p.reachable_critical || 0), 0), rcp = ps.filter(p => p.reachable_critical).length;
+  const open = sum('critical') + sum('high') + sum('medium'), acc = sum('accepted');
+  const expl = ps.reduce((n, p) => n + (p.explained || 0), 0), fns = ps.reduce((n, p) => n + (p.functions || 0), 0);
+  const running = ps.filter(isRunning);
+  const barw = p => Math.max(2, Math.min(100, p.score || 0));
+  const num = (v, bad) => v == null ? '<span class="num dash">–</span>' : `<span class="num ${bad && v ? 'bad' : ''}">${esc(v)}</span>`;
+  const r = rows.map(p => {
+    const c = p.counts, run = isRunning(p), t = tone(p.grade);
+    return `<div class="r"><div><div class="n">${esc(p.name)}${p.starter ? '<span class="tag">STARTER</span>' : ''}</div><div class="p" title="${esc(p.path)}">${esc(p.path)}</div></div>
+      <span class="p" style="font:12px var(--font);color:var(--ink-2)">${esc(p.stack || (p.languages || []).join(' + ') || '–')}</span>
+      ${p.score != null ? `<div class="rd"><span style="font-weight:600;color:var(--ink);width:24px">${esc(p.score)}</span><div class="bar"><i class="bar-${t}" style="width:${barw(p)}%"></i></div><span class="g tone-${t}">${esc(p.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'analyzing' : 'not yet'}</span></div>`}
+      ${num(c ? c.critical : null, true)}${num(c ? c.high : null)}${num(c ? c.medium : null)}${num(c ? c.accepted : null)}
+      <span class="num">${p.functions ? `${esc(p.explained || 0)} / ${esc(p.functions)}` : '<span class="dash">–</span>'}</span>
+      <span style="color:var(--muted);white-space:nowrap">${run ? 'Analyzing…' : esc(p.finished_at || '–')}</span>
+      <div class="acts">${p.has_report ? `<button class="btn" data-open="${p.id}">Open</button>` : ''}${p.starter ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}${run ? `<button class="btn" data-log="${p.id}">View log</button>` : `<button class="btn" data-run="${p.id}" ${!p.exists ? 'disabled' : ''}>${p.has_report ? 'Re-check' : 'Analyze'}</button>`}<button class="btn quiet" data-del="${p.id}" aria-label="Remove from this list">${icon('trash')}</button></div></div>`;
+  }).join('');
+  const logs = running.map(p => `<div class="prolog" id="log-${p.id}"><div class="t">${esc(p.name)} · analyze</div>${esc(((S.jobs[p.id] || {}).log || []).join('\n'))}</div>`).join('');
+  el.innerHTML = `<main class="prohome"><div class="strip">
+      <div><div class="k">Projects</div><div class="v">${ps.length}<small>${running.length ? `${running.length} analyzing` : ''}</small></div></div>
+      <div><div class="k">Reachable critical</div><div class="v ${rc ? 'bad' : ''}">${rc}<small>${rcp ? `across ${rcp} project${rcp > 1 ? 's' : ''}` : ''}</small></div></div>
+      <div><div class="k">Open findings</div><div class="v">${open}<small>${acc ? `${acc} accepted` : ''}</small></div></div>
+      <div><div class="k">Median readiness</div><div class="v">${median == null ? '–' : median}<small>/100</small></div></div>
+      <div><div class="k">Explained</div><div class="v">${expl}<small>of ${fns} functions</small></div></div></div>
+    <div class="probar"><span class="ttl">All projects</span><div class="seg" id="sortseg">${[['risk', 'Risk'], ['name', 'Name'], ['recent', 'Recent']].map(([k, l]) => `<button data-s="${k}" class="${sort === k ? 'on' : ''}">${l}</button>`).join('')}</div><span class="spacer"></span>
+      <div class="addf">${icon('folder')}<input type="text" id="addpath" placeholder="/path/to/app or https://github.com/you/app" autocomplete="off" spellcheck="false" aria-label="Folder path or GitHub link"><button class="btn ghost sm" id="browsebtn">Browse…</button><button class="btn primary" id="add">Add</button></div>
+      <button class="btn sm" id="recheckall" ${ps.some(p => p.exists && !isRunning(p)) ? '' : 'disabled'}>Re-check all</button><button class="btn sm" id="csv">Export CSV</button></div>
+    <div id="adderr" style="margin:8px 16px 0"></div><div id="browse" style="margin:8px 16px 0"></div>
+    ${ps.length ? `<div class="ptable"><div class="r h"><span>Project</span><span>Stack</span><button data-s="risk">Readiness ${sort === 'risk' ? '↓' : ''}</button><span class="num">Crit</span><span class="num">High</span><span class="num">Med</span><span class="num">Accept</span><span class="num">Explained</span><button data-s="recent">Analyzed ${sort === 'recent' ? '↓' : ''}</button><span></span></div>${r}</div>${logs}`
+      : `<div class="empty">${LANTERN_ART}<b>No projects yet</b>Add a folder or a link above, or try a starter app in <a href="#" id="tolearn">Learn</a>.</div>`}</main>`;
+  addControls(el);
+  el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { S.sort = b.dataset.s; renderHome(el); });
+  el.querySelectorAll('[data-log]').forEach(b => b.onclick = () => { const l = document.getElementById('log-' + b.dataset.log); if (l) l.scrollIntoView({behavior: 'smooth'}); });
+  el.querySelector('#recheckall').onclick = async () => { for (const p of ps) if (p.exists && !isRunning(p)) { try { const j = await api(`/api/projects/${p.id}/analyze`, {method: 'POST'}); watch(j.id, p.id); } catch (e) {} } render(); };
+  el.querySelector('#csv').onclick = () => {
+    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['project', 'path', 'stack', 'readiness', 'grade', 'critical', 'high', 'medium', 'accepted', 'explained', 'functions', 'analyzed'].join(',')]
+      .concat(rows.map(p => [p.name, p.path, p.stack, p.score, p.grade, ...(['critical', 'high', 'medium', 'accepted'].map(k => (p.counts || {})[k])), p.explained, p.functions, p.finished_at].map(q).join(',')));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type: 'text/csv'})); a.download = 'lantern-projects.csv'; a.click(); URL.revokeObjectURL(a.href);
+  };
 }
 async function browse(path) {
   const box = document.getElementById('browse');

@@ -267,7 +267,22 @@ class App:
         # These files sit in the analyzed folder, which may come from anyone: keep only the expected types.
         counts = sec.get("counts") if isinstance(sec.get("counts"), dict) else None
         grade, shape = rd.get("grade"), rd.get("shape")
+        stack = rd.get("stack") if isinstance(rd.get("stack"), dict) else {}
+        frameworks = [_str(x) for x in (stack.get("frameworks") or []) if _str(x)][:3]
+        languages = [_str(x) for x in (stack.get("languages") or []) if _str(x)][:4]
+        # The Projects screen's one sentence: how many open critical findings a visitor can reach, and from where.
+        reach_crit, top_page = 0, None
+        for f in (sec.get("findings") or []) if isinstance(sec.get("findings"), list) else []:
+            if not isinstance(f, dict) or f.get("status") != "open" or f.get("rank") != "critical" or not f.get("reachable"):
+                continue
+            reach_crit += 1
+            path = f.get("ui_path")
+            if top_page is None and isinstance(path, list) and path and isinstance(path[0], str) and path[0].startswith("js:") and "::" in path[0]:
+                top_page = path[0].rsplit("::", 1)[1].split(".")[0][:40]
         return {**p, "exists": Path(p["path"]).is_dir(), "has_report": (out / "report.html").exists(),
+                "stack": " + ".join(frameworks) or " + ".join(languages) or None,
+                "languages": languages, "reachable_critical": reach_crit, "top_page": top_page,
+                "functions": _int(sec.get("total_callables")),
                 "score": _int(rd.get("score")), "grade": grade if grade in ("A", "B", "C", "D", "F") else None,
                 "shape": shape if shape in SHAPES else None,
                 "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
