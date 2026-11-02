@@ -1,6 +1,5 @@
 # Publishes site/ (the landing page, the intro and the live example report) to GitHub Pages
-# on every push to main that touches it. One-time setup: repository Settings → Pages →
-# Source: "GitHub Actions".
+# on every push to main that touches it. The first run turns Pages on by itself.
 name: site
 on:
   push:
@@ -23,6 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true   # turns GitHub Pages on for the repo the first time; no Settings click needed
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
