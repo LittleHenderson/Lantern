@@ -130,6 +130,7 @@ Add Three-Lens explanations. The default model is **Claude Haiku 5.5** (`anthrop
 ```bash
 lantern explain path/to/repo --estimate          # token estimate, no calls
 
+lantern login --github   # or --google: a free allowance, one sign-in
 lantern login --token <token>                    # free allowance (hosted by Lantern), or...
 export ANTHROPIC_API_KEY=sk-ant-...              # ...your own Anthropic key, no Lantern limit (or DEEPSEEK_API_KEY)
 lantern explain path/to/repo                     # uses whichever is set up

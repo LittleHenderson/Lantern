@@ -5,7 +5,8 @@
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
   lantern trace PATH -- python -m pytest -q               record what actually runs
   lantern explain PATH                                    add Three-Lens explanations (Claude Haiku by default)
-  lantern login --token TOKEN                             use the free hosted allowance
+  lantern login --github | --google                        get a free allowance (sign in once)
+  lantern login --token TOKEN                             use a token you already have
   lantern allowance                                       see how much of it is left
   lantern report PATH                                     rebuild report.html from saved results
   lantern accept PATH FINDING_ID --reason "..."           record an accepted risk (committed in the repo)
@@ -335,6 +336,45 @@ def cmd_learn(a) -> int:
     return 0
 
 
+def cmd_login(a) -> int:
+    from .providers import ProviderError, save_token, sign_in_claim, sign_in_providers, sign_in_start
+    if a.token:
+        print(f"saved   {save_token(a.token)}  (the default model now uses the free allowance)")
+        return 0
+    provider = "github" if a.github else "google" if a.google else None
+    if provider is None:
+        avail = sign_in_providers()
+        print("Get a free allowance (about 300 explanations with Claude Haiku) by signing in once:")
+        for p in avail or ["github", "google"]:
+            print(f"  lantern login --{p}")
+        print("Or save a token you already have:  lantern login --token lt_...")
+        return 0
+    start = sign_in_start(provider)
+    print(f"Sign in with {provider.capitalize()} in your browser:\n  {start['url']}")
+    if not a.no_browser:
+        import webbrowser
+        try:
+            webbrowser.open(start["url"])
+        except Exception:  # noqa: BLE001: no browser is fine, the link is printed
+            pass
+    print("waiting for the sign-in to finish (up to 5 minutes)...", flush=True)
+    import time as _time
+    deadline = _time.time() + 300
+    while _time.time() < deadline:
+        try:
+            tok = sign_in_claim(start["cli"])
+        except ProviderError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        if tok:
+            print(f"saved   {save_token(tok)}  (the default model now uses the free allowance)")
+            return 0
+        _time.sleep(2)
+    print("timed out. Run the command again, or paste the token from the browser page: lantern login --token lt_...",
+          file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["mcp"]:   # its own small parser; stdout belongs to the protocol
@@ -376,8 +416,11 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--metaphor", help='fix the metaphor world, e.g. "a hotel"')
     sp.add_argument("--estimate", action="store_true", help="show the token estimate and stop")
 
-    sp = sub.add_parser("login", help="save a free-allowance token (Claude Haiku, hosted by Lantern)")
-    sp.add_argument("--token", required=True)
+    sp = sub.add_parser("login", help="get or save a free-allowance token (Claude Haiku, hosted by Lantern)")
+    sp.add_argument("--token", help="a token you already have")
+    sp.add_argument("--github", action="store_true", help="sign in with GitHub in your browser")
+    sp.add_argument("--google", action="store_true", help="sign in with Google in your browser")
+    sp.add_argument("--no-browser", action="store_true", help="print the link instead of opening it")
 
     sub.add_parser("allowance", help="show what's left of the free allowance")
 
@@ -461,9 +504,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "explain":
         return cmd_explain(a)
     if a.cmd == "login":
-        from .providers import save_token
-        print(f"saved   {save_token(a.token)}  (the default model now uses the free allowance)")
-        return 0
+        return cmd_login(a)
     if a.cmd == "allowance":
         from .providers import ProviderError, allowance_status
         try:

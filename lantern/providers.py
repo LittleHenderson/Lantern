@@ -278,6 +278,41 @@ def save_token(token: str) -> Path:
     return p
 
 
+def sign_in_start(provider: str, url: str | None = None) -> dict:
+    """Start a browser sign-in: returns the page to open and the one-time `cli` code the token is parked under."""
+    import secrets
+    url = url or gateway_url()
+    cli = secrets.token_urlsafe(36)
+    return {"cli": cli, "url": f"{url}/login?provider={urllib.parse.quote(provider)}&cli={urllib.parse.quote(cli)}",
+            "provider": provider}
+
+
+def sign_in_claim(cli: str, url: str | None = None) -> str | None:
+    """The token parked for `cli`, once it exists (None while the person is still signing in)."""
+    url = url or gateway_url()
+    req = urllib.request.Request(f"{url}/auth/claim?cli={urllib.parse.quote(cli)}")
+    if urllib.parse.urlsplit(req.full_url).scheme not in ("http", "https"):
+        raise ProviderError("refusing non-HTTP URL")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310: scheme checked above
+            return str(json.loads(resp.read()).get("token") or "") or None
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise ProviderError(f"HTTP {e.code} from gateway", status=e.code) from None
+    except urllib.error.URLError as e:
+        raise ProviderError(f"cannot reach gateway: {e.reason}") from None
+
+
+def sign_in_providers(url: str | None = None) -> list[str]:
+    url = url or gateway_url()
+    try:
+        with urllib.request.urlopen(f"{url}/auth/providers", timeout=10) as resp:  # nosec B310: https gateway
+            return [p for p in json.loads(resp.read()).get("providers", []) if p in ("github", "google")]
+    except (urllib.error.URLError, ValueError, OSError):
+        return []
+
+
 def allowance_status(token: str | None = None, url: str | None = None) -> dict:
     token, url = token or load_token(), url or gateway_url()
     if not token or not url:

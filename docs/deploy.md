@@ -67,6 +67,36 @@ What can go wrong and what it looks like:
 | Dashboard says "That secret was not accepted" | Wrong admin secret | `fly ssh console -C "printenv LANTERN_ADMIN_SECRET"` |
 | Counters reset after a deploy | Volume not mounted | `fly volumes list` should show `lantern_data` attached |
 
+## Sign in with GitHub and Google (free allowance without minting tokens by hand)
+
+Once these are set, anyone can get their own allowance token by signing in at `https://lantern-gateway.fly.dev/v1/login`,
+with `lantern login --github` / `--google`, or from the app's Settings. One token per account; signing in again rotates
+the token and keeps the usage count. The gateway stores the provider's stable user id and, for GitHub, the login name;
+never an email address.
+
+**GitHub** (GitHub → Settings → Developer settings → OAuth Apps → New OAuth App):
+- Application name: `Lantern`
+- Homepage URL: `https://lantern-gateway.fly.dev/v1/login`
+- Authorization callback URL: `https://lantern-gateway.fly.dev/v1/auth/github/callback`
+- Copy the **Client ID**; click **Generate a new client secret** and copy it.
+
+**Google** (Google Cloud Console → APIs & Services → Credentials → Create credentials → OAuth client ID, type "Web application";
+the consent screen needs only the `openid` scope, and the app can stay in "Testing" with up to 100 test users or be published):
+- Authorized redirect URI: `https://lantern-gateway.fly.dev/v1/auth/google/callback`
+- Copy the **Client ID** and **Client secret**.
+
+Then, on the Fly website (app → Secrets) or in the terminal, set them yourself:
+
+```bash
+fly secrets set GITHUB_CLIENT_ID=... GITHUB_CLIENT_SECRET=...
+fly secrets set GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=...
+fly secrets set LANTERN_AUTH_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"   # signs the sign-in state
+# LANTERN_PUBLIC_URL defaults to https://lantern-gateway.fly.dev; set it if the gateway lives elsewhere
+```
+
+A provider with no id/secret is simply not offered: `GET /v1/auth/providers` lists what is on. The client secrets are
+used only for the server-side code exchange and never reach a browser or the CLI.
+
 ## Landing page on Cloudflare Pages
 
 You need: a Cloudflare account (free) and the landing page files in the repository (the design package's

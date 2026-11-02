@@ -308,6 +308,7 @@ class App:
                 # No key needed while the free allowance lasts; the user's own key, once added, wins.
                 row["default"] = True
                 row["allowance"] = allowance and not key
+                row["can_sign_in"] = bool(gateway_url()) and not allowance and not key
                 if row["allowance"]:
                     row["needs_key"] = False
                     row["notice"] = DATA_NOTICES["lantern"]
@@ -532,6 +533,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"connections": connections(app.store), "now": int(time.time()),
                                "setup": {"claude_code": f"claude mcp add lantern -- {cmd} mcp",
                                          "json": {"mcpServers": {"lantern": {"command": cmd, "args": ["mcp"]}}}}})
+        if path == "/api/login/poll":
+            from .providers import ProviderError, save_token, sign_in_claim
+            cli = (q.get("cli") or [""])[0]
+            if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", cli):
+                return self._err(400, "bad cli code")
+            try:
+                tok = sign_in_claim(cli)
+            except ProviderError as e:
+                return self._json({"done": False, "error": str(e)[:200]})
+            if not tok:
+                return self._json({"done": False})
+            save_token(tok)
+            usage.record("settings_save")
+            return self._json({"done": True})
         if path == "/api/allowance":
             from .providers import ProviderError, allowance_status, gateway_url, load_token
             if not (load_token() and gateway_url()):
@@ -613,6 +628,12 @@ class Handler(BaseHTTPRequestHandler):
             privacy = app.store.settings().get("privacy", "full")
             job = app.jobs.start(proj["id"], "analyze", lambda log: pipeline.analyze(dest, app.out(proj), privacy, log=log))
             return self._json({"project": app.summary(proj), "job": job}, 201)
+        if path == "/api/login/start":
+            from .providers import sign_in_start
+            provider = str(b.get("provider") or "")
+            if provider not in ("github", "google"):
+                raise ValueError("provider is github or google")
+            return self._json(sign_in_start(provider))
         if path == "/api/settings":
             s = app.store.settings()
             for k in ("provider", "model", "base_url", "privacy"):
