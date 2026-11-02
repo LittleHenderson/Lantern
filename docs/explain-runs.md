@@ -17,7 +17,12 @@ make a model pass). Target: 90% of explanations validated on the first try. Samp
 | 2026-11-01 | claude-haiku-5-5 (gateway) | 22 / 25 | 18 | 56,500 / 35,581 | final lens-v4 prompt, run B |
 | 2026-11-01 | claude-haiku-5-5 (gateway) | 22 / 25 | 16 | 59,116 / 37,567 | model-invented findings dropped and counted (4 this run) instead of failing the explanation |
 
-**Stable number with the final prompt (three runs): 21–22 of 25 validated, 15–18 on the first try (60–72%).**
+| 2026-11-01 | claude-haiku-5-5 (gateway) | 12 / 12 (nextapp) | 10 | 25,254 / 16,022 | Next.js + Supabase fixture, 12 functions, run A; 1 invented finding dropped |
+| 2026-11-01 | claude-haiku-5-5 (gateway) | 12 / 12 (nextapp) | 11 | 23,199 / 14,309 | Next.js + Supabase fixture, run B; 1 invented finding dropped |
+
+**Next.js sample: 12 of 12 validated in both runs, 10 and 11 on the first try (83%, 92%).**
+
+**Stable number with the final prompt (three runs, shop): 21–22 of 25 validated, 15–18 on the first try (60–72%).**
 
 The model keeps inventing a security finding when it sees an obvious problem the scanners did not report (4 times in
 25 functions, even when told not to). Those entries are now removed before anything reaches a reader and counted in
