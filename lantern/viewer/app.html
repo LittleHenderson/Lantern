@@ -753,7 +753,7 @@ function addControls(el) {
   }
   el.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => {
     try { const j = await api(`/api/projects/${b.dataset.run}/analyze`, {method: 'POST'}); watch(j.id, b.dataset.run); render(); } catch (e) { alert(e.message); } });
-  el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => go('project', {project: b.dataset.open, tab: 'atlas', reportTab: b.dataset.rt || null}));
+  el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => go('project', {project: b.dataset.open, tab: b.dataset.rt === 'fix' ? 'findings' : 'atlas', reportTab: b.dataset.rt || null}));
   el.querySelectorAll('[data-guide]').forEach(b => b.onclick = () => go('project', {project: b.dataset.guide, tab: 'guide'}));
   el.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (confirm('Remove this project from the list? Its files and results are not deleted.')) { await api('/api/projects/' + b.dataset.del, {method: 'DELETE'}); refresh(); } });
   const tl = el.querySelector('#tolearn'); if (tl) tl.onclick = e => { e.preventDefault(); go('learn'); };
@@ -771,7 +771,7 @@ function renderHome(el) {
         : `<p class="sentence">${sentence(p)}</p>`}
       ${!p.exists ? note('warn', 'This folder no longer exists.') : ''}
       ${job && job.status === 'error' ? note('err', esc(job.error)) : ''}
-      <div class="actions">${run ? '' : p.has_report ? `<button class="btn primary" data-open="${p.id}" data-rt="findings">Show me what to fix</button>` : ''}${p.starter && !run ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}
+      <div class="actions">${run ? '' : p.has_report ? `<button class="btn primary" data-open="${p.id}" data-rt="fix">Show me what to fix</button>` : ''}${p.starter && !run ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}
         ${run ? '' : `<button class="btn ${p.has_report ? '' : 'primary'}" data-run="${p.id}" ${!p.exists ? 'disabled' : ''}>${p.has_report ? 'Re-check' : 'Check my app'}</button>`}
         <span class="spacer"></span><button class="btn quiet sm" data-del="${p.id}" title="Remove from this list (files are not touched)" aria-label="Remove from this list">${icon('trash')}</button></div></article>`;
   }).join('');
