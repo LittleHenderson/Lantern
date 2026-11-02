@@ -3,7 +3,8 @@
 **See every path your code takes, from the button to the database.** Lantern maps a full-stack app
 (Python, TypeScript/JavaScript, Go, Rust and Java), links the frontend's API calls to the backend routes that serve
 them, explains each function three ways, and audits it with security checks ranked by whether a user
-can actually reach the problem.
+can actually reach the problem. AI apps get their own checks: paid model calls marked on the map, routes that
+can drain your wallet, model output that becomes a command, and keys left in notebooks (`docs/ai-apps.md`).
 
 > Working title. Built from the product spec in [`docs/`](docs/Lantern_Product_Spec_v0.4.pdf). Status: v0.1, the local
 > product: map, Three-Lens explanations with your own key, security audit, readiness grade, and Evidence Report, all in a
