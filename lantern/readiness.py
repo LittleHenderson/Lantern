@@ -133,7 +133,8 @@ class Repo:
 
 def detect_stack(repo: Repo, g: Graph) -> dict:
     deps_text = " ".join(repo.text(f) for f in repo.project_files
-                         if f.rsplit("/", 1)[-1] in ("pyproject.toml", "package.json", "Pipfile", "go.mod", "Cargo.toml")
+                         if f.rsplit("/", 1)[-1] in ("pyproject.toml", "package.json", "Pipfile", "go.mod", "Cargo.toml",
+                                                     "pom.xml", "build.gradle", "build.gradle.kts")
                          or re.search(r"(^|/)requirements[^/]*\.txt$", f)).lower()
     fw = []
     for key, label in (("fastapi", "FastAPI"), ("flask", "Flask"), ("django", "Django"), ("starlette", "Starlette"),
@@ -143,7 +144,8 @@ def detect_stack(repo: Repo, g: Graph) -> dict:
                        ("github.com/gin-gonic/gin", "Gin"), ("github.com/labstack/echo", "Echo"),
                        ("github.com/go-chi/chi", "chi"), ("github.com/gofiber/fiber", "Fiber"),
                        ("github.com/gorilla/mux", "gorilla/mux"), ("axum", "axum"), ("actix-web", "Actix"),
-                       ("rocket", "Rocket"), ("warp", "warp")):
+                       ("rocket", "Rocket"), ("warp", "warp"), ("spring-boot", "Spring Boot"), ("quarkus", "Quarkus"),
+                       ("micronaut", "Micronaut"), ("javalin", "Javalin")):
         if key in deps_text:
             fw.append(label)
     entries = Counter((n.entry or {}).get("kind") for n in g.entry_points())
@@ -293,6 +295,14 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
         want.append(pj)
         if any((d + lk) in repo.files for lk in JS_LOCKS) or any(lk in repo.files for lk in JS_LOCKS):
             have.append(pj)
+    for bg in (f for f in repo.project_files if f.rsplit("/", 1)[-1] in ("build.gradle", "build.gradle.kts")):
+        want.append(bg)
+        d = bg.rsplit("/", 1)[0] + "/" if "/" in bg else ""
+        if (d + "gradle.lockfile") in repo.files or "gradle.lockfile" in repo.files:
+            have.append(bg)
+    for pm in (f for f in repo.project_files if f.rsplit("/", 1)[-1] == "pom.xml"):
+        want.append(pm)
+        have.append(pm)                 # Maven resolves to the exact versions written in the POM
     for ct in (f for f in repo.project_files if f.rsplit("/", 1)[-1] == "Cargo.toml"):
         if "[package]" not in repo.text(ct) or "[dependencies]" not in repo.text(ct):
             continue
@@ -311,7 +321,7 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
                           "pass" if not miss else "partial" if have else "fail",
                           "lockfile for every manifest" if not miss else f"no lockfile for {', '.join(miss[:3])}",
                           "" if not miss else "Commit the lockfile your package manager writes (package-lock.json, "
-                          "pnpm-lock.yaml, uv.lock, poetry.lock, go.sum, Cargo.lock) so every install gets the same versions."))
+                          "pnpm-lock.yaml, uv.lock, poetry.lock, go.sum, Cargo.lock, gradle.lockfile) so every install gets the same versions."))
     else:
         out.append(_check("deps-lock", "Lockfile committed", 4, "skip",
                           f"not expected: a {shape} usually leaves exact versions to whoever installs it"
