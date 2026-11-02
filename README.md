@@ -215,3 +215,7 @@ No PWA, cloud mode, or deployment-readiness score yet. Runtime tracing is Python
 code (`getattr`, plugin registries, framework dispatch) lowers recall; the report counts what it
 couldn't resolve. Full-stack security checks are pattern- and graph-based; the "no login check" rule
 is marked as a heuristic in the report. See [`CLAUDE.md`](CLAUDE.md) for architecture and the backlog.
+
+## License
+
+MIT. See `LICENSE`.
