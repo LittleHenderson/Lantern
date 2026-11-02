@@ -330,3 +330,24 @@ def test_watch_tests_accepts_only_python_test_runners(tmp_path):
     d = detect_test_command(js)
     assert d["command"] == "npm test" and not d["supported"]
     assert not detect_test_command(tmp_path / "nowhere")["supported"] if (tmp_path / "nowhere").mkdir() is None else True
+
+
+def test_terminal_drawer_runs_lantern_commands_only(tmp_path):
+    from lantern.server import run_terminal_command, TERMINAL_HELP
+    class Jobs:
+        def start(self, pid, kind, fn):
+            return {"id": "j1", "kind": kind, "status": "running"}
+    class Store:
+        def settings(self):
+            return {"privacy": "full"}
+    class App:
+        jobs = Jobs(); store = Store()
+    app, p, repo, out = App(), {"id": "x"}, tmp_path, tmp_path / ".lantern"
+    assert run_terminal_command(app, p, repo, out, "help")["output"] == TERMINAL_HELP
+    assert run_terminal_command(app, p, repo, out, "lantern analyze --offline")["job"]["kind"] == "analyze"
+    for bad in ("rm -rf /", "python app.py", "curl http://x", "bash", "pytest", "analyze; rm x"):
+        with pytest.raises(ValueError):
+            run_terminal_command(app, p, repo, out, bad)
+    with pytest.raises(ValueError):
+        run_terminal_command(app, p, repo, out, "accept abc --reason x")
+    assert "no open findings" in run_terminal_command(app, p, repo, out, "findings")["output"]
