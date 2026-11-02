@@ -1,0 +1,115 @@
+"""Stack lanes: which part of the stack a node lives in.
+
+Four fixed stops, always in this order: ``browser`` → ``frontend`` → ``server`` → ``data``. The viewer
+draws them as the "stack strip" ("You are here: Server"), as swimlanes in the Path view, and as a 4-dot
+glyph on findings. Assignment is deterministic — it uses only the node id, file path and entry kind — so
+it needs no model and no extra parsing.
+
+* ``browser``  — what the visitor's browser shows: page entry points and the app start of a client bundle.
+* ``frontend`` — the rest of the client-side code (components, hooks, helpers).
+* ``server``   — code that runs on a machine the owner pays for: Python/Go/Rust/Java, Next.js route
+                 handlers and ``pages/api``, Express-style handlers, server starts, and any module that
+                 lives beside them.
+* ``data``     — where the code reaches outside itself: databases, files, the shell, outside services.
+                 Only external nodes get this lane; other externals (``json.dumps``) have no lane.
+"""
+
+from __future__ import annotations
+
+import re
+
+from .graph import Graph, Node
+
+LANES = ["browser", "frontend", "server", "data"]
+LANE_WORDS = {"browser": "Browser", "frontend": "Frontend", "server": "Server", "data": "Data"}
+
+# External names that mean the code is reaching a database, a file, the shell, or a service outside the app.
+DATA_RE = re.compile(
+    r"^(sqlite3|psycopg2?|pymysql|mysql|asyncpg|sqlalchemy|sqlmodel|peewee|django\.db|pymongo|motor|redis|"
+    r"aioredis|boto3|botocore|google\.cloud|azure|stripe|requests|httpx|urllib|aiohttp|smtplib|subprocess|"
+    r"os\.(system|popen|remove|unlink|rename|makedirs|mkdir|rmdir)|open|shutil|pathlib|io\.open|pickle|"
+    r"openai|anthropic|resend|sendgrid|twilio|mailgun|supabase|firebase|firestore|prisma|@prisma|mongoose|"
+    r"pg|mysql2|knex|drizzle|typeorm|sequelize|kysely|ioredis|fs|fs/promises|node:fs|child_process|"
+    r"node:child_process|axios|\$?fetch|ky|got|@aws-sdk|aws-sdk|@google-cloud|@supabase|@upstash|"
+    r"@vercel/(kv|postgres|blob)|@planetscale|@neondatabase|@libsql|better-sqlite3|level|nodemailer)"
+    r"(\.|\(|$|/)"
+)
+
+# A JS/TS module in one of these places runs on the server.
+SERVER_PATH_RE = re.compile(
+    r"(^|/)(src/)?(app/.*(/|^)route\.[cm]?[jt]sx?$|pages/api/|api/|server/|backend/|functions/|netlify/|"
+    r"supabase/functions/|worker[s]?/|middleware\.[cm]?[jt]s$)"
+)
+
+
+def _module_id(n: Node) -> str:
+    return n.id.split("::", 1)[0]
+
+
+def _server_modules(g: Graph) -> set[str]:
+    out: set[str] = set()
+    for n in g.nodes.values():
+        if not n.id.startswith("js:"):
+            continue
+        if n.file and SERVER_PATH_RE.search(n.file):
+            out.add(_module_id(n))
+        e = n.entry or {}
+        if e.get("kind") == "route" or (e.get("kind") == "main" and str(e.get("detail", "")).startswith("server start")):
+            out.add(_module_id(n))
+    return out
+
+
+def lane_of(n: Node, server_modules: set[str]) -> str | None:
+    """The lane for one node, given the set of server-side JS modules. ``None`` = not part of the stack picture."""
+    if n.id.startswith("ext:HTTP "):
+        target = n.id[len("ext:HTTP "):].split(" ", 1)[-1]
+        return "server" if target.startswith("/") else "data"
+    if n.id.startswith("ext:"):
+        return "data" if DATA_RE.match(n.id[4:]) else None
+    if not n.id.startswith("js:"):
+        return "server"
+    if _module_id(n) in server_modules:
+        return "server"
+    e = n.entry or {}
+    if e.get("kind") == "page" or (e.get("kind") == "main" and str(e.get("detail", "")).startswith("app start")):
+        return "browser"
+    return "frontend"
+
+
+def assign(g: Graph) -> dict:
+    """Set ``node.lane`` on every node. Returns counts per lane for ``graph.meta``."""
+    servers = _server_modules(g)
+    counts = {k: 0 for k in LANES}
+    for n in g.nodes.values():
+        n.lane = lane_of(n, servers)
+        if n.lane:
+            counts[n.lane] += 1
+    g.meta["lanes"] = counts
+    return counts
+
+
+def lanes_for_path(g: Graph, ids: list[str] | None, hot: str | None = None, extra: list[str] | None = None) -> list[str]:
+    """Ordered, de-duplicated lanes crossed by a path (plus the hot lane and any extra lanes)."""
+    seen: set[str] = set()
+    for nid in ids or []:
+        n = g.nodes.get(nid)
+        if n and n.lane:
+            seen.add(n.lane)
+    if hot:
+        seen.add(hot)
+    for x in extra or []:
+        seen.add(x)
+    return [l for l in LANES if l in seen]
+
+
+def lane_for_file(file: str | None) -> str | None:
+    """Fallback for a finding with no node (e.g. a secret in a config file)."""
+    if not file:
+        return None
+    if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs")):
+        return "server"
+    if re.search(r"\.[cm]?[jt]sx?$", file):
+        return "server" if SERVER_PATH_RE.search(file) else "frontend"
+    if re.search(r"(^|/)\.env|\.ya?ml$|\.toml$|\.json$|Dockerfile|\.ini$|\.cfg$", file):
+        return "server"
+    return None

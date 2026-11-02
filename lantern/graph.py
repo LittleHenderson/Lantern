@@ -35,6 +35,7 @@ class Node:
     docstring: str | None = None
     decorators: list[str] = field(default_factory=list)
     entry: dict | None = None    # {"kind": "main|route|cli|script|test", "detail": "..."}
+    lane: str | None = None      # stack lane: browser | frontend | server | data (lanes.py); None = not in the picture
 
 
 @dataclass

@@ -14,6 +14,7 @@ import sys
 from collections import deque
 from pathlib import Path
 
+from . import lanes
 from .graph import Graph
 from .python_frontend import SKIP_DIRS, inside_repo
 
@@ -428,6 +429,13 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
         f["reachable_from_tests_only"] = bool(not r and f["node"] in test_reach)
         u = ui_reach.get(f["node"]) if f["node"] else None
         f["ui_path"] = u["path"] if u else None
+        # Stack strip: the lane the problem lives on, and every lane its path crosses (lanes.py).
+        node = g.nodes.get(f["node"]) if f["node"] else None
+        f["hot_lane"] = (node.lane if node else None) or lanes.lane_for_file(f["file"])
+        data_hops = ["data"] if node and any((g.nodes.get(e.dst) and g.nodes[e.dst].lane == "data")
+                                             for e in g.callees(node.id)) else []
+        f["lanes"] = lanes.lanes_for_path(g, (u["path"] if u else None) or (r["path"] if r else None),
+                                          f["hot_lane"], data_hops)
         f["input"] = _input_on_line(g, f, lines_cache) if f["category"] == "code" and r and \
             r["kind"] in UNTRUSTED_ENTRY_KINDS else None
         f["rank"] = "low" if f["in_tests"] and f["category"] == "code" else rank(f)
