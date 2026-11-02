@@ -83,6 +83,12 @@ pre.cmd span{color:var(--muted);user-select:none}
 .langs{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
 .langs span{font:600 11px var(--mono);letter-spacing:.04em;padding:3px 8px;border-radius:5px;background:var(--hover);color:var(--ink-2)}
 
+.howto{margin:10px 0 0;padding-left:22px;display:flex;flex-direction:column;gap:10px;font:14.5px/1.55 var(--font);color:var(--ink-2)}
+.howto b{color:var(--ink)} .howto pre.cmd{margin:6px 0}
+.risks{margin:4px 0 10px;padding-left:20px;display:flex;flex-direction:column;gap:8px;font:14.5px/1.55 var(--font);color:var(--ink-2)}
+.risks b{color:var(--ink)}
+.fine{font-size:13px !important;color:var(--muted) !important}
+#privacy .get{grid-template-columns:repeat(auto-fit,minmax(360px,1fr))}
 .promise{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:28px 32px}
 .promise h3{margin:0 0 8px;font:600 17px var(--font)}
 .promise p{margin:0;font:15px/1.6 var(--font);color:var(--ink-2)}
@@ -125,6 +131,7 @@ footer a{color:var(--ink-2)}
     <a class="hide" href="#how">How it works</a>
     <a class="hide" href="demo/report.html">Live example</a>
     <a href="#get">Get Lantern</a>
+    <a href="#privacy">Privacy</a>
     <a class="hide" href="https://github.com/LittleHenderson/Lantern" rel="noopener">GitHub</a>
   </nav>
   <button class="ghost" id="replay">Replay intro</button>
@@ -138,7 +145,7 @@ footer a{color:var(--ink-2)}
     <button class="cta" id="gosteps">See how it works</button>
     <a class="cta alt" href="demo/report.html" style="display:inline-flex;align-items:center">Open a live example</a>
   </div>
-  <p class="tiny">Runs on your computer. Your code never leaves it.</p>
+  <p class="tiny">Runs on your computer. Your code never leaves it. <a href="#privacy">How to keep it that way →</a></p>
 </main>
 
 <section id="how">
@@ -167,15 +174,44 @@ footer a{color:var(--ink-2)}
       </div>
       <div class="card">
         <h3>See a finished report first</h3>
-        <p>A sample shop app (React + FastAPI) with planted problems, analyzed and explained. Every screen of the report works in this browser tab, nothing to install.</p>
+        <p>A sample shop app (React + FastAPI) with planted problems, analyzed and explained. Every screen of the report works in this browser tab, nothing to install. It is a sample: nothing of yours is read or uploaded here.</p>
         <div class="sp"></div>
         <a class="btn" href="demo/report.html">Open the live example</a>
       </div>
       <div class="card">
         <h3>Plain-word explanations, free</h3>
-        <p>Sign in with GitHub or Google inside the app and Lantern explains your code with Claude Haiku on a free allowance of about 300 explanations per account. Or use your own key, or none at all; the map and the findings never need a model.</p>
+        <p>Sign in with GitHub or Google inside the app and Lantern explains your code with Claude Haiku on a free allowance of about 300 explanations per account. Or use your own key, or none at all; the map and the findings never need a model. Explanations send the piece being explained to the model provider, so they are <a href="#privacy">optional and at your own risk</a>.</p>
         <div class="sp"></div>
         <a class="btn" href="https://lantern-gateway.fly.dev/v1/login" rel="noopener">Get a free allowance</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="in">
+    <div class="eyebrow">Your code, your choice</div>
+    <div class="get">
+      <div class="card" style="border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)">
+        <h3>Best for privacy: download it and run it on your computer</h3>
+        <p>Everything Lantern does by itself (the map of your app, the security findings, the readiness grade, the evidence report) runs on your own machine. No account, no upload, no server of ours ever sees your code. This is the recommended way to use Lantern, and the only way we can promise that nothing leaves your computer.</p>
+        <ol class="howto">
+          <li><b>Install Python 3.11 or newer</b> from <a href="https://www.python.org/downloads/" rel="noopener">python.org</a> (on Windows, tick "Add python.exe to PATH").</li>
+          <li><b>Install Lantern</b> in a terminal (PowerShell on Windows, Terminal on Mac):<pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"</pre></li>
+          <li><b>Open it:</b><pre class="cmd"><span>$ </span>lantern serve</pre>Your browser opens Lantern at a local address (127.0.0.1) that only your computer can reach.</li>
+          <li><b>Add your app</b>: Browse… to its folder, or paste a GitHub link. A link is cloned onto <em>your</em> computer, not onto a server, and analyzed there.</li>
+        </ol>
+        <p class="fine">Model explanations are off until you turn them on. With a key or a sign-in set up, Lantern still asks you once, and tells you what will be sent, before any code leaves the machine.</p>
+      </div>
+      <div class="card">
+        <h3>Optional, at your own risk: anything that uses an outside model</h3>
+        <p>Two features talk to a model provider on the internet, and only if you switch them on:</p>
+        <ul class="risks">
+          <li><b>Plain-word explanations.</b> The function being explained (its code, and the names of what calls it and what it calls) is sent to the provider you chose: Anthropic through the free allowance, DeepSeek, Anthropic or an OpenAI-compatible service with your own key, or a model running on your own machine (Ollama, LM Studio), which sends nothing anywhere.</li>
+          <li><b>Ask Lantern.</b> Your question, plus the project's results that the answer needs (finding titles, file names and line numbers, readiness checks, the selected function's explanation), goes to the same provider. A screenshot you drop in is read on your computer; the picture itself is not uploaded.</li>
+        </ul>
+        <p>What that provider does with the text is governed by its own terms, not by Lantern. The free allowance goes through a small gateway we run; it keeps a count of requests per account and never stores code or prompts, but it is still a server on the internet between you and the model. If your code is confidential, use a local model or leave explanations off: every finding, path and grade works without them.</p>
+        <p class="fine">There is no cloud version of Lantern that holds your repository. The "live example" on this site is a sample report built from a demo app, not a place to upload yours.</p>
       </div>
     </div>
   </div>
@@ -199,6 +235,7 @@ footer a{color:var(--ink-2)}
   <a href="https://github.com/LittleHenderson/Lantern" rel="noopener">Source</a>
   <a href="https://github.com/LittleHenderson/Lantern/issues" rel="noopener">Report a problem</a>
   <a href="demo/report.html">Live example</a>
+  <a href="#privacy">Privacy</a>
 </footer>
 </div>
 
