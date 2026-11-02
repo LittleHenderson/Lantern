@@ -1,7 +1,7 @@
 # Lantern
 
 **See every path your code takes, from the button to the database.** Lantern maps a full-stack app
-(Python, TypeScript/JavaScript and Go), links the frontend's API calls to the backend routes that serve
+(Python, TypeScript/JavaScript, Go and Rust), links the frontend's API calls to the backend routes that serve
 them, explains each function three ways, and audits it with security checks ranked by whether a user
 can actually reach the problem.
 
