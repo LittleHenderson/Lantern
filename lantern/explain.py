@@ -602,7 +602,7 @@ def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nid
         stats["invented_findings"] += len(rec.get("dropped_findings") or [])
         stats["repaired"] += 1 if rec.get("repaired") else 0
         stats["pairs_dropped"] += len(rec.get("dropped_pairs") or [])
-        stats["undetermined"] += 1 if rec.get("undetermined") else 0
+        stats["undetermined"] += 1 if rec.get("undetermined") and rec.get("validated") else 0   # rejected ones are failures
         if rec.get("validated"):
             stats["validated"] += 1
             if rec.get("attempts") == 1:
