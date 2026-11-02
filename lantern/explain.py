@@ -157,7 +157,8 @@ def build_context(g: Graph, nid: str, findings: list[dict], done: dict[str, dict
 
 def render_prompt(ctx: Context, g: Graph) -> str:
     n = ctx.node
-    lang = "TypeScript/JavaScript" if (n.file or "").endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")) else "Python"
+    lang = ("TypeScript/JavaScript" if (n.file or "").endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"))
+            else "Go" if (n.file or "").endswith(".go") else "Python")
     parts = [
         f"METAPHOR WORLD: {ctx.metaphor}",
         f"LANGUAGE: {lang}",

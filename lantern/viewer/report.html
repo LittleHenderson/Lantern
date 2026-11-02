@@ -390,7 +390,7 @@ const short = q => {
   const p = q.split('.'); return p.length > 2 ? p.slice(-2).join('.') : q;
 };
 const isJS = id => (id || '').startsWith('js:');
-const layer = id => isJS(id) ? 'frontend' : (id || '').startsWith('py:') ? 'backend' : 'external';
+const layer = id => isJS(id) ? 'frontend' : (id || '').startsWith('py:') || (id || '').startsWith('go:') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
 const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', open: new Set(), q: '', pair: null, fsev: 'all'};
 try { S.lens = +localStorage.getItem('lantern.lens') || 1; } catch (e) {}
@@ -427,7 +427,8 @@ const st = DATA.stats || {};
 const LANGS = G.meta.languages || {};
 const BR = G.meta.bridge;
 const chip = (v, label) => `<span class="chip"><b>${esc(v)}</b>${esc(label)}</span>`;
-let chipHtml = Object.entries(LANGS).map(([k, v]) => chip(v.files, (k === 'python' ? 'Python' : 'TS/JS') + ' files')).join('');
+const LANG_NAMES = {python: 'Python', 'typescript/javascript': 'TS/JS', go: 'Go'};
+let chipHtml = Object.entries(LANGS).map(([k, v]) => chip(v.files, (LANG_NAMES[k] || k) + ' files')).join('');
 chipHtml += chip((st.nodes || {}).callable ?? 0, 'functions') + chip(st.entry_points ?? 0, 'entry points');
 if (BR && BR.matched) chipHtml += chip(BR.matched, 'frontend→backend links');
 const nexp = Object.keys(EXP).length;

@@ -133,13 +133,16 @@ class Repo:
 
 def detect_stack(repo: Repo, g: Graph) -> dict:
     deps_text = " ".join(repo.text(f) for f in repo.project_files
-                         if f.rsplit("/", 1)[-1] in ("pyproject.toml", "package.json", "Pipfile")
+                         if f.rsplit("/", 1)[-1] in ("pyproject.toml", "package.json", "Pipfile", "go.mod")
                          or re.search(r"(^|/)requirements[^/]*\.txt$", f)).lower()
     fw = []
     for key, label in (("fastapi", "FastAPI"), ("flask", "Flask"), ("django", "Django"), ("starlette", "Starlette"),
                        ('"next"', "Next.js"), ('"react"', "React"), ('"vite"', "Vite"), ('"express"', "Express"),
                        ('"hono"', "Hono"), ('"fastify"', "Fastify"), ("@supabase/", "Supabase"),
-                       ("firebase", "Firebase"), ("click", "Click"), ("typer", "Typer")):
+                       ("firebase", "Firebase"), ("click", "Click"), ("typer", "Typer"),
+                       ("github.com/gin-gonic/gin", "Gin"), ("github.com/labstack/echo", "Echo"),
+                       ("github.com/go-chi/chi", "chi"), ("github.com/gofiber/fiber", "Fiber"),
+                       ("github.com/gorilla/mux", "gorilla/mux")):
         if key in deps_text:
             fw.append(label)
     entries = Counter((n.entry or {}).get("kind") for n in g.entry_points())
@@ -289,13 +292,19 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
         want.append(pj)
         if any((d + lk) in repo.files for lk in JS_LOCKS) or any(lk in repo.files for lk in JS_LOCKS):
             have.append(pj)
+    for gm in (f for f in repo.project_files if f.rsplit("/", 1)[-1] == "go.mod"):
+        if "require" not in repo.text(gm):
+            continue                                        # no dependencies: go.sum is not written
+        want.append(gm)
+        if (gm[:-3] + "sum") in repo.files:
+            have.append(gm)
     if want:
         miss = [w for w in want if w not in have]
         out.append(_check("deps-lock", "Lockfile committed", 4,
                           "pass" if not miss else "partial" if have else "fail",
                           "lockfile for every manifest" if not miss else f"no lockfile for {', '.join(miss[:3])}",
                           "" if not miss else "Commit the lockfile your package manager writes (package-lock.json, "
-                          "pnpm-lock.yaml, uv.lock, poetry.lock) so every install gets the same versions."))
+                          "pnpm-lock.yaml, uv.lock, poetry.lock, go.sum) so every install gets the same versions."))
     else:
         out.append(_check("deps-lock", "Lockfile committed", 4, "skip",
                           f"not expected: a {shape} usually leaves exact versions to whoever installs it"
