@@ -83,7 +83,7 @@ def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str) -> Path
     base = load(out, "baseline.json")
     from .security import ID_VERSION
     if sec is not None and (base is None or base.get("id_version") != ID_VERSION):   # first run, or ids changed
-        base = ev.baseline_from(sec, ev.git_info(Path(g.repo_root)).get("commit"))
+        base = ev.baseline_from(sec, ev.git_info(Path(g.repo_root)).get("commit"), rd)
         (out / "baseline.json").write_text(json.dumps(base, indent=1), encoding="utf-8")
     rec = ev.build(g, sec, rd, load(out, "explanations.json"), run_meta, base, privacy)
     return ev.write(out, rec)["html"]

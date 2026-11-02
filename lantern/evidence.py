@@ -188,6 +188,9 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
                     for k in ("critical", "high", "medium", "low")},
             "before": (baseline or {}).get("counts"), "baseline_date": (baseline or {}).get("date"),
             "baseline_commit": (baseline or {}).get("commit"),
+            "baseline_readiness": (baseline or {}).get("readiness"),
+            "new": [_f(f) for f in live if f.get("status") == "open" and baseline and baseline.get("findings")
+                    and f["id"] not in baseline["findings"]],
         },
         "architecture": {
             "languages": g.meta.get("languages"), "files": g.meta.get("files"), "lines": g.meta.get("lines"),
@@ -291,13 +294,85 @@ def _f(f: dict) -> dict:
         "path": f.get("ui_path") or (f.get("reachable") or {}).get("path")}
 
 
-def baseline_from(sec: dict | None, commit: str | None) -> dict:
+def baseline_from(sec: dict | None, commit: str | None, rd: dict | None = None) -> dict:
     live = [f for f in (sec or {}).get("findings", []) if not f.get("in_tests")]
     return {"date": dt.date.today().isoformat(), "commit": commit, "id_version": ID_VERSION,
+            "readiness": None if not rd else {"score": rd.get("score"), "grade": rd.get("grade"),
+                                              "categories": {c["title"]: c.get("score") for c in rd.get("categories", [])}},
             "counts": {k: sum(1 for f in live if f["rank"] == k and f.get("status") == "open")
                        for k in ("critical", "high", "medium", "low")},
             "findings": {f["id"]: {"rule": f["rule"], "rank": f["rank"], "title": f["title"], "file": f["file"],
                                    "line": f["line"]} for f in live}}
+
+
+
+_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"]
+
+
+def _w(n: int, cap: bool = False) -> str:
+    t = _WORDS[n] if 0 <= n < len(_WORDS) else str(n)
+    return t[0].upper() + t[1:] if cap else t
+
+
+def _memo(ev: dict) -> dict:
+    """The sentences at the top of the report (design 4b): what changed since the baseline and what is open."""
+    h, sc, se = ev["header"], ev["scorecard"], ev["security"]
+    rd, base = sc.get("readiness"), sc.get("baseline_readiness") or {}
+    now_open = len(se["open"])
+    crit = sum(1 for f in se["open"] if f["rank"] == "critical")
+    high = sum(1 for f in se["open"] if f["rank"] == "high")
+    name = h["name"]
+    since = sc.get("baseline_date")
+    same_day = since == dt.date.today().isoformat()
+    title = (f"What changed in {name} since {since}, and what is still open." if since and not same_day
+             else f"Where {name} stands today, and what is still open.")
+    parts = []
+    if rd:
+        if base.get("score") is not None and base.get("score") != rd["score"] and not same_day:
+            parts.append(f"Readiness moved from <b>{base['score']} to {rd['score']}</b> out of 100 "
+                         f"({base.get('grade', '?')} to {rd['grade']}).")
+        else:
+            parts.append(f"Readiness is <b>{rd['score']} of 100</b> (grade {rd['grade']}).")
+    if se["fixed"] or se["accepted"]:
+        bits = []
+        if se["fixed"]:
+            bits.append(f"{_w(len(se['fixed']), True)} finding{'s were' if len(se['fixed']) != 1 else ' was'} fixed")
+        if se["accepted"]:
+            bits.append(f"{_w(len(se['accepted']), not se['fixed'])} risk{'s were' if len(se['accepted']) != 1 else ' was'} "
+                        f"accepted with a written reason")
+        parts.append(" and ".join(bits) + ".")
+    if now_open:
+        tail = []
+        if crit:
+            tail.append(f"{_w(crit)} of them critical")
+        if high:
+            tail.append(f"{_w(high)} high")
+        parts.append(f"{_w(now_open, True)} finding{'s remain' if now_open != 1 else ' remains'} open"
+                     + (", " + ", ".join(tail) if tail else "") + ".")
+    else:
+        parts.append("No findings are open.")
+    parts.append("Facts in this report come from Lantern's parsers and scanners on the commit above; a model wrote none of them.")
+    # the "still open" paragraph: the critical ones with where they start
+    crits = [f for f in se["open"] if f["rank"] == "critical"]
+    if crits:
+        where = []
+        for f in crits[:3]:
+            start = (f.get("path") or [None])[0]
+            page = start.split("::")[-1] if start and "::" in start else (start.split(".")[-1] if start else None)
+            where.append(f"{E(f['title']).rstrip('.')} (<code>{E(f['file'])}:{E(f.get('line') or '')}</code>"
+                         + (f", reached from {E(page)}" if page else "") + ")")
+        still = (f"{_w(len(crits), True)} critical finding{'s are' if len(crits) != 1 else ' is'} open: " + "; ".join(where)
+                 + ". " + (f"{_w(high, True)} high, {_w(sum(1 for f in se['open'] if f['rank'] == 'medium'))} medium and "
+                           f"{_w(sum(1 for f in se['open'] if f['rank'] == 'low'))} low follow below with their paths."
+                           if now_open > len(crits) else ""))
+    elif now_open:
+        still = (f"Nothing critical is open. {_w(now_open, True)} finding{'s' if now_open != 1 else ''} remain"
+                 f"{'' if now_open != 1 else 's'} open, listed below with their paths.")
+    else:
+        still = "Nothing is open. The scanners that ran and what they could not check are listed under Provenance and Limits."
+    delta = (rd["score"] - base["score"]) if rd and base.get("score") is not None and not same_day else None
+    return {"title": title, "lead": " ".join(parts), "still": still, "delta": delta,
+            "crit": crit, "high": high, "open": now_open}
 
 
 # ---------------------------------------------------------------------------- render
@@ -450,6 +525,41 @@ def render_html(ev: dict) -> str:
                      for m in ev["provenance"]["models"]) or "<tr><td colspan=3 class='muted'>No model was used.</td></tr>"
     verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern\" "
               f"&& lantern verify . --report evidence.html{_trace_suffix(ev)}") if commit else "Commit your changes and regenerate the report to make it verifiable."
+    memo = _memo(ev)
+    base_rd = sc.get("baseline_readiness") or {}
+    base_cats = base_rd.get("categories") or {}
+    same_day = sc.get("baseline_date") == dt.date.today().isoformat()
+    d_html = (f"<span class='delta {'up' if memo['delta'] > 0 else 'down'}'>{'↑' if memo['delta'] > 0 else '↓'} {abs(memo['delta'])}</span>"
+              if memo["delta"] else "")
+    tiles = (f"<div class='tiles'>"
+             f"<div><div class='v'>{E(rd['score']) if rd else '–'} {d_html}</div><div class='k'>Readiness, grade {E(rd['grade']) if rd else '–'}</div></div>"
+             f"<div><div class='v'>{len(se['fixed'])}</div><div class='k'>Fixed since baseline</div></div>"
+             f"<div><div class='v'>{memo['open']}</div><div class='k'>Open · {memo['crit']} critical, {memo['high']} high</div></div>"
+             f"<div><div class='v'>{len(se['accepted'])}</div><div class='k'>Accepted with a reason</div></div></div>")
+    fixed_list = "".join(f"<div class='fx'><b>✓</b><span>{E(f['title'])} · <code>{E(f['file'] or '')}</code></span>"
+                         f"<span class='muted'>{E(f['rank'])} · {E(f['id'][:6])}</span></div>" for f in se["fixed"]) \
+        or "<p class='muted'>Nothing yet. Findings fixed after the baseline will be listed here, verified by rescan.</p>"
+    # Advanced: scorecard with the baseline column and the findings diff
+    def cat_row(c):
+        b = base_cats.get(c["title"])
+        now = "n/a" if c["score"] is None else f"{E(c['score'])}/{E(c['weight'])}"
+        before = "–" if b is None or same_day else f"{E(b)}/{E(c['weight'])}"
+        dl = "" if b is None or c["score"] is None or same_day else (f"+{round(c['score'] - b, 1)}" if c["score"] > b else f"{round(c['score'] - b, 1)}" if c["score"] < b else "0")
+        return (f"<tr><td>{E(c['title'])}</td><td class='num'>{before}</td><td class='num'>{now}</td>"
+                f"<td class='num {'good' if dl.startswith('+') else 'bad' if dl.startswith('-') else ''}'>{dl}</td>"
+                f"<td><span class='bar'><i style='width:{_pct(c.get('percent'))}%'></i></span></td></tr>")
+    cats_adv = "".join(cat_row(c) for c in (rd or {}).get("categories", []))
+    def drow(kind, f, extra=""):
+        return (f"<tr><td><span class='kind {kind.lower()}'>{kind}</span></td><td>{E(f['title'])}"
+                f"{(' · <code>' + E(f['file']) + (':' + E(f['line']) if f.get('line') else '') + '</code>') if f.get('file') else ''}{extra}</td>"
+                f"<td><span class='sev {E(f['rank'])}'>{E(f['rank'])}</span></td></tr>")
+    diff_rows = ("".join(drow("FIXED", f) for f in se["fixed"])
+                 + "".join(drow("NEW", f) for f in sc.get("new") or [] if not same_day)
+                 + "".join(drow("OPEN", f) for f in se["open"] if f["rank"] in ("critical", "high"))
+                 + "".join(drow("ACCEPT", f, f" <span class='muted'>· “{E(f['accepted'].get('reason') or '')}” · {E(f['accepted'].get('by') or '?')}, {E(f['accepted'].get('date') or '')}</span>") for f in se["accepted"]))
+    rest_open = [f for f in se["open"] if f["rank"] not in ("critical", "high")]
+    diff_more = (f"<p class='muted'>+{len(rest_open)} open ({sum(1 for f in rest_open if f['rank'] == 'medium')} medium, "
+                 f"{sum(1 for f in rest_open if f['rank'] == 'low')} low) in section 3.</p>" if rest_open else "")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Evidence Report · {E(h['name'])}</title>
@@ -490,31 +600,62 @@ ul{{padding-left:20px;margin:8px 0}} li{{margin:4px 0}}
 .digest{{font:12px var(--mono);overflow-wrap:anywhere;color:var(--ink);background:var(--soft);padding:2px 6px;border-radius:6px}}
 .diagram{{color:var(--ink);margin:12px 0}}
 button.print{{float:right;position:relative;z-index:1;font:inherit;font-size:12.5px;font-weight:600;height:32px;padding:0 14px;border-radius:9px;border:1px solid var(--line-2);background:var(--panel);color:var(--ink);cursor:pointer}}
-@media print{{body{{background:#fff}} section{{break-inside:avoid;border-color:#ccc;box-shadow:none}} section:first-child::after{{display:none}} button.print{{display:none}}}}
+.topbar{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 18px}} .topbar .sp{{flex:1}}
+.seg{{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:var(--hover)}} .seg button{{font:600 12px var(--font);padding:5px 10px;border-radius:7px;border:0;background:none;color:var(--muted);cursor:pointer}} .seg button.on{{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(16,16,20,.08),0 0 0 1px var(--line)}}
+.topbar .btn{{font:600 12.5px var(--font);height:32px;padding:0 12px;border-radius:9px;border:1px solid var(--line-2);background:var(--panel);color:var(--ink);cursor:pointer}}
+.topbar .dg{{font:12px var(--mono);color:var(--muted);padding:0 8px}}
+.eyebrow{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font:600 11px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}}
+h1.memo{{font:600 26px/1.3 var(--display);letter-spacing:-.02em;margin:14px 0 10px;text-wrap:pretty}}
+p.lead{{font-size:15px;line-height:1.65;color:var(--body);margin:0 0 18px}} p.lead b{{color:var(--ink)}}
+.tiles{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 6px}} .tiles>div{{padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)}}
+.tiles .v{{font:700 24px/1.1 var(--display);color:var(--ink);font-variant-numeric:tabular-nums}} .tiles .k{{font-size:12px;color:var(--muted);margin-top:3px}}
+.delta{{font:600 13px var(--font);vertical-align:middle;padding:1px 7px;border-radius:99px;background:var(--hover);color:var(--muted)}} .delta.up{{background:var(--good-soft);color:var(--good-ink)}} .delta.down{{background:var(--critical-soft);color:var(--critical)}}
+.fx{{display:flex;gap:10px;align-items:baseline;padding:8px 0;border-top:1px solid var(--line)}} .fx:first-child{{border-top:0}} .fx b{{color:var(--good-ink)}} .fx span:nth-child(2){{flex:1}}
+.contents{{font-size:12.5px;color:var(--muted);margin-top:6px}}
+.kind{{display:inline-block;font:700 10px var(--mono);letter-spacing:.06em;padding:2px 6px;border-radius:5px;background:var(--hover);color:var(--body)}} .kind.fixed{{background:var(--good-soft);color:var(--good-ink)}} .kind.new{{background:var(--warning-soft);color:var(--warn-ink)}} .kind.open{{background:var(--critical-soft);color:var(--critical)}}
+td.good{{color:var(--good-ink)}} td.bad{{color:var(--critical)}}
+body[data-mode=simple] .adv{{display:none}} body[data-mode=advanced] .simp{{display:none}}
+@media (max-width:700px){{.tiles{{grid-template-columns:1fr 1fr}}}}
+@media print{{.topbar{{display:none}} body{{background:#fff}} section{{break-inside:avoid;border-color:#ccc;box-shadow:none}} section:first-child::after{{display:none}} button.print{{display:none}}}}
 @media (max-width:560px){{main{{padding:20px 12px 60px}} section{{padding:18px}} .kv{{grid-template-columns:1fr;gap:2px}} .kv div:nth-child(odd){{margin-top:8px}}}}
-</style></head><body><main>
-<section><button class="print" onclick="window.print()">Save as PDF</button>
-<h1>Evidence Report</h1><div class="muted">{E(h['name'])} · made with Lantern {E(__version__)}</div>
+</style></head><body data-mode="simple"><main>
+<div class="topbar"><span class="muted" style="font-weight:600;color:var(--ink)">{E(h['name'])} / Evidence Report</span><span class="sp"></span>
+<div class="seg" id="mode"><button data-m="simple" class="on">Simple</button><button data-m="advanced">Advanced</button></div>
+<span class="dg" title="{E(ev['digest'])}">digest {E(ev['digest'][:14])}…{E(ev['digest'][-4:])}</span>
+<button class="btn" id="copyverify">Copy verify command</button><button class="btn" onclick="window.print()">Save as PDF</button></div>
+<section><div class="eyebrow"><span>Evidence Report · Lantern {E(__version__)}</span><span>{E(h['name'])}{(' · commit ' + E(commit[:7])) if commit else ''} · {E(h['generated_at'][:10])}</span></div>
+<h1 class="memo">{memo['title']}</h1>
+<p class="lead">{memo['lead']}</p>
+{tiles}
+<div class="simp"><h4>1 · Fixed since the baseline</h4>{fixed_list}
+<h4>2 · Still open</h4><p>{memo['still']}</p>
+<div class="contents">Continues: 3 · Scorecard · 4 · Architecture · 5 · Security · 6 · Understanding · 7 · Provenance · 8 · Limits · 9 · Digest</div></div>
+<div class="adv"><h4>Readiness scorecard <small class="muted" style="font-weight:400">· 10 categories · weighted · every point has a reason</small></h4>
+{f"<table><tr><td class='muted'>Category</td><td class='num muted'>{E(sc['baseline_date'] or 'Baseline')}</td><td class='num muted'>Now</td><td class='num muted'>Δ</td><td></td></tr>{cats_adv}</table>" if rd else '<p class="muted">Readiness was not computed.</p>'}
+<h4>Findings · baseline → now <small class="muted" style="font-weight:400">· {len(se['fixed'])} fixed · {memo['open']} open · {len(se['accepted'])} accepted</small></h4>
+<table>{diff_rows or "<tr><td colspan=3 class='muted'>No findings.</td></tr>"}</table>{diff_more}</div>
+</section>
+<section class="adv"><h2>About this report</h2><div class="muted">{E(h['name'])} · made with Lantern {E(__version__)}</div>
 <div class="kv" style="margin-top:12px"><div>Repository</div><div>{E(h['repo'] or '')}</div>
 <div>Commit</div><div>{commit_html}{(' on ' + E(h['branch'])) if h.get('branch') else ''}</div>
 <div>Analyzed</div><div>{E(h['generated_at'])}</div><div>Mode</div><div>local (the code never left this machine{', except to the model provider listed below' if ev['provenance']['models'] else ''})</div>
 <div>Privacy level</div><div>{E(h['privacy'])}</div></div></section>
 
-<section><h2>1 · Scorecard</h2>
+<section><h2>3 · Scorecard</h2>
 {f'''<div class="score"><span class="big">{E(rd["score"])}<span style="font-size:20px" class="muted">/100</span></span><span class="grade {rd["grade"] if rd.get("grade") in ("A", "B", "C", "D", "F") else ""}">{E(rd["grade"])}</span>
 <div class="muted">Deployment readiness for a {E(rd["shape"])}.<br>Checks that don't apply are skipped, not counted.</div></div>
 <table style="margin-top:12px">{cats}</table>''' if rd else '<p class="muted">Readiness was not computed.</p>'}
 <div class="kv" style="margin-top:14px"><div>Open findings now</div><div>{cnt(sc['now'])}</div>
 <div>At first analysis</div><div>{cnt(sc['before'])}{(' <span class="muted">(' + E(sc['baseline_date'] or '') + ')</span>') if sc.get('before') else ''}</div></div></section>
 
-<section><h2>2 · Architecture</h2>
+<section><h2>4 · Architecture</h2>
 <p>{E(ar['files'])} files, {E(ar['lines'])} lines{(' · ' + E(', '.join(ar['frameworks']))) if ar['frameworks'] else ''}.
 {E(len(ar['entries']))} entry points: the places a user, a request, or a command can start running code.</p>
 <ul>{entries}</ul>{bridge}
 {f'<h4>Recommended deployment</h4><div class="diagram">{_deploy_svg(ar["shape"])}</div><ul>' + ''.join(f'<li>{E(a)}</li>' for a in ar['advice']) + '</ul>' if ar['advice'] else ''}
 </section>
 
-<section><h2>3 · Security <small>· ranked by severity and by whether a user can reach the code</small></h2>
+<section><h2>5 · Security <small>· ranked by severity and by whether a user can reach the code</small></h2>
 <h4>Open ({len(se['open'])})</h4><table>{open_rows}</table>
 {f"<h4>Fixed since first analysis ({len(se['fixed'])})</h4><table>{fixed_rows}</table>" if se['fixed'] else ''}
 {f"<h4>Changed but still open ({len(se.get('changed') or [])})</h4><p class='muted'>The flagged line changed, and the same rule now flags new code in the same file, so these are not counted as fixed.</p><table>{changed_rows}</table>" if se.get('changed') else ''}
@@ -523,23 +664,35 @@ button.print{{float:right;position:relative;z-index:1;font:inherit;font-size:12.
 {f"<p class='muted'>{E(se['in_tests'])} more finding(s) are in test code only.</p>" if se['in_tests'] else ''}
 </section>
 
-<section><h2>4 · Understanding</h2>
+<section><h2>6 · Understanding</h2>
 {_narratives_html(ev['understanding']) if ev['understanding'] else f'<p class="muted">No path narratives attached. Write how your key flows work in <code>{NARRATIVES_FILE}</code> at the repository root and regenerate.</p>'}
 </section>
 
-<section><h2>5 · Provenance</h2><table>{tools}</table>
+<section><h2>7 · Provenance</h2><table>{tools}</table>
 <h4>Models</h4><table>{models}</table>
 <h4>Rule sets</h4><ul>{''.join(f'<li>{E(r)}</li>' for r in ev['provenance']['rules'])}</ul>
 <p class="muted">Facts (call edges, findings, scores) come from the tools above. Models only explain; they never create or close a finding.</p></section>
 
-<section><h2>6 · Limits <small>· what this report does not prove</small></h2><ul>{''.join(f'<li>{E(x)}</li>' for x in ev['limits'])}</ul></section>
+<section><h2>8 · Limits <small>· what this report does not prove</small></h2><ul>{''.join(f'<li>{E(x)}</li>' for x in ev['limits'])}</ul></section>
 
-<section><h2>7 · Verify it yourself</h2>
+<section><h2>9 · Verify it yourself</h2>
 <p>Results digest: <span class="digest">{E(ev['digest'])}</span></p>
 <p class="muted">This is a SHA-256 hash of the deterministic results above (graph, findings, readiness checks, tool versions) and the commit. Re-running the open-source analyzer on the same commit with the same tool versions gives the same digest. It shows the results match the code; it is not a signature of who made the report.</p>
 <p><code>{E(verify)}</code></p>
 <p style="margin-top:14px"><b>Badge.</b> <code>badge.svg</code> beside this report reads <span class="digest">Lantern · {E(badge_text(ev))}</span>: the commit, the open critical count, and the date. It never says "verified" or "secure", because no tool can promise that. Link it to this report so a reader lands on the Limits section: <code>[![Lantern](.lantern/badge.svg)](.lantern/evidence.html)</code></p></section>
-</main></body></html>"""
+</main><script>
+(function () {{
+  var body = document.body, seg = document.getElementById('mode');
+  try {{ if (localStorage.getItem('lantern.simple') === '0') body.dataset.mode = 'advanced'; }} catch (e) {{}}
+  function draw() {{ var bs = seg.querySelectorAll('button'); for (var i = 0; i < bs.length; i++) bs[i].classList.toggle('on', bs[i].dataset.m === body.dataset.mode); }}
+  seg.onclick = function (e) {{ var b = e.target.closest('button'); if (!b) return; body.dataset.mode = b.dataset.m; try {{ localStorage.setItem('lantern.simple', b.dataset.m === 'simple' ? '1' : '0'); }} catch (x) {{}} draw(); }};
+  window.setSimple = function (v) {{ body.dataset.mode = v ? 'simple' : 'advanced'; draw(); }};
+  draw();
+  var cv = document.getElementById('copyverify'), cmd = {verify!r};
+  cv.onclick = function () {{ if (navigator.clipboard) navigator.clipboard.writeText(cmd); cv.textContent = 'Copied'; }};
+  try {{ if (window.self !== window.top) document.querySelector('.topbar .seg').style.display = 'none'; }} catch (e) {{}}
+}})();
+</script></body></html>"""
 
 
 def write(out_dir: Path, ev: dict) -> dict[str, Path]:
