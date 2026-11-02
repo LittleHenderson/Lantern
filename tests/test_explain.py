@@ -161,3 +161,22 @@ def test_retry_fixes_invalid_answer(gs, tmp_path):
     out = run(g, FixtureProvider(flaky), findings, tmp_path, ["py:shop.repo.UserRepo.get"])
     rec = out["explanations"]["py:shop.repo.UserRepo.get"]
     assert rec["validated"] and rec["attempts"] == 2
+
+
+def test_model_invented_findings_are_dropped_not_shown(tmp_path):
+    """A findings entry with an id the scanners never reported is a finding the model made up: removed, counted."""
+    from lantern.explain import build_context, validate
+    from lantern.engine import build_graph
+    g = build_graph(FIX)
+    ctx = build_context(g, "py:shop.auth.make_repo", [], {}, "a hotel")   # no scanner findings here
+    lo, hi = ctx.line_range
+    sym = next(iter(ctx.allowed_symbols))
+    text = "The helper takes a request and hands back an answer."
+    rec = {"lens1": {"summary": "s"}, "lens2": {"text": text, "example": "e", "analogy": "a"},
+           "lens3": {"text": text, "pairs": [
+               {"plain": "The helper", "technical": "t", "anchor": {"type": "symbol", "id": sym}},
+               {"plain": "takes a request", "technical": "t", "anchor": {"type": "term", "term": "argument"}},
+               {"plain": "hands back an answer", "technical": "t", "anchor": {"type": "lines", "start": lo, "end": hi}}]},
+           "findings": [{"id": "hardcoded-password", "lens1": "x", "lens2": "y", "fix": "z"}]}
+    assert validate(rec, ctx) == []
+    assert rec["findings"] == [] and rec["dropped_findings"][0]["id"] == "hardcoded-password"

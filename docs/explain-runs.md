@@ -13,7 +13,14 @@ make a model pass). Target: 90% of explanations validated on the first try. Samp
 | 2026-11-01 | claude-haiku-5-5 (gateway) | 17 / 25 | 11 | 67,047 / 45,606 | same prompt, 4–5 pairs, bare symbol ids in the listing (run-to-run variance is real) |
 | 2026-11-01 | claude-haiku-5-5 (gateway) | 22 / 25 | 19 | 54,832 / 35,293 | pre-filled `findings` skeleton; "check every pair with an exact search" |
 | 2026-11-01 | deepseek-flash (gateway fallback) | 1 / 1 | 1 | – | one function while Anthropic was out of credits |
+| 2026-11-01 | claude-haiku-5-5 (gateway) | 21 / 25 | 15 | 61,726 / 39,109 | final lens-v4 prompt, run A |
+| 2026-11-01 | claude-haiku-5-5 (gateway) | 22 / 25 | 18 | 56,500 / 35,581 | final lens-v4 prompt, run B |
+| 2026-11-01 | claude-haiku-5-5 (gateway) | 22 / 25 | 16 | 59,116 / 37,567 | model-invented findings dropped and counted (4 this run) instead of failing the explanation |
 
-Remaining failure classes after the last run: a finding invented where none was listed (2; now forbidden in the
-prompt), one `lens3` sent as a malformed JSON string (1). Next: rerun 3 times with the final prompt and record the
-median; then the JS-heavy `nextapp` fixture and the bench repos.
+**Stable number with the final prompt (three runs): 21–22 of 25 validated, 15–18 on the first try (60–72%).**
+
+The model keeps inventing a security finding when it sees an obvious problem the scanners did not report (4 times in
+25 functions, even when told not to). Those entries are now removed before anything reaches a reader and counted in
+`stats["invented_findings"]`; the explanation itself still has to pass every anchor check. Remaining misses: a nested
+object sent as a JSON string with a stray trailing brace (now parsed leniently at the gateway), and a paraphrased
+pair phrase now and then. Next: the JS-heavy `nextapp` fixture, then the bench repos; the first-try target is 90%.

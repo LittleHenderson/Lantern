@@ -276,9 +276,14 @@ def validate(rec: dict, ctx: Context) -> list[str]:
         else:
             errs.append(f"{tag} has unknown anchor type '{t}'")
     fids = {f["id"] for f in ctx.findings}
+    # A findings entry whose id is not one the scanners reported is a finding the model made up. Models never
+    # create findings, so the entry is removed before anything reaches a reader; it is kept under
+    # `dropped_findings` so the run can count how often a model tried.
+    kept, dropped = [], []
     for f in rec.get("findings") or []:
-        if isinstance(f, dict) and f.get("id") not in fids:
-            errs.append(f"findings entry references unknown finding id '{f.get('id')}'")
+        (kept if isinstance(f, dict) and f.get("id") in fids else dropped).append(f)
+    if dropped:
+        rec["findings"], rec["dropped_findings"] = kept, dropped
     missing = fids - {f.get("id") for f in rec.get("findings") or [] if isinstance(f, dict)}
     if missing:
         errs.append(f"findings not explained: {', '.join(sorted(missing))}")
@@ -432,7 +437,8 @@ def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nid
         metaphor: str | None = None, progress=None) -> dict:
     cache = Cache(cache_dir)
     done: dict[str, dict] = {}
-    stats = {"generated": 0, "cached": 0, "validated": 0, "failed": 0, "first_try": 0, "stopped": None}
+    stats = {"generated": 0, "cached": 0, "validated": 0, "failed": 0, "first_try": 0, "invented_findings": 0,
+             "stopped": None}
     # the same model gives the same cache entries whether billed to the allowance or your own key
     model_id = getattr(provider, "cache_model", provider.label)
     try:
@@ -457,6 +463,7 @@ def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nid
             if "error" not in rec:
                 cache.put(k, rec)
         done[nid] = rec
+        stats["invented_findings"] += len(rec.get("dropped_findings") or [])
         if rec.get("validated"):
             stats["validated"] += 1
             if rec.get("attempts") == 1:

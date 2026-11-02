@@ -288,8 +288,8 @@ def _unwrap(obj: dict) -> dict:
     for _ in range(3):
         for k, v in list(obj.items()):
             if isinstance(v, str) and v.lstrip()[:1] in ("{", "["):
-                try:
-                    obj[k] = json.loads(v)
+                try:   # raw_decode: the first complete value, ignoring a stray trailing brace (seen: "...}}")
+                    obj[k] = json.JSONDecoder(strict=False).raw_decode(v.lstrip())[0]
                 except ValueError:
                     pass
         if len(obj) == 1 and isinstance(next(iter(obj.values())), dict):
