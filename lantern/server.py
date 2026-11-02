@@ -356,7 +356,7 @@ def _same(given, token: str) -> bool:
 
 def _csp(nonce: str | None) -> str:
     """Only our own scripts run on Lantern's pages: inline ones carry this response's nonce, and pages without
-    a nonce (Evidence Report, messages) run none at all."""
+    a nonce (messages) run none at all."""
     script = f"'nonce-{nonce}'" if nonce else "'none'"
     # Google Fonts is the one outside origin: the design's typefaces (DM Sans, Lora, JetBrains Mono). Offline, the
     # system fallbacks render and nothing else changes; the browser sends no cookies to it.
@@ -523,7 +523,8 @@ class Handler(BaseHTTPRequestHandler):
                                   {"Content-Security-Policy": _csp(nonce)})
             if name == "evidence.html":
                 ev = _load(f.with_suffix(".json"))
-                return self._send(200, render_html(ev), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
+                nonce = secrets.token_urlsafe(16)   # the page's one script: Simple/Advanced, copy the verify command
+                return self._send(200, render_html(ev, nonce), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)})
             if name == "badge.svg":
                 rd = _load(f) or {}
                 ev = _load(f.with_name("evidence.json")) or {}
@@ -546,7 +547,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             s = app.store.settings()
             return self._json({"version": __version__, "projects": [app.summary(p) for p in app.store.projects()],
-                               "settings": s, "providers": app.provider_info()})
+                               "settings": s, "providers": app.provider_info(),
+                               "default_model": {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL_NAME}})
         if path == "/api/usage":
             from .providers import gateway_url
             return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
@@ -732,7 +734,7 @@ class Handler(BaseHTTPRequestHandler):
                                                               else "rejected by the anchor check")
                     log(f"[{i}/{n}] {nid.split(':', 1)[-1]}  {flag}")
 
-                res = pipeline.explain(out, provider, ids, progress=progress)
+                res = pipeline.explain(out, provider, ids, progress=progress, fresh=bool(b.get("fresh")) and bool(nodes))
                 st = res["stats"]
                 log(f"done: {st['validated']} validated, {st['failed']} failed, {st['cached']} from cache; "
                     f"{st['usage']['input_tokens']:,} tokens in, {st['usage']['output_tokens']:,} out")

@@ -246,6 +246,36 @@ h3{font:650 15px/1.35 var(--display);letter-spacing:-.01em;color:var(--ink);marg
 @media (max-width:1100px){.apps{grid-template-columns:repeat(2,1fr)}.strip{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:760px){.apps,.firstrun{grid-template-columns:1fr}.simplehome h1{font-size:28px}.dropzone{flex-wrap:wrap;padding:12px}.dropzone input[type=text]{width:100%;flex:1 0 100%}.steps3{gap:14px;flex-direction:column;align-items:flex-start}.strip{grid-template-columns:1fr 1fr}}
 
+
+.choice.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.tag.priv{font:600 10px var(--font);letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:99px;background:var(--good-soft);color:var(--good-ink);margin-left:8px;vertical-align:middle}
+.subrow{margin:-6px 0 12px 34px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)} .subrow label{margin-top:0}
+.alsorow{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-top:1px solid var(--line)} .alsorow:first-of-type{border-top:0} .alsorow .hint{margin-top:2px}
+
+.fchip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:99px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);font:500 12.5px var(--font);cursor:pointer} .fchip.on{background:var(--primary);color:var(--on-primary);border-color:var(--primary)} .fchip .ic{width:14px;height:14px}
+.faq{display:flex;flex-direction:column;gap:8px}
+.qa{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:12px 16px;cursor:pointer;transition:border-color var(--t) var(--ease),box-shadow var(--t) var(--ease)} .qa:hover{border-color:var(--line-2);box-shadow:var(--shadow-2)} .qa.open{border-color:var(--accent)}
+.qa .qh{display:flex;align-items:center;gap:10px} .qa .g{font:600 10.5px var(--font);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);width:76px;flex:none} .qa .q{flex:1;font-weight:600;color:var(--ink);font-size:14.5px} .qa .pm{color:var(--muted);font-size:18px}
+.qa p{margin:10px 0 0 86px;font-size:14px;line-height:1.6;color:var(--ink-2)}
+pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--code-bg);color:var(--code-ink);font:12.5px/1.7 var(--mono);white-space:pre-wrap} pre.cli .c{color:var(--code-dim)}
+.keys{display:grid;grid-template-columns:auto 1fr;gap:8px 14px;align-items:center;font-size:13.5px;color:var(--ink-2)} kbd{font:600 11.5px var(--mono);padding:2px 7px;border-radius:6px;border:1px solid var(--line-2);background:var(--surface-2);color:var(--ink)}
+@media (max-width:640px){.qa p{margin-left:0}.qa .g{display:none}}
+
+/* Guide (design 4c) */
+.gmain{max-width:1120px}
+.gsplit{display:grid;grid-template-columns:minmax(260px,360px) minmax(0,1fr);gap:32px;align-items:start}
+.gside .k{font:600 12px var(--font);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.gside h1{font:650 26px/1.2 var(--display);letter-spacing:-.02em;margin:0 0 8px}
+.gsteps{display:flex;flex-direction:column;gap:10px}
+.gstep{display:flex;gap:14px;padding:14px 16px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow-1);transition:border-color var(--t) var(--ease),box-shadow var(--t) var(--ease)}
+.gstep.open{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)} .gstep:not(.open):hover{border-color:var(--line-2)}
+.gnum{flex:none;width:30px;height:30px;border-radius:99px;display:grid;place-items:center;font:650 13px var(--display);background:var(--hover);color:var(--ink)} .gstep.done .gnum{background:var(--good);color:#fff} .gnum .ic{width:15px;height:15px}
+.gbody{flex:1;min-width:0} .ghead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer;min-height:30px}
+.gt{font:600 15px var(--display);color:var(--ink)} .glabel{font:600 10.5px var(--font);letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:99px;background:var(--hover);color:var(--muted)}
+.glabel.done{background:var(--good-soft);color:var(--good-ink)} .glabel.todo{background:var(--warning-soft);color:var(--warn-ink)} .glabel.last{background:var(--accent-soft);color:var(--accent-ink)}
+.gwhy{font-size:12.5px;color:var(--muted);flex-basis:100%}
+.gbody p{margin:10px 0 0;font-size:14px;line-height:1.6;color:var(--ink-2)}
+@media (max-width:860px){.gsplit{grid-template-columns:1fr}}
 /* ---------- buttons and fields ---------- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface);
   color:var(--ink);font-weight:600;font-size:13.5px;white-space:nowrap;text-decoration:none;transition:background var(--t) var(--ease), border-color var(--t) var(--ease), transform var(--t) var(--ease), box-shadow var(--t) var(--ease)}
@@ -343,6 +373,10 @@ pre.cmd{background:var(--sunken);color:var(--ink);font:12.5px/1.6 var(--mono);pa
 .tabs button.on{color:var(--ink)}
 .tabs button.on::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
 iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px);display:block;background:var(--bg)}
+.withbar iframe{height:calc(100vh - 164px);height:calc(100dvh - 164px)}
+.xbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:56px;padding:8px 20px;background:var(--surface);border-bottom:1px solid var(--line);font-size:13px}
+.xbar>.ic{width:18px;height:18px;color:var(--accent);flex:none} .xbar .t{flex:1;min-width:240px} .xbar .t b{color:var(--ink)} .xbar .d{font-size:12px;color:var(--muted);margin-top:2px}
+.xbar .xlog{flex-basis:100%;max-height:140px;margin:0}
 
 /* ---------- explain ---------- */
 .tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 6px}
@@ -477,7 +511,7 @@ const ICONS = {
   sparkle: '<path d="M10 3v3M10 14v3M3 10h3M14 10h3M5.5 5.5l2 2M12.5 12.5l2 2M14.5 5.5l-2 2M7.5 12.5l-2 2"/>',
   clock: '<circle cx="10" cy="10" r="7"/><path d="M10 6v4l2.5 2"/>',
   layers: '<path d="m10 3 7 4-7 4-7-4z"/><path d="m3 11 7 4 7-4"/>',
-  bolt: '<path d="M11 3 4.5 11H10l-1 6 6.5-8H10z"/>',
+  bolt: '<path d="M11 3 4.5 11H10l-1 6 6.5-8H10z"/>', search: '<circle cx="9" cy="9" r="5.5"/><path d="m13 13 3.5 3.5"/>',
   sun: '<circle cx="10" cy="10" r="3.2"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7l1.3 1.3M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/>',
   moon: '<path d="M15.5 12.2A6 6 0 0 1 7.8 4.5a6 6 0 1 0 7.7 7.7z"/>',
   auto: '<circle cx="10" cy="10" r="6.5"/><path d="M10 3.5v13a6.5 6.5 0 0 0 0-13z" fill="currentColor"/>',
@@ -518,7 +552,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyThe
 applyTheme();
 
 async function refresh() { S.state = await api('/api/state'); render(); }
-function go(view, extra = {}) { Object.assign(S, {view}, extra); for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
+function go(view, extra = {}) { if (extra.project && extra.project !== S.project) S.guide = null; Object.assign(S, {view}, extra); ASK.page = null; for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
 document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); };
 document.getElementById('home').onclick = () => { go('home'); refresh().catch(() => {}); };
 
@@ -555,17 +589,38 @@ document.getElementById('viewmode').addEventListener('click', async e => {
   drawViewMode(); render();
 });
 
+// Keyboard (listed under Help → Command line): / search, ? help, 1–6 project tabs, Shift+D appearance.
+document.addEventListener('keydown', e => {
+  const t = e.target, typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === '?') { e.preventDefault(); go('help'); return; }
+  if (e.key === 'D' && e.shiftKey) { e.preventDefault(); setTheme(THEMES[(THEMES.indexOf(THEME) + 1) % 3]); return; }
+  if (e.key === '/') { e.preventDefault(); const fr = S.view === 'project' && S.frame && S.frame.el.contentDocument; const q = fr ? fr.querySelector('#q, #xq') : document.getElementById('addpath') || document.getElementById('hq'); if (q) q.focus(); return; }
+  if (S.view === 'project' && /^[1-6]$/.test(e.key)) { const tabs = document.querySelectorAll('.sub .tabs [data-t]'); const b = tabs[+e.key - 1]; if (b) b.click(); }
+});
+
 // ---------------------------------------------------------------- Ask Lantern
 const ASK = {open: false, opacity: 1, log: [], busy: false, shot: null};
 const MARK = document.querySelector('.brand .mark').outerHTML;
 function askContext() {
-  if (S.view === 'project' && S.project) { const p = (S.state.projects || []).find(x => x.id === S.project); return (p ? p.name : 'this project') + ' · ' + (S.tab || 'atlas'); }
+  if (S.view === 'project' && S.project) { const p = (S.state.projects || []).find(x => x.id === S.project); const pg = ASK.page && ASK.page.page ? ASK.page.page : (S.tab || 'atlas'); const nd = ASK.page && ASK.page.node ? ' · ' + ASK.page.node.split('::').pop().split('.').slice(-2).join('.') : ''; return (p ? p.name : 'this project') + ' · ' + pg + nd; }
   return {home: 'My projects', learn: 'Learn', settings: 'Settings', help: 'Help'}[S.view] || 'Lantern';
 }
 function askModel() { const s = S.state && S.state.settings; return s && s.model ? s.model.split('/').pop() : 'no model yet'; }
+const PAGE_CHIPS = {
+  map: ['What am I looking at?', 'What is a hop?', 'What does “likely” mean?'],
+  findings: ['Which one should I fix first?', 'What does “reachable” mean?', 'How do I fix the top one?'],
+  prot: ['What is a protection?', 'Which missing one matters most?', 'What does “heuristic” mean?'],
+  ready: ['What does the score mean?', 'Why is it this grade?', 'What is a hard failure?'],
+  xp: ['What does this function do, in plain words?', 'What does “anchored to your code” mean?', 'Why does this function matter?'],
+  about: ['What did Lantern check?', 'What could it not follow?'],
+};
+// The report viewer's "Ask Lantern" button (same origin) opens the assistant on that page, with its selection as the focus.
+window.askAbout = ctx => { ASK.page = ctx || null; ASK.open = true; renderAsk(); };
 function renderAsk() {
   const el = document.getElementById('ask');
-  const chips = S.view === 'project' ? ['What should I fix first?', 'Why is it critical?', 'Summarize this project'] : ['What does Lantern check?', 'What is "likely"?', 'How do I add a project?'];
+  const pageTab = ASK.page && ASK.page.tab;
+  const chips = pageTab && PAGE_CHIPS[pageTab] ? PAGE_CHIPS[pageTab] : S.view === 'project' ? ['What should I fix first?', 'Why is it critical?', 'Summarize this project'] : ['What does Lantern check?', 'What is "likely"?', 'How do I add a project?'];
   const msgs = ASK.log.map(m => m.role === 'me' ? `<div class="me">${esc(m.text)}</div>` :
     `<div class="bot ${m.wait ? 'wait' : ''}">${fmtAsk(m.text)}${(m.cited || []).length ? `<div class="cites">${m.cited.map(c => `<button data-cite="${esc(c)}" title="Open this finding">${esc(c)}</button>`).join('')}</div>` : ''}</div>`).join('');
   el.innerHTML = (ASK.open ? `<div class="win" style="opacity:${ASK.opacity}">
@@ -587,7 +642,8 @@ async function askSend(text) {
   if (!text || ASK.busy) return;
   ASK.log.push({role: 'me', text}); ASK.log.push({role: 'bot', text: 'Thinking…', wait: true}); ASK.busy = true; renderAsk();
   const focus = {};
-  if (S.view === 'project' && S.sel) focus.node = S.sel;
+  if (S.view === 'project' && (ASK.page && ASK.page.node || S.sel)) focus.node = (ASK.page && ASK.page.node) || S.sel;
+  if (ASK.page && ASK.page.page) text = `(I am on the “${ASK.page.page}” page.) ` + text;
   if (ASK.shot && ASK.shot.text) text += '\n\nScreenshot text (read on this computer):\n' + ASK.shot.text;
   try {
     const r = await api('/api/ask', {method: 'POST', body: {project: S.view === 'project' ? S.project : null, question: text, focus}});
@@ -638,6 +694,7 @@ function watch(jobId, pid) {
       if (el) { const t = el.querySelector('.t'); el.textContent = j.log.join('\n'); if (t) el.prepend(t); el.scrollTop = el.scrollHeight; }
       const line = document.querySelector(`[data-last="${pid}"]`); if (line && j.log.length) line.textContent = j.log[j.log.length - 1];
       if (j.status === 'running') return setTimeout(tick, 700);
+      S.frame = null;   // results changed: the embedded report is rebuilt on the next render
       await refresh();
     } catch (e) { setTimeout(tick, 2000); }
   };
@@ -799,7 +856,7 @@ function renderProject(el) {
   const simple = viewMode() === 'simple';
   const W = simple ? {atlas: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', evidence: 'Report', explain: 'Explanations', guide: 'Guide'}
                    : {atlas: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', evidence: 'Evidence', explain: 'Explanations', guide: 'Guide'};
-  const REPORT_TABS = {atlas: 'map', findings: 'findings', prot: 'prot', ready: 'ready'};
+  const REPORT_TABS = {atlas: 'map', findings: 'findings', prot: 'prot', ready: 'ready', explain: 'xp'};
   const c = p.counts || {}, nf = (c.critical || 0) + (c.high || 0) + (c.medium || 0);
   const tab = (t, label) => `<button data-t="${t}" class="${S.tab === t ? 'on' : ''}">${label}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${nf}</span>` : ''}</button>`;
   el.innerHTML = `<div class="sub"><button class="back" id="back" aria-label="Back to projects">${icon('back')}</button><span class="title">${esc(p.name)}</span>
@@ -808,55 +865,54 @@ function renderProject(el) {
     <span class="spacer"></span><a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a></div>
     <div id="pbody"></div>`;
   el.querySelector('#back').onclick = () => go('home');
-  el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; renderProject(el); });
+  el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; ASK.page = null; if (ASK.open) renderAsk(); renderProject(el); });
   const body = el.querySelector('#pbody');
   if (S.tab === 'guide') return renderGuide(body, p);
   if (REPORT_TABS[S.tab]) {
     const want = S.reportTab || REPORT_TABS[S.tab];
     const old = S.frame && S.frame.pid === p.id ? S.frame.el : null;
+    const bar = S.tab === 'explain' ? '<div class="xbar" id="xbar"></div>' : '';
+    body.classList.toggle('withbar', S.tab === 'explain');
     if (old && old.contentDocument && old.contentDocument.querySelector('#tabs')) {
       // Same project: keep the loaded report and switch its tab, so the Atlas state (selection, zoom) survives.
-      body.replaceChildren(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
+      body.innerHTML = bar; body.appendChild(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
     } else {
-      body.innerHTML = `<iframe src="/p/${p.id}/report.html" title="${esc(W[S.tab])}"></iframe>`;
+      body.innerHTML = `${bar}<iframe src="/p/${p.id}/report.html" title="${esc(W[S.tab])}"></iframe>`;
       const fr = body.querySelector('iframe'); S.frame = {pid: p.id, el: fr};
       // The report is served from this app's origin, so the app can open it on a tab and keep the theme in step.
       fr.onload = e => { try { themeOn(e.target.contentDocument); e.target.contentDocument.body.classList.add('embed'); e.target.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {} };
     }
   }
-  else if (S.tab === 'evidence') {
+  if (S.tab === 'explain') renderExplain(body.querySelector('#xbar'), p);
+  if (REPORT_TABS[S.tab]) return;
+  if (S.tab === 'evidence') {
     body.innerHTML = `<iframe src="/p/${p.id}/evidence.html" title="Evidence Report"></iframe>`;
     body.querySelector('iframe').onload = e => { try { themeOn(e.target.contentDocument); } catch (err) {} };
   }
   else renderExplain(body, p);
 }
-async function renderExplain(body, p) {
+async function renderExplain(bar, p) {
+  // The batch control from the design's Explanations header: "Explain 98 unexplained · est. 6 min · $0.00".
   const s = S.state.settings, prov = S.state.providers.find(x => x.name === s.provider) || {};
   const job = S.jobs[p.id];
-  body.innerHTML = `<main><section class="hero"><h1>Three-Lens explanations</h1>
-    <p class="lede">A model writes each explanation three ways: technical, everyday, and a 1:1 map between them. Lantern checks every phrase anchors to real code and rejects ones that don't. Models never create or close findings.</p></section>
-    <div class="card" id="plan"><div class="working"><span class="pulse"></span>Working out what to explain…</div></div></main>`;
+  bar.innerHTML = `<span class="working"><span class="pulse"></span>Working out what to explain…</span>`;
   let plan;
-  try { plan = await api(`/api/projects/${p.id}/plan?depth=3&limit=40`); } catch (e) { body.querySelector('#plan').innerHTML = note('err', esc(e.message)); return; }
+  try { plan = await api(`/api/projects/${p.id}/plan?depth=3&limit=40`); } catch (e) { bar.innerHTML = note('err', esc(e.message)); return; }
   const cloud = prov.local === false || (prov.local === null && !/localhost|127\.0\.0\.1/.test(s.base_url || ''));
   const ready = s.model && (!prov.needs_key || prov.key);
-  const num = v => esc((+v || 0).toLocaleString());
-  body.querySelector('#plan').innerHTML = `<div class="tiles"><div class="tile"><div class="lbl">Functions to explain</div><div class="val">${num(plan.nodes)}</div></div>
-      <div class="tile"><div class="lbl">Input tokens, about</div><div class="val">${num(plan.input_tokens)}</div></div>
-      <div class="tile"><div class="lbl">Output tokens, about</div><div class="val">${num(plan.output_tokens)}</div></div></div>
-    <div class="hint">Entry points and what they call, up to 3 levels deep. ${esc(plan.note)}</div>
-    <div class="model">${icon('sparkle')}<div>${s.model ? `Model <b>${esc(s.provider)}/${esc(s.model)}</b>` : 'No model chosen yet.'}</div><span class="spacer"></span><a href="#" id="toset">Change in Settings</a></div>
-    ${s.model && cloud ? note('warn', `The source code of these functions will be sent to ${esc(prov.allowance ? 'Claude Haiku (free allowance, through Lantern)' : s.provider)} to write the explanations. ${esc(prov.notice || '')} To keep everything on this computer, choose Ollama or LM Studio in Settings.`) : ''}
-    ${s.model && !cloud ? note('ok', 'Local model: your code stays on this computer.') : ''}
-    ${s.model && prov.needs_key && !prov.key ? note('warn', `Add your ${esc(s.provider)} API key in Settings first.`) : ''}
-    <div class="row" style="margin-top:16px"><button class="btn primary" id="go" ${!ready || (job && job.status === 'running') ? 'disabled' : ''}>${icon('sparkle')}Explain ${num(plan.nodes)} functions</button>
-    <span class="small muted">You can also explain one function at a time from the Atlas.</span></div>
-    ${job ? `<div style="margin-top:14px"><pre class="log" id="log-${p.id}">${esc((job.log || []).join('\n'))}</pre></div>${job.status === 'error' ? note('err', esc(job.error)) : ''}` : ''}`;
-  body.querySelector('#toset').onclick = e => { e.preventDefault(); go('settings'); };
-  body.querySelector('#go').onclick = async () => {
-    try { const j = await api(`/api/projects/${p.id}/explain`, {method: 'POST', body: {depth: 3, limit: 40}}); watch(j.id, p.id); renderExplain(body, p); }
+  const num = v => (+v || 0).toLocaleString();
+  const mins = Math.max(1, Math.round(plan.nodes * 6 / 60));
+  const cost = !s.model ? '' : !cloud ? 'free, local' : prov.allowance ? 'free allowance' : `about ${num(plan.input_tokens)} tokens in, ${num(plan.output_tokens)} out`;
+  const running = job && job.status === 'running';
+  bar.innerHTML = `${icon('sparkle')}<div class="t"><b>${plan.nodes ? `Explain ${num(plan.nodes)} unexplained` : 'Everything on the main paths is explained'}</b>${plan.nodes ? ` · est. ${mins} min · ${esc(cost || 'choose a model in Settings')}` : ''}<div class="d">${esc(plan.note || '')} ${s.model ? `Model <b>${esc(s.provider)}/${esc(s.model)}</b>${cloud ? ' — the code of these functions is sent to ' + esc(prov.allowance ? 'Claude Haiku through the free allowance' : s.provider) + '.' : ' — stays on this computer.'}` : 'No model chosen yet.'} <a href="#" id="toset">Settings</a></div></div>
+    ${running ? `<span class="working"><span class="pulse"></span>Explaining…</span><button class="btn sm" id="showlog">Log</button>` : plan.nodes ? `<button class="btn primary" id="go" ${!ready ? 'disabled' : ''}>${icon('sparkle')}Explain ${num(plan.nodes)} functions</button>` : ''}
+    ${job && job.status === 'error' ? note('err', esc(job.error)) : ''}<pre class="log xlog" id="log-${p.id}" ${running ? '' : 'hidden'}>${esc((job && job.log || []).join('\n'))}</pre>`;
+  bar.querySelector('#toset').onclick = e => { e.preventDefault(); go('settings'); };
+  const g = bar.querySelector('#go'); if (g) g.onclick = async () => {
+    try { const j = await api(`/api/projects/${p.id}/explain`, {method: 'POST', body: {depth: 3, limit: 40}}); watch(j.id, p.id); renderExplain(bar, p); }
     catch (e) { alert(e.message); }
   };
+  const sl = bar.querySelector('#showlog'); if (sl) sl.onclick = () => { const l = bar.querySelector('.xlog'); l.hidden = !l.hidden; };
 }
 
 // ---------------------------------------------------------------- learn
@@ -895,22 +951,30 @@ async function renderGuide(body, p) {
   const job = S.jobs[p.id], running = p.job || (job && job.status === 'running');
   const st = (pr && pr.steps) || [];
   const pct = pr && pr.total ? Math.round(100 * pr.done / pr.total) : 0;
-  body.innerHTML = `<main><section class="hero"><h1>${esc(s.title)}</h1><p class="lede">${fmt(s.summary)}</p></section>
-    <div class="card"><div class="progress">${pr ? `<div class="big">${esc(pr.done)}<span> of ${esc(pr.total)} steps done</span></div>${pr.explore ? `<span class="small muted">${esc(pr.explore)} to explore on your own</span>` : ''}` : '<div class="big"><span>Not analyzed yet</span></div>'}
-      <span class="spacer"></span><button class="btn primary" id="check" ${running ? 'disabled' : ''}>${icon('refresh')}${running ? 'Analyzing…' : 'Check my progress'}</button></div>
-      <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
-      <div class="small muted">Folder: <code>${esc(p.path)}</code>. Open it in your editor or AI assistant, make each fix there, then press Check my progress.</div>
-      ${running ? `<div style="margin-top:12px"><pre class="log" id="log-${p.id}">${esc((job && job.log || []).join('\n'))}</pre></div>` : ''}
-      ${s.run && s.run.length ? `<details class="small" style="margin-top:12px"><summary class="muted" style="cursor:pointer">Run the app yourself (optional)</summary><pre class="cmd">${esc(s.run.join('\n'))}</pre></details>` : ''}</div>
-    <div class="steps">${s.steps.map((x, i) => { const r = st[i] || {status: x.check ? 'unknown' : 'read', why: ''}; const [cls, label] = STATUS[r.status] || STATUS.unknown;
-      return `<div class="step ${r.status === 'done' ? 'done' : ''}"><div class="num">${r.status === 'done' ? icon('check') : i + 1}</div><div class="card">
-      <div class="stitle">${esc(x.title)}<span class="status ${cls}"><i></i>${esc(label)}</span>${r.why && r.status !== 'done' ? `<span class="why">${esc(r.why)}</span>` : ''}</div>
-      ${x.body.map(t => `<p>${fmt(t)}</p>`).join('')}
-      ${x.prompt ? `<div class="prompt"><div class="eyebrow">${icon('sparkle')}Ask your AI assistant<span class="spacer"></span><button class="btn sm" data-copy="${i}">${icon('copy')}Copy</button></div><div class="txt">${esc(x.prompt)}</div></div>` : ''}
-      ${x.commands ? `<pre class="cmd">${esc(x.commands.join('\n'))}</pre>` : ''}
-      <div class="row" style="margin-top:10px">${SHOW[x.feature] ? `<button class="btn" data-show="${esc(x.feature)}">${esc(SHOW[x.feature])}</button>` : ''}
-        ${(x.fix_files || []).map(f => `<button class="btn ghost" data-fix="${esc(f)}">Show the fix: ${esc(f)}</button>`).join('')}</div>
-      <div id="fix-${i}"></div></div></div>`; }).join('')}</div></main>`;
+  const G = S.guide || (S.guide = {open: null});
+  if (G.open === null || (!G.user && (st[G.open] || {}).status === 'done')) { const first = s.steps.findIndex((x, i) => (st[i] || {}).status !== 'done' && x.check); G.open = first >= 0 ? first : 0; }
+  const LABEL = {done: 'done', todo: 'to do', unknown: 'to do', read: 'explore'};
+  const simple = viewMode() === 'simple';
+  const stepRow = (x, i) => {
+    const r = st[i] || {status: x.check ? 'unknown' : 'read', why: ''}; const open = G.open === i, last = i === s.steps.length - 1;
+    const lab = last && r.status !== 'done' ? 'last' : LABEL[r.status] || 'to do';
+    return `<div class="gstep ${r.status === 'done' ? 'done' : ''} ${open ? 'open' : ''}" data-i="${i}"><div class="gnum">${r.status === 'done' ? icon('check') : i + 1}</div><div class="gbody">
+      <div class="ghead"><span class="gt">${esc(x.title)}</span><span class="glabel ${lab.replace(' ', '')}">${esc(lab)}</span>${r.why && r.status !== 'done' && !open ? `<span class="gwhy">${esc(r.why)}</span>` : ''}</div>
+      ${open ? `${x.body.map(t => `<p>${fmt(t)}</p>`).join('')}${r.why && r.status !== 'done' ? `<div class="hint">Lantern’s check: ${esc(r.why)}</div>` : ''}
+        ${x.prompt ? `<div class="prompt"><div class="eyebrow">${icon('sparkle')}Paste into your assistant</div><div class="txt">${esc(x.prompt)}</div></div>` : ''}
+        ${x.commands ? `<pre class="cmd">${esc(x.commands.join('\n'))}</pre>` : ''}
+        <div class="row" style="margin-top:12px">${SHOW[x.feature] ? `<button class="btn primary" data-show="${esc(x.feature)}">${esc(simple ? SHOW[x.feature].replace('Open the Atlas', 'Show me').replace('Open ', 'Show me: ') : SHOW[x.feature])}</button>` : ''}${x.prompt ? `<button class="btn" data-copy="${i}">${icon('copy')}Copy prompt</button>` : ''}
+          ${(x.fix_files || []).map(f => `<button class="btn ghost" data-fix="${esc(f)}">Show me the fixed <code>${esc(f.split('/').pop())}</code></button>`).join('')}</div><div id="fix-${i}"></div>` : ''}</div></div>`;
+  };
+  const aside = `<aside class="gside"><div class="k">${simple ? 'Your first fix-up' : 'Starter · ' + esc(s.stack)}</div><h1>${esc(s.title)}</h1><p class="lede" style="font-size:14.5px">${fmt(s.summary)}</p>
+      <div class="card" style="margin-top:14px"><div class="progress">${pr ? `<div class="big">${esc(pr.done)}<span> of ${esc(pr.total)} done</span></div>` : '<div class="big"><span>Not analyzed yet</span></div>'}<span class="spacer"></span><button class="btn primary sm" id="check" ${running ? 'disabled' : ''}>${icon('refresh')}${running ? 'Analyzing…' : 'Check my progress'}</button></div>
+        <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
+        <div class="small muted" style="margin-top:8px">${p.score != null ? `Readiness is ${esc(p.score)} of 100 now; it climbs as you fix things.` : 'Readiness appears after the first check.'}${pr && pr.explore ? ` ${esc(pr.explore)} step${pr.explore === 1 ? ' is' : 's are'} just for exploring.` : ''}</div>
+        ${running ? `<pre class="log" id="log-${p.id}" style="margin-top:10px">${esc((job && job.log || []).join('\n'))}</pre>` : ''}</div>
+      <div class="small muted" style="margin-top:12px">Folder <code>${esc(p.path)}</code><br>Fix each step in your editor or with your AI assistant, then press Check my progress. Stuck? Every step has the fixed file.</div>
+      ${s.run && s.run.length ? `<details class="small" style="margin-top:12px"><summary class="muted" style="cursor:pointer">Run the app yourself (optional)</summary><pre class="cmd">${esc(s.run.join('\n'))}</pre></details>` : ''}</aside>`;
+  body.innerHTML = `<main class="gmain"><div class="gsplit">${aside}<div class="gsteps">${s.steps.map(stepRow).join('')}</div></div></main>`;
+  body.querySelectorAll('.gstep .ghead').forEach(h => h.onclick = () => { const i = +h.closest('.gstep').dataset.i; G.open = G.open === i ? -1 : i; G.user = true; renderGuide(body, p); });
   body.querySelector('#check').onclick = async () => {
     try { const j = await api(`/api/projects/${p.id}/analyze`, {method: 'POST'}); watch(j.id, p.id); renderGuide(body, p); }
     catch (e) { alert(e.message); }
@@ -919,12 +983,11 @@ async function renderGuide(body, p) {
   body.querySelectorAll('[data-show]').forEach(b => b.onclick = () => {
     const f = b.dataset.show;
     if (f === 'settings') return go('settings');
-    S.reportTab = f === 'findings' || f === 'ready' ? f : null;
-    S.tab = f === 'evidence' || f === 'explain' ? f : 'atlas';
+    S.tab = f === 'evidence' || f === 'explain' ? f : f === 'findings' ? 'findings' : f === 'ready' ? 'ready' : 'atlas';
     render();
   });
   body.querySelectorAll('[data-fix]').forEach(b => b.onclick = async () => {
-    const box = b.closest('.step').querySelector('[id^=fix-]');
+    const box = b.closest('.gstep').querySelector('[id^=fix-]');
     try { const r = await api(`/api/starters/${encodeURIComponent(p.starter)}/fix?file=${encodeURIComponent(b.dataset.fix)}`);
       box.innerHTML = `<div class="hint">Fixed version of <code>${esc(b.dataset.fix)}</code>. Compare it with yours, or paste it in.</div><pre class="cmd">${esc(r.text)}</pre>`; }
     catch (e) { box.innerHTML = note('err', esc(e.message)); }
@@ -932,6 +995,47 @@ async function renderGuide(body, p) {
 }
 
 // ---------------------------------------------------------------- settings
+
+// Settings, Simple (design 7b): three choices that matter; everything else keeps a sensible default.
+function renderSettingsSimple(el, s, provs, themeBtn) {
+  const anth = provs.find(x => x.name === 'anthropic') || {};
+  const isLocal = ['ollama', 'lmstudio'].includes(s.provider), isNone = !s.model;
+  const choice = isNone ? 'none' : isLocal ? 'local' : 'cloud';
+  const cloudWord = anth.allowance ? 'Claude Haiku, through the free allowance' : anth.key ? 'Claude, with your key' : 'Claude (cloud)';
+  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>Settings</h1><p class="lede">Three choices that matter. Everything else has a sensible default.</p></section>
+    <div class="card group"><h2>Who writes the explanations</h2>
+      <label class="choice ${choice === 'local' ? 'on' : ''}"><input type="radio" name="who" value="local" ${choice === 'local' ? 'checked' : ''}><span><b>A local model on this computer <span class="tag priv">Private</span></b>${isLocal && s.model ? `${esc(s.provider)} · ${esc(s.model)}. ` : 'Ollama or LM Studio. '}Nothing leaves your machine. Explanations take a little longer.</span></label>
+      <div id="localrow" class="subrow" ${choice === 'local' ? '' : 'hidden'}><label for="lmodel">Model name</label><div class="row"><select id="lprov"><option value="ollama" ${s.provider === 'lmstudio' ? '' : 'selected'}>Ollama</option><option value="lmstudio" ${s.provider === 'lmstudio' ? 'selected' : ''}>LM Studio</option></select><input type="text" id="lmodel" value="${esc(isLocal ? s.model : '')}" placeholder="llama3.2" spellcheck="false" style="flex:1"></div><div class="hint">Start the model server first (for Ollama: <code>ollama pull llama3.2</code>, then it runs by itself).</div></div>
+      <label class="choice ${choice === 'cloud' ? 'on' : ''}"><input type="radio" name="who" value="cloud" ${choice === 'cloud' ? 'checked' : ''}><span><b>${esc(cloudWord)}</b>Faster and sharper. The source of each function you ask about is sent to Anthropic; Lantern tells you before it happens.${anth.can_sign_in ? ' Sign in once for a free allowance of about 300 explanations.' : ''}</span></label>
+      <div id="cloudrow" class="subrow" ${choice === 'cloud' || anth.can_sign_in ? '' : 'hidden'}>${anth.can_sign_in ? `<div class="row"><button class="btn" data-signin="github">Sign in with GitHub</button><button class="btn" data-signin="google">Sign in with Google</button></div><div id="signinmsg" class="hint"></div><div class="hint">Or paste your own Anthropic key in Advanced.</div>` : anth.allowance ? '<div class="hint">Signed in. The free allowance is ready; your own key (in Advanced) would remove the limit.</div>' : anth.key ? `<div class="hint">Using your Anthropic key (${esc(anth.key)}).</div>` : '<div class="hint">No key yet: add one in Advanced, or sign in for the free allowance when the gateway is reachable.</div>'}</div>
+      <label class="choice ${choice === 'none' ? 'on' : ''}"><input type="radio" name="who" value="none" ${choice === 'none' ? 'checked' : ''}><span><b>No model</b>Everything still works: the map, findings, readiness and the report. You just read the code yourself.</span></label>
+      <div id="whomsg" class="hint"></div></div>
+    <div class="card group"><h2>Appearance</h2><div class="row" style="justify-content:space-between"><div><b>Theme</b></div><div class="seg" id="themeseg">${themeBtn('light', 'sun', 'Light')}${themeBtn('dark', 'moon', 'Dark')}${themeBtn('auto', 'auto', 'System')}</div></div>
+      <div class="row" style="justify-content:space-between;margin-top:12px"><div><b>Moving shapes in the background</b></div><div class="seg" id="bdseg">${['off', 'subtle', 'bold'].map(v => `<button data-bd="${v}" class="${(s.backdrop || 'subtle') === v ? 'on' : ''}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div></div></div>
+    <div class="card group"><h2>Also</h2>
+      <div class="alsorow"><div><b>Connections</b><div class="hint" id="connhint">Looking…</div></div><button class="btn" id="toconn">Open</button></div>
+      <div class="alsorow"><div><b>Privacy of reports</b><div class="hint">${s.privacy === 'structure' ? 'Reports leave source code out.' : 'Reports include each function’s source so the code panel works.'}</div></div><button class="btn" id="topriv">Change</button></div>
+      <div class="alsorow"><div><b>Everything else</b><div class="hint">Keys, base URLs, usage counts, default view.</div></div><button class="btn" id="toadv">Advanced</button></div></div>
+    <p class="foot">Lantern listens on this computer only (127.0.0.1) and has no telemetry unless you turn usage counts on. The only network calls are dependency checks and the model you choose above.</p></main>`;
+  const save = async body => { try { const r = await api('/api/settings', {method: 'POST', body}); S.state.settings = r.settings; S.state.providers = r.providers; return true; } catch (e) { el.querySelector('#whomsg').textContent = e.message; return false; } };
+  const pick = async v => {
+    el.querySelectorAll('.choice').forEach(c => c.classList.toggle('on', c.querySelector('input').value === v));
+    el.querySelector('#localrow').hidden = v !== 'local'; el.querySelector('#cloudrow').hidden = v !== 'cloud' && !anth.can_sign_in;
+    if (v === 'none') { if (await save({provider: s.provider, model: ''})) el.querySelector('#whomsg').textContent = 'Saved: no model. Nothing is sent anywhere.'; }
+    if (v === 'cloud') { if (await save({provider: 'anthropic', model: s.provider === 'anthropic' && s.model ? s.model : ((S.state.default_model || {}).model || 'claude-haiku-5-5')})) el.querySelector('#whomsg').textContent = anth.allowance || anth.key ? 'Saved: Claude writes the explanations.' : 'Saved. Sign in above, or add a key in Advanced, before the first explanation.'; }
+    if (v === 'local') { const m = el.querySelector('#lmodel').value.trim(); if (m && await save({provider: el.querySelector('#lprov').value, model: m, base_url: ''})) el.querySelector('#whomsg').textContent = `Saved: ${m} on this computer.`; else if (!m) el.querySelector('#whomsg').textContent = 'Type the model name (for example llama3.2), then press Enter.'; }
+  };
+  el.querySelectorAll('input[name=who]').forEach(r => r.onchange = () => pick(r.value));
+  el.querySelector('#lmodel').onkeydown = e => { if (e.key === 'Enter') pick('local'); };
+  el.querySelector('#lmodel').onblur = () => { if (el.querySelector('input[name=who]:checked').value === 'local') pick('local'); };
+  el.querySelector('#lprov').onchange = () => pick('local');
+  el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
+  el.querySelector('#bdseg').onclick = async e => { const b = e.target.closest('button'); if (!b) return; await save({backdrop: b.dataset.bd}); for (const x of el.querySelectorAll('#bdseg button')) x.classList.toggle('on', x === b); setBackdrop(); };
+  const toAdv = async (anchor) => { try { const r = await api('/api/settings', {method: 'POST', body: {view_mode: 'advanced'}}); S.state.settings = r.settings; } catch (e) {} drawViewMode(); render(); if (anchor) { const a = document.getElementById(anchor); if (a) a.scrollIntoView({behavior: 'smooth'}); } };
+  el.querySelector('#toconn').onclick = () => toAdv('conns'); el.querySelector('#topriv').onclick = () => toAdv('privcard'); el.querySelector('#toadv').onclick = () => toAdv();
+  api('/api/connections').then(c => { el.querySelector('#connhint').textContent = c.connections.length ? c.connections.map(x => x.name).slice(0, 3).join(', ') + ' have called' : 'No assistant has connected yet (Claude Code, Cursor, ChatGPT can).'; }).catch(() => { el.querySelector('#connhint').textContent = ''; });
+}
+
 function renderSettings(el) {
   const s = S.state.settings, provs = S.state.providers;
   const draw = () => {
@@ -965,7 +1069,8 @@ function renderSettings(el) {
     } catch (err) { msg.textContent = 'Sign-in failed: ' + (err.message || err); }
   });
   const themeBtn = (t, ic, label) => `<button data-theme="${t}" class="${THEME === t ? 'on' : ''}">${icon(ic)}${label}</button>`;
-  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>Settings</h1><p class="lede">Choose the model that writes explanations, and how much of your code a report carries.</p></section>
+  if (viewMode() === 'simple') return renderSettingsSimple(el, s, provs, themeBtn);
+  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>Settings</h1><p class="lede">Every setting Lantern has. The Simple view shows the three that matter.</p></section>
     <div class="card group"><h2>Model for explanations</h2><div class="hint">Lantern works without a model. A model only adds the three-lens explanations.</div>
       <label for="prov">Provider</label><select id="prov">${provs.map(p => `<option value="${esc(p.name)}" ${p.name === s.provider ? 'selected' : ''}>${esc(p.name)}${p.local ? ' (local)' : ''}</option>`).join('')}</select>
       <div id="provinfo"></div>
@@ -974,7 +1079,7 @@ function renderSettings(el) {
       <div id="keyrow"><label for="key">API key</label><input type="password" id="key" autocomplete="off" placeholder="paste to set or replace">
         <label class="check"><input type="checkbox" id="remember"><span>Remember on this computer (saved in ~/.lantern/keys.json, readable only by you). Otherwise kept in memory until Lantern stops.</span></label>
         <button class="btn sm" id="forget" type="button">Forget saved key</button></div></div>
-    <div class="card group"><h2>Privacy</h2><div class="hint">Applies to reports written from now on.</div>
+    <div class="card group" id="privcard"><h2>Privacy</h2><div class="hint">Applies to reports written from now on.</div>
       <label class="choice"><input type="radio" name="priv" value="full" ${s.privacy !== 'structure' ? 'checked' : ''}><span><b>Full</b>Reports include each function's source, for the code panel.</span></label>
       <label class="choice"><input type="radio" name="priv" value="structure" ${s.privacy === 'structure' ? 'checked' : ''}><span><b>Structure only</b>Reports leave source code out (safer to share).</span></label>
       <div class="row" style="margin-top:18px"><button class="btn primary" id="save">Save</button><span id="saved" class="small muted"></span></div></div>
@@ -1020,18 +1125,52 @@ function renderSettings(el) {
   el.querySelector('#forget').onclick = () => save({forget_key: true, key: undefined});
 }
 
+const FAQ = [
+  ['Safety', 'Does my code leave my computer?', 'No, unless you turn on explanations or Ask Lantern with a cloud model. Analysis (the map, findings, readiness, the Evidence Report) runs here. A GitHub link is cloned onto this computer, not a server. With a local model (Ollama, LM Studio) nothing leaves either. Lantern tells you once, before the first time code would be sent.'],
+  ['Safety', 'Does Lantern run my app or my tests?', 'It reads your code; it never runs your app. Tests run only if you ask (“Watch my tests run” or <code>lantern analyze --trace -- pytest</code>), with your own test command, shown first.'],
+  ['Safety', 'What does the free allowance store?', 'A hash of your sign-in token and request counts. No code, no prompts, no email address. Each account gets one token; signing in again rotates it.'],
+  ['Findings', 'What makes a finding critical?', 'Two yes answers: a page or route leads to that line (reachable), and the line uses something the visitor sent (input). Reachable but no input is high; not reachable stays low even when the scanner says high.'],
+  ['Findings', 'What does “reachable” mean?', 'Lantern found a path from a place a visitor can start (a page, a route, a command) to the function that holds the finding. The path is drawn on the finding so you can follow it.'],
+  ['Findings', 'What is “accept risk with a reason”?', 'When you have decided a finding is fine (a fixed list, admin-only, a test fixture), write why. The reason is committed in <code>lantern-accepted.json</code> and shown in the Evidence Report; it is never silent.'],
+  ['Findings', 'Why are some findings labelled heuristic?', 'Those come from pattern checks that can misfire (missing login check, CORS, rate limit). They say so, never count as hard failures, and ask you to look before acting.'],
+  ['Atlas', 'What do the line styles mean?', 'Teal: seen running under your tests. Solid: confirmed by reading the code. Dashed: likely (about 90% right across our benchmark). Dotted: possible. What Lantern could not follow is counted on the About page, never guessed.'],
+  ['Atlas', 'What is a hop?', 'One step along a path: a click handler, a function call, an HTTP request from the browser to a route, a call into a library. “Seven hops” means seven such steps from the page to the flagged line.'],
+  ['Atlas', 'Why is a function missing from the map?', 'Either nothing reachable calls it (it is counted as hidden in the Graph view), or the call went through something Lantern cannot follow yet: hook results, framework dispatch, dynamic names. The About page lists what was unresolved.'],
+  ['Readiness', 'How is the score made?', 'Ten weighted areas (security findings, secrets, input handling, dependencies, tests, observability, packaging, CI, resilience, documentation). Every point has a written reason. Checks that do not apply are skipped, not counted against you.'],
+  ['Readiness', 'What is a hard failure?', 'A critical finding a visitor can reach that uses their input. Those cap the grade until fixed; nothing else does.'],
+  ['Readiness', 'Will Lantern overwrite my files?', 'Never. Starter files (Dockerfile, CI, .env.example, SECURITY.md) are written only when you press Write, and only where no file exists.'],
+  ['Setup', 'How do I add an app?', 'My projects → Browse… to its folder, or paste a GitHub link, then Check my app. Python, TypeScript/JavaScript, Go, Rust and Java apps work today.'],
+  ['Setup', 'How do explanations work, and what do they cost?', 'A model writes each function three ways and Lantern checks every phrase against your code. Sign in for a free allowance (about 300 explanations), use your own key, or run a local model for free. The Explanations tab shows the estimate before you press Explain.'],
+  ['Setup', 'How do I use Lantern from Claude Code, Cursor or ChatGPT?', 'Settings → Connections shows the one-line setup. The assistant can read findings, paths and readiness and re-check a fix; it can never accept or close a finding.'],
+  ['Setup', 'Where are my results stored?', 'In a <code>.lantern</code> folder inside the analyzed project (report, evidence, baseline) and <code>~/.lantern</code> for settings and keys (keys only if you tick “remember”).'],
+];
+const CLI_REF = [
+  ['# open the app for a project', 'lantern serve path/to/app', 'lantern serve https://github.com/you/app'],
+  ['# check without the app (CI, scripts)', 'lantern analyze . --fail-on high', 'lantern analyze . --trace -- pytest -q'],
+  ['# record a decision, prove a fix', 'lantern accept . FINDING_ID --reason "…"', 'lantern verify . --report evidence.html'],
+  ['# explanations and learning', 'lantern explain . --model ollama/llama3.2', 'lantern learn notes-api ~/notes-api', 'lantern starter . --write dockerfile ci'],
+  ['# free allowance, connectors', 'lantern login --github', 'lantern mcp --setup'],
+];
 function renderHelp(el) {
-  const steps = [
-    ['Add a project', 'Any folder with a Python or TypeScript/JavaScript app, new or years old, or a GitHub link to one (Lantern clones it into <code>~/.lantern/repos</code>). Lantern reads the code; it never runs it.'],
-    ['Open the Atlas', 'Pick a page or API route on the left and follow the path, from button clicks through HTTP calls to the backend. Lines show how sure Lantern is about each link.'],
-    ['Findings', 'Security problems ranked by how bad they are and whether a user can reach them. Fix them, or accept a risk with a written reason.'],
-    ['Readiness', 'A 0–100 grade across ten areas, with what to fix first and starter files (Dockerfile, CI, .env.example) you can write with one click.'],
-    ['Explanations', 'Add your own model key (or a local model) in Settings to get every function explained three ways.'],
-    ['Evidence Report', 'A commit-pinned summary to share with an engineer. They can re-run <code>lantern verify</code> to check it.'],
-  ];
-  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>How to use Lantern</h1><p class="lede">New to this? The <b>Learn</b> tab has starter apps with real problems in them and a guide that walks you through every feature.</p></section>
-    <div class="card"><ol class="howto">${steps.map(([t, d], i) => `<li><span class="n">${i + 1}</span><div><b>${t}</b><div>${d}</div></div></li>`).join('')}</ol></div>
-    <p class="foot">Command line: <code>lantern analyze PATH</code>, <code>lantern explain PATH --model provider/model</code>, <code>lantern verify PATH --report evidence.html</code>. Run <code>lantern --help</code> for all commands.</p></main>`;
+  const H = S.help || (S.help = {q: '', group: 'All', cli: false, open: null});
+  const groups = ['All', ...new Set(FAQ.map(f => f[0]))];
+  const q = H.q.toLowerCase();
+  const list = FAQ.map((f, i) => [i, ...f]).filter(([, g, qq, a]) => (H.group === 'All' || g === H.group) && (!q || (qq + ' ' + a).toLowerCase().includes(q)));
+  el.innerHTML = `<main style="max-width:820px"><section class="hero" style="text-align:center"><h1>How can we help?</h1><p class="lede" style="margin:0 auto">Ship your vibe-coded app like a senior engineer built it. Build with vibes. Ship with confidence.</p></section>
+    <div class="dropzone" style="margin-bottom:14px">${icon('search')}<input type="text" id="hq" placeholder="Search questions, like “does my code leave my computer”" value="${esc(H.q)}" autocomplete="off"><button class="btn primary" id="hgo">Search</button></div>
+    <div class="row" style="margin-bottom:16px">${groups.map(g => `<button class="fchip ${!H.cli && H.group === g ? 'on' : ''}" data-g="${esc(g)}">${esc(g)}</button>`).join('')}<span class="spacer"></span><button class="fchip ${H.cli ? 'on' : ''}" id="hcli">${icon('bolt')}Command line</button></div>
+    ${H.cli ? `<div class="card"><h2>Everything the app does, from a terminal</h2><pre class="cli">${CLI_REF.map(([c, ...cmds]) => `<span class="c">${esc(c)}</span>\n${cmds.map(esc).join('\n')}`).join('\n\n')}</pre>
+        <div class="hint">Every command prints what it will read before it starts. Add <code>--help</code> to any of them for the full list.</div></div>
+      <div class="card" style="margin-top:14px"><h2>Keyboard</h2><div class="keys"><kbd>/</kbd><span>Search functions (Atlas)</span><kbd>?</kbd><span>Open help</span><kbd>1–6</kbd><span>Switch project tab</span><kbd>⇧ D</kbd><span>Toggle appearance</span></div>
+        <div class="hint" style="margin-top:10px"><b>Something wrong?</b> <code>python -m pytest -q</code> in a checkout runs every automated check; <code>lantern analyze . --fail-on medium</code> is the self-audit.</div></div>`
+      : `<div class="faq">${list.map(([i, g, qq, a]) => `<div class="qa ${H.open === i ? 'open' : ''}" data-i="${i}"><div class="qh"><span class="g">${esc(g)}</span><span class="q">${esc(qq)}</span><span class="pm">${H.open === i ? '−' : '+'}</span></div>${H.open === i ? `<p>${a}</p>` : ''}</div>`).join('') || '<div class="empty">No question matches. Ask Lantern (bottom right) in your own words.</div>'}</div>`}
+    <p class="foot">Still stuck? Press the lantern button bottom-right and ask in your own words. New to all this? <a href="#" id="tolearn2">Learn</a> has a practice app with a step-by-step guide.</p></main>`;
+  const hq = el.querySelector('#hq'); hq.oninput = () => { H.q = hq.value; H.cli = false; renderHelp(el); const z = document.getElementById('hq'); z.focus(); z.setSelectionRange(z.value.length, z.value.length); };
+  el.querySelector('#hgo').onclick = () => { H.q = hq.value; renderHelp(el); };
+  el.querySelectorAll('[data-g]').forEach(b => b.onclick = () => { H.group = b.dataset.g; H.cli = false; renderHelp(el); });
+  el.querySelector('#hcli').onclick = () => { H.cli = !H.cli; renderHelp(el); };
+  el.querySelectorAll('.qa').forEach(d => d.onclick = () => { const i = +d.dataset.i; H.open = H.open === i ? null : i; renderHelp(el); });
+  const tl = el.querySelector('#tolearn2'); if (tl) tl.onclick = e => { e.preventDefault(); go('learn'); };
 }
 
 function render() {

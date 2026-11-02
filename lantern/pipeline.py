@@ -83,7 +83,7 @@ def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str) -> Path
     base = load(out, "baseline.json")
     from .security import ID_VERSION
     if sec is not None and (base is None or base.get("id_version") != ID_VERSION):   # first run, or ids changed
-        base = ev.baseline_from(sec, ev.git_info(Path(g.repo_root)).get("commit"))
+        base = ev.baseline_from(sec, ev.git_info(Path(g.repo_root)).get("commit"), rd)
         (out / "baseline.json").write_text(json.dumps(base, indent=1), encoding="utf-8")
     rec = ev.build(g, sec, rd, load(out, "explanations.json"), run_meta, base, privacy)
     return ev.write(out, rec)["html"]
@@ -110,7 +110,7 @@ def plan_explain(out: Path, depth: int = 3, limit: int | None = 40, only: list[s
 
 
 def explain(out: Path, provider, nids: list[str], metaphor: str | None = None,
-            progress: Callable | None = None) -> dict:
+            progress: Callable | None = None, fresh: bool = False) -> dict:
     """Explain `nids` with `provider`, merge into explanations.json, and re-render the report."""
     from .explain import run
     g = Graph.load(out / "graph.json")
@@ -118,7 +118,7 @@ def explain(out: Path, provider, nids: list[str], metaphor: str | None = None,
     prev = load(out, "explanations.json")
     if metaphor is None and prev and (prev.get("metaphor") or {}).get("world"):
         metaphor = prev["metaphor"]["world"]   # keep one metaphor world across runs
-    res = run(g, provider, sec["findings"], out / "cache", nids, metaphor=metaphor, progress=progress)
+    res = run(g, provider, sec["findings"], out / "cache", nids, metaphor=metaphor, progress=progress, fresh=fresh)
     if prev and prev.get("explanations"):
         prev["explanations"].update(res["explanations"])
         res["explanations"] = prev["explanations"]

@@ -83,7 +83,7 @@ header{flex:none;background:var(--surface);border-bottom:1px solid var(--line);z
 .iconbtn{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;color:var(--muted)}
 .iconbtn:hover{background:var(--hover);color:var(--ink)}
 .iconbtn .ic{width:17px;height:17px}
-body.embed .brand{display:none} body.embed nav.tabs{display:none} body.embed .seg.mode{display:none}
+body.embed .brand{display:none} body.embed nav.tabs{display:none} body.embed .seg.mode{display:none} body.embed .xnote{display:none}
 .bar2{display:flex;align-items:center;gap:16px;padding:0 16px;min-height:48px}
 nav.tabs{display:flex;gap:2px;flex:none}
 nav.tabs button{position:relative;display:flex;align-items:center;gap:6px;height:48px;padding:0 11px;font-weight:550;font-size:13.5px;color:var(--muted);transition:color var(--t) var(--ease)}
@@ -196,6 +196,29 @@ code.cmd{font:11.5px var(--mono);color:var(--muted);background:var(--hover);padd
 .pitem.miss{background:transparent;border-style:dashed} .pitem.miss .pic{border-style:dashed}
 .badge.medium{background:var(--warning-soft);color:var(--warn-ink)}
 @media (max-width:900px){.split,.split.wide{grid-template-columns:1fr}.strip5{grid-template-columns:repeat(2,1fr)}.ctable .r{grid-template-columns:1fr 1fr;gap:6px}.ctable .r.h{display:none}}
+
+/* Explanations (design 7c) */
+.xgrid{display:grid;grid-template-columns:280px minmax(0,1fr);gap:22px;align-items:start} .xgrid.three{grid-template-columns:260px minmax(0,1fr) 260px}
+.xside{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:10px;max-height:calc(100vh - 220px);overflow:auto}
+.xside .k2{margin:12px 4px 4px}
+.xrow{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 8px;border-radius:9px;background:none;border:0;color:var(--ink)} .xrow:hover{background:var(--hover)} .xrow.on{background:var(--accent-soft)}
+.xrow>div{flex:1;min-width:0} .xrow .t{font:500 13px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .xrow .d{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xrow .dotx{width:7px;height:7px;border-radius:99px;background:var(--accent);flex:none}
+.xmain{min-width:0} .xhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap} .xhead h1{font:650 24px/1.2 var(--mono);letter-spacing:-.01em;margin:0} .xhead h2{font:650 18px/1.2 var(--mono);margin:0}
+.xsit{margin:10px 0 4px;font-size:14.5px;color:var(--ink-2)}
+.xanchors{margin-top:12px;font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px;align-items:center} .xanchors span{font:12px var(--mono);padding:2px 7px;border-radius:6px;background:var(--hover);color:var(--ink-2)}
+.xmain .acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0} .three .col{min-width:0} .three .lens{font-size:13px}
+.xprov{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:14px;font-size:13px}
+.xprov dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 10px} .xprov dt{color:var(--muted)} .xprov dd{margin:0;color:var(--ink)}
+@media (max-width:1000px){.xgrid,.xgrid.three{grid-template-columns:1fr}.three{grid-template-columns:1fr}.xside{max-height:300px}}
+
+.btn.help{font-weight:700;color:var(--muted);border-color:transparent;background:var(--hover)} .btn.help span{font-weight:600;font-size:12.5px} .btn.help:hover{color:var(--ink)}
+.btn.ask{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-soft)} .btn.ask .ic{width:15px;height:15px}
+.helppanel{margin:0 0 14px;padding:14px 16px;border:1px solid var(--accent);border-radius:14px;background:var(--surface);box-shadow:0 0 0 4px var(--accent-soft);max-width:760px}
+.helppanel .hh{display:flex;align-items:center;gap:10px;margin-bottom:6px} .helppanel .hh b{font-size:15px;color:var(--ink)} .helppanel .x{margin-left:auto;background:none;border:0;font-size:18px;color:var(--muted);cursor:pointer}
+.helppanel p{margin:6px 0;font-size:13.5px;line-height:1.6;color:var(--ink-2)}
+@media (max-width:760px){.btn.help span{display:none}}
 .detail .acts{display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 
 /* ---------- left: entry points ---------- */
@@ -436,7 +459,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
   <div class="brand"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
   <div class="bar2">
     <nav class="tabs" id="tabs">
-      <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="about">About</button>
+      <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="xp">Explanations</button><button data-t="about">About</button>
     </nav>
     <div class="chips" id="chips"></div>
   </div>
@@ -490,7 +513,7 @@ const short = q => {
 const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv):/.test(id || '') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
-const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: ''};
+const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
 try { S.simple = localStorage.getItem('lantern.simple') !== '0'; S.view = ['tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : 'tree'; S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
 try { S.lens = +localStorage.getItem('lantern.lens') || 1; } catch (e) {}
 // Icons and the status tone of a 0-100 value: fixed markup and fixed words, never data.
@@ -791,13 +814,91 @@ function wireGraph(el) {
   g.querySelectorAll('g[data-id]').forEach(b => b.onclick = () => { if (b.dataset.http === '1') return; const id = b.dataset.id; if (N[id] && N[id].entry) { S.entry = id; S.open = new Set([id]); } select(id); renderMap(); });
 }
 
+
+// ---------- Explanations (design 7c): a browser of functions with the three lenses ----------
+function anchorChips(r) {
+  const pairs = ((r || {}).lens3 || {}).pairs || [];
+  const words = [];
+  for (const p of pairs) { const a = p.anchor; if (!a) continue; const w = a.type === 'symbol' ? short((N[a.id] || {}).qualname || a.id) : a.type === 'lines' ? `lines ${a.start}–${a.end}` : a.term; if (w && !words.includes(w)) words.push(w); }
+  return words;
+}
+function situation(n) {
+  // "Runs on your server when someone on /admin clicks Export orders."
+  const f = SEC.findings.find(x => x.node === n.id && x.ui_path);
+  const ids = f ? f.ui_path : null;
+  let page = null, ui = null;
+  if (ids) { page = N[ids[0]]; for (let i = 1; i < ids.length; i++) { const e = (OUT[ids[i - 1]] || []).find(x => x.dst === ids[i]); if (e && e.detail && UI_WORDS[e.detail]) { ui = UI_WORDS[e.detail]; break; } } }
+  else { for (const nid of Object.keys(N)) { const v = ((window._uiReach || {})[nid]); if (v) break; } }
+  const where = isJS(n.id) ? 'Runs in the visitor’s browser' : layer(n.id) === 'backend' ? 'Runs on your server' : 'A library call';
+  if (page && page.entry) return `${where} when someone on <b>${esc(page.entry.detail || short(page.qualname))}</b> ${ui ? esc(ui).replace('on ', '') + 's' : 'uses the page'}.`;
+  if (n.entry) return `${where}: ${esc({page: 'a page', route: 'a route', cli: 'a command', main: 'the program start', test: 'a test', script: 'a script'}[n.entry.kind] || n.entry.kind)}${n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}.`;
+  const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
+  return `${where}, called by ${callers.length ? callers.slice(0, 2).map(x => `<b>${esc(short(N[x].qualname))}</b>`).join(' and ') + (callers.length > 2 ? ` and ${callers.length - 2} more` : '') : 'nothing in the repo'}.`;
+}
+function renderExplanations() {
+  const el = document.getElementById('center');
+  const fns = G.nodes.filter(n => n.kind === 'callable');
+  const explained = fns.filter(n => EXP[n.id]), withF = fns.filter(n => (FIND_BY_NODE[n.id] || []).length);
+  const q = S.xq.toLowerCase();
+  let list = fns.filter(n => !q || n.qualname.toLowerCase().includes(q));
+  if (S.xf === 'explained') list = list.filter(n => EXP[n.id]); else if (S.xf === 'findings') list = list.filter(n => (FIND_BY_NODE[n.id] || []).length);
+  const weight = n => (worstRank(n.id) ? 0 : 2) + (EXP[n.id] ? 0 : 1) + (n.entry ? 0 : .5);
+  list = list.sort((a, b) => weight(a) - weight(b) || a.qualname.localeCompare(b.qualname)).slice(0, 300);
+  if (!S.xsel || !N[S.xsel]) S.xsel = (list.find(x => EXP[x.id]) || list[0] || {}).id || null;
+  const n = N[S.xsel], r = n && EXP[n.id];
+  const lang = id => id.startsWith('js:') ? 'ts' : id.startsWith('py:') ? 'py' : id.startsWith('go:') ? 'go' : id.startsWith('rs:') ? 'rs' : id.startsWith('jv:') ? 'java' : '';
+  const row = x => { const w = worstRank(x.id); return `<button class="xrow ${S.xsel === x.id ? 'on' : ''}" data-x="${esc(x.id)}"><span class="layer ${layer(x.id)}"></span><div><div class="t">${esc(short(x.qualname))}</div><div class="d">${esc(x.file)}${S.simple ? '' : ':' + esc(x.start_line)}${S.simple && w ? ' · ' + (w === 'critical' ? 'the risky one' : 'has a ' + esc(w) + ' finding') : ''}</div></div>${!S.simple && w ? sevChip(w) : ''}${EXP[x.id] ? '<i class="dotx" title="explained"></i>' : ''}</button>`; };
+  const side = S.simple
+    ? `<div class="xside"><input class="search" id="xq" placeholder="Find a function or a page" value="${esc(S.xq)}" spellcheck="false" autocomplete="off">
+        <div class="k2">Explained · ${explained.length} of ${fns.length}</div>${list.filter(x => EXP[x.id]).slice(0, 40).map(row).join('') || '<div class="note">None yet.</div>'}
+        <div class="k2">Not explained yet · ${fns.length - explained.length}</div>${list.filter(x => !EXP[x.id]).slice(0, 40).map(row).join('')}
+        <div class="note" style="margin-top:14px">Explanations are written by <b>${esc(LIVE && LIVE.model ? LIVE.model + (LIVE.local ? ' on this computer' : '') : (r ? r.model : 'the model you choose in Settings'))}</b>. ${LIVE && LIVE.local ? 'Nothing left your machine, and a' : 'A'} model only explains: it never creates, closes or accepts a finding.</div></div>`
+    : `<div class="xside"><input class="search" id="xq" placeholder="Filter" value="${esc(S.xq)}" spellcheck="false" autocomplete="off">
+        <div class="filters" style="margin:8px 0 10px">${[['all', `All ${fns.length}`], ['explained', `Explained ${explained.length}`], ['findings', `Findings ${withF.length}`]].map(([k, l]) => `<button class="fchip ${S.xf === k ? 'on' : ''}" data-xf="${k}">${l}</button>`).join('')}</div>${list.map(row).join('')}</div>`;
+  const lensTabs = (order) => `<div class="lenses">${order.map(l => `<button data-l="${l}" class="${S.lens === l ? 'on' : ''}"><i></i>${{1: 'Technical', 2: 'Everyday', 3: S.simple ? 'Where it sits' : 'Mapped'}[l]}</button>`).join('')}</div>`;
+  const chips = r ? anchorChips(r) : [];
+  const path = (() => { const f = n && SEC.findings.find(x => x.node === n.id && (x.ui_path || x.reachable)); return f ? chainHtml('', f.ui_path || f.reachable.path) : ''; })();
+  const fs = n ? FIND_BY_NODE[n.id] || [] : [];
+  const explainBtn = n && LIVE && LIVE.model ? `<button class="btn ${r ? '' : 'primary'}" id="xexplain">${icon('sparkle')}${r ? 'Re-explain' : `Explain with ${esc(LIVE.model)}`}</button>` : '';
+  const main = !n ? `<div class="empty">${ART}<b>Pick a function</b>The list shows what has been explained and what has not.</div>` : S.simple
+    ? `<div class="xmain"><div class="xhead"><h1>${esc(short(n.qualname))}</h1><span class="note">${esc(n.file)} · lines ${esc(n.start_line)}–${esc(n.end_line)}</span><span class="lang">${lang(n.id)}</span></div>
+        <div class="xsit">${situation(n)}</div>
+        ${r ? lensTabs([2, 1, 3]) + `<div class="xbody">${S.lens === 3 ? (path ? `<div class="k2" style="margin-top:0">Where it sits</div>${path}` : '') + lensBody(r) : lensBody(r)}</div>
+        ${chips.length ? `<div class="xanchors">Every phrase is anchored to your code: ${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}` : `<div class="unexplained" style="margin-top:14px">Not explained yet.${LIVE && LIVE.model ? '' : ' Choose a model in Settings, then press Explain.'}</div>`}
+        <div class="acts" style="margin-top:16px">${fs.length ? `<button class="btn primary" data-atlas="${esc(n.id)}" data-f="1">Show me the problem</button>` : ''}<button class="btn" data-atlas="${esc(n.id)}">Open in Paths</button>${explainBtn}<span class="note" style="margin-left:auto">Facts from Lantern’s tools · words from your model · checked against each other</span></div><div id="explainmsg" class="note"></div></div>`
+    : `<div class="xmain pro"><div class="xhead"><h2>${esc(short(n.qualname))}</h2><span class="note">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}</span><span class="lang">${lang(n.id)}</span></div>
+        ${r ? `<div class="three">${[1, 2, 3].map(l => { const keep = S.lens; S.lens = l; const h = `<div class="col"><div class="k2" style="margin-top:0">${{1: 'Technical', 2: 'Everyday', 3: 'Mapped'}[l]}</div>${l === 3 && path ? path : ''}${lensBody(r).replace(/<div class="byline">.*?<\/div>/s, '')}</div>`; S.lens = keep; return h; }).join('')}</div>
+        <div class="acts">${explainBtn}<button class="btn" id="xcopy">Copy all three</button><span class="note">Rejected drafts are regenerated with the failing phrase quoted back to the model.</span></div><div id="explainmsg" class="note"></div>`
+        : `<div class="unexplained" style="margin-top:14px">Not explained yet.</div><div class="acts">${explainBtn}</div><div id="explainmsg" class="note"></div>`}
+        ${srcBlock(n)}</div>`;
+  const prov = !S.simple && r ? `<aside class="xprov"><div class="k2" style="margin-top:0">Provenance</div><dl>
+      <dt>Model</dt><dd>${esc(r.model)}</dd><dt>Metaphor</dt><dd>${esc(r.metaphor_world || '–')}</dd><dt>Attempts</dt><dd>${esc(r.attempts || 1)}${r.repaired ? ' · repaired once' : ''}</dd>
+      <dt>Anchors</dt><dd><b>${r.validated ? `${chips.length} of ${chips.length} verified` : 'failed checks'}</b></dd>
+      ${(r.dropped_pairs || []).length ? `<dt>Rejected</dt><dd>${r.dropped_pairs.length} phrase${r.dropped_pairs.length === 1 ? '' : 's'} had no anchor and ${r.dropped_pairs.length === 1 ? 'was' : 'were'} removed</dd>` : ''}
+      ${r.undetermined ? `<dt>Undetermined</dt><dd>${esc(r.undetermined)}</dd>` : ''}</dl>
+      ${chips.length ? `<div class="k2">Anchored phrases</div><div class="xanchors">${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}
+      <div class="note" style="margin-top:14px"><b>Rule.</b> A model only explains. Every phrase must anchor to a real symbol, line or term, or the draft is rejected. It can never create, close or accept a finding.</div></aside>` : '';
+  el.innerHTML = `<div class="page wide"><div class="toolbar"><h2>${S.simple ? 'What does this do?' : 'Explanations'} <span class="c">${explained.length} of ${fns.length}</span></h2>${modeSeg()}${LIVE && LIVE.model && fns.length - explained.length ? `<span class="note xnote">${fns.length - explained.length} unexplained · use the app’s Explanations tab to explain them in one go</span>` : ''}</div>
+    <div class="xgrid ${prov ? 'three' : ''}">${side}${main}${prov}</div></div>`;
+  wireMode(el);
+  const qi = el.querySelector('#xq'); qi.oninput = () => { S.xq = qi.value; renderExplanations(); const z = document.getElementById('xq'); z.focus(); z.setSelectionRange(z.value.length, z.value.length); };
+  el.querySelectorAll('[data-xf]').forEach(b => b.onclick = () => { S.xf = b.dataset.xf; renderExplanations(); });
+  el.querySelectorAll('[data-x]').forEach(b => b.onclick = () => { S.xsel = b.dataset.x; S.pair = null; renderExplanations(); });
+  el.querySelectorAll('.lenses button').forEach(b => b.onclick = () => { S.lens = +b.dataset.l; S.pair = null; try { localStorage.setItem('lantern.lens', S.lens); } catch (e) {} renderExplanations(); });
+  el.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { const i = +b.dataset.p; S.pair = S.pair === i ? null : i; renderExplanations(); });
+  el.querySelectorAll('[data-atlas]').forEach(b => b.onclick = () => { const id = b.dataset.atlas; S.tab = 'map'; for (const x of document.querySelectorAll('#tabs button')) x.classList.toggle('on', x.dataset.t === 'map'); const f = SEC.findings.find(q => q.node === id && (q.ui_path || q.reachable)); const ids = f ? (f.ui_path || f.reachable.path) : null; if (ids) { S.entry = ids[0]; S.open = new Set(ids); } else if (N[id].entry) { S.entry = id; S.open = new Set([id]); } S.open.add(id); select(id, true); render(); });
+  el.querySelectorAll('.path [data-id]').forEach(b => b.onclick = () => { S.xsel = b.dataset.id; renderExplanations(); });
+  const xb = el.querySelector('#xexplain'); if (xb) xb.onclick = () => explainLive(S.xsel, true);
+  const xc = el.querySelector('#xcopy'); if (xc) xc.onclick = () => { const t = [`Technical: ${(r.lens1 || {}).summary || ''}`, `Everyday: ${(r.lens2 || {}).text || ''}`, `Mapped: ${(r.lens3 || {}).text || ''}`].join('\n\n'); navigator.clipboard?.writeText(t); xc.textContent = 'Copied'; };
+}
+
 const ART = '<svg class="art" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="35" r="24" fill="#FFB547" opacity=".14"/><path d="M26 13h12M25 51h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg>';
 function renderMap() {
   const el = document.getElementById('center');
   if (!S.entry) {
     const eps = G.nodes.filter(n => n.entry && n.entry.kind !== 'test');
-    el.innerHTML = `<div class="empty">${ART}<b>Pick a starting point</b>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
-    return;
+    el.innerHTML = `<div class="toolbar" style="justify-content:flex-end">${helpBtns()}</div><div class="empty">${ART}<b>Pick a starting point</b>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
+    wireHelp(el); return;
   }
   const n = N[S.entry];
   let title = esc(short(n.qualname));
@@ -805,12 +906,13 @@ function renderMap() {
   else if (n.entry && n.entry.kind === 'script') title = esc(n.entry.detail);
   el.innerHTML = `<div class="toolbar"><h2>${title}</h2>
     <div class="seg"><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button><button data-v="graph" class="${S.view === 'graph' ? 'on' : ''}">Graph</button></div>
-    ${S.view === 'graph' ? `<div class="seg mode" title="What the colours mean"><button data-m="risk" class="${S.mode === 'risk' ? 'on' : ''}">Risk</button><button data-m="confidence" class="${S.mode === 'confidence' ? 'on' : ''}">Confidence</button><button data-m="fanin" class="${S.mode === 'fanin' ? 'on' : ''}">Fan-in</button></div>` : `<button class="btn" id="expand">${icon('expand')}Expand all</button>`}</div>
+    ${S.view === 'graph' ? `<div class="seg gmode" title="What the colours mean"><button data-m="risk" class="${S.mode === 'risk' ? 'on' : ''}">Risk</button><button data-m="confidence" class="${S.mode === 'confidence' ? 'on' : ''}">Confidence</button><button data-m="fanin" class="${S.mode === 'fanin' ? 'on' : ''}">Fan-in</button></div>` : `<button class="btn" id="expand">${icon('expand')}Expand all</button>`}${helpBtns()}</div>
     ${S.view === 'graph' ? '' : `<div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>`}
     ${S.view === 'tree' ? renderTree() : S.view === 'chart' ? renderChart() : renderGraph()}`;
   el.querySelectorAll('.seg [data-v]').forEach(b => b.onclick = () => { S.view = b.dataset.v; try { localStorage.setItem('lantern.view', S.view); } catch (e) {} renderMap(); });
   el.querySelectorAll('.seg [data-m]').forEach(b => b.onclick = () => { S.mode = b.dataset.m; renderMap(); });
   if (S.view === 'graph') wireGraph(el);
+  wireHelp(el);
   const ex = document.getElementById('expand'); if (ex) ex.onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
   el.querySelectorAll('[data-tog]').forEach(b => b.onclick = ev => { ev.stopPropagation(); const id = b.dataset.tog; S.open.has(id) ? S.open.delete(id) : S.open.add(id); renderMap(); });
   el.querySelectorAll('.node, g[data-id]').forEach(b => b.onclick = () => { const id = b.dataset.id; if (!S.open.has(id)) S.open.add(id); select(id); renderMap(); });
@@ -857,8 +959,42 @@ function wireFindings(el) {
   el.querySelectorAll('[data-accept]').forEach(b => b.onclick = () => acceptLive(b.dataset.accept));
   el.querySelectorAll('[data-send]').forEach(b => b.onclick = () => sendMenu(b));
 }
-function modeSeg() { return `<div class="seg mode" title="Pick how much detail you want to see"><button data-vm="simple" class="${S.simple ? 'on' : ''}">Simple</button><button data-vm="advanced" class="${S.simple ? '' : 'on'}">Advanced</button></div>`; }
-function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { S.simple = b.dataset.vm === 'simple'; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); }); }
+// Plain-word help for each page, for someone who has never seen a tool like this. Shown by the "?" button on every
+// page; inside the app the "Ask Lantern" button next to it opens the assistant on that page with fitting questions.
+const PAGE_HELP = {
+  map: {t: 'What am I looking at?', p: ['This is a map of your app. On the left are the places a visitor (or a command) can start: pages, API routes, program starts.',
+    'Pick one and the middle shows every step the code takes from there, like following a phone call through an office: who picks up, who they call next. Path lists the steps, Flowchart draws them, Graph shows the whole app at once.',
+    'Click any step to see what it does on the right. Colours mean: red or orange is a security finding inside that function; teal lines were seen running under your tests; dashed lines are Lantern’s best guess (“likely” or “possible”), never a certainty.']},
+  findings: {t: 'What is a finding?', p: ['A finding is a specific line of your code that a scanner flagged as a security problem, with the file and line number.',
+    'Lantern ranks each one by two questions: can a visitor reach it (is there a path from a page or route to that line)? and does it use something the visitor typed? Both yes = critical. That is what “reachable” and “uses input” mean.',
+    'Start at the top. Each one shows the path a visitor would take to reach it, a plain-words explanation when a model has written one, and how to fix it. “Accept risk with a reason” is for when you have decided it is fine and want that written down.']},
+  prot: {t: 'What are protections?', p: ['These are the things a careful engineer adds so an app can be on the internet safely: a login check on routes that change data, a limit on how fast one person can hit a route, security headers, slow password hashing.',
+    'The top list is what Lantern found already in place. The other list is what it looked for and did not find, with how to add each one.',
+    'They are labelled “heuristic” because Lantern looks for known patterns and can be wrong; they lower the readiness score a little but are never counted as hard failures.']},
+  ready: {t: 'What does the score mean?', p: ['The readiness score is a 0–100 number for “could a senior engineer ship this today?”, made of ten areas such as security findings, secrets, tests, dependencies and deployment files, each with a weight.',
+    'Every point has a written reason. A hard failure is a critical finding that a visitor can reach and that uses their input; those cap the grade until fixed.',
+    'The “moves” list is sorted by how many points each fix is worth, so doing them in order raises the grade fastest. Checks that do not apply to your kind of app are skipped, not counted against you.']},
+  xp: {t: 'What are explanations?', p: ['An explanation is a model’s description of one function, written three ways: Technical (for an engineer), Everyday (for anyone, with an example and an analogy) and Mapped (each everyday phrase tied to the exact code it means).',
+    'Lantern checks every phrase against your real code before showing it. If a phrase does not match anything, it is removed and you are told. The model only explains; it can never create, close or accept a finding.',
+    '“Explain” sends that one function’s code to the model you chose in Settings (or none leaves this computer with a local model). Pick a function on the left to read or request its explanation.']},
+  about: {t: 'What is this page?', p: ['What was analyzed, which tools ran with which versions, and what Lantern could not follow. The numbers here are the honest limits of the report.']},
+};
+function helpBtns() {
+  const inApp = (() => { try { return window.self !== window.top && typeof window.parent.askAbout === 'function'; } catch (e) { return false; } })();
+  return `<button class="btn help" id="pagehelp" title="Plain-word help for this page">?<span> What am I looking at</span></button>${inApp ? `<button class="btn ask" id="pageask">${icon('sparkle')}Ask Lantern</button>` : ''}`;
+}
+function wireHelp(el) {
+  const h = el.querySelector('#pagehelp'); if (h) h.onclick = () => {
+    const old = document.getElementById('helppanel'); if (old) { old.remove(); return; }
+    const d = PAGE_HELP[S.tab] || PAGE_HELP.about;
+    const box = document.createElement('div'); box.id = 'helppanel'; box.className = 'helppanel';
+    box.innerHTML = `<div class="hh"><b>${esc(d.t)}</b><button class="x" aria-label="Close">×</button></div>${d.p.map(x => `<p>${esc(x)}</p>`).join('')}<div class="note">Still unsure? ${h.nextElementSibling && h.nextElementSibling.id === 'pageask' ? 'Press <b>Ask Lantern</b> and ask in your own words.' : 'Open this project in the Lantern app and press Ask Lantern.'}</div>`;
+    h.parentElement.after(box); box.querySelector('.x').onclick = () => box.remove();
+  };
+  const a = el.querySelector('#pageask'); if (a) a.onclick = () => { try { window.parent.askAbout({tab: S.tab, page: TAB_WORDS[S.simple ? 'simple' : 'advanced'][S.tab], node: S.tab === 'xp' ? S.xsel : S.sel, finding: S.fsel}); } catch (e) {} };
+}
+function modeSeg() { return `<div class="seg mode" title="Pick how much detail you want to see"><button data-vm="simple" class="${S.simple ? 'on' : ''}">Simple</button><button data-vm="advanced" class="${S.simple ? '' : 'on'}">Advanced</button></div>${helpBtns()}`; }
+function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { S.simple = b.dataset.vm === 'simple'; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); }); wireHelp(el); }
 function renderFindings() {
   const el = document.getElementById('center');
   const all = SEC.findings;
@@ -959,16 +1095,16 @@ async function waitJob(id, onLog) {
     await new Promise(res => setTimeout(res, 800));
   }
 }
-async function explainLive(id) {
-  const msg = document.getElementById('explainmsg'), btn = document.getElementById('explainbtn');
+async function explainLive(id, again = false) {
+  const msg = document.getElementById('explainmsg') || {}, btn = document.getElementById('explainbtn') || document.getElementById('xexplain') || document.getElementById('reexplain') || {};
   btn.disabled = true; msg.textContent = 'Asking the model…';
   try {
-    const job = await live('/explain', {nodes: [id]});
+    const job = await live('/explain', {nodes: [id], fresh: again});
     const j = await waitJob(job.id, log => { msg.textContent = log[log.length - 1] || 'Working…'; });
     if (j.status === 'error') throw new Error(j.error);
     const r = await fetch(LIVE.api + '/explanation?node=' + encodeURIComponent(id), {credentials: 'same-origin'}).then(x => x.json());
     if (r.record) { EXP[id] = r.record; }
-    renderRight(); if (S.tab === 'map') renderMap();
+    render();
   } catch (e) { msg.textContent = e.message; btn.disabled = false; }
 }
 async function acceptLive(fid) {
@@ -1179,7 +1315,7 @@ function renderRight() {
   const railLabel = n ? `${layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : 'Library'} · ${kindWord}` : 'Details';
   const chrome = railChrome(railLabel, 'r');
   // The Simple findings memo and the Readiness/About pages use the full width unless a function is open.
-  document.getElementById('main').classList.toggle('noright', !n && ((S.tab === 'findings' && (S.simple || !S.fsel)) || S.tab === 'ready' || S.tab === 'prot' || S.tab === 'about'));
+  document.getElementById('main').classList.toggle('noright', !n && ((S.tab === 'findings' && (S.simple || !S.fsel)) || S.tab === 'ready' || S.tab === 'prot' || S.tab === 'xp' || S.tab === 'about'));
   el.classList.toggle('rail', S.rrail); document.getElementById('main').classList.toggle('rrail', S.rrail);
   const wire = () => { el.querySelector('.edge').onclick = () => { S.rrail = !S.rrail; try { localStorage.setItem('lantern.rrail', S.rrail ? '1' : '0'); } catch (e) {} renderRight(); }; };
   const fsel = S.tab === 'findings' && !n && S.fsel ? SEC.findings.find(f => f.id === S.fsel) : null;
@@ -1228,13 +1364,13 @@ function renderRight() {
   const c = document.getElementById('close'); if (c) c.onclick = () => el.classList.remove('open');
 }
 
-const TAB_WORDS = {simple: {map: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', about: 'About'},
-                   advanced: {map: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', about: 'About'}};
+const TAB_WORDS = {simple: {map: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', xp: 'What does this do?', about: 'About'},
+                   advanced: {map: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', xp: 'Explanations', about: 'About'}};
 function tabWords() { for (const b of document.querySelectorAll('#tabs button')) { const n = b.querySelector('.n'); b.textContent = TAB_WORDS[S.simple ? 'simple' : 'advanced'][b.dataset.t] || b.textContent; if (n) b.appendChild(n); } }
 window.setSimple = v => { S.simple = !!v; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); };
 function render() {
   renderLeft();
-  if (S.tab === 'map') renderMap(); else if (S.tab === 'findings') renderFindings(); else if (S.tab === 'prot') renderProtections(); else if (S.tab === 'ready') renderReady(); else renderAbout();
+  if (S.tab === 'map') renderMap(); else if (S.tab === 'findings') renderFindings(); else if (S.tab === 'prot') renderProtections(); else if (S.tab === 'ready') renderReady(); else if (S.tab === 'xp') renderExplanations(); else renderAbout();
   tabWords();
   renderRight();
 }
