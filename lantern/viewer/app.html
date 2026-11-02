@@ -6,6 +6,8 @@
 <meta name="theme-color" content="#F5F5F2" id="themecolor">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Lora:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <title>Lantern</title>
 <style>
 /* Lantern design tokens. The same set lives in report.html and evidence.py (each page is self-contained).
@@ -13,10 +15,10 @@
    (good, warning, serious, critical) only for risk and results, always with a label. */
 :root{
   color-scheme: light;
-  --bg:#F5F5F2; --glow:rgba(255,181,71,.16); --surface:#FFFFFF; --surface-2:#FAFAF8; --sunken:#EEEEEA; --hover:rgba(22,22,24,.045);
+  --bg:#F5F5F2; --glow:rgba(255,181,71,.2); --surface:#FFFFFF; --surface-2:#FAFAF8; --sunken:#EEEEEA; --hover:rgba(22,22,24,.045);
   --ink:#161618; --ink-2:#46464C; --muted:#6E6E74; --faint:#A3A3A8;
   --line:rgba(22,22,24,.09); --line-2:rgba(22,22,24,.16);
-  --accent:#2F5BEA; --accent-ink:#2148C9; --accent-soft:rgba(47,91,234,.09); --on-accent:#FFFFFF;
+  --accent:#0F7B74; --accent-ink:#0B5F5A; --accent-soft:rgba(15,123,116,.10); --on-accent:#FFFFFF;
   --primary:#161618; --primary-hover:#2C2C30; --on-primary:#FFFFFF;
   --flame:#FFB547;
   --good:#0CA30C; --warning:#FAB219; --serious:#EC835A; --critical:#D03B3B;
@@ -28,16 +30,17 @@
   --shadow-3:0 1px 3px rgba(16,16,20,.06), 0 24px 56px -16px rgba(16,16,20,.28);
   --r-sm:7px; --r:10px; --r-lg:16px; --r-xl:22px;
   --ease:cubic-bezier(.2,.8,.2,1); --t:160ms;
-  --font:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --display:-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono:ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  --font:"DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --display:"DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif:"Lora", Georgia, "Times New Roman", serif;
+  --mono:"JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
 }
 :root[data-theme=dark]{
   color-scheme: dark;
   --bg:#0E0E10; --glow:rgba(255,170,60,.09); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
   --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
   --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
-  --accent:#7C9BFF; --accent-ink:#A3B8FF; --accent-soft:rgba(124,155,255,.14); --on-accent:#0E0E10;
+  --accent:#4FC3BA; --accent-ink:#7FDBD3; --accent-soft:rgba(79,195,186,.14); --on-accent:#0E0E10;
   --primary:#F3F3F1; --primary-hover:#FFFFFF; --on-primary:#0E0E10;
   --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
   --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
@@ -52,7 +55,7 @@
     --bg:#0E0E10; --glow:rgba(255,170,60,.09); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
     --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
     --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
-    --accent:#7C9BFF; --accent-ink:#A3B8FF; --accent-soft:rgba(124,155,255,.14); --on-accent:#0E0E10;
+    --accent:#4FC3BA; --accent-ink:#7FDBD3; --accent-soft:rgba(79,195,186,.14); --on-accent:#0E0E10;
     --primary:#F3F3F1; --primary-hover:#FFFFFF; --on-primary:#0E0E10;
     --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
     --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
@@ -77,10 +80,62 @@ a{color:var(--accent-ink);text-decoration:none} a:hover{text-decoration:underlin
 code{font:12.5px var(--mono);background:var(--sunken);color:var(--ink);padding:1px 6px;border-radius:6px;overflow-wrap:anywhere}
 
 /* ---------- top bar ---------- */
+/* Backdrop: three full-size SVG layers, each animated as a whole element (compositor only), 22–30 s drifts.
+   Quieter on project screens (the Atlas is busy enough); off under prefers-reduced-motion or in Settings. */
+#bg{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;opacity:.55;transition:opacity .4s}
+#bg.quiet{opacity:.4}#bg.off{display:none}
+#bg svg{position:absolute;inset:0;width:100%;height:100%;will-change:transform}
+#bg .la{animation:drift1 22s cubic-bezier(.45,0,.55,1) 0s infinite}#bg .lb{animation:drift2 26s cubic-bezier(.45,0,.55,1) 3s infinite}#bg .lc{animation:drift3 30s cubic-bezier(.45,0,.55,1) 6s infinite}
+@keyframes drift1{0%,100%{transform:translate(0,0) rotate(0)}50%{transform:translate(18px,-26px) rotate(6deg)}}
+@keyframes drift2{0%,100%{transform:translate(0,0)}50%{transform:translate(-24px,18px)}}
+@keyframes drift3{0%,100%{transform:translate(0,0) rotate(0)}50%{transform:translate(14px,22px) rotate(-8deg)}}
+@keyframes flame{0%{transform:scale(1,1) skewX(0)}22%{transform:scale(.93,1.09) skewX(-4deg)}48%{transform:scale(1.05,.94) skewX(3deg)}71%{transform:scale(.96,1.06) skewX(-2deg)}100%{transform:scale(1,1) skewX(0)}}
+@keyframes flame2{0%{transform:scale(1,1) skewX(0)}30%{transform:scale(.88,1.14) skewX(4deg)}60%{transform:scale(1.08,.9) skewX(-3deg)}100%{transform:scale(1,1) skewX(0)}}
+@keyframes flameglow{0%,100%{opacity:.5}40%{opacity:.9}70%{opacity:.65}}
+@media (prefers-reduced-motion: reduce){#bg svg,.mark .fl,.mark .fl2,.mark .gl{animation:none !important}}
+header.top,#view{position:relative;z-index:1}
+/* The lantern mark: glow + body + two flame tongues, each animated as a whole element. */
+.mark{width:28px;height:28px;border-radius:9px;flex:none;position:relative;display:inline-block;background:#141416;overflow:hidden;box-shadow:0 0 0 1px var(--line),0 4px 14px -4px rgba(255,170,60,.5)}
+.mark .gl{position:absolute;left:17%;top:22%;width:66%;height:66%;border-radius:99px;background:radial-gradient(closest-side,rgba(255,196,92,.6),rgba(255,196,92,0));animation:flameglow 1.4s ease-in-out infinite;will-change:opacity}
+.mark svg{position:absolute;inset:0;width:100%;height:100%}
+.mark .fl{transform-origin:50% 61%;animation:flame 1.1s ease-in-out infinite;will-change:transform}
+.mark .fl2{transform-origin:50% 61%;animation:flame2 .75s ease-in-out infinite;will-change:transform}
+/* Ask Lantern: floating pill bottom-right, 340×580 window. */
+#ask{position:fixed;right:20px;bottom:20px;z-index:60;display:flex;flex-direction:column;align-items:flex-end;gap:10px;font-family:var(--font);color:var(--ink-2)}
+#ask .win{width:340px;height:580px;max-height:calc(100vh - 100px);max-width:calc(100vw - 32px);display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line-2);border-radius:18px;box-shadow:0 1px 3px rgba(16,16,20,.08),0 24px 56px -16px rgba(16,16,20,.35);overflow:hidden;transition:opacity .15s}
+#ask .hd{display:flex;align-items:center;gap:10px;padding:12px 12px 12px 14px;border-bottom:1px solid var(--line)}
+#ask .hd .t{font:600 13.5px var(--font);color:var(--ink);line-height:1.2}#ask .hd .s{font:11px var(--font);color:var(--muted);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#ask .hd input[type=range]{width:64px;accent-color:var(--accent);margin:0}
+#ask .x{width:26px;height:26px;border-radius:7px;border:0;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center;font:400 16px/1 var(--font)}#ask .x:hover{background:var(--hover);color:var(--ink)}
+#ask .log{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:10px}
+#ask .ctx{align-self:center;font:11px var(--font);color:var(--faint);white-space:nowrap}#ask .ctx b{color:var(--muted);font-weight:600}
+#ask .me{align-self:flex-end;max-width:85%;padding:8px 12px;border-radius:14px 14px 4px 14px;background:var(--primary);color:var(--on-primary);font:13px/1.45 var(--font);white-space:pre-wrap}
+#ask .bot{align-self:flex-start;max-width:92%;padding:10px 12px;border-radius:14px 14px 14px 4px;background:var(--surface-2);border:1px solid var(--line);font:13px/1.5 var(--font);color:var(--ink-2);white-space:pre-wrap;overflow-wrap:anywhere}
+#ask .bot code{font:11.5px var(--mono);background:var(--sunken);padding:0 4px;border-radius:4px;color:var(--ink)}
+#ask .bot .cites{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}#ask .bot .cites button{font:600 10.5px var(--mono);padding:2px 7px;border-radius:99px;background:var(--accent-soft);color:var(--accent-ink);border:0;cursor:pointer}
+#ask .bot.wait{color:var(--muted)}
+#ask .ft{padding:10px 12px 12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+#ask .chips{display:flex;gap:6px;flex-wrap:wrap}#ask .chips button{font:500 11.5px var(--font);padding:4px 9px;border-radius:99px;border:1px solid var(--line-2);background:transparent;color:var(--ink-2);white-space:nowrap;cursor:pointer}#ask .chips button:hover{background:var(--hover)}
+#ask .shot{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:12px;border:1px dashed var(--accent);background:var(--accent-soft)}#ask .shot .nm{font:600 12.5px var(--font);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#ask .shot .sm{font:11px var(--font);color:var(--muted)}#ask .shot button{font:600 11.5px var(--font);color:var(--ink-2);padding:4px 8px;border-radius:7px;border:1px solid var(--line-2);background:transparent;cursor:pointer}
+#ask .comp{display:flex;align-items:center;gap:6px;padding:6px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface)}
+#ask .comp .att{width:30px;height:30px;border-radius:9px;border:0;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center;flex:none}#ask .comp .att:hover{background:var(--hover);color:var(--ink)}
+#ask .comp textarea{flex:1;resize:none;border:0;outline:0;background:transparent;font:13px/1.4 var(--font);color:var(--ink);min-height:20px;max-height:90px;padding:4px 2px}
+#ask .comp .send{width:30px;height:30px;border-radius:9px;border:0;background:var(--primary);color:var(--on-primary);display:grid;place-items:center;flex:none;cursor:pointer}
+#ask .asknote{font:10.5px var(--font);color:var(--faint);text-align:center}
+#ask .peek{padding:8px 12px;border-radius:12px 12px 4px 12px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-2);font:12.5px/1.4 var(--font);color:var(--ink);max-width:230px}
+#ask .pill{display:flex;align-items:center;gap:8px;height:48px;padding:0 12px;border-radius:99px;border:0;background:var(--primary);color:var(--on-primary);cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.18),0 10px 28px -8px rgba(255,170,60,.55);transition:padding .15s,transform .15s;font:600 13.5px var(--font)}
+#ask .pill:hover{transform:translateY(-1px)}#ask .pill .lbl{display:none}#ask .pill:hover .lbl{display:inline}#ask .pill:hover{padding:0 14px 0 12px}
+#ask .pill .mark{width:24px;height:24px;border-radius:8px;box-shadow:none}
+@media (max-width:760px){#ask .win{width:calc(100vw - 32px);height:min(580px,calc(100vh - 90px))}}
+/* Simple / Advanced segmented toggle (shared chrome) */
+.seg{display:inline-flex;gap:2px;padding:3px;border-radius:9px;background:var(--sunken);border:1px solid var(--line)}
+.seg button{padding:4px 10px;border-radius:6px;border:0;cursor:pointer;font:600 12px var(--font);background:transparent;color:var(--muted)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1)}
+@media (max-width:760px){.seg{display:none}}
 header.top{position:sticky;top:0;z-index:10;height:56px;display:flex;align-items:center;gap:16px;padding:0 20px;
   background:color-mix(in srgb, var(--bg) 82%, transparent);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:10px;background:none;border:0;padding:4px 6px 4px 0;font:600 16px/1 var(--display);letter-spacing:-.02em;color:var(--ink)}
-.brand img{width:28px;height:28px;border-radius:8px;box-shadow:0 0 0 1px var(--line), 0 4px 14px -4px rgba(255,170,60,.45)}
+.brand:hover span{color:var(--accent-ink)}
 .nav{display:flex;gap:2px;margin-left:auto;padding:3px;border-radius:12px;background:var(--hover)}
 .nav button{display:flex;align-items:center;gap:7px;background:none;border:0;padding:6px 12px;border-radius:9px;font-weight:550;font-size:13.5px;color:var(--muted);transition:color var(--t) var(--ease), background var(--t) var(--ease)}
 .nav button:hover{color:var(--ink)}
@@ -291,17 +346,20 @@ iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px
 </style>
 </head>
 <body>
+<div id="bg" aria-hidden="true"></div>
 <header class="top">
-  <button class="brand" id="home" aria-label="Lantern home"><img src="/icon.svg" alt=""><span>Lantern</span></button>
+  <button class="brand" id="home" aria-label="Lantern home" title="My projects"><span class="mark" aria-hidden="true"><i class="gl"></i><svg viewBox="0 0 64 64"><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/></svg><svg viewBox="0 0 64 64" class="fl"><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><svg viewBox="0 0 64 64" class="fl2"><path d="M32 30.5c1.6 1.9 2.4 3.3 2.4 4.6a2.4 2.4 0 0 1-4.8 0c0-1.3.8-2.7 2.4-4.6z" fill="#FFE3A6"/></svg></span><span>Lantern</span></button>
   <nav id="nav" class="nav" aria-label="Main">
-    <button data-v="home" class="on"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>Projects</span></button>
+    <button data-v="home" class="on"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>My projects</span></button>
     <button data-v="learn"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 5.5C8.5 4.3 6.3 3.8 3.5 4v11c2.8-.2 5 .3 6.5 1.5 1.5-1.2 3.7-1.7 6.5-1.5V4c-2.8-.2-5 .3-6.5 1.5zM10 5.5v11"/></svg><span>Learn</span></button>
     <button data-v="settings"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg><span>Settings</span></button>
     <button data-v="help"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M10 14h.01"/></svg><span>Help</span></button>
   </nav>
+  <div class="seg" id="viewmode" title="Simple: plain sentences and one next action. Advanced: every table and panel."><button data-m="simple">Simple</button><button data-m="advanced">Advanced</button></div>
   <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
 </header>
 <div id="view"></div>
+<div id="ask"></div>
 <script>
 const TOKEN = '__LANTERN_TOKEN__';
 const VERSION = '__LANTERN_VERSION__';
@@ -379,7 +437,111 @@ applyTheme();
 async function refresh() { S.state = await api('/api/state'); render(); }
 function go(view, extra = {}) { Object.assign(S, {view}, extra); for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
 document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); };
-document.getElementById('home').onclick = () => go('home');
+document.getElementById('home').onclick = () => { go('home'); refresh().catch(() => {}); };
+
+// ---------------------------------------------------------------- backdrop (design: three drifting SVG layers)
+(function backdrop() {
+  const hex = (cx, cy, r) => Array.from({length: 6}, (_, i) => `${(cx + r * Math.cos(Math.PI / 3 * i - Math.PI / 6)).toFixed(1)},${(cy + r * Math.sin(Math.PI / 3 * i - Math.PI / 6)).toFixed(1)}`).join(' ');
+  const st = 'fill="none" stroke-width="1.2" vector-effect="non-scaling-stroke"';
+  const layer = (cls, inner) => `<svg class="${cls}" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice">${inner}</svg>`;
+  document.getElementById('bg').innerHTML =
+    layer('la', `<polygon points="${hex(1010, 140, 150)}" ${st} stroke="var(--line-2)"/><polygon points="760,80 830,200 690,200" ${st} stroke="var(--line-2)"/><circle cx="260" cy="300" r="6" fill="var(--flame)" fill-opacity=".6"/><polygon points="${hex(620, 330, 44)}" ${st} stroke="var(--line-2)"/>`) +
+    layer('lb', `<circle cx="130" cy="690" r="170" ${st} stroke="var(--line-2)"/><circle cx="130" cy="690" r="118" ${st} stroke="var(--flame)" stroke-opacity=".5" stroke-dasharray="2 14"/><rect x="560" y="560" width="110" height="110" rx="14" ${st} stroke="var(--accent)" stroke-opacity=".4" transform="rotate(18 615 615)"/><rect x="584" y="584" width="62" height="62" rx="8" fill="var(--accent-soft)" transform="rotate(18 615 615)"/>`) +
+    layer('lc', `<polygon points="${hex(1010, 140, 108)}" ${st} stroke="var(--accent)" stroke-opacity=".35" stroke-dasharray="6 10"/><circle cx="700" cy="420" r="4" fill="var(--accent)" fill-opacity=".55"/>
+      <g class="graphs" stroke="var(--accent)" stroke-opacity=".3" stroke-width="1" fill="var(--accent)" opacity=".7"><line x1="300" y1="640" x2="400" y2="690"/><line x1="400" y1="690" x2="480" y2="630"/><line x1="400" y1="690" x2="430" y2="770"/><circle cx="300" cy="640" r="3.5" fill-opacity=".7"/><circle cx="400" cy="690" r="5" fill-opacity=".9"/><circle cx="480" cy="630" r="3" fill-opacity=".6"/><circle cx="430" cy="770" r="3" fill-opacity=".6"/></g>
+      <g class="graphs" stroke="var(--ink)" stroke-opacity=".25" stroke-width="1" fill="var(--ink)" opacity=".7"><line x1="880" y1="620" x2="980" y2="560"/><line x1="980" y1="560" x2="1090" y2="610"/><line x1="980" y1="560" x2="1000" y2="470"/><circle cx="880" cy="620" r="3" fill-opacity=".5"/><circle cx="980" cy="560" r="4.5" fill-opacity=".7"/><circle cx="1090" cy="610" r="3" fill-opacity=".5"/><circle cx="1000" cy="470" r="2.5" fill-opacity=".5"/></g>`);
+})();
+function setBackdrop() {
+  const bg = document.getElementById('bg'); const pref = (S.state && S.state.settings && S.state.settings.backdrop) || 'subtle';
+  bg.className = pref === 'off' ? 'off' : S.view === 'project' ? 'quiet' : '';
+  bg.style.opacity = pref === 'bold' ? (S.view === 'project' ? '.7' : '1') : '';
+  for (const g of bg.querySelectorAll('.graphs')) g.style.display = S.view === 'project' ? 'none' : '';
+}
+
+// ---------------------------------------------------------------- Simple / Advanced (persisted per user)
+function viewMode() { return (S.state && S.state.settings && S.state.settings.view_mode) || 'simple'; }
+function drawViewMode() {
+  for (const b of document.querySelectorAll('#viewmode button')) b.classList.toggle('on', b.dataset.m === viewMode());
+  document.body.dataset.mode = viewMode();
+}
+document.getElementById('viewmode').addEventListener('click', async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  try { const r = await api('/api/settings', {method: 'POST', body: {view_mode: b.dataset.m}}); S.state.settings = r.settings; } catch (err) { /* keep going with the old value */ }
+  drawViewMode(); render();
+});
+
+// ---------------------------------------------------------------- Ask Lantern
+const ASK = {open: false, opacity: 1, log: [], busy: false, shot: null};
+const MARK = document.querySelector('.brand .mark').outerHTML;
+function askContext() {
+  if (S.view === 'project' && S.project) { const p = (S.state.projects || []).find(x => x.id === S.project); return (p ? p.name : 'this project') + ' · ' + (S.tab || 'atlas'); }
+  return {home: 'My projects', learn: 'Learn', settings: 'Settings', help: 'Help'}[S.view] || 'Lantern';
+}
+function askModel() { const s = S.state && S.state.settings; return s && s.model ? s.model.split('/').pop() : 'no model yet'; }
+function renderAsk() {
+  const el = document.getElementById('ask');
+  const chips = S.view === 'project' ? ['What should I fix first?', 'Why is it critical?', 'Summarize this project'] : ['What does Lantern check?', 'What is "likely"?', 'How do I add a project?'];
+  const msgs = ASK.log.map(m => m.role === 'me' ? `<div class="me">${esc(m.text)}</div>` :
+    `<div class="bot ${m.wait ? 'wait' : ''}">${fmtAsk(m.text)}${(m.cited || []).length ? `<div class="cites">${m.cited.map(c => `<button data-cite="${esc(c)}" title="Open this finding">${esc(c)}</button>`).join('')}</div>` : ''}</div>`).join('');
+  el.innerHTML = (ASK.open ? `<div class="win" style="opacity:${ASK.opacity}">
+    <div class="hd">${MARK}<div style="flex:1;min-width:0"><div class="t">Ask Lantern</div><div class="s">Facts from your analysis · words from ${esc(askModel())}</div></div>
+      <label title="Window opacity" style="display:flex;align-items:center;gap:6px;color:var(--muted);flex:none"><svg viewBox="0 0 20 20" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6"><circle cx="10" cy="10" r="6.5"/><path d="M10 3.5v13a6.5 6.5 0 0 0 0-13z" fill="currentColor"/></svg><input type="range" min="0.3" max="1" step="0.05" value="${ASK.opacity}" id="askop"></label>
+      <button class="x" id="askclose" aria-label="Close">×</button></div>
+    <div class="log" id="asklog"><div class="ctx">Looking at <b>${esc(askContext())}</b></div>${msgs || '<div class="bot">Ask anything about this page, your projects, or a term you don’t know. I answer from Lantern’s own results and never guess.</div>'}</div>
+    <div class="ft"><div class="chips">${chips.map(c => `<button data-chip="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+      ${ASK.shot ? `<div class="shot"><span style="width:52px;height:36px;border-radius:7px;background:var(--code-bg);display:grid;place-items:center;flex:none"><svg viewBox="0 0 20 20" style="width:16px;height:16px;fill:none;stroke:var(--code-dim);stroke-width:1.6;stroke-linejoin:round"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="m3 14 4-4 3 3 2-2 5 5"/><circle cx="13" cy="8" r="1.3"/></svg></span><div style="flex:1;min-width:0"><div class="nm">${esc(ASK.shot.name)}</div><div class="sm">${esc(ASK.shot.info)}</div></div><button id="askrm">Remove</button></div>` : ''}
+      <div class="comp"><button class="att" id="askatt" title="Attach a screenshot (or paste / drop one)" aria-label="Attach a screenshot"><svg viewBox="0 0 20 20" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round;stroke-linecap:round"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="m3 14 4-4 3 3 2-2 5 5"/><circle cx="13" cy="8" r="1.3"/></svg></button><input type="file" id="askfile" accept="image/*" hidden><textarea id="askin" rows="1" placeholder="${ASK.shot ? 'What went wrong here?' : 'Ask, or drop a screenshot…'}"></textarea><button class="send" id="asksend" aria-label="Send"><svg viewBox="0 0 20 20" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M10 15V5M5.5 9.5 10 5l4.5 4.5"/></svg></button></div>
+      <div class="asknote">Answers cite your code. The agent cannot create, close or accept findings.</div></div></div>` : '') +
+    `<div class="peek" id="askpeek" hidden>Ask Lantern anything about this page, your projects, or a term you don't know.</div>
+     <button class="pill" id="askpill" aria-label="Ask Lantern">${MARK}<span class="lbl">Ask Lantern</span></button>`;
+  const log = el.querySelector('#asklog'); if (log) log.scrollTop = log.scrollHeight;
+  const ta = el.querySelector('#askin'); if (ta && ASK.open && !ASK.busy) ta.focus();
+}
+function fmtAsk(t) { return esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\[([0-9a-f]{12})\]/g, '<code>$1</code>'); }
+async function askSend(text) {
+  if (!text || ASK.busy) return;
+  ASK.log.push({role: 'me', text}); ASK.log.push({role: 'bot', text: 'Thinking…', wait: true}); ASK.busy = true; renderAsk();
+  const focus = {};
+  if (S.view === 'project' && S.sel) focus.node = S.sel;
+  if (ASK.shot && ASK.shot.text) text += '\n\nScreenshot text (read on this computer):\n' + ASK.shot.text;
+  try {
+    const r = await api('/api/ask', {method: 'POST', body: {project: S.view === 'project' ? S.project : null, question: text, focus}});
+    ASK.log.pop(); ASK.log.push({role: 'bot', text: r.answer, cited: r.cited || []});
+  } catch (e) { ASK.log.pop(); ASK.log.push({role: 'bot', text: 'I could not answer: ' + (e.message || e)}); }
+  ASK.busy = false; ASK.shot = null; renderAsk();
+}
+document.getElementById('ask').addEventListener('click', async e => {
+  const t = e.target.closest('button'); if (!t) return;
+  if (t.id === 'askpill') { ASK.open = !ASK.open; renderAsk(); return; }
+  if (t.id === 'askclose') { ASK.open = false; renderAsk(); return; }
+  if (t.id === 'asksend') { const ta = document.getElementById('askin'); const v = ta.value.trim(); ta.value = ''; askSend(v); return; }
+  if (t.dataset.chip) { askSend(t.dataset.chip); return; }
+  if (t.id === 'askatt') { document.getElementById('askfile').click(); return; }
+  if (t.id === 'askrm') { ASK.shot = null; renderAsk(); return; }
+  if (t.dataset.cite) { if (S.view === 'project') { S.tab = 'findings'; S.focusFinding = t.dataset.cite; render(); } }
+});
+document.getElementById('ask').addEventListener('input', e => { if (e.target.id === 'askop') { ASK.opacity = +e.target.value; const w = document.querySelector('#ask .win'); if (w) w.style.opacity = ASK.opacity; } });
+document.getElementById('ask').addEventListener('keydown', e => { if (e.target.id === 'askin' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('asksend').click(); } });
+document.getElementById('ask').addEventListener('change', async e => {
+  if (e.target.id !== 'askfile' || !e.target.files[0]) return;
+  await askAttach(e.target.files[0]);
+});
+document.getElementById('ask').addEventListener('mouseenter', e => { const p = document.getElementById('askpeek'); if (p && !ASK.open) p.hidden = false; }, true);
+document.getElementById('ask').addEventListener('mouseleave', e => { const p = document.getElementById('askpeek'); if (p) p.hidden = true; }, true);
+document.addEventListener('paste', e => { if (!ASK.open) return; const f = [...(e.clipboardData.files || [])].find(x => x.type.startsWith('image/')); if (f) askAttach(f); });
+document.addEventListener('dragover', e => { if (ASK.open && e.target.closest('#ask')) e.preventDefault(); });
+document.addEventListener('drop', e => { if (!ASK.open || !e.target.closest('#ask')) return; e.preventDefault(); const f = [...(e.dataTransfer.files || [])].find(x => x.type.startsWith('image/')); if (f) askAttach(f); });
+async function askAttach(file) {
+  ASK.shot = {name: file.name, info: 'reading on this computer…', text: ''}; renderAsk();
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const r = await fetch('/api/ask/screenshot', {method: 'POST', headers: {'X-Lantern-Token': TOKEN}, body: fd, credentials: 'same-origin'});
+    const j = await r.json();
+    ASK.shot = {name: file.name, info: `${j.width || '?'}×${j.height || '?'} · read on this computer · ${j.lines === undefined ? (j.error || 'could not read text') : j.lines + ' lines of text found'}`, text: j.text || ''};
+  } catch (err) { ASK.shot = {name: file.name, info: 'could not read the image', text: ''}; }
+  renderAsk();
+}
+
 
 function watch(jobId, pid) {
   S.jobs[pid] = {id: jobId, log: [], status: 'running'};
@@ -643,7 +805,13 @@ function renderSettings(el) {
     <div class="card group" id="conns"><h2>Connections</h2><div class="hint">Lantern works inside Claude, ChatGPT, Cursor and Claude Code as a connector (MCP). An assistant can read findings, paths, readiness and explanations, re-analyze, re-check a fix, and verify an Evidence Report. It can never accept or close a finding; that stays with you, with a written reason.</div>
       <div id="connlist"><div class="working"><span class="pulse"></span>Looking…</div></div></div>
     <div class="card group"><h2>Appearance</h2><div class="hint">Saved in this browser right away.</div>
-      <div class="seg" id="themeseg">${themeBtn('auto', 'auto', 'Match computer')}${themeBtn('light', 'sun', 'Light')}${themeBtn('dark', 'moon', 'Dark')}</div></div>
+      <div class="seg" id="themeseg">${themeBtn('auto', 'auto', 'Match computer')}${themeBtn('light', 'sun', 'Light')}${themeBtn('dark', 'moon', 'Dark')}</div>
+      <label for="bdsel" style="margin-top:14px">Moving shapes in the background</label>
+      <div class="seg" id="bdseg">${['off', 'subtle', 'bold'].map(v => `<button data-bd="${v}" class="${(s.backdrop || 'subtle') === v ? 'on' : ''}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>
+      <div class="hint">Slow geometric shapes behind the pages, quieter on project screens. Off when your system asks for reduced motion.</div>
+      <label style="margin-top:14px">Default view</label>
+      <div class="seg" id="modeseg"><button data-md="simple" class="${viewMode() === 'simple' ? 'on' : ''}">Simple</button><button data-md="advanced" class="${viewMode() === 'advanced' ? 'on' : ''}">Advanced</button></div>
+      <div class="hint">Simple: plain sentences and one next action. Advanced: every table and panel. Phones always get Simple. The toggle in the header does the same.</div></div>
     <p class="foot">Lantern ${esc(VERSION)} · settings live in ~/.lantern on this computer.</p></main>`;
   el.querySelector('#prov').onchange = draw; draw();
   api('/api/connections').then(c => {
@@ -668,6 +836,8 @@ function renderSettings(el) {
     : 'Off. Nothing is sent anywhere.'; }).catch(() => {});
   usageInfo();
   el.querySelector('#share').onchange = async () => { await save(); usageInfo(); };
+  el.querySelector('#bdseg').onclick = async e => { const b = e.target.closest('button'); if (!b) return; await save({backdrop: b.dataset.bd}); for (const x of el.querySelectorAll('#bdseg button')) x.classList.toggle('on', x === b); setBackdrop(); };
+  el.querySelector('#modeseg').onclick = async e => { const b = e.target.closest('button'); if (!b) return; await save({view_mode: b.dataset.md}); for (const x of el.querySelectorAll('#modeseg button')) x.classList.toggle('on', x === b); drawViewMode(); };
   el.querySelector('#forget').onclick = () => save({forget_key: true, key: undefined});
 }
 
@@ -688,6 +858,7 @@ function renderHelp(el) {
 function render() {
   const el = document.getElementById('view');
   if (!S.state) { el.innerHTML = '<div class="empty">Loading…</div>'; return; }
+  setBackdrop(); drawViewMode(); renderAsk();
   if (S.view === 'project') { el.className = ''; return renderProject(el); }
   if (S.view === 'settings') return renderSettings(el);
   if (S.view === 'help') return renderHelp(el);

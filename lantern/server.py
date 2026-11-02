@@ -170,11 +170,13 @@ class Store:
     # settings and keys
     def settings(self) -> dict:
         return {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL_NAME, "base_url": "", "privacy": "full",
-                "share_usage": False, **self._read("settings.json", {})}
+                "share_usage": False, "view_mode": "simple", "backdrop": "subtle", **self._read("settings.json", {})}
 
     def save_settings(self, s: dict) -> None:
         keep = {k: s.get(k) for k in ("provider", "model", "base_url", "privacy")}
         keep["share_usage"] = bool(s.get("share_usage"))
+        keep["view_mode"] = "advanced" if s.get("view_mode") == "advanced" else "simple"
+        keep["backdrop"] = s.get("backdrop") if s.get("backdrop") in ("off", "subtle", "bold") else "subtle"
         with self.lock:
             self._write("settings.json", keep)
         if keep["share_usage"]:
@@ -341,7 +343,10 @@ def _csp(nonce: str | None) -> str:
     """Only our own scripts run on Lantern's pages: inline ones carry this response's nonce, and pages without
     a nonce (Evidence Report, messages) run none at all."""
     script = f"'nonce-{nonce}'" if nonce else "'none'"
-    return (f"default-src 'self'; script-src {script}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+    # Google Fonts is the one outside origin: the design's typefaces (DM Sans, Lora, JetBrains Mono). Offline, the
+    # system fallbacks render and nothing else changes; the browser sends no cookies to it.
+    return (f"default-src 'self'; script-src {script}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; "
             "worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
             "frame-ancestors 'self'")
 
@@ -394,6 +399,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
+        ctype = self.headers.get("Content-Type") or ""
+        if ctype.startswith("multipart/form-data"):
+            if n > 12_000_000:
+                raise ValueError("file too large (12 MB max)")
+            return {"_multipart": self.rfile.read(n), "_ctype": ctype}
         if n > 1_000_000:
             raise ValueError("request too large")
         raw = self.rfile.read(n) if n else b"{}"
@@ -628,6 +638,24 @@ class Handler(BaseHTTPRequestHandler):
             privacy = app.store.settings().get("privacy", "full")
             job = app.jobs.start(proj["id"], "analyze", lambda log: pipeline.analyze(dest, app.out(proj), privacy, log=log))
             return self._json({"project": app.summary(proj), "job": job}, 201)
+        if path == "/api/ask/screenshot":
+            from . import ask as _ask
+            return self._json(_ask.read_screenshot(b.get("_multipart") or b"", str(b.get("_ctype") or "")))
+        if path == "/api/ask":
+            from . import ask as _ask
+            pid = str(b.get("project") or "")
+            proj = app.store.project(pid) if pid else None
+            if pid and not proj:
+                raise ValueError("no such project")
+            try:
+                provider = app.make_provider()
+            except ValueError as e:
+                return self._json({"answer": f"No model is set up yet, so I can't answer in words. {e} "
+                                             "Everything else in Lantern works without a model.", "no_model": True})
+            usage.record("explain_one")
+            res = _ask.ask(provider, str(b.get("question") or ""), Path(proj["path"]) if proj else None,
+                           b.get("focus") if isinstance(b.get("focus"), dict) else None)
+            return self._json(res)
         if path == "/api/login/start":
             from .providers import sign_in_start
             provider = str(b.get("provider") or "")
@@ -645,6 +673,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("privacy is full or structure")
             if "share_usage" in b:
                 s["share_usage"] = bool(b["share_usage"])
+            for k in ("view_mode", "backdrop"):
+                if k in b and b[k] is not None:
+                    s[k] = str(b[k])
             app.store.save_settings(s)
             usage.record("settings_save")
             if b.get("key"):
