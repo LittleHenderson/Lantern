@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lantern"
 version = "0.1.0"
+license = "MIT"
 description = "Map every call path in a full-stack app (Python + TypeScript/JavaScript), explain it in three lenses, and audit it."
 readme = "README.md"
 requires-python = ">=3.11"
