@@ -530,6 +530,7 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern\" "
               f"&& lantern verify . --report evidence.html{_trace_suffix(ev)}") if commit else "Commit your changes and regenerate the report to make it verifiable."
     memo = _memo(ev)
+    verify_js = json.dumps(verify).replace("<", "\\u003c")   # the verify command inside the page's script
     base_rd = sc.get("baseline_readiness") if isinstance(sc.get("baseline_readiness"), dict) else {}
     base_cats = base_rd.get("categories") if isinstance(base_rd.get("categories"), dict) else {}
     same_day = sc.get("baseline_date") == dt.date.today().isoformat()
@@ -695,7 +696,7 @@ body[data-mode=simple] .adv{{display:none}} body[data-mode=advanced] .simp{{disp
   seg.onclick = function (e) {{ var b = e.target.closest('button'); if (!b) return; body.dataset.mode = b.dataset.m; try {{ localStorage.setItem('lantern.simple', b.dataset.m === 'simple' ? '1' : '0'); }} catch (x) {{}} draw(); }};
   window.setSimple = function (v) {{ body.dataset.mode = v ? 'simple' : 'advanced'; draw(); }};
   draw();
-  var cv = document.getElementById('copyverify'), cmd = {json.dumps(verify).replace('<', '\\u003c')};
+  var cv = document.getElementById('copyverify'), cmd = {verify_js};
   cv.onclick = function () {{ if (navigator.clipboard) navigator.clipboard.writeText(cmd); cv.textContent = 'Copied'; }};
   try {{ if (window.self !== window.top) document.querySelector('.topbar .seg').style.display = 'none'; }} catch (e) {{}}
 }})();
