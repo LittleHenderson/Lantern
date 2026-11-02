@@ -337,6 +337,7 @@ pre.cmd{background:var(--sunken);color:var(--ink);font:12.5px/1.6 var(--mono);pa
 .sub .gchip.good{background:var(--good-soft)} .sub .gchip.warning{background:var(--warning-soft)} .sub .gchip.serious{background:var(--serious-soft)} .sub .gchip.critical{background:var(--critical-soft)}
 .tabs{display:flex;gap:2px;margin-left:8px;overflow-x:auto;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
+.tabs button .n{font:600 11px/1 var(--font);padding:3px 6px;border-radius:99px;background:var(--hover);color:var(--ink-2)} .tabs button .n.crit{background:var(--critical-soft);color:var(--crit-ink)}
 .tabs button{position:relative;display:flex;align-items:center;gap:7px;height:52px;padding:0 12px;background:none;border:0;font-weight:550;font-size:13.5px;color:var(--muted);white-space:nowrap;transition:color var(--t) var(--ease)}
 .tabs button:hover{color:var(--ink)}
 .tabs button.on{color:var(--ink)}
@@ -546,6 +547,7 @@ function drawViewMode() {
   for (const b of document.querySelectorAll('#viewmode button')) b.classList.toggle('on', b.dataset.m === viewMode());
   document.body.dataset.mode = viewMode();
   try { localStorage.setItem('lantern.simple', viewMode() === 'simple' ? '1' : '0'); } catch (e) {}   // the Atlas (report.html, same origin) follows
+  try { if (S.frame && S.frame.el.contentWindow.setSimple) S.frame.el.contentWindow.setSimple(viewMode() === 'simple'); } catch (e) {}
 }
 document.getElementById('viewmode').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -793,21 +795,34 @@ function renderProject(el) {
   const p = S.state.projects.find(x => x.id === S.project);
   if (!p) return go('home');
   if (S.tab === 'guide' && !p.starter) S.tab = 'atlas';
-  const tab = (t, label) => `<button data-t="${t}" class="${S.tab === t ? 'on' : ''}">${label}</button>`;
+  // The project screens from the design: the first four are the report viewer opened on one of its tabs.
+  const simple = viewMode() === 'simple';
+  const W = simple ? {atlas: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', evidence: 'Report', explain: 'Explanations', guide: 'Guide'}
+                   : {atlas: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', evidence: 'Evidence', explain: 'Explanations', guide: 'Guide'};
+  const REPORT_TABS = {atlas: 'map', findings: 'findings', prot: 'prot', ready: 'ready'};
+  const c = p.counts || {}, nf = (c.critical || 0) + (c.high || 0) + (c.medium || 0);
+  const tab = (t, label) => `<button data-t="${t}" class="${S.tab === t ? 'on' : ''}">${label}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${nf}</span>` : ''}</button>`;
   el.innerHTML = `<div class="sub"><button class="back" id="back" aria-label="Back to projects">${icon('back')}</button><span class="title">${esc(p.name)}</span>
-    ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100">${esc(p.grade)}</span>` : ''}
-    <div class="tabs" role="tablist">${p.starter ? tab('guide', 'Guide') : ''}${tab('atlas', 'Atlas')}${tab('evidence', 'Evidence Report')}${tab('explain', 'Explanations')}</div>
+    ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100">${esc(p.grade)}${simple ? '' : ' · ' + esc(p.score)}</span>` : ''}
+    <div class="tabs" role="tablist">${p.starter ? tab('guide', W.guide) : ''}${['atlas', 'findings', 'prot', 'ready', 'evidence', 'explain'].map(t => tab(t, W[t])).join('')}</div>
     <span class="spacer"></span><a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a></div>
     <div id="pbody"></div>`;
   el.querySelector('#back').onclick = () => go('home');
   el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; renderProject(el); });
   const body = el.querySelector('#pbody');
   if (S.tab === 'guide') return renderGuide(body, p);
-  if (S.tab === 'atlas') {
-    body.innerHTML = `<iframe src="/p/${p.id}/report.html" title="Atlas"></iframe>`;
-    const want = S.reportTab;
-    // The report is served from this app's origin, so a step's "Show me" can open its Findings or Readiness tab.
-    body.querySelector('iframe').onload = e => { try { themeOn(e.target.contentDocument); if (want) e.target.contentDocument.querySelector(`[data-t="${want}"]`)?.click(); } catch (err) {} };
+  if (REPORT_TABS[S.tab]) {
+    const want = S.reportTab || REPORT_TABS[S.tab];
+    const old = S.frame && S.frame.pid === p.id ? S.frame.el : null;
+    if (old && old.contentDocument && old.contentDocument.querySelector('#tabs')) {
+      // Same project: keep the loaded report and switch its tab, so the Atlas state (selection, zoom) survives.
+      body.replaceChildren(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
+    } else {
+      body.innerHTML = `<iframe src="/p/${p.id}/report.html" title="${esc(W[S.tab])}"></iframe>`;
+      const fr = body.querySelector('iframe'); S.frame = {pid: p.id, el: fr};
+      // The report is served from this app's origin, so the app can open it on a tab and keep the theme in step.
+      fr.onload = e => { try { themeOn(e.target.contentDocument); e.target.contentDocument.body.classList.add('embed'); e.target.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {} };
+    }
   }
   else if (S.tab === 'evidence') {
     body.innerHTML = `<iframe src="/p/${p.id}/evidence.html" title="Evidence Report"></iframe>`;
