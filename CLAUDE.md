@@ -57,8 +57,8 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/readiness.py` | Deployment Readiness Score (spec 10): ten weighted categories of deterministic checks (`pass/fail/partial/skip`, skip leaves the denominator), shape advisor, fan-in hotspots, starter files. Accepted risks: `lantern-accepted.json` via `lantern accept` |
 | `lantern/evidence.py` | Evidence Report (spec 11): commit-pinned HTML/JSON, baseline → fixed findings, provenance (including analysis packs), Limits, SHA-256 results digest; `verify()` re-runs and compares (used by the CLI and the connector; never replays a trace command); badge reads `Lantern · commit 1a2b3c · 0 critical · Oct 31`, never "verified" or "secure" |
 | `lantern/explain.py` | Prompt (language-aware, includes HTTP links), `validate()`, retry, bottom-up `select_nodes`, cache |
-| `lantern/providers.py` | Default `deepseek/deepseek-flash`; `resolve_default()` (--model > LANTERN_MODEL > DEEPSEEK_API_KEY > allowance token); `LanternHostedProvider` (402 → `AllowanceExhausted`; run stops cleanly, cache shared with the user's own key via `cache_model`); `ensure_consent()` once per provider before code leaves the machine (local presets and localhost endpoints never ask); Anthropic and OpenAI-compatible adapters. `_post` returns the body; `_post_full` also returns headers |
-| `gateway/` | Separate deployable (FastAPI, `create_app --factory`) hosting the free allowance. The owner's DeepSeek key lives only here; per-user lifetime and daily limits, global daily dollar cap, narrowed requests (one model, capped tokens and body), token hashes and counters only, never bodies. Owner dashboard at `/v1/admin` (`dashboard.py`, admin secret kept in the tab) over `/v1/admin/stats`; `/v1/usage` takes the app's opt-in counts. Tests: `tests/test_gateway.py`, `tests/test_allowance_flow.py` (live local gateway, end to end), `tests/test_usage.py` |
+| `lantern/providers.py` | Default `anthropic/claude-haiku-5-5` (`DEFAULT_PROVIDER`/`DEFAULT_MODEL_NAME`); `resolve_default()` (--model > LANTERN_MODEL > ANTHROPIC_API_KEY > DEEPSEEK_API_KEY > allowance token); `LanternHostedProvider` (402 → `AllowanceExhausted`; run stops cleanly, cache shared with the user's own key via `cache_model`); `ensure_consent()` once per provider before code leaves the machine (local presets and localhost endpoints never ask); Anthropic and OpenAI-compatible adapters. `_post` returns the body; `_post_full` also returns headers |
+| `gateway/` | Separate deployable (FastAPI, `create_app --factory`) hosting the free allowance. The owner's model keys live only here (Anthropic primary, DeepSeek fallback, `Settings.order()`); per-user lifetime and daily limits, global daily dollar cap, narrowed requests (one model, capped tokens and body), token hashes and counters only, never bodies. Owner dashboard at `/v1/admin` (`dashboard.py`, admin secret kept in the tab) over `/v1/admin/stats`; `/v1/usage` takes the app's opt-in counts. Tests: `tests/test_gateway.py`, `tests/test_allowance_flow.py` (live local gateway, end to end), `tests/test_usage.py` |
 | `lantern/report.py` + `viewer/report.html` | One self-contained HTML file (vanilla JS): pages/routes, path tree with HTTP and click hops, flowchart, lenses, findings with UI paths |
 | `docs/api.md` | The local API (`lantern serve`) and every result file's shape, build sequence and acceptance checklist for anyone rebuilding the UI; keep it current when routes or file fields change |
 | `lantern/pipeline.py` | analyze / explain / rebuild as functions with a `log` callback; used by the CLI and the server |
@@ -106,7 +106,10 @@ edge a distinct `via`, run `bench/run_bench.py`, and check the numbers before ch
 
 ## Default model and free allowance
 
-DeepSeek is the default in the CLI and in `lantern serve` (Settings defaults to `deepseek` / `deepseek-flash`).
+Claude Haiku 5.5 is the default in the CLI and in `lantern serve` (`DEFAULT_MODEL = anthropic/claude-haiku-5-5`;
+Settings defaults to the same). The gateway answers with Haiku first and DeepSeek when Anthropic fails
+(`LANTERN_PRIMARY` swaps them); `DATA_NOTICES["lantern"]` names both. Spec section 8.5 still describes DeepSeek as
+the default; the switch (2026-11-01) was a price and data-location decision: Haiku 5.5 is $0.10/$0.50 per MTok, US-hosted.
 **Never put a provider key in the client or this repo**: the free allowance works only through `gateway/`.
 Without an own key, `App.make_provider` uses the allowance when `lantern login` saved a token and a gateway URL
 is configured (`DEFAULT_GATEWAY_URL` or `LANTERN_GATEWAY_URL`); otherwise it says how to get one. `/api/allowance`
@@ -114,7 +117,7 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 
 ## Backlog (priority order)
 
-0. **Ship the allowance:** the gateway is live at `https://lantern-gateway.fly.dev` (Fly.io, org Little Henderson, region sjc; `gateway/fly.toml`, `docs/deploy.md`; deploy with `fly deploy --depot=false` from behind a TLS-inspecting proxy) and `DEFAULT_GATEWAY_URL` points at it. Left: the owner's secrets on Fly, then issue tokens through
+0. **Ship the allowance:** the gateway is live at `https://lantern-gateway.fly.dev` (Fly.io, org Little Henderson, region sjc; `gateway/fly.toml`, `docs/deploy.md`; deploy with `fly deploy --depot=false` from behind a TLS-inspecting proxy) and `DEFAULT_GATEWAY_URL` points at it. Secrets are on Fly. Left: issue tokens through
    "Sign in with GitHub" (one per account). Then the spec chapter 19 order: wallet-drain check, "Prove it" live
    checks (domain verification and consent first), Ask Lantern with screenshots, What changed, data-flow map.
    Done: the MCP connector (`lantern mcp`) with the fix-and-verify loop (`lantern_recheck`), "Send to…",

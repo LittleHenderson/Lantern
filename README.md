@@ -124,13 +124,13 @@ Attach your own walkthroughs of key flows by writing `lantern-narratives.md` at 
 
 Record what actually runs (Python): `lantern analyze path/to/repo --trace -- python -m pytest -q`
 
-Add Three-Lens explanations. The default model is **DeepSeek** (`deepseek-flash`), in the app and the CLI:
+Add Three-Lens explanations. The default model is **Claude Haiku 5.5** (`anthropic/claude-haiku-5-5`), in the app and the CLI:
 
 ```bash
 lantern explain path/to/repo --estimate          # token estimate, no calls
 
 lantern login --token <token>                    # free allowance (hosted by Lantern), or...
-export DEEPSEEK_API_KEY=sk-...                   # ...your own DeepSeek key, no Lantern limit
+export ANTHROPIC_API_KEY=sk-ant-...              # ...your own Anthropic key, no Lantern limit (or DEEPSEEK_API_KEY)
 lantern explain path/to/repo                     # uses whichever is set up
 lantern allowance                                # free explanations left
 
@@ -138,13 +138,15 @@ lantern explain path/to/repo --model ollama/<model>      # local: code never lea
 lantern explain path/to/repo --model anthropic/<model>   # or openai/, gemini/, mistral/, openrouter/
 ```
 
-Before code leaves your machine, Lantern asks once per provider and says where it goes (DeepSeek's
-privacy policy says it stores data in China). Local models and `localhost` endpoints never ask. When
+Before code leaves your machine, Lantern asks once per provider and says where it goes (Anthropic, US,
+by default; DeepSeek's privacy policy says it stores data in China, and the free allowance only uses DeepSeek
+when Anthropic is unavailable). Local models and `localhost` endpoints never ask. When
 the free allowance runs out, the run stops cleanly, keeps everything finished, and shows how to add
 your own key; re-running bills only what's left. Explanations are cached by a hash of each function's code.
 
-The free allowance runs through [`gateway/`](gateway/), a small metered proxy that holds the owner's
-DeepSeek key on the server, never in the client, with per-user, per-day, and global spend caps.
+The free allowance runs through [`gateway/`](gateway/), a small metered proxy that holds the owner's model
+keys on the server, never in the client, with per-user, per-day, and global spend caps. Claude Haiku answers
+first; DeepSeek answers when Anthropic fails.
 
 Try it without a key: `python examples/make_demo.py demo-out` builds the report for the sample
 full-stack app with hand-written explanations that pass the same validator.

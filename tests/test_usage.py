@@ -26,7 +26,7 @@ def home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def gw(tmp_path):
-    app = create_app(Settings(upstream_url="https://x.test", upstream_key="k", admin_secret=ADMIN,
+    app = create_app(Settings(primary="deepseek", deepseek_url="https://x.test", deepseek_key="k", admin_secret=ADMIN,
                               db_path=str(tmp_path / "gw.db"), free_requests=5))
     return TestClient(app)
 

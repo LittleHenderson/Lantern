@@ -30,7 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-DEFAULT_MODEL = "deepseek/deepseek-flash"
+DEFAULT_MODEL = "anthropic/claude-haiku-5-5"
+DEFAULT_PROVIDER, DEFAULT_MODEL_NAME = DEFAULT_MODEL.split("/", 1)
 
 # Where the hosted free allowance lives. Set at release time once the gateway is deployed;
 # LANTERN_GATEWAY_URL overrides it (self-hosting, staging, tests).
@@ -55,10 +56,11 @@ LOCAL_PRESETS = {"ollama", "lmstudio"}
 DATA_NOTICES = {
     "deepseek": ("DeepSeek's privacy policy says it stores data on servers in the People's Republic of "
                  "China and may use inputs to improve its models."),
-    "lantern": ("The free allowance runs on DeepSeek through the Lantern gateway. The gateway counts "
-                "usage and does not store your code; DeepSeek's privacy policy says it stores data in "
-                "the People's Republic of China and may use inputs to improve its models. When DeepSeek "
-                "is unavailable the gateway sends the same request to Anthropic (Claude Haiku, US) instead."),
+    "anthropic": "Sent to Anthropic's API (United States).",
+    "lantern": ("The free allowance runs on Claude Haiku (Anthropic, United States) through the Lantern "
+                "gateway, which counts usage and does not store your code. If Anthropic is unavailable, the "
+                "gateway sends the same request to DeepSeek instead, whose privacy policy says it stores data in "
+                "the People's Republic of China and may use inputs to improve its models."),
 }
 
 
@@ -85,9 +87,9 @@ class AllowanceExhausted(ProviderError):
 
 
 ALLOWANCE_HELP = (
-    "To keep going, use your own DeepSeek key (about $1-2 per 1,000 explanations):\n"
-    "  1. create a key at https://platform.deepseek.com\n"
-    "  2. export DEEPSEEK_API_KEY=sk-...\n"
+    "To keep going, use your own Anthropic key (Claude Haiku: under $1 per 1,000 explanations):\n"
+    "  1. create a key at https://platform.claude.com\n"
+    "  2. export ANTHROPIC_API_KEY=sk-ant-...   (or DEEPSEEK_API_KEY=sk-... for DeepSeek)\n"
     "  3. run the same command again; finished explanations are cached and not re-billed.\n"
     "Or choose any other provider with --model (e.g. ollama/<model> to stay fully local).")
 
@@ -195,11 +197,11 @@ class OpenAICompatProvider(Provider):
 class LanternHostedProvider(OpenAICompatProvider):
     """The free allowance: OpenAI-compatible calls to the Lantern gateway with a user token.
 
-    The gateway, not this client, holds the DeepSeek key, picks the model, and enforces limits.
+    The gateway, not this client, holds the model keys, picks the model, and enforces limits.
     When the allowance runs out it answers 402 and this raises AllowanceExhausted.
     """
 
-    def __init__(self, token: str, gateway_url: str, model: str = "deepseek-flash"):
+    def __init__(self, token: str, gateway_url: str, model: str = DEFAULT_MODEL_NAME):
         super().__init__(model, gateway_url, token, label="lantern")
 
     def _send(self, body: dict) -> tuple[dict, dict]:
@@ -223,7 +225,7 @@ class LanternHostedProvider(OpenAICompatProvider):
 
     @property
     def cache_model(self) -> str:
-        return f"deepseek/{self.model}"   # same model as using your own DeepSeek key
+        return f"{DEFAULT_PROVIDER}/{self.model}"   # same model as using your own key for it
 
     @property
     def remaining(self) -> dict:
@@ -336,20 +338,23 @@ def make_provider(spec: str, base_url: str | None = None, api_key: str | None = 
 def resolve_default(explicit: str | None = None) -> tuple[str, str]:
     """Pick the model spec when the user didn't pass --model. Returns (spec, reason).
 
-    Order: --model > LANTERN_MODEL > your own DeepSeek key > free allowance token > setup help.
+    Order: --model > LANTERN_MODEL > your own Anthropic key > your own DeepSeek key > free allowance token > help.
     """
     if explicit:
         return explicit, "chosen with --model"
     if os.environ.get("LANTERN_MODEL"):
         return os.environ["LANTERN_MODEL"], "from LANTERN_MODEL"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return DEFAULT_MODEL, "default model, your Anthropic key"
     if os.environ.get("DEEPSEEK_API_KEY"):
-        return DEFAULT_MODEL, "default model, your DeepSeek key"
+        return "deepseek/deepseek-flash", "your DeepSeek key"
     if load_token():
-        return "lantern/" + DEFAULT_MODEL.split("/", 1)[1], "default model, free Lantern allowance"
+        return "lantern/" + DEFAULT_MODEL_NAME, "default model, free Lantern allowance"
     raise ValueError(
         "No model is set up yet. Pick one:\n"
         "  free allowance:   lantern login --token <token>\n"
-        "  your own key:     export DEEPSEEK_API_KEY=sk-...   (default model: deepseek-flash)\n"
+        "  your own key:     export ANTHROPIC_API_KEY=sk-ant-...   (default model: claude-haiku-5-5)\n"
+        "                    or export DEEPSEEK_API_KEY=sk-...     (deepseek-flash)\n"
         "  fully local:      lantern explain . --model ollama/<model>\n"
         "  any provider:     lantern explain . --model anthropic/<model>  (or openai/, gemini/, openrouter/...)")
 

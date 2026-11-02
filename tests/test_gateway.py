@@ -30,7 +30,7 @@ def upstream(calls):
 @pytest.fixture
 def gw(tmp_path):
     calls = []
-    s = Settings(upstream_url="https://upstream.test", upstream_key="sk-owner-secret", model="deepseek-flash",
+    s = Settings(primary="deepseek", deepseek_url="https://upstream.test", deepseek_key="sk-owner-secret", deepseek_model="deepseek-flash",
                  admin_secret=ADMIN, db_path=str(tmp_path / "g.db"), free_requests=3, free_tokens=10_000,
                  daily_requests=10, global_daily_usd=5.0)
     app = create_app(s, transport=upstream(calls))
@@ -108,17 +108,20 @@ def _two_upstreams(deepseek_status, calls):
             if deepseek_status == "down":
                 raise httpx.ConnectError("no route")
             return httpx.Response(deepseek_status, json={"error": {"message": "Insufficient Balance", "account": "secret"}})
+        if body.get("tool_choice") == {"type": "tool", "name": "json"}:   # JSON mode -> forced tool call
+            content = [{"type": "tool_use", "id": "t1", "name": "json", "input": {"answer": {"ok": 2}}}]   # wrapped once
+        else:
+            content = [{"type": "text", "text": 'Here you go:\n{"ok": 2}\nDone.'}]
         return httpx.Response(200, json={"id": "msg_1", "model": "claude-haiku-5-5", "stop_reason": "end_turn",
-                                         "content": [{"type": "text", "text": 'Here you go:\n{"ok": 2}\nDone.'}],
-                                         "usage": {"input_tokens": 1000, "output_tokens": 2000}})
+                                         "content": content, "usage": {"input_tokens": 1000, "output_tokens": 2000}})
     return httpx.MockTransport(handler)
 
 
 @pytest.mark.parametrize("deepseek_status", [402, 429, 503, "down"])
 def test_fallback_to_anthropic_when_deepseek_fails(tmp_path, deepseek_status):
     calls = []
-    s = Settings(upstream_url="https://upstream.test", upstream_key="sk-owner", model="deepseek-flash", admin_secret=ADMIN,
-                 db_path=str(tmp_path / "g.db"), fallback_url="https://anthropic.test", fallback_key="sk-ant-owner")
+    s = Settings(primary="deepseek", deepseek_url="https://upstream.test", deepseek_key="sk-owner", deepseek_model="deepseek-flash", admin_secret=ADMIN,
+                 db_path=str(tmp_path / "g.db"), anthropic_url="https://anthropic.test", anthropic_key="sk-ant-owner")
     client = TestClient(create_app(s, transport=_two_upstreams(deepseek_status, calls)))
     tok = client.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
     r = chat(client, tok)
@@ -129,7 +132,8 @@ def test_fallback_to_anthropic_when_deepseek_fails(tmp_path, deepseek_status):
     ant = calls[1]
     assert ant["headers"]["x-api-key"] == "sk-ant-owner" and "authorization" not in ant["headers"]
     assert ant["body"]["system"] == "json please" and ant["body"]["messages"] == [{"role": "user", "content": "explain f"}]
-    assert ant["body"]["max_tokens"] == 3000 and "tools" not in ant["body"]
+    assert ant["body"]["max_tokens"] == 3000 and ant["body"]["tools"][0]["name"] == "json"
+    assert ant["body"]["thinking"] == {"type": "disabled"} and "function" not in json.dumps(ant["body"]["tools"])
     assert "secret" not in r.text                                              # DeepSeek's error body never leaks
     st = client.get("/v1/admin/stats", headers={"authorization": f"Bearer {ADMIN}"}).json()["allowance"]
     assert st["by_model"] == [{"model": "claude-haiku-5-5", "requests": 1, "usd": round(1000 / 1e6 * 0.10 + 2000 / 1e6 * 0.50, 4)}]
@@ -138,8 +142,8 @@ def test_fallback_to_anthropic_when_deepseek_fails(tmp_path, deepseek_status):
 
 def test_no_fallback_without_a_key_and_none_when_deepseek_works(tmp_path):
     calls = []
-    s = Settings(upstream_url="https://upstream.test", upstream_key="sk-owner", model="deepseek-flash", admin_secret=ADMIN,
-                 db_path=str(tmp_path / "g.db"), fallback_key="")
+    s = Settings(primary="deepseek", deepseek_url="https://upstream.test", deepseek_key="sk-owner", deepseek_model="deepseek-flash", admin_secret=ADMIN,
+                 db_path=str(tmp_path / "g.db"), anthropic_key="")
     client = TestClient(create_app(s, transport=_two_upstreams(402, calls)))
     tok = client.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
     r = chat(client, tok)
@@ -148,10 +152,38 @@ def test_no_fallback_without_a_key_and_none_when_deepseek_works(tmp_path):
     assert client.get("/v1/health").json()["fallback"] is None
     # DeepSeek healthy: the fallback is never touched even when configured
     calls2 = []
-    s2 = Settings(upstream_url="https://upstream.test", upstream_key="sk-owner", model="deepseek-flash", admin_secret=ADMIN,
-                  db_path=str(tmp_path / "g2.db"), fallback_key="sk-ant-owner")
+    s2 = Settings(primary="deepseek", deepseek_url="https://upstream.test", deepseek_key="sk-owner", deepseek_model="deepseek-flash", admin_secret=ADMIN,
+                  db_path=str(tmp_path / "g2.db"), anthropic_key="sk-ant-owner")
     client2 = TestClient(create_app(s2, transport=upstream(calls2)))
     tok2 = client2.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
     r2 = chat(client2, tok2)
     assert r2.status_code == 200 and r2.headers["x-lantern-model"] == "deepseek-flash" and len(calls2) == 1
     assert client2.get("/v1/health").json()["fallback"] == "claude-haiku-5-5"
+
+
+def test_default_order_is_anthropic_first_then_deepseek(tmp_path):
+    calls = []
+    s = Settings(anthropic_url="https://anthropic.test", anthropic_key="sk-ant-owner",
+                 deepseek_url="https://upstream.test", deepseek_key="sk-owner", admin_secret=ADMIN, db_path=str(tmp_path / "g.db"))
+    assert s.primary == "anthropic" and [p["name"] for p in s.order()] == ["anthropic", "deepseek"]
+    assert s.model == "claude-haiku-5-5"
+    client = TestClient(create_app(s, transport=_two_upstreams(402, calls)))   # DeepSeek would fail, Anthropic answers
+    assert client.get("/v1/health").json() == {"ok": True, "model": "claude-haiku-5-5", "configured": True,
+                                               "primary": "anthropic", "fallback": "deepseek-flash"}
+    tok = client.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
+    r = chat(client, tok)
+    assert r.status_code == 200 and r.headers["x-lantern-model"] == "claude-haiku-5-5"
+    assert [c["host"] for c in calls] == ["anthropic.test"]          # DeepSeek never touched
+    # Anthropic down -> DeepSeek answers (here DeepSeek is the healthy OpenAI-shaped fake)
+    calls2 = []
+    def both(request):
+        calls2.append(request.url.host)
+        if request.url.host == "anthropic.test":
+            return httpx.Response(400, json={"type": "error", "error": {"type": "invalid_request_error",
+                                             "message": "Your credit balance is too low to access the Anthropic API."}})
+        return upstream([]).handler(request)
+    client2 = TestClient(create_app(s, transport=httpx.MockTransport(both)))
+    tok2 = client2.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
+    r2 = chat(client2, tok2)
+    assert r2.status_code == 200 and r2.headers["x-lantern-model"] == "deepseek-flash" and calls2 == ["anthropic.test", "upstream.test"]
+    assert "credit balance" not in r2.text
