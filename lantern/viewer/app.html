@@ -512,7 +512,7 @@ iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px
   <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
 </header>
 <div id="view"></div>
-<div id="term" hidden><div class="tbar"><b>Terminal</b><span class="muted">Lantern commands only · output links into the app</span><span class="spacer"></span><label class="muted" title="Background opacity"><input type="range" min="0.4" max="1" step="0.05" value="1" id="termop"></label><button class="x" id="termclose" aria-label="Close">×</button></div><div class="tout" id="tout"></div><div class="tin"><span class="ps">lantern</span><input type="text" id="tcmd" placeholder="help · analyze · findings · accept ID --reason … · explain · starter NAME · verify" autocomplete="off" spellcheck="false"></div></div>
+<div id="term" hidden><div class="tbar"><b>Terminal</b><span class="muted">Lantern commands only · output links into the app</span><span class="spacer"></span><label class="muted" title="Background opacity"><input type="range" min="0.4" max="1" step="0.05" value="1" id="termop"></label><button class="x" id="termclose" aria-label="Close">×</button></div><div class="tout" id="tout"></div><div class="tin"><span class="ps">lantern</span><input type="text" id="tcmd" placeholder="help · analyze · trace python -m pytest -q · accept ID --reason … · explain · verify · export" autocomplete="off" spellcheck="false"></div></div>
 <div id="ask"></div>
 <script>
 const TOKEN = '__LANTERN_TOKEN__';
@@ -641,12 +641,38 @@ function termPrint(text, cls = '') {
   d.innerHTML = esc(text).replace(/\b([0-9a-f]{12})\b/g, '<a href="#" data-fid="$1">$1</a>').replace(/((?:[\w.-]+\/)*[\w.-]+\.(?:py|ts|tsx|js|jsx|go|rs|java))(:\d+)?/g, '<a href="#" data-file="$1">$1$2</a>');
   out.appendChild(d); out.scrollTop = out.scrollHeight;
 }
+// Split a typed line into words the way a shell would quote them, without ever handing it to a shell: the server
+// receives an argv list and accepts only Lantern's own commands.
+function termWords(line) {
+  const out = []; let cur = '', q = null, any = false;
+  for (const ch of line) {
+    if (q) { if (ch === q) q = null; else cur += ch; continue; }
+    if (ch === '"' || ch === "'") { q = ch; any = true; continue; }
+    if (/\s/.test(ch)) { if (cur || any) out.push(cur); cur = ''; any = false; continue; }
+    cur += ch;
+  }
+  if (cur || any) out.push(cur);
+  return out;
+}
+const TERM_HELP = `Lantern commands only (results go to this project's .lantern/):
+  analyze [--offline] [--no-scan]          read the project again
+  trace python -m pytest -q                run your tests in the sandbox
+  explain [--node ID] [--depth N]          explain functions with the model in Settings
+  report                                   rebuild report.html
+  verify                                   compare with the Evidence Report
+  accept ID --reason "..."  |  accept ID --remove
+  packs                                    list analysis packs
+  export [--sarif FILE]                    findings as SARIF
+  learn [--check]                          a starter app's progress
+Shell commands are refused: this drawer never runs a shell or your code.`;
 async function termRun(line) {
   const p = S.view === 'project' && (S.state.projects || []).find(x => x.id === S.project);
   termPrint('lantern ' + line, 'me');
+  const argv = termWords(line); if (argv[0] === 'lantern') argv.shift();
+  if (!argv.length || argv[0] === 'help' || argv[0] === '?') { termPrint(TERM_HELP, 'sys'); return; }
   if (!p) { termPrint('Open a project first; the terminal runs against the project on screen.', 'err'); return; }
   try {
-    const r = await api(`/api/projects/${p.id}/cmd`, {method: 'POST', body: {line}});
+    const r = await api(`/api/projects/${p.id}/cmd`, {method: 'POST', body: {argv}});
     if (r.output) termPrint(r.output);
     if (r.job) {
       S.jobs[p.id] = r.job; let seen = 0;
