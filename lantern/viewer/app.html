@@ -484,6 +484,17 @@ iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px
 .conn{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .conn b{white-space:nowrap}
 .connrows .conn:last-child{border-bottom:0}
+/* Settings → Analysis packs (design 10d) */
+.pack{display:flex;gap:14px;align-items:flex-start;padding:14px;border:1px solid var(--line-2);border-radius:12px;margin:8px 0}
+.pack .pk{flex:1;min-width:0} .pack .pk b{font-weight:600} .pack .pk .hint{margin-top:3px}
+.pack .meta{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
+.pack.off .pk{opacity:.62}
+.packempty{border:1.5px dashed var(--line-2);border-radius:12px;padding:16px;margin:8px 0;color:var(--ink-2);font-size:13px;line-height:1.55}
+.packempty code{font-family:var(--mono);font-size:12px}
+.switch{position:relative;flex:none;width:42px;height:24px;border-radius:999px;border:0;padding:0;background:var(--line-2);cursor:pointer;transition:background var(--t) var(--ease)}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform var(--t) var(--ease)}
+.switch[aria-checked="true"]{background:var(--accent)} .switch[aria-checked="true"]::after{transform:translateX(18px)}
+.switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px} .switch:disabled{opacity:.5;cursor:wait}
 .snip{font:12px var(--mono);background:var(--sunken);border:1px solid var(--line);border-radius:8px;padding:8px 10px;overflow:auto;white-space:pre;margin:6px 0 10px}
 </style>
 </head>
@@ -1145,6 +1156,7 @@ function renderSettingsSimple(el, s, provs, themeBtn) {
       <div class="row" style="justify-content:space-between;margin-top:12px"><div><b>Moving shapes in the background</b></div><div class="seg" id="bdseg">${['off', 'subtle', 'bold'].map(v => `<button data-bd="${v}" class="${(s.backdrop || 'subtle') === v ? 'on' : ''}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div></div></div>
     <div class="card group"><h2>Also</h2>
       <div class="alsorow"><div><b>Connections</b><div class="hint" id="connhint">Looking…</div></div><button class="btn" id="toconn">Open</button></div>
+      <div class="alsorow"><div><b>Analysis packs</b><div class="hint" id="packhint">Looking…</div></div><button class="btn" id="topacks">Open</button></div>
       <div class="alsorow"><div><b>Privacy of reports</b><div class="hint">${s.privacy === 'structure' ? 'Reports leave source code out.' : 'Reports include each function’s source so the code panel works.'}</div></div><button class="btn" id="topriv">Change</button></div>
       <div class="alsorow"><div><b>Everything else</b><div class="hint">Keys, base URLs, usage counts, default view.</div></div><button class="btn" id="toadv">Advanced</button></div></div>
     <p class="foot">Lantern listens on this computer only (127.0.0.1) and has no telemetry unless you turn usage counts on. The only network calls are dependency checks and the model you choose above.</p></main>`;
@@ -1163,7 +1175,8 @@ function renderSettingsSimple(el, s, provs, themeBtn) {
   el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
   el.querySelector('#bdseg').onclick = async e => { const b = e.target.closest('button'); if (!b) return; await save({backdrop: b.dataset.bd}); for (const x of el.querySelectorAll('#bdseg button')) x.classList.toggle('on', x === b); setBackdrop(); };
   const toAdv = async (anchor) => { try { const r = await api('/api/settings', {method: 'POST', body: {view_mode: 'advanced'}}); S.state.settings = r.settings; } catch (e) {} drawViewMode(); render(); if (anchor) { const a = document.getElementById(anchor); if (a) a.scrollIntoView({behavior: 'smooth'}); } };
-  el.querySelector('#toconn').onclick = () => toAdv('conns'); el.querySelector('#topriv').onclick = () => toAdv('privcard'); el.querySelector('#toadv').onclick = () => toAdv();
+  el.querySelector('#toconn').onclick = () => toAdv('conns'); el.querySelector('#topacks').onclick = () => toAdv('packs');
+  api('/api/packs?all=1').then(d => { const off = d.packs.filter(x => !x.enabled).length; el.querySelector('#packhint').textContent = `${d.packs.length} pack${d.packs.length === 1 ? '' : 's'}` + (off ? `, ${off} turned off` : ', all on') + '. Python and TypeScript web are always on.'; }).catch(() => { el.querySelector('#packhint').textContent = ''; }); el.querySelector('#topriv').onclick = () => toAdv('privcard'); el.querySelector('#toadv').onclick = () => toAdv();
   api('/api/connections').then(c => { el.querySelector('#connhint').textContent = c.connections.length ? c.connections.map(x => x.name).slice(0, 3).join(', ') + ' have called' : 'No assistant has connected yet (Claude Code, Cursor, ChatGPT can).'; }).catch(() => { el.querySelector('#connhint').textContent = ''; });
 }
 
@@ -1219,6 +1232,8 @@ function renderSettings(el) {
       <div id="usageinfo" class="hint"></div></div>
     <div class="card group" id="conns"><h2>Connections</h2><div class="hint">Lantern works inside Claude, ChatGPT, Cursor and Claude Code as a connector (MCP). An assistant can read findings, paths, readiness and explanations, re-analyze, re-check a fix, and verify an Evidence Report. It can never accept or close a finding; that stays with you, with a written reason.</div>
       <div id="connlist"><div class="working"><span class="pulse"></span>Looking…</div></div></div>
+    <div class="card group" id="packs"><h2>Analysis packs</h2><div class="hint">Python web and TypeScript web apps are Lantern's engine and are always on; packs teach it more frameworks with patterns and entry points, written as data, never code.</div>
+      <div id="packlist"><div class="working"><span class="pulse"></span>Looking…</div></div></div>
     <div class="card group"><h2>Appearance</h2><div class="hint">Saved in this browser right away.</div>
       <div class="seg" id="themeseg">${themeBtn('auto', 'auto', 'Match computer')}${themeBtn('light', 'sun', 'Light')}${themeBtn('dark', 'moon', 'Dark')}</div>
       <label for="bdsel" style="margin-top:14px">Moving shapes in the background</label>
@@ -1237,6 +1252,7 @@ function renderSettings(el) {
          <label>Claude Desktop, Cursor, Windsurf, Codex (mcp.json)</label><pre class="snip">${esc(JSON.stringify(c.setup.json, null, 2))}</pre>
          <div class="hint">ChatGPT and Claude on the web need a URL: put this server behind an MCP bridge (for example mcp-proxy) on a URL you control, then add it as a custom connector. Lantern never opens a port by itself. In a report, a finding's <b>Send to…</b> button hands the assistant a reference it resolves through this connector.</div>`;
   }).catch(e => { el.querySelector('#connlist').innerHTML = note('err', esc(e.message)); });
+  drawPacks(el.querySelector('#packlist'));
   el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
   const save = async (extra = {}) => {
     const body = {provider: el.querySelector('#prov').value, model: el.querySelector('#model').value, base_url: el.querySelector('#url').value,
@@ -1254,6 +1270,34 @@ function renderSettings(el) {
   el.querySelector('#bdseg').onclick = async e => { const b = e.target.closest('button'); if (!b) return; await save({backdrop: b.dataset.bd}); for (const x of el.querySelectorAll('#bdseg button')) x.classList.toggle('on', x === b); setBackdrop(); };
   el.querySelector('#modeseg').onclick = async e => { const b = e.target.closest('button'); if (!b) return; await save({view_mode: b.dataset.md}); for (const x of el.querySelectorAll('#modeseg button')) x.classList.toggle('on', x === b); drawViewMode(); };
   el.querySelector('#forget').onclick = () => save({forget_key: true, key: undefined});
+}
+
+// Settings → Analysis packs (design 10d): built-in packs, then project and user packs, each with an on/off switch.
+// A change applies on the next check; projects analyzed before it show "Re-check to apply" (GET /api/state `stale`).
+async function drawPacks(box) {
+  if (!box) return;
+  let d;
+  try { d = await api('/api/packs?all=1'); } catch (e) { box.innerHTML = note('err', esc(e.message)); return; }
+  const where = {builtin: 'Built in', project: 'From a project', user: 'From your packs folder'};
+  const card = x => `<div class="pack ${x.enabled ? '' : 'off'}"><div class="pk"><b>${esc(x.name[0].toUpperCase() + x.name.slice(1))}</b> <span class="small muted">v${esc(x.version)} · ${esc(where[x.source] || x.source)}</span>
+      ${x.about ? `<div class="hint">${esc(x.about)}</div>` : ''}
+      <div class="meta">${esc(x.rules)} rule${x.rules === 1 ? '' : 's'} · ${esc(x.entry_patterns)} entry pattern${x.entry_patterns === 1 ? '' : 's'} · ${esc(x.path)}</div>
+      ${x.source === 'builtin' ? '' : '<div class="hint">Findings from this pack are labelled heuristic.</div>'}</div>
+    <button class="switch" role="switch" aria-checked="${x.enabled ? 'true' : 'false'}" aria-label="${esc((x.enabled ? 'Turn off ' : 'Turn on ') + x.name)}" data-pack="${esc(x.name)}"></button></div>`;
+  const builtin = d.packs.filter(x => x.source === 'builtin'), mine = d.packs.filter(x => x.source !== 'builtin');
+  box.innerHTML = `<label>Built in</label>${builtin.map(card).join('') || '<div class="hint">None in this build.</div>'}
+    <label>Project and user packs</label>${mine.map(card).join('') || `<div class="packempty"><b>No project or user packs yet.</b> Add a pack file to <code>lantern-packs/*.json</code> inside a project (used for that project) or <code>~/.lantern/packs/*.json</code> (used for every project). <code>lantern packs</code> checks them; the format is in docs/packs.md.</div>`}
+    <div id="packmsg" class="hint">Turning a pack on or off applies on the next check of each project.</div>`;
+  box.querySelectorAll('[data-pack]').forEach(b => b.onclick = async () => {
+    const on = b.getAttribute('aria-checked') !== 'true';
+    b.disabled = true;
+    try {
+      await api('/api/packs', {method: 'POST', body: {name: b.dataset.pack, enabled: on}});
+      await drawPacks(box);
+      const m = box.querySelector('#packmsg'); if (m) m.innerHTML = `${esc(b.dataset.pack)} turned ${on ? 'on' : 'off'}. Projects checked before this show <b>Re-check to apply</b>.`;
+      try { S.state = await api('/api/state'); } catch (e) {}
+    } catch (e) { b.disabled = false; const m = box.querySelector('#packmsg'); if (m) m.textContent = e.message; }
+  });
 }
 
 const FAQ = [

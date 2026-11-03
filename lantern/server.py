@@ -734,7 +734,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
                                "features": sorted(usage.FEATURES), "text": usage.describe()})
         if path == "/api/packs":
-            return self._json({"packs": packs_list(app, (q.get("project") or [""])[0])})
+            return self._json({"packs": packs_list(app, (q.get("project") or [""])[0],
+                                                   all_projects=(q.get("all") or [""])[0] == "1")})
         if path == "/api/connections":
             import shutil
             from .mcp_server import connections

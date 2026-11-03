@@ -90,3 +90,26 @@ def test_packs_endpoints_and_stale_card(srv, tmp_path, monkeypatch):  # noqa: F8
     assert code == 400
     code, e = call(base, "/api/packs", "POST", {"name": "django", "enabled": False}, token=None)
     assert code == 403
+
+
+def test_settings_screen_lists_every_projects_packs(srv, tmp_path, monkeypatch):  # noqa: F811
+    """Settings → Analysis packs asks GET /api/packs?all=1: built-in, user and every project's packs, each with
+    `enabled`; a project pack can be turned off like a built-in one."""
+    base, store = srv
+    monkeypatch.setenv("LANTERN_HOME", str(store.root))
+    mail = {"pack": "mail", "version": "1", "about": "Mail helpers", "rules": [
+        {"id": "LP-MAIL-HTML", "title": "Email sent as HTML", "severity": "LOW", "files": ["*.py"],
+         "pattern": "mail\\(.*html=True", "confidence": "HIGH"}]}
+    repo = tmp_path / "app"
+    _write(repo, {**DJANGO_APP, "lantern-packs/mail.json": json.dumps(mail)})
+    call(base, "/api/projects", "POST", {"path": str(repo)})
+    names = lambda d: {p["name"]: p for p in d["packs"]}  # noqa: E731
+    _, d = call(base, "/api/packs")
+    assert "django" in names(d) and "mail" not in names(d)          # no project named: built-in and user only
+    _, d = call(base, "/api/packs?all=1")
+    m = names(d)["mail"]
+    assert m["source"] == "project" and m["path"] == "lantern-packs/mail.json" and m["enabled"] is True and m["rules"] == 1
+    code, r = call(base, "/api/packs", "POST", {"name": "mail", "enabled": False})
+    assert code == 200 and store.settings()["packs"]["disabled"] == ["mail"]
+    assert names(call(base, "/api/packs?all=1")[1])["mail"]["enabled"] is False
+    assert names(call(base, "/api/packs?all=1")[1])["django"]["enabled"] is True
