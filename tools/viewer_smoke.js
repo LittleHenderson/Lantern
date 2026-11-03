@@ -41,6 +41,13 @@ async function appSmoke(url, out, image, expectText) {
       await p.reload(); await p.waitForSelector('[data-open]');
       await p.click('[data-open]'); await p.waitForTimeout(1500);
       await p.screenshot({ path: `${out}-${name}-project.png` });
+      {
+        // inside the app the report draws no backdrop of its own; the app's shows through
+        const fr = p.frames().find(f => /report\.html/.test(f.url()));
+        const own = fr ? await fr.evaluate(() => !!document.querySelector('.backdrop')).catch(() => null) : null;
+        const app = await p.evaluate(() => document.querySelectorAll('#bg svg').length);
+        if (own !== false || app !== 3) errs.push(`${name}: backdrop wrong inside the app (report draws its own: ${own}, app layers: ${app})`);
+      }
       if (name === 'phone') {
         // phones get Simple only, even though the desktop pass saved Advanced
         const mode = await p.evaluate(() => document.body.dataset.mode);
@@ -138,6 +145,9 @@ async function appSmoke(url, out, image, expectText) {
     await pwned('load');
     if (await p.$('#expand')) { await p.click('#expand'); await p.waitForTimeout(150); }
     await p.screenshot({ path: `${out}-${name}-map.png` });
+    // the backdrop (design directive): three drifting layers, quiet behind the map, full behind About
+    const bd = await p.evaluate(() => { const el = document.querySelector('body>.backdrop'); return el ? {n: el.querySelectorAll(':scope>svg').length, quiet: el.hasAttribute('data-quiet'), hidden: el.getAttribute('aria-hidden')} : null; });
+    if (!bd || bd.n !== 3 || !bd.quiet || bd.hidden !== 'true') errs.push(`${name}: the backdrop is missing or not quiet on the map (${JSON.stringify(bd)})`);
     // Simple opens the Lanes view (an SVG); the rest of the smoke walks the Path list, so switch to it
     if (await p.$('.seg [data-v="lanes"].on') && !(await p.$('.node'))) { await p.click('.seg [data-v="tree"]'); await p.waitForTimeout(150); if (await p.$('#expand')) { await p.click('#expand'); await p.waitForTimeout(150); } }
     const nodes = await p.$$('.node');
@@ -189,6 +199,16 @@ async function appSmoke(url, out, image, expectText) {
     }
     await p.click('#tabs button[data-t="about"]'); await p.waitForTimeout(150);
     await pwned('about');
+    if (await p.evaluate(() => document.querySelector('body>.backdrop').hasAttribute('data-quiet'))) errs.push(`${name}: the backdrop stays quiet on About (should be full)`);
+    if (name === 'desk') {
+      // reduced motion: the shapes are drawn, nothing moves (two frames 2 s apart)
+      await p.emulateMedia({ reducedMotion: 'reduce' });
+      const tf = () => p.evaluate(() => [...document.querySelectorAll('body>.backdrop svg')].map(x => getComputedStyle(x).transform).join('|'));
+      const t1 = await tf(); await p.waitForTimeout(2000); const t2 = await tf();
+      if (t1 !== t2) errs.push('desk: the backdrop still moves under prefers-reduced-motion');
+      await p.screenshot({ path: `${out}-${name}-about-still.png` });
+      await p.emulateMedia({ reducedMotion: 'no-preference' });
+    }
     if (name === 'desk') {
       // the search box renders arbitrary function names
       await p.click('#tabs button[data-t="map"]'); await p.waitForTimeout(100);

@@ -205,7 +205,8 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   screens in Simple/Advanced). The design tokens at the top of `app.html`, `report.html` and `evidence.py` are one set
   (accent teal `#0F7B74`/`#4FC3BA`, DM Sans / Lora / JetBrains Mono with system fallbacks; the report stays offline and
   never loads fonts from the network); change all three together. `app.html` has the backdrop (`#bg`, three drifting
-  SVG layers, `settings.backdrop` off/subtle/bold, quiet on project screens), the Simple/Advanced toggle
+  SVG layers, `settings.backdrop` off/subtle/bold, quiet on project screens; `report.html` draws the same geometry as
+  `.backdrop` when opened on its own, `LANTERN_LIVE.backdrop`, and none inside a frame, where it is transparent), the Simple/Advanced toggle
   (`settings.view_mode`, phones Simple only) and the Ask Lantern pill/window (`#ask`).
   Status colors (good/warning/serious/critical) mean risk or results only and always sit beside a word or icon.
 * Plain language in user-facing text; technical detail lives in Lens 1, `via`, and `detail`.
