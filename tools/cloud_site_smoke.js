@@ -20,13 +20,14 @@ async function until(p, fn, timeout) {
   const token = fs.readFileSync(tokenFile, 'utf8').trim();
   const b = await chromium.launch();
   const errs = [];
+  let allow503 = false;
   const sizes = [['desk', { width: 1360, height: 880 }], ['phone', { width: 390, height: 844 }]];
   for (const [name, viewport] of sizes) for (const scheme of ['light', 'dark']) {
     const tag = `${name}-${scheme}`;
     const ctx = await b.newContext({ viewport, colorScheme: scheme });
     const watch = p => {
       p.on('pageerror', e => errs.push(`${tag}: ${e.message}`));
-      p.on('console', m => { if (m.type() === 'error' && !/status of 401/.test(m.text())) errs.push(`${tag} console: ${m.text()}`); });
+      p.on('console', m => { if (m.type() === 'error' && !/status of 401/.test(m.text()) && !(allow503 && /status of 503/.test(m.text()))) errs.push(`${tag} console: ${m.text()}`); });
       p.on('dialog', d => { errs.push(`${tag}: a dialog opened: ${d.message()}`); d.dismiss(); });
     };
     const clean = async (p, where) => {
@@ -60,6 +61,12 @@ async function until(p, fn, timeout) {
     await clean(p, 'progress');
     await p.goto(base + '#/run/failed1'); await p.reload(); await p.waitForSelector('.progress [data-again]');
     await clean(p, 'failed run');
+    // "Try again" starts the same link again (the demo server has no worker, so it answers 503: that is fine here)
+    allow503 = true;
+    const again = p.waitForRequest(rq => rq.url().endsWith('/v1/repos') && rq.method() === 'POST', { timeout: 5000 }).catch(() => null);
+    await p.click('.progress [data-again]');
+    if (!(await again)) errs.push(`${tag}: "Try again" on a failed run sent nothing`);
+    await p.waitForTimeout(300); allow503 = false;
     await p.goto(base + '#/run/done1'); await p.reload();
     await until(p, () => { try { return !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('#tabs'); } catch (e) { return false; } }, 20000);
     await p.waitForTimeout(800);

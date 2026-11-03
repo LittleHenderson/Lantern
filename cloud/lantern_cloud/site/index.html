@@ -224,22 +224,24 @@ function addBox() {
     <div id="adderr" style="max-width:720px;margin:0 auto"></div>`;
 }
 function addControls(el) {
-  const input = el.querySelector('#link'); if (!input) return;
-  input.oninput = () => { S.link = input.value; };
-  input.onkeydown = e => { if (e.key === 'Enter') el.querySelector('#add').click(); };
-  el.querySelectorAll('input[name=priv]').forEach(r => r.onchange = () => { S.privacy = r.value; render(); });
-  const ag = el.querySelector('#agreed'); if (ag) ag.onchange = () => { S.agreed = ag.checked; };
-  el.querySelector('#add').onclick = () => {
-    const link = input.value.trim(), err = el.querySelector('#adderr');
-    if (!link) { input.focus(); return; }
-    if (!/^https:\/\//i.test(link) && !/^git@/.test(link)) { err.innerHTML = note('warn', 'Paste the https link of a public repository, such as https://github.com/owner/name.'); return; }
-    if (S.privacy === 'full' && !S.agreed) { err.innerHTML = note('warn', 'Tick the box to agree to keeping snippets, or choose <b>Map and findings only</b>.'); return; }
-    err.innerHTML = ''; startRun(link, S.privacy, S.agreed);
-  };
+  const input = el.querySelector('#link');
+  if (input) {
+    input.oninput = () => { S.link = input.value; };
+    input.onkeydown = e => { if (e.key === 'Enter') el.querySelector('#add').click(); };
+    el.querySelectorAll('input[name=priv]').forEach(r => r.onchange = () => { S.privacy = r.value; render(); });
+    const ag = el.querySelector('#agreed'); if (ag) ag.onchange = () => { S.agreed = ag.checked; };
+    el.querySelector('#add').onclick = () => {
+      const link = input.value.trim(), err = el.querySelector('#adderr');
+      if (!link) { input.focus(); return; }
+      if (!/^https:\/\//i.test(link) && !/^git@/.test(link)) { err.innerHTML = note('warn', 'Paste the https link of a public repository, such as https://github.com/owner/name.'); return; }
+      if (S.privacy === 'full' && !S.agreed) { err.innerHTML = note('warn', 'Tick the box to agree to keeping snippets, or choose <b>Map and findings only</b>.'); return; }
+      err.innerHTML = ''; startRun(link, S.privacy, S.agreed);
+    };
+  }
   el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => { S.tab = b.dataset.tab || 'findings'; location.hash = '#/run/' + encodeURIComponent(b.dataset.open); });
   el.querySelectorAll('[data-again]').forEach(b => b.onclick = () => {
-    const r = (S.runs || []).find(x => x.id === b.dataset.again); if (!r) return;
-    if (r.privacy === 'full' && !confirm('Check again and keep short code snippets with the results, as last time?')) return;
+    // Again, with the same privacy the person chose (and agreed to) for this repository last time.
+    const r = (S.runs || []).find(x => x.id === b.dataset.again) || (S.run && S.run.id === b.dataset.again ? S.run : null); if (!r) return;
     startRun(r.link, r.privacy, r.privacy === 'full');
   });
   el.querySelectorAll('[data-signin]').forEach(b => b.onclick = e => { e.preventDefault(); signInSheet(); });
