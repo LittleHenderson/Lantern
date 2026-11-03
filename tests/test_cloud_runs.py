@@ -309,3 +309,26 @@ def test_precomputed_audits_reach_the_report(tmp_path, monkeypatch):
     assert depaudit.run_pip_audit(tmp_path, True)[1]["status"] != "ok"     # no entry for pip-audit: runs as usual
     f.write_text("not json", encoding="utf-8")
     assert depaudit.precomputed("npm-audit") is None
+
+
+def test_sample_apps_are_listed_and_checked_without_a_clone(tmp_path, monkeypatch):
+    def no_clone(link, dest, log):
+        raise AssertionError("a sample app must not be cloned")
+    monkeypatch.setattr(worker_mod, "clone_repo", no_clone)
+    cloud, gw, s = make(tmp_path)
+    listed = cloud.get("/v1/samples").json()["samples"]            # public: shown before sign-in
+    ids = [x["id"] for x in listed]
+    assert "notes-api" in ids and all(x["title"] and x["summary"] for x in listed)
+    tok = gw.sign_in("github:1", "github:octo")
+    for bad in ("../notes-api", "nope", 7, ""):
+        r = cloud.post("/v1/repos", json={"sample": bad}, headers=bearer(tok))
+        assert r.status_code == 400 and "sample apps" in r.json()["error"]["message"], (bad, r.text)
+    r = cloud.post("/v1/repos", json={"sample": "notes-api"}, headers=bearer(tok))
+    assert r.status_code == 202, r.text
+    d = r.json()
+    assert d["link"] == "lantern:sample/notes-api" and d["host"] == "sample"
+    done = wait(cloud, tok, d["id"])
+    assert done["status"] == "done", done
+    assert done["summary"]["counts"]["critical"] + done["summary"]["counts"]["high"] >= 1   # the planted problems
+    assert "built-in starter apps" in done["log_tail"]
+    assert (Path(s.results_dir) / d["id"] / "report.html").is_file()

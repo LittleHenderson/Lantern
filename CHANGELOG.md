@@ -3,6 +3,13 @@
 Each release has a section headed `## <version>`. The release workflow (`.github/workflows/release.yml`) puts the
 section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses `## 0.9.0-rc1` if present, else `## 0.9.0`).
 
+## Unreleased
+
+- Website home: the warm light behind the headline, as in the mock-ups (the app's home has it too); "Your repositories"
+  (GitHub sign-ins) and "Explore GitHub" buttons under the link box, to find a repository to paste; and "Try a sample app":
+  Lantern's four built-in starter apps, each with planted problems, checked with one click (written from the package,
+  nothing cloned), so a beginner sees a real report without a repository of their own.
+
 ## 0.10.0
 
 Lantern on the web, and the app redrawn to match the design mock-ups screen by screen.

@@ -33,7 +33,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from lantern import remote, sandbox
+from lantern import learn, remote, sandbox
 
 from .settings import Settings
 from .store import Store
@@ -62,6 +62,31 @@ class RunFailed(Exception):
 def clone_repo(link: str, dest: Path, log) -> Path:
     """Step 1. Replaced in tests (the real clone is https only; `tests/test_remote.py` covers it)."""
     return remote.clone(link, log=log, dest=dest)
+
+
+SAMPLE_PREFIX = "lantern:sample/"   # a run's "link" for one of Lantern's own starter apps (`lantern.learn`)
+
+
+def sample_id(link: str) -> str | None:
+    """The starter id of a sample run's link, or None for a repository link. Only an id Lantern ships is accepted."""
+    if not isinstance(link, str) or not link.startswith(SAMPLE_PREFIX):
+        return None
+    sid = link[len(SAMPLE_PREFIX):]
+    learn.get(sid)          # ValueError for anything that is not a shipped starter
+    return sid
+
+
+def get_source(link: str, dest: Path, log) -> Path:
+    """Step 1: the code to read. A sample app is written from the starter templates inside the package (no network,
+    nothing cloned); anything else is cloned and checked for missing files."""
+    sid = sample_id(link)
+    if sid:
+        log(f"sample app {sid}: written from Lantern's built-in starter apps (nothing downloaded)")
+        learn.scaffold(sid, dest)
+        return dest
+    repo = clone_repo(link, dest, log)
+    remote.check_complete(repo)
+    return repo
 
 
 class Logs:
@@ -157,8 +182,7 @@ class Worker:
         try:
             stage("clone")
             try:
-                repo = clone_repo(r["link"], root / "repo", log)
-                remote.check_complete(repo)
+                repo = get_source(r["link"], root / "repo", log)
             except (RuntimeError, ValueError) as e:
                 raise RunFailed(_scrub(str(e), scrub)) from None
             commit = _commit(repo)
@@ -236,8 +260,7 @@ class Worker:
                 raise RunFailed("Lantern restarted while these were waiting. Click Explain again.")
             log("· Copying the repository again to read the code (nothing is run or installed)")
             try:
-                repo = clone_repo(r["link"], root / "repo", log)
-                remote.check_complete(repo)
+                repo = get_source(r["link"], root / "repo", log)
             except (RuntimeError, ValueError) as e:
                 raise RunFailed(_scrub(str(e), scrub)) from None
             now_at = _commit(repo)

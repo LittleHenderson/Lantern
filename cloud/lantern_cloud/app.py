@@ -26,6 +26,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from lantern import learn
 
 from . import __version__
 from .identity import GatewayUnavailable, Identity
@@ -33,7 +34,7 @@ from .idle import IdleExit
 from .settings import Settings
 from . import site
 from .store import FINISHED, LimitReached, Store
-from .worker import ACTIVE_EXPLAIN, STAGES, Worker
+from .worker import ACTIVE_EXPLAIN, SAMPLE_PREFIX, STAGES, Worker
 
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
@@ -69,6 +70,14 @@ def _host_of(link: str, allowed: list[str] | None) -> str:
     if allowed is not None and host not in allowed:
         raise ValueError("Cloud mode accepts links from " + ", ".join(allowed) + " for now.")
     return host
+
+
+def _sample(sid) -> dict:
+    """A shipped starter app by id; ValueError with a plain sentence otherwise."""
+    try:
+        return learn.get(sid)
+    except (ValueError, TypeError):
+        raise ValueError("Choose one of the sample apps on the home page.") from None
 
 
 def _note_page(title: str, text: str) -> str:
@@ -194,6 +203,11 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 authorization.removeprefix("Bearer ").strip(), s.admin_secret):
             raise HTTPException(403, "admin only")
 
+    @app.get("/v1/samples")
+    def samples():
+        # Public: Lantern's built-in starter apps, which a signed-in person can check with one click.
+        return {"samples": [{k: c.get(k) for k in ("id", "title", "stack", "level", "summary")} for c in learn.catalog()]}
+
     @app.get("/v1/health")
     def health():
         # Public: versions and limits only, never counters, accounts or links.
@@ -226,11 +240,14 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if privacy == "full" and payload.get("stored_snippets_ok") is not True:
             raise HTTPException(400, FULL_NOTICE)
         try:
-            host = _host_of(payload.get("link"), s.hosts())
+            if payload.get("sample") is not None:      # one of Lantern's own starter apps, for people with no repo
+                link, host = SAMPLE_PREFIX + _sample(payload["sample"])["id"], "sample"
+            else:
+                host, link = _host_of(payload.get("link"), s.hosts()), payload["link"].strip()
         except ValueError as e:
             raise HTTPException(400, str(e)) from None
         try:
-            rid = store.create_run(who["account"], payload["link"].strip(), host, privacy, per_day=s.runs_per_day,
+            rid = store.create_run(who["account"], link, host, privacy, per_day=s.runs_per_day,
                                    global_per_day=s.global_runs_per_day, per_user_active=s.per_user_active)
         except LimitReached as e:
             raise HTTPException(429, str(e)) from None
