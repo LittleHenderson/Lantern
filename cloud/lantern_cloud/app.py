@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 
 from . import __version__
 from .identity import GatewayUnavailable, Identity
+from .idle import IdleExit
 from .settings import Settings
 from .store import Store
 
@@ -40,6 +41,14 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     ident = Identity(s.gateway_url, s.identity_ttl, transport=transport)
     app = FastAPI(title="Lantern cloud", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store, app.state.settings, app.state.identity = store, s, ident
+    idle = IdleExit(s.idle_minutes, busy=lambda: store.active_runs() > 0)
+    app.state.idle = idle
+    idle.start()
+
+    @app.middleware("http")
+    async def _seen(request: Request, call_next):
+        idle.touch()
+        return await call_next(request)
 
     @app.exception_handler(HTTPException)
     async def _http_error(request: Request, exc: HTTPException):

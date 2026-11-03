@@ -167,3 +167,25 @@ def test_versions_match_their_pyproject():
     from lantern_gateway import __version__ as gwv
     txt = (ROOT / "gateway" / "pyproject.toml").read_text(encoding="utf-8")
     assert re.search(r'^version = "([^"]+)"', txt, re.M).group(1) == gwv
+
+
+def test_idle_exit_waits_for_runs_and_requests(env):
+    from lantern_cloud.idle import IdleExit
+    stops = []
+    busy = {"v": True}
+    ie = IdleExit(0.0005, busy=lambda: busy["v"], stop=lambda: stops.append(1))   # 0.03 s
+    import time
+    time.sleep(0.05)
+    assert ie.check() is False and stops == []          # a run is going: never stops
+    busy["v"] = False
+    assert ie.check() is False                          # the run just ended: the idle clock starts again
+    time.sleep(0.05)
+    assert ie.check() is True and stops == [1]
+    assert ie.check() is False and stops == [1]         # once
+    assert IdleExit(0, busy=lambda: False, stop=lambda: stops.append(2)).check() is False
+    # Requests reset the clock.
+    _, _, cloud, _, _, _ = env
+    before = cloud.app.state.idle.last
+    time.sleep(0.01)
+    cloud.get("/v1/health")
+    assert cloud.app.state.idle.last > before

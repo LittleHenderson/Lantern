@@ -40,6 +40,9 @@ class Settings:
     concurrent_jobs: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_CONCURRENT_JOBS", 2))
     clone_max_mb: int = field(default_factory=lambda: _env_int("LANTERN_CLONE_MAX_MB", 200))
     job_timeout: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_JOB_SECONDS", 600))
+    # Minutes with no request and no run before the service stops itself (Fly then keeps the machine stopped, and
+    # bills nothing for it, until the next visitor). 0 = never.
+    idle_minutes: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_IDLE_MINUTES", 0))
     # 0 = keep results until the person deletes them (the owner's choice). A positive number deletes runs that old.
     retention_days: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_RETENTION_DAYS", 0))
     # Comma-separated hosts allowed for clones. Empty = every host `lantern.remote` accepts.

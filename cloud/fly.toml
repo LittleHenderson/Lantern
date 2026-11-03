@@ -14,19 +14,23 @@ primary_region = 'sjc'
   LANTERN_CLOUD_JOB_SECONDS = '600'
   # 0 = results are kept until the person deletes them (owner's decision, 2026-11-03)
   LANTERN_CLOUD_RETENTION_DAYS = '0'
+  # Sleep when unused: after 10 minutes with no visitor and no run, the service stops itself and Fly bills
+  # (almost) nothing until the next visitor wakes it, which takes a few seconds.
+  LANTERN_CLOUD_IDLE_MINUTES = '10'
 
 [[mounts]]
   source = 'lantern_cloud_data'
   destination = '/home/app/data'
-  initial_size = '3gb'
+  initial_size = '1gb'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  # Jobs run inside this machine; a stopped machine would cut a run short, so it stays on.
+  # Fly's own idle stop is off because it could cut a run short; the service stops itself instead, only when no
+  # run is going (LANTERN_CLOUD_IDLE_MINUTES). A visitor's request starts it again.
   auto_stop_machines = 'off'
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [http_service.concurrency]
     type = 'requests'
@@ -40,7 +44,12 @@ primary_region = 'sjc'
     method = 'GET'
     path = '/v1/health'
 
+# A clean stop (the idle sleep) leaves the machine stopped; a crash restarts it.
+[[restart]]
+  policy = 'on-failure'
+  retries = 5
+
 [[vm]]
-  # Analysis of a large repository (tens of thousands of functions) needs memory; 2 GB covers Django-sized repos.
-  size = 'shared-cpu-2x'
-  memory = '2gb'
+  # 1 GB covers typical apps. A very large repository (Django-sized) may need 2 GB: `fly scale memory 2048`.
+  size = 'shared-cpu-1x'
+  memory = '1gb'
