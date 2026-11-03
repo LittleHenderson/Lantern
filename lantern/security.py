@@ -409,12 +409,16 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     findings += af
     tools.append({"tool": "lantern-ai", "status": "ok" + ("" if ai["calls"] else " (no model, vector or paid API calls found)"),
                   "version": "0.1"})
-    from .packs import load_all, scan_packs
-    loaded, skipped = load_all(repo)
+    from .packs import load_all, scan_packs, split_enabled
+    loaded, skipped = load_all(repo, keep_disabled=True)
+    loaded, off = split_enabled(loaded)
     if loaded:
         pf, pt = scan_packs(repo, loaded)
         findings += pf
         tools += pt
+    # a pack turned off in Settings is named with its status, so the Evidence Report says it was not used
+    tools += [{"tool": f"lantern-pack:{pk['pack']}", "status": "off (turned off in Settings)",
+               "version": str(pk.get("version", "-"))} for pk in off]
     tools += [{"tool": where, "status": "skipped: " + why, "version": "-"} for where, why in skipped]
     stable_ids(repo, findings)
     accepted = load_accepted(repo)
