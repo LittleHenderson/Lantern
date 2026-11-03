@@ -1,0 +1,78 @@
+"""The cloud website: one page that looks and behaves like the Lantern app, because it is built from the app.
+
+The app's stylesheet, typefaces, brand mark, icons, readiness ring, appearance switch and backdrop are read from
+`lantern/viewer/app.html` (the same file `lantern serve` sends) when the service starts, and placed into
+`site/index.html`. Change the app and the website follows; a test fails if an anchor this module reads from the app
+disappears, so the two can never drift apart quietly.
+
+Every page is sent with a fresh nonce and the same Content-Security-Policy as the app (`lantern.server._csp`), so only
+our own scripts run. Data shown on the page arrives from the JSON API and goes through `esc()` before it touches HTML.
+"""
+
+from __future__ import annotations
+
+import re
+import secrets
+from functools import lru_cache
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent / "site"
+
+
+def _viewer() -> Path:
+    import lantern
+    return Path(lantern.__file__).resolve().parent / "viewer"
+
+
+# What the website takes from the app, and the text that marks where each piece starts and ends.
+JS_BLOCKS = (
+    ("const esc = ", "\n"),                                                         # the escaper, one line
+    ("// Icons: fixed markup, never data.", "document.getElementById('theme').onclick"),  # icons, ring, appearance
+    ("// ---------------------------------------------------------------- backdrop", "function setBackdrop"),
+)
+
+
+def _between(text: str, start: str, end: str) -> str:
+    i = text.index(start)
+    j = text.index(end, i + len(start))
+    return text[i:j]
+
+
+def app_parts(app_html: str) -> dict:
+    """The pieces of the app the website reuses. ValueError when the app no longer has one of them."""
+    try:
+        style = _between(app_html, "<style>", "</style>")[len("<style>"):]
+        fonts = re.search(r'<link href="https://fonts\.googleapis\.com/[^"]+" rel="stylesheet">', app_html).group(0)
+        brand = re.search(r'<span class="mark" aria-hidden="true">.*?</span><span>Lantern</span>', app_html).group(0)
+        js = "\n".join(_between(app_html, a, b).rstrip() for a, b in JS_BLOCKS)
+    except (ValueError, AttributeError) as e:
+        raise ValueError(f"the app page changed shape; update lantern_cloud/site.py ({e})") from None
+    if "</script" in js.lower() or "</style" in style.lower():
+        raise ValueError("unexpected closing tag in a shared piece")
+    return {"style": style, "fonts": fonts, "brand": brand, "js": js}
+
+
+@lru_cache(maxsize=1)
+def _template(version: str) -> str:
+    parts = app_parts((_viewer() / "app.html").read_text(encoding="utf-8"))
+    page = (HERE / "index.html").read_text(encoding="utf-8")
+    for key in ("style", "fonts", "brand", "js"):
+        page = page.replace(f"/*__APP_{key.upper()}__*/", parts[key]).replace(f"<!--__APP_{key.upper()}__-->", parts[key])
+    return page.replace("__VERSION__", version)
+
+
+def page(version: str) -> tuple[str, str]:
+    """(html, nonce) for the website, with the nonce on every script tag."""
+    nonce = secrets.token_urlsafe(16)
+    return _template(version).replace("<script>", f'<script nonce="{nonce}">'), nonce
+
+
+def asset(name: str) -> tuple[bytes, str] | None:
+    """The PWA files: the icon is the app's own; the manifest and service worker are the website's."""
+    if name == "icon.svg":
+        return (_viewer() / "icon.svg").read_bytes(), "image/svg+xml"
+    if name == "manifest.webmanifest":
+        return (HERE / "manifest.webmanifest").read_bytes(), "application/manifest+json"
+    if name == "sw.js":
+        return (HERE / "sw.js").read_bytes(), "text/javascript"
+    return None

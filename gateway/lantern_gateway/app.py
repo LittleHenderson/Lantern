@@ -482,7 +482,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     # ---- Sign in with GitHub / Google ----
     from . import auth as oauth
     from fastapi.responses import HTMLResponse, RedirectResponse
-    page_headers = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'", "Referrer-Policy": "no-referrer",
+    page_headers = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; "
+                    "font-src https://fonts.gstatic.com", "Referrer-Policy": "no-referrer",
                     "Cache-Control": "no-store"}
 
     @app.get("/v1/auth/providers")

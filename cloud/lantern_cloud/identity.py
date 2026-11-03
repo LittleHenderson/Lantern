@@ -24,7 +24,8 @@ class Identity:
     MAX_CACHE = 5000
 
     def __init__(self, gateway_url: str, ttl: int = 300, transport: httpx.AsyncBaseTransport | None = None):
-        self.url = gateway_url.rstrip("/") + "/whoami"
+        self.base = gateway_url.rstrip("/")
+        self.url = self.base + "/whoami"
         self.ttl = ttl
         self.transport = transport
         self.cache: dict[str, tuple[float, dict | None]] = {}
@@ -61,3 +62,40 @@ class Identity:
         # A refusal is remembered for a short while only, so a fresh sign-in works at once.
         self.cache[key] = (time.monotonic() + (self.ttl if who else min(self.ttl, 30)), who)
         return who
+
+    async def _get(self, path: str) -> httpx.Response:
+        try:
+            async with httpx.AsyncClient(transport=self.transport, timeout=10) as client:
+                return await client.get(self.base + path, headers={"user-agent": "lantern-cloud"})
+        except httpx.HTTPError as e:
+            raise GatewayUnavailable(type(e).__name__) from None
+
+    async def providers(self) -> list[str]:
+        """The sign-in providers the gateway has switched on (GitHub, Google)."""
+        r = await self._get("/auth/providers")
+        if r.status_code != 200:
+            raise GatewayUnavailable(f"HTTP {r.status_code}")
+        try:
+            ps = r.json().get("providers") or []
+        except (ValueError, AttributeError):
+            raise GatewayUnavailable("bad answer") from None
+        return [p for p in ps if p in ("github", "google")]
+
+    def login_url(self, provider: str, cli: str) -> str:
+        """The gateway page that sends the person straight to GitHub or Google; the token is parked under `cli`."""
+        from urllib.parse import quote
+        return f"{self.base}/auth/{quote(provider)}/start?cli={quote(cli)}"
+
+    async def claim(self, cli: str) -> str | None:
+        """The token parked for `cli` once the person has signed in (once, within ten minutes), else None."""
+        from urllib.parse import quote
+        r = await self._get(f"/auth/claim?cli={quote(cli)}")
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise GatewayUnavailable(f"HTTP {r.status_code}")
+        try:
+            tok = r.json().get("token")
+        except (ValueError, AttributeError):
+            raise GatewayUnavailable("bad answer") from None
+        return tok if isinstance(tok, str) and 0 < len(tok) <= 512 else None

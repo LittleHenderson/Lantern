@@ -1,7 +1,7 @@
-"""Lantern cloud service (milestone 1 of docs/cloud-mode-brief.md): settings, store, sign-in, health.
+"""Lantern cloud service (docs/cloud-mode-brief.md): the website, sign-in, runs from a link, results in the browser.
 
-Later milestones add the job queue and worker (POST /v1/repos, GET /v1/runs/...), result pages (/r/<id>/...),
-the website flow, share links and deletion. The rules that hold from the first line:
+Still to come: share links and deletion (milestone 5), explanations through the allowance (milestone 6).
+The rules that hold from the first line:
   * the analysed code is never executed: no builds, installs or test runs, no runtime tracing;
   * the clone is deleted when the job ends; only derived results are kept, at the privacy level chosen first;
   * no tokens, emails, request bodies or repository contents in the database or the logs;
@@ -28,10 +28,20 @@ from . import __version__
 from .identity import GatewayUnavailable, Identity
 from .idle import IdleExit
 from .settings import Settings
+from . import site
 from .store import FINISHED, LimitReached, Store
-from .worker import Worker
+from .worker import STAGES, Worker
 
 PRIVACY = {"structure", "full"}
+SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
+SIGNIN_COOKIE = "lsi"          # the one-time code a sign-in in progress is parked under, for this browser only
+SESSION_DAYS = 30
+EXPIRED_PAGE = ("<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                "<title>Link expired · Lantern</title><body style=\"margin:0;min-height:100vh;display:grid;place-items:center;"
+                "background:#F5F5F2;color:#46464C;font:15px/1.55 -apple-system,'Segoe UI',Roboto,sans-serif;padding:24px\">"
+                "<div style=\"max-width:420px;text-align:center\"><div style=\"font:700 22px -apple-system,'Segoe UI',sans-serif;"
+                "color:#161618;margin-bottom:8px;letter-spacing:-.02em\">This link has expired</div>Report links work for an "
+                "hour. Open the run again from <a href=\"/\" style=\"color:#0B5F5A\">My runs</a>.</div>")
 # What /r/{id}/<name> serves, and the result file behind each. Every page is rebuilt from our templates
 # (`lantern.server.result_page`); nothing in the run's folder is sent as a page.
 VIEWABLE = {"report.html": "report.html", "evidence.html": "evidence.html", "badge.svg": "badge.svg",
@@ -78,7 +88,8 @@ def run_view(r: dict, logs=None) -> dict:
     return {"id": r["id"], "link": r["link"], "host": r["host"], "privacy": r["privacy"], "status": r["status"],
             "stage": r["stage"], "error": r["error"], "created": r["created"], "started": r["started"],
             "finished": r["finished"], "commit": r["commit_sha"], "summary": r["summary"],
-            "shared": bool(r["share_slug"]), "log_tail": tail}
+            "shared": bool(r["share_slug"]), "log_tail": tail,
+            "step": next((k for k, v in STAGES.items() if v == r["stage"]), None)}
 
 
 def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None,
@@ -105,11 +116,22 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             exc.status_code, "error")
         return JSONResponse({"error": {"type": kind, "message": str(exc.detail)}}, status_code=exc.status_code)
 
-    async def signed_in(authorization: str | None) -> dict:
-        if not authorization or not authorization.lower().startswith("bearer "):
+    async def signed_in(request: Request) -> dict:
+        """The account behind the request: a gateway token as `Authorization: Bearer` (apps, scripts), or the
+        website's HttpOnly `lt` cookie. A cookie only counts for a change (anything but GET) when the request also
+        carries `X-Lantern-Site`, a header another site's page cannot send here (no CORS is offered), so a link or
+        form elsewhere can never start a run or sign someone out."""
+        authorization = request.headers.get("authorization") or ""
+        if authorization.lower().startswith("bearer "):
+            token = authorization[7:].strip()
+        else:
+            token = request.cookies.get(SESSION_COOKIE) or ""
+            if token and request.method != "GET" and request.headers.get("x-lantern-site") != "1":
+                raise HTTPException(403, "This request did not come from Lantern's own page.")
+        if not token:
             raise HTTPException(401, "Sign in first.")
         try:
-            who = await ident.whoami(authorization[7:].strip())
+            who = await ident.whoami(token)
         except GatewayUnavailable:
             raise HTTPException(503, "Lantern can't check your sign-in right now. Try again in a minute.") from None
         if who is None:
@@ -129,8 +151,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 "limits": s.limits(), "hosts": s.hosts() or "all"}
 
     @app.get("/v1/me")
-    async def me(authorization: str | None = Header(default=None)):
-        who = await signed_in(authorization)
+    async def me(request: Request):
+        who = await signed_in(request)
         acc = who["account"]
         return {"account": acc.split(":", 1)[0], "label": who["label"],
                 "runs_today": store.runs_today(acc), "runs_active": store.active_runs(acc),
@@ -144,8 +166,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return r
 
     @app.post("/v1/repos", status_code=202)
-    async def start_run(payload: dict, authorization: str | None = Header(default=None)):
-        who = await signed_in(authorization)
+    async def start_run(payload: dict, request: Request):
+        who = await signed_in(request)
         if worker is None:
             raise HTTPException(503, "Runs are paused on this server.")
         privacy = payload.get("privacy") or s.default_privacy
@@ -166,20 +188,20 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return run_view(store.run(rid))
 
     @app.get("/v1/runs")
-    async def list_runs(authorization: str | None = Header(default=None)):
-        who = await signed_in(authorization)
+    async def list_runs(request: Request):
+        who = await signed_in(request)
         return {"runs": [run_view(r) for r in store.runs(who["account"])]}
 
     @app.get("/v1/runs/{rid}")
-    async def get_run(rid: str, authorization: str | None = Header(default=None)):
-        who = await signed_in(authorization)
+    async def get_run(rid: str, request: Request):
+        who = await signed_in(request)
         return run_view(own_run(rid, who), worker.logs if worker else None)
 
     @app.get("/v1/runs/{rid}/stream")
-    async def stream_run(rid: str, authorization: str | None = Header(default=None)):
+    async def stream_run(rid: str, request: Request):
         """Server-sent events: `log` events (one line each), then one `end` event with the run, then the stream
         closes. A finished run sends its saved tail and `end` at once."""
-        who = await signed_in(authorization)
+        who = await signed_in(request)
         own_run(rid, who)
 
         async def events():
@@ -217,10 +239,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return exp > time.time() and hmac.compare_digest(view_key(rid, exp), k or "")
 
     @app.post("/v1/runs/{rid}/view")
-    async def view_link(rid: str, authorization: str | None = Header(default=None)):
+    async def view_link(rid: str, request: Request):
         """Links that open this run's report, evidence and files in a browser for the next `view_minutes`. Anyone
         holding a link can open it until then, so the website opens it at once and never stores it."""
-        who = await signed_in(authorization)
+        who = await signed_in(request)
         r = own_run(rid, who)
         if r["status"] != "done":
             raise HTTPException(409, "This run has no report yet.")
@@ -236,7 +258,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(404, "Not found.")
         cookie = request.cookies.get("lv")
         if not (key_ok(rid, k) or key_ok(rid, cookie)):
-            return Response("<p>This link has expired. Open the run again from your list of runs.</p>", 401,
+            return Response(EXPIRED_PAGE, 401,
                             media_type="text/html; charset=utf-8", headers=_page_headers(None))
         r = store.run(rid)
         if not r or r["status"] != "done":
@@ -248,6 +270,83 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             # the report links to evidence.html and badge.svg by relative path; the cookie lets those open too
             resp.set_cookie("lv", k, max_age=max(1, int(k.split(".", 1)[0]) - int(time.time())), path=f"/r/{rid}/",
                             secure=s.public_url.startswith("https://"), httponly=True, samesite="lax")
+        return resp
+
+    # ---- the website (same origin as the API, so no CORS is offered or needed) ----
+    secure = s.public_url.startswith("https://")
+
+    @app.get("/")
+    def website():
+        html, nonce = site.page(__version__)
+        from lantern.server import _csp
+        return Response(html, 200, media_type="text/html; charset=utf-8", headers={
+            "Content-Security-Policy": _csp(nonce), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer", "Permissions-Policy": "camera=(), microphone=(), geolocation=()"})
+
+    @app.get("/{name}")
+    def website_asset(name: str):
+        a = site.asset(name)
+        if a is None:
+            raise HTTPException(404, "Not found.")
+        body, ctype = a
+        return Response(body, 200, media_type=ctype, headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"})
+
+    def site_only(request: Request) -> None:
+        if request.headers.get("x-lantern-site") != "1":
+            raise HTTPException(403, "This request did not come from Lantern's own page.")
+
+    @app.get("/v1/signin/providers")
+    async def signin_providers():
+        try:
+            return {"providers": await ident.providers()}
+        except GatewayUnavailable:
+            raise HTTPException(503, "Sign-in is unavailable right now. Try again in a minute.") from None
+
+    @app.post("/v1/signin/start")
+    async def signin_start(payload: dict, request: Request):
+        """Begin a sign-in: a fresh one-time code, kept in an HttpOnly cookie for this browser only, and the page to
+        open. The person signs in on GitHub or Google through the gateway, which parks the token under the code."""
+        site_only(request)
+        provider = payload.get("provider")
+        try:
+            ok = provider in await ident.providers()
+        except GatewayUnavailable:
+            raise HTTPException(503, "Sign-in is unavailable right now. Try again in a minute.") from None
+        if not ok:
+            raise HTTPException(400, "Choose GitHub or Google.")
+        cli = secrets.token_urlsafe(36)
+        resp = JSONResponse({"url": ident.login_url(provider, cli)}, headers={"Cache-Control": "no-store"})
+        resp.set_cookie(SIGNIN_COOKIE, cli, max_age=600, path="/v1/signin", secure=secure, httponly=True, samesite="strict")
+        return resp
+
+    @app.post("/v1/signin/poll")
+    async def signin_poll(request: Request):
+        """Collect the token once the person has signed in; it goes into an HttpOnly cookie, never to the page."""
+        site_only(request)
+        cli = request.cookies.get(SIGNIN_COOKIE) or ""
+        if not (32 <= len(cli) <= 128):
+            raise HTTPException(400, "No sign-in in progress here. Start again.")
+        try:
+            token = await ident.claim(cli)
+            who = await ident.whoami(token) if token else None
+        except GatewayUnavailable:
+            raise HTTPException(503, "Sign-in is unavailable right now. Try again in a minute.") from None
+        if not token:
+            return JSONResponse({"signed_in": False}, headers={"Cache-Control": "no-store"})
+        if who is None:
+            raise HTTPException(401, "That sign-in did not work. Try again.")
+        store.touch_user(who["account"], who["label"])
+        resp = JSONResponse({"signed_in": True, "label": who["label"]}, headers={"Cache-Control": "no-store"})
+        resp.delete_cookie(SIGNIN_COOKIE, path="/v1/signin")
+        resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, path="/", secure=secure, httponly=True,
+                        samesite="strict")
+        return resp
+
+    @app.post("/v1/signout")
+    def signout(request: Request):
+        site_only(request)
+        resp = JSONResponse({"signed_in": False})
+        resp.delete_cookie(SESSION_COOKIE, path="/")
         return resp
 
     @app.get("/v1/admin/stats")

@@ -198,11 +198,20 @@ A separate server from `lantern serve`: Lantern's own Fly app (`https://lantern-
 analyse a repository from the website without installing anything. Plan and later routes: `docs/cloud-mode-brief.md`
 §4. This section lists only what is built; a route appears here before any UI is built against it.
 
-**Sign-in.** The website signs the person in at the gateway (`<gateway>/v1/login?provider=github&cli=<code>`, then
-polls `<gateway>/v1/auth/claim?cli=<code>`) and sends the token as `Authorization: Bearer lt_...`. The cloud service
-asks the gateway `GET /v1/whoami` → `{account, label}` and remembers the answer for 5 minutes, keyed by the
-token's SHA-256 in memory. Runs belong to the account (`github:<id>`, `google:<sub>`), so they survive a re-sign-in
-(which rotates the token). Nothing about the token is stored.
+**Sign-in.** Two ways, same accounts:
+
+* *The website* (`/`, same origin as the API, so no CORS is offered): `POST /v1/signin/start {provider}` makes a
+  one-time code, keeps it in an HttpOnly cookie `lsi` (path `/v1/signin`, 10 min, SameSite=Strict) and answers the
+  gateway page to open (`<gateway>/v1/auth/<provider>/start?cli=<code>`, which goes straight to GitHub or Google).
+  The page then calls `POST /v1/signin/poll` every 1.5 s; the server collects the token from the gateway's
+  `/v1/auth/claim` and puts it in an HttpOnly cookie `lt` (path `/`, 30 days, SameSite=Strict, Secure on https).
+  The page's script never sees the token. A request authenticated by the cookie that changes something (anything
+  but GET) must also carry `X-Lantern-Site: 1`, which another site's page cannot send here; without it: 403.
+* *Apps and scripts*: sign in at the gateway (`lantern login`) and send `Authorization: Bearer lt_...`.
+
+Either way the cloud service asks the gateway `GET /v1/whoami` → `{account, label}` and remembers the answer for 5
+minutes, keyed by the token's SHA-256 in memory. Runs belong to the account (`github:<id>`, `google:<sub>`), so they
+survive a re-sign-in (which rotates the token). Nothing about the token is stored on disk.
 
 **Errors** are `{"error": {"type", "message"}}`; `message` is a plain sentence the UI may show as is. Types:
 `signed_out` (401: no token, or an expired/replaced one: sign in again), `forbidden` (403), `not_found` (404),
@@ -211,12 +220,18 @@ token's SHA-256 in memory. Runs belong to the account (`github:<id>`, `google:<s
 | Route | Auth | Returns |
 |---|---|---|
 | `GET /v1/health` | none | `{ok, service: "lantern-cloud", version, engine, limits, hosts}`; `engine` is the analysis engine's version, `hosts` is `"all"` or a list. No counters |
-| `GET /v1/me` | Bearer | `{account: "github"\|"google"\|"token", label, runs_today, runs_active, limits}` |
-| `POST /v1/repos` `{link, privacy?, stored_snippets_ok?}` | Bearer | 202 + a **run** (status `queued`). `link`: https link to a public repository on a host `lantern.remote` accepts (and `LANTERN_CLOUD_HOSTS`, when set). `privacy`: `"structure"` (default, no code kept) or `"full"` (short snippets kept; needs `stored_snippets_ok: true`, else 400 with the sentence to show). 400 for a bad link or privacy, 429 over a limit (one active run per person, runs per day, runs for everyone per day) |
-| `GET /v1/runs` | Bearer | `{runs: [run]}`, the person's runs, newest first (at most 100) |
-| `GET /v1/runs/{id}` | Bearer | the run; 404 when it is not the caller's (same answer as a missing id) |
-| `GET /v1/runs/{id}/stream` | Bearer | `text/event-stream`: `event: log` with one JSON string per line, then one `event: end` with the run, then the stream closes. A finished run sends its saved tail and `end` at once |
-| `POST /v1/runs/{id}/view` | Bearer | `{expires_in, report, evidence, badge, findings, graph, readiness}`: absolute links that open the run's results in a browser for the next `LANTERN_CLOUD_VIEW_MINUTES` (60). Each carries `?k=<expiry>.<HMAC>` for this run only. 404 when not the caller's run, 409 when it has no report (not `done`). Open the link at once; never store or share it (anyone holding it can open it until it expires; Share comes in milestone 5) |
+| `GET /` | none | The website (`cloud/lantern_cloud/site/index.html`, filled by `site.py` with the app's own stylesheet, typefaces, brand mark, icons, readiness ring, appearance switch and backdrop from `lantern/viewer/app.html`). Per-response nonce, the app's CSP (`lantern.server._csp`), `no-store`. Screens: signed out (paste box, sign-in sheet), My runs (Simple: cards; Advanced: the app's table), a run in progress (steps from `step`, log from `/stream`), a finished run (the report in the app's frame, tabs Paths / What to fix / What protects you / Ready to ship? / Report), Help |
+| `GET /manifest.webmanifest` · `/sw.js` · `/icon.svg` | none | Installable like the app. The service worker caches only the icon and manifest, never `/v1/` or `/r/` |
+| `GET /v1/signin/providers` | none | `{providers: ["github", "google"]}` as switched on at the gateway; 503 when it does not answer |
+| `POST /v1/signin/start` `{provider}` | `X-Lantern-Site` | `{url}` to open; sets `lsi`. 400 for a provider that is not switched on |
+| `POST /v1/signin/poll` | `X-Lantern-Site` + `lsi` | `{signed_in: false}` while waiting; `{signed_in: true, label}` + `lt` cookie once; 400 with no sign-in in progress |
+| `POST /v1/signout` | `X-Lantern-Site` | Clears `lt` |
+| `GET /v1/me` | Bearer or `lt` | `{account: "github"\|"google"\|"token", label, runs_today, runs_active, limits}` |
+| `POST /v1/repos` `{link, privacy?, stored_snippets_ok?}` | Bearer or `lt` | 202 + a **run** (status `queued`). `link`: https link to a public repository on a host `lantern.remote` accepts (and `LANTERN_CLOUD_HOSTS`, when set). `privacy`: `"structure"` (default, no code kept) or `"full"` (short snippets kept; needs `stored_snippets_ok: true`, else 400 with the sentence to show). 400 for a bad link or privacy, 429 over a limit (one active run per person, runs per day, runs for everyone per day) |
+| `GET /v1/runs` | Bearer or `lt` | `{runs: [run]}`, the person's runs, newest first (at most 100) |
+| `GET /v1/runs/{id}` | Bearer or `lt` | the run; 404 when it is not the caller's (same answer as a missing id) |
+| `GET /v1/runs/{id}/stream` | Bearer or `lt` | `text/event-stream`: `event: log` with one JSON string per line, then one `event: end` with the run, then the stream closes. A finished run sends its saved tail and `end` at once |
+| `POST /v1/runs/{id}/view` | Bearer or `lt` | `{expires_in, report, evidence, badge, findings, graph, readiness}`: absolute links that open the run's results in a browser for the next `LANTERN_CLOUD_VIEW_MINUTES` (60). Each carries `?k=<expiry>.<HMAC>` for this run only. 404 when not the caller's run, 409 when it has no report (not `done`). Open the link at once; never store or share it (anyone holding it can open it until it expires; Share comes in milestone 5) |
 | `GET /r/{id}/report.html` · `evidence.html` · `badge.svg` · `findings.json` (= `security.json`) · `graph.json` · `readiness.json` | `?k=` from `/view`, or the `lv` cookie the first page sets for `/r/{id}/` | Rebuilt from Lantern's templates (`lantern.server.result_page`, the same code as `lantern serve`): the stored files are read for data only, pages get a per-response nonce CSP plus the report's own hash CSP, `live` is null (no actions), privacy as chosen before the run. Headers: `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`. 401 with a sentence for a missing, wrong or expired key; 404 for other names |
 | `GET /v1/admin/stats` | Bearer = cloud admin secret | `{users, runs, runs_by_status, runs_today, shared}`; 403 when no admin secret is set |
 
@@ -225,7 +240,9 @@ log_tail}`. `status`: `queued` → `running` → `done` | `error` | `blocked` (t
 reaching the network or writing outside its folder). `stage` is a plain sentence for the current step. `error` is a
 plain sentence (never a traceback or a server path). `summary` (when done) = `{score, grade, shape, counts:
 {critical, high, medium, low}, files}`, read from the result files. `shared` is false until the person clicks Share
-(milestone 5). `log_tail`: the last 40 log lines, server paths removed.
+(milestone 5). `log_tail`: the last 40 log lines, server paths removed. `step`: `clone` | `audit` | `analyze` |
+`save` while running (the key of `stage`), else null. `summary` values are checked when read (score and files whole
+numbers or null, grade A–F or null, counts whole numbers), since a stranger's repository wrote the files.
 
 What a run does (`cloud/lantern_cloud/worker.py`): clone into a temp folder (size cap before checkout) → dependency
 audits on lock files in the restricted process with the network on → analysis (`lantern analyze --offline`, the
@@ -260,5 +277,9 @@ disabled token. A hand-minted token has `account: "token:<16 hex>"`. Never retur
   wording exactly `Lantern · commit · N critical · date`.
 * **Settings**: provider list with local/cloud marking and data notices; key remembered or session-only; privacy;
   theme; **Connections** rows by assistant name with last use, setup snippets, no connect/disconnect control.
+* **Cloud website**: the same look as the app (it is built from it); sign in with GitHub or Google in a new tab and
+  the page notices by itself; paste a link with the privacy choice (snippets need the box ticked); the run page shows
+  the four steps and the live log, then the report; My runs in Simple (cards) and Advanced (table); phone layout;
+  `tools/cloud_site_smoke.js` with `tools/cloud_site_demo.py --poison` passes (no JS errors, run data stays text).
 * **Everything**: no JS errors in Chromium at desktop and phone widths (`tools/viewer_smoke.js`); the poisoned
   report (`tools/poison_report.py`) renders as text; `python -m pytest -q` and `bash tools/audit.sh --browser` green.

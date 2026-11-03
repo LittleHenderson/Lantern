@@ -63,6 +63,13 @@ jobs:
           want = re.search(r'^version = "([^"]+)"', open("pyproject.toml").read(), re.M).group(1)
           assert d["ok"] is True and d["service"] == "lantern-cloud" and d["engine"] == want, d
           PY
+      - name: the website is served, built from the app's own stylesheet, with a nonce policy
+        run: |
+          curl -fsS -D site.h http://127.0.0.1:8090/ -o site.html
+          grep -qi "content-security-policy: .*nonce-" site.h
+          grep -q 'class="dropzone"' site.html
+          grep -q -- '--accent:#0F7B74' site.html
+          curl -fsS http://127.0.0.1:8090/manifest.webmanifest | grep -q '"start_url": "/"'
 
   windows:
     # Stock Windows settings: the system code page, not UTF-8, and backslash paths.

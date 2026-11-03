@@ -96,7 +96,7 @@ class Worker:
         self.results = Path(settings.results_dir)
         self.work = Path(settings.work_dir)
         self.work.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.work, 0o711)   # others may pass through (the analysis user, when we run as root), not list
+        os.chmod(self.work, 0o711)   # nosec B103 - a folder: others may pass through (the analysis user, when we run as root), not list
         self.pool = ThreadPoolExecutor(max_workers=max(1, settings.concurrent_jobs), thread_name_prefix="lantern-run")
         self._sweep_work()
         for r in store.unfinished():   # the service restarted: queued runs go again, a half-done one is reported
@@ -274,6 +274,17 @@ def _summary(out: Path) -> dict:
     rd, sec, g = load("readiness.json"), load("security.json"), load("graph.json")
     counts = sec.get("counts") if isinstance(sec.get("counts"), dict) else {}
     meta = g.get("meta") if isinstance(g.get("meta"), dict) else {}
-    return {"score": rd.get("score"), "grade": rd.get("grade"), "shape": rd.get("shape"),
-            "counts": {k: int(counts.get(k) or 0) for k in ("critical", "high", "medium", "low")},
-            "files": meta.get("files")}
+    def num(v):
+        return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+    def count(v):
+        try:
+            return max(0, int(v or 0))
+        except (TypeError, ValueError):
+            return 0
+    # The result files were written by the analysis of a stranger's repository: keep only well-formed values.
+    shape = rd.get("shape")
+    return {"score": num(rd.get("score")), "grade": rd.get("grade") if rd.get("grade") in ("A", "B", "C", "D", "F") else None,
+            "shape": shape[:80] if isinstance(shape, str) else None,
+            "counts": {k: count(counts.get(k)) for k in ("critical", "high", "medium", "low")},
+            "files": num(meta.get("files"))}

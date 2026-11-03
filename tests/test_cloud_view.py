@@ -69,7 +69,8 @@ def test_links_need_a_valid_unexpired_key_for_that_run(done_run, tmp_path, clone
     k = v["report"].split("k=", 1)[1]
     cloud.cookies.clear()
     assert cloud.get(f"/r/{rid}/report.html").status_code == 401
-    assert cloud.get(f"/r/{rid}/report.html?k={k[:-1]}0").status_code == 401
+    wrong = k[:-1] + ("1" if k[-1] == "0" else "0")       # a different last digit, whatever the key ends in
+    assert cloud.get(f"/r/{rid}/report.html?k={wrong}").status_code == 401
     assert cloud.get(f"/r/{rid}/report.html?k=garbage").status_code == 401
     exp, mac = k.split(".")
     assert cloud.get(f"/r/{rid}/report.html?k={int(exp) + 999}.{mac}").status_code == 401   # can't stretch the time

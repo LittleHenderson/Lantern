@@ -12,3 +12,6 @@ dependencies = ["fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.29"]
 
 [tool.setuptools.packages.find]
 include = ["lantern_cloud*"]
+
+[tool.setuptools.package-data]
+lantern_cloud = ["site/*"]
