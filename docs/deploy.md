@@ -180,7 +180,7 @@ curl https://lantern-cloud.fly.dev/v1/health
 ```
 
 Windows PowerShell: step 3 is two lines (PowerShell passes `NAME=(...)` as two separate words, which `fly` refuses):
-`$s = python -c "import secrets; print(secrets.token_urlsafe(32))"` then `fly secrets set -a lantern-cloud "LANTERN_ADMIN_SECRET=$s"`; `echo $s` shows it to keep.
+`$s = python -c "import secrets; print(secrets.token_urlsafe(32))"` then `fly secrets set -a lantern-cloud "LANTERN_ADMIN_SECRET=$s"`; `$s | Set-Clipboard` copies it for your password manager without printing it on screen.
 Or set it on the Fly website: lantern-cloud → Secrets → New secret, then **Deploy Secrets**.
 
 Limits (environment variables; the values in `cloud/fly.toml` are the owner's choices of 2026-11-03):
