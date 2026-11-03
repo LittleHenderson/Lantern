@@ -144,6 +144,6 @@ jobs:
             lantern serve tests/fixtures/shop --check 2>&1 | sed 's/token=[A-Za-z0-9_-]*/token=<one-time>/'
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
-          test "$(lantern --version)" = "lantern 0.9.0"
+          test "$(lantern --version)" = "lantern $(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
           test -f "$RUNNER_TEMP/shop/report.html"
           lantern serve tests/fixtures/shop --check > /dev/null
