@@ -1,0 +1,169 @@
+"""Cloud service, milestone 1: settings, store, sign-in through the gateway, health, admin stats.
+
+The gateway here is the real gateway app (in process, through httpx's ASGI transport), so the test proves the
+two services agree on the token scheme: a token minted or signed in at the gateway works on the cloud service.
+"""
+
+import sqlite3
+import sys
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("fastapi")
+httpx = pytest.importorskip("httpx")
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "gateway"))
+sys.path.insert(0, str(ROOT / "cloud"))
+from fastapi.testclient import TestClient  # noqa: E402
+
+from lantern_cloud import __version__ as CLOUD_VERSION  # noqa: E402
+from lantern_cloud.app import create_app  # noqa: E402
+from lantern_cloud.settings import Settings  # noqa: E402
+from lantern_gateway.app import Settings as GwSettings  # noqa: E402
+from lantern_gateway.app import create_app as create_gateway  # noqa: E402
+
+ADMIN = "admin-" + "y" * 20
+
+
+class CountingASGI(httpx.ASGITransport):
+    def __init__(self, app):
+        super().__init__(app=app)
+        self.calls = 0
+
+    async def handle_async_request(self, request):
+        self.calls += 1
+        return await super().handle_async_request(request)
+
+
+@pytest.fixture
+def env(tmp_path):
+    gw_app = create_gateway(GwSettings(admin_secret=ADMIN, db_path=str(tmp_path / "gw.db")))
+    gw = TestClient(gw_app)
+    transport = CountingASGI(gw_app)
+    s = Settings(gateway_url="http://gateway.test/v1", admin_secret=ADMIN, db_path=str(tmp_path / "cloud.db"),
+                 results_dir=str(tmp_path / "results"))
+    cloud = TestClient(create_app(s, transport=transport))
+    return gw, gw_app, cloud, transport, s, tmp_path
+
+
+def bearer(t):
+    return {"authorization": f"Bearer {t}"}
+
+
+def test_health_is_public_and_shows_no_counters(env):
+    _, _, cloud, transport, _, _ = env
+    r = cloud.get("/v1/health")
+    assert r.status_code == 200
+    d = r.json()
+    assert d["ok"] is True and d["service"] == "lantern-cloud" and d["version"] == CLOUD_VERSION
+    import lantern
+    assert d["engine"] == lantern.__version__
+    # Owner decisions: every known host, results kept until deleted, structure-only by default.
+    assert d["hosts"] == "all"
+    assert d["limits"]["retention_days"] is None and d["limits"]["default_privacy"] == "structure"
+    assert d["limits"]["clone_max_mb"] == 200
+    assert "users" not in d and "runs" not in d
+    assert transport.calls == 0          # health never asks the gateway
+
+
+def test_signed_out_and_unknown_tokens_are_refused(env):
+    _, _, cloud, _, _, _ = env
+    r = cloud.get("/v1/me")
+    assert r.status_code == 401 and r.json()["error"]["type"] == "signed_out"
+    r = cloud.get("/v1/me", headers=bearer("lt_not-a-real-token"))
+    assert r.status_code == 401 and "Sign in again" in r.json()["error"]["message"]
+
+
+def test_gateway_token_signs_in_and_only_the_account_is_stored(env):
+    gw, _, cloud, transport, s, _ = env
+    tok = gw.post("/v1/tokens", json={"label": "tester"}, headers=bearer(ADMIN)).json()["token"]
+    r = cloud.get("/v1/me", headers=bearer(tok))
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["label"] == "tester" and d["runs_today"] == 0 and d["runs_active"] == 0
+    assert d["limits"]["runs_per_day"] == s.runs_per_day
+    # Asked once, then the answer is reused (keyed by the token's hash, in memory only).
+    cloud.get("/v1/me", headers=bearer(tok))
+    assert transport.calls == 1
+    # The database holds the account id and label, never the token or its hash.
+    db = sqlite3.connect(s.db_path)
+    rows = db.execute("select account, label from users").fetchall()
+    assert len(rows) == 1 and rows[0][0].startswith("token:") and rows[0][1] == "tester"
+    raw = Path(s.db_path).read_bytes()
+    assert tok.encode() not in raw
+    import hashlib
+    assert hashlib.sha256(tok.encode()).hexdigest().encode() not in raw
+
+
+def test_signed_in_account_follows_the_person_across_token_rotation(env):
+    _, gw_app, cloud, _, s, _ = env
+    store = gw_app.state.store
+    t1 = store.sign_in("github:4242", "github:octo")
+    assert cloud.get("/v1/me", headers=bearer(t1)).json()["label"] == "github:octo"
+    t2 = store.sign_in("github:4242", "github:octo")      # signing in again rotates the token
+    assert cloud.get("/v1/me", headers=bearer(t2)).status_code == 200
+    accounts = [r[0] for r in sqlite3.connect(s.db_path).execute("select account from users")]
+    assert accounts == ["github:4242"]
+    # The old token is disabled at the gateway; once the cached answer expires it is refused here too.
+    cloud.app.state.identity.cache.clear()
+    assert cloud.get("/v1/me", headers=bearer(t1)).status_code == 401
+
+
+def test_gateway_down_is_unavailable_not_signed_out(tmp_path):
+    def down(request):
+        raise httpx.ConnectError("no route")
+    s = Settings(gateway_url="http://gateway.test/v1", db_path=str(tmp_path / "c.db"), results_dir=str(tmp_path / "r"))
+    cloud = TestClient(create_app(s, transport=httpx.MockTransport(down)))
+    r = cloud.get("/v1/me", headers=bearer("lt_whatever"))
+    assert r.status_code == 503 and r.json()["error"]["type"] == "unavailable"
+
+    def odd(request):
+        return httpx.Response(200, json={"account": ""})
+    cloud = TestClient(create_app(s, transport=httpx.MockTransport(odd)))
+    assert cloud.get("/v1/me", headers=bearer("lt_whatever")).status_code == 503
+
+
+def test_admin_stats_needs_the_admin_secret(env):
+    gw, _, cloud, _, _, _ = env
+    assert cloud.get("/v1/admin/stats").status_code == 403
+    assert cloud.get("/v1/admin/stats", headers=bearer("wrong")).status_code == 403
+    tok = gw.post("/v1/tokens", json={"label": "a"}, headers=bearer(ADMIN)).json()["token"]
+    cloud.get("/v1/me", headers=bearer(tok))
+    d = cloud.get("/v1/admin/stats", headers=bearer(ADMIN)).json()
+    assert d["users"] == 1 and d["runs"] == 0 and d["shared"] == 0
+
+
+def test_admin_stats_closed_when_no_secret_is_set(tmp_path):
+    s = Settings(admin_secret="", db_path=str(tmp_path / "c.db"), results_dir=str(tmp_path / "r"))
+    assert TestClient(create_app(s)).get("/v1/admin/stats", headers=bearer("")).status_code == 403
+
+
+def test_store_delete_user_forgets_everything(tmp_path):
+    from lantern_cloud.store import Store, now
+    st = Store(str(tmp_path / "c.db"))
+    st.touch_user("github:1", "github:a")
+    st.db.execute("insert into runs (id, account, link, privacy, status, created) values ('r1', 'github:1', "
+                  "'https://github.com/a/b', 'structure', 'done', ?)", (now(),))
+    st.db.execute("insert into daily (day, account, runs) values ('2026-11-03', 'github:1', 3)")
+    st.db.commit()
+    assert st.delete_user("github:1") == ["r1"]
+    assert st.user("github:1") is None and st.active_runs() == 0
+    assert st.db.execute("select count(*) from daily").fetchone()[0] == 0
+
+
+def test_settings_from_environment(monkeypatch):
+    monkeypatch.setenv("LANTERN_CLOUD_HOSTS", "github.com, GitLab.com ,")
+    monkeypatch.setenv("LANTERN_CLOUD_RUNS_PER_DAY", "not-a-number")
+    s = Settings()
+    assert s.hosts() == ["github.com", "gitlab.com"] and s.runs_per_day == 10
+
+
+def test_versions_match_their_pyproject():
+    import re
+    txt = (ROOT / "cloud" / "pyproject.toml").read_text(encoding="utf-8")
+    assert re.search(r'^version = "([^"]+)"', txt, re.M).group(1) == CLOUD_VERSION
+    from lantern_gateway import __version__ as gwv
+    txt = (ROOT / "gateway" / "pyproject.toml").read_text(encoding="utf-8")
+    assert re.search(r'^version = "([^"]+)"', txt, re.M).group(1) == gwv

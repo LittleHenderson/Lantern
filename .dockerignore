@@ -1,0 +1,12 @@
+# Context for cloud/Dockerfile (built from the repository root). The gateway builds from gateway/ and is unaffected.
+.git
+**/__pycache__
+**/*.egg-info
+**/.lantern
+tests
+bench
+site
+docs
+examples
+tools
+gateway

@@ -1,0 +1,46 @@
+# Lantern cloud service on Fly.io. Deploy from the REPOSITORY ROOT (the image includes the analysis engine):
+#   fly deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --depot=false
+# Step by step, including the one-time setup: docs/deploy.md, "Cloud service on Fly.io".
+
+app = 'lantern-cloud'
+primary_region = 'sjc'
+
+[env]
+  LANTERN_GATEWAY_URL = 'https://lantern-gateway.fly.dev/v1'
+  LANTERN_PUBLIC_URL = 'https://lantern-cloud.fly.dev'
+  LANTERN_CLOUD_RUNS_PER_DAY = '10'
+  LANTERN_CLOUD_CONCURRENT_JOBS = '2'
+  LANTERN_CLONE_MAX_MB = '200'
+  LANTERN_CLOUD_JOB_SECONDS = '600'
+  # 0 = results are kept until the person deletes them (owner's decision, 2026-11-03)
+  LANTERN_CLOUD_RETENTION_DAYS = '0'
+
+[[mounts]]
+  source = 'lantern_cloud_data'
+  destination = '/home/app/data'
+  initial_size = '3gb'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Jobs run inside this machine; a stopped machine would cut a run short, so it stays on.
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 100
+    soft_limit = 50
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '20s'
+    method = 'GET'
+    path = '/v1/health'
+
+[[vm]]
+  # Analysis of a large repository (tens of thousands of functions) needs memory; 2 GB covers Django-sized repos.
+  size = 'shared-cpu-2x'
+  memory = '2gb'

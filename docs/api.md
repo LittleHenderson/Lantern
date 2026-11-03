@@ -192,6 +192,34 @@ the scenario of the function's finding, else a one-line sketch from the map.
 `cache/` (explanation cache). In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed),
 `lantern-packs/*.json` (project analysis packs), `lantern-narratives.md` (the builder's own notes for the Evidence Report).
 
+## Cloud service (`cloud/`, cloud mode)
+
+A separate server from `lantern serve`: Lantern's own Fly app (`https://lantern-cloud.fly.dev`), for people who
+analyse a repository from the website without installing anything. Plan and later routes: `docs/cloud-mode-brief.md`
+§4. This section lists only what is built; a route appears here before any UI is built against it.
+
+**Sign-in.** The website signs the person in at the gateway (`<gateway>/v1/login?provider=github&cli=<code>`, then
+polls `<gateway>/v1/auth/claim?cli=<code>`) and sends the token as `Authorization: Bearer lt_...`. The cloud service
+asks the gateway `GET /v1/whoami` → `{account, label}` and remembers the answer for 5 minutes, keyed by the
+token's SHA-256 in memory. Runs belong to the account (`github:<id>`, `google:<sub>`), so they survive a re-sign-in
+(which rotates the token). Nothing about the token is stored.
+
+**Errors** are `{"error": {"type", "message"}}`; `message` is a plain sentence the UI may show as is. Types:
+`signed_out` (401: no token, or an expired/replaced one: sign in again), `forbidden` (403), `not_found` (404),
+`limit` (429), `unavailable` (503: the gateway did not answer; the person is **not** signed out).
+
+| Route | Auth | Returns |
+|---|---|---|
+| `GET /v1/health` | none | `{ok, service: "lantern-cloud", version, engine, limits, hosts}`; `engine` is the analysis engine's version, `hosts` is `"all"` or a list. No counters |
+| `GET /v1/me` | Bearer | `{account: "github"\|"google"\|"token", label, runs_today, runs_active, limits}` |
+| `GET /v1/admin/stats` | Bearer = cloud admin secret | `{users, runs, runs_by_status, runs_today, shared}`; 403 when no admin secret is set |
+
+`limits` = `{runs_per_day, concurrent_jobs, clone_max_mb, job_seconds, retention_days (null = kept until
+deleted), default_privacy: "structure"}`.
+
+Gateway side: `GET <gateway>/v1/whoami` (Bearer = the person's token) → `{account, label}`; 401 for an unknown or
+disabled token. A hand-minted token has `account: "token:<16 hex>"`. Never returns an email.
+
 ## Acceptance checklist per screen
 
 * **Projects**: add by folder and by GitHub link; job log streams while analyzing; score, grade and counts update
