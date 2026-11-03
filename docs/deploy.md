@@ -126,7 +126,7 @@ to the running gateway only after `fly deploy`; the first prune runs when the ne
 `/v1/health` then reports `"version": "0.2.0"` (or later). Version 0.2.1 adds `GET /v1/whoami`, which the cloud
 service below uses to recognise a signed-in person; deploy it before the cloud service.
 
-## Cloud service on Fly.io (cloud mode, milestone 1)
+## Cloud service on Fly.io (cloud mode)
 
 The cloud service is the "analyze my repo in the browser" part (`cloud/`, brief: `docs/cloud-mode-brief.md`). It is
 a **second Fly app**, `lantern-cloud`, separate from the gateway on purpose: it handles strangers' repositories, and
@@ -139,7 +139,10 @@ OAuth app and no model key to set here**: the only secret is the cloud service's
 
 What it runs: `GET /v1/health` (public), `GET /v1/me`, `POST /v1/repos` and `GET /v1/runs…` (signed in),
 `POST /v1/runs/{id}/view` and the report pages under `/r/` (the run's owner, through a short-lived link),
-`GET /v1/admin/stats` (admin secret). The website pages are milestone 4.
+`GET /v1/admin/stats` (admin secret), and **the website itself at `/`**: the same look as the Lantern app, with
+"Sign in", a box to paste a link, the privacy choice, a live progress page and "My runs". It can be installed on a
+phone or computer like the app (browser menu → Install / Add to Home Screen). Sign-in on the website goes through the
+gateway's GitHub and Google apps that are already set up, so nothing new is needed for it.
 
 Cost: the service **sleeps when nobody uses it**. After 10 minutes with no visitor and no run going, it stops
 itself, and Fly bills a stopped machine only for its stored disk image and the 1 GB volume (Fly's price list put
@@ -152,9 +155,9 @@ that is not a written promise; to be sure, ask billing@fly.io. Free alternatives
 From the **repository root** (not `cloud/`: the image also packs the analysis engine):
 
 ```bash
-# 0. The gateway first, so it has /v1/whoami (version 0.2.1).
+# 0. The gateway first, so it has /v1/whoami and the sign-in pages in the app's style (version 0.2.2).
 cd gateway && fly deploy --depot=false && cd ..
-curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.1"
+curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.2"
 
 # 1. Create the empty app (once). `fly orgs list` shows your organisation's short name.
 fly apps create lantern-cloud --org <your-org>
@@ -173,6 +176,7 @@ fly deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --depot=false
 # 5. Check.
 curl https://lantern-cloud.fly.dev/v1/health
 #    -> {"ok": true, "service": "lantern-cloud", "version": "0.1.0", "engine": "0.9.0", "limits": {...}, "hosts": "all"}
+#    Then open https://lantern-cloud.fly.dev/ in a browser, press Sign in, and paste a repository link.
 ```
 
 Windows PowerShell: step 3 is `fly secrets set -a lantern-cloud LANTERN_ADMIN_SECRET=(python -c "import secrets; print(secrets.token_urlsafe(32))")`.
@@ -204,6 +208,7 @@ even its hash), an email, or the repository's files.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `/v1/me` answers 503 "can't check your sign-in" | The gateway is down, or older than 0.2.1 (no `/v1/whoami`) | step 0 |
+| The website's sign-in sheet says sign-in is not switched on | The gateway has no GitHub/Google app secrets | "Sign in with GitHub and Google" above |
 | `fly deploy` says it can't find `lantern/` or `pyproject.toml` | Run from `cloud/` instead of the repository root | `cd ..`, repeat step 4 |
 | Health check fails right after deploy | Volume not created, so the database can't be written | step 2, then `fly deploy` again |
 | The first request after a quiet spell takes a few seconds | The service was asleep (normal, it saves money) | nothing |

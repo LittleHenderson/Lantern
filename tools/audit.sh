@@ -117,6 +117,16 @@ PYEOF
     node tools/viewer_smoke.js --app "$URL" "$W/app" --image "$A/shot.png" "${EXPECT[@]}"
   cat "$W/log"
   kill $SPID 2>/dev/null; wait $SPID 2>/dev/null
+  # the cloud website: signed out, sign-in sheet, My runs, progress, report; every run field carries an HTML payload
+  if "$PY" -c "import fastapi, httpx, uvicorn" 2>/dev/null; then
+    C="$W/cloud"; mkdir -p "$C"
+    "$PY" tools/cloud_site_demo.py --port 8872 --token-file "$C/token" --poison > "$C/demo.log" 2>&1 &
+    CPID=$!
+    for _ in $(seq 150); do grep -q '"ready"' "$C/demo.log" && break; sleep 0.2; done
+    check "cloud website: no JS errors, poisoned run data stays text (desktop + phone, light + dark)" \
+      node tools/cloud_site_smoke.js http://127.0.0.1:8872/ "$C/token" "$C/shot"
+    kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+  fi
 fi
 
 printf '\n%s\n' "$([ $FAILS -eq 0 ] && echo 'ALL PASS' || echo "$FAILS FAILED")  (work dir: $W)"

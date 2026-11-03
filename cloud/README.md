@@ -10,14 +10,18 @@ Built so far (milestone 1): settings, the SQLite store, sign-in reused from the 
 (`POST /v1/repos`, `GET /v1/runs…` with a live log stream) and the worker (`worker.py`) that clones, audits and
 analyses in the restricted process, keeps the result files and deletes the clone. Milestone 3: the owner opens
 the finished report, evidence, badge and data in a browser through a short-lived signed link (`/v1/runs/{id}/view`,
-`/r/{id}/…`), every page rebuilt from Lantern's templates.
+`/r/{id}/…`), every page rebuilt from Lantern's templates. Milestone 4: the website at `/`, built from the Lantern app's own page
+(`site.py` reads its stylesheet, typefaces, brand mark, icons and backdrop from `lantern/viewer/app.html`), so the
+two look and behave alike: sign in with GitHub or Google, paste a link, choose what is kept, watch the run, open the
+report, all runs in "My runs". Installable like the app.
 
 ## Run locally
 
 ```bash
 pip install -e ".[scan,dev]" -e cloud/          # the engine and this service
 LANTERN_GATEWAY_URL=http://127.0.0.1:8080/v1 uvicorn lantern_cloud.app:create_app --factory --port 8090
-python -m pytest -q tests/test_cloud.py tests/test_cloud_runs.py tests/test_cloud_view.py
+python -m pytest -q tests/test_cloud.py tests/test_cloud_runs.py tests/test_cloud_view.py tests/test_cloud_site.py
+python tools/cloud_site_demo.py --port 8872 --token-file /tmp/tok   # the website with sample runs, signed-in token in /tmp/tok
 ```
 
 ## Rules this service keeps

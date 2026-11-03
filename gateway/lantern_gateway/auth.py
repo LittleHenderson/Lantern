@@ -128,32 +128,57 @@ hash of the token and usage counts; no code, prompts or email addresses are stor
 
 
 def done_page(token: str, label: str, parked: bool) -> str:
-    return _page("Signed in", f"""<h1>You're in{html.escape(' as ' + label.split(':', 1)[1]) if label.startswith('github:') and ':' in label else ''}</h1>
-{'<p>Your terminal or app has picked up the token. You can close this tab.</p>' if parked else ''}
-<p>Your Lantern token, shown once:</p>
-<pre class="tok">{html.escape(token)}</pre>
+    who = html.escape(' as ' + label.split(':', 1)[1]) if label.startswith('github:') and ':' in label else ''
+    tok = f"""<pre class="tok">{html.escape(token)}</pre>
 <p class="small">Keep it like a password. To use it on a computer: <code>lantern login --token {html.escape(token[:5])}…</code>.
-Signing in again later gives a new token and keeps your usage count.</p>""")
+Signing in again later gives a new token and keeps your usage count.</p>"""
+    if parked:
+        # The website, app or terminal that opened this tab collects the token by itself: say so first, and keep the
+        # token out of sight unless the person asks for it.
+        return _page("Signed in", f"""<h1>You're in{who}</h1>
+<p>Go back to Lantern: it has picked up your sign-in. You can close this tab.</p>
+<details><summary>Show the token instead</summary>{tok}</details>""")
+    return _page("Signed in", f"""<h1>You're in{who}</h1>
+<p>Your Lantern token, shown once:</p>
+{tok}""")
 
 
 def error_page(msg: str) -> str:
     return _page("Sign-in problem", f"<h1>Sign-in problem</h1><p>{html.escape(msg)}</p><p class=\"small\"><a href=\"/v1/login\">Back</a></p>")
 
 
+# The page style is the Lantern app's (tokens, typeface, the lantern mark), so signing in looks like the rest of Lantern.
+MARK = ('<span class="mark" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M26 13h12M25 51h14" stroke="#F3F3F1" '
+        'stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" '
+        'stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" '
+        'fill="#FFB547"/></svg></span>')
+FONTS = ('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700'
+         '&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">')
+
+
 def _page(title: str, inner: str) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)} · Lantern</title>
+{FONTS}
 <style>
-:root{{--bg:#F5F5F2;--surface:#fff;--ink:#161618;--muted:#6E6E74;--line:rgba(22,22,24,.09);--accent:#0F7B74}}
-@media(prefers-color-scheme:dark){{:root{{--bg:#0E0E10;--surface:#161618;--ink:#F3F3F1;--muted:#8C8C92;--line:rgba(255,255,255,.08);--accent:#4FC3BA}}}}
-body{{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}}
-main{{max-width:560px;margin:8vh auto;padding:28px 24px;background:var(--surface);border:1px solid var(--line);border-radius:14px}}
-h1{{font-size:22px;margin:0 0 10px}}p{{margin:10px 0}}.small{{font-size:13px;color:var(--muted)}}
-.row{{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}}
-.btn{{display:inline-block;padding:11px 16px;border-radius:10px;background:var(--ink);color:var(--bg);text-decoration:none;font-weight:600}}
-.tok{{font:14px ui-monospace,Menlo,Consolas,monospace;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;user-select:all;overflow-wrap:anywhere;white-space:pre-wrap}}
-code{{font-family:ui-monospace,Menlo,Consolas,monospace}}
-</style></head><body><main>{inner}</main></body></html>"""
+:root{{color-scheme:light;--bg:#F5F5F2;--glow:rgba(255,181,71,.2);--surface:#fff;--ink:#161618;--ink-2:#46464C;--muted:#6E6E74;--line:rgba(22,22,24,.09);--line-2:rgba(22,22,24,.16);--accent:#0B5F5A;--sunken:#EEEEEA;--primary:#161618;--on-primary:#fff}}
+@media(prefers-color-scheme:dark){{:root{{color-scheme:dark;--bg:#0E0E10;--glow:rgba(255,170,60,.09);--surface:#161618;--ink:#F3F3F1;--ink-2:#BEBEC3;--muted:#8C8C92;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.15);--accent:#7FDBD3;--sunken:#0A0A0B;--primary:#F3F3F1;--on-primary:#0E0E10}}}}
+*{{box-sizing:border-box}}
+body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink-2);font:15px/1.6 "DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}}
+header{{display:flex;align-items:center;gap:10px;height:56px;padding:0 20px;border-bottom:1px solid var(--line);font:600 16px "DM Sans",-apple-system,sans-serif;color:var(--ink);letter-spacing:-.02em}}
+.mark{{width:28px;height:28px;border-radius:9px;background:#141416;display:inline-block;box-shadow:0 0 0 1px var(--line),0 4px 14px -4px rgba(255,170,60,.5)}}.mark svg{{width:100%;height:100%;display:block}}
+main{{position:relative;max-width:520px;margin:9vh auto;padding:28px 28px 24px;background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:0 1px 2px rgba(16,16,20,.04),0 6px 20px -6px rgba(16,16,20,.10)}}
+main::before{{content:"";position:absolute;z-index:-1;left:-120px;top:-120px;width:420px;height:300px;background:radial-gradient(closest-side,var(--glow),transparent)}}
+h1{{font:700 26px/1.2 "DM Sans",-apple-system,sans-serif;letter-spacing:-.028em;color:var(--ink);margin:0 0 10px}}p{{margin:10px 0}}
+.small{{font-size:13px;color:var(--muted)}}a{{color:var(--accent)}}
+.row{{display:flex;flex-direction:column;gap:10px;margin:20px 0}}
+.btn{{display:flex;align-items:center;justify-content:center;height:46px;padding:0 16px;border-radius:13px;background:var(--primary);color:var(--on-primary);text-decoration:none;font-weight:600}}
+.btn+.btn{{background:var(--surface);color:var(--ink);border:1px solid var(--line-2)}}
+.tok{{font:13px/1.5 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;padding:12px 14px;background:var(--sunken);color:var(--ink);border:1px solid var(--line);border-radius:12px;user-select:all;overflow-wrap:anywhere;white-space:pre-wrap}}
+details{{margin-top:16px;font-size:14px}}summary{{cursor:pointer;color:var(--muted)}}
+code{{font:12.5px "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;background:var(--sunken);padding:1px 6px;border-radius:6px;color:var(--ink)}}
+@media(max-width:560px){{main{{margin:16px;padding:22px 18px}}}}
+</style></head><body><header>{MARK}<span>Lantern</span></header><main>{inner}</main></body></html>"""
 
 
 def valid_cli(cli: str | None) -> str:

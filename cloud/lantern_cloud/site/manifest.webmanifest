@@ -1,0 +1,12 @@
+{
+  "id": "/",
+  "name": "Lantern",
+  "short_name": "Lantern",
+  "description": "Paste a link to your app. Lantern maps every path a visitor can take, finds what to fix, and grades it.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0E0E10",
+  "theme_color": "#0E0E10",
+  "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+}
