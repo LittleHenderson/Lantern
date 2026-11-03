@@ -231,8 +231,14 @@ survive a re-sign-in (which rotates the token). Nothing about the token is store
 | `GET /v1/runs` | Bearer or `lt` | `{runs: [run]}`, the person's runs, newest first (at most 100) |
 | `GET /v1/runs/{id}` | Bearer or `lt` | the run; 404 when it is not the caller's (same answer as a missing id) |
 | `GET /v1/runs/{id}/stream` | Bearer or `lt` | `text/event-stream`: `event: log` with one JSON string per line, then one `event: end` with the run, then the stream closes. A finished run sends its saved tail and `end` at once |
-| `POST /v1/runs/{id}/view` | Bearer or `lt` | `{expires_in, report, evidence, badge, findings, graph, readiness}`: absolute links that open the run's results in a browser for the next `LANTERN_CLOUD_VIEW_MINUTES` (60). Each carries `?k=<expiry>.<HMAC>` for this run only. 404 when not the caller's run, 409 when it has no report (not `done`). Open the link at once; never store or share it (anyone holding it can open it until it expires; Share comes in milestone 5) |
+| `POST /v1/runs/{id}/view` | Bearer or `lt` | `{expires_in, report, evidence, badge, findings, graph, readiness}`: absolute links that open the run's results in a browser for the next `LANTERN_CLOUD_VIEW_MINUTES` (60). Each carries `?k=<expiry>.<HMAC>` for this run only. 404 when not the caller's run, 409 when it has no report (not `done`). Open the link at once; never store or share it (anyone holding it can open it until it expires; to show someone, use Share) |
 | `GET /r/{id}/report.html` · `evidence.html` · `badge.svg` · `findings.json` (= `security.json`) · `graph.json` · `readiness.json` | `?k=` from `/view`, or the `lv` cookie the first page sets for `/r/{id}/` | Rebuilt from Lantern's templates (`lantern.server.result_page`, the same code as `lantern serve`): the stored files are read for data only, pages get a per-response nonce CSP plus the report's own hash CSP, `live` is null (no actions), privacy as chosen before the run. Headers: `Cache-Control: private, no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`. 401 with a sentence for a missing, wrong or expired key; 404 for other names |
+| `GET /v1/runs/{id}/share` | Bearer or `lt` | `{shared, url}`; `url` is null while sharing is off (the default) |
+| `POST /v1/runs/{id}/share` | Bearer, or `lt` + `X-Lantern-Site` | Turns sharing on: `{shared: true, url}`, `url` = `<public url>/s/<slug>/report.html`, the slug 24 random characters, not the run id. Asking again returns the same link. 404 when not the caller's run, 409 when the run is not `done` |
+| `DELETE /v1/runs/{id}/share` | Bearer, or `lt` + `X-Lantern-Site` | Turns sharing off: `{shared: false, url: null}`. The old link stops working at once and never comes back; sharing again makes a new one |
+| `GET /s/{slug}/report.html` · `evidence.html` · `badge.svg` | none (the link is the key) | The shared run's pages, read-only, built exactly as `/r/{id}/…` (same templates, nonce CSP, `live` null, privacy as chosen before the run) plus `X-Robots-Tag: noindex`. The raw data files (`findings.json`, `graph.json`, `readiness.json`) are not shared. 404 "This link is off" for a slug that is not (or no longer) shared |
+| `DELETE /v1/runs/{id}` | Bearer, or `lt` + `X-Lantern-Site` | `{deleted: id}`: the run's row, its result files and its share link are gone. 404 when not the caller's run; 409 while it is `queued` or `running` |
+| `DELETE /v1/me` | Bearer, or `lt` + `X-Lantern-Site` | `{deleted: true, runs: n}`: every run, result folder, share link, daily counter and the account row are deleted, and the `lt` cookie is cleared. Signing in again starts a fresh, empty account. 409 while one of the person's runs is still going. The gateway account (and its allowance counters) is not touched |
 | `GET /v1/admin/stats` | Bearer = cloud admin secret | `{users, runs, runs_by_status, runs_today, shared}`; 403 when no admin secret is set |
 
 A **run** = `{id, link, host, privacy, status, stage, error, created, started, finished, commit, summary, shared,
@@ -240,9 +246,13 @@ log_tail}`. `status`: `queued` → `running` → `done` | `error` | `blocked` (t
 reaching the network or writing outside its folder). `stage` is a plain sentence for the current step. `error` is a
 plain sentence (never a traceback or a server path). `summary` (when done) = `{score, grade, shape, counts:
 {critical, high, medium, low}, files}`, read from the result files. `shared` is false until the person clicks Share
-(milestone 5). `log_tail`: the last 40 log lines, server paths removed. `step`: `clone` | `audit` | `analyze` |
+(`POST /v1/runs/{id}/share`). `log_tail`: the last 40 log lines, server paths removed. `step`: `clone` | `audit` | `analyze` |
 `save` while running (the key of `stage`), else null. `summary` values are checked when read (score and files whole
 numbers or null, grade A–F or null, counts whole numbers), since a stranger's repository wrote the files.
+
+Retention: with `LANTERN_CLOUD_RETENTION_DAYS` = 0 (the default, the owner's decision) results are kept until the
+person deletes them. A number N starts an hourly sweep (`app.sweep`) that deletes finished runs older than N days, their
+result folders and share links, exactly as `DELETE /v1/runs/{id}` does.
 
 What a run does (`cloud/lantern_cloud/worker.py`): clone into a temp folder (size cap before checkout) → dependency
 audits on lock files in the restricted process with the network on → analysis (`lantern analyze --offline`, the

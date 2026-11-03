@@ -42,6 +42,9 @@
 .runmeta span{display:inline-flex;align-items:center;gap:6px}.runmeta .ic{width:14px;height:14px}
 .app .when{font:12.5px var(--font);color:var(--muted);white-space:nowrap}
 .foot{font-size:13px;color:var(--muted);text-align:center;margin-top:28px}
+.tag.shared{font:600 10px var(--font);letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:99px;background:var(--accent-soft);color:var(--accent-ink);border:0;margin-left:6px;vertical-align:middle}
+.btn.danger{background:var(--critical);border-color:var(--critical);color:#fff} .btn.danger:hover{filter:brightness(.95);background:var(--critical)}
+.sheet .field{margin-top:14px}.sheet .field input[type=text]{font:13px var(--mono)}
 @media (max-width:760px){.privacy{grid-template-columns:1fr}.acct .who .nm{display:none}.acct .who{padding:0 4px}}
 </style>
 </head>
@@ -197,8 +200,65 @@ async function accountSheet() {
   const el = sheet(`<div class="sh"><h2>${esc(name)}</h2><button class="x" data-close aria-label="Close">×</button></div>
     <p>Signed in with ${esc(via)}. You have used <b>${esc(me.runs_today)}</b> of today's ${esc(me.limits.runs_per_day)} checks.</p>
     <p class="muted small">Your results are private to this account and stay until you delete them. Nothing is shared unless you click Share on a run.</p>
-    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Close</button><button class="btn primary" id="signout">Sign out</button></div>`);
+    <div class="row" style="margin-top:18px"><button class="btn quiet" id="delme">${icon('trash')}Delete my account</button><span class="spacer"></span><button class="btn" data-close>Close</button><button class="btn primary" id="signout">Sign out</button></div>`);
+  el.querySelector('#delme').onclick = deleteMeSheet;
   el.querySelector('#signout').onclick = async () => { try { await api('/v1/signout', {method: 'POST'}); } catch (e) {} S.me = null; S.runs = null; S.links = {}; closeSheet(); go('home'); };
+}
+
+// ---- share, delete
+const SHARE_IC = '<svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.8-2.8a3 3 0 0 0-4.2-4.2l-1 1M11.5 8.5a3 3 0 0 0-4.2 0l-2.8 2.8a3 3 0 0 0 4.2 4.2l1-1"/></svg>';
+function patchRun(r) { S.runs = (S.runs || []).map(x => x.id === r.id ? {...x, ...r} : x); if (S.run && S.run.id === r.id) S.run = {...S.run, ...r}; }
+async function shareSheet(r) {
+  const draw = (st, msg) => {
+    const el = sheet(`<div class="sh"><h2>${st.shared ? 'Anyone with this link can open the report' : 'Share this report?'}</h2><button class="x" data-close aria-label="Close">×</button></div>
+      ${st.shared ? `<div class="field" style="margin-top:16px">${SHARE_IC}<input type="text" id="shareurl" value="${esc(st.url)}" readonly aria-label="Share link"><button class="btn sm" id="copy">${icon('copy')}Copy</button></div>
+          <p class="muted small">The link opens the report, the evidence page and the badge, read-only. It works until you stop sharing; then it shows "This link is off".</p>`
+        : `<p>Lantern makes a link that opens this report, its evidence page and its badge, for anyone who has it. Nobody needs to sign in. You can stop sharing at any time.</p>
+          ${note('warn', 'Findings can include passwords or keys Lantern found in your code (partly hidden), and where your app is weakest. Share with people you trust, or fix those first.')}
+          <p class="muted small">${r.privacy === 'full' ? 'This run kept short code snippets, so the report shows them.' : 'This run kept no code: the report names files and lines only.'}</p>`}
+      <div id="sharemsg">${msg || ''}</div>
+      <div class="row" style="margin-top:18px">${st.shared ? '<button class="btn quiet" id="unshare">Stop sharing</button>' : ''}<span class="spacer"></span><button class="btn" data-close>${st.shared ? 'Done' : 'Cancel'}</button>${st.shared ? '' : `<button class="btn primary" id="doshare">${SHARE_IC}Create link</button>`}</div>`);
+    const set = async (on) => {
+      try { const n = await api(`/v1/runs/${encodeURIComponent(r.id)}/share`, {method: on ? 'POST' : 'DELETE'}); r.shared = n.shared; patchRun({id: r.id, shared: n.shared}); draw(n, on ? '' : note('ok', 'Sharing is off. The old link no longer opens anything.')); const b = document.querySelector('#share span'); if (b) b.textContent = n.shared ? 'Shared' : 'Share'; }
+      catch (e) { el.querySelector('#sharemsg').innerHTML = note('err', esc(e.message)); }
+    };
+    const d = el.querySelector('#doshare'); if (d) d.onclick = () => set(true);
+    const u = el.querySelector('#unshare'); if (u) u.onclick = () => set(false);
+    const c = el.querySelector('#copy'); if (c) c.onclick = async () => {
+      const i = el.querySelector('#shareurl'); i.select();
+      try { await navigator.clipboard.writeText(i.value); c.innerHTML = icon('check') + 'Copied'; } catch (e) { c.innerHTML = 'Press Ctrl+C'; }
+    };
+  };
+  sheet(`<div class="working"><span class="pulse"></span>Loading…</div>`);
+  try { draw(await api(`/v1/runs/${encodeURIComponent(r.id)}/share`)); } catch (e) { sheet(`<div class="sh"><h2>Share</h2><button class="x" data-close aria-label="Close">×</button></div>${note('err', esc(e.message))}`); }
+}
+function deleteSheet(r) {
+  const el = sheet(`<div class="sh"><h2>Delete ${esc(repoName(r.link))}?</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>This deletes the run, its report and its results from Lantern's server${r.shared ? ', and turns its share link off' : ''}. It can't be undone. Your repository is not touched.</p>
+    <div id="delmsg"></div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Cancel</button><button class="btn danger" id="dodel">${icon('trash')}Delete</button></div>`);
+  el.querySelector('#dodel').onclick = async () => {
+    try {
+      await api('/v1/runs/' + encodeURIComponent(r.id), {method: 'DELETE'});
+      S.runs = (S.runs || []).filter(x => x.id !== r.id); delete S.links[r.id]; if (S.run && S.run.id === r.id) S.run = null; S.frame = null;
+      closeSheet(); if (S.view === 'run') go('home'); else render();
+    } catch (e) { el.querySelector('#delmsg').innerHTML = note('err', esc(e.message)); }
+  };
+}
+function deleteMeSheet() {
+  const n = (S.runs || []).length;
+  const el = sheet(`<div class="sh"><h2>Delete your Lantern account?</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>This deletes everything Lantern's cloud keeps about you: <b>${esc(n)} run${n === 1 ? '' : 's'}</b>, their reports and results, every share link, and your account name. It can't be undone.</p>
+    <p class="muted small">Your GitHub or Google account is not touched. Signing in again later starts a fresh, empty account here.</p>
+    <label class="check"><input type="checkbox" id="sure"><span>Yes, delete my account and all my results</span></label>
+    <div id="delmsg"></div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Cancel</button><button class="btn danger" id="dodel" disabled>${icon('trash')}Delete everything</button></div>`);
+  const sure = el.querySelector('#sure'), go2 = el.querySelector('#dodel');
+  sure.onchange = () => { go2.disabled = !sure.checked; };
+  go2.onclick = async () => {
+    try { await api('/v1/me', {method: 'DELETE'}); S.me = null; S.runs = null; S.links = {}; S.run = null; closeSheet(); go('home'); render(); }
+    catch (e) { el.querySelector('#delmsg').innerHTML = note('err', esc(e.message)); }
+  };
 }
 
 // ---- starting a run
@@ -244,19 +304,20 @@ function addControls(el) {
     const r = (S.runs || []).find(x => x.id === b.dataset.again) || (S.run && S.run.id === b.dataset.again ? S.run : null); if (!r) return;
     startRun(r.link, r.privacy, r.privacy === 'full');
   });
+  el.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { const r = (S.runs || []).find(x => x.id === b.dataset.del) || (S.run && S.run.id === b.dataset.del ? S.run : null); if (r) deleteSheet(r); });
   el.querySelectorAll('[data-signin]').forEach(b => b.onclick = e => { e.preventDefault(); signInSheet(); });
 }
 
 // ---- home
 function runCard(r) {
   const sum = r.summary || {}, run = ACTIVE.includes(r.status), name = repoName(r.link);
-  return `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(name)}</div><div class="path">${esc(r.host)} · ${esc(PRIV[r.privacy] || r.privacy)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</div></div>${ring(r.status === 'done' ? sum.score : null, sum.grade)}</div>
+  return `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(name)}${r.shared ? ' <span class="tag shared">Shared</span>' : ''}</div><div class="path">${esc(r.host)} · ${esc(PRIV[r.privacy] || r.privacy)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</div></div>${ring(r.status === 'done' ? sum.score : null, sum.grade)}</div>
     ${run ? `<div class="checking"><i></i>${r.status === 'queued' ? 'Waiting for a free worker…' : 'Checking… about a minute'}</div><div class="indeterminate"></div><p class="lastline">${esc(lastLine(r))}</p>`
       : r.status === 'done' ? `<p class="sentence">${sentence(sum)}</p>`
       : note(r.status === 'blocked' ? 'warn' : 'err', esc(r.error || 'This check stopped before it finished.'))}
     <div class="actions">${r.status === 'done' ? `<button class="btn primary" data-open="${esc(r.id)}" data-tab="findings">Show me what to fix</button>` : run ? `<button class="btn" data-open="${esc(r.id)}">Watch it run</button>` : ''}
       ${run ? '' : `<button class="btn ${r.status === 'done' ? '' : 'primary'}" data-again="${esc(r.id)}">${r.status === 'done' ? 'Re-check' : 'Try again'}</button>`}
-      <span class="spacer"></span><span class="when">${esc(ago(r.finished || r.created))}</span></div></article>`;
+      <span class="spacer"></span><span class="when">${esc(ago(r.finished || r.created))}</span>${run ? '' : `<button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>`}</div></article>`;
 }
 function renderHome(el) {
   if (S.me && !simple()) return renderHomePro(el);
@@ -285,13 +346,13 @@ function renderHomePro(el) {
   const num = (v, bad) => v == null ? '<span class="num dash">–</span>' : `<span class="num ${bad && v ? 'bad' : ''}">${esc(v)}</span>`;
   const rows = runs.map(r => {
     const s = r.summary || {}, c = r.status === 'done' ? s.counts || {} : null, t = tone(s.grade), run = ACTIVE.includes(r.status);
-    return `<div class="r"><div><div class="n">${esc(repoName(r.link))}${r.privacy === 'full' ? '<span class="tag">SNIPPETS</span>' : ''}</div><div class="p" title="${esc(r.link)}">${esc(r.link)}</div></div>
+    return `<div class="r"><div><div class="n">${esc(repoName(r.link))}${r.privacy === 'full' ? '<span class="tag">SNIPPETS</span>' : ''}${r.shared ? '<span class="tag">SHARED</span>' : ''}</div><div class="p" title="${esc(r.link)}">${esc(r.link)}</div></div>
       <span class="p" style="font:12px var(--font);color:var(--ink-2)">${esc(r.host)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</span>
       ${r.status === 'done' && s.score != null ? `<div class="rd"><span style="font-weight:600;color:var(--ink);width:24px">${esc(s.score)}</span><div class="bar"><i class="bar-${t}" style="width:${Math.max(2, Math.min(100, +s.score || 0))}%"></i></div><span class="g tone-${t}">${esc(s.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'checking' : esc(r.status)}</span></div>`}
       ${num(c ? c.critical : null, true)}${num(c ? c.high : null)}${num(c ? c.medium : null)}${num(c ? c.low : null)}
       <span class="num">${s.files != null && r.status === 'done' ? esc(s.files) : '<span class="dash">–</span>'}</span>
       <span style="color:var(--muted);white-space:nowrap">${run ? 'Checking…' : esc(ago(r.finished || r.created))}</span>
-      <div class="acts">${r.status === 'done' ? `<button class="btn" data-open="${esc(r.id)}" data-tab="atlas">Open</button>` : run ? `<button class="btn" data-open="${esc(r.id)}">View log</button>` : ''}${run ? '' : `<button class="btn" data-again="${esc(r.id)}">Re-check</button>`}</div></div>`;
+      <div class="acts">${r.status === 'done' ? `<button class="btn" data-open="${esc(r.id)}" data-tab="atlas">Open</button>` : run ? `<button class="btn" data-open="${esc(r.id)}">View log</button>` : ''}${run ? '' : `<button class="btn" data-again="${esc(r.id)}">Re-check</button><button class="btn quiet" data-del="${esc(r.id)}" aria-label="Delete this run">${icon('trash')}</button>`}</div></div>`;
   }).join('');
   el.innerHTML = `<main class="prohome"><div class="strip">
       <div><div class="k">Repositories</div><div class="v">${esc(L.length)}<small>${going.length ? `${going.length} checking` : ''}</small></div></div>
@@ -328,7 +389,7 @@ function subBar(r, tabs) {
   return `<div class="sub"><button class="back" id="back" aria-label="Back to my runs">${icon('back')}</button><span class="title">${esc(repoName(r.link))}</span>
     ${r.status === 'done' && s.grade ? `<span class="gchip ${tone(s.grade)}" title="Readiness ${esc(s.score)}/100">${esc(s.grade)}${sm ? '' : ' · ' + esc(s.score)}</span>` : ''}
     ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].map(tab).join('')}</div>` : ''}
-    <span class="spacer"></span>${tabs ? `<a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#">${icon('open')}<span>Open in new tab</span></a>` : ''}</div>`;
+    <span class="spacer"></span>${tabs ? `<button class="btn sm" id="share">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button><a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#">${icon('open')}<span>Open in new tab</span></a><button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}</div>`;
 }
 async function renderRun(el, id) {
   let r = S.run && S.run.id === id ? S.run : null;
@@ -386,6 +447,8 @@ async function renderReport(el, r) {
   const old = S.frame && S.frame.rid === r.id ? S.frame.el : null;
   el.innerHTML = `${subBar(r, true)}<div id="pbody"></div>`;
   el.querySelector('#back').onclick = () => go('home');
+  el.querySelector('#share').onclick = () => shareSheet(r);
+  addControls(el);
   el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; renderReport(el, r); });
   const body = el.querySelector('#pbody');
   let links;
@@ -412,7 +475,8 @@ async function renderReport(el, r) {
 // ---- help
 const FAQ = [
   ['Privacy', 'What happens to my code?', 'Lantern copies the repository into a sealed box on its server, reads it without installing or running anything, and deletes the copy when the check ends. What stays is the result: the map, the findings and the grade. With <b>Map and findings only</b> no code is kept at all; with <b>Include code snippets</b> the short lines the report talks about are kept too.'],
-  ['Privacy', 'Who can see my results?', 'Only you, while you are signed in. Each report opens through a link that works for an hour and only for your account. Nothing is shared unless you click Share on a run.'],
+  ['Privacy', 'Who can see my results?', 'Only you, while you are signed in. Each report opens through a link that works for an hour and only for your account. Nothing is shared unless you click <b>Share</b> on a run; that makes a link anyone holding it can open, and <b>Stop sharing</b> turns it off again.'],
+  ['Privacy', 'How do I delete my results?', 'The bin icon on a run deletes that run, its report and its share link. To delete everything, press your name (top right), then <b>Delete my account</b>. Your GitHub or Google account is not touched.'],
   ['Using it', 'Which links work?', 'The https link of a public repository on GitHub, GitLab, Bitbucket, Codeberg and other public code hosts, like <code>https://github.com/owner/name</code>. A link to a branch (<code>/tree/branch</code>) checks that branch.'],
   ['Using it', 'How long does a check take, and how many can I run?', 'Usually about a minute. Each account can run a few checks a day and one at a time; the number left today is under your name, top right.'],
   ['Using it', 'Does Lantern run my app or my tests?', 'No. In the cloud Lantern only reads the code. To watch your tests run, use the Lantern app on your own computer: <code>pip install lantern</code> then <code>lantern serve</code>.'],

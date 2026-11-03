@@ -1,6 +1,6 @@
 """Lantern cloud service (docs/cloud-mode-brief.md): the website, sign-in, runs from a link, results in the browser.
 
-Still to come: share links and deletion (milestone 5), explanations through the allowance (milestone 6).
+Still to come: explanations through the allowance (milestone 6).
 The rules that hold from the first line:
   * the analysed code is never executed: no builds, installs or test runs, no runtime tracing;
   * the clone is deleted when the job ends; only derived results are kept, at the privacy level chosen first;
@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 from pathlib import Path
 
@@ -36,12 +37,6 @@ PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
 SIGNIN_COOKIE = "lsi"          # the one-time code a sign-in in progress is parked under, for this browser only
 SESSION_DAYS = 30
-EXPIRED_PAGE = ("<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-                "<title>Link expired · Lantern</title><body style=\"margin:0;min-height:100vh;display:grid;place-items:center;"
-                "background:#F5F5F2;color:#46464C;font:15px/1.55 -apple-system,'Segoe UI',Roboto,sans-serif;padding:24px\">"
-                "<div style=\"max-width:420px;text-align:center\"><div style=\"font:700 22px -apple-system,'Segoe UI',sans-serif;"
-                "color:#161618;margin-bottom:8px;letter-spacing:-.02em\">This link has expired</div>Report links work for an "
-                "hour. Open the run again from <a href=\"/\" style=\"color:#0B5F5A\">My runs</a>.</div>")
 # What /r/{id}/<name> serves, and the result file behind each. Every page is rebuilt from our templates
 # (`lantern.server.result_page`); nothing in the run's folder is sent as a page.
 VIEWABLE = {"report.html": "report.html", "evidence.html": "evidence.html", "badge.svg": "badge.svg",
@@ -74,6 +69,39 @@ def _host_of(link: str, allowed: list[str] | None) -> str:
     return host
 
 
+def _note_page(title: str, text: str) -> str:
+    """A small page in the app's colours for a link that no longer works (no script, inline style only)."""
+    return ("<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            f"<title>{title} · Lantern</title><body style=\"margin:0;min-height:100vh;display:grid;place-items:center;"
+            "background:#F5F5F2;color:#46464C;font:15px/1.55 -apple-system,'Segoe UI',Roboto,sans-serif;padding:24px\">"
+            "<div style=\"max-width:420px;text-align:center\"><div style=\"font:700 22px -apple-system,'Segoe UI',sans-serif;"
+            f"color:#161618;margin-bottom:8px;letter-spacing:-.02em\">{title}</div>{text}</div>")
+
+
+SHARE_GONE = _note_page("This link is off", "Its owner stopped sharing this report, or deleted it. "
+                        "<a href=\"/\" style=\"color:#0B5F5A\">Check your own app with Lantern</a>.")
+SHAREABLE = {"report.html", "evidence.html", "badge.svg"}     # a shared run shows its pages, not its raw data files
+
+
+def remove_results(results_dir: str, rid: str) -> None:
+    import shutil
+    if rid and "/" not in rid and "\\" not in rid and rid not in (".", ".."):
+        shutil.rmtree(Path(results_dir) / rid, ignore_errors=True)
+
+
+def sweep(store, results_dir: str, days: int) -> list[str]:
+    """Delete finished runs older than `days` and their results (0 = keep until the person deletes them)."""
+    gone = store.expired(days)
+    for rid in gone:
+        store.delete_run(rid)
+        remove_results(results_dir, rid)
+    return gone
+
+
+EXPIRED_PAGE = _note_page("This link has expired", "Report links work for an hour. Open the run again from "
+                          "<a href=\"/\" style=\"color:#0B5F5A\">My runs</a>.")
+
+
 def _page_headers(extra: dict | None) -> dict:
     """Every result response: never cached, never sniffed, no referrer (the link carries its key)."""
     h = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -104,6 +132,15 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     idle = IdleExit(s.idle_minutes, busy=lambda: store.active_runs() > 0)
     app.state.idle = idle
     idle.start()
+    if s.retention_days > 0:
+        def _retention():
+            while True:
+                try:
+                    sweep(store, s.results_dir, s.retention_days)
+                except Exception:  # noqa: BLE001: the next pass tries again
+                    pass
+                time.sleep(3600)
+        threading.Thread(target=_retention, name="lantern-retention", daemon=True).start()
 
     @app.middleware("http")
     async def _seen(request: Request, call_next):
@@ -270,6 +307,70 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             # the report links to evidence.html and badge.svg by relative path; the cookie lets those open too
             resp.set_cookie("lv", k, max_age=max(1, int(k.split(".", 1)[0]) - int(time.time())), path=f"/r/{rid}/",
                             secure=s.public_url.startswith("https://"), httponly=True, samesite="lax")
+        return resp
+
+    # ---- share (off until the owner turns it on), delete ----
+    def done_run(rid: str, who: dict) -> dict:
+        r = own_run(rid, who)
+        if r["status"] != "done":
+            raise HTTPException(409, "This run has no report yet.")
+        return r
+
+    def share_view(slug: str | None) -> dict:
+        return {"shared": bool(slug), "url": f"{s.public_url}/s/{slug}/report.html" if slug else None}
+
+    @app.get("/v1/runs/{rid}/share")
+    async def share_state(rid: str, request: Request):
+        who = await signed_in(request)
+        return share_view(own_run(rid, who)["share_slug"])
+
+    @app.post("/v1/runs/{rid}/share")
+    async def share_on(rid: str, request: Request):
+        """A public, read-only link to this run's report, evidence and badge. Anyone holding it can open them until
+        the owner turns it off. The report shows what the run kept (privacy as chosen before the run)."""
+        who = await signed_in(request)
+        r = done_run(rid, who)
+        return share_view(store.set_share(r["id"], True))
+
+    @app.delete("/v1/runs/{rid}/share")
+    async def share_off(rid: str, request: Request):
+        who = await signed_in(request)
+        store.set_share(own_run(rid, who)["id"], False)
+        return share_view(None)
+
+    @app.get("/s/{slug}/{name}")
+    def shared(slug: str, name: str):
+        r = store.run_by_slug(slug)
+        if name not in SHAREABLE or not r or r["status"] != "done":
+            return Response(SHARE_GONE, 404, media_type="text/html; charset=utf-8",
+                            headers=_page_headers({"X-Robots-Tag": "noindex"}))
+        from lantern.server import result_page
+        code, body, ctype, headers = result_page(Path(s.results_dir) / r["id"], VIEWABLE[name], None)
+        return Response(body, code, media_type=ctype, headers=_page_headers({**headers, "X-Robots-Tag": "noindex"}))
+
+    @app.delete("/v1/runs/{rid}")
+    async def delete_run(rid: str, request: Request):
+        """Delete a run: its row, its result files and its share link. A run still going is refused (409)."""
+        who = await signed_in(request)
+        r = own_run(rid, who)
+        if r["status"] not in FINISHED:
+            raise HTTPException(409, "This check is still going. Delete it once it has finished.")
+        store.delete_run(r["id"])
+        remove_results(s.results_dir, r["id"])
+        return {"deleted": r["id"]}
+
+    @app.delete("/v1/me")
+    async def delete_me(request: Request):
+        """Forget the person here: every run, result file, share link and daily counter, and the sign-in cookie.
+        Their sign-in at the gateway (and its free allowance) is separate and stays."""
+        who = await signed_in(request)
+        if store.active_runs(who["account"]):
+            raise HTTPException(409, "A check is still going. Delete your account once it has finished.")
+        ids = store.delete_user(who["account"])
+        for rid in ids:
+            remove_results(s.results_dir, rid)
+        resp = JSONResponse({"deleted": True, "runs": len(ids)})
+        resp.delete_cookie(SESSION_COOKIE, path="/")
         return resp
 
     # ---- the website (same origin as the API, so no CORS is offered or needed) ----

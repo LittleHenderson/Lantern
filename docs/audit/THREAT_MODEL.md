@@ -1,6 +1,7 @@
 # Threat model
 
-Scope: Lantern as built today, running locally (`lantern serve` or the CLI). Cloud mode is not built.
+Scope: Lantern as built today, running locally (`lantern serve` or the CLI), plus the cloud service (`cloud/`,
+milestones 1–5: sign-in, runs from a link, results in the browser, the website, sharing and deleting), see T7.
 
 ## Assets
 
@@ -90,6 +91,20 @@ script in the app's origin can act as the user. That makes XSS in the viewers (T
 * `report.html` at privacy `full` embeds function source and scanner snippets (for example a hard-coded password
   that bandit flagged). Share `--privacy structure` reports, or the Evidence Report, which contains no source.
 * The Evidence Report shows the git remote with credentials stripped (`git_info`, tested).
+
+### T7. Cloud service (`cloud/lantern_cloud/`)
+
+Strangers paste links to repositories Lantern has never seen, on a server Lantern's owner pays for.
+
+| Attack | Mitigation | Where | Status |
+|---|---|---|---|
+| A hostile repository runs code on the server, reaches the network during analysis, or keeps files | Clone into a temp folder (size cap before checkout); dependency audits in the restricted process with network; analysis (`lantern analyze --offline`) in the restricted process with **no network** and writes only in its temp folder (the same `_jail` as the test sandbox); the temp folder, clone included, removed in `finally`; `blocked` when the sandbox stopped something | `worker.py` | Mitigated, tested (`tests/test_cloud_runs.py`) |
+| Planted result files run script in someone's browser | Pages are rebuilt from Lantern's templates (`lantern.server.result_page`), data only, nonce CSP; run summaries type-checked (`worker._summary`) and escaped in the website | `app.py`, `worker._summary`, `site/index.html` | Mitigated, tested (`tools/cloud_site_smoke.js` with `cloud_site_demo.py --poison` in Chromium, `test_summary_keeps_only_well_formed_values`) |
+| Another website acts for a signed-in person (start a run, share, delete) | The sign-in token lives only in an HttpOnly, SameSite=Strict `lt` cookie; every cookie request that changes something must carry `X-Lantern-Site: 1`, which a form or link from another site cannot send (it would need CORS, which the service never grants) | `app.signed_in` | Mitigated, tested (`test_cookie_requests_that_change_something_need_the_sites_header`, `test_cookie_deletes_need_the_sites_header`) |
+| Someone opens another person's results | Every run route answers 404 unless the caller owns the run; owner links are HMAC-signed per run and expire in 60 min; share links use a random 24-character slug, never the run id | `app.py`, `store.run_by_slug` | Mitigated, tested (`tests/test_cloud_view.py`, `tests/test_cloud_share.py`) |
+| A share link outlives the owner's wish, or leaks more than they chose | Sharing is off until clicked; "Stop sharing" deletes the slug, and sharing again makes a new one; only the report, evidence page and badge are shared (no JSON data files), read-only, `noindex`, privacy as chosen before the run | `app.py` (`/s/…`), `store.set_share` | Mitigated, tested. Residual: anyone who received the link while it was on may have saved the pages; the share sheet says so and warns about secrets |
+| "Delete" leaves something behind | `DELETE /v1/runs/{id}` removes the row and results folder; `DELETE /v1/me` removes every run, results folder, share slug, daily counter and the account row (409 while a run is going, so the worker cannot write after deletion) | `store.delete_run`, `store.delete_user`, `app.remove_results` | Mitigated, tested. Residual: the gateway account (sign-in, allowance counters) is separate and kept, by design; Fly volume snapshots are outside the app |
+| One person exhausts the service | One active run per person, runs per day per person and for everyone, clone size cap, 10-minute wall clock | `settings.py`, `worker.py` | Mitigated, tested |
 
 ## Known open risks, ranked
 

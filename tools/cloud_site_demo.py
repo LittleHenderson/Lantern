@@ -5,7 +5,8 @@
 The gateway runs in the same process (sign-in switched on with dummy GitHub/Google apps, so the sign-in sheet shows
 its buttons), and one account is signed in; its token is written to --token-file for the browser's cookie. Runs are
 put straight into the database (no worker, no cloning): one finished run analysed from tests/fixtures/shop, one still
-going, one that failed. With --poison every text the website shows from a run (link, error, stage, log, and the
+going, one that failed (and a second account, token in --token-file + ".2", with one failed run).
+With --poison every text the website shows from a run (link, error, stage, log, and the
 summary read from result files) carries an HTML payload that must stay text.
 """
 
@@ -51,10 +52,10 @@ def main() -> None:
     app = create_app(s, transport=httpx.ASGITransport(app=gw), start_worker=False)
     store = app.state.store
 
-    def add(rid, link, status, **f):
+    def add(rid, link, status, account="github:1", **f):
         with store.lock:
             store.db.execute("insert into runs (id, account, link, host, privacy, status, stage, created) values "
-                             "(?, 'github:1', ?, ?, 'structure', ?, ?, ?)", (rid, link, "github.com", status, f.pop("stage", ""), now()))
+                             "(?, ?, ?, ?, 'structure', ?, ?, ?)", (rid, account, link, "github.com", status, f.pop("stage", ""), now()))
             store.db.commit()
         store.update_run(rid, **f)
 
@@ -72,6 +73,12 @@ def main() -> None:
     add("failed1", "https://codeberg.org/sam/blog", "error", started=now(), finished=now(), stage="finished",
         error="could not clone it: not found" + bad, log_tail="could not clone" + bad)
     Path(a.token_file).write_text(token, encoding="utf-8")
+    # a second account with nothing still going, so the smoke can delete a whole account (the first one is refused:
+    # its check "going1" is still running)
+    token2 = gw.state.store.sign_in("github:2", "github:sam")
+    add("failed2", "https://codeberg.org/sam/blog", "error", account="github:2", started=now(), finished=now(),
+        stage="finished", error="could not clone it: not found" + bad, log_tail="could not clone" + bad)
+    Path(a.token_file + ".2").write_text(token2, encoding="utf-8")
     print(json.dumps({"ready": f"http://127.0.0.1:{a.port}/", "work": str(base)}), flush=True)
     uvicorn.run(app, host="127.0.0.1", port=a.port, log_level="warning")
 

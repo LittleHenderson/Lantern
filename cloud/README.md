@@ -13,7 +13,9 @@ the finished report, evidence, badge and data in a browser through a short-lived
 `/r/{id}/…`), every page rebuilt from Lantern's templates. Milestone 4: the website at `/`, built from the Lantern app's own page
 (`site.py` reads its stylesheet, typefaces, brand mark, icons and backdrop from `lantern/viewer/app.html`), so the
 two look and behave alike: sign in with GitHub or Google, paste a link, choose what is kept, watch the run, open the
-report, all runs in "My runs". Installable like the app.
+report, all runs in "My runs". Installable like the app. Milestone 5: Share (off until the person clicks it; a
+random `/s/<slug>/` link, read-only, that dies for good on "Stop sharing"), deleting a run, and deleting your account
+(everything the cloud keeps about you). Optional retention sweep (`LANTERN_CLOUD_RETENTION_DAYS`).
 
 ## Run locally
 
