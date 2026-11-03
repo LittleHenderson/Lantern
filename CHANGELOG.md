@@ -3,8 +3,16 @@
 Each release has a section headed `## <version>`. The release workflow (`.github/workflows/release.yml`) puts the
 section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses `## 0.9.0-rc1` if present, else `## 0.9.0`).
 
-## Unreleased
+## 0.10.0
 
+Lantern on the web, and the app redrawn to match the design mock-ups screen by screen.
+
+- Cloud mode (a separate service, `lantern-cloud` 0.1.0, deployed on its own): paste a repository link on the
+  website, sign in with GitHub or Google, and Lantern analyzes it in a locked-down sandbox (no network during the
+  analysis, limits per person and per day) with a live log. Reports open only for their owner; Share makes a
+  read-only link and turning it off retires it. Delete a run or your whole account at any time; results are kept
+  until you do. Explanations and Ask Lantern use your free allowance, only after you agree once to the data notice.
+  The website is built from the app's own stylesheet, so it looks like the app.
 - Ready to ship? (Simple) leads with the grade as designed: a large letter inside the score ring, the score and a
   plain answer beside it, the biggest moves as cards with their gain in green, smaller moves in a row underneath, and
   a right-hand column with what's already good, how the score works, and the starter-files note.

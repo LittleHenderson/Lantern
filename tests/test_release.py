@@ -14,7 +14,7 @@ import changelog_section  # noqa: E402
 
 def test_one_version():
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    assert meta["version"] == lantern.__version__ == "0.9.0"
+    assert meta["version"] == lantern.__version__ == "0.10.0"
     assert meta["scripts"]["lantern"] == "lantern.cli:main"
     assert meta["urls"]["Issues"].endswith("/issues") and meta["urls"]["Homepage"].startswith("https://")
     assert set(meta["optional-dependencies"]) >= {"scan", "dev"}

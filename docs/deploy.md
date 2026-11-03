@@ -175,7 +175,7 @@ fly deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --depot=false
 
 # 5. Check.
 curl https://lantern-cloud.fly.dev/v1/health
-#    -> {"ok": true, "service": "lantern-cloud", "version": "0.1.0", "engine": "0.9.0", "limits": {...}, "hosts": "all"}
+#    -> {"ok": true, "service": "lantern-cloud", "version": "0.1.0", "engine": "0.10.0", "limits": {...}, "hosts": "all"}
 #    Then open https://lantern-cloud.fly.dev/ in a browser, press Sign in, and paste a repository link.
 ```
 
@@ -243,7 +243,7 @@ The Docker image runs the same on any of them; only the steps in this file are F
 A pushed tag `v*` runs `.github/workflows/release.yml`: it builds the sdist and wheel, runs the tests against the
 built wheel in a clean venv, checks `https://lantern-gateway.fly.dev/v1/health`, and creates a GitHub Release with
 both files and the matching `CHANGELOG.md` section. Testers install with
-`pip install "git+https://github.com/LittleHenderson/Lantern@v0.9.0"`.
+`pip install "git+https://github.com/LittleHenderson/Lantern@v0.10.0"`.
 
 TODO (not in wave 1): publish to PyPI so the command becomes `pip install lantern`.
 1. Create a PyPI account (pypi.org → Register) with two-factor sign-in, and check the name `lantern` is free
