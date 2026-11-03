@@ -8,14 +8,16 @@ browser, with nothing installed. The same engine as the CLI, run on Lantern's se
 Built so far (milestone 1): settings, the SQLite store, sign-in reused from the gateway (`GET /v1/whoami`),
 `/v1/health`, `/v1/me`, `/v1/admin/stats`, the Docker image and `fly.toml`. Milestone 2: runs from a link
 (`POST /v1/repos`, `GET /v1/runs…` with a live log stream) and the worker (`worker.py`) that clones, audits and
-analyses in the restricted process, keeps the result files and deletes the clone.
+analyses in the restricted process, keeps the result files and deletes the clone. Milestone 3: the owner opens
+the finished report, evidence, badge and data in a browser through a short-lived signed link (`/v1/runs/{id}/view`,
+`/r/{id}/…`), every page rebuilt from Lantern's templates.
 
 ## Run locally
 
 ```bash
 pip install -e ".[scan,dev]" -e cloud/          # the engine and this service
 LANTERN_GATEWAY_URL=http://127.0.0.1:8080/v1 uvicorn lantern_cloud.app:create_app --factory --port 8090
-python -m pytest -q tests/test_cloud.py tests/test_cloud_runs.py
+python -m pytest -q tests/test_cloud.py tests/test_cloud_runs.py tests/test_cloud_view.py
 ```
 
 ## Rules this service keeps
