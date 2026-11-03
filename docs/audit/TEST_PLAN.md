@@ -16,9 +16,22 @@ bash tools/audit.sh --browser    # adds the Chromium viewer and app checks
 | Determinism | `lantern verify` on a temp git repo against its own report | MATCH, then DIFFERENT after a code change |
 | CLI surface | `lantern --help`, `starter`, `accept`, `evidence` | exit codes as documented |
 | Offline model end to end | `tools/fake_model.py` + `lantern explain --model openai-compatible/demo` | explanations validated for the demo units |
-| Browser (optional) | `node tools/viewer_smoke.js` | "no JS errors" at desktop and phone sizes; also on a report whose every field carries an HTML payload (`tools/poison_report.py`): nothing lands as markup, the title never changes |
+| Browser (optional) | `node tools/viewer_smoke.js` | "no JS errors" at desktop and phone sizes; also on a report whose every field carries an HTML payload (`tools/poison_report.py`): nothing lands as markup, the title never changes; and on one where only the scenarios carry it (`--only scenario,dropped_scenarios`), so the finding cards, Fix page and Scenario lens that show them are drawn and checked |
+| Live app (with `--browser`) | `node tools/viewer_smoke.js --app URL OUT --image shot.png --expect-text 7351` against `lantern serve tests/fixtures/shop` | "no JS errors" and each step answers: "Watch my tests run" is confirmed and runs in the sandbox (toast says tests ran), the Terminal drawer runs `analyze --offline` (prints `ready`) and refuses `rm -rf /`, a generated screenshot dropped into Ask Lantern is read on this computer (the text when Tesseract is installed; CI installs it), Settings → Analysis packs turns Django off (the project card goes "Re-check to apply") and back on |
 
 CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every push (`.github/workflows/ci.yml`).
+The `install` job does what a tester does on Linux, macOS and Windows: a clean venv, `pip install
+"git+https://github.com/LittleHenderson/Lantern@<commit>"` with no extras, then `lantern --version` (0.9.0),
+`lantern analyze tests/fixtures/shop --offline` (prints an `off` line naming the scanners that are not installed)
+and `lantern serve tests/fixtures/shop --check` (starts, prints the link, loads the app once, exits 0).
+The `gateway` job curls the live gateway's `/v1/health` (`https://lantern-gateway.fly.dev`) on every push and prints
+it to the job summary; it fails when the gateway does not answer `ok` with a model configured. The limits it enforces
+are listed in `docs/deploy.md` ("Free allowance limits as configured").
+Retention (90 days for token hashes and per-day counters, `Store.prune`) is tested in `tests/test_gateway.py`:
+idle and rotated-out hashes and their account mapping go, a hash in use and rows exactly 90 days old stay, an old
+database gains the `last_used` column, and the app prunes at start-up and on the first request of a new day.
+A pushed `v*` tag runs `.github/workflows/release.yml`: build sdist + wheel, the test suite against the built wheel
+with the source folder moved away, the live gateway's `/v1/health`, then a GitHub Release with both files.
 
 ## 2. What the test files cover
 
@@ -29,9 +42,15 @@ CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every pu
 | `tests/test_security.py` | Scanner orchestration, pinning, reachability, ranking, `.env` scanning, symlink containment |
 | `tests/test_trace.py` | Runtime tracing and merge into the graph |
 | `tests/test_explain.py` | Anchor validator: invented symbols, out-of-range lines, unknown terms, code identifiers in Lens 2, required finding explanations |
+| `tests/test_scenarios.py` | Every finding gets a scenario from its own facts (page, click, parameter, route, unreached, test code, heuristic), kind by rule then CWE then category, generic story for unknown rules; model scenarios with code names or pages the map does not show are removed and counted, never fail the lenses; the connector carries scenarios |
 | `tests/test_providers.py` | Provider presets (including DeepSeek), key requirements, URL scheme checks |
 | `tests/test_readiness.py` | Weights, failing and fixed projects, skip logic for libraries, fixtures ignored, accept + `--fail-on`, starter files never overwrite |
 | `tests/test_evidence.py` | Commit pinning, verify match/mismatch, fixed-vs-baseline, narrative escaping, no-git message, remote credential stripping |
+| `tests/test_release.py` | One version in `pyproject.toml` and `lantern/__init__.py`, a CHANGELOG section per tag, `serve --check`, Bandit missing reported as skipped (not a silent "ok"), the tester guide `docs/try-lantern.md` (eight sections in order, one install command shared with README and the site) and the tester issue form |
+| `tests/test_view_mode.py` | Simple/Advanced saved by `POST /api/settings`, read back after a restart, and handed to the Atlas as `LANTERN_LIVE.view_mode` (the saved value wins over the browser's memory); an unknown value is saved as `simple`; no change without the write header |
+| `tests/test_pack_toggle.py` | Per-pack on/off: Django turned off → no `LP-*` findings, no pack entry points, `meta.packs.disabled`, provenance says off; back on → findings return; `GET`/`POST /api/packs`, the stale card, refusals; `?all=1` lists every project's packs for the Settings screen and a project pack turns off like a built-in one |
+| `tests/test_ocr.py` | Ask Lantern screenshots: a generated PNG/JPEG/WebP with a known string is read (needs Tesseract; CI installs it on Linux), the no-Tesseract answer carries the install line, an image over 8 MB, a GIF and a non-image are refused, the image reaches Tesseract through a pipe and no temp file is made |
+| `tests/test_sandbox.py` | The test sandbox in both backends (Docker skipped with the reason when no daemon): the shop's pytest runs and its calls are mapped back to the project, at least one edge becomes `observed`, a planted test cannot write to the project (Python and `sh`), open a socket or see the user's environment, the toast's `blocked` reasons, the 10-minute wall clock kills the tree, the copy is read-only and removed, the server's confirm-once rule |
 | `tests/test_server.py` | Access control (token, cookie, write header, Host), project lifecycle over HTTP, key privacy and file mode, explain end to end with the fake model |
 
 ## 3. Manual walkthrough (15 minutes)
@@ -47,7 +66,9 @@ CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every pu
    `python tools/fake_model.py 8799`). The screen says the model is local. Pick `anthropic` and confirm the warning
    that code will be sent to Anthropic.
 6. Atlas → click `BackupButton` → "Explain with openai-compatible/demo". The three lenses appear. Lens 3 phrases
-   highlight their technical twins.
+   highlight their technical twins. The fourth tab, Scenario, tells the story of someone pressing that button.
+   What to fix → Fix this on any finding: a "Scenario · see it happen" card walks one tester through it; on findings the
+   demo model did not explain it is Lantern's own numbered story with "What goes wrong" and "After the fix".
 7. Explanations tab → "Explain N functions"; the log shows ok and "rejected by the anchor check" lines (the fake
    model only knows some functions; rejections are expected and prove the validator runs).
 8. Evidence Report: commit, scorecard, open/accepted findings, provenance listing the demo model, Limits, digest.
@@ -123,7 +144,7 @@ by `if not cmd: cmd = "ls"` (expect critical, naming the request line).
 
 * All of section 1 passes on Linux with Python 3.11–3.13 and on Windows with Python 3.12 under stock settings
   (`PYTHONUTF8=0`, the system code page). CI runs both, plus `tools/audit.sh --browser` in Chromium. macOS is not in
-  CI. (Before PR #7, Windows failed 24 of 88 tests; see `AUDIT_HISTORY.md`.)
+  CI except in the clean-install job. (Before PR #7, Windows failed 24 of 88 tests; see `AUDIT_HISTORY.md`.)
 * No critical or high issue open from sections 4.1–4.5 and 4.9.
 * Section 4.6: analysis of a 100k-line repo finishes in under 60 s and under 2 GB.
 * Every claim in `CLAIMS.md` is held or its text is corrected.

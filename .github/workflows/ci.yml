@@ -13,6 +13,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Tesseract, so the screenshot-reading tests run (tests/test_ocr.py)
+        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
       - run: pip install -e ".[scan,dev]"
       - run: python -m pytest -q
       - name: Lantern audits itself (no critical, high, or medium findings)
@@ -20,6 +22,25 @@ jobs:
       - name: Audit package checks (tools/audit.sh)
         if: matrix.python == '3.13'
         run: bash tools/audit.sh
+
+  gateway:
+    # The free allowance testers get by default: the live gateway must answer. Prints its health (version and
+    # model, no counters) to the job summary.
+    runs-on: ubuntu-latest
+    steps:
+      - name: curl the live gateway's health check
+        run: |
+          curl -fsS --retry 3 --retry-delay 5 --retry-all-errors --max-time 20 https://lantern-gateway.fly.dev/v1/health | tee health.json
+          echo
+          python3 - <<'PY'
+          import json, os
+          d = json.load(open("health.json"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### Live gateway\n```\n$ curl -fsS https://lantern-gateway.fly.dev/v1/health\n" + json.dumps(d) + "\n```\n")
+          assert d.get("ok") is True and d.get("configured") is True, d
+          if "version" not in d:
+              print("::notice::the live gateway predates the version field; deploy gateway/ to add it")
+          PY
 
   windows:
     # Stock Windows settings: the system code page, not UTF-8, and backslash paths.
@@ -57,4 +78,43 @@ jobs:
           node-version: "20"
       - run: pip install -e ".[scan,dev]"
       - run: npm i --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+      - name: Tesseract, so the live-app smoke can check a screenshot's text is read
+        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
       - run: bash tools/audit.sh --browser
+
+  install:
+    # What a tester does: one pip command into a clean venv (no extras), then the first three commands.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4   # only for tests/fixtures/shop; Lantern itself comes from pip below
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Clean-venv install from GitHub, then version, analyze, serve --check
+        run: |
+          python -m venv "$RUNNER_TEMP/v"
+          if [ -f "$RUNNER_TEMP/v/Scripts/activate" ]; then . "$RUNNER_TEMP/v/Scripts/activate"; else . "$RUNNER_TEMP/v/bin/activate"; fi
+          pip install "git+https://github.com/LittleHenderson/Lantern@${SHA}"
+          export LANTERN_HOME="$RUNNER_TEMP/lantern-home"
+          {
+            echo '### Clean install on ${{ matrix.os }}'
+            echo '```'
+            echo "$ lantern --version"; lantern --version
+            echo "$ lantern analyze tests/fixtures/shop --out $RUNNER_TEMP/shop --offline"
+            lantern analyze tests/fixtures/shop --out "$RUNNER_TEMP/shop" --offline 2>&1
+            echo "$ lantern serve tests/fixtures/shop --check"
+            lantern serve tests/fixtures/shop --check 2>&1 | sed 's/token=[A-Za-z0-9_-]*/token=<one-time>/'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$(lantern --version)" = "lantern 0.9.0"
+          test -f "$RUNNER_TEMP/shop/report.html"
+          lantern serve tests/fixtures/shop --check > /dev/null

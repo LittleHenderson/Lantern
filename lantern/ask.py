@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import sys
 from pathlib import Path
 
 from .lanes import LANE_WORDS  # the four stack stops: Browser, Frontend, Server, Data
@@ -28,7 +30,7 @@ Atlas map (routes and clicks → functions → database, confidence per link: se
 possible), Findings (ranked critical/high/medium/low by whether a route reaches them and whether outside input is
 used; "Send to…" hands one to an AI assistant), Readiness score (0–100, grade A–F, ten categories, starter files
 Lantern can write), Protections to add, Evidence Report (commit-pinned, with a digest and a badge), Explain (three
-lenses: technical, everyday, mapped; every phrase anchored to real code), Learn (starter apps with planted problems),
+lenses: technical, everyday, mapped; every phrase anchored to real code; plus a scenario, a short story of someone using it, and a scenario for every finding), Learn (starter apps with planted problems),
 Settings (model provider; free allowance via Sign in with GitHub/Google; privacy: full or structure-only reports;
 Connections: which AI assistants called Lantern through the connector `lantern mcp`). Languages: Python,
 TypeScript/JavaScript, Go, Rust, Java. AI apps: paid calls marked on the map, wallet-drain check, model output
@@ -78,6 +80,12 @@ def facts(project_dir: Path, focus: dict | None = None, limit: int = 40) -> str:
         lines.append(f"{len(exps)} functions have explanations; ask about one by name to get its plain-words lens.")
     if focus and focus.get("finding"):
         lines.append(f"The person is looking at finding [{focus['finding']}].")
+        sel = next((f for f in sec.get("findings") or [] if isinstance(f, dict) and f.get("id") == focus["finding"]), None)
+        sc = (sel or {}).get("scenario")
+        if isinstance(sc, dict) and sc.get("steps"):   # Lantern's own story of it (scenarios.py), for "show me"
+            lines.append("Scenario for it (an illustration built from the facts above, nothing was run): "
+                         + " ".join(str(x) for x in sc["steps"][:5])[:500] + " What goes wrong: "
+                         + str(sc.get("harm") or "")[:300])
     text = "\n".join(lines)
     return text[:14000]
 
@@ -127,40 +135,79 @@ def _short(nid: str) -> str:
     return s[-60:]
 
 
+SCREENSHOT_MAX = 8 * 1024 * 1024
+SCREENSHOT_FORMATS = {"PNG", "JPEG", "WEBP"}
+
+
+def tesseract_how() -> str:
+    """One line: how to install the Tesseract program on this computer's OS."""
+    if sys.platform == "darwin":
+        return "brew install tesseract"
+    if sys.platform == "win32":
+        return "winget install UB-Mannheim.TesseractOCR (then reopen Lantern)"
+    return "sudo apt install tesseract-ocr (Fedora: sudo dnf install tesseract)"
+
+
+def ocr_image(img) -> str:
+    """Text in a Pillow image, read by the Tesseract program. The image goes to Tesseract through a pipe
+    (`tesseract stdin stdout`), so it is never written to disk."""
+    import io
+    import subprocess
+    exe = shutil.which("tesseract")
+    if not exe:
+        raise FileNotFoundError("tesseract")
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="PNG")
+    r = subprocess.run([exe, "stdin", "stdout"], input=buf.getvalue(), capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode("utf-8", "replace").strip()[:120] or f"exit {r.returncode}")
+    return r.stdout.decode("utf-8", "replace")
+
+
 def read_screenshot(raw: bytes, ctype: str) -> dict:
-    """A screenshot dropped into Ask Lantern: read on this computer. Needs Tesseract (pytesseract) for the text;
-    without it the image size is reported and the person is told what to install. The image is never sent anywhere."""
+    """A screenshot dropped into Ask Lantern, read on this computer: PNG, JPEG or WebP up to 8 MB, decoded with
+    Pillow, its text read by Tesseract when the program is installed. Without Tesseract the answer says so and how to
+    install it (`text: None`, `reason`, `how`). The image is held in memory for this request only: it is never written
+    to disk, never sent anywhere, and nothing keeps it after the response."""
     import email
     import email.policy
     import io
     msg = email.message_from_bytes(b"Content-Type: " + ctype.encode() + b"\r\nMIME-Version: 1.0\r\n\r\n" + raw,
                                    policy=email.policy.HTTP)
     data = None
-    for part in msg.iter_parts():
-        if part.get_filename():
-            data = part.get_payload(decode=True)
-            break
+    if msg.is_multipart():
+        for part in msg.iter_parts():
+            if part.get_filename():
+                data = part.get_payload(decode=True)
+                break
     if not data:
-        return {"error": "no image received"}
+        raise ValueError("no image received")
+    if len(data) > SCREENSHOT_MAX:
+        raise ValueError(f"image too large ({len(data) // (1024 * 1024)} MB; 8 MB max)")
     try:
         from PIL import Image
     except ImportError:
-        return {"error": "install Pillow to read screenshots (pip install pillow)"}
+        return {"text": None, "reason": "Pillow not installed", "how": 'pip install "lantern[ocr]"'}
     try:
         img = Image.open(io.BytesIO(data))
+        fmt = img.format
+        if fmt not in SCREENSHOT_FORMATS:
+            raise ValueError(f"{fmt or 'this file'} is not PNG, JPEG or WebP")
         img.load()
+    except ValueError:
+        raise
     except Exception:  # noqa: BLE001
-        return {"error": "not an image Lantern can open"}
-    out = {"width": img.width, "height": img.height}
+        raise ValueError("not an image Lantern can open (PNG, JPEG or WebP)") from None
+    out = {"width": img.width, "height": img.height, "format": fmt}
     try:
-        import pytesseract
-        text = pytesseract.image_to_string(img)
-    except ImportError:
-        out["error"] = "text reading needs Tesseract (pip install pytesseract, plus the Tesseract program)"
-        return out
+        text = ocr_image(img)
+    except FileNotFoundError:
+        return out | {"text": None, "reason": "tesseract not installed", "how": tesseract_how()}
     except Exception as e:  # noqa: BLE001
-        out["error"] = f"could not read text: {str(e)[:80]}"
-        return out
+        return out | {"text": None, "reason": f"could not read text: {str(e)[:80]}", "how": tesseract_how()}
+    finally:
+        img.close()
+        del data
     lines = [ln for ln in text.splitlines() if ln.strip()]
     out.update({"lines": len(lines), "text": "\n".join(lines)[:4000]})
     return out

@@ -277,7 +277,10 @@ pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--co
 .gbody p{margin:10px 0 0;font-size:14px;line-height:1.6;color:var(--ink-2)}
 @media (max-width:860px){.gsplit{grid-template-columns:1fr}}
 
+/* Re-check to apply (packs changed) */
+.stale{font-size:12px;color:var(--warn, #9a6200)}
 /* Watch my tests run: sheet + toast */
+.sbx{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:12px 0;background:var(--surface)} .sbx .sbxh{display:flex;align-items:center;gap:8px} .sbx .sbxh svg{width:16px;height:16px;color:var(--good, #1f8a5a)} .sbx ul{margin:6px 0 4px 22px;padding:0;font-size:13.5px;color:var(--ink-2, inherit)} .sbx .sbxl{font-size:13px;color:var(--muted)}
 .sheetwrap{position:fixed;inset:0;z-index:30;background:rgba(14,14,16,.45);display:grid;place-items:center;padding:20px}
 .sheet{width:min(620px,100%);background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px 24px;box-shadow:0 20px 60px -20px rgba(0,0,0,.5)}
 .sheet .sh{display:flex;align-items:flex-start;gap:12px} .sheet h2{font:650 19px/1.3 var(--display);margin:0;flex:1} .sheet .x{background:none;border:0;font-size:22px;color:var(--muted);cursor:pointer}
@@ -481,6 +484,17 @@ iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px
 .conn{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .conn b{white-space:nowrap}
 .connrows .conn:last-child{border-bottom:0}
+/* Settings → Analysis packs (design 10d) */
+.pack{display:flex;gap:14px;align-items:flex-start;padding:14px;border:1px solid var(--line-2);border-radius:12px;margin:8px 0}
+.pack .pk{flex:1;min-width:0} .pack .pk b{font-weight:600} .pack .pk .hint{margin-top:3px}
+.pack .meta{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
+.pack.off .pk{opacity:.62}
+.packempty{border:1.5px dashed var(--line-2);border-radius:12px;padding:16px;margin:8px 0;color:var(--ink-2);font-size:13px;line-height:1.55}
+.packempty code{font-family:var(--mono);font-size:12px}
+.switch{position:relative;flex:none;width:42px;height:24px;border-radius:999px;border:0;padding:0;background:var(--line-2);cursor:pointer;transition:background var(--t) var(--ease)}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform var(--t) var(--ease)}
+.switch[aria-checked="true"]{background:var(--accent)} .switch[aria-checked="true"]::after{transform:translateX(18px)}
+.switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px} .switch:disabled{opacity:.5;cursor:wait}
 .snip{font:12px var(--mono);background:var(--sunken);border:1px solid var(--line);border-radius:8px;padding:8px 10px;overflow:auto;white-space:pre;margin:6px 0 10px}
 </style>
 </head>
@@ -498,7 +512,7 @@ iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px
   <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
 </header>
 <div id="view"></div>
-<div id="term" hidden><div class="tbar"><b>Terminal</b><span class="muted">Lantern commands only · output links into the app</span><span class="spacer"></span><label class="muted" title="Background opacity"><input type="range" min="0.4" max="1" step="0.05" value="1" id="termop"></label><button class="x" id="termclose" aria-label="Close">×</button></div><div class="tout" id="tout"></div><div class="tin"><span class="ps">lantern</span><input type="text" id="tcmd" placeholder="help · analyze · findings · accept ID --reason … · explain · starter NAME · verify" autocomplete="off" spellcheck="false"></div></div>
+<div id="term" hidden><div class="tbar"><b>Terminal</b><span class="muted">Lantern commands only · output links into the app</span><span class="spacer"></span><label class="muted" title="Background opacity"><input type="range" min="0.4" max="1" step="0.05" value="1" id="termop"></label><button class="x" id="termclose" aria-label="Close">×</button></div><div class="tout" id="tout"></div><div class="tin"><span class="ps">lantern</span><input type="text" id="tcmd" placeholder="help · analyze · trace python -m pytest -q · accept ID --reason … · explain · verify · export" autocomplete="off" spellcheck="false"></div></div>
 <div id="ask"></div>
 <script>
 const TOKEN = '__LANTERN_TOKEN__';
@@ -606,6 +620,7 @@ function drawViewMode() {
   try { localStorage.setItem('lantern.simple', viewMode() === 'simple' ? '1' : '0'); } catch (e) {}   // the Atlas (report.html, same origin) follows
   try { if (S.frame && S.frame.el.contentWindow.setSimple) S.frame.el.contentWindow.setSimple(viewMode() === 'simple'); } catch (e) {}
 }
+window.lanternViewMode = settings => { if (settings && S.state) { S.state.settings = settings; drawViewMode(); } };   // the Atlas saved a new mode
 document.getElementById('viewmode').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
   try { const r = await api('/api/settings', {method: 'POST', body: {view_mode: b.dataset.m}}); S.state.settings = r.settings; } catch (err) { /* keep going with the old value */ }
@@ -627,12 +642,38 @@ function termPrint(text, cls = '') {
   d.innerHTML = esc(text).replace(/\b([0-9a-f]{12})\b/g, '<a href="#" data-fid="$1">$1</a>').replace(/((?:[\w.-]+\/)*[\w.-]+\.(?:py|ts|tsx|js|jsx|go|rs|java))(:\d+)?/g, '<a href="#" data-file="$1">$1$2</a>');
   out.appendChild(d); out.scrollTop = out.scrollHeight;
 }
+// Split a typed line into words the way a shell would quote them, without ever handing it to a shell: the server
+// receives an argv list and accepts only Lantern's own commands.
+function termWords(line) {
+  const out = []; let cur = '', q = null, any = false;
+  for (const ch of line) {
+    if (q) { if (ch === q) q = null; else cur += ch; continue; }
+    if (ch === '"' || ch === "'") { q = ch; any = true; continue; }
+    if (/\s/.test(ch)) { if (cur || any) out.push(cur); cur = ''; any = false; continue; }
+    cur += ch;
+  }
+  if (cur || any) out.push(cur);
+  return out;
+}
+const TERM_HELP = `Lantern commands only (results go to this project's .lantern/):
+  analyze [--offline] [--no-scan]          read the project again
+  trace python -m pytest -q                run your tests in the sandbox
+  explain [--node ID] [--depth N]          explain functions with the model in Settings
+  report                                   rebuild report.html
+  verify                                   compare with the Evidence Report
+  accept ID --reason "..."  |  accept ID --remove
+  packs                                    list analysis packs
+  export [--sarif FILE]                    findings as SARIF
+  learn [--check]                          a starter app's progress
+Shell commands are refused: this drawer never runs a shell or your code.`;
 async function termRun(line) {
   const p = S.view === 'project' && (S.state.projects || []).find(x => x.id === S.project);
   termPrint('lantern ' + line, 'me');
+  const argv = termWords(line); if (argv[0] === 'lantern') argv.shift();
+  if (!argv.length || argv[0] === 'help' || argv[0] === '?') { termPrint(TERM_HELP, 'sys'); return; }
   if (!p) { termPrint('Open a project first; the terminal runs against the project on screen.', 'err'); return; }
   try {
-    const r = await api(`/api/projects/${p.id}/cmd`, {method: 'POST', body: {line}});
+    const r = await api(`/api/projects/${p.id}/cmd`, {method: 'POST', body: {argv}});
     if (r.output) termPrint(r.output);
     if (r.job) {
       S.jobs[p.id] = r.job; let seen = 0;
@@ -674,23 +715,24 @@ document.addEventListener('keydown', e => {
 
 // ---------------------------------------------------------------- Watch my tests run (design 6a/6b/8f)
 async function watchTestsSheet(p) {
-  let d = {command: 'python -m pytest -q', how: '', supported: true, note: ''};
+  let d = {command: 'python -m pytest -q', how: '', supported: true, note: '', sandbox: null, leaves: '', confirmed: false};
   try { d = await api(`/api/projects/${p.id}/testcmd`); } catch (e) {}
   const el = document.createElement('div'); el.className = 'sheetwrap'; el.id = 'sheet';
   el.innerHTML = `<div class="sheet" role="dialog" aria-label="Watch my tests run"><div class="sh"><h2>Lantern will run your tests, not your app.</h2><button class="x" id="shx" aria-label="Close">×</button></div>
     <label for="testcmd">The exact command${d.how ? ` <span class="muted">(from ${esc(d.how)}; change it if yours is different)</span>` : ''}</label>
     <input type="text" id="testcmd" value="${esc(d.command)}" spellcheck="false">
     ${d.note ? `<div class="hint">${esc(d.note)}</div>` : ''}
-    ${note('warn', `It runs in <code>${esc(p.path)}</code> as you, with a call recorder attached, exactly like running it yourself. Only a Python test runner is accepted (<code>python -m pytest</code>, <code>pytest</code>, <code>python -m unittest</code>); nothing else is run. It is not sandboxed yet, so only run tests you would run anyway.`)}
+    ${d.sandbox ? `<div class="sbx"><div class="sbxh">${icon('check')}<b>Where it runs: ${esc(d.sandbox.label)}</b>${d.sandbox.image ? ` <span class="muted">${esc(String(d.sandbox.image).split('@')[0])}</span>` : ''}</div><ul>${(d.sandbox.details || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul><div class="sbxl">${esc(d.leaves || 'Nothing leaves this computer.')}</div></div>` : ''}
+    ${note('info', `Only a test command is accepted (pytest, unittest, npm/pnpm/yarn test, Jest, Vitest, Mocha, go test, cargo test, Maven, Gradle); nothing else is run. Your app itself never runs outside its tests.`)}
     <div class="rewards"><div>${icon('check')}<span>Dashed “likely” lines that your tests go through turn solid: <b>seen running</b>.</span></div><div>${icon('check')}<span>Functions and routes your tests reach get the <b>seen running</b> mark.</span></div><div>${icon('check')}<span>Readiness can only go up: the tests check earns its points.</span></div></div>
-    <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn" id="shskip">Skip</button><button class="btn primary" id="shrun" ${d.supported ? '' : 'disabled'}>${icon('play')}Run the tests</button></div></div>`;
+    <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn" id="shskip">Skip</button><button class="btn primary" id="shrun" ${d.supported ? '' : 'disabled'}>${icon('play')}${d.confirmed ? 'Run the tests' : 'Confirm and run'}</button></div></div>`;
   document.body.appendChild(el);
   const close = () => el.remove();
   el.querySelector('#shx').onclick = close; el.querySelector('#shskip').onclick = close; el.addEventListener('click', e => { if (e.target === el) close(); });
   el.querySelector('#shrun').onclick = async () => {
     const command = el.querySelector('#testcmd').value.trim();
     try {
-      const j = await api(`/api/projects/${p.id}/trace`, {method: 'POST', body: {command}});
+      const j = await api(`/api/projects/${p.id}/trace`, {method: 'POST', body: {command, confirm: true}});
       close();
       S.toast = {pid: p.id, html: `<div class="toastin"><span class="pulse"></span>Running <code>${esc(command)}</code>… you can keep browsing; the Atlas updates when it finishes.</div>`};
       renderProject(document.getElementById('view'));
@@ -703,13 +745,18 @@ async function watchTrace(jobId, p, command) {
   for (;;) { try { j = await api('/api/jobs/' + jobId); } catch (e) { await new Promise(r => setTimeout(r, 2000)); continue; } if (j.status !== 'running') break; await new Promise(r => setTimeout(r, 1000)); }
   const r = j.result || {};
   const tail = (j.log || []).slice(-6).join('\n');
-  if (j.status === 'error' || (r.returncode !== undefined && r.returncode !== 0 && !r.observed)) {
+  const blocked = Array.isArray(r.blocked) ? r.blocked : [];
+  if (blocked.length || r.timed_out) {
+    const why = r.timed_out ? 'They ran longer than 10 minutes, so the sandbox stopped them and everything they started.'
+      : 'The sandbox refused ' + blocked.map(b => b.kind === 'network' ? 'a network connection' : 'a write outside its temp folder').filter((x, i, a) => a.indexOf(x) === i).join(' and ') + '. Tests here cannot change your project or reach the internet.';
+    S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests were stopped by the sandbox.</b> ${esc(why)}<pre class="log" style="margin-top:8px;max-height:120px">${esc(blocked.map(b => b.what).join('\n') || tail)}</pre></div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+  } else if (j.status === 'error' || (r.returncode !== undefined && r.returncode !== 0 && !r.observed)) {
     const code = r.returncode !== undefined ? r.returncode : '?';
     const likely = /No module named|ModuleNotFoundError/.test(tail + (j.error || '')) ? 'A package your tests import is not installed in the Python that runs Lantern.' : /not recognized|No such file|command not found/.test(tail + (j.error || '')) ? 'The command was not found. Is pytest installed?' : /collected 0 items|no tests ran/.test(tail) ? 'No tests were found by that command.' : 'Look at the last lines below.';
     S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests didn’t finish, so nothing changed.</b> Exit code ${esc(code)}. ${esc(likely)}<pre class="log" style="margin-top:8px;max-height:120px">${esc(j.error || tail)}</pre></div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn sm" data-retry>Change the command</button><button class="btn ghost sm" data-dismiss>Skip</button></div>`};
   } else {
     const d = r.score_after != null && r.score_before != null ? r.score_after - r.score_before : null;
-    S.toast = {pid: p.id, html: `<div class="toastin ok">${icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}.</b> ${esc(r.observed || 0)} call${r.observed === 1 ? '' : 's'} seen running${r.recall != null ? `, ${Math.round(r.recall * 100)}% of them already on the map` : ''}.${d == null ? '' : d > 0 ? ` Readiness up ${d}, now ${r.score_after}.` : ` Readiness unchanged at ${r.score_after}.`} The edges your tests went through are now solid in the Atlas.</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+    S.toast = {pid: p.id, html: r.traced === false ? `<div class="toastin ok">${icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}${r.backend ? ` in the ${r.backend === 'docker' ? 'Docker' : 'restricted'} sandbox` : ''}.</b> ${esc(r.note || 'Tests run; your map upgrades for Python only for now.')}</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>` : `<div class="toastin ok">${icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}.</b> ${esc(r.observed || 0)} call${r.observed === 1 ? '' : 's'} seen running${r.recall != null ? `, ${Math.round(r.recall * 100)}% of them already on the map` : ''}.${d == null ? '' : d > 0 ? ` Readiness up ${d}, now ${r.score_after}.` : ` Readiness unchanged at ${r.score_after}.`} The edges your tests went through are now solid in the Atlas.</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
   }
   S.frame = null; await refresh();
 }
@@ -759,7 +806,7 @@ async function askSend(text) {
   const focus = {};
   if (S.view === 'project' && (ASK.page && ASK.page.node || S.sel)) focus.node = (ASK.page && ASK.page.node) || S.sel;
   if (ASK.page && ASK.page.page) text = `(I am on the “${ASK.page.page}” page.) ` + text;
-  if (ASK.shot && ASK.shot.text) text += '\n\nScreenshot text (read on this computer):\n' + ASK.shot.text;
+  if (ASK.shot && ASK.shot.text) text += '\n\nText read from my screenshot (on this computer):\n' + ASK.shot.text.split('\n').map(l => '> ' + l).join('\n');
   try {
     const r = await api('/api/ask', {method: 'POST', body: {project: S.view === 'project' ? S.project : null, question: text, focus}});
     ASK.log.pop(); ASK.log.push({role: 'bot', text: r.answer, cited: r.cited || []});
@@ -793,7 +840,9 @@ async function askAttach(file) {
     const fd = new FormData(); fd.append('file', file);
     const r = await fetch('/api/ask/screenshot', {method: 'POST', headers: {'X-Lantern-Token': TOKEN}, body: fd, credentials: 'same-origin'});
     const j = await r.json();
-    ASK.shot = {name: file.name, info: `${j.width || '?'}×${j.height || '?'} · read on this computer · ${j.lines === undefined ? (j.error || 'could not read text') : j.lines + ' lines of text found'}`, text: j.text || ''};
+    if (!r.ok) ASK.shot = {name: file.name, info: j.error || 'could not read the image', text: ''};
+    else if (j.text === null || j.text === undefined) ASK.shot = {name: file.name, info: `${j.width || '?'}×${j.height || '?'} · ${j.reason || 'text not read'}${j.how ? ' · to read text: ' + j.how : ''}`, text: ''};
+    else ASK.shot = {name: file.name, info: `${j.width}×${j.height} · read on this computer, not uploaded · ${j.lines} line${j.lines === 1 ? '' : 's'} of text found`, text: j.text};
   } catch (err) { ASK.shot = {name: file.name, info: 'could not read the image', text: ''}; }
   renderAsk();
 }
@@ -885,6 +934,7 @@ function renderHome(el) {
       ${run ? `<div class="checking"><i></i>Checking… ${p.score != null ? 'usually under a minute' : 'about a minute'}</div><div class="indeterminate"></div><p class="lastline" data-last="${p.id}">${esc(lastLine(p))}</p>`
         : `<p class="sentence">${sentence(p)}</p>`}
       ${!p.exists ? note('warn', 'This folder no longer exists.') : ''}
+      ${p.stale === 'packs' && !run ? note('info', 'Analysis packs changed since this check. <b>Re-check to apply.</b>') : ''}
       ${job && job.status === 'error' ? note('err', esc(job.error)) : ''}
       <div class="actions">${run ? '' : p.has_report ? `<button class="btn primary" data-open="${p.id}" data-rt="fix">Show me what to fix</button>` : ''}${p.starter && !run ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}
         ${run ? '' : `<button class="btn ${p.has_report ? '' : 'primary'}" data-run="${p.id}" ${!p.exists ? 'disabled' : ''}>${p.has_report ? 'Re-check' : 'Check my app'}</button>`}
@@ -924,7 +974,7 @@ function renderHomePro(el, ps) {
       ${p.score != null ? `<div class="rd"><span style="font-weight:600;color:var(--ink);width:24px">${esc(p.score)}</span><div class="bar"><i class="bar-${t}" style="width:${barw(p)}%"></i></div><span class="g tone-${t}">${esc(p.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'analyzing' : 'not yet'}</span></div>`}
       ${num(c ? c.critical : null, true)}${num(c ? c.high : null)}${num(c ? c.medium : null)}${num(c ? c.accepted : null)}
       <span class="num">${p.functions ? `${esc(p.explained || 0)} / ${esc(p.functions)}` : '<span class="dash">–</span>'}</span>
-      <span style="color:var(--muted);white-space:nowrap">${run ? 'Analyzing…' : esc(p.finished_at || '–')}</span>
+      <span style="color:var(--muted);white-space:nowrap">${run ? 'Analyzing…' : esc(p.finished_at || '–')}${p.stale === 'packs' && !run ? '<br><span class="stale" title="Analysis packs changed since this check">Re-check to apply</span>' : ''}</span>
       <div class="acts">${p.has_report ? `<button class="btn" data-open="${p.id}">Open</button>` : ''}${p.starter ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}${run ? `<button class="btn" data-log="${p.id}">View log</button>` : `<button class="btn" data-run="${p.id}" ${!p.exists ? 'disabled' : ''}>${p.has_report ? 'Re-check' : 'Analyze'}</button>`}<button class="btn quiet" data-del="${p.id}" aria-label="Remove from this list">${icon('trash')}</button></div></div>`;
   }).join('');
   const logs = running.map(p => `<div class="prolog" id="log-${p.id}"><div class="t">${esc(p.name)} · analyze</div>${esc(((S.jobs[p.id] || {}).log || []).join('\n'))}</div>`).join('');
@@ -1133,6 +1183,7 @@ function renderSettingsSimple(el, s, provs, themeBtn) {
       <div class="row" style="justify-content:space-between;margin-top:12px"><div><b>Moving shapes in the background</b></div><div class="seg" id="bdseg">${['off', 'subtle', 'bold'].map(v => `<button data-bd="${v}" class="${(s.backdrop || 'subtle') === v ? 'on' : ''}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div></div></div>
     <div class="card group"><h2>Also</h2>
       <div class="alsorow"><div><b>Connections</b><div class="hint" id="connhint">Looking…</div></div><button class="btn" id="toconn">Open</button></div>
+      <div class="alsorow"><div><b>Analysis packs</b><div class="hint" id="packhint">Looking…</div></div><button class="btn" id="topacks">Open</button></div>
       <div class="alsorow"><div><b>Privacy of reports</b><div class="hint">${s.privacy === 'structure' ? 'Reports leave source code out.' : 'Reports include each function’s source so the code panel works.'}</div></div><button class="btn" id="topriv">Change</button></div>
       <div class="alsorow"><div><b>Everything else</b><div class="hint">Keys, base URLs, usage counts, default view.</div></div><button class="btn" id="toadv">Advanced</button></div></div>
     <p class="foot">Lantern listens on this computer only (127.0.0.1) and has no telemetry unless you turn usage counts on. The only network calls are dependency checks and the model you choose above.</p></main>`;
@@ -1151,7 +1202,8 @@ function renderSettingsSimple(el, s, provs, themeBtn) {
   el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
   el.querySelector('#bdseg').onclick = async e => { const b = e.target.closest('button'); if (!b) return; await save({backdrop: b.dataset.bd}); for (const x of el.querySelectorAll('#bdseg button')) x.classList.toggle('on', x === b); setBackdrop(); };
   const toAdv = async (anchor) => { try { const r = await api('/api/settings', {method: 'POST', body: {view_mode: 'advanced'}}); S.state.settings = r.settings; } catch (e) {} drawViewMode(); render(); if (anchor) { const a = document.getElementById(anchor); if (a) a.scrollIntoView({behavior: 'smooth'}); } };
-  el.querySelector('#toconn').onclick = () => toAdv('conns'); el.querySelector('#topriv').onclick = () => toAdv('privcard'); el.querySelector('#toadv').onclick = () => toAdv();
+  el.querySelector('#toconn').onclick = () => toAdv('conns'); el.querySelector('#topacks').onclick = () => toAdv('packs');
+  api('/api/packs?all=1').then(d => { const off = d.packs.filter(x => !x.enabled).length; el.querySelector('#packhint').textContent = `${d.packs.length} pack${d.packs.length === 1 ? '' : 's'}` + (off ? `, ${off} turned off` : ', all on') + '. Python and TypeScript web are always on.'; }).catch(() => { el.querySelector('#packhint').textContent = ''; }); el.querySelector('#topriv').onclick = () => toAdv('privcard'); el.querySelector('#toadv').onclick = () => toAdv();
   api('/api/connections').then(c => { el.querySelector('#connhint').textContent = c.connections.length ? c.connections.map(x => x.name).slice(0, 3).join(', ') + ' have called' : 'No assistant has connected yet (Claude Code, Cursor, ChatGPT can).'; }).catch(() => { el.querySelector('#connhint').textContent = ''; });
 }
 
@@ -1207,6 +1259,8 @@ function renderSettings(el) {
       <div id="usageinfo" class="hint"></div></div>
     <div class="card group" id="conns"><h2>Connections</h2><div class="hint">Lantern works inside Claude, ChatGPT, Cursor and Claude Code as a connector (MCP). An assistant can read findings, paths, readiness and explanations, re-analyze, re-check a fix, and verify an Evidence Report. It can never accept or close a finding; that stays with you, with a written reason.</div>
       <div id="connlist"><div class="working"><span class="pulse"></span>Looking…</div></div></div>
+    <div class="card group" id="packs"><h2>Analysis packs</h2><div class="hint">Python web and TypeScript web apps are Lantern's engine and are always on; packs teach it more frameworks with patterns and entry points, written as data, never code.</div>
+      <div id="packlist"><div class="working"><span class="pulse"></span>Looking…</div></div></div>
     <div class="card group"><h2>Appearance</h2><div class="hint">Saved in this browser right away.</div>
       <div class="seg" id="themeseg">${themeBtn('auto', 'auto', 'Match computer')}${themeBtn('light', 'sun', 'Light')}${themeBtn('dark', 'moon', 'Dark')}</div>
       <label for="bdsel" style="margin-top:14px">Moving shapes in the background</label>
@@ -1225,6 +1279,7 @@ function renderSettings(el) {
          <label>Claude Desktop, Cursor, Windsurf, Codex (mcp.json)</label><pre class="snip">${esc(JSON.stringify(c.setup.json, null, 2))}</pre>
          <div class="hint">ChatGPT and Claude on the web need a URL: put this server behind an MCP bridge (for example mcp-proxy) on a URL you control, then add it as a custom connector. Lantern never opens a port by itself. In a report, a finding's <b>Send to…</b> button hands the assistant a reference it resolves through this connector.</div>`;
   }).catch(e => { el.querySelector('#connlist').innerHTML = note('err', esc(e.message)); });
+  drawPacks(el.querySelector('#packlist'));
   el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
   const save = async (extra = {}) => {
     const body = {provider: el.querySelector('#prov').value, model: el.querySelector('#model').value, base_url: el.querySelector('#url').value,
@@ -1244,9 +1299,37 @@ function renderSettings(el) {
   el.querySelector('#forget').onclick = () => save({forget_key: true, key: undefined});
 }
 
+// Settings → Analysis packs (design 10d): built-in packs, then project and user packs, each with an on/off switch.
+// A change applies on the next check; projects analyzed before it show "Re-check to apply" (GET /api/state `stale`).
+async function drawPacks(box) {
+  if (!box) return;
+  let d;
+  try { d = await api('/api/packs?all=1'); } catch (e) { box.innerHTML = note('err', esc(e.message)); return; }
+  const where = {builtin: 'Built in', project: 'From a project', user: 'From your packs folder'};
+  const card = x => `<div class="pack ${x.enabled ? '' : 'off'}"><div class="pk"><b>${esc(x.name[0].toUpperCase() + x.name.slice(1))}</b> <span class="small muted">v${esc(x.version)} · ${esc(where[x.source] || x.source)}</span>
+      ${x.about ? `<div class="hint">${esc(x.about)}</div>` : ''}
+      <div class="meta">${esc(x.rules)} rule${x.rules === 1 ? '' : 's'} · ${esc(x.entry_patterns)} entry pattern${x.entry_patterns === 1 ? '' : 's'} · ${esc(x.path)}</div>
+      ${x.source === 'builtin' ? '' : '<div class="hint">Findings from this pack are labelled heuristic.</div>'}</div>
+    <button class="switch" role="switch" aria-checked="${x.enabled ? 'true' : 'false'}" aria-label="${esc((x.enabled ? 'Turn off ' : 'Turn on ') + x.name)}" data-pack="${esc(x.name)}"></button></div>`;
+  const builtin = d.packs.filter(x => x.source === 'builtin'), mine = d.packs.filter(x => x.source !== 'builtin');
+  box.innerHTML = `<label>Built in</label>${builtin.map(card).join('') || '<div class="hint">None in this build.</div>'}
+    <label>Project and user packs</label>${mine.map(card).join('') || `<div class="packempty"><b>No project or user packs yet.</b> Add a pack file to <code>lantern-packs/*.json</code> inside a project (used for that project) or <code>~/.lantern/packs/*.json</code> (used for every project). <code>lantern packs</code> checks them; the format is in docs/packs.md.</div>`}
+    <div id="packmsg" class="hint">Turning a pack on or off applies on the next check of each project.</div>`;
+  box.querySelectorAll('[data-pack]').forEach(b => b.onclick = async () => {
+    const on = b.getAttribute('aria-checked') !== 'true';
+    b.disabled = true;
+    try {
+      await api('/api/packs', {method: 'POST', body: {name: b.dataset.pack, enabled: on}});
+      await drawPacks(box);
+      const m = box.querySelector('#packmsg'); if (m) m.innerHTML = `${esc(b.dataset.pack)} turned ${on ? 'on' : 'off'}. Projects checked before this show <b>Re-check to apply</b>.`;
+      try { S.state = await api('/api/state'); } catch (e) {}
+    } catch (e) { b.disabled = false; const m = box.querySelector('#packmsg'); if (m) m.textContent = e.message; }
+  });
+}
+
 const FAQ = [
   ['Safety', 'Does my code leave my computer?', 'No, unless you turn on explanations or Ask Lantern with a cloud model. Analysis (the map, findings, readiness, the Evidence Report) runs here. A GitHub link is cloned onto this computer, not a server. With a local model (Ollama, LM Studio) nothing leaves either. Lantern tells you once, before the first time code would be sent.'],
-  ['Safety', 'Does Lantern run my app or my tests?', 'It reads your code; it never runs your app. Tests run only if you ask (“Watch my tests run” or <code>lantern analyze --trace -- pytest</code>), with your own test command, shown first.'],
+  ['Safety', 'Does Lantern run my app or my tests?', 'It reads your code; it never runs your app. Tests run only if you ask (“Watch my tests run”), with the command shown first, inside a sandbox: a Docker container or a read-only temp copy, with the network off and your environment variables left out.'],
   ['Safety', 'What does the free allowance store?', 'A hash of your sign-in token and request counts. No code, no prompts, no email address. Each account gets one token; signing in again rotates it.'],
   ['Findings', 'What makes a finding critical?', 'Two yes answers: a page or route leads to that line (reachable), and the line uses something the visitor sent (input). Reachable but no input is high; not reachable stays low even when the scanner says high.'],
   ['Findings', 'What does “reachable” mean?', 'Lantern found a path from a place a visitor can start (a page, a route, a command) to the function that holds the finding. The path is drawn on the finding so you can follow it.'],

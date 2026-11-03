@@ -43,7 +43,8 @@ lines and the server streams them to the browser.
 | `websec.py` | Full-stack rules (public env secrets, Supabase, Firebase, CORS, missing auth, JS patterns) | `scan_web` |
 | `readiness.py` | Readiness checks, shape classifier, advisor, hotspots, starter files | `assess`, `Repo`, `check_*` |
 | `evidence.py` | Evidence Report, digest, badge, git facts | `build`, `digest_payload`, `render_html`, `git_info` |
-| `explain.py` | Prompt, JSON parsing, anchor validation, selection, cache | `validate`, `select_nodes`, `run` |
+| `explain.py` | Prompt, JSON parsing, anchor validation, scenario checks, selection, cache | `validate`, `check_scenarios`, `select_nodes`, `run` |
+| `scenarios.py` | A short story per finding (who, steps, what goes wrong, after the fix, basis) from the finding's own facts; no model | `for_finding`, `kind_of`, `attach` |
 | `providers.py` | Anthropic, OpenAI-compatible presets, fixture stub | `make_provider` |
 | `report.py` | Bundle data into `viewer/report.html` | `write_report`, `collect_sources` |
 | `server.py` | Local HTTP app, jobs, settings and keys store | `serve`, `Handler`, `Store`, `Jobs` |
@@ -57,7 +58,7 @@ lines and the server streams them to the browser.
 | `graph.json` | `schema`, `repo_root`, `meta` (languages, files, lines, `http_calls`, `bridge` stats), `nodes[]` (`id`, `kind`, `qualname`, `file`, `start_line`, `end_line`, `fingerprint`, `signature`, `entry`), `edges[]` (`src`, `dst`, `kind`, `confidence`, `lines`, `via`, `detail`), `unresolved` |
 | `security.json` | `findings[]` (`id`, `tool`, `rule`, `title`, `tool_severity`, `tool_confidence`, `file`, `line`, `category`, `node`, `reachable`, `ui_path`, `rank`, `status`, `accepted`), `tools[]`, `counts` (open only, plus `in_tests`, `accepted`) |
 | `readiness.json` | `score`, `grade`, `categories[]` → `checks[]` (`id`, `status` pass/fail/partial/skip, `points`, `earned`, `evidence`, `fix`, `how`), `shape`, `stack`, `advice`, `hotspots`, `next_steps`, `starter` |
-| `explanations.json` | `metaphor`, `explanations{node_id → record}` (`lens1`, `lens2`, `lens3.pairs[]` with `anchor`, `findings`, `validated`, `validation_errors`, `model`, `prompt_version`, `code_hash`), `stats` |
+| `explanations.json` | `metaphor`, `explanations{node_id → record}` (`lens1`, `lens2`, `lens3.pairs[]` with `anchor`, `scenario`, `findings` (each may carry `scenario`), `dropped_scenarios`, `validated`, `validation_errors`, `model`, `prompt_version`, `code_hash`), `stats` |
 | `run.json`, `baseline.json` | timings, privacy, trace exit code; first-run counts and finding ids |
 | `report.html` | Self-contained viewer with all of the above embedded (source included only at privacy `full`) |
 | `evidence.html`, `evidence.json`, `badge.svg` | Evidence Report, its data including `payload` and `digest`, README badge |

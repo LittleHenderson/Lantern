@@ -72,7 +72,11 @@
           }
         ]
       },
-      "findings": []
+      "findings": [],
+      "scenario": {
+        "who": "Maria, a tester",
+        "story": "Maria opens the profile page for user 7. Their browser asks the server for that user, and this is the code that answers. It hands the number to the login check and sends back yes or no."
+      }
     },
     "shop.auth.Session.login": {
       "lens1": {
@@ -133,7 +137,11 @@
           }
         ]
       },
-      "findings": []
+      "findings": [],
+      "scenario": {
+        "who": "Sam, a tester",
+        "story": "Sam opens a user's profile page. Behind the scenes the server looks that user up and compares the password on file with the one it was given. Sam only sees the result: allowed or not."
+      }
     },
     "shop.repo.UserRepo.get": {
       "lens1": {
@@ -198,9 +206,14 @@
           "id": "271ac69ef170",
           "lens1": "B608: user_id is interpolated into SQL text. It is reachable from GET /users/{user_id}, so a request can change the query, for example to return every row or to drop tables.",
           "lens2": "A visitor can add their own instructions to the slip, and the records room will follow them.",
-          "fix": "Use a placeholder: self.conn.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,))."
+          "fix": "Use a placeholder: self.conn.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,)).",
+          "scenario": "Maria, a tester, opens a profile page and changes the user number in the address to ' OR '1'='1. The database reads their characters as part of its question and answers with every user instead of one. With the fix, their characters are only something to search for, and they get nothing."
         }
-      ]
+      ],
+      "scenario": {
+        "who": "Maria, a tester",
+        "story": "Maria opens the profile page for user 7, and this code looks user 7 up in the database. If they change the number in the address to something odd, those characters go straight into the database question."
+      }
     },
     "shop.auth.check_password": {
       "lens1": {
@@ -256,9 +269,14 @@
           "id": "12771352490c",
           "lens1": "B324: MD5 is a fast, broken hash. Stored MD5 password hashes can be cracked quickly with commodity GPUs.",
           "lens2": "The lock on the guest book has a master key that many people already have.",
-          "fix": "Use a slow password hash such as Argon2id (argon2-cffi) or bcrypt, and compare with a constant-time check."
+          "fix": "Use a slow password hash such as Argon2id (argon2-cffi) or bcrypt, and compare with a constant-time check.",
+          "scenario": "Leo, a tester, gets hold of a copy of the user table (a backup left in the wrong place). Because the passwords are scrambled with MD5, a free tool turns most of them back into the real passwords within minutes. With a slow password hash, the same work would take years."
         }
-      ]
+      ],
+      "scenario": {
+        "who": "Leo, a tester",
+        "story": "Leo opens a profile page and the server checks a password. This code scrambles it with an old, fast method and compares the result with the stored one. Leo sees nothing unusual, which is the point: the weakness only shows if the stored values ever leak."
+      }
     },
     "shop.app.backup": {
       "lens1": {
@@ -325,15 +343,21 @@
           "id": "57fa455f7b3b",
           "lens1": "B602: subprocess with shell=True and a request-controlled string. Reachable from POST /backup, so a request can run arbitrary commands on the server.",
           "lens2": "A visitor can slip their own orders into the intercom message, and the staff will carry them out.",
-          "fix": "Pass an argument list without a shell: subprocess.run([\"tar\", \"czf\", f\"{safe_name}.tgz\", \"data/\"], check=True), after validating name against an allow-list pattern."
+          "fix": "Pass an argument list without a shell: subprocess.run([\"tar\", \"czf\", f\"{safe_name}.tgz\", \"data/\"], check=True), after validating name against an allow-list pattern.",
+          "scenario": "Priya, a tester, opens the admin page and types report; whoami as the backup name, then presses the button. The server runs the backup command and then their second command too, with the server's own permissions. With the fix, the name is passed on its own, so nothing extra runs."
         },
         {
           "id": "27105c2e3afc",
           "lens1": "LW-AUTH-MISSING (heuristic): POST /backup is called from the Admin page and changes server state, but no authentication dependency or check was found within three calls.",
           "lens2": "Anyone who finds this address can ask the storage room to pack boxes. Nobody checks that they work at the hotel.",
-          "fix": "Require a logged-in admin: add a dependency such as current_user: CurrentAdmin = Depends(get_current_admin) to the route."
+          "fix": "Require a logged-in admin: add a dependency such as current_user: CurrentAdmin = Depends(get_current_admin) to the route.",
+          "scenario": "Sam, a tester, is not signed in. They skip the pages and send a backup request straight to the server, and the server starts the backup anyway because nothing asks who they are. With the fix, the server answers not allowed."
         }
-      ]
+      ],
+      "scenario": {
+        "who": "Priya, a tester",
+        "story": "Priya opens the admin page, types a name for the backup and presses the button. The server builds a command that includes their name and runs it, then answers that the backup started."
+      }
     },
     "web/src/pages/Admin::BackupButton": {
       "lens1": {
@@ -401,7 +425,11 @@
           }
         ]
       },
-      "findings": []
+      "findings": [],
+      "scenario": {
+        "who": "Priya, a tester",
+        "story": "Priya opens the admin page, types nightly in the box and presses Back up now. This button sends their word to the server and shows that the backup has started."
+      }
     },
     "web/src/api::runBackup": {
       "lens1": {
@@ -461,7 +489,11 @@
           }
         ]
       },
-      "findings": []
+      "findings": [],
+      "scenario": {
+        "who": "Priya, a tester",
+        "story": "Priya presses Back up now on the admin page. This code carries the name they typed to the server exactly as they typed it and waits for the answer."
+      }
     }
   }
 }

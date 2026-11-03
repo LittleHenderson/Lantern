@@ -1,0 +1,83 @@
+# A pushed tag v* (v0.9.0, v0.9.0-rc1) builds the sdist and wheel, runs the test suite against the built wheel
+# in a clean environment, checks the hosted gateway is up, and publishes a GitHub Release with both files.
+# The Release body is the matching CHANGELOG.md section (tools/changelog_section.py).
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tag matches the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          case "$tag" in "$ver"|"$ver"-*|"$ver"rc*) ;; *) echo "tag $GITHUB_REF_NAME does not match version $ver"; exit 1;; esac
+      - name: The CHANGELOG has a section for this tag
+        run: python tools/changelog_section.py "$GITHUB_REF_NAME" > release-notes.md && cat release-notes.md
+      - run: pip install build && python -m build
+      - run: ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/
+            release-notes.md
+
+  test-wheel:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: built
+      - name: Tests against the built wheel in a clean venv (the source package is moved away first)
+        run: |
+          mv lantern "$RUNNER_TEMP/lantern-source-not-used"
+          python -m venv "$RUNNER_TEMP/v"
+          . "$RUNNER_TEMP/v/bin/activate"
+          whl="$(ls built/dist/*.whl)"
+          pip install "${whl}[scan,dev]"
+          python -c "import lantern, sys; print(lantern.__version__, lantern.__file__); sys.exit('site-packages' not in lantern.__file__)"
+          python -m pytest -q
+
+  gateway-up:
+    # The free allowance must answer before a build that points testers at it goes out.
+    runs-on: ubuntu-latest
+    steps:
+      - name: curl the live gateway's health check
+        run: |
+          curl -fsS --retry 3 --retry-delay 5 --max-time 20 https://lantern-gateway.fly.dev/v1/health | tee health.json
+          python3 -c "import json; d=json.load(open('health.json')); assert d.get('ok') is True and d.get('configured') is True, d"
+          { echo '### Live gateway'; echo '```'; cat health.json; echo; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: [build, test-wheel, gateway-up]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: built
+      - name: GitHub Release with the sdist and wheel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*|*rc*) pre="--prerelease";; esac
+          gh release create "$GITHUB_REF_NAME" built/dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Lantern $GITHUB_REF_NAME" --notes-file built/release-notes.md $pre

@@ -28,8 +28,10 @@ def out_dir(repo: Path, out: str | Path | None = None) -> Path:
 
 
 def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] | None = None,
-            no_scan: bool = False, log: Log = print, offline: bool | None = None) -> dict:
-    """Graph -> (trace) -> scan -> readiness -> report -> evidence. Returns a short summary."""
+            no_scan: bool = False, log: Log = print, offline: bool | None = None, sandbox: bool = False,
+            test_cwd: str = "") -> dict:
+    """Graph -> (trace) -> scan -> readiness -> report -> evidence. Returns a short summary.
+    `sandbox`: run `trace_cmd` (a test command) in `lantern.sandbox` instead of directly (the app always does)."""
     from . import remote
     if remote.is_clone(repo):   # a clone whose checkout could not be completed would report on part of a repository
         remote.check_complete(repo)
@@ -51,10 +53,19 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
     if trace_cmd:
         t = time.perf_counter()
-        m = merge_trace(g, run_trace(repo, trace_cmd))
+        extra: dict = {}
+        if sandbox:
+            from . import sandbox as sbx
+            data = sbx.run(repo, trace_cmd, log=log, cwd_rel=test_cwd)
+            extra = {k: data.get(k) for k in ("backend", "language", "traced", "timed_out", "blocked")}
+            m = merge_trace(g, data) if data.get("traced") else {"returncode": data.get("returncode"), "observed_edges": 0,
+                                                                  "recall": None, "runtime_only": 0}
+            m["stderr_tail"] = data.get("stderr_tail")
+        else:
+            m = merge_trace(g, run_trace(repo, trace_cmd))
         timings["trace"] = round(time.perf_counter() - t, 2)
         run_meta["trace"] = {"command": trace_cmd, "returncode": m["returncode"], "observed_edges": m["observed_edges"],
-                             "recall": m["recall"], "stderr_tail": (m.get("stderr_tail") or "")[-600:]}
+                             "recall": m["recall"], "stderr_tail": (m.get("stderr_tail") or "")[-600:], **extra}
         log(f"trace   {m['observed_edges']} calls seen running, recall {m['recall']}, "
             f"{m['runtime_only']} runtime-only (exit {m['returncode']})")
     sec = None
@@ -65,6 +76,10 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
         c = sec["counts"]
         log(f"scan    {c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low "
             f"({timings['scan']}s)")
+        off = [t["tool"] for t in sec.get("tools", []) if "lantern[scan]" in str(t.get("status", ""))]
+        if off:
+            log(f"off     {', '.join(off)} not installed; Lantern's own rules ran. "
+                f'For these too: pip install "lantern[scan]"')
         (out / "security.json").write_text(json.dumps(sec, indent=1), encoding="utf-8")
     g.save(out / "graph.json")
     rd = assess(g, sec, run_meta)

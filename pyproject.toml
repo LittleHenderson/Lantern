@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lantern"
-version = "0.1.0"
+version = "0.9.0"
 license = "MIT"
 description = "Map every call path in a full-stack app (Python + TypeScript/JavaScript), explain it in three lenses, and audit it."
 readme = "README.md"
@@ -19,9 +19,15 @@ dependencies = [
   "tree-sitter-java>=0.23",
 ]
 
+[project.urls]
+Homepage = "https://littlehenderson.github.io/Lantern/"
+Issues = "https://github.com/LittleHenderson/Lantern/issues"
+Source = "https://github.com/LittleHenderson/Lantern"
+
 [project.optional-dependencies]
 scan = ["bandit>=1.7", "pip-audit>=2.7"]
-dev = ["pytest>=8", "fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.29"]
+ocr = ["Pillow>=10"]   # screenshot reading; the Tesseract program itself comes from the OS (see docs/try-lantern.md)
+dev = ["pytest>=8", "Pillow>=10", "fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.29"]
 
 [project.scripts]
 lantern = "lantern.cli:main"

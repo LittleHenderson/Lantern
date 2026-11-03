@@ -33,6 +33,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__, learn, pipeline, remote, usage
+from .packs import PACK_NAME
 from .providers import DEFAULT_MODEL_NAME, DEFAULT_PROVIDER, PRESETS
 from .readiness import SHAPES
 
@@ -178,10 +179,29 @@ class Store:
         keep["share_usage"] = bool(s.get("share_usage"))
         keep["view_mode"] = "advanced" if s.get("view_mode") == "advanced" else "simple"
         keep["backdrop"] = s.get("backdrop") if s.get("backdrop") in ("off", "subtle", "bold") else "subtle"
+        pk = s.get("packs") if isinstance(s.get("packs"), dict) else {}
+        names = [n for n in pk.get("disabled") or [] if isinstance(n, str) and PACK_NAME.match(n)]
+        if names or pk.get("changed_at"):
+            keep["packs"] = {"disabled": sorted(set(names))[:100],
+                             "changed_at": pk.get("changed_at") if isinstance(pk.get("changed_at"), (int, float)) else None}
         with self.lock:
             self._write("settings.json", keep)
         if keep["share_usage"]:
             usage.install_id()
+
+    def confirmed_tests(self, pid: str) -> list[str]:
+        d = self._read("test-confirmations.json", {})
+        v = d.get(pid) if isinstance(d, dict) else None
+        return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+
+    def confirm_test(self, pid: str, command: str) -> None:
+        with self.lock:
+            d = self._read("test-confirmations.json", {})
+            d = d if isinstance(d, dict) else {}
+            have = [x for x in (d.get(pid) or []) if isinstance(x, str)]
+            if command not in have:
+                d[pid] = (have + [command])[-20:]
+                self._write("test-confirmations.json", d)
 
     def key_for(self, provider: str) -> str | None:
         env = (PRESETS.get(provider) or (None, None, "LANTERN_API_KEY"))[2]
@@ -289,7 +309,18 @@ class App:
                 "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
                 "finished_at": _str(run.get("finished_at")),
                 "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"],
-                "starter": learn.starter_of(Path(p["path"]))}
+                "starter": learn.starter_of(Path(p["path"])), "stale": self._stale(out)}
+
+    def _stale(self, out: Path) -> str | None:
+        """'packs' when analysis packs were turned on or off after this report was made (the card says
+        "Re-check to apply")."""
+        pk = self.store.settings().get("packs")
+        changed = pk.get("changed_at") if isinstance(pk, dict) else None
+        try:
+            made = (out / "report.html").stat().st_mtime
+        except OSError:
+            return None
+        return "packs" if isinstance(changed, (int, float)) and changed > made else None
 
     def clone_project(self, link: str) -> dict:
         """A repository link pasted instead of a folder: the project is listed at once (so its card shows the job
@@ -371,82 +402,135 @@ def write_starter_file(repo: Path, out: Path, name: str) -> str:
     return name
 
 
-TERMINAL_HELP = """Lantern commands only (the app runs them the same way its buttons do):
-  analyze [--offline]                 read the project again and rebuild every result
-  accept FINDING_ID --reason "..."    record an accepted risk (shown in the Evidence Report)
-  unaccept FINDING_ID                 remove an accepted risk
-  explain [NODE_ID ...]               explain the main paths (or the given functions) with the model in Settings
-  starter NAME                        write one starter file (Dockerfile, .env.example, ci, SECURITY.md, ...)
-  verify                              re-run the analysis and compare it with this project's Evidence Report
-  findings [critical|high|medium|low] list open findings with ids
-  learn                               show the guide's progress for a starter app
-  help                                this list
-Anything else (shell commands, python, rm, curl) is refused: this drawer never runs your code."""
+TERMINAL_ALLOWED = ["analyze", "trace", "explain", "report", "verify", "accept", "packs", "export", "learn"]
+TERMINAL_HELP = """Lantern commands only. The app runs each one the way its buttons do; results go to this project's .lantern/.
+  analyze [--offline] [--no-scan] [--privacy full|structure]   read the project again and rebuild every result
+  trace [--] TEST COMMAND                       run your tests in the sandbox (e.g. trace python -m pytest -q)
+  explain [--node ID ...] [--depth N] [--max-nodes N]   explain functions with the model in Settings
+  report [--privacy full|structure]             rebuild report.html from the saved results
+  verify [--report FILE]                        re-run the analysis and compare it with the Evidence Report
+  accept FINDING_ID --reason "..." [--by NAME]  record an accepted risk (or: accept FINDING_ID --remove)
+  packs                                         list the analysis packs in use
+  export [--sarif FILE]                         write findings as SARIF (default .lantern/findings.sarif)
+  learn [--check]                               show the guide's progress for a starter app
+Anything else (shell commands, python, rm, curl) is refused: this drawer never runs a shell or your code."""
 
 
-def run_terminal_command(app, p: dict, repo: Path, out: Path, line: str) -> dict:
-    """Parse one drawer line. Returns a job (for long commands) or {"output": ...} for instant ones. Every
-    branch calls the same function the matching button calls, so there is nothing here that the UI cannot do."""
-    words = shlex.split(line, posix=os.name != "nt") if line.strip() else []
-    if words and words[0] == "lantern":
-        words = words[1:]
-    if not words or words[0] in ("help", "?"):
-        return {"output": TERMINAL_HELP}
-    verb, args = words[0], words[1:]
-    privacy = app.store.settings().get("privacy", "full")
+class TerminalRefused(ValueError):
+    """A drawer command outside the allow-list or with arguments it does not take; answered with 400 + the list."""
+
+
+def _terminal_parser(verb: str):
+    import argparse
+
+    class P(argparse.ArgumentParser):
+        def error(self, message):
+            raise TerminalRefused(f"{verb}: {message}")
+
+        def exit(self, status=0, message=None):
+            raise TerminalRefused(f"{verb}: {message or 'refused'}")
+    ap = P(prog=verb, add_help=False, allow_abbrev=False)
+    ap.add_argument("--out", help=argparse.SUPPRESS)
     if verb == "analyze":
-        offline = "--offline" in args
-        job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log, offline=offline))
-        return {"job": job}
-    if verb in ("accept", "unaccept"):
-        from .security import load_accepted, reason_ok, save_accepted
-        fid = args[0] if args else ""
-        if verb == "unaccept":
-            acc = load_accepted(repo)
-            if fid not in acc:
-                raise ValueError(f"{fid or '(no id)'} is not an accepted risk")
-            acc.pop(fid)
-            save_accepted(repo, acc)
-        else:
-            reason = ""
-            if "--reason" in args:
-                i = args.index("--reason")
-                reason = " ".join(args[i + 1:]).strip()
-            if not fid or fid.startswith("--"):
-                raise ValueError('usage: accept FINDING_ID --reason "why this risk is acceptable"')
-            if not reason_ok(reason):
-                raise ValueError("write a real reason (a sentence of at least 10 letters); it appears in the Evidence Report")
-            sec = _load(out / "security.json") or {"findings": []}
-            f = next((x for x in sec["findings"] if x["id"] == fid), None)
-            if not f:
-                raise ValueError(f"unknown finding {fid}; `findings` lists the open ids")
-            acc = load_accepted(repo)
-            acc[fid] = {"id": fid, "rule": f["rule"], "file": f["file"], "line": f["line"], "title": f["title"],
-                        "reason": reason, "by": "me", "date": time.strftime("%Y-%m-%d")}
-            save_accepted(repo, acc)
-        job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log))
-        return {"job": job, "output": f"{'accepted' if verb == 'accept' else 'removed'} {fid}; re-analyzing so the score and the Evidence Report follow"}
+        ap.add_argument("--offline", action="store_true")
+        ap.add_argument("--no-scan", action="store_true")
+        ap.add_argument("--privacy", choices=["full", "structure"])
+    elif verb == "explain":
+        ap.add_argument("--node", action="append")
+        ap.add_argument("--depth", type=int, default=3)
+        ap.add_argument("--max-nodes", type=int, default=40)
+        ap.add_argument("--fresh", action="store_true")
+    elif verb == "report":
+        ap.add_argument("--privacy", choices=["full", "structure"])
+    elif verb == "verify":
+        ap.add_argument("--report")
+    elif verb == "accept":
+        ap.add_argument("finding")
+        ap.add_argument("--reason")
+        ap.add_argument("--by")
+        ap.add_argument("--remove", action="store_true")
+    elif verb == "export":
+        ap.add_argument("--sarif", default=".lantern/findings.sarif")
+    elif verb == "learn":
+        ap.add_argument("--check", action="store_true")
+    return ap
+
+
+def _inside(repo: Path, value: str, what: str) -> Path:
+    """A path argument: relative to the project, and it must stay inside it (no `..`, no absolute escape, no symlink out)."""
+    root = repo.resolve()
+    target = (root / value).resolve()
+    if target != root and root not in target.parents:
+        raise TerminalRefused(f"{what} must be inside the project: {value}")
+    return target
+
+
+def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
+    """One drawer command, as an argv list (never a shell string). Allow-list only (`TERMINAL_ALLOWED`); `--out` is
+    always the project's `.lantern/`; path arguments must resolve inside the project. Returns a job: its log is
+    what the drawer prints. Every branch calls the function the matching button calls."""
+    if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
+        raise TerminalRefused("argv must be a list of strings")
+    if len(argv) > 64 or any(len(a) > 2000 or "\x00" in a for a in argv):
+        raise TerminalRefused("argv is too long")
+    words = argv[1:] if argv[:1] == ["lantern"] else list(argv)
+    if not words:
+        raise TerminalRefused("type a Lantern command")
+    verb, args = words[0], words[1:]
+    if verb not in TERMINAL_ALLOWED:
+        raise TerminalRefused(f"'{verb}' is not an allowed command")
+    privacy_default = app.store.settings().get("privacy", "full")
+    if verb == "trace":
+        from . import sandbox
+        cmd = args[1:] if args[:1] == ["--"] else args
+        try:
+            language = sandbox.check_command(cmd)
+        except ValueError as e:
+            raise TerminalRefused(f"trace: {e}") from None
+        app.store.confirm_test(p["id"], " ".join(cmd))   # typed in full by the user: that is the confirmation
+        det = sandbox.detect(repo)
+        test_cwd = det.get("cwd", "") if det.get("language") == language else ""
+        return {"job": app.jobs.start(p["id"], "trace", lambda log: pipeline.analyze(
+            repo, out, privacy_default, trace_cmd=cmd, log=log, sandbox=True, test_cwd=test_cwd))}
+    a = _terminal_parser(verb).parse_args(args)
+    if a.out is not None and _inside(repo, a.out, "--out") != out.resolve():
+        raise TerminalRefused("--out is always this project's .lantern/ folder")
+    if verb == "analyze":
+        privacy = a.privacy or privacy_default
+        return {"job": app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(
+            repo, out, privacy, log=log, offline=a.offline or None, no_scan=a.no_scan))}
     if verb == "explain":
-        provider = app.make_provider()
         if not (out / "graph.json").exists():
-            raise ValueError("analyze the project first")
-        nodes = [a for a in args if not a.startswith("--")] or None
+            raise TerminalRefused("explain: analyze the project first")
+        if not (1 <= a.depth <= 10 and 1 <= a.max_nodes <= 400):
+            raise TerminalRefused("explain: --depth 1-10, --max-nodes 1-400")
+        provider = app.make_provider()
 
         def work(log):
-            ids = nodes or pipeline.plan_explain(out, 3, 40)["nodes"]
+            ids = a.node or pipeline.plan_explain(out, a.depth, a.max_nodes)["nodes"]
             log(f"explaining {len(ids)} function(s) with {provider.label}")
-            res = pipeline.explain(out, provider, ids, progress=lambda i, n, nid, rec: log(f"[{i}/{n}] {nid.split(':', 1)[-1]}  {'ok' if rec.get('validated') else 'rejected'}"))
+            res = pipeline.explain(out, provider, ids, fresh=a.fresh and bool(a.node), progress=lambda i, n, nid, rec: log(
+                f"[{i}/{n}] {nid.split(':', 1)[-1]}  {'ok' if rec.get('validated') else 'rejected'}"))
             return {"stats": res["stats"]}
         return {"job": app.jobs.start(p["id"], "explain", work)}
-    if verb == "starter":
-        if not args:
-            raise ValueError("usage: starter NAME   (names: see Readiness → Starter files)")
-        return {"output": f"wrote {write_starter_file(repo, out, args[0])}"}
+    if verb == "report":
+        if not (out / "graph.json").exists():
+            raise TerminalRefused("report: analyze the project first")
+
+        def work(log):
+            if a.privacy:
+                run = _load(out / "run.json") or {}
+                run["privacy"] = a.privacy
+                (out / "run.json").write_text(json.dumps(run, indent=1), encoding="utf-8")
+            path = pipeline.rebuild_outputs(out)
+            log(f"report  {path}")
+            return {"report": str(path)}
+        return {"job": app.jobs.start(p["id"], "report", work)}
     if verb == "verify":
         from . import evidence
-        ev = out / "evidence.json"
+        ev = _inside(repo, a.report, "--report") if a.report else out / "evidence.json"
         if not ev.exists():
-            raise ValueError("this project has no Evidence Report yet; run analyze first")
+            raise TerminalRefused("verify: this project has no Evidence Report yet; run analyze first")
         want, old = evidence.read_digest(ev)
 
         def work(log):
@@ -456,54 +540,102 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, line: str) -> dict
                 log(str(r.get("note") or r.get("refused") or ""))
             return r
         return {"job": app.jobs.start(p["id"], "verify", work)}
-    if verb == "findings":
-        sec = _load(out / "security.json") or {"findings": []}
-        want = args[0] if args else None
-        rows = [f for f in sec["findings"] if f.get("status") == "open" and not f.get("in_tests") and (not want or f.get("rank") == want)]
-        lines = [f"{f['id']}  {f['rank']:<8} {f['file']}:{f.get('line') or ''}  {f['title']}" for f in rows] or ["no open findings"]
-        return {"output": "\n".join(lines)}
-    if verb == "learn":
-        from . import learn
-        sid = learn.starter_of(repo)
+    if verb == "accept":
+        from .security import load_accepted, reason_ok, save_accepted
+        acc = load_accepted(repo)
+        if a.remove:
+            if a.finding not in acc:
+                raise TerminalRefused(f"accept: {a.finding} is not an accepted risk")
+            acc.pop(a.finding)
+        else:
+            reason = (a.reason or "").strip()
+            if not reason_ok(reason):
+                raise TerminalRefused("accept: write a real reason (a sentence of at least 10 letters); it appears in the Evidence Report")
+            sec = _load(out / "security.json") or {"findings": []}
+            f = next((x for x in sec["findings"] if x["id"] == a.finding), None)
+            if not f:
+                raise TerminalRefused(f"accept: unknown finding {a.finding}")
+            acc[a.finding] = {"id": a.finding, "rule": f["rule"], "file": f["file"], "line": f["line"], "title": f["title"],
+                              "reason": reason, "by": (a.by or "me")[:80], "date": time.strftime("%Y-%m-%d")}
+        save_accepted(repo, acc)
+        note = f"{'removed' if a.remove else 'accepted'} {a.finding}; analyzing again so the score and the Evidence Report follow"
+
+        def work(log):
+            log(note)
+            return pipeline.analyze(repo, out, privacy_default, log=log)
+        return {"job": app.jobs.start(p["id"], "analyze", work)}
+    if verb == "packs":
+        from . import packs
+
+        def work(log):
+            loaded, problems = packs.load_all(repo, keep_inactive=True)
+            for pk in loaded:
+                req = pk.get("requires") or {}
+                why = "" if pk["active"] else "  not used here: needs " + ", ".join(req.get("files", []) + req.get("text", []))
+                log(f"{pk['pack']:<20} v{str(pk.get('version', '-')):<6} {len(pk.get('rules', [])):>2} rule(s), "
+                    f"{len(pk.get('entries', []))} entry pattern(s)  [{pk['source']}]{why}")
+            for where, msg in problems:
+                log(f"skipped {where}: {msg}")
+            return {"packs": len(loaded), "problems": len(problems)}
+        return {"job": app.jobs.start(p["id"], "packs", work)}
+    if verb == "export":
+        from .exporters import sarif
+        dest = _inside(repo, a.sarif, "--sarif")
+        sec = _load(out / "security.json")
+        if sec is None:
+            raise TerminalRefused("export: analyze the project first")
+
+        def work(log):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json.dumps(sarif(sec, repo), indent=1), encoding="utf-8")
+            log(f"wrote   {dest.relative_to(repo.resolve()).as_posix()}  ({len(sec.get('findings', []))} findings)")
+            return {"wrote": str(dest)}
+        return {"job": app.jobs.start(p["id"], "export", work)}
+    # learn
+    from . import learn as learn_mod
+    sid = learn_mod.starter_of(repo)
+
+    def work(log):
         if not sid:
-            return {"output": "this project is not a starter app; Learn → Create one"}
-        pr = learn.progress(sid, repo, out)
-        return {"output": f"{sid}: {pr.get('done', 0)} of {pr.get('total', 0)} steps done"}
-    raise ValueError(f"'{verb}' is not a Lantern command; type help. This drawer never runs shell commands or your code.")
+            log("this project is not a starter app; Learn → Create one")
+            return {}
+        pr = learn_mod.progress(sid, repo, out)
+        log(f"{sid}: {pr.get('done', 0)} of {pr.get('total', 0)} steps done")
+        for st in pr.get("steps", []) if a.check else []:
+            log(f"  {'done' if st.get('done') else 'todo'}  {st.get('title', st.get('id', ''))}")
+        return pr
+    return {"job": app.jobs.start(p["id"], "learn", work)}
 
 
-def _python_test_command(words: list[str]) -> bool:
-    """Only a Python test runner, so 'Watch my tests run' never becomes 'run anything'."""
-    head = Path(words[0]).name.lower()
-    if head in ("pytest", "py.test"):
-        return True
-    if head.startswith("python"):
-        rest = words[1:]
-        return bool(rest) and (rest[0] == "-m" and len(rest) > 1 and rest[1] in ("pytest", "unittest")
-                               or rest[0].endswith(".py") and "test" in rest[0].lower())
-    return False
+def packs_list(app, pid: str = "", all_projects: bool = False) -> list[dict]:
+    """GET /api/packs: built-in and user packs, plus the project's own when `pid` names one (every project's with
+    `all_projects`). Shape per pack: name, version, source (builtin|project|user), rules, entry_patterns, path,
+    enabled, active (its `requires` match the project), about."""
+    from . import packs
+    projects = app.store.projects() if all_projects else [x for x in [app.store.project(pid)] if x] if pid else []
+    seen, rows = set(), []
+    for repo in [Path(x["path"]) for x in projects if Path(x["path"]).is_dir()] or [None]:
+        loaded, _ = packs.load_all(repo, keep_inactive=True)
+        for pk in loaded:
+            if pk["pack"] in seen:
+                continue
+            seen.add(pk["pack"])
+            where = {"builtin": "lantern/packs/", "project": packs.PROJECT_DIR + "/", "user": "~/.lantern/packs/"}[pk["source"]]
+            rows.append({"name": pk["pack"], "version": str(pk.get("version", "-")), "source": pk["source"],
+                         "rules": len(pk.get("rules", [])), "entry_patterns": len(pk.get("entries", [])),
+                         "path": where + pk["file"], "enabled": pk.get("enabled", True),
+                         "active": bool(pk.get("active", True)) if repo is not None else None,
+                         "about": str(pk.get("about") or "")[:300]})
+    return rows
 
 
 def detect_test_command(repo: Path) -> dict:
-    """The command the sheet shows first: read from the project, editable before it runs."""
-    py = any((repo / f).exists() for f in ("pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "requirements.txt"))
-    has_tests = any(d.is_dir() for d in (repo / "tests", repo / "test")) or any(repo.glob("test_*.py")) or any(repo.glob("*/tests"))
-    pkg = repo / "package.json"
-    js_test = None
-    if pkg.exists():
-        try:
-            js_test = (json.loads(pkg.read_text(encoding="utf-8")).get("scripts") or {}).get("test")
-        except (OSError, ValueError):
-            js_test = None
-    if py or has_tests:
-        return {"command": "python -m pytest -q", "how": "pyproject.toml / tests folder", "supported": True,
-                "note": "Python tests are recorded function by function. JavaScript tests are not traced yet."}
-    if js_test:
-        return {"command": f"npm test", "how": "package.json scripts.test", "supported": False,
-                "note": "This project's tests are JavaScript. Lantern cannot record JavaScript calls yet, so watching them "
-                        "would change nothing. Python tests are supported today."}
-    return {"command": "python -m pytest -q", "how": "default", "supported": False,
-            "note": "No test setup was found. Add a tests folder with pytest tests, then try again."}
+    """The command the sheet shows first (see `sandbox.detect`), plus which sandbox will run it."""
+    from . import sandbox
+    d = sandbox.detect(repo)
+    d["sandbox"] = sandbox.describe(repo, d["language"])
+    d["leaves"] = "Nothing leaves this computer: the tests run with the network off."
+    return d
 
 
 def _csp(nonce: str | None) -> str:
@@ -669,7 +801,8 @@ class Handler(BaseHTTPRequestHandler):
                 usage.record("report_open")
                 s = self.app.store.settings()
                 live = {"api": f"/api/projects/{p['id']}", "token": self.app.token, "model": s.get("model") and
-                        f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS}
+                        f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS,
+                        "view_mode": "advanced" if s.get("view_mode") == "advanced" else "simple"}
                 nonce = secrets.token_urlsafe(16)
                 return self._send(200, render(read_bundle(f), live, nonce), "text/html; charset=utf-8",
                                   {"Content-Security-Policy": _csp(nonce)})
@@ -705,6 +838,9 @@ class Handler(BaseHTTPRequestHandler):
             from .providers import gateway_url
             return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
                                "features": sorted(usage.FEATURES), "text": usage.describe()})
+        if path == "/api/packs":
+            return self._json({"packs": packs_list(app, (q.get("project") or [""])[0],
+                                                   all_projects=(q.get("all") or [""])[0] == "1")})
         if path == "/api/connections":
             import shutil
             from .mcp_server import connections
@@ -763,7 +899,9 @@ class Handler(BaseHTTPRequestHandler):
             p = app.store.project(m.group(1))
             if not p:
                 return self._err(404, "unknown project")
-            return self._json(detect_test_command(Path(p["path"])))
+            d = detect_test_command(Path(p["path"]))
+            d["confirmed"] = d["command"] in app.store.confirmed_tests(p["id"])
+            return self._json(d)
         m = re.fullmatch(r"/api/projects/(\w+)/plan", path)
         if m:
             p = app.store.project(m.group(1)) or {}
@@ -837,6 +975,21 @@ class Handler(BaseHTTPRequestHandler):
             if provider not in ("github", "google"):
                 raise ValueError("provider is github or google")
             return self._json(sign_in_start(provider))
+        if path == "/api/packs":
+            # Settings → Analysis packs: turn one pack on or off for every project. Reports made before the change
+            # are marked stale ("Re-check to apply"); nothing is re-analyzed by itself.
+            name, enabled = str(b.get("name") or ""), b.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be true or false")
+            if name not in {x["name"] for x in packs_list(app, "", all_projects=True)}:
+                raise ValueError(f"no analysis pack called {name!r}")
+            s = app.store.settings()
+            pk = s.get("packs") if isinstance(s.get("packs"), dict) else {}
+            off = set(pk.get("disabled") or [])
+            off = off - {name} if enabled else off | {name}
+            s["packs"] = {"disabled": sorted(off), "changed_at": time.time()}
+            app.store.save_settings(s)
+            return self._json({"ok": True, "packs": packs_list(app, str(b.get("project") or ""))})
         if path == "/api/settings":
             s = app.store.settings()
             for k in ("provider", "model", "base_url", "privacy"):
@@ -876,27 +1029,38 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(job, 202)
         if action == "cmd":
             # The terminal drawer: Lantern commands only, run through the same code paths as the buttons.
-            return self._json(run_terminal_command(app, p, repo, out, str(b.get("line") or "")), 202)
+            try:
+                return self._json(run_terminal_command(app, p, repo, out, b.get("argv")), 202)
+            except TerminalRefused as e:
+                return self._json({"error": str(e), "allowed": TERMINAL_ALLOWED, "help": TERMINAL_HELP}, 400)
         if action == "trace":
-            # "Watch my tests run": Lantern runs the test command you confirmed, in the project folder, with the
-            # call recorder attached, then analyzes again so the edges that ran become "seen running".
+            # "Watch my tests run": the confirmed test command runs in the sandbox (lantern/sandbox.py: Docker, or a
+            # restricted process on a read-only temp copy), then the project is analyzed again so the calls the
+            # tests made become "seen running". The user confirms once per project per command.
             usage.record("trace")
+            from . import sandbox
             cmd = str(b.get("command") or "").strip()
-            words = shlex.split(cmd, posix=os.name != "nt") if cmd else []
-            if not words or not _python_test_command(words):
-                raise ValueError("Lantern can watch Python tests only for now: the command must start with python, "
-                                 "python -m pytest, or pytest (JavaScript test tracing is not built yet)")
+            words = sandbox.split(cmd)
+            language = sandbox.check_command(words)   # ValueError -> 400 with the accepted runners
+            canon = " ".join(words)
+            if not b.get("confirm") and canon not in app.store.confirmed_tests(p["id"]):
+                return self._err(409, "confirm this command first: the sheet shows what will run and where")
+            app.store.confirm_test(p["id"], canon)
+            det = sandbox.detect(repo)
+            test_cwd = det.get("cwd", "") if det.get("language") == language else ""
             privacy = app.store.settings().get("privacy", "full")
             before = _load(out / "readiness.json") or {}
             before_score = _int(before.get("score"))
 
             def work(log):
-                log(f"running: {' '.join(words)}   (in {repo}, as you; Lantern records which functions run)")
-                res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log)
+                res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log, sandbox=True, test_cwd=test_cwd)
                 run = _load(out / "run.json") or {}
                 tr = run.get("trace") or {}
                 after = _load(out / "readiness.json") or {}
                 return {"returncode": tr.get("returncode"), "observed": tr.get("observed_edges"), "recall": tr.get("recall"),
+                        "backend": tr.get("backend"), "language": tr.get("language"), "traced": tr.get("traced"),
+                        "timed_out": tr.get("timed_out"), "blocked": tr.get("blocked") or [],
+                        "note": None if tr.get("traced") else sandbox.JS_NOTE,
                         "score_before": before_score, "score_after": _int(after.get("score")), "summary": res}
             return self._json(app.jobs.start(p["id"], "trace", work), 202)
         if action == "explain":
@@ -997,9 +1161,15 @@ def _unspecified(host: str) -> bool:
 
 
 def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True,
-          analyze_first: bool = True) -> int:
+          analyze_first: bool = True, check: bool = False) -> int:
+    """`check`: start, print the link, fetch the home page once through it, stop. Adds no project, runs no
+    analysis, opens no browser and sends nothing; exits 0 only if the page came back (used by install tests)."""
+    missing = [p for p in paths if not Path(p).is_dir()]
+    if check and missing:
+        print(f"not a folder: {', '.join(missing)}")
+        return 2
     store = Store(home_dir())
-    added = [store.add_project(Path(p)) for p in paths if Path(p).is_dir()]
+    added = [] if check else [store.add_project(Path(p)) for p in paths if Path(p).is_dir()]
     httpd = None
     for candidate in range(port, port + 20):
         try:
@@ -1024,6 +1194,22 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
             app.jobs.start(p["id"], "analyze",
                            lambda log, repo=repo: pipeline.analyze(repo, pipeline.out_dir(repo), privacy, log=log))
     url = f"http://{'127.0.0.1' if _unspecified(host) else host}:{port}/?token={token}"
+    if check:
+        print(f"Lantern {__version__} is running. Open:\n\n  {url}\n", flush=True)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        import urllib.request   # the token link sets the cookie, then redirects to the app
+        local = f"http://127.0.0.1:{port}/?token={token}" if _unspecified(host) else url
+        try:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor()).open(local, timeout=20) as r:
+                ok = r.status == 200 and b"Lantern" in r.read()
+        except OSError as e:
+            print(f"check failed: {e}")
+            ok = False
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        print("check   the app answered; stopped" if ok else "check   the app did not answer")
+        return 0 if ok else 1
     print(f"Lantern {__version__} is running. Open:\n\n  {url}\n\nPress Ctrl-C to stop.", flush=True)
     usage.record("serve")
     _usage_sender()

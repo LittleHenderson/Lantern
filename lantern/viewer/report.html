@@ -18,7 +18,7 @@
   --good:#0CA30C; --warning:#FAB219; --serious:#EC835A; --critical:#D03B3B;
   --good-soft:rgba(12,163,12,.11); --warning-soft:rgba(250,178,25,.17); --serious-soft:rgba(236,131,90,.16); --critical-soft:rgba(208,59,59,.11);
   --good-ink:#0A7A0A; --warn-ink:#8A5A00; --crit-ink:#B02A2A;
-  --l1:#2F5BEA; --l1s:rgba(47,91,234,.08); --l2:#B8650A; --l2s:rgba(232,140,30,.10); --l3:#0B8466; --l3s:rgba(11,132,102,.09);
+  --l1:#2F5BEA; --l1s:rgba(47,91,234,.08); --l2:#B8650A; --l2s:rgba(232,140,30,.10); --l3:#0B8466; --l3s:rgba(11,132,102,.09); --l4:#7A4FD6; --l4s:rgba(122,79,214,.08);
   --fe:#2F5BEA; --be:#0B8466;
   --code-bg:#151517; --code-ink:#E7E7E4; --code-dim:#6C6C72; --code-hl:rgba(255,181,71,.20); --code-flag:rgba(208,59,59,.32);
   --shadow-1:0 1px 2px rgba(16,16,20,.05);
@@ -38,7 +38,7 @@
   --primary:#F3F3F1; --on-primary:#0E0E10;
   --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
   --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
-  --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3s:rgba(79,209,165,.11);
+  --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3s:rgba(79,209,165,.11); --l4:#B79CFF; --l4s:rgba(183,156,255,.12);
   --fe:#8EA8FF; --be:#4FD1A5;
   --code-bg:#0A0A0B;
   --shadow-1:0 1px 2px rgba(0,0,0,.4);
@@ -55,7 +55,7 @@
     --primary:#F3F3F1; --on-primary:#0E0E10;
     --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
     --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
-    --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3s:rgba(79,209,165,.11);
+    --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3s:rgba(79,209,165,.11); --l4:#B79CFF; --l4s:rgba(183,156,255,.12);
     --fe:#8EA8FF; --be:#4FD1A5;
     --code-bg:#0A0A0B;
     --shadow-1:0 1px 2px rgba(0,0,0,.4);
@@ -377,14 +377,16 @@ input.search::placeholder{color:var(--faint)}
 .detail h3{margin:0;font:650 15px/1.4 var(--mono);color:var(--ink);overflow-wrap:anywhere}
 .detail .meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font:12px var(--mono);color:var(--muted);margin:8px 0 12px}
 .sig{font:12px/1.5 var(--mono);background:var(--surface-2);border:1px solid var(--line);padding:9px 11px;border-radius:10px;overflow-wrap:anywhere;color:var(--ink)}
-.lenses{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;margin:18px 0 10px;padding:3px;border-radius:11px;background:var(--hover)}
+.lenses{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;margin:18px 0 10px;padding:3px;border-radius:11px;background:var(--hover)}
 .lenses button{display:flex;align-items:center;justify-content:center;gap:7px;height:32px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--muted);transition:color var(--t) var(--ease)}
 .lenses button i{width:7px;height:7px;border-radius:99px}
-.lenses button[data-l="1"] i{background:var(--l1)} .lenses button[data-l="2"] i{background:var(--l2)} .lenses button[data-l="3"] i{background:var(--l3)}
+.lenses button[data-l="1"] i{background:var(--l1)} .lenses button[data-l="2"] i{background:var(--l2)} .lenses button[data-l="3"] i{background:var(--l3)} .lenses button[data-l="4"] i{background:var(--l4)}
 .lenses button:hover{color:var(--ink)}
 .lenses button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
 .lens{border-radius:12px;padding:14px 16px;font-size:13.5px;line-height:1.6;color:var(--ink);border-left:3px solid}
-.lens.l1{background:var(--l1s);border-color:var(--l1)} .lens.l2{background:var(--l2s);border-color:var(--l2)} .lens.l3{background:var(--l3s);border-color:var(--l3)}
+.lens.l1{background:var(--l1s);border-color:var(--l1)} .lens.l2{background:var(--l2s);border-color:var(--l2)} .lens.l3{background:var(--l3s);border-color:var(--l3)} .lens.l4{background:var(--l4s);border-color:var(--l4)}
+.scen ol{margin:6px 0 0;padding-left:20px} .scen li{margin:3px 0} .scen .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:10px} .scenbox{margin-top:10px} .scenbox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .scenbox .lens{margin-top:8px}
+.scen .basis{font-size:12px;color:var(--muted);margin-top:10px}
 .lens dl{margin:6px 0 0} .lens dt{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-top:10px} .lens dd{margin:2px 0 0;color:var(--ink-2)}
 .lens .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:12px}
 mark.p{background:transparent;border-bottom:2px solid var(--l3);color:var(--ink);cursor:pointer;padding:0 1px}
@@ -587,8 +589,11 @@ const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv):/.test(id || '') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
 const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
-try { S.simple = localStorage.getItem('lantern.simple') !== '0'; S.view = ['lanes', 'tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : (S.simple ? 'lanes' : 'tree'); S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
-try { S.lens = +localStorage.getItem('lantern.lens') || 1; } catch (e) {}
+try { S.simple = localStorage.getItem('lantern.simple') !== '0'; } catch (e) {}
+// Opened from `lantern serve`: the saved setting (Settings → view_mode) wins over this browser's memory.
+try { const lv = window.LANTERN_LIVE; if (lv && (lv.view_mode === 'simple' || lv.view_mode === 'advanced')) S.simple = lv.view_mode === 'simple'; } catch (e) {}
+try { S.view = ['lanes', 'tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : (S.simple ? 'lanes' : 'tree'); S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
+try { S.lens = [1, 2, 3, 4].includes(+localStorage.getItem('lantern.lens')) ? +localStorage.getItem('lantern.lens') : 1; } catch (e) {}
 // Icons and the status tone of a 0-100 value: fixed markup and fixed words, never data.
 const ICONS = {
   search: '<circle cx="9" cy="9" r="5.5"/><path d="m13 13 3.5 3.5"/>', chev: '<path d="m7.5 4.5 5.5 5.5-5.5 5.5"/>',
@@ -976,6 +981,22 @@ function situation(n) {
   const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
   return `${where}, called by ${callers.length ? callers.slice(0, 2).map(x => `<b>${esc(short(N[x].qualname))}</b>`).join(' and ') + (callers.length > 2 ? ` and ${callers.length - 2} more` : '') : 'nothing in the repo'}.`;
 }
+// ---------- Scenarios: one person meeting a finding, or using a function. Facts from the map, words escaped. ----------
+// A model-written story (validated: no code names, only pages the map shows) wins; otherwise the scenario
+// security.json carries for every finding (scenarios.py), so a story is there with no model at all.
+function findingScenario(f, ex) {
+  const sc = f && f.scenario;
+  if (ex && typeof ex.scenario === 'string' && ex.scenario.trim()) return `<div class="lens l4 scen">${esc(ex.scenario)}<div class="basis">${icon('sparkle')}Written by ${esc((EXP[f.node] || {}).model || 'the model')} from Lantern’s facts. An illustration: nothing was run.</div></div>`;
+  if (!sc || typeof sc !== 'object') return '';
+  const steps = Array.isArray(sc.steps) ? sc.steps : [];
+  return `<div class="lens l4 scen">${steps.length ? `<ol>${steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : ''}${sc.harm ? `<span class="k">What goes wrong</span>${esc(sc.harm)}` : ''}${sc.after_fix ? `<span class="k">After the fix</span>${esc(sc.after_fix)}` : ''}${sc.basis ? `<div class="basis">${esc(sc.basis)}</div>` : ''}</div>`;
+}
+function scenarioLens(r, n) {
+  if (r && r.scenario && r.scenario.story) return `<div class="lens l4 scen">${r.scenario.who ? `<b>${esc(r.scenario.who)}</b><br>` : ''}${esc(r.scenario.story)}</div><div class="byline">${icon('sparkle')}Written by ${esc(r.model)} · an illustration, nothing was run</div>`;
+  const f = n ? (FIND_BY_NODE[n.id] || []).find(x => x.scenario) : null;
+  if (f) return `<div class="note" style="margin-bottom:6px">${r ? 'The model did not write a story for this function, so here' : 'Here'} is how someone meets its ${esc(f.rank)} finding:</div>` + findingScenario(f, null);
+  return `<div class="lens l4 scen">${n ? situation(n) : ''}<div class="basis">A sketch from the map only. ${LIVE && LIVE.model ? 'Explain this function to get a full story of someone using it.' : 'Explain this function (choose a model in Settings) to get a full story of someone using it.'}</div></div>`;
+}
 function renderExplanations() {
   const el = document.getElementById('center');
   const fns = G.nodes.filter(n => n.kind === 'callable');
@@ -996,7 +1017,7 @@ function renderExplanations() {
         <div class="note" style="margin-top:14px">Explanations are written by <b>${esc(LIVE && LIVE.model ? LIVE.model + (LIVE.local ? ' on this computer' : '') : (r ? r.model : 'the model you choose in Settings'))}</b>. ${LIVE && LIVE.local ? 'Nothing left your machine, and a' : 'A'} model only explains: it never creates, closes or accepts a finding.</div></div>`
     : `<div class="xside"><input class="search" id="xq" placeholder="Filter" value="${esc(S.xq)}" spellcheck="false" autocomplete="off">
         <div class="filters" style="margin:8px 0 10px">${[['all', `All ${fns.length}`], ['explained', `Explained ${explained.length}`], ['findings', `Findings ${withF.length}`]].map(([k, l]) => `<button class="fchip ${S.xf === k ? 'on' : ''}" data-xf="${k}">${l}</button>`).join('')}</div>${list.map(row).join('')}</div>`;
-  const lensTabs = (order) => `<div class="lenses">${order.map(l => `<button data-l="${l}" class="${S.lens === l ? 'on' : ''}"><i></i>${{1: 'Technical', 2: 'Everyday', 3: S.simple ? 'Where it sits' : 'Mapped'}[l]}</button>`).join('')}</div>`;
+  const lensTabs = (order) => `<div class="lenses">${order.map(l => `<button data-l="${l}" class="${S.lens === l ? 'on' : ''}"><i></i>${{1: 'Technical', 2: 'Everyday', 3: S.simple ? 'Where it sits' : 'Mapped', 4: 'Scenario'}[l]}</button>`).join('')}</div>`;
   const chips = r ? anchorChips(r) : [];
   const path = (() => { const f = n && SEC.findings.find(x => x.node === n.id && (x.ui_path || x.reachable)); return f ? chainHtml('', f.ui_path || f.reachable.path) : ''; })();
   const fs = n ? FIND_BY_NODE[n.id] || [] : [];
@@ -1004,12 +1025,13 @@ function renderExplanations() {
   const main = !n ? `<div class="empty">${ART}<b>Pick a function</b>The list shows what has been explained and what has not.</div>` : S.simple
     ? `<div class="xmain"><div class="xhead"><h1>${esc(short(n.qualname))}</h1><span class="note">${esc(n.file)} · lines ${esc(n.start_line)}–${esc(n.end_line)}</span><span class="lang">${lang(n.id)}</span></div>
         <div class="xsit">${situation(n)}</div>
-        ${r ? lensTabs([2, 1, 3]) + `<div class="xbody">${S.lens === 3 ? (path ? `<div class="k2" style="margin-top:0">Where it sits</div>${path}` : '') + lensBody(r) : lensBody(r)}</div>
+        ${r ? lensTabs([2, 1, 3, 4]) + `<div class="xbody">${S.lens === 3 ? (path ? `<div class="k2" style="margin-top:0">Where it sits</div>${path}` : '') + lensBody(r, n) : lensBody(r, n)}</div>
         ${chips.length ? `<div class="xanchors">Every phrase is anchored to your code: ${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}` : `<div class="unexplained" style="margin-top:14px">Not explained yet.${LIVE && LIVE.model ? '' : ' Choose a model in Settings, then press Explain.'}</div>`}
         <div class="acts" style="margin-top:16px">${fs.length ? `<button class="btn primary" data-atlas="${esc(n.id)}" data-f="1">Show me the problem</button>` : ''}<button class="btn" data-atlas="${esc(n.id)}">Open in Paths</button>${explainBtn}<span class="note" style="margin-left:auto">Facts from Lantern’s tools · words from your model · checked against each other</span></div><div id="explainmsg" class="note"></div></div>`
     : `<div class="xmain pro"><div class="xhead"><h2>${esc(short(n.qualname))}</h2><span class="note">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}</span><span class="lang">${lang(n.id)}</span></div>
         ${r ? `<div class="three">${[1, 2, 3].map(l => { const keep = S.lens; S.lens = l; const h = `<div class="col"><div class="k2" style="margin-top:0">${{1: 'Technical', 2: 'Everyday', 3: 'Mapped'}[l]}</div>${l === 3 && path ? path : ''}${lensBody(r).replace(/<div class="byline">.*?<\/div>/s, '')}</div>`; S.lens = keep; return h; }).join('')}</div>
-        <div class="acts">${explainBtn}<button class="btn" id="xcopy">Copy all three</button><span class="note">Rejected drafts are regenerated with the failing phrase quoted back to the model.</span></div><div id="explainmsg" class="note"></div>`
+        <div class="k2">Scenario</div>${(() => { const keep = S.lens; S.lens = 4; const h = lensBody(r, n).replace(/<div class="byline">.*?<\/div>/s, ''); S.lens = keep; return h; })()}
+        <div class="acts">${explainBtn}<button class="btn" id="xcopy">Copy all four</button><span class="note">Rejected drafts are regenerated with the failing phrase quoted back to the model.</span></div><div id="explainmsg" class="note"></div>`
         : `<div class="unexplained" style="margin-top:14px">Not explained yet.</div><div class="acts">${explainBtn}</div><div id="explainmsg" class="note"></div>`}
         ${srcBlock(n)}</div>`;
   const prov = !S.simple && r ? `<aside class="xprov"><div class="k2" style="margin-top:0">Provenance</div><dl>
@@ -1030,7 +1052,7 @@ function renderExplanations() {
   el.querySelectorAll('[data-atlas]').forEach(b => b.onclick = () => { const id = b.dataset.atlas; S.tab = 'map'; for (const x of document.querySelectorAll('#tabs button')) x.classList.toggle('on', x.dataset.t === 'map'); const f = SEC.findings.find(q => q.node === id && (q.ui_path || q.reachable)); const ids = f ? (f.ui_path || f.reachable.path) : null; if (ids) { S.entry = ids[0]; S.open = new Set(ids); } else if (N[id].entry) { S.entry = id; S.open = new Set([id]); } S.open.add(id); select(id, true); render(); });
   el.querySelectorAll('.path [data-id]').forEach(b => b.onclick = () => { S.xsel = b.dataset.id; renderExplanations(); });
   const xb = el.querySelector('#xexplain'); if (xb) xb.onclick = () => explainLive(S.xsel, true);
-  const xc = el.querySelector('#xcopy'); if (xc) xc.onclick = () => { const t = [`Technical: ${(r.lens1 || {}).summary || ''}`, `Everyday: ${(r.lens2 || {}).text || ''}`, `Mapped: ${(r.lens3 || {}).text || ''}`].join('\n\n'); navigator.clipboard?.writeText(t); xc.textContent = 'Copied'; };
+  const xc = el.querySelector('#xcopy'); if (xc) xc.onclick = () => { const t = [`Technical: ${(r.lens1 || {}).summary || ''}`, `Everyday: ${(r.lens2 || {}).text || ''}`, `Mapped: ${(r.lens3 || {}).text || ''}`, `Scenario: ${(r.scenario || {}).story || ''}`].join('\n\n'); navigator.clipboard?.writeText(t); xc.textContent = 'Copied'; };
 }
 
 
@@ -1076,6 +1098,7 @@ function renderFix() {
       <h1>${esc(plainTitle(f))}</h1>
       <p class="lede">${ex && ex.lens2 && ex.lens2 !== plainTitle(f) ? esc(ex.lens2) + ' ' : ''}${f.ui_path ? `A visitor reaches it from the <b>${esc(pageWord)}</b>${f.input ? ', and what they type reaches this line' : ''}.` : f.reachable ? `Reachable from ${esc(f.reachable.kind)} <b>${esc(entry)}</b>.` : 'Not reached from any page or route today; it becomes serious the day something calls it.'} <span class="note">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span></p>
       ${hotLane(f) ? laneWalk(f) : ''}
+      ${findingScenario(f, ex) ? `<div class="card" style="margin-top:16px"><div class="k2" style="margin-top:0">Scenario · see it happen</div>${findingScenario(f, ex)}</div>` : ''}
       <div class="fixtwo"><div class="card"><div class="k2" style="margin-top:0">Why it’s ${esc(f.rank)}</div><div class="why">${why}</div></div>
         <div class="card"><div class="k2" style="margin-top:0">Where</div><div>${esc(f.file)}${f.line ? `, line ${esc(f.line)}` : ''}${n ? ` · in <code>${esc(short(n.qualname))}</code>` : ''}</div>${srcLine ? `<pre class="oneline">${esc(srcLine)}</pre>` : ''}</div></div>
       <div class="card paste"><div class="k2" style="margin-top:0">Paste this into your AI assistant</div><p>${esc(prompt)}</p></div>
@@ -1228,6 +1251,7 @@ function findingCard(f) {
     ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
     <h4>${esc(f.title)}</h4><p class="fdesc">${where}.${reach}${input}</p>
     ${pathsHtml(f)}
+    ${findingScenario(f, ex) ? `<details class="scenbox"><summary>See it happen: a scenario</summary>${findingScenario(f, ex)}</details>` : ''}
     ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
     <div class="srcslot" id="src-${esc(f.id)}"></div>
     <div class="acts">${f.status !== 'accepted' ? `<button class="btn primary" data-fix="${esc(f.id)}">Fix this</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">Open in Atlas</button>` : ''}${f.node && SRC[f.node] ? `<button class="btn" data-lines="${esc(f.id)}">Show the lines</button>` : ''}${f.status !== 'accepted' ? `<button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn quietlink" data-accept="${esc(f.id)}">Accept risk with a reason…</button>` : ''}</div><div class="sendslot"></div></div>`;
@@ -1256,7 +1280,7 @@ const PAGE_HELP = {
   ready: {t: 'What does the score mean?', p: ['The readiness score is a 0–100 number for “could a senior engineer ship this today?”, made of ten areas such as security findings, secrets, tests, dependencies and deployment files, each with a weight.',
     'Every point has a written reason. A hard failure is a critical finding that a visitor can reach and that uses their input; those cap the grade until fixed.',
     'The “moves” list is sorted by how many points each fix is worth, so doing them in order raises the grade fastest. Checks that do not apply to your kind of app are skipped, not counted against you.']},
-  xp: {t: 'What are explanations?', p: ['An explanation is a model’s description of one function, written three ways: Technical (for an engineer), Everyday (for anyone, with an example and an analogy) and Mapped (each everyday phrase tied to the exact code it means).',
+  xp: {t: 'What are explanations?', p: ['An explanation is a model’s description of one function, written three ways: Technical (for an engineer), Everyday (for anyone, with an example and an analogy) and Mapped (each everyday phrase tied to the exact code it means). A fourth part, Scenario, tells it as a short story of one person using your app.',
     'Lantern checks every phrase against your real code before showing it. If a phrase does not match anything, it is removed and you are told. The model only explains; it can never create, close or accept a finding.',
     '“Explain” sends that one function’s code to the model you chose in Settings (or none leaves this computer with a local model). Pick a function on the left to read or request its explanation.']},
   about: {t: 'What is this page?', p: ['What was analyzed, which tools ran with which versions, and what Lantern could not follow. The numbers here are the honest limits of the report.']},
@@ -1276,7 +1300,18 @@ function wireHelp(el) {
   const a = el.querySelector('#pageask'); if (a) a.onclick = () => { try { window.parent.askAbout({tab: S.tab, page: TAB_WORDS[S.simple ? 'simple' : 'advanced'][S.tab], node: S.tab === 'xp' ? S.xsel : S.sel, finding: S.fsel}); } catch (e) {} };
 }
 function modeSeg() { return `<div class="seg mode" title="Pick how much detail you want to see"><button data-vm="simple" class="${S.simple ? 'on' : ''}">Simple</button><button data-vm="advanced" class="${S.simple ? '' : 'on'}">Advanced</button></div>${helpBtns()}`; }
-function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { S.simple = b.dataset.vm === 'simple'; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); }); wireHelp(el); }
+// One place that changes Simple/Advanced from inside the report. In the app it is saved on the server (POST
+// /api/settings) and the app's own toggle is told, so the next visit and every other screen agree.
+function setMode(simple, save = true) {
+  S.simple = !!simple;
+  try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {}
+  if (save && LIVE && LIVE.token) {
+    const m = S.simple ? 'simple' : 'advanced'; LIVE.view_mode = m;
+    fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lantern-Token': LIVE.token}, body: JSON.stringify({view_mode: m}), credentials: 'same-origin'})
+      .then(r => r.ok ? r.json() : null).then(d => { try { if (d && window.parent !== window && window.parent.lanternViewMode) window.parent.lanternViewMode(d.settings); } catch (e) {} }).catch(() => {});
+  }
+}
+function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { setMode(b.dataset.vm === 'simple'); render(); }); wireHelp(el); }
 function renderFindings() {
   const el = document.getElementById('center');
   const all = SEC.findings;
@@ -1330,6 +1365,7 @@ function findingPanel(f) {
     ${f.status === 'accepted' ? `<div class="k2">Accepted</div><p>By ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</p>` : ''}
     <div class="k2">What ${esc(f.tool)} says</div><p>${esc(f.title)}${f.tool_confidence ? ` Confidence ${esc(f.tool_confidence)}` : ''}${f.tool_severity ? `, severity ${esc(f.tool_severity)}` : ''}.${raised ? ' Lantern ranks it critical because the line uses request data and a page reaches it.' : f.tool_confidence === 'LOW' ? ' A pattern-based check: review before acting.' : ''}</p>
     ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}
+    ${findingScenario(f, ex) ? `<div class="k2">Scenario · see it happen</div>${findingScenario(f, ex)}` : ''}
     <div class="acts">${f.status !== 'accepted' ? `<button class="btn primary" data-fix="${esc(f.id)}">Fix this</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">Open in Atlas</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn" data-accept="${esc(f.id)}">Accept risk…</button>` : ''}</div></div>`;
 }
 // ---------- "Send to…": hand a finding to an AI assistant as a reference, not a pasted blob ----------
@@ -1474,7 +1510,7 @@ function renderReady() {
   el.querySelectorAll('[data-go]').forEach(b => b.onclick = () => {
     const g = b.dataset.go;
     if (g === 'findings') { S.tab = 'findings'; for (const x of document.querySelectorAll('#tabs button')) x.classList.toggle('on', x.dataset.t === 'findings'); render(); }
-    else if (g === 'advanced' || g === 'starters') { S.simple = false; try { localStorage.setItem('lantern.simple', '0'); } catch (e) {} render(); if (g === 'starters') { const st = document.getElementById('starters'); if (st) st.scrollIntoView({behavior: 'smooth'}); } }
+    else if (g === 'advanced' || g === 'starters') { setMode(false); render(); if (g === 'starters') { const st = document.getElementById('starters'); if (st) st.scrollIntoView({behavior: 'smooth'}); } }
   });
   el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
   el.querySelectorAll('[data-starter]').forEach(b => b.onclick = () => starterLive(b.dataset.starter, b));
@@ -1543,7 +1579,8 @@ function select(id, open = true) {
   if (S.tab === 'map' && S.entry) { /* tree re-render handled by caller */ }
 }
 
-function lensBody(r) {
+function lensBody(r, n) {
+  if (S.lens === 4) return scenarioLens(r, n || (r && N[r.node_id]));
   if (!r && LIVE) return `<div class="unexplained">Not explained yet.${LIVE.model ? `<br><button class="btn primary" id="explainbtn">${icon('sparkle')}Explain with ${esc(LIVE.model)}</button>${LIVE.local ? '' : `<div class="note" style="margin-top:6px">This sends the function's code to ${esc(LIVE.model.split('/')[0])}.</div>`}` : '<div class="note" style="margin-top:4px">Choose a model in Lantern\'s Settings to explain functions.</div>'}<div id="explainmsg" class="note" style="margin-top:6px"></div></div>`;
   if (!r) return `<div class="unexplained">Not explained yet. Run <code>lantern explain</code> to add the three lenses for this function.</div>`;
   if (r.error) return `<div class="warn">${icon('warn')}<div>Explanation failed: ${esc(r.error)}</div></div>`;
@@ -1631,9 +1668,9 @@ function renderRight() {
     ${laneOf(n.id) ? laneStrip(laneOf(n.id), (() => { const f = fs.find(x => x.ui_path || x.reachable); const lit = f ? fLanes(f) : laneSet([S.entry, n.id]); lit.add(laneOf(n.id)); for (const e of OUT[n.id] || []) if (laneOf(e.dst) === 'data') lit.add('data'); return lit; })()) : ''}
     ${lw ? `<div class="langline"><span class="lang">${lw[0]}</span>Written in ${lw[1]}</div>` : ''}
     <div class="sig">${esc(n.signature || n.kind)}</div>
-    <div class="lenses"><button data-l="1" class="${S.lens === 1 ? 'on' : ''}"><i></i>Technical</button><button data-l="2" class="${S.lens === 2 ? 'on' : ''}"><i></i>Everyday</button><button data-l="3" class="${S.lens === 3 ? 'on' : ''}"><i></i>Mapped</button></div>
-    ${lensBody(r)}
-    ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard ${cls(f.rank, RANKS)}" style="margin-top:12px"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.rule)} · line ${esc(f.line ?? '–')}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
+    <div class="lenses"><button data-l="1" class="${S.lens === 1 ? 'on' : ''}"><i></i>Technical</button><button data-l="2" class="${S.lens === 2 ? 'on' : ''}"><i></i>Everyday</button><button data-l="3" class="${S.lens === 3 ? 'on' : ''}"><i></i>Mapped</button><button data-l="4" class="${S.lens === 4 ? 'on' : ''}"><i></i>Scenario</button></div>
+    ${lensBody(r, n)}
+    ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard ${cls(f.rank, RANKS)}" style="margin-top:12px"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.rule)} · line ${esc(f.line ?? '–')}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : S.lens === 4 && ex.scenario ? ex.scenario : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
     ${srcBlock(n)}
     <div class="links"><div><h5>Called by · ${callers.length}</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
       <div><h5>Calls · ${callees.length}</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div>
@@ -1665,7 +1702,7 @@ const RFAQ = [
   ['score|readiness|grade', 'Readiness is a 0–100 score over ten weighted areas (security findings, secrets, input handling, dependencies, tests, observability, packaging, CI, resilience, documentation). Every point has a written reason; checks that do not apply are skipped. Hard failures (critical, reachable, uses input) cap the grade.'],
   ['heuristic', 'Heuristic checks look for known patterns (missing login check, CORS, rate limit) and can misfire. They say so, never count as hard failures, and ask you to look before acting.'],
   ['accept', 'Accept risk with a reason records that you decided a finding is fine, with the reason written down. It is committed in lantern-accepted.json and shown in the Evidence Report; it is never silent.'],
-  ['explain|explanation|lens|anchor', 'An explanation is a model’s description of one function, written three ways (Technical, Everyday, Mapped). Lantern checks every phrase against the real code; unmatched phrases are removed. The model only explains, never creates or closes a finding.'],
+  ['explain|explanation|lens|anchor', 'An explanation is a model’s description of one function, written three ways (Technical, Everyday, Mapped), plus a Scenario: a short story of someone using it. Every finding also has a scenario Lantern builds from its own facts, with no model. Lantern checks every phrase against the real code; unmatched phrases are removed. The model only explains, never creates or closes a finding.'],
   ['fix', 'Open a finding and press Fix this: you get the exact file and line, why it matters, and a prompt to paste into your AI assistant. In the Lantern app, “I fixed it, check again” re-reads the project and says whether it is gone.'],
   ['install|download|get lantern|start', 'Install with pip (Python 3.11+): pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern", then run lantern serve and add your app’s folder or GitHub link.'],
   ['evidence|report|proof|verify', 'The Evidence Report is a commit-pinned summary a reviewer can print: what was checked, found, fixed and accepted, with provenance, limits and a digest they can re-verify with lantern verify.'],
@@ -1716,7 +1753,7 @@ async function rAskSend(text) {
   el.addEventListener('keydown', e => { if (e.target.id === 'raskin' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('rasksend').click(); } });
 })();
 
-window.setSimple = v => { S.simple = !!v; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); };
+window.setSimple = v => { setMode(v, false); if (LIVE) LIVE.view_mode = S.simple ? 'simple' : 'advanced'; render(); };   // the app's toggle, already saved
 function render() {
   renderRAsk();
   renderLeft();

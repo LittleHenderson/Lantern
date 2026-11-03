@@ -52,6 +52,22 @@ def user_dir() -> Path:
     return Path(os.environ.get("LANTERN_HOME") or Path.home() / ".lantern") / "packs"
 
 
+def disabled() -> set[str]:
+    """Packs the user turned off: `LANTERN_HOME/settings.json` → `{"packs": {"disabled": [names]}}` (the app's
+    Settings → Analysis packs writes it). Built-in, project and user packs can all be turned off."""
+    f = Path(os.environ.get("LANTERN_HOME") or Path.home() / ".lantern") / "settings.json"
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    names = ((d.get("packs") or {}) if isinstance(d, dict) and isinstance(d.get("packs"), dict) else {}).get("disabled")
+    return {n for n in names if isinstance(n, str) and PACK_NAME.match(n)} if isinstance(names, list) else set()
+
+
+def split_enabled(packs: list[dict]) -> tuple[list[dict], list[dict]]:
+    return [p for p in packs if p.get("enabled", True)], [p for p in packs if not p.get("enabled", True)]
+
+
 # ---------------------------------------------------------------------------- validation
 
 def validate(pack: dict) -> list[str]:
@@ -148,10 +164,12 @@ def _read_pack(p: Path, source: str) -> tuple[dict | None, str | None]:
 
 
 def load_all(repo: Path | None = None, builtin: bool = True,
-             keep_inactive: bool = False) -> tuple[list[dict], list[tuple[str, str]]]:
+             keep_inactive: bool = False, keep_disabled: bool = False) -> tuple[list[dict], list[tuple[str, str]]]:
     """All usable packs, built-in first, and the files that were skipped with why. Packs with `requires` that
     the repo does not meet are left out quietly (they are for another framework), or kept with
-    `active: False` when `keep_inactive` is set (for `lantern packs`)."""
+    `active: False` when `keep_inactive` is set (for `lantern packs`). Packs turned off in settings (`disabled()`)
+    are left out, or kept with `enabled: False` when `keep_disabled` (or `keep_inactive`) is set."""
+    off = disabled()
     places = []
     if builtin and BUILTIN_DIR.is_dir():
         places.append((BUILTIN_DIR, "builtin"))
@@ -172,7 +190,10 @@ def load_all(repo: Path | None = None, builtin: bool = True,
                 problems.append((f"{source} pack {p.name}", f"a pack called {pk['pack']} is already loaded"))
                 continue
             pk["active"] = repo is None or _applies(pk, repo)
+            pk["enabled"] = pk["pack"] not in off
             if not pk["active"] and not keep_inactive:
+                continue
+            if not pk["enabled"] and not (keep_disabled or keep_inactive):
                 continue
             names.add(pk["pack"])
             packs.append(pk)

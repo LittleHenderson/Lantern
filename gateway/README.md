@@ -49,6 +49,7 @@ The user runs `lantern login --token lt_...`. Next step for a public launch: iss
 | `DEEPSEEK_API_KEY`, `LANTERN_MODEL_ID`, `UPSTREAM_URL` | –, deepseek-flash, https://api.deepseek.com | DeepSeek key, model, host |
 | `LANTERN_USD_PER_M_INPUT` / `_OUTPUT` | 0.30 / 1.20 | deepseek-flash peak rates |
 | `LANTERN_DB` | lantern_gateway.db | SQLite file: token hashes and counters only |
+| `LANTERN_RETENTION_DAYS` | 90 | Token hashes unused for this many days, and per-day counters older than this, are deleted daily; `0` keeps everything |
 
 An explanation on Haiku 5.5 costs about $0.0007 (roughly 1,000 input and 1,000 output tokens), so a full
 300-explanation allowance is about $0.20 and the default $10/day cap covers roughly 14,000 explanations a day.
@@ -84,3 +85,9 @@ modified client. `lantern usage --show` prints exactly what the next ping contai
 Token hashes, request and token counts, daily spend, and the usage counts above (install id, version, OS,
 feature counts per day). Never request or response bodies; nothing about anyone's code. Upstream error bodies
 are never passed back to clients.
+
+Kept for 90 days (`LANTERN_RETENTION_DAYS`): a token hash and its account mapping are deleted 90 days after the
+token's last request or sign-in (a hash replaced by a re-sign-in, 90 days after that sign-in), and per-day rows
+(`daily`, `spend`, `models`, `usage`) and installs not seen for 90 days are deleted too. `Store.prune` runs at
+start-up and on the first request of each UTC day. An account forgotten this way starts a fresh allowance on its
+next sign-in.

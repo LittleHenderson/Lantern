@@ -121,6 +121,7 @@ def cmd_packs(a) -> int:
     for pk in loaded:
         req = pk.get("requires") or {}
         why = "" if pk["active"] else "  not used here: needs " + ", ".join(req.get("files", []) + req.get("text", []))
+        why += "" if pk.get("enabled", True) else "  off (turned off in Settings)"
         print(f"{pk['pack']:<20} v{str(pk.get('version', '-')):<6} {len(pk.get('rules', [])):>2} rule(s), "
               f"{len(pk.get('entries', []))} entry pattern(s)  [{pk['source']}]{why}")
     for where, msg in problems:
@@ -477,6 +478,8 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--port", type=int, default=8765)
     sp.add_argument("--host", default="127.0.0.1", help="default 127.0.0.1 (this computer only)")
     sp.add_argument("--no-open", action="store_true", help="don't open a browser")
+    sp.add_argument("--check", action="store_true",
+                    help="start, print the link, load the app once, then stop (exit 0 if it answered)")
 
     a = p.parse_args(argv)
     # A repository link instead of a folder: clone it (shallow) under ~/.lantern/repos and go on from there.
@@ -542,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_learn(a)
     if a.cmd == "serve":
         from .server import serve
-        return serve(a.paths, host=a.host, port=a.port, open_browser=not a.no_open)
+        return serve(a.paths, host=a.host, port=a.port, open_browser=not a.no_open and not a.check, check=a.check)
     return cmd_report(a)
 
 

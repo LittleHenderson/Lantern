@@ -97,6 +97,48 @@ fly secrets set LANTERN_AUTH_SECRET="$(python -c 'import secrets; print(secrets.
 A provider with no id/secret is simply not offered: `GET /v1/auth/providers` lists what is on. The client secrets are
 used only for the server-side code exchange and never reach a browser or the CLI.
 
+## Free allowance limits as configured
+
+Read from the repository on 2026-11-03. The only change since: retention set to 90 days (Wakil's decision, 2026-11-03). A Fly secret with the same name would override a value
+here; `fly secrets list` shows names only. **Bold** marks a value that is unset or has no limit.
+
+| Limit | Value | Where |
+|---|---|---|
+| Per-user lifetime requests | 300 (`LANTERN_FREE_REQUESTS`) | `gateway/fly.toml:15`, default `gateway/lantern_gateway/app.py:81` |
+| Per-user lifetime tokens | 1,500,000 (`LANTERN_FREE_TOKENS`, **not set in fly.toml**, so the code default applies) | `gateway/lantern_gateway/app.py:82` |
+| Per-user daily requests | 120 per UTC day (`LANTERN_DAILY_REQUESTS`) | `gateway/fly.toml:13`, default `app.py:83` |
+| Global daily dollar cap | $10 per UTC day, then HTTP 503 until 00:00 UTC (`LANTERN_GLOBAL_DAILY_USD`) | `gateway/fly.toml:16`, default `app.py:85`, check `app.py:601` |
+| Output tokens per request | 3,000 max (`LANTERN_MAX_TOKENS`, **not set in fly.toml**) | `app.py:86` |
+| Request body | 250,000 bytes max (`LANTERN_MAX_BODY`, **not set in fly.toml**) | `app.py:87` |
+| Model order | Anthropic `claude-haiku-5-5` first, DeepSeek `deepseek-flash` when Anthropic fails; `LANTERN_PRIMARY=deepseek` swaps them (**not set**, so Anthropic first) | `app.py:58`, `:61`, `:67`, `Settings.order()` `:112` |
+| Token hash retention | 90 days (`LANTERN_RETENTION_DAYS`, **not set in fly.toml**, so the code default applies). The SHA-256 of a token in `users` is deleted 90 days after its last request or sign-in, together with the account mapping in `accounts` that points at it; a hash disabled by a re-sign-in is deleted 90 days after that re-sign-in | default `app.py:90`, `Store.prune` `:248`, `users` `:141` |
+| Per-day counters | 90 days: rows in `daily`, `spend`, `models` and `usage` dated more than 90 days ago, and `installs` not seen for 90 days, are deleted. Pruning runs at start-up and on the first request of each UTC day. `LANTERN_RETENTION_DAYS=0` keeps everything | `Store.prune` `:248`, `daily` `:144` |
+| Unclaimed sign-in tokens | the plain token waits in `pending` for one claim, deleted after 10 minutes | `app.py:204` |
+
+`GET /v1/health` is public and returns `{ok, version, model, configured, primary, fallback}`: no counters, users or
+spend. CI (`gateway` job in `ci.yml`) and the release workflow (`gateway-up`) curl it and print it to the job summary.
+
+What the 90 days mean for a tester: a GitHub or Google account that makes no request and does not sign in for 90
+days is forgotten. Its old token stops working, and the next sign-in starts a fresh allowance (300 requests). An
+account in use keeps its counters, and signing in again within 90 days still carries them over. Retention applies
+to the running gateway only after `fly deploy`; the first prune runs when the new version starts, and
+`/v1/health` then reports `"version": "0.2.0"`.
+
+## Releases (GitHub now, PyPI later)
+
+A pushed tag `v*` runs `.github/workflows/release.yml`: it builds the sdist and wheel, runs the tests against the
+built wheel in a clean venv, checks `https://lantern-gateway.fly.dev/v1/health`, and creates a GitHub Release with
+both files and the matching `CHANGELOG.md` section. Testers install with
+`pip install "git+https://github.com/LittleHenderson/Lantern@v0.9.0"`.
+
+TODO (not in wave 1): publish to PyPI so the command becomes `pip install lantern`.
+1. Create a PyPI account (pypi.org → Register) with two-factor sign-in, and check the name `lantern` is free
+   (if not, pick one such as `lantern-code` and change `[project] name`).
+2. PyPI → Your account → Publishing → **Add a new pending publisher**: owner `LittleHenderson`, repository `Lantern`,
+   workflow `release.yml`, environment `pypi` (a *trusted publisher*: no token is stored anywhere).
+3. In `release.yml`, add a `pypi` job after `test-wheel` with `environment: pypi`, `permissions: id-token: write`,
+   that downloads the `dist` artifact and runs `pypa/gh-action-pypi-publish@release/v1` with `packages-dir: built/dist`.
+
 ## Landing page on Cloudflare Pages
 
 You need: a Cloudflare account (free) and the landing page files in the repository (the design package's
