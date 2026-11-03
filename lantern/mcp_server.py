@@ -181,6 +181,13 @@ def _finding_view(f: dict, g: Graph | None, exp: dict | None) -> dict:
     if ex:
         view["plain_words"] = ex.get("lens2")
         view["fix"] = ex.get("fix")
+    # A short story of someone meeting the finding: the model's when it wrote one, else Lantern's own (scenarios.py)
+    sc = f.get("scenario") if isinstance(f.get("scenario"), dict) else None
+    if ex and isinstance(ex.get("scenario"), str) and ex["scenario"].strip():
+        view["scenario"] = {"story": ex["scenario"], "written_by": rec.get("model")}
+    elif sc:
+        view["scenario"] = {"steps": sc.get("steps"), "what_goes_wrong": sc.get("harm"),
+                            "after_the_fix": sc.get("after_fix"), "basis": sc.get("basis")}
     if f.get("status") == "accepted":
         view["accepted"] = f.get("accepted")
     return view
@@ -332,6 +339,9 @@ def tool_explain(P: Projects, args: dict) -> dict:
             f"  side effects: {l1.get('side_effects')}\n  errors: {l1.get('errors')}\n"
             f"Plain words: {l2.get('text')}\n  example: {l2.get('example')}\n  analogy: {l2.get('analogy')}\n"
             f"Mapped: {l3.get('text')}\n{pairs}")
+    sc = rec.get("scenario") if isinstance(rec.get("scenario"), dict) else {}
+    if sc.get("story"):
+        text += f"\nScenario: {sc['story']}"
     return {"text": text, "data": {"id": nid, "name": n.qualname, "file": n.file, "lines": [n.start_line, n.end_line],
                                    "explanation": rec, "source": src}}
 
@@ -492,7 +502,7 @@ TOOLS = [
                                        "target": {"type": "string", "description": "Function name, qualified name, node id, or file:line."}},
       "required": ["target"], "additionalProperties": False}),
     ("lantern_explain", tool_explain,
-     "The stored three-lens explanation of a function (technical; plain words with an example and analogy; plain "
+     "The stored three-lens explanation of a function, plus its scenario (technical; plain words with an example and analogy; plain "
      "phrases mapped 1:1 to code terms) plus its source. Says so when none exists yet; this tool never calls a model.",
      {"type": "object", "properties": {"project": JSON_SCHEMA_PROJECT,
                                        "target": {"type": "string", "description": "Function name, qualified name, node id, or file:line."}},

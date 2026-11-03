@@ -60,7 +60,8 @@ script in the app's origin can act as the user. That makes XSS in the viewers (T
 
 | Attack | Mitigation |
 |---|---|
-| Return HTML/JS inside explanation fields | All lens fields rendered through `esc()`; line anchors escaped; non-list fields tolerated (`viewer/report.html` `lensBody`) |
+| Return HTML/JS inside explanation fields | All lens fields rendered through `esc()`; line anchors escaped; non-list fields tolerated (`viewer/report.html` `lensBody`, `scenarioLens`, `findingScenario`) |
+| Use a scenario to invent a page, a route or an attack the code does not have | A model scenario with a code name or a page/route the prompt did not show is removed, never shown (`explain.check_scenarios`); a scenario cannot create, close or re-rank a finding, and Lantern's own scenario is built only from the finding's facts (`scenarios.py`). Residual: a story's wording inside those limits can still overstate the harm; every scenario is labelled an illustration |
 | Return explanations that "dismiss" a finding | Models have no write path to findings (`explain.run` writes only explanations) |
 | Very large responses | `max_tokens` is requested; response size is not hard-capped (**open**, low) |
 | Steal the key | The key is sent only to the configured endpoint, in a header; a user who points `base_url` at a hostile server gives it the key (expected) |

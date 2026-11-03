@@ -16,7 +16,7 @@ bash tools/audit.sh --browser    # adds the Chromium viewer and app checks
 | Determinism | `lantern verify` on a temp git repo against its own report | MATCH, then DIFFERENT after a code change |
 | CLI surface | `lantern --help`, `starter`, `accept`, `evidence` | exit codes as documented |
 | Offline model end to end | `tools/fake_model.py` + `lantern explain --model openai-compatible/demo` | explanations validated for the demo units |
-| Browser (optional) | `node tools/viewer_smoke.js` | "no JS errors" at desktop and phone sizes; also on a report whose every field carries an HTML payload (`tools/poison_report.py`): nothing lands as markup, the title never changes |
+| Browser (optional) | `node tools/viewer_smoke.js` | "no JS errors" at desktop and phone sizes; also on a report whose every field carries an HTML payload (`tools/poison_report.py`): nothing lands as markup, the title never changes; and on one where only the scenarios carry it (`--only scenario,dropped_scenarios`), so the finding cards, Fix page and Scenario lens that show them are drawn and checked |
 | Live app (with `--browser`) | `node tools/viewer_smoke.js --app URL OUT --image shot.png --expect-text 7351` against `lantern serve tests/fixtures/shop` | "no JS errors" and each step answers: "Watch my tests run" is confirmed and runs in the sandbox (toast says tests ran), the Terminal drawer runs `analyze --offline` (prints `ready`) and refuses `rm -rf /`, a generated screenshot dropped into Ask Lantern is read on this computer (the text when Tesseract is installed; CI installs it), Settings → Analysis packs turns Django off (the project card goes "Re-check to apply") and back on |
 
 CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every push (`.github/workflows/ci.yml`).
@@ -42,6 +42,7 @@ with the source folder moved away, the live gateway's `/v1/health`, then a GitHu
 | `tests/test_security.py` | Scanner orchestration, pinning, reachability, ranking, `.env` scanning, symlink containment |
 | `tests/test_trace.py` | Runtime tracing and merge into the graph |
 | `tests/test_explain.py` | Anchor validator: invented symbols, out-of-range lines, unknown terms, code identifiers in Lens 2, required finding explanations |
+| `tests/test_scenarios.py` | Every finding gets a scenario from its own facts (page, click, parameter, route, unreached, test code, heuristic), kind by rule then CWE then category, generic story for unknown rules; model scenarios with code names or pages the map does not show are removed and counted, never fail the lenses; the connector carries scenarios |
 | `tests/test_providers.py` | Provider presets (including DeepSeek), key requirements, URL scheme checks |
 | `tests/test_readiness.py` | Weights, failing and fixed projects, skip logic for libraries, fixtures ignored, accept + `--fail-on`, starter files never overwrite |
 | `tests/test_evidence.py` | Commit pinning, verify match/mismatch, fixed-vs-baseline, narrative escaping, no-git message, remote credential stripping |
@@ -65,7 +66,9 @@ with the source folder moved away, the live gateway's `/v1/health`, then a GitHu
    `python tools/fake_model.py 8799`). The screen says the model is local. Pick `anthropic` and confirm the warning
    that code will be sent to Anthropic.
 6. Atlas → click `BackupButton` → "Explain with openai-compatible/demo". The three lenses appear. Lens 3 phrases
-   highlight their technical twins.
+   highlight their technical twins. The fourth tab, Scenario, tells the story of someone pressing that button.
+   What to fix → Fix this on any finding: a "Scenario · see it happen" card walks one tester through it; on findings the
+   demo model did not explain it is Lantern's own numbered story with "What goes wrong" and "After the fix".
 7. Explanations tab → "Explain N functions"; the log shows ok and "rejected by the anchor check" lines (the fake
    model only knows some functions; rejections are expected and prove the validator runs).
 8. Evidence Report: commit, scorecard, open/accepted findings, provenance listing the demo model, Limits, digest.

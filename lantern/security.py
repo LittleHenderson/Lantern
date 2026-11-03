@@ -450,8 +450,11 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
         f["status"] = "accepted" if acc else "open"
         if acc:
             f["accepted"] = {k: acc.get(k) for k in ("reason", "by", "date")}
+    # Scenarios (scenarios.py): a short story of one person meeting each finding, built from the facts above only.
+    from .scenarios import attach as attach_scenarios
+    attach_scenarios(findings, g)
     findings.sort(key=lambda f: (f["in_tests"], RANK_ORDER[f["rank"]], f["file"] or "", f["line"] or 0))
-    live = [f for f in findings if not f["in_tests"] and f["status"] == "open"]
+    live =[f for f in findings if not f["in_tests"] and f["status"] == "open"]
     counts = {k: sum(1 for f in live if f["rank"] == k) for k in RANK_ORDER}
     counts["in_tests"] = sum(1 for f in findings if f["in_tests"])
     counts["accepted"] = sum(1 for f in findings if f["status"] == "accepted")

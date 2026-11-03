@@ -30,7 +30,7 @@ Atlas map (routes and clicks → functions → database, confidence per link: se
 possible), Findings (ranked critical/high/medium/low by whether a route reaches them and whether outside input is
 used; "Send to…" hands one to an AI assistant), Readiness score (0–100, grade A–F, ten categories, starter files
 Lantern can write), Protections to add, Evidence Report (commit-pinned, with a digest and a badge), Explain (three
-lenses: technical, everyday, mapped; every phrase anchored to real code), Learn (starter apps with planted problems),
+lenses: technical, everyday, mapped; every phrase anchored to real code; plus a scenario, a short story of someone using it, and a scenario for every finding), Learn (starter apps with planted problems),
 Settings (model provider; free allowance via Sign in with GitHub/Google; privacy: full or structure-only reports;
 Connections: which AI assistants called Lantern through the connector `lantern mcp`). Languages: Python,
 TypeScript/JavaScript, Go, Rust, Java. AI apps: paid calls marked on the map, wallet-drain check, model output
@@ -80,6 +80,12 @@ def facts(project_dir: Path, focus: dict | None = None, limit: int = 40) -> str:
         lines.append(f"{len(exps)} functions have explanations; ask about one by name to get its plain-words lens.")
     if focus and focus.get("finding"):
         lines.append(f"The person is looking at finding [{focus['finding']}].")
+        sel = next((f for f in sec.get("findings") or [] if isinstance(f, dict) and f.get("id") == focus["finding"]), None)
+        sc = (sel or {}).get("scenario")
+        if isinstance(sc, dict) and sc.get("steps"):   # Lantern's own story of it (scenarios.py), for "show me"
+            lines.append("Scenario for it (an illustration built from the facts above, nothing was run): "
+                         + " ".join(str(x) for x in sc["steps"][:5])[:500] + " What goes wrong: "
+                         + str(sc.get("harm") or "")[:300])
     text = "\n".join(lines)
     return text[:14000]
 

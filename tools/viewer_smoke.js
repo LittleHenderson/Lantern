@@ -148,7 +148,7 @@ async function appSmoke(url, out, image, expectText) {
       const list = await p.$$('.node');
       await list[Math.min(picked, list.length - 1)].click();
       await p.waitForTimeout(150);
-      for (const l of ['1', '2', '3']) {
+      for (const l of ['1', '2', '3', '4']) {
         const btn = await p.$(`.lenses button[data-l="${l}"]`);
         if (btn) { await btn.click(); await p.waitForTimeout(60); }
         if (l === '3') { const pair = await p.$('.pair'); if (pair) { await pair.click(); await p.waitForTimeout(60); } }
@@ -164,6 +164,15 @@ async function appSmoke(url, out, image, expectText) {
     await p.click('#tabs button[data-t="findings"]'); await p.waitForTimeout(150);
     await pwned('findings');
     await p.screenshot({ path: `${out}-${name}-findings.png` });
+    // scenarios: open the first finding's story, then its Fix page (which shows the story as a card)
+    const scen = await p.$('details.scenbox summary');
+    if (scen) { await scen.click(); await p.waitForTimeout(60); await pwned('scenario'); }
+    const fixb = await p.$('[data-fix]');
+    if (fixb) {
+      await fixb.click(); await p.waitForTimeout(150); await pwned('fix');
+      await p.screenshot({ path: `${out}-${name}-fix.png`, fullPage: true });
+      await p.click('#tabs button[data-t="findings"]'); await p.waitForTimeout(100);
+    }
     if (await p.$('#tabs button[data-t="ready"]')) {
       await p.click('#tabs button[data-t="ready"]'); await p.waitForTimeout(150);
       await pwned('readiness');
