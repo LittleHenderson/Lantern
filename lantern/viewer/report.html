@@ -240,6 +240,15 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 .move>div{flex:1;min-width:0}
 .gain{flex:none;min-width:44px;text-align:center;font:700 15px var(--font);color:var(--good-ink);background:var(--good-soft);padding:6px 8px;border-radius:9px} .gain.sm{font-size:12px;padding:1px 6px;min-width:0}
 .more{font-size:13px;color:var(--ink-2);padding:6px 4px}
+/* design 7a: the ring carries the grade letter; the small moves sit in one row; the right column is the page's edge */
+.gauge.lettered .v b{font:650 40px/1 var(--display);letter-spacing:-.02em}
+.readysimple .gain{background:none;padding:0;min-width:36px;text-align:left;font-size:15px}
+.readysimple .more{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:baseline;padding:10px 2px}
+.readysimple .more .mi{display:flex;gap:8px;align-items:baseline;max-width:230px;color:var(--ink-2)} .readysimple .more .mi>span:last-child{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.readysimple .gain.sm{color:var(--muted);font-size:13px;min-width:0}
+.readysimple .rside .good{padding:5px 0;font-size:14px;color:var(--ink)} .readysimple .rside .good .pic{width:22px;height:22px}
+.readysimple .howscore{margin-top:14px;padding:14px 16px;border-radius:12px;background:var(--surface);font-size:13.5px;color:var(--muted);line-height:1.55} .readysimple .howscore b{color:var(--ink)}
+.readysimple .dashed{border:1px dashed var(--line-2);border-radius:12px;padding:12px 16px;margin-top:auto}
 .linkbtn{background:none;border:0;padding:0;color:var(--accent-ink);font:inherit;font-weight:600;cursor:pointer} .linkbtn:hover{text-decoration:underline} .linkbtn.mono{font-family:var(--mono);font-weight:500}
 .good{display:flex;gap:8px;align-items:center;font-size:13.5px;color:var(--ink-2);padding:6px 0} .good .ic{width:16px;height:16px;color:var(--good);flex:none}
 .strip5{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--line);border-radius:12px;background:var(--surface-2);margin:0 0 16px;overflow:hidden}
@@ -1532,10 +1541,10 @@ async function starterLive(name, btn) {
   try { await live('/starter', {name}); btn.textContent = 'Written ✓'; btn.disabled = true; } catch (e) { alert(e.message); }
 }
 
-function gauge(score, size = 112) {
+function gauge(score, size = 112, grade = null) {
   const r = size / 2 - 7, c = 2 * Math.PI * r, n = pct(score);
-  return `<div class="gauge ${toneOf(score)}" role="img" aria-label="Readiness ${esc(score)} of 100" style="width:${size}px;height:${size}px"><svg viewBox="0 0 ${size} ${size}" style="width:${size}px;height:${size}px"><circle class="track" cx="${size / 2}" cy="${size / 2}" r="${r}"/><circle class="fill" cx="${size / 2}" cy="${size / 2}" r="${r}" stroke-dasharray="${(c * n / 100).toFixed(1)} ${c.toFixed(1)}"/></svg>
-    <div class="v"><b>${esc(score)}</b><span>of 100</span></div></div>`;
+  return `<div class="gauge ${toneOf(score)}${grade ? ' lettered' : ''}" role="img" aria-label="Readiness ${esc(score)} of 100${grade ? `, grade ${esc(grade)}` : ''}" style="width:${size}px;height:${size}px"><svg viewBox="0 0 ${size} ${size}" style="width:${size}px;height:${size}px"><circle class="track" cx="${size / 2}" cy="${size / 2}" r="${r}"/><circle class="fill" cx="${size / 2}" cy="${size / 2}" r="${r}" stroke-dasharray="${(c * n / 100).toFixed(1)} ${c.toFixed(1)}"/></svg>
+    <div class="v">${grade ? `<b>${esc(grade)}</b>` : `<b>${esc(score)}</b><span>of 100</span>`}</div></div>`;
 }
 const hardFailures = () => SEC.findings.filter(f => f.status !== 'accepted' && f.rank === 'critical' && f.input && (f.reachable || f.ui_path));
 function readyHeadline(R) {
@@ -1556,7 +1565,7 @@ function renderReady() {
   const rankOf = k => /critical/.test(k.id) ? 'critical' : /high/.test(k.id) ? 'high' : /medium/.test(k.id) ? 'medium' : null;
   const firstFinding = k => { const r = rankOf(k); return r ? SEC.findings.find(f => f.rank === r && f.status !== 'accepted' && !f.in_tests) : null; };
   // The design phrases each move as the action, not the check: "Fix: subprocess call with shell=True" / "Commit the lockfile…".
-  const moveTitle = k => { const f = firstFinding(k); if (f) { const n = SEC.findings.filter(x => x.rank === f.rank && x.status !== 'accepted' && !x.in_tests).length; return n > 1 ? `Fix the ${n} ${f.rank} findings, starting with: ${f.title.replace(/\.$/, '')}` : `Fix: ${f.title.replace(/\.$/, '')}`; } const fx = (k.fix || '').split(/(?<=\.)\s/)[0].replace(/\.$/, ''); return fx && fx.length < 120 ? fx : k.title; };
+  const moveTitle = k => { const f = firstFinding(k); if (f) { const n = SEC.findings.filter(x => x.rank === f.rank && x.status !== 'accepted' && !x.in_tests).length; const what = (f.headline || f.title).replace(/\.$/, ''); return n > 1 ? `Fix the ${n} ${f.rank} findings, starting with: ${what}` : `Fix: ${what}`; } const fx = (k.fix || '').split(/(?<=\.)\s/)[0].replace(/\.$/, ''); return fx && fx.length < 120 ? fx : k.title; };
   const stepMeta = k => {
     const f = firstFinding(k);
     if (f) return `<b class="${esc(f.rank)}">${esc(f.rank)}</b> · <code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${lang(f.file)} · ${f.ui_path ? `a visitor on ${esc(entryOf(f))} can reach it` : f.reachable ? `reachable from ${esc(f.reachable.kind)} ${esc(entryOf(f))}` : 'not reached from an entry point'}`;
@@ -1568,17 +1577,16 @@ function renderReady() {
   const steps = arr(R.next_steps);
   if (S.simple) {
     const top = steps.slice(0, 3), rest = steps.slice(3, 6);
-    el.innerHTML = `<div class="page readysimple"><div class="toolbar" style="justify-content:flex-end">${modeSeg()}</div>
-      <div class="rhero">${gauge(R.score, 84)}<div><div class="k">Ready to ship? · ${esc(R.score)} of 100</div><h1>${readyHeadline(R)}</h1><div class="note">Fix the list below in order and the grade follows. Grade ${esc(R.grade)} now; C at 70, B at 80, A at 90.</div></div></div>
-      <div class="split"><div class="smain">
+    el.innerHTML = `<div class="psplit readysimple"><div class="smain"><div class="toolbar" style="justify-content:flex-end">${modeSeg()}</div>
+      <div class="rhero">${gauge(R.score, 108, ['A', 'B', 'C', 'D', 'F'].includes(R.grade) ? R.grade : null)}<div><div class="k">Ready to ship? · ${esc(R.score)} of 100</div><h1>${readyHeadline(R)}</h1><div class="note">Fix the list below in order and the grade follows. Grade ${esc(R.grade)} now; C at 70, B at 80, A at 90.</div></div></div>
         <div class="k2">What moves the needle most</div>
         <div class="moves">${top.map(k => `<div class="move"><span class="gain">+${esc(Math.round(k.gain))}</span><div><div class="t">${esc(moveTitle(k))}</div><div class="d">${stepMeta(k)}</div></div>${stepAct(k)}</div>`).join('')}
-          ${rest.length ? `<div class="more">${rest.map(k => `<span class="gain sm">+${esc(Math.round(k.gain))}</span> ${esc(moveTitle(k).toLowerCase())}`).join(' · ')} <button class="linkbtn" data-go="advanced">All ten areas</button></div>` : ''}</div>
+          ${rest.length ? `<div class="more">${rest.map(k => `<span class="mi"><span class="gain sm">+${esc(Math.round(k.gain))}</span><span>${esc(moveTitle(k))}</span></span>`).join('')}<button class="linkbtn" data-go="advanced">All ten areas</button></div>` : ''}</div>
         </div><aside class="rside">
-        <div class="card"><div class="k2" style="margin-top:0">Already good · keep it that way</div>${passed.length ? passed.slice(0, 6).map(k => `<div class="good">${icon('check')}<span>${esc(k.title)}</span></div>`).join('') : '<div class="note">Nothing has passed yet.</div>'}${passed.length > 6 ? `<div class="note" style="margin-top:6px">and ${passed.length - 6} more</div>` : ''}</div>
-        <div class="note" style="margin-top:12px"><b>How the score works.</b> Ten areas, each weighted. Every point has a written reason, and heuristic checks never count as hard failures. <button class="linkbtn" data-go="advanced">Read the rubric</button></div>
-        <div class="note" style="margin-top:10px">Lantern never overwrites a file you already have. Starter files land next to your code${LIVE ? '' : ' with <code>lantern starter . --write NAME</code>'}.</div>
-      </aside></div></div>`;
+        <div class="k2" style="margin-top:0">Already good · keep it that way</div>${passed.length ? passed.slice(0, 6).map(k => `<div class="good"><span class="pic good">${icon('check')}</span><span>${esc(k.title)}</span></div>`).join('') : '<div class="note">Nothing has passed yet.</div>'}${passed.length > 6 ? `<div class="note">and ${passed.length - 6} more</div>` : ''}
+        <div class="howscore"><b>How the score works.</b> Ten areas, each weighted. Every point has a written reason, and heuristic checks never count as hard failures. <button class="linkbtn" data-go="advanced">Read the rubric</button></div>
+        <div class="note pfoot dashed">Lantern never overwrites a file you already have. Starter files land next to your code${LIVE ? '' : ' with <code>lantern starter . --write NAME</code>'}.</div>
+      </aside></div>`;
   } else {
     const hard = hardFailures().length, heur = arr(R.protections).filter(p => p.status !== 'in place').length;
     const tr = (G.meta || {}).trace, tests = checks.find(k => k.id === 'tests-entries');

@@ -5,6 +5,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Ready to ship? (Simple) leads with the grade as designed: a large letter inside the score ring, the score and a
+  plain answer beside it, the biggest moves as cards with their gain in green, smaller moves in a row underneath, and
+  a right-hand column with what's already good, how the score works, and the starter-files note.
 - The Evidence Report reads as a printed document, as designed: paper sheets with a serif heading and opening
   paragraph, the four numbers as a ruled row (fixed in green, open in red), section labels in small capitals, and
   inside the app the moving shapes drift around the sheets. "Save as PDF" works inside the app again: it used an
