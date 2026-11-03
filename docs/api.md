@@ -212,7 +212,25 @@ token's SHA-256 in memory. Runs belong to the account (`github:<id>`, `google:<s
 |---|---|---|
 | `GET /v1/health` | none | `{ok, service: "lantern-cloud", version, engine, limits, hosts}`; `engine` is the analysis engine's version, `hosts` is `"all"` or a list. No counters |
 | `GET /v1/me` | Bearer | `{account: "github"\|"google"\|"token", label, runs_today, runs_active, limits}` |
+| `POST /v1/repos` `{link, privacy?, stored_snippets_ok?}` | Bearer | 202 + a **run** (status `queued`). `link`: https link to a public repository on a host `lantern.remote` accepts (and `LANTERN_CLOUD_HOSTS`, when set). `privacy`: `"structure"` (default, no code kept) or `"full"` (short snippets kept; needs `stored_snippets_ok: true`, else 400 with the sentence to show). 400 for a bad link or privacy, 429 over a limit (one active run per person, runs per day, runs for everyone per day) |
+| `GET /v1/runs` | Bearer | `{runs: [run]}`, the person's runs, newest first (at most 100) |
+| `GET /v1/runs/{id}` | Bearer | the run; 404 when it is not the caller's (same answer as a missing id) |
+| `GET /v1/runs/{id}/stream` | Bearer | `text/event-stream`: `event: log` with one JSON string per line, then one `event: end` with the run, then the stream closes. A finished run sends its saved tail and `end` at once |
 | `GET /v1/admin/stats` | Bearer = cloud admin secret | `{users, runs, runs_by_status, runs_today, shared}`; 403 when no admin secret is set |
+
+A **run** = `{id, link, host, privacy, status, stage, error, created, started, finished, commit, summary, shared,
+log_tail}`. `status`: `queued` → `running` → `done` | `error` | `blocked` (the sandbox stopped the analysis from
+reaching the network or writing outside its folder). `stage` is a plain sentence for the current step. `error` is a
+plain sentence (never a traceback or a server path). `summary` (when done) = `{score, grade, shape, counts:
+{critical, high, medium, low}, files}`, read from the result files. `shared` is false until the person clicks Share
+(milestone 5). `log_tail`: the last 40 log lines, server paths removed.
+
+What a run does (`cloud/lantern_cloud/worker.py`): clone into a temp folder (size cap before checkout) → dependency
+audits on lock files in the restricted process with the network on → analysis (`lantern analyze --offline`, the
+audit results passed in through `LANTERN_AUDITS_FROM`) in the restricted process with **no network** and writes only
+in its temp folder → result files copied to the run's folder → the temp folder, clone included, removed in every
+case. Nothing from the repository is built, installed or run. A restart marks a running run `error` ("start it
+again") and requeues waiting ones.
 
 `limits` = `{runs_per_day, concurrent_jobs, clone_max_mb, job_seconds, retention_days (null = kept until
 deleted), default_privacy: "structure"}`.

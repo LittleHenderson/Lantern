@@ -137,8 +137,9 @@ It has no sign-in of its own. A person signs in once at the gateway (GitHub or G
 allowance) and the cloud service asks the gateway `GET /v1/whoami` who the token belongs to. So there is **no new
 OAuth app and no model key to set here**: the only secret is the cloud service's own admin secret.
 
-What milestone 1 runs: `GET /v1/health` (public), `GET /v1/me` (signed in), `GET /v1/admin/stats` (admin secret).
-Nothing analyses repositories yet; that is milestone 2.
+What it runs: `GET /v1/health` (public), `GET /v1/me`, `POST /v1/repos` and `GET /v1/runs…` (signed in),
+`GET /v1/admin/stats` (admin secret). Viewing a finished report in the browser is milestone 3; the website pages
+are milestone 4.
 
 Cost: the service **sleeps when nobody uses it**. After 10 minutes with no visitor and no run going, it stops
 itself, and Fly bills a stopped machine only for its stored disk image and the 1 GB volume (Fly's price list put
@@ -184,13 +185,15 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 | `LANTERN_CLOUD_RUNS_PER_DAY` | 10 | Runs per person per UTC day |
 | `LANTERN_CLOUD_GLOBAL_RUNS_PER_DAY` | 300 | Runs for everyone per UTC day |
 | `LANTERN_CLOUD_CONCURRENT_JOBS` | 2 | Runs analysed at the same time; the rest wait in the queue |
+| `LANTERN_CLOUD_ACTIVE_PER_USER` | 1 | Runs one person may have waiting or going at once |
+| `LANTERN_CLOUD_AUDITS` | 1 | Dependency audits (pip-audit, npm audit on lock files); `0` skips them and reports say so |
 | `LANTERN_CLONE_MAX_MB` | 200 | A repository larger than this is refused before its files are written |
 | `LANTERN_CLOUD_JOB_SECONDS` | 600 | Wall clock per run; the analysis is stopped after it |
 | `LANTERN_CLOUD_IDLE_MINUTES` | 0 (10 in `cloud/fly.toml`) | Minutes with no visitor and no run before the service stops itself; 0 = never |
 | `LANTERN_CLOUD_RETENTION_DAYS` | 0 | 0 = results kept until the person deletes them; a number deletes older runs |
 | `LANTERN_CLOUD_HOSTS` | (empty) | Comma-separated clone hosts; empty = every public forge Lantern knows |
 | `LANTERN_GATEWAY_URL` | `https://lantern-gateway.fly.dev/v1` | Where sign-ins are checked |
-| `LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS` | on the volume | Run list (SQLite) and result folders |
+| `LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS`, `LANTERN_CLOUD_WORK` | on the volume | Run list (SQLite), result folders, temp folders of runs in progress (emptied after each run and at start-up) |
 
 What the cloud database holds: the account id the gateway gives (`github:<number>`, `google:<id>`), its label (the
 GitHub login), and later each run's link, privacy level, status, times, commit and counts. Never a token (not

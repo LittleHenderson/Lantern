@@ -6,14 +6,16 @@ browser, with nothing installed. The same engine as the CLI, run on Lantern's se
 "Cloud service". Deploying: [`../docs/deploy.md`](../docs/deploy.md), "Cloud service on Fly.io".
 
 Built so far (milestone 1): settings, the SQLite store, sign-in reused from the gateway (`GET /v1/whoami`),
-`/v1/health`, `/v1/me`, `/v1/admin/stats`, the Docker image and `fly.toml`.
+`/v1/health`, `/v1/me`, `/v1/admin/stats`, the Docker image and `fly.toml`. Milestone 2: runs from a link
+(`POST /v1/repos`, `GET /v1/runs…` with a live log stream) and the worker (`worker.py`) that clones, audits and
+analyses in the restricted process, keeps the result files and deletes the clone.
 
 ## Run locally
 
 ```bash
 pip install -e ".[scan,dev]" -e cloud/          # the engine and this service
 LANTERN_GATEWAY_URL=http://127.0.0.1:8080/v1 uvicorn lantern_cloud.app:create_app --factory --port 8090
-python -m pytest -q tests/test_cloud.py
+python -m pytest -q tests/test_cloud.py tests/test_cloud_runs.py
 ```
 
 ## Rules this service keeps
