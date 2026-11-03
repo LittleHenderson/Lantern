@@ -25,7 +25,7 @@ from lantern_cloud.settings import Settings  # noqa: E402
 from lantern_gateway.app import Settings as GwSettings  # noqa: E402
 from lantern_gateway.app import create_app as create_gateway  # noqa: E402
 
-APP_HTML = (ROOT / "lantern" / "viewer" / "app.html").read_text(encoding="utf-8")
+APP_HTML = (site._viewer() / "app.html").read_text(encoding="utf-8")
 SITE = {"x-lantern-site": "1"}
 
 
@@ -95,7 +95,7 @@ def test_page_and_pwa_files(env):
     assert m.headers["content-type"].startswith("application/manifest+json")
     man = json.loads(m.text)
     assert man["start_url"] == "/" and man["display"] == "standalone"
-    assert c.get("/icon.svg").content == (ROOT / "lantern" / "viewer" / "icon.svg").read_bytes()
+    assert c.get("/icon.svg").content == (site._viewer() / "icon.svg").read_bytes()
     sw = c.get("/sw.js")
     assert sw.headers["content-type"].startswith("text/javascript") and "/v1/" in sw.text   # says it never stores those
     assert c.get("/cloud.db").status_code == 404 and c.get("/app.html").status_code == 404
