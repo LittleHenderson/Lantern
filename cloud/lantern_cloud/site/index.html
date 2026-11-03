@@ -51,6 +51,7 @@
 .sheet ul.sendlist{margin:10px 0 0;padding-left:20px;font-size:14px;line-height:1.6}.sheet ul.sendlist li{margin-top:6px}
 .sub #explain[disabled]{opacity:.75;cursor:default}
 @media (max-width:760px){#xtoast{left:12px;bottom:84px;max-width:calc(100vw - 24px)}.sub #explain span,.sub #share span{display:none}}
+.dropzone.over{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .ghrow{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;max-width:720px;margin:12px auto 0;font:13px var(--font);color:var(--muted)}
 .ghrow .btn svg{width:15px;height:15px;flex:none}.ghrow .btn .ic{width:13px;height:13px;opacity:.6}
 .samples{margin-top:40px}
@@ -96,8 +97,9 @@ const api = async (path, opts = {}) => {
   if (!r.ok) { const e = new Error((d.error && d.error.message) || 'Lantern did not answer. Try again in a moment.'); e.status = r.status; e.type = d.error && d.error.type; throw e; }
   return d;
 };
-const S = {view: 'home', me: undefined, runs: null, run: null, tab: 'findings', links: {}, privacy: 'structure', agreed: false, link: '', pending: null, health: null, help: {open: null}, samples: []};
+const S = {view: 'home', addMsg: null, me: undefined, runs: null, run: null, tab: 'findings', links: {}, privacy: 'structure', agreed: false, link: '', pending: null, health: null, help: {open: null}, samples: []};
 const SAMPLE = 'lantern:sample/';   // a run's link for one of Lantern's built-in sample apps
+const UPLOAD = 'lantern:upload/';   // a run's link for an app uploaded from the person's computer (a label, not a path)
 const ACTIVE = ['queued', 'running'];
 const STEPS = [['clone', 'Copy the repository', 'Into a sealed box. Nothing in it is run or installed.'],
                ['audit', 'Check dependency versions', 'Against public security advisories.'],
@@ -135,6 +137,7 @@ function setBackdrop() {
 function sampleTitle(id) { const x = (S.samples || []).find(v => v.id === id); return x && x.title ? String(x.title) : id; }
 function repoName(link) {
   if (String(link || '').startsWith(SAMPLE)) return 'Sample: ' + sampleTitle(String(link).slice(SAMPLE.length));
+  if (String(link || '').startsWith(UPLOAD)) return String(link).slice(UPLOAD.length) || 'Uploaded app';
   try { const p = new URL(link).pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/, '').split('/'); return p.slice(0, 2).join('/') || link; }
   catch (e) { return String(link || ''); }
 }
@@ -295,26 +298,97 @@ function deleteMeSheet() {
 
 // ---- starting a run
 async function startRun(link, privacy, agreed) {
-  const err = document.getElementById('adderr');
   if (!S.me) { S.pending = {link, privacy, agreed}; return signInSheet('Sign in, and Lantern checks this link straight after.'); }
   try {
     const what = link.startsWith(SAMPLE) ? {sample: link.slice(SAMPLE.length)} : {link};
     const r = await api('/v1/repos', {method: 'POST', body: {...what, privacy, stored_snippets_ok: privacy === 'full' && agreed === true}});
-    S.link = ''; S.run = r; S.runs = [r, ...(S.runs || []).filter(x => x.id !== r.id)];
+    S.link = ''; S.addMsg = null; S.run = r; S.runs = [r, ...(S.runs || []).filter(x => x.id !== r.id)];
     location.hash = '#/run/' + encodeURIComponent(r.id);
   } catch (e) {
     if (e.status === 401) { S.me = null; S.pending = {link, privacy, agreed}; drawAcct(); return signInSheet('Your sign-in has expired. Sign in again, and Lantern checks this link straight after.'); }
-    if (err) err.innerHTML = note(e.status === 429 ? 'warn' : 'err', esc(e.message));
+    upMsg(e.status === 429 ? 'warn' : 'err', esc(e.message));
   }
+}
+// ---- upload from this computer: a folder (zipped here, in the browser) or a .zip, sent to /v1/uploads
+const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', 'venv', 'env', '__pycache__', '.next', '.nuxt', 'dist', 'build', 'target', '.lantern', '.cache', '.turbo', 'coverage', '.pytest_cache', '.mypy_cache', 'vendor']);
+const capMB = () => ((S.me && S.me.limits) || {}).clone_max_mb || 200;
+// The message under the add box (a refused link, an upload's progress or error). Kept in S so a redraw (runs still
+// going redraw the page every few seconds) does not wipe it; `html` is built from esc()'d values only.
+function upMsg(kind, html) { S.addMsg = html ? {kind, html} : null; const e = document.getElementById('adderr'); if (e) e.innerHTML = addMsgHtml(); }
+const addMsgHtml = () => S.addMsg ? note(S.addMsg.kind, S.addMsg.html) : '';
+function uploadSheet(dir, zip) {
+  const el = sheet(`<div class="sh"><h2>Upload from this computer</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>Choose your app's folder, or a .zip of it. Lantern checks it in the same sealed box as a link: nothing is run or installed, and the upload is deleted when the check ends.</p>
+    <div class="signbtns"><button class="btn" id="updir">${icon('folder')}<span>Choose a folder</span></button><button class="btn" id="upzip">${icon('up')}<span>Choose a .zip file</span></button></div>
+    <p class="foot">Up to ${esc(capMB())} MB. Folders such as node_modules, .git, build output and virtual environments are left out. You can also drop a folder or a .zip on the link box.</p>`);
+  el.querySelector('#updir').onclick = () => { closeSheet(); dir.click(); };
+  el.querySelector('#upzip').onclick = () => { closeSheet(); zip.click(); };
+}
+async function readEntries(entries) {   // a dropped folder, walked with the browser's entry API
+  const out = [];
+  const walk = async (en, base) => {
+    if (en.isFile) { out.push([base + en.name, await new Promise((ok, no) => en.file(ok, no))]); return; }
+    if (SKIP_DIRS.has(en.name)) return;
+    const rd = en.createReader();
+    for (;;) { const batch = await new Promise((ok, no) => rd.readEntries(ok, no)); if (!batch.length) break; for (const c of batch) await walk(c, base + en.name + '/'); }
+  };
+  for (const en of entries) await walk(en, '');
+  return out;
+}
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+async function makeZip(files) {   // [[path, File]] -> Blob, files stored as they are (no compression needed)
+  const enc = new TextEncoder(), parts = [], central = []; let off = 0;
+  for (const [path, f] of files) {
+    const name = enc.encode(path), data = new Uint8Array(await f.arrayBuffer()), crc = crc32(data);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint32(14, crc, true);
+    h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint32(16, crc, true);
+    c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true); c.setUint32(42, off, true);
+    parts.push(h, name, data); central.push(c, name); off += 30 + name.length + data.length;
+  }
+  const size = central.reduce((n, x) => n + x.byteLength, 0), e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, size, true); e.setUint32(16, off, true);
+  return new Blob([...parts, ...central, e], {type: 'application/zip'});
+}
+async function uploadFiles(files) {
+  const kept = files.filter(([p]) => !p.split('/').slice(0, -1).some(d => SKIP_DIRS.has(d)));
+  if (!kept.length) return upMsg('warn', 'That folder has no files Lantern can check.');
+  if (kept.length > 60000) return upMsg('warn', 'That folder has too many files. Choose the app\'s own folder, not a whole drive.');
+  const total = kept.reduce((n, [, f]) => n + f.size, 0);
+  if (total > capMB() * 1048576) return upMsg('warn', `That folder is larger than ${esc(capMB())} MB, even without node_modules and build output. Choose a smaller folder.`);
+  const top = (kept[0][0].split('/')[0] || 'app');
+  upMsg('info', `Packing ${esc(kept.length)} files…`);
+  try { sendUpload(await makeZip(kept), top); } catch (e) { upMsg('err', 'Lantern could not read some of those files. Try a .zip of the folder instead.'); }
+}
+function uploadZip(f) {
+  if (f.size > capMB() * 1048576) return upMsg('warn', `That file is larger than ${esc(capMB())} MB. Leave out node_modules, .git and build output, then zip it again.`);
+  sendUpload(f, f.name.replace(/\.zip$/i, ''));
+}
+async function sendUpload(blob, name) {
+  if (!S.me) return signInSheet('Sign in first, then upload your app again.');
+  if (S.privacy === 'full' && !S.agreed) return upMsg('warn', 'Tick the box to agree to keeping snippets, or choose <b>Map and findings only</b>.');
+  upMsg('info', 'Uploading…');
+  const q = new URLSearchParams({name: String(name).slice(0, 80), privacy: S.privacy, snippets_ok: S.privacy === 'full' && S.agreed ? '1' : '0'});
+  try {
+    const res = await fetch('/v1/uploads?' + q, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/zip', 'X-Lantern-Site': '1'}, body: blob});
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { if (res.status === 401) { S.me = null; drawAcct(); return signInSheet('Your sign-in has expired. Sign in again, then upload your app again.'); } return upMsg(res.status === 429 || res.status === 413 ? 'warn' : 'err', esc((d.error && d.error.message) || 'The upload did not go through. Try again.')); }
+    upMsg('', ''); S.run = d; S.runs = [d, ...(S.runs || []).filter(x => x.id !== d.id)];
+    location.hash = '#/run/' + encodeURIComponent(d.id);
+  } catch (e) { upMsg('err', 'The upload did not go through. Check your connection and try again.'); }
 }
 function addBox() {
   const full = S.privacy === 'full';
-  return `<div class="dropzone">${icon('cloud')}<input type="text" id="link" placeholder="Paste a link, like https://github.com/you/app" value="${esc(S.link)}" autocomplete="off" spellcheck="false" inputmode="url" aria-label="Link to a public repository"><button class="btn primary" id="add">Check my app</button></div>
+  return `<div class="dropzone">${icon('cloud')}<input type="text" id="link" placeholder="Paste a link, like https://github.com/you/app" value="${esc(S.link)}" autocomplete="off" spellcheck="false" inputmode="url" aria-label="Link to a public repository"><button class="btn ghost" id="upload" title="Check an app from this computer: a folder, or a .zip of it">Upload…</button><button class="btn primary" id="add">Check my app</button></div>
+    <input type="file" id="pickdir" webkitdirectory multiple hidden><input type="file" id="pickzip" accept=".zip,application/zip" hidden>
     <div class="privacy" role="radiogroup" aria-label="What Lantern keeps">
       <label class="choice"><input type="radio" name="priv" value="structure" ${full ? '' : 'checked'}><span><b>Map and findings only <span class="tag priv">Private</span></b>No code is kept. The report names files and lines.</span></label>
       <label class="choice"><input type="radio" name="priv" value="full" ${full ? 'checked' : ''}><span><b>Include code snippets</b>The report shows the lines it talks about. Those short snippets are kept with your results.</span></label></div>
     ${full ? `<div class="agree"><label class="check"><input type="checkbox" id="agreed" ${S.agreed ? 'checked' : ''}><span>I agree that short snippets of this repository's code are stored on Lantern's server with my results, until I delete them.</span></label></div>` : ''}
-    <div id="adderr" style="max-width:720px;margin:0 auto"></div>
+    <div id="adderr" style="max-width:720px;margin:0 auto">${addMsgHtml()}</div>
     ${ghRow()}`;
 }
 // Buttons that open GitHub in a new tab, to find a repository to paste. "Your repositories" only for a GitHub
@@ -342,11 +416,26 @@ function addControls(el) {
     el.querySelectorAll('input[name=priv]').forEach(r => r.onchange = () => { S.privacy = r.value; render(); });
     const ag = el.querySelector('#agreed'); if (ag) ag.onchange = () => { S.agreed = ag.checked; };
     el.querySelector('#add').onclick = () => {
-      const link = input.value.trim(), err = el.querySelector('#adderr');
+      const link = input.value.trim();
       if (!link) { input.focus(); return; }
-      if (!/^https:\/\//i.test(link) && !/^git@/.test(link)) { err.innerHTML = note('warn', 'Paste the https link of a public repository, such as https://github.com/owner/name.'); return; }
-      if (S.privacy === 'full' && !S.agreed) { err.innerHTML = note('warn', 'Tick the box to agree to keeping snippets, or choose <b>Map and findings only</b>.'); return; }
-      err.innerHTML = ''; startRun(link, S.privacy, S.agreed);
+      if (!/^https:\/\//i.test(link) && !/^git@/.test(link)) { upMsg('warn', 'Paste the https link of a public repository, such as https://github.com/owner/name.'); return; }
+      if (S.privacy === 'full' && !S.agreed) { upMsg('warn', 'Tick the box to agree to keeping snippets, or choose <b>Map and findings only</b>.'); return; }
+      upMsg('', ''); startRun(link, S.privacy, S.agreed);
+    };
+  }
+  const up = el.querySelector('#upload');
+  if (up) {
+    const dir = el.querySelector('#pickdir'), zip = el.querySelector('#pickzip'), zone = el.querySelector('.dropzone');
+    up.onclick = () => uploadSheet(dir, zip);
+    dir.onchange = () => { const fs = [...dir.files]; dir.value = ''; if (fs.length) uploadFiles(fs.map(f => [f.webkitRelativePath || f.name, f])); };
+    zip.onchange = () => { const f = zip.files[0]; zip.value = ''; if (f) uploadZip(f); };
+    zone.ondragover = e => { e.preventDefault(); zone.classList.add('over'); };
+    zone.ondragleave = () => zone.classList.remove('over');
+    zone.ondrop = async e => {
+      e.preventDefault(); zone.classList.remove('over');
+      const items = [...(e.dataTransfer.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+      if (items.length === 1 && items[0].isFile && /\.zip$/i.test(items[0].name)) return uploadZip(e.dataTransfer.files[0]);
+      if (items.length) { upMsg('info', 'Reading the folder…'); try { uploadFiles(await readEntries(items)); } catch (x) { upMsg('err', 'Lantern could not read that folder. Use Upload… instead.'); } }
     };
   }
   el.querySelectorAll('[data-sample]').forEach(b => b.onclick = () => {
@@ -357,6 +446,7 @@ function addControls(el) {
   el.querySelectorAll('[data-again]').forEach(b => b.onclick = () => {
     // Again, with the same privacy the person chose (and agreed to) for this repository last time.
     const r = (S.runs || []).find(x => x.id === b.dataset.again) || (S.run && S.run.id === b.dataset.again ? S.run : null); if (!r) return;
+    if (String(r.link).startsWith(UPLOAD)) { S.privacy = r.privacy; S.agreed = r.privacy === 'full'; location.hash = '#/'; setTimeout(() => { const u = document.getElementById('upload'); if (u) u.click(); }, 50); return; }   // the code was deleted: pick it again
     startRun(r.link, r.privacy, r.privacy === 'full');
   });
   el.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { const r = (S.runs || []).find(x => x.id === b.dataset.del) || (S.run && S.run.id === b.dataset.del ? S.run : null); if (r) deleteSheet(r); });
@@ -378,10 +468,10 @@ function renderHome(el) {
   if (S.me && !simple()) return renderHomePro(el);
   const runs = S.runs || [], done = runs.filter(r => r.status === 'done').length, going = runs.filter(r => ACTIVE.includes(r.status)).length;
   el.innerHTML = `<main class="simplehome"><h1>${runs.length ? 'What would you like to check?' : 'Which app should we check first?'}</h1>
-    <p class="lede">Paste a link to any app you built. Lantern reads the code like a reviewer, in a sealed box that never runs it.</p>
+    <p class="lede">Paste a link to any app you built, or upload it from this computer. Lantern reads the code like a reviewer, in a sealed box that never runs it.</p>
     ${addBox()}
-    <div class="steps3"><span><b>1</b>Paste a link</span><span><b>2</b>Lantern maps every path a visitor can take</span><span><b>3</b>Fix what it finds, with a guide and proof</span></div>
-    <p class="privline">${icon('lock')}Lantern copies the repository into a sealed box, reads it without installing or running anything, and deletes the copy when the check ends. Only the results are kept, private to your account, until you delete them.</p>
+    <div class="steps3"><span><b>1</b>Paste a link or upload</span><span><b>2</b>Lantern maps every path a visitor can take</span><span><b>3</b>Fix what it finds, with a guide and proof</span></div>
+    <p class="privline">${icon('lock')}Lantern copies your app (from its link or your upload) into a sealed box, reads it without installing or running anything, and deletes the copy when the check ends. Only the results are kept, private to your account, until you delete them.</p>
     ${S.me === undefined ? '<div class="empty">Loading…</div>'
       : !S.me ? `<div class="firstrun"><div class="card"><div class="k">Free to try</div><h3>Sign in to start checking</h3><p>Use your GitHub or Google account. Lantern keeps your account name only, so your runs stay yours.</p><a href="#" class="btn primary" data-signin>Sign in</a></div>
           <div class="card"><div class="k">What happens next</div><div class="li">${icon('clock')}A check usually takes about a minute</div><div class="li">${icon('check')}You get a map, a list of what to fix, and a grade</div><div class="li">${icon('layers')}Python, TypeScript, Go, Rust and Java apps work today</div></div></div>`
@@ -420,7 +510,7 @@ function renderHomePro(el) {
       <div class="addf">${icon('cloud')}<input type="text" id="link" placeholder="https://github.com/you/app" value="${esc(S.link)}" autocomplete="off" spellcheck="false" aria-label="Link to a public repository"><button class="btn primary" id="add">Check</button></div>
       <div class="seg" id="privseg" title="What Lantern keeps"><button data-pv="structure" class="${S.privacy === 'structure' ? 'on' : ''}">Map only</button><button data-pv="full" class="${S.privacy === 'full' ? 'on' : ''}">Snippets</button></div></div>
     ${S.privacy === 'full' ? `<div style="margin:8px 16px 0"><label class="check"><input type="checkbox" id="agreed" ${S.agreed ? 'checked' : ''}><span>I agree that short snippets of the repository's code are stored with my results, until I delete them.</span></label></div>` : ''}
-    <div id="adderr" style="margin:8px 16px 0"></div>
+    <div id="adderr" style="margin:8px 16px 0">${addMsgHtml()}</div>
     ${runs.length ? `<div class="ptable"><div class="r h"><span>Repository</span><span>Host</span><span>Readiness</span><span class="num">Crit</span><span class="num">High</span><span class="num">Med</span><span class="num">Low</span><span class="num">Files</span><span>Checked</span><span></span></div>${rows}</div>
         ${going.map(r => `<div class="prolog"><div class="t">${esc(repoName(r.link))} · ${esc(r.stage || r.status)}</div>${esc(r.log_tail || '')}</div>`).join('')}`
       : `<div class="empty">${LANTERN_ART}<b>No runs yet</b>Paste a repository link above to check it.</div>`}</main>`;
@@ -459,8 +549,9 @@ async function renderRun(el, id) {
   renderProgress(el, r);
 }
 function renderProgress(el, r) {
-  const run = ACTIVE.includes(r.status), at = STEPS.findIndex(s => s[0] === r.step);
-  const steps = STEPS.map(([k, t, d], i) => {
+  const ST = String(r.link || '').startsWith(UPLOAD) ? [['unpack', 'Unpack your upload', 'Into a sealed box. Nothing in it is run or installed.'], ...STEPS.slice(1)] : STEPS;
+  const run = ACTIVE.includes(r.status), at = ST.findIndex(s => s[0] === r.step);
+  const steps = ST.map(([k, t, d], i) => {
     const cls = !run ? (r.status === 'done' || i < at ? 'done' : '') : i < at ? 'done' : i === at ? 'now' : '';
     return `<div class="st ${cls}"><span class="dot">${cls === 'done' ? icon('check') : ''}</span><div><b>${esc(t)}</b>${esc(d)}</div></div>`;
   }).join('');
@@ -568,6 +659,9 @@ function explainBtn(r) {
 }
 function explainClick(r) {
   const x = r.explain || {}, sum = x.summary || {};
+  if (String(r.link || '').startsWith(UPLOAD)) return sheet(`<div class="sh"><h2>Plain-words explanations</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>An uploaded app is deleted as soon as its check ends, so Lantern cannot read its code again to explain it.</p>
+    <p>Explanations work for apps checked from a GitHub link, and in the Lantern app on your computer.</p><div class="row" style="margin-top:16px"><button class="btn primary" data-close>OK</button></div>`);
   if (x.status !== 'done') return withConsent(() => startExplain(r));
   const el = sheet(`<div class="sh"><h2>Plain-words explanations</h2><button class="x" data-close aria-label="Close">×</button></div>
     <p><b>${esc(sum.validated || 0)}</b> of the ${esc(sum.functions || 0)} functions on your app's main paths have an explanation, each phrase tied to your code. Open a function on <b>${simple() ? 'Paths' : 'Atlas'}</b>, or a problem in <b>${simple() ? 'What to fix' : 'Findings'}</b>, to read it.</p>
@@ -696,7 +790,7 @@ document.getElementById('ask').addEventListener('keydown', e => { if (e.target.i
 
 // ---- help
 const FAQ = [
-  ['Privacy', 'What happens to my code?', 'Lantern copies the repository into a sealed box on its server, reads it without installing or running anything, and deletes the copy when the check ends. What stays is the result: the map, the findings and the grade. With <b>Map and findings only</b> no code is kept at all; with <b>Include code snippets</b> the short lines the report talks about are kept too.'],
+  ['Privacy', 'What happens to my code?', 'Lantern copies the repository, or the files you upload, into a sealed box on its server, reads it without installing or running anything, and deletes the copy when the check ends. What stays is the result: the map, the findings and the grade. With <b>Map and findings only</b> no code is kept at all; with <b>Include code snippets</b> the short lines the report talks about are kept too.'],
   ['Privacy', 'Who can see my results?', 'Only you, while you are signed in. Each report opens through a link that works for an hour and only for your account. Nothing is shared unless you click <b>Share</b> on a run; that makes a link anyone holding it can open, and <b>Stop sharing</b> turns it off again.'],
   ['Privacy', 'How do I delete my results?', 'The bin icon on a run deletes that run, its report and its share link. To delete everything, press your name (top right), then <b>Delete my account</b>. Your GitHub or Google account is not touched.'],
   ['Using it', 'Which links work?', 'The https link of a public repository on GitHub, GitLab, Bitbucket, Codeberg and other public code hosts, like <code>https://github.com/owner/name</code>. A link to a branch (<code>/tree/branch</code>) checks that branch.'],
@@ -753,7 +847,7 @@ setInterval(() => {
   if (S.view === 'home' && S.me && (S.runs || []).some(r => ACTIVE.includes(r.status)) && !document.hidden)
     loadRuns().then(() => { if (S.view === 'home' && !document.activeElement?.matches('input')) render(); });
 }, 3000);
-addEventListener('hashchange', route);
+addEventListener('hashchange', () => { S.addMsg = null; route(); });
 addEventListener('resize', () => { const m = document.body.dataset.mode; drawViewMode(); if (document.body.dataset.mode !== m) render(); });
 (async () => { await Promise.all([loadMe(), loadSamples()]); await loadRuns(); route(); })();
 </script>

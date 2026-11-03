@@ -46,6 +46,9 @@ class Settings:
     idle_minutes: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_IDLE_MINUTES", 0))
     # Temp folders for runs in progress (clone + analysis output); emptied at start-up and after every run.
     work_dir: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_WORK", "cloud-work"))
+    # Uploaded .zip files waiting for their run ("Upload from this computer"); each is deleted when its run starts
+    # (it is moved into the run's temp folder) or when the run is deleted. Empty: next to the work folder.
+    uploads_dir: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_UPLOADS", ""))
     # Dependency audits (pip-audit, npm audit on lock files) need the network; off only in tests.
     audits: bool = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_AUDITS", "1") not in ("0", "false", "no"))
     # Runs one person may have queued or running at once.
@@ -59,6 +62,9 @@ class Settings:
     # header). Empty: derived from the admin secret, or random for this process (links then end at a restart).
     view_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_VIEW_SECRET", ""))
     view_minutes: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_VIEW_MINUTES", 60))
+
+    def uploads(self) -> str:
+        return self.uploads_dir or (self.work_dir.rstrip("/\\") + "-uploads")
 
     def limits(self) -> dict:
         """The limits a person may see (health, /v1/me). No secrets, no counters of other people."""

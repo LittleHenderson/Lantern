@@ -34,7 +34,7 @@ from .idle import IdleExit
 from .settings import Settings
 from . import site
 from .store import FINISHED, LimitReached, Store
-from .worker import ACTIVE_EXPLAIN, SAMPLE_PREFIX, STAGES, Worker
+from .worker import ACTIVE_EXPLAIN, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, is_upload
 
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
@@ -254,6 +254,53 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         worker.submit(rid)
         return run_view(store.run(rid))
 
+    @app.post("/v1/uploads", status_code=202)
+    async def upload_run(request: Request, name: str = "app", privacy: str | None = None, snippets_ok: str = "0"):
+        """Check an app uploaded from the person's computer: the request body is a .zip (at most the clone size cap).
+        It waits in the uploads folder until its run starts, is then moved into the run's temp folder and unpacked
+        by `lantern.archive` inside the restricted process, and is gone when the run ends, like a clone."""
+        who = await signed_in(request)
+        if worker is None:
+            raise HTTPException(503, "Runs are paused on this server.")
+        privacy = privacy or s.default_privacy
+        if privacy not in PRIVACY:
+            raise HTTPException(400, 'privacy is "structure" (no code kept) or "full" (short snippets kept).')
+        if privacy == "full" and snippets_ok != "1":
+            raise HTTPException(400, FULL_NOTICE)
+        label = "".join(ch for ch in str(name) if ch.isalnum() or ch in "._-")[:80].strip(".") or "app"
+        cap = s.clone_max_mb << 20
+        too_big = f"The upload is larger than {s.clone_max_mb} MB. Leave out folders like node_modules, .git and build output."
+        try:
+            if int(request.headers.get("content-length") or 0) > cap:
+                raise HTTPException(413, too_big)
+        except ValueError:
+            raise HTTPException(400, "The upload had a bad size.") from None
+        up = Path(s.uploads())
+        up.mkdir(parents=True, exist_ok=True)
+        part = up / f".part-{secrets.token_hex(8)}"
+        size, head = 0, b""
+        try:
+            with open(part, "wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > cap:
+                        raise HTTPException(413, too_big)
+                    if len(head) < 4:
+                        head += chunk[:4]
+                    f.write(chunk)
+            if size == 0 or not head.startswith(b"PK"):
+                raise HTTPException(400, "That is not a .zip file. Choose your app's folder, or a .zip of it.")
+            try:
+                rid = store.create_run(who["account"], UPLOAD_PREFIX + label, "upload", privacy, per_day=s.runs_per_day,
+                                       global_per_day=s.global_runs_per_day, per_user_active=s.per_user_active)
+            except LimitReached as e:
+                raise HTTPException(429, str(e)) from None
+            part.replace(worker.upload_path(rid))
+        finally:
+            part.unlink(missing_ok=True)
+        worker.submit(rid)
+        return run_view(store.run(rid))
+
     @app.get("/v1/runs")
     async def list_runs(request: Request):
         who = await signed_in(request)
@@ -442,6 +489,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if worker is None:
             raise HTTPException(503, "Explanations are paused on this server.")
         r = done_run(rid, who)
+        if is_upload(r["link"]):
+            raise HTTPException(409, UPLOAD_EXPLAIN)
         agreed(who)
         if not store.queue_explain(r["id"]):
             raise HTTPException(409, "Lantern is already writing this check's explanations.")

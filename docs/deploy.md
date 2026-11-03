@@ -201,6 +201,7 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 | `LANTERN_CLOUD_HOSTS` | (empty) | Comma-separated clone hosts; empty = every public forge Lantern knows |
 | `LANTERN_GATEWAY_URL` | `https://lantern-gateway.fly.dev/v1` | Where sign-ins are checked |
 | `LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS`, `LANTERN_CLOUD_WORK` | on the volume | Run list (SQLite), result folders, temp folders of runs in progress (emptied after each run and at start-up) |
+| `LANTERN_CLOUD_UPLOADS` | `<LANTERN_CLOUD_WORK>-uploads` (on the volume) | Uploaded .zip files waiting for their run to start; each is moved into its run's temp folder when the run starts, and anything not waiting for a queued run is removed at start-up |
 
 Explanations and Ask Lantern (milestone 6) need no new setting or secret: they go to the same gateway the
 sign-in uses, with each person's own allowance token, and only after that person agrees on the website. The gateway's

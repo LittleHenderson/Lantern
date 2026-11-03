@@ -332,3 +332,78 @@ def test_sample_apps_are_listed_and_checked_without_a_clone(tmp_path, monkeypatc
     assert done["summary"]["counts"]["critical"] + done["summary"]["counts"]["high"] >= 1   # the planted problems
     assert "built-in starter apps" in done["log_tail"]
     assert (Path(s.results_dir) / d["id"] / "report.html").is_file()
+
+
+def _zip_of(folder: Path, top: str = "shop", extra: dict | None = None) -> bytes:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in sorted(folder.rglob("*")):
+            if p.is_file() and ".lantern" not in p.parts and "__pycache__" not in p.parts:
+                z.write(p, f"{top}/{p.relative_to(folder).as_posix()}")
+        for name, data in (extra or {}).items():
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+SHOP = Path(__file__).parent / "fixtures" / "shop"
+
+
+def test_an_uploaded_zip_is_checked_and_then_deleted(tmp_path, monkeypatch):
+    def no_clone(link, dest, log):
+        raise AssertionError("an upload must not be cloned")
+    monkeypatch.setattr(worker_mod, "clone_repo", no_clone)
+    cloud, gw, s = make(tmp_path)
+    tok = gw.sign_in("github:1", "github:octo")
+    body = _zip_of(SHOP)
+    assert cloud.post("/v1/uploads?name=shop", content=body).status_code == 401           # signed in only
+    r = cloud.post("/v1/uploads?name=my%20shop/../x", content=body, headers=bearer(tok))
+    assert r.status_code == 202, r.text
+    d = r.json()
+    assert d["link"] == "lantern:upload/myshop..x" and d["host"] == "upload"                # a label, never a path
+    done = wait(cloud, tok, d["id"])
+    assert done["status"] == "done", done
+    assert done["summary"]["counts"]["critical"] >= 1 and "Unpacking your upload" in done["log_tail"]
+    assert not list(Path(s.uploads()).iterdir())                     # the upload is gone once the run has it
+    res = Path(s.results_dir) / d["id"]
+    assert (res / "report.html").is_file() and SOURCE_LINE not in (res / "report.html").read_text(encoding="utf-8")
+    # explanations would need the code again, which is deleted
+    cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(tok))
+    r = cloud.post(f"/v1/runs/{d['id']}/explain", headers=bearer(tok))
+    assert r.status_code == 409 and "uploaded app" in r.json()["error"]["message"]
+
+
+def test_bad_uploads_are_refused(tmp_path):
+    cloud, gw, s = make(tmp_path, clone_max_mb=1)
+    tok = gw.sign_in("github:1", "github:octo")
+    r = cloud.post("/v1/uploads", content=b"hello, not a zip", headers=bearer(tok))
+    assert r.status_code == 400 and ".zip" in r.json()["error"]["message"]
+    r = cloud.post("/v1/uploads", content=b"PK" + os.urandom(2 << 20), headers=bearer(tok))
+    assert r.status_code == 413 and "larger than 1 MB" in r.json()["error"]["message"]
+    r = cloud.post("/v1/uploads?privacy=full", content=_zip_of(SHOP), headers=bearer(tok))
+    assert r.status_code == 400                                      # snippets need the agreement, as for links
+    assert not [p for p in Path(s.uploads()).iterdir()]              # nothing half-written is left behind
+    # an archive that tries to write outside its folder: the run stops with the unpacker's sentence
+    r = cloud.post("/v1/uploads", content=_zip_of(SHOP, extra={"../../evil.py": "x"}), headers=bearer(tok))
+    assert r.status_code == 202
+    done = wait(cloud, tok, r.json()["id"])
+    assert done["status"] == "error" and "outside its folder" in done["error"], done
+    assert not (Path(s.work_dir).parent / "evil.py").exists()
+
+
+def test_a_restart_keeps_only_the_uploads_of_waiting_runs(tmp_path):
+    s = Settings(gateway_url="http://gateway.test/v1", db_path=str(tmp_path / "cloud.db"),
+                 results_dir=str(tmp_path / "results"), work_dir=workdir(tmp_path), audits=False)
+    store = Store(s.db_path)
+    rid = store.create_run("github:1", "lantern:upload/shop", "upload", "structure", per_day=10, global_per_day=10,
+                           per_user_active=1)
+    up = Path(s.uploads())
+    up.mkdir(parents=True, exist_ok=True)
+    (up / f"{rid}.zip").write_bytes(b"PK")             # its run is still queued: kept for it
+    (up / "gone.zip").write_bytes(b"PK")               # its run was deleted
+    (up / ".part-abc").write_bytes(b"PK")              # cut off while it was being received
+    w = worker_mod.Worker(s, store)
+    w.pool.shutdown(wait=False, cancel_futures=True)   # only the start-up sweep is tested here
+    assert {p.name for p in up.iterdir()} <= {f"{rid}.zip"}
+    assert not (up / "gone.zip").exists() and not (up / ".part-abc").exists()
