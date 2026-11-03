@@ -97,6 +97,26 @@ fly secrets set LANTERN_AUTH_SECRET="$(python -c 'import secrets; print(secrets.
 A provider with no id/secret is simply not offered: `GET /v1/auth/providers` lists what is on. The client secrets are
 used only for the server-side code exchange and never reach a browser or the CLI.
 
+## Free allowance limits as configured
+
+Read from the repository on 2026-11-03, with nothing changed. A Fly secret with the same name would override a value
+here; `fly secrets list` shows names only. **Bold** marks a value that is unset or has no limit.
+
+| Limit | Value | Where |
+|---|---|---|
+| Per-user lifetime requests | 300 (`LANTERN_FREE_REQUESTS`) | `gateway/fly.toml:15`, default `gateway/lantern_gateway/app.py:81` |
+| Per-user lifetime tokens | 1,500,000 (`LANTERN_FREE_TOKENS`, **not set in fly.toml**, so the code default applies) | `gateway/lantern_gateway/app.py:82` |
+| Per-user daily requests | 120 per UTC day (`LANTERN_DAILY_REQUESTS`) | `gateway/fly.toml:13`, default `app.py:83` |
+| Global daily dollar cap | $10 per UTC day, then HTTP 503 until 00:00 UTC (`LANTERN_GLOBAL_DAILY_USD`) | `gateway/fly.toml:16`, default `app.py:85`, check `app.py:559` |
+| Output tokens per request | 3,000 max (`LANTERN_MAX_TOKENS`, **not set in fly.toml**) | `app.py:86` |
+| Request body | 250,000 bytes max (`LANTERN_MAX_BODY`, **not set in fly.toml**) | `app.py:87` |
+| Model order | Anthropic `claude-haiku-5-5` first, DeepSeek `deepseek-flash` when Anthropic fails; `LANTERN_PRIMARY=deepseek` swaps them (**not set**, so Anthropic first) | `app.py:58`, `:61`, `:67`, `Settings.order()` `:109` |
+| Token hash retention | SHA-256 of each token in `users`; **kept with no limit** (a re-sign-in marks the old hash disabled, it is not deleted); per-day counters in `daily` and `spend` are **kept with no limit** too | `app.py:126`, `:139`, `:142` |
+| Unclaimed sign-in tokens | the plain token waits in `pending` for one claim, deleted after 10 minutes | `app.py:195` |
+
+`GET /v1/health` is public and returns `{ok, version, model, configured, primary, fallback}`: no counters, users or
+spend. CI (`gateway` job in `ci.yml`) and the release workflow (`gateway-up`) curl it and print it to the job summary.
+
 ## Releases (GitHub now, PyPI later)
 
 A pushed tag `v*` runs `.github/workflows/release.yml`: it builds the sdist and wheel, runs the tests against the

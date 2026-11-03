@@ -34,6 +34,8 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from . import __version__
+
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -406,7 +408,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     @app.get("/v1/health")
     def health():
         order = s.order()
-        return {"ok": True, "model": s.model, "configured": bool(order),
+        # Public and cached by monitors: the version and which model answers, never counters or spend.
+        return {"ok": True, "version": __version__, "model": s.model, "configured": bool(order),
                 "primary": order[0]["name"] if order else None,
                 "fallback": order[1]["model"] if len(order) > 1 else None}
 
