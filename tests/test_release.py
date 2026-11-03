@@ -47,3 +47,24 @@ def test_bandit_missing_says_so(tmp_path, monkeypatch):
     monkeypatch.setattr(importlib.util, "find_spec", lambda n, *a: None if n == "bandit" else real(n, *a))
     found, info = security.run_bandit(tmp_path)
     assert found == [] and info["status"].startswith("skipped: not installed") and "lantern[scan]" in info["status"]
+
+
+def test_tester_guide_and_issue_form():
+    """docs/try-lantern.md has the eight sections in order, and README, the site and the guide give one install command."""
+    import re
+    root = Path(__file__).parents[1]
+    doc = (root / "docs/try-lantern.md").read_text(encoding="utf-8")
+    heads = re.findall(r"^## (\d)\. (.+)$", doc, re.M)
+    assert [n for n, _ in heads] == [str(i) for i in range(1, 9)]
+    words = ["what it does", "install", "run", "what to look at", "explanations", "what runs where", "how to report", "uninstall"]
+    assert all(w in h.lower() for w, (_, h) in zip(words, heads)), heads
+    assert "[ocr]" in doc and "tesseract" in doc.lower()
+    cmd = 'pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern'
+    readme, site = (root / "README.md").read_text(encoding="utf-8"), (root / "site/index.html").read_text(encoding="utf-8")
+    pinned = lambda text: set(re.findall(re.escape(cmd) + r'[^"]*"', text))  # noqa: E731
+    assert pinned(doc) == pinned(readme) == pinned(site) and len(pinned(doc)) == 1
+    assert "docs/try-lantern.md" in readme and "docs/try-lantern.md" in site
+    form = (root / ".github/ISSUE_TEMPLATE/tester-report.yml").read_text(encoding="utf-8")
+    assert 'labels: ["tester", "v0.9"]' in form and "id: version" in form
+    cfg = (root / ".github/ISSUE_TEMPLATE/config.yml").read_text(encoding="utf-8")
+    assert "blank_issues_enabled: false" in cfg and "docs/try-lantern.md" in cfg
