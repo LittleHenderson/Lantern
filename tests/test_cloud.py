@@ -43,7 +43,7 @@ def env(tmp_path):
     gw = TestClient(gw_app)
     transport = CountingASGI(gw_app)
     s = Settings(gateway_url="http://gateway.test/v1", admin_secret=ADMIN, db_path=str(tmp_path / "cloud.db"),
-                 results_dir=str(tmp_path / "results"))
+                 results_dir=str(tmp_path / "results"), work_dir=str(tmp_path / "work"), audits=False)
     cloud = TestClient(create_app(s, transport=transport))
     return gw, gw_app, cloud, transport, s, tmp_path
 
@@ -114,7 +114,7 @@ def test_signed_in_account_follows_the_person_across_token_rotation(env):
 def test_gateway_down_is_unavailable_not_signed_out(tmp_path):
     def down(request):
         raise httpx.ConnectError("no route")
-    s = Settings(gateway_url="http://gateway.test/v1", db_path=str(tmp_path / "c.db"), results_dir=str(tmp_path / "r"))
+    s = Settings(gateway_url="http://gateway.test/v1", db_path=str(tmp_path / "c.db"), results_dir=str(tmp_path / "r"), work_dir=str(tmp_path / "w"))
     cloud = TestClient(create_app(s, transport=httpx.MockTransport(down)))
     r = cloud.get("/v1/me", headers=bearer("lt_whatever"))
     assert r.status_code == 503 and r.json()["error"]["type"] == "unavailable"
@@ -136,7 +136,7 @@ def test_admin_stats_needs_the_admin_secret(env):
 
 
 def test_admin_stats_closed_when_no_secret_is_set(tmp_path):
-    s = Settings(admin_secret="", db_path=str(tmp_path / "c.db"), results_dir=str(tmp_path / "r"))
+    s = Settings(admin_secret="", db_path=str(tmp_path / "c.db"), results_dir=str(tmp_path / "r"), work_dir=str(tmp_path / "w"))
     assert TestClient(create_app(s)).get("/v1/admin/stats", headers=bearer("")).status_code == 403
 
 

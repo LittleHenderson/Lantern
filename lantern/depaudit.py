@@ -41,6 +41,31 @@ def _pkg_version(name: str) -> str | None:
         return None
 
 
+def precomputed(tool: str) -> tuple[list[dict], dict] | None:
+    """Results of an audit that already ran elsewhere: Lantern's cloud service runs the audits (network, lock files
+    only) in one step and the analysis (no network at all) in another, and hands the first step's file to the
+    second through LANTERN_AUDITS_FROM. None when there is no such file or it has nothing for `tool`."""
+    path = os.environ.get("LANTERN_AUDITS_FROM", "")
+    if not path:
+        return None
+    try:
+        d = json.loads(Path(path).read_text(encoding="utf-8")).get(tool)
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(d, dict) or not isinstance(d.get("findings"), list) or not isinstance(d.get("info"), dict):
+        return None
+    return [f for f in d["findings"] if isinstance(f, dict)], d["info"]
+
+
+def run_all(repo: Path) -> dict:
+    """Both audits with the network on, as {tool: {findings, info}} (what LANTERN_AUDITS_FROM reads)."""
+    out = {}
+    for tool, fn in (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit)):
+        f, info = fn(repo, False)
+        out[tool] = {"findings": f, "info": info}
+    return out
+
+
 def offline() -> bool:
     return os.environ.get("LANTERN_OFFLINE", "").strip() not in ("", "0", "false", "no")
 
@@ -134,6 +159,9 @@ def python_pins(repo: Path) -> tuple[dict[str, tuple[str, str]], list[str], list
 
 def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
     from .security import _fid
+    pre = precomputed("pip-audit")
+    if pre is not None:
+        return pre
     info = {"tool": "pip-audit", "role": "known-vulnerable Python packages", "version": _pkg_version("pip-audit")}
     pins, loose, files = python_pins(repo)
     if not files:
@@ -191,6 +219,9 @@ def _advisories(vulns: list[dict]) -> list[tuple[dict, list[str]]]:
 
 def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
     from .security import _fid
+    pre = precomputed("npm-audit")
+    if pre is not None:
+        return pre
     info = {"tool": "npm-audit", "role": "known-vulnerable npm packages (production dependencies)"}
     manifests = _project_files(repo, names=("package.json",))
     if not manifests:
@@ -253,3 +284,8 @@ def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     if other:
         res["not_checked"] = other[:10]
     return out, res
+
+
+if __name__ == "__main__":   # python -m lantern.depaudit REPO OUT.json  (the cloud service's audit step)
+    import sys
+    Path(sys.argv[2]).write_text(json.dumps(run_all(Path(sys.argv[1]))), encoding="utf-8")

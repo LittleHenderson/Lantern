@@ -12,18 +12,25 @@ Run:  LANTERN_ADMIN_SECRET=... uvicorn lantern_cloud.app:create_app --factory --
 
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from . import __version__
 from .identity import GatewayUnavailable, Identity
 from .idle import IdleExit
 from .settings import Settings
-from .store import Store
+from .store import FINISHED, LimitReached, Store
+from .worker import Worker
+
+PRIVACY = {"structure", "full"}
+FULL_NOTICE = ("Short source snippets of your code will be stored on Lantern's server so the report can show them. "
+               "Send stored_snippets_ok: true to agree, or choose privacy \"structure\" (no code kept).")
 
 
 def _engine_version() -> str | None:
@@ -34,13 +41,40 @@ def _engine_version() -> str | None:
         return None
 
 
-def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+def _host_of(link: str, allowed: list[str] | None) -> str:
+    """The link's host, after `lantern.remote.parse` (https only, known forges, no credentials). ValueError with a
+    plain sentence otherwise."""
+    from lantern import remote
+    if not isinstance(link, str) or not link.strip() or len(link) > 500:
+        raise ValueError("Paste the https link of a public repository, such as https://github.com/owner/name.")
+    try:
+        info = remote.parse(link.strip())
+    except (ValueError, RuntimeError) as e:
+        raise ValueError(str(e)) from None
+    host = info["host"].lower().removeprefix("www.")
+    if allowed is not None and host not in allowed:
+        raise ValueError("Cloud mode accepts links from " + ", ".join(allowed) + " for now.")
+    return host
+
+
+def run_view(r: dict, logs=None) -> dict:
+    """What the owner sees about a run. Never the account id."""
+    tail = (logs.tail(r["id"]) if logs and r["status"] not in FINISHED else None) or r.get("log_tail") or ""
+    return {"id": r["id"], "link": r["link"], "host": r["host"], "privacy": r["privacy"], "status": r["status"],
+            "stage": r["stage"], "error": r["error"], "created": r["created"], "started": r["started"],
+            "finished": r["finished"], "commit": r["commit_sha"], "summary": r["summary"],
+            "shared": bool(r["share_slug"]), "log_tail": tail}
+
+
+def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None,
+               start_worker: bool = True) -> FastAPI:
     s = settings or Settings()
     Path(s.results_dir).mkdir(parents=True, exist_ok=True)
     store = Store(s.db_path)
     ident = Identity(s.gateway_url, s.identity_ttl, transport=transport)
+    worker = Worker(s, store) if start_worker else None
     app = FastAPI(title="Lantern cloud", docs_url=None, redoc_url=None, openapi_url=None)
-    app.state.store, app.state.settings, app.state.identity = store, s, ident
+    app.state.store, app.state.settings, app.state.identity, app.state.worker = store, s, ident, worker
     idle = IdleExit(s.idle_minutes, busy=lambda: store.active_runs() > 0)
     app.state.idle = idle
     idle.start()
@@ -86,6 +120,72 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return {"account": acc.split(":", 1)[0], "label": who["label"],
                 "runs_today": store.runs_today(acc), "runs_active": store.active_runs(acc),
                 "limits": s.limits()}
+
+    # ---- runs ----
+    def own_run(rid: str, who: dict) -> dict:
+        r = store.run(rid) if isinstance(rid, str) and len(rid) <= 40 else None
+        if not r or not hmac.compare_digest(r["account"], who["account"]):
+            raise HTTPException(404, "No run with that id in your account.")   # same answer for someone else's run
+        return r
+
+    @app.post("/v1/repos", status_code=202)
+    async def start_run(payload: dict, authorization: str | None = Header(default=None)):
+        who = await signed_in(authorization)
+        if worker is None:
+            raise HTTPException(503, "Runs are paused on this server.")
+        privacy = payload.get("privacy") or s.default_privacy
+        if privacy not in PRIVACY:
+            raise HTTPException(400, 'privacy is "structure" (no code kept) or "full" (short snippets kept).')
+        if privacy == "full" and payload.get("stored_snippets_ok") is not True:
+            raise HTTPException(400, FULL_NOTICE)
+        try:
+            host = _host_of(payload.get("link"), s.hosts())
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        try:
+            rid = store.create_run(who["account"], payload["link"].strip(), host, privacy, per_day=s.runs_per_day,
+                                   global_per_day=s.global_runs_per_day, per_user_active=s.per_user_active)
+        except LimitReached as e:
+            raise HTTPException(429, str(e)) from None
+        worker.submit(rid)
+        return run_view(store.run(rid))
+
+    @app.get("/v1/runs")
+    async def list_runs(authorization: str | None = Header(default=None)):
+        who = await signed_in(authorization)
+        return {"runs": [run_view(r) for r in store.runs(who["account"])]}
+
+    @app.get("/v1/runs/{rid}")
+    async def get_run(rid: str, authorization: str | None = Header(default=None)):
+        who = await signed_in(authorization)
+        return run_view(own_run(rid, who), worker.logs if worker else None)
+
+    @app.get("/v1/runs/{rid}/stream")
+    async def stream_run(rid: str, authorization: str | None = Header(default=None)):
+        """Server-sent events: `log` events (one line each), then one `end` event with the run, then the stream
+        closes. A finished run sends its saved tail and `end` at once."""
+        who = await signed_in(authorization)
+        own_run(rid, who)
+
+        async def events():
+            n = 0
+            while True:
+                r = store.run(rid)
+                if r is None:
+                    return
+                if r["status"] in FINISHED:
+                    lines = (r.get("log_tail") or "").splitlines() if n == 0 else []
+                    lines += worker.logs.since(rid, n)[0] if worker and n else []
+                    for ln in lines:
+                        yield "event: log\ndata: " + json.dumps(ln) + "\n\n"
+                    yield "event: end\ndata: " + json.dumps(run_view(r)) + "\n\n"
+                    return
+                lines, n = worker.logs.since(rid, n) if worker else ([], n)
+                for ln in lines:
+                    yield "event: log\ndata: " + json.dumps(ln) + "\n\n"
+                await asyncio.sleep(0.4)
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={"cache-control": "no-store", "x-accel-buffering": "no"})
 
     @app.get("/v1/admin/stats")
     def admin_stats(authorization: str | None = Header(default=None)):

@@ -38,11 +38,18 @@ class Settings:
     runs_per_day: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_RUNS_PER_DAY", 10))
     global_runs_per_day: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_GLOBAL_RUNS_PER_DAY", 300))
     concurrent_jobs: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_CONCURRENT_JOBS", 2))
+    # The same variable `lantern.remote` reads for its size check (set in cloud/Dockerfile and cloud/fly.toml).
     clone_max_mb: int = field(default_factory=lambda: _env_int("LANTERN_CLONE_MAX_MB", 200))
     job_timeout: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_JOB_SECONDS", 600))
     # Minutes with no request and no run before the service stops itself (Fly then keeps the machine stopped, and
     # bills nothing for it, until the next visitor). 0 = never.
     idle_minutes: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_IDLE_MINUTES", 0))
+    # Temp folders for runs in progress (clone + analysis output); emptied at start-up and after every run.
+    work_dir: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_WORK", "cloud-work"))
+    # Dependency audits (pip-audit, npm audit on lock files) need the network; off only in tests.
+    audits: bool = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_AUDITS", "1") not in ("0", "false", "no"))
+    # Runs one person may have queued or running at once.
+    per_user_active: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_ACTIVE_PER_USER", 1))
     # 0 = keep results until the person deletes them (the owner's choice). A positive number deletes runs that old.
     retention_days: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_RETENTION_DAYS", 0))
     # Comma-separated hosts allowed for clones. Empty = every host `lantern.remote` accepts.
