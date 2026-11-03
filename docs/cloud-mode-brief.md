@@ -2,7 +2,7 @@
 
 **For:** the dev agent that builds it
 **Owner:** Little Henderson (Wakil), GitHub `LittleHenderson` · repo `LittleHenderson/Lantern`
-**Written:** 2026-11-02 by the previous dev agent, from spec v0.4 chapters 5, 12, 13 and the code on `main`
+**Written:** 2026-11-02 by the previous dev agent, from spec v0.4 chapters 5, 12, 13 and the code on `main` at v0.9.0 (`5f7ada1`)
 **Read first:** `CLAUDE.md`, `docs/handoff-to-design.md` (rules, build/ship routine, how the owner wants updates),
 `docs/api.md`, `docs/deploy.md`, `gateway/README.md`
 
@@ -39,6 +39,7 @@ only needed past ~1k edges; the current viewer is fine for v1 repos).
 | Sign-in + allowance | `gateway/` (FastAPI, `create_app --factory`, SQLite `Store`, `auth.py`: GitHub/Google OAuth with HMAC state, one token per account, `/v1/auth/<p>/start|callback|claim`, `/v1/allowance`, `/v1/chat/completions` narrowed proxy, per-user and global daily caps, admin dashboard) live at `https://lantern-gateway.fly.dev` | The cloud service is a **second app in the same style** (or a second router in the same process — your call; see §3). Reuse `auth.py` and the token scheme (hashes only, never emails). |
 | Explanations | `lantern.pipeline.plan_explain/explain`, `lantern.providers` (consent, `LanternHostedProvider` for the allowance, cache by `cache_model`) | v1.5: run `explain` server-side on the stored results with the signed-in user's allowance token. |
 | Ask Lantern | `lantern.ask.facts/ask` | v1.5, same as above. Screenshot OCR stays local-only (never upload images). |
+| Isolation | `lantern/sandbox.py` + `lantern/_jail.py` (v0.9.0): Docker backend (image pinned by digest, project read-only at `/app`, `--network none`, 2 CPU / 2 GB, uid 65534) or restricted subprocess (read-only temp copy, env allow-list, rlimits, Landlock writes-only-in-temp + no TCP, 10-min wall clock killing the tree); `LANTERN_SANDBOX=subprocess\|docker` | Built for "Watch my tests run"; **reuse it to run the cloud worker's analysis step** (see §3). Tests: `tests/test_sandbox.py`. |
 | Connector | `lantern mcp` (stdio) | Out of scope for cloud v1; an HTTP transport is a separate backlog item. |
 | Website | `site/` on GitHub Pages | Add the "Analyze my repo" entry point here; the app itself is served by the cloud service, not by Pages. |
 | Deploy | Fly.io, org Little Henderson, region sjc; `gateway/fly.toml`, `gateway/Dockerfile`, `docs/deploy.md` | The agent cannot run `fly deploy` or set secrets; the owner does that from `docs/deploy.md`. Write the steps for him. |
@@ -64,12 +65,15 @@ browser ◄── GET /r/<run>/report  (report.html, live=None, nonce CSP) ─�
 Decisions already made for you (the owner approved the pattern in the gateway; keep it):
 - **Python/FastAPI, SQLite, one Docker image**, same layout as `gateway/`. No Postgres, no queue service, no Kubernetes
   in v1. Spec 13.1 allows exactly this ("Postgres-backed queue initially" — SQLite is the smaller first step).
-- **Isolation in v1 is process-level, not a microVM**: the worker runs as a non-root user in its own container
-  with `ulimit` CPU/memory/time, a read-only image, a writable `/tmp` only, and egress limited to git hosts and the
-  audit services (OSV / npm registry). This is acceptable **only because the engine never runs the user's code**
-  (no build, no tests, no `npm install`, no `pip install`, `trace_cmd=None`). The spec's microVM (5.1) is the v2
-  target; say so in the Limits section of every cloud Evidence Report ("analysed in a shared container, no runtime
-  tracing").
+- **Isolation in v1 reuses `lantern/sandbox.py`**, not a microVM. Sequence per job: (1) `remote.clone` on the
+  service side (network needed, untrusted bytes only, size cap); (2) `pipeline.analyze(..., offline=True,
+  trace_cmd=None)` **inside the sandbox** (Docker backend on Fly when the daemon is available, else the restricted
+  subprocess: Landlock, no TCP, rlimits, uid 65534, 10-min wall clock) with the clone mounted read-only and results
+  written to the sandbox temp dir; (3) the dependency audits (`lantern.depaudit`) run on the service side on the
+  lock files only — they are data, not code, and need the network (OSV / npm registry); (4) results copied out,
+  clone and temp removed. This is acceptable **only because the engine never runs the user's code** (no build, no
+  tests, no `npm install`, no `pip install`). The spec's microVM (5.1) is the v2 target; say so in the Limits section
+  of every cloud Evidence Report ("analysed in a sandboxed container, no runtime tracing").
 - **Clone destroyed when the job ends**, success or failure (`remote.remove_tree` in a `finally`). Only derived
   results persist (spec 5.1 Retention). Verify with a test that lists the tmp dir after a failed job.
 - **Privacy level is chosen before the run** and shown on the report and in Evidence provenance. Cloud default:
@@ -141,6 +145,7 @@ UI against it (the design side builds only against documented routes).
   works, revoke returns 404 → delete removes files → limits return 429 → a run over the size cap fails with the
   plain message and leaves nothing behind.
 - Poisoned results (`tools/poison_report.py`) served through `/r/…` pass `tools/viewer_smoke.js`.
+- A job whose analysis step tries to open a TCP connection or write outside its temp dir is killed and reported as `blocked` (the sandbox's `LANTERN-SANDBOX-BLOCKED:` marker), with nothing left behind.
 - The self-audit covers the new package.
 
 ## 8. Milestones (each one a PR, merged only on the owner's "merge #N")
