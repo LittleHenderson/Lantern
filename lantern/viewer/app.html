@@ -166,7 +166,9 @@ h3{font:650 15px/1.35 var(--display);letter-spacing:-.01em;color:var(--ink);marg
 
 
 /* ---------- Projects (design 3b/8a/8b): Simple hero + app cards, Advanced strip + table ---------- */
-.simplehome{max-width:1040px;padding-top:36px}
+.simplehome{max-width:1040px;padding-top:36px;position:relative;isolation:isolate}
+/* The warm light behind the home headline, as in the mock-ups (same --glow as the hero on other pages). */
+.simplehome::before{content:"";position:absolute;z-index:-1;left:50%;top:-70px;width:min(820px,100%);height:360px;transform:translateX(-50%);background:radial-gradient(closest-side,var(--glow),transparent);pointer-events:none}
 .simplehome h1{font:700 36px/1.15 var(--font);letter-spacing:-.025em;text-align:center;margin:0 0 10px}
 .simplehome .lede{text-align:center;max-width:520px;margin:0 auto 28px;font-size:16px}
 .dropzone{max-width:720px;margin:0 auto;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:10px 10px 10px 20px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow-2);transition:border-color var(--t) var(--ease), box-shadow var(--t) var(--ease)}
