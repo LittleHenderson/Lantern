@@ -829,7 +829,8 @@ class Handler(BaseHTTPRequestHandler):
             s = self.app.store.settings()
             live = {"api": f"/api/projects/{p['id']}", "token": self.app.token, "model": s.get("model") and
                     f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS,
-                    "view_mode": "advanced" if s.get("view_mode") == "advanced" else "simple"}
+                    "view_mode": "advanced" if s.get("view_mode") == "advanced" else "simple",
+                    "backdrop": s.get("backdrop") if s.get("backdrop") in ("off", "subtle", "bold") else "subtle"}
         return self._send(*result_page(self.app.out(p), name, live))
 
     # ------------------------------------------------------------------ GET routes

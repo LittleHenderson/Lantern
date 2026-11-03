@@ -37,7 +37,7 @@
 }
 :root[data-theme=dark]{
   color-scheme: dark;
-  --bg:#0E0E10; --glow:rgba(255,170,60,.09); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
+  --bg:#0E0E10; --glow:rgba(255,170,60,.1); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
   --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
   --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
   --accent:#4FC3BA; --accent-ink:#7FDBD3; --accent-soft:rgba(79,195,186,.14); --on-accent:#0E0E10;
@@ -52,7 +52,7 @@
 @media (prefers-color-scheme: dark){
   :root:not([data-theme=light]){
     color-scheme: dark;
-    --bg:#0E0E10; --glow:rgba(255,170,60,.09); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
+    --bg:#0E0E10; --glow:rgba(255,170,60,.1); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
     --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
     --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
     --accent:#4FC3BA; --accent-ink:#7FDBD3; --accent-soft:rgba(79,195,186,.14); --on-accent:#0E0E10;
@@ -420,7 +420,7 @@ body[data-mode=simple] .sub .tabs button.on::after{display:none}
 .tabs button:hover{color:var(--ink)}
 .tabs button.on{color:var(--ink)}
 .tabs button.on::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
-iframe{border:0;width:100%;height:calc(100vh - var(--hh));height:calc(100dvh - var(--hh));display:block;background:var(--bg)}
+iframe{border:0;width:100%;height:calc(100vh - var(--hh));height:calc(100dvh - var(--hh));display:block;background:transparent}
 .withbar iframe{height:calc(100vh - var(--hh) - 56px);height:calc(100dvh - var(--hh) - 56px)}
 .xbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:56px;padding:8px 20px;background:var(--surface);border-bottom:1px solid var(--line);font-size:13px}
 .xbar>.ic{width:18px;height:18px;color:var(--accent);flex:none} .xbar .t{flex:1;min-width:240px} .xbar .t b{color:var(--ink)} .xbar .d{font-size:12px;color:var(--muted);margin-top:2px}

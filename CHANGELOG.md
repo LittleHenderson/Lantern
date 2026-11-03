@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- The moving shapes behind the app now show behind the Atlas too (the report inside the app is see-through, and its
+  lanes sit on the page instead of a grey box), and a report opened on its own draws the same shapes: full behind
+  About and the other pages, quieter behind the map, findings and fix pages. Settings › Backdrop (off, subtle, bold)
+  reaches a report opened in its own tab; with reduced motion turned on the shapes stay still. Dark mode's glow
+  matches the design token.
 - Paths, as designed: Advanced opens on the whole-app Graph with the riskiest route already selected; Simple opens
   on Lanes, full width, starting on the path that reaches the worst finding, with a line naming where it goes wrong.
   The lanes now fit the screen instead of running off the right edge, and the page title is no longer cut short.
