@@ -18,6 +18,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   ("Starting your check…"), and each running check shows a timer that counts every second ("running for 0:42") on its
   card and its progress page. With animations turned off in Windows or macOS (reduced motion), the progress bar and dots
   now fade in and out instead of standing still. The app (`lantern serve`) shares the bar and dot change.
+- Landing page: the intro plays on every visit to `/` (deep links and `?intro=0` skip it) with no flash of the page first,
+  and ends on a card with "Add your app" (lands on the install card with an accent ring) and "See a finished report
+  first"; Skip and Escape jump to that card. The hero's first button is now "Add your app". The React scripts carry SRI
+  hashes, and the page opens even if they do not load. On phones the page is no longer wider than the screen.
 
 ## 0.10.0
 

@@ -25,7 +25,7 @@ break the product while you do it.
 | Connector | MCP over stdio (`lantern mcp`), 8 tools, **no accept/close/dismiss tool**, connections log for Settings › Connections, "Send to…" on every finding, SARIF export | `lantern/mcp_server.py`, `lantern/exporters.py`, `docs/connectors.md` |
 | Packs | Analysis packs (`LP-*` rules + entry patterns), Django built in, `lantern packs` | `lantern/packs.py`, `docs/packs.md` |
 | Model / allowance | Default `anthropic/claude-haiku-5-5` (switched from DeepSeek on 2026-11-01 for price + US hosting; DeepSeek is the gateway's fallback); free allowance via `gateway/` on Fly (`https://lantern-gateway.fly.dev`), GitHub/Google sign-in, consent before code leaves the machine, clean stop when the allowance runs out | `lantern/providers.py`, `gateway/`, `docs/deploy.md` |
-| Website | Landing page + 20 s intro (plays on the first three visits, Replay in header), privacy section, live demo report built at publish time | `site/`, `.github/workflows/site.yml` → https://littlehenderson.github.io/Lantern/ |
+| Website | Landing page + 20 s intro (plays on every visit to `/`, ends on an "Add your app" card; deep links and `?intro=0` skip it; Replay in header), privacy section, live demo report built at publish time | `site/`, `.github/workflows/site.yml` → https://littlehenderson.github.io/Lantern/ |
 | Docs | API contract and result-file shapes, acceptance checklist per screen, stack lanes rules | `docs/api.md` |
 
 ## 2. Rules that must not break (the owner holds these; CI enforces several)
@@ -69,7 +69,7 @@ Honest list, screen by screen. "Verify" means I believe it is partly there and y
 - Phones: every screen reflows at ≤720 px (Simple only), but none is the 402×874 design from Lantern App turn 9 or Redesign 2d/1h/1o/1r. The standalone report's tab bar wraps badly on phones (the app hides it when embedded).
 - Backdrop: in `app.html` (`#bg`, three drifting layers, off/subtle/bold). **Not** in the standalone `report.html`.
 
-**Landing / intro** — built from `lantern-intro.jsx` (Babel-compiled to `site/intro/intro.js`); tones muted; plays on first three visits (owner's choice). Verify scene timing and captions against Lantern Landing; the video export from the timeline was not done.
+**Landing / intro** — built from `lantern-intro.jsx` (Babel-compiled to `site/intro/intro.js`); tones muted; plays on every visit and ends on an "Add your app" card (Claude Design's landing-intro directive, 2026-11-03; earlier: first three visits). Verify scene timing and captions against Lantern Landing; the video export from the timeline was not done.
 
 **Projects (3b)** — Simple hero + drop zone + app cards with grade ring; Advanced strip + table + live log. Verify sort behaviour and the card's single action.
 

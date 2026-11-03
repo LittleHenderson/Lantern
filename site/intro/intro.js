@@ -887,7 +887,8 @@ function Piece({
       left: 260,
       right: 260,
       top: 0,
-      bottom: 0,
+      // centred at 38 % of the height, so the page's end card (bottom 30 %) never covers the tagline
+      bottom: '24%',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
