@@ -277,6 +277,8 @@ pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--co
 .gbody p{margin:10px 0 0;font-size:14px;line-height:1.6;color:var(--ink-2)}
 @media (max-width:860px){.gsplit{grid-template-columns:1fr}}
 
+/* Re-check to apply (packs changed) */
+.stale{font-size:12px;color:var(--warn, #9a6200)}
 /* Watch my tests run: sheet + toast */
 .sbx{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:12px 0;background:var(--surface)} .sbx .sbxh{display:flex;align-items:center;gap:8px} .sbx .sbxh svg{width:16px;height:16px;color:var(--good, #1f8a5a)} .sbx ul{margin:6px 0 4px 22px;padding:0;font-size:13.5px;color:var(--ink-2, inherit)} .sbx .sbxl{font-size:13px;color:var(--muted)}
 .sheetwrap{position:fixed;inset:0;z-index:30;background:rgba(14,14,16,.45);display:grid;place-items:center;padding:20px}
@@ -894,6 +896,7 @@ function renderHome(el) {
       ${run ? `<div class="checking"><i></i>Checking… ${p.score != null ? 'usually under a minute' : 'about a minute'}</div><div class="indeterminate"></div><p class="lastline" data-last="${p.id}">${esc(lastLine(p))}</p>`
         : `<p class="sentence">${sentence(p)}</p>`}
       ${!p.exists ? note('warn', 'This folder no longer exists.') : ''}
+      ${p.stale === 'packs' && !run ? note('info', 'Analysis packs changed since this check. <b>Re-check to apply.</b>') : ''}
       ${job && job.status === 'error' ? note('err', esc(job.error)) : ''}
       <div class="actions">${run ? '' : p.has_report ? `<button class="btn primary" data-open="${p.id}" data-rt="fix">Show me what to fix</button>` : ''}${p.starter && !run ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}
         ${run ? '' : `<button class="btn ${p.has_report ? '' : 'primary'}" data-run="${p.id}" ${!p.exists ? 'disabled' : ''}>${p.has_report ? 'Re-check' : 'Check my app'}</button>`}
@@ -933,7 +936,7 @@ function renderHomePro(el, ps) {
       ${p.score != null ? `<div class="rd"><span style="font-weight:600;color:var(--ink);width:24px">${esc(p.score)}</span><div class="bar"><i class="bar-${t}" style="width:${barw(p)}%"></i></div><span class="g tone-${t}">${esc(p.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'analyzing' : 'not yet'}</span></div>`}
       ${num(c ? c.critical : null, true)}${num(c ? c.high : null)}${num(c ? c.medium : null)}${num(c ? c.accepted : null)}
       <span class="num">${p.functions ? `${esc(p.explained || 0)} / ${esc(p.functions)}` : '<span class="dash">–</span>'}</span>
-      <span style="color:var(--muted);white-space:nowrap">${run ? 'Analyzing…' : esc(p.finished_at || '–')}</span>
+      <span style="color:var(--muted);white-space:nowrap">${run ? 'Analyzing…' : esc(p.finished_at || '–')}${p.stale === 'packs' && !run ? '<br><span class="stale" title="Analysis packs changed since this check">Re-check to apply</span>' : ''}</span>
       <div class="acts">${p.has_report ? `<button class="btn" data-open="${p.id}">Open</button>` : ''}${p.starter ? `<button class="btn" data-guide="${p.id}">Guide</button>` : ''}${run ? `<button class="btn" data-log="${p.id}">View log</button>` : `<button class="btn" data-run="${p.id}" ${!p.exists ? 'disabled' : ''}>${p.has_report ? 'Re-check' : 'Analyze'}</button>`}<button class="btn quiet" data-del="${p.id}" aria-label="Remove from this list">${icon('trash')}</button></div></div>`;
   }).join('');
   const logs = running.map(p => `<div class="prolog" id="log-${p.id}"><div class="t">${esc(p.name)} · analyze</div>${esc(((S.jobs[p.id] || {}).log || []).join('\n'))}</div>`).join('');
