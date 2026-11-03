@@ -5,6 +5,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Project screens have one header row, as designed: logo, "My apps" (Simple) or "Projects /" (Advanced), the app's
+  name and grade, the tabs (a segmented control in Simple), then the actions and the Simple/Advanced switch. The
+  global header and the report's own stats strip no longer stack above it, so at 1200px nothing is cut off. The cloud
+  website's run pages get the same single row.
 - Phones always show the Simple view, as the design says, even when Advanced was picked on a computer; the
   Simple/Advanced switch is hidden below 760px. Protections no longer says "Lantern found each one in your code" when
   it found none.
