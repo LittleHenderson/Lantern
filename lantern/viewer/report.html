@@ -131,6 +131,9 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:280px minmax(0,1fr) 
 main.noleft{grid-template-columns:minmax(0,1fr) 440px} main.noleft aside.left{display:none}
 aside.left{border-right:1px solid var(--line);background:color-mix(in srgb, var(--surface) 62%, transparent);overflow:auto;padding:14px 10px 24px}
 section.center{padding:20px 24px 40px;overflow:auto;min-width:0}
+/* design 6b/11b: Flowchart and Graph sit straight on a dotted page; the drifting backdrop shows between the dots.
+   The dots scroll with the content (local), so the map and its grid move together. */
+section.center.dotted{background-image:radial-gradient(color-mix(in srgb, var(--faint) 60%, transparent) 1.1px, transparent 1.4px);background-size:20px 20px;background-attachment:local}
 aside.right{border-left:1px solid var(--line);background:var(--surface);overflow:auto;position:relative}
 aside.left{position:relative}
 /* Retracting side panels (design 3c): a 30px rail with a vertical label and the same toggle. */
@@ -174,8 +177,7 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 .strip .mini{display:none;align-items:center;gap:8px}
 @media (max-width:720px){.lanewalk{grid-template-columns:1fr 1fr}.strip:not(.legend2) .stop,.strip:not(.legend2) .ln2,.strip:not(.legend2) .yah{display:none}.strip:not(.legend2) .mini{display:inline-flex}.strip.legend2{gap:7px}.strip.legend2 .ln2{width:18px}.strip.legend2 .yah{display:none}}
 /* Graph view: the whole app in five columns, risk as heat */
-#graph{position:relative;border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden;min-height:420px;
-  background-image:radial-gradient(color-mix(in srgb, var(--faint) 60%, transparent) 1.1px, transparent 1.4px);background-size:20px 20px}   /* design 6b: dotted canvas */
+#graph{position:relative;overflow:hidden;min-height:420px}   /* design 6b: no box; the map sits on the dotted page (section.center.dotted) */
 #graph .vp{overflow:auto;height:calc(100vh - 260px);min-height:400px;cursor:grab} #graph .vp.drag{cursor:grabbing}
 #graph svg{display:block;transform-origin:0 0}
 #graph svg text{font-family:var(--mono);font-size:11.5px;fill:var(--ink)} #graph svg text.col{font-family:var(--font);font-size:11px;font-weight:600;letter-spacing:.06em;fill:var(--muted)}
@@ -405,8 +407,7 @@ input.search::placeholder{color:var(--faint)}
 .empty{color:var(--muted);padding:48px 16px;text-align:center;line-height:1.6}
 .empty b{display:block;color:var(--ink);font:600 16px var(--display);margin-bottom:4px}
 .empty .art{width:52px;height:52px;display:block;margin:0 auto 12px}
-#chart{width:100%;overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface);
-  background-image:radial-gradient(color-mix(in srgb, var(--faint) 60%, transparent) 1.1px, transparent 1.4px);background-size:20px 20px}   /* same dotted canvas as the graph */
+#chart{width:100%;overflow:auto}   /* design: no box; the flowchart sits on the dotted page like the graph */
 #chart svg text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
 #chart g[data-id]:hover rect.box{stroke:var(--accent-line)}
 
@@ -1022,9 +1023,21 @@ function renderGraph() {
 function wireGraph(el) {
   const g = el.querySelector('#graph'), vp = g.querySelector('.vp'), svg = g.querySelector('svg');
   const w0 = +svg.getAttribute('width'), h0 = +svg.getAttribute('height');
-  const apply = () => { svg.style.transform = `scale(${S.zoom})`; svg.style.width = w0 + 'px'; vp.style.setProperty('--w', w0 * S.zoom + 'px'); svg.parentElement.style.minWidth = (w0 * S.zoom) + 'px'; svg.parentElement.style.minHeight = (h0 * S.zoom) + 'px'; };
+  /* the svg has a viewBox, so it is zoomed by its own size: the frame (.vp) then scrolls and drags over it */
+  const apply = () => { svg.setAttribute('width', Math.round(w0 * S.zoom)); svg.setAttribute('height', Math.round(h0 * S.zoom)); vp.style.setProperty('--w', w0 * S.zoom + 'px'); };
   const fit = () => { S.zoom = Math.max(.35, Math.min(1.4, Math.min((vp.clientWidth - 8) / w0, (vp.clientHeight - 8) / h0))); apply(); };
-  if (S.zoom === 1 && w0 > vp.clientWidth) fit(); else apply();
+  /* design 6b: the graph opens readable (never below 80%) and is dragged sideways, rather than shrunk until the names
+     cannot be read; the selected function is scrolled into view. "fit" still shows the whole app at once. */
+  if (S.zoom === 1 && w0 > vp.clientWidth) {
+    fit(); if (S.zoom < .8) { S.zoom = .8; apply(); }
+  } else apply();
+  /* a re-render keeps where the person had dragged to; the first time, the selected function is centred */
+  if (S.gscroll) { vp.scrollLeft = S.gscroll[0]; vp.scrollTop = S.gscroll[1]; }
+  else {
+    const on = S.sel && [...g.querySelectorAll('g[data-id]')].find(x => x.dataset.id === S.sel);
+    if (on) { try { const r = on.getBBox(); vp.scrollLeft = Math.max(0, (r.x + r.width / 2) * S.zoom - vp.clientWidth / 2); vp.scrollTop = Math.max(0, (r.y + r.height / 2) * S.zoom - vp.clientHeight / 2); } catch (e) {} }
+  }
+  vp.addEventListener('scroll', () => { S.gscroll = [vp.scrollLeft, vp.scrollTop]; }, {passive: true});
   g.querySelectorAll('[data-z]').forEach(b => b.onclick = () => { if (b.dataset.z === 'fit') return fit(); S.zoom = Math.max(.35, Math.min(2.5, S.zoom * (b.dataset.z === 'in' ? 1.2 : 1 / 1.2))); apply(); });
   let drag = null;
   vp.onmousedown = e => { if (e.target.closest('g[data-id]')) return; drag = {x: e.clientX, y: e.clientY, l: vp.scrollLeft, t: vp.scrollTop}; vp.classList.add('drag'); };
@@ -1207,6 +1220,7 @@ function recheckBanner() {
 const ART = '<svg class="art" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="35" r="24" fill="#FFB547" opacity=".14"/><path d="M26 13h12M25 51h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg>';
 function renderMap() {
   const el = document.getElementById('center');
+  el.classList.toggle('dotted', S.view === 'graph' || S.view === 'chart');
   if (!S.entry) {
     const eps = G.nodes.filter(n => n.entry && n.entry.kind !== 'test');
     el.innerHTML = `<div class="toolbar" style="justify-content:flex-end">${helpBtns()}</div><div class="empty">${ART}<b>Pick a starting point</b>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
@@ -1829,6 +1843,7 @@ async function rAskSend(text) {
 window.setSimple = v => { setMode(PHONE.matches || v, false); if (LIVE) LIVE.view_mode = S.simple ? 'simple' : 'advanced'; render(); };   // the app's toggle, already saved
 PHONE.addEventListener('change', () => { if (PHONE.matches && !S.simple) { S.simple = true; render(); } });
 function render() {
+  document.getElementById('center').classList.remove('dotted');   /* renderMap puts it back for Flowchart and Graph */
   mountBackdrop();
   renderRAsk();
   renderLeft();
