@@ -759,7 +759,7 @@ async function askSend(text) {
   const focus = {};
   if (S.view === 'project' && (ASK.page && ASK.page.node || S.sel)) focus.node = (ASK.page && ASK.page.node) || S.sel;
   if (ASK.page && ASK.page.page) text = `(I am on the “${ASK.page.page}” page.) ` + text;
-  if (ASK.shot && ASK.shot.text) text += '\n\nScreenshot text (read on this computer):\n' + ASK.shot.text;
+  if (ASK.shot && ASK.shot.text) text += '\n\nText read from my screenshot (on this computer):\n' + ASK.shot.text.split('\n').map(l => '> ' + l).join('\n');
   try {
     const r = await api('/api/ask', {method: 'POST', body: {project: S.view === 'project' ? S.project : null, question: text, focus}});
     ASK.log.pop(); ASK.log.push({role: 'bot', text: r.answer, cited: r.cited || []});
@@ -793,7 +793,9 @@ async function askAttach(file) {
     const fd = new FormData(); fd.append('file', file);
     const r = await fetch('/api/ask/screenshot', {method: 'POST', headers: {'X-Lantern-Token': TOKEN}, body: fd, credentials: 'same-origin'});
     const j = await r.json();
-    ASK.shot = {name: file.name, info: `${j.width || '?'}×${j.height || '?'} · read on this computer · ${j.lines === undefined ? (j.error || 'could not read text') : j.lines + ' lines of text found'}`, text: j.text || ''};
+    if (!r.ok) ASK.shot = {name: file.name, info: j.error || 'could not read the image', text: ''};
+    else if (j.text === null || j.text === undefined) ASK.shot = {name: file.name, info: `${j.width || '?'}×${j.height || '?'} · ${j.reason || 'text not read'}${j.how ? ' · to read text: ' + j.how : ''}`, text: ''};
+    else ASK.shot = {name: file.name, info: `${j.width}×${j.height} · read on this computer, not uploaded · ${j.lines} line${j.lines === 1 ? '' : 's'} of text found`, text: j.text};
   } catch (err) { ASK.shot = {name: file.name, info: 'could not read the image', text: ''}; }
   renderAsk();
 }
