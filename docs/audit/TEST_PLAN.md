@@ -39,6 +39,7 @@ with the source folder moved away, the live gateway's `/v1/health`, then a GitHu
 | `tests/test_readiness.py` | Weights, failing and fixed projects, skip logic for libraries, fixtures ignored, accept + `--fail-on`, starter files never overwrite |
 | `tests/test_evidence.py` | Commit pinning, verify match/mismatch, fixed-vs-baseline, narrative escaping, no-git message, remote credential stripping |
 | `tests/test_release.py` | One version in `pyproject.toml` and `lantern/__init__.py`, a CHANGELOG section per tag, `serve --check`, Bandit missing reported as skipped (not a silent "ok") |
+| `tests/test_pack_toggle.py` | Per-pack on/off: Django turned off → no `LP-*` findings, no pack entry points, `meta.packs.disabled`, provenance says off; back on → findings return; `GET`/`POST /api/packs`, the stale card, refusals |
 | `tests/test_server.py` | Access control (token, cookie, write header, Host), project lifecycle over HTTP, key privacy and file mode, explain end to end with the fake model |
 
 ## 3. Manual walkthrough (15 minutes)

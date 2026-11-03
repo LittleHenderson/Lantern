@@ -33,6 +33,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__, learn, pipeline, remote, usage
+from .packs import PACK_NAME
 from .providers import DEFAULT_MODEL_NAME, DEFAULT_PROVIDER, PRESETS
 from .readiness import SHAPES
 
@@ -178,6 +179,11 @@ class Store:
         keep["share_usage"] = bool(s.get("share_usage"))
         keep["view_mode"] = "advanced" if s.get("view_mode") == "advanced" else "simple"
         keep["backdrop"] = s.get("backdrop") if s.get("backdrop") in ("off", "subtle", "bold") else "subtle"
+        pk = s.get("packs") if isinstance(s.get("packs"), dict) else {}
+        names = [n for n in pk.get("disabled") or [] if isinstance(n, str) and PACK_NAME.match(n)]
+        if names or pk.get("changed_at"):
+            keep["packs"] = {"disabled": sorted(set(names))[:100],
+                             "changed_at": pk.get("changed_at") if isinstance(pk.get("changed_at"), (int, float)) else None}
         with self.lock:
             self._write("settings.json", keep)
         if keep["share_usage"]:
@@ -289,7 +295,18 @@ class App:
                 "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
                 "finished_at": _str(run.get("finished_at")),
                 "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"],
-                "starter": learn.starter_of(Path(p["path"]))}
+                "starter": learn.starter_of(Path(p["path"])), "stale": self._stale(out)}
+
+    def _stale(self, out: Path) -> str | None:
+        """'packs' when analysis packs were turned on or off after this report was made (the card says
+        "Re-check to apply")."""
+        pk = self.store.settings().get("packs")
+        changed = pk.get("changed_at") if isinstance(pk, dict) else None
+        try:
+            made = (out / "report.html").stat().st_mtime
+        except OSError:
+            return None
+        return "packs" if isinstance(changed, (int, float)) and changed > made else None
 
     def clone_project(self, link: str) -> dict:
         """A repository link pasted instead of a folder: the project is listed at once (so its card shows the job
@@ -482,6 +499,28 @@ def _python_test_command(words: list[str]) -> bool:
         return bool(rest) and (rest[0] == "-m" and len(rest) > 1 and rest[1] in ("pytest", "unittest")
                                or rest[0].endswith(".py") and "test" in rest[0].lower())
     return False
+
+
+def packs_list(app, pid: str = "", all_projects: bool = False) -> list[dict]:
+    """GET /api/packs: built-in and user packs, plus the project's own when `pid` names one (every project's with
+    `all_projects`). Shape per pack: name, version, source (builtin|project|user), rules, entry_patterns, path,
+    enabled, active (its `requires` match the project), about."""
+    from . import packs
+    projects = app.store.projects() if all_projects else [x for x in [app.store.project(pid)] if x] if pid else []
+    seen, rows = set(), []
+    for repo in [Path(x["path"]) for x in projects if Path(x["path"]).is_dir()] or [None]:
+        loaded, _ = packs.load_all(repo, keep_inactive=True)
+        for pk in loaded:
+            if pk["pack"] in seen:
+                continue
+            seen.add(pk["pack"])
+            where = {"builtin": "lantern/packs/", "project": packs.PROJECT_DIR + "/", "user": "~/.lantern/packs/"}[pk["source"]]
+            rows.append({"name": pk["pack"], "version": str(pk.get("version", "-")), "source": pk["source"],
+                         "rules": len(pk.get("rules", [])), "entry_patterns": len(pk.get("entries", [])),
+                         "path": where + pk["file"], "enabled": pk.get("enabled", True),
+                         "active": bool(pk.get("active", True)) if repo is not None else None,
+                         "about": str(pk.get("about") or "")[:300]})
+    return rows
 
 
 def detect_test_command(repo: Path) -> dict:
@@ -705,6 +744,8 @@ class Handler(BaseHTTPRequestHandler):
             from .providers import gateway_url
             return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
                                "features": sorted(usage.FEATURES), "text": usage.describe()})
+        if path == "/api/packs":
+            return self._json({"packs": packs_list(app, (q.get("project") or [""])[0])})
         if path == "/api/connections":
             import shutil
             from .mcp_server import connections
@@ -837,6 +878,21 @@ class Handler(BaseHTTPRequestHandler):
             if provider not in ("github", "google"):
                 raise ValueError("provider is github or google")
             return self._json(sign_in_start(provider))
+        if path == "/api/packs":
+            # Settings → Analysis packs: turn one pack on or off for every project. Reports made before the change
+            # are marked stale ("Re-check to apply"); nothing is re-analyzed by itself.
+            name, enabled = str(b.get("name") or ""), b.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be true or false")
+            if name not in {x["name"] for x in packs_list(app, "", all_projects=True)}:
+                raise ValueError(f"no analysis pack called {name!r}")
+            s = app.store.settings()
+            pk = s.get("packs") if isinstance(s.get("packs"), dict) else {}
+            off = set(pk.get("disabled") or [])
+            off = off - {name} if enabled else off | {name}
+            s["packs"] = {"disabled": sorted(off), "changed_at": time.time()}
+            app.store.save_settings(s)
+            return self._json({"ok": True, "packs": packs_list(app, str(b.get("project") or ""))})
         if path == "/api/settings":
             s = app.store.settings()
             for k in ("provider", "model", "base_url", "privacy"):
