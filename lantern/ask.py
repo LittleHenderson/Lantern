@@ -37,11 +37,14 @@ TypeScript/JavaScript, Go, Rust, Java. AI apps: paid calls marked on the map, wa
 into tools, notebook secrets."""
 
 
-def facts(project_dir: Path, focus: dict | None = None, limit: int = 40) -> str:
-    out = project_dir / ".lantern"
+def facts(project_dir: Path, focus: dict | None = None, limit: int = 40, out: Path | None = None,
+          name: str | None = None) -> str:
+    """The project's results as text. `out` is the results folder (default `<project>/.lantern`; the cloud service
+    keeps a run's results in a folder of its own) and `name` what to call the project."""
+    out = out or project_dir / ".lantern"
     load = lambda n: _load(out / n)  # noqa: E731
     rd, sec, g, ex = load("readiness.json") or {}, load("security.json") or {}, load("graph.json") or {}, load("explanations.json") or {}
-    lines = [f"FACTS for project folder {project_dir.name!r} (analysis results on disk):"]
+    lines = [f"FACTS for project {name or project_dir.name!r} (analysis results on disk):"]
     if rd:
         lines.append(f"Readiness: {rd.get('score')}/100, grade {rd.get('grade')}, shape {rd.get('shape')}.")
         fails = [c for c in (rd.get("checks") or []) if isinstance(c, dict) and c.get("status") in ("fail", "partial")][:12]
@@ -90,11 +93,12 @@ def facts(project_dir: Path, focus: dict | None = None, limit: int = 40) -> str:
     return text[:14000]
 
 
-def ask(provider, question: str, project_dir: Path | None, focus: dict | None = None) -> dict:
+def ask(provider, question: str, project_dir: Path | None, focus: dict | None = None, out: Path | None = None,
+        name: str | None = None) -> dict:
     q = question.strip()[:2000]
     if not q:
         raise ValueError("ask a question")
-    body = facts(project_dir, focus) if project_dir else ABOUT
+    body = facts(project_dir or out, focus, out=out, name=name) if (project_dir or out) else ABOUT
     answer = _plain(provider.complete(SYSTEM, body + "\n\nQUESTION: " + q, max_tokens=700))
     ids = set(re.findall(r"\[([0-9a-f]{12})\]", body))
     cited = re.findall(r"\[([0-9a-f]{12})\]", answer)
@@ -164,7 +168,7 @@ def ocr_image(img) -> str:
     return r.stdout.decode("utf-8", "replace")
 
 
-def read_screenshot(raw: bytes, ctype: str) -> dict:
+def read_screenshot(raw: bytes, ctype: str, max_pixels: int | None = None) -> dict:
     """A screenshot dropped into Ask Lantern, read on this computer: PNG, JPEG or WebP up to 8 MB, decoded with
     Pillow, its text read by Tesseract when the program is installed. Without Tesseract the answer says so and how to
     install it (`text: None`, `reason`, `how`). The image is held in memory for this request only: it is never written
@@ -193,6 +197,8 @@ def read_screenshot(raw: bytes, ctype: str) -> dict:
         fmt = img.format
         if fmt not in SCREENSHOT_FORMATS:
             raise ValueError(f"{fmt or 'this file'} is not PNG, JPEG or WebP")
+        if max_pixels and img.width * img.height > max_pixels:   # checked before decoding (a server's memory)
+            raise ValueError(f"image too large ({img.width}×{img.height}); a screenshot of one screen is enough")
         img.load()
     except ValueError:
         raise

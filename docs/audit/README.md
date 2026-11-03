@@ -59,7 +59,7 @@ In scope: everything under `lantern/`, `tools/`, `tests/`, the CI workflow, and 
    server, key handling. See `THREAT_MODEL.md`.
 4. **Usability**: can a non-expert install it, analyze their app, and understand the result?
 
-In scope since 2026-11-03: the cloud service (`cloud/`, THREAT_MODEL T7, CLAIMS C1–C6). Out of scope: device pairing
+In scope since 2026-11-03: the cloud service (`cloud/`, THREAT_MODEL T7, CLAIMS C1–C7). Out of scope: device pairing
 (not built), and accuracy for languages other than Python and TypeScript/JavaScript.
 
 ## How to report a finding

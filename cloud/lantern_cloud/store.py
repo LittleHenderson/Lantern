@@ -16,7 +16,8 @@ import threading
 SCHEMA = """
 create table if not exists users (
   account text primary key,          -- github:<id>, google:<sub>, token:<hash prefix> (from the gateway)
-  label text, created text, last_seen text);
+  label text, created text, last_seen text,
+  ai_consent text);                  -- when the person agreed to send code to the model (null: not yet)
 create table if not exists runs (
   id text primary key,               -- random, unguessable
   account text not null,
@@ -26,7 +27,9 @@ create table if not exists runs (
   created text not null, started text, finished text,
   commit_sha text, summary text,     -- summary: JSON counts + score, written by the worker
   log_tail text,                     -- the last lines of the run's log (no tokens, no file contents)
-  share_slug text unique);           -- null until the person clicks Share (off by default)
+  share_slug text unique,            -- null until the person clicks Share (off by default)
+  explain_status text,               -- null | queued | running | done | error (plain-words explanations)
+  explain_error text, explain_summary text);   -- summary: JSON {functions, validated, failed, stopped}
 create index if not exists runs_by_account on runs (account, created);
 create table if not exists daily (
   day text, account text, runs integer default 0, primary key (day, account));
@@ -36,7 +39,7 @@ create table if not exists global_daily (day text primary key, runs integer defa
 ACTIVE = ("queued", "running")
 FINISHED = ("done", "error", "blocked")
 RUN_FIELDS = ("id", "account", "link", "host", "privacy", "status", "stage", "error", "created", "started", "finished",
-              "commit_sha", "summary", "log_tail", "share_slug")
+              "commit_sha", "summary", "log_tail", "share_slug", "explain_status", "explain_error", "explain_summary")
 
 
 class LimitReached(Exception):
@@ -57,8 +60,12 @@ class Store:
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.execute("pragma journal_mode=wal")
         self.db.executescript(SCHEMA)
-        if "log_tail" not in {r[1] for r in self.db.execute("pragma table_info(runs)")}:   # a milestone-1 database
-            self.db.execute("alter table runs add column log_tail text")
+        cols = {r[1] for r in self.db.execute("pragma table_info(runs)")}
+        for col in ("log_tail", "explain_status", "explain_error", "explain_summary"):   # an earlier database
+            if col not in cols:
+                self.db.execute(f"alter table runs add column {col} text")
+        if "ai_consent" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
+            self.db.execute("alter table users add column ai_consent text")
         self.db.commit()
 
     def _all(self, sql: str, args=()) -> list:
@@ -80,6 +87,15 @@ class Store:
     def user(self, account: str) -> dict | None:
         row = self._one("select account, label, created, last_seen from users where account = ?", (account,))
         return dict(zip(("account", "label", "created", "last_seen"), row)) if row else None
+
+    def consent(self, account: str) -> str | None:
+        row = self._one("select ai_consent from users where account = ?", (account,))
+        return row[0] if row else None
+
+    def set_consent(self, account: str, on: bool) -> None:
+        with self.lock:
+            self.db.execute("update users set ai_consent = ? where account = ?", (now() if on else None, account))
+            self.db.commit()
 
     def runs_today(self, account: str, day: str | None = None) -> int:
         row = self._one("select runs from daily where day = ? and account = ?", (day or today(), account))
@@ -136,8 +152,9 @@ class Store:
         bad = set(fields) - set(RUN_FIELDS[4:])
         if bad:
             raise ValueError(f"not a run field: {bad}")
-        if isinstance(fields.get("summary"), dict):
-            fields["summary"] = json.dumps(fields["summary"])
+        for k in ("summary", "explain_summary"):
+            if isinstance(fields.get(k), dict):
+                fields[k] = json.dumps(fields[k])
         with self.lock:
             self.db.execute(f"update runs set {', '.join(k + ' = ?' for k in fields)} where id = ?",   # nosec B608 - names checked above
                             (*fields.values(), rid))
@@ -150,6 +167,32 @@ class Store:
                                 (now(), rid)).rowcount
             self.db.commit()
         return n == 1
+
+    def claim_explain(self, rid: str) -> bool:
+        """Explanations queued -> running, for exactly one worker thread."""
+        with self.lock:
+            n = self.db.execute("update runs set explain_status = 'running' where id = ? and explain_status = 'queued'",
+                                (rid,)).rowcount
+            self.db.commit()
+        return n == 1
+
+    def queue_explain(self, rid: str) -> bool:
+        """Mark a finished run's explanations queued, unless they are already queued or running."""
+        with self.lock:
+            n = self.db.execute("update runs set explain_status = 'queued', explain_error = null where id = ? and "
+                                "status = 'done' and coalesce(explain_status, '') not in ('queued', 'running')",
+                                (rid,)).rowcount
+            self.db.commit()
+        return n == 1
+
+    def busy(self, account: str | None = None) -> int:
+        """Runs going, plus explanations being written: what must finish before deleting."""
+        sql = "select count(*) from runs where (status in (?, ?) or explain_status in (?, ?))"
+        args = [*ACTIVE, *ACTIVE]
+        if account is not None:
+            sql += " and account = ?"
+            args.append(account)
+        return self._one(sql, args)[0]
 
     def run(self, rid: str) -> dict | None:
         row = self._one(f"select {', '.join(RUN_FIELDS)} from runs where id = ?", (rid,))   # nosec B608
@@ -203,10 +246,11 @@ class Store:
     @staticmethod
     def _run_dict(row) -> dict:
         d = dict(zip(RUN_FIELDS, row))
-        try:
-            d["summary"] = json.loads(d["summary"]) if d["summary"] else None
-        except ValueError:
-            d["summary"] = None
+        for k in ("summary", "explain_summary"):
+            try:
+                d[k] = json.loads(d[k]) if d[k] else None
+            except ValueError:
+                d[k] = None
         return d
 
     def stats(self) -> dict:

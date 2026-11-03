@@ -1,7 +1,8 @@
 # Threat model
 
 Scope: Lantern as built today, running locally (`lantern serve` or the CLI), plus the cloud service (`cloud/`,
-milestones 1–5: sign-in, runs from a link, results in the browser, the website, sharing and deleting), see T7.
+milestones 1–6: sign-in, runs from a link, results in the browser, the website, sharing and deleting, explanations
+and Ask Lantern through the allowance), see T7.
 
 ## Assets
 
@@ -104,6 +105,10 @@ Strangers paste links to repositories Lantern has never seen, on a server Lanter
 | Someone opens another person's results | Every run route answers 404 unless the caller owns the run; owner links are HMAC-signed per run and expire in 60 min; share links use a random 24-character slug, never the run id | `app.py`, `store.run_by_slug` | Mitigated, tested (`tests/test_cloud_view.py`, `tests/test_cloud_share.py`) |
 | A share link outlives the owner's wish, or leaks more than they chose | Sharing is off until clicked; "Stop sharing" deletes the slug, and sharing again makes a new one; only the report, evidence page and badge are shared (no JSON data files), read-only, `noindex`, privacy as chosen before the run | `app.py` (`/s/…`), `store.set_share` | Mitigated, tested. Residual: anyone who received the link while it was on may have saved the pages; the share sheet says so and warns about secrets |
 | "Delete" leaves something behind | `DELETE /v1/runs/{id}` removes the row and results folder; `DELETE /v1/me` removes every run, results folder, share slug, daily counter and the account row (409 while a run is going, so the worker cannot write after deletion) | `store.delete_run`, `store.delete_user`, `app.remove_results` | Mitigated, tested. Residual: the gateway account (sign-in, allowance counters) is separate and kept, by design; Fly volume snapshots are outside the app |
+| Code goes to a model without the person knowing, or on someone else's allowance | Explain and Ask answer 412 until the account has agreed (`POST /v1/ai/consent`) to the same notice the app shows; the website shows what is sent (Explain: code of up to 40 functions; Ask: the question and the results, no code) before asking; the call uses the caller's own token; the token is passed to the explain job in memory and its environment only, never stored or logged | `app.agreed`, `worker.explain`, `site/index.html` | Mitigated, tested (`tests/test_cloud_ai.py`: nothing reaches the fake model before agreement, the token is not in the database) |
+| Explanations describe code the map was not built from | The repository is copied again and refused when its commit differs from the run's | `worker.explain` | Mitigated, tested |
+| Model output becomes markup or changes a finding | Explanations go through `explain.validate()` and the report's `esc()`, as in the app; Ask answers are escaped on the website and invented finding ids replaced | `lantern.explain`, `lantern.ask`, `site/index.html` | Mitigated, tested (`cloud_site_smoke.js` with a poisoned answer) |
+| A crafted image crashes or exhausts the server through Ask Lantern's screenshot reader | Signed-in only; 8 MB body cap checked before reading; PNG/JPEG/WebP only; the pixel count checked before decoding (40 M); Tesseract through a pipe with a 60 s timeout; two at a time; the image is never written to disk or kept | `app.ask_screenshot`, `ask.read_screenshot` | Mitigated, tested (`test_ask_reads_a_screenshots_text_like_the_app`). Residual: Pillow and Tesseract parse untrusted images in the service process (not the sandbox); keep both updated |
 | One person exhausts the service | One active run per person, runs per day per person and for everyone, clone size cap, 10-minute wall clock | `settings.py`, `worker.py` | Mitigated, tested |
 
 ## Known open risks, ranked

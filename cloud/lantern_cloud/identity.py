@@ -81,6 +81,23 @@ class Identity:
             raise GatewayUnavailable("bad answer") from None
         return [p for p in ps if p in ("github", "google")]
 
+    async def allowance(self, token: str) -> dict | None:
+        """What is left of the person's free allowance (`GET /v1/allowance`), numbers only; None if not known."""
+        try:
+            async with httpx.AsyncClient(transport=self.transport, timeout=10) as client:
+                r = await client.get(self.base + "/allowance", headers={"authorization": f"Bearer {token}",
+                                                                         "user-agent": "lantern-cloud"})
+        except httpx.HTTPError as e:
+            raise GatewayUnavailable(type(e).__name__) from None
+        if r.status_code != 200:
+            return None
+        try:
+            d = r.json()
+        except ValueError:
+            return None
+        keys = ("remaining_requests", "limit_requests", "remaining_today")
+        return {k: d.get(k) if isinstance(d.get(k), int) and not isinstance(d.get(k), bool) else None for k in keys}
+
     def login_url(self, provider: str, cli: str) -> str:
         """The gateway page that sends the person straight to GitHub or Google; the token is parked under `cli`."""
         from urllib.parse import quote

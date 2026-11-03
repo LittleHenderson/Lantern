@@ -45,6 +45,12 @@
 .tag.shared{font:600 10px var(--font);letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:99px;background:var(--accent-soft);color:var(--accent-ink);border:0;margin-left:6px;vertical-align:middle}
 .btn.danger{background:var(--critical);border-color:var(--critical);color:#fff} .btn.danger:hover{filter:brightness(.95);background:var(--critical)}
 .sheet .field{margin-top:14px}.sheet .field input[type=text]{font:13px var(--mono)}
+#xtoast{position:fixed;left:20px;bottom:20px;z-index:55;max-width:min(440px,calc(100vw - 110px))}
+#xtoast .toastin .indeterminate{margin-top:8px}
+#xtoast .toastin .ln{font:11.5px var(--mono);color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sheet ul.sendlist{margin:10px 0 0;padding-left:20px;font-size:14px;line-height:1.6}.sheet ul.sendlist li{margin-top:6px}
+.sub #explain[disabled]{opacity:.75;cursor:default}
+@media (max-width:760px){#xtoast{left:12px;bottom:84px;max-width:calc(100vw - 24px)}.sub #explain span,.sub #share span{display:none}}
 @media (max-width:760px){.privacy{grid-template-columns:1fr}.acct .who .nm{display:none}.acct .who{padding:0 4px}}
 </style>
 </head>
@@ -61,6 +67,8 @@
   <div class="acct" id="acct"></div>
 </header>
 <div id="view"></div>
+<div id="xtoast" aria-live="polite"></div>
+<div id="ask"></div>
 <div id="sheet"></div>
 <script>
 const VERSION = '__VERSION__';
@@ -200,8 +208,17 @@ async function accountSheet() {
   const el = sheet(`<div class="sh"><h2>${esc(name)}</h2><button class="x" data-close aria-label="Close">×</button></div>
     <p>Signed in with ${esc(via)}. You have used <b>${esc(me.runs_today)}</b> of today's ${esc(me.limits.runs_per_day)} checks.</p>
     <p class="muted small">Your results are private to this account and stay until you delete them. Nothing is shared unless you click Share on a run.</p>
+    <div id="ailine"></div>
     <div class="row" style="margin-top:18px"><button class="btn quiet" id="delme">${icon('trash')}Delete my account</button><span class="spacer"></span><button class="btn" data-close>Close</button><button class="btn primary" id="signout">Sign out</button></div>`);
   el.querySelector('#delme').onclick = deleteMeSheet;
+  aiState(true).then(st => {
+    const box = el.querySelector('#ailine'); if (!box || !st) return;
+    box.innerHTML = st.consent
+      ? note('ok', `Plain-words explanations and Ask Lantern are on. ${leftLine(st)} <button class="btn quiet sm" id="aioff">Turn off</button>`)
+      : note('info', 'Lantern has not sent anything to a model for you. Explain and Ask Lantern ask first.');
+    const off = box.querySelector('#aioff');
+    if (off) off.onclick = async () => { try { AI.state = {...st, ...(await api('/v1/ai/consent', {method: 'POST', body: {agree: false}}))}; accountSheet(); } catch (e) { box.innerHTML = note('err', esc(e.message)); } };
+  });
   el.querySelector('#signout').onclick = async () => { try { await api('/v1/signout', {method: 'POST'}); } catch (e) {} S.me = null; S.runs = null; S.links = {}; closeSheet(); go('home'); };
 }
 
@@ -389,7 +406,7 @@ function subBar(r, tabs) {
   return `<div class="sub"><button class="back" id="back" aria-label="Back to my runs">${icon('back')}</button><span class="title">${esc(repoName(r.link))}</span>
     ${r.status === 'done' && s.grade ? `<span class="gchip ${tone(s.grade)}" title="Readiness ${esc(s.score)}/100">${esc(s.grade)}${sm ? '' : ' · ' + esc(s.score)}</span>` : ''}
     ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].map(tab).join('')}</div>` : ''}
-    <span class="spacer"></span>${tabs ? `<button class="btn sm" id="share">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button><a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#">${icon('open')}<span>Open in new tab</span></a><button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}</div>`;
+    <span class="spacer"></span>${tabs ? `${explainBtn(r)}<button class="btn sm" id="share">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button><a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#">${icon('open')}<span>Open in new tab</span></a><button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}</div>`;
 }
 async function renderRun(el, id) {
   let r = S.run && S.run.id === id ? S.run : null;
@@ -448,6 +465,8 @@ async function renderReport(el, r) {
   el.innerHTML = `${subBar(r, true)}<div id="pbody"></div>`;
   el.querySelector('#back').onclick = () => go('home');
   el.querySelector('#share').onclick = () => shareSheet(r);
+  el.querySelector('#explain').onclick = () => explainClick(r);
+  if (ACTIVE.includes((r.explain || {}).status)) watchExplain(r.id);
   addControls(el);
   el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; renderReport(el, r); });
   const body = el.querySelector('#pbody');
@@ -472,6 +491,170 @@ async function renderReport(el, r) {
   fr.src = links.report;
 }
 
+// ---- words from a model: consent first, then Explain (a job on the server) and Ask Lantern (an answer now)
+// Nothing goes to a model before the person has read where it goes and agreed; the server checks that too (412).
+const AI = {state: null, watching: {}};
+async function aiState(force) {
+  if (!AI.state || force) { try { AI.state = await api('/v1/ai'); } catch (e) { if (e.status === 401) AI.state = null; } }
+  return AI.state;
+}
+function leftLine(st) {
+  const a = st && st.allowance;
+  if (!a || typeof a.remaining_requests !== 'number') return '';
+  return `<b>${esc(a.remaining_requests)}</b> free model answer${a.remaining_requests === 1 ? '' : 's'} left${typeof a.remaining_today === 'number' ? ` (${esc(a.remaining_today)} today)` : ''}.`;
+}
+async function withConsent(then) {
+  const st = await aiState(true);
+  if (st && st.consent) return then();
+  consentSheet(st, then);
+}
+function consentSheet(st, then) {
+  const el = sheet(`<div class="sh"><h2>Before Lantern uses a model</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>Lantern's findings, map and grade come from its own checks. To put them into plain words, it sends some of your work to a language model:</p>
+    <ul class="sendlist"><li><b>Explain in plain words</b> sends the code of up to 40 functions on your app's main paths. Lantern copies the repository again for a moment to read them, runs nothing, and deletes the copy.</li>
+      <li><b>Ask Lantern</b> sends your question and this check's results (findings, routes, grade), not your code. If you add a screenshot, Lantern reads its text, never keeps the image, and sends only that text with your question.</li></ul>
+    ${st && st.notice ? note('info', esc(st.notice)) : note('warn', 'Lantern could not reach the free allowance just now. Try again in a minute.')}
+    <p class="muted small">It is paid from your free allowance, so it costs you nothing. ${leftLine(st)} The model only explains: it cannot add, close or change a finding. You can turn this off again under your name, top right.</p>
+    <div id="agmsg"></div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Not now</button><button class="btn primary" id="agree" ${st && st.notice ? '' : 'disabled'}>I agree</button></div>`);
+  el.querySelector('#agree').onclick = async () => {
+    try { const r = await api('/v1/ai/consent', {method: 'POST', body: {agree: true}}); AI.state = {...(AI.state || {}), ...r}; closeSheet(); then(); }
+    catch (e) { el.querySelector('#agmsg').innerHTML = note('err', esc(e.message)); }
+  };
+}
+function explainBtn(r) {
+  const x = r.explain || {}, going = ACTIVE.includes(x.status), sm = simple();
+  const label = going ? 'Explaining…' : x.status === 'done' ? 'Explained' : sm ? 'Explain in plain words' : 'Explain';
+  return `<button class="btn sm" id="explain" ${going ? 'disabled' : ''} title="Plain-words explanations of the main functions, from your free allowance">${icon(x.status === 'done' ? 'check' : 'sparkle')}<span>${label}</span></button>`;
+}
+function explainClick(r) {
+  const x = r.explain || {}, sum = x.summary || {};
+  if (x.status !== 'done') return withConsent(() => startExplain(r));
+  const el = sheet(`<div class="sh"><h2>Plain-words explanations</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p><b>${esc(sum.validated || 0)}</b> of the ${esc(sum.functions || 0)} functions on your app's main paths have an explanation, each phrase tied to your code. Open a function on <b>${simple() ? 'Paths' : 'Atlas'}</b>, or a problem in <b>${simple() ? 'What to fix' : 'Findings'}</b>, to read it.</p>
+    ${sum.stopped ? note('warn', esc(sum.stopped)) : ''}
+    <p class="muted small">Explaining again only writes the ones still missing; the rest are kept.</p>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Close</button><button class="btn" id="again">${icon('sparkle')}Explain again</button></div>`);
+  el.querySelector('#again').onclick = () => { closeSheet(); withConsent(() => startExplain(r)); };
+}
+async function startExplain(r) {
+  try { const v = await api(`/v1/runs/${encodeURIComponent(r.id)}/explain`, {method: 'POST'}); patchRun(v); if (S.runId === r.id) renderReport(document.getElementById('view'), S.run); else watchExplain(r.id); }
+  catch (e) { if (e.type === 'consent_needed') { AI.state = null; return withConsent(() => startExplain(r)); } xtoast(`<div class="toastin bad">${icon('warn')}<div>${esc(e.message)}</div></div>`, 8000); }
+}
+function xtoast(html, ms) {
+  const el = document.getElementById('xtoast'); clearTimeout(xtoast.t);
+  el.innerHTML = html || '';
+  if (html && ms) xtoast.t = setTimeout(() => { el.innerHTML = ''; }, ms);
+}
+function watchExplain(id) {
+  if (AI.watching[id]) return; AI.watching[id] = true;
+  const tick = async () => {
+    let r; try { r = await api('/v1/runs/' + encodeURIComponent(id)); } catch (e) { AI.watching[id] = false; return; }
+    const x = r.explain || {};
+    if (ACTIVE.includes(x.status)) {
+      const ln = String(x.log || '').trim().split('\n').pop().replace(/^· /, '');
+      xtoast(`<div class="toastin">${icon('sparkle')}<div><b>Writing plain-words explanations for ${esc(repoName(r.link))}</b><div class="ln">${esc(ln || 'Waiting for a free worker…')}</div><div class="indeterminate"></div></div></div>`);
+      return setTimeout(tick, 2000);
+    }
+    AI.watching[id] = false; patchRun(r);
+    const sum = x.summary || {};
+    xtoast(x.status === 'done'
+      ? `<div class="toastin ok">${icon('check')}<div><b>${esc(sum.validated || 0)} functions explained in plain words.</b> Open one on the map to read it.${sum.stopped ? `<div class="ln">${esc(sum.stopped)}</div>` : ''}</div></div>`
+      : `<div class="toastin bad">${icon('warn')}<div><b>The explanations were not written.</b> ${esc(x.error || '')}</div></div>`, 10000);
+    loadMe().then(drawAcct);
+    if (S.runId === id && S.view === 'run') { S.frame = null; S.links[id] = null; renderReport(document.getElementById('view'), S.run); }
+  };
+  tick();
+}
+
+// ---- Ask Lantern: the app's assistant, answering from this check's results through the free allowance
+const ASK = {open: false, opacity: 1, log: [], busy: false, page: null, shot: null};
+const MARK = (document.querySelector('.brand .mark') || {}).outerHTML || '';
+const PAGE_CHIPS = {
+  map: ['What am I looking at?', 'What is a hop?', 'What does “likely” mean?'],
+  findings: ['Which one should I fix first?', 'What does “reachable” mean?', 'How do I fix the top one?'],
+  prot: ['What is a protection?', 'Which missing one matters most?', 'What does “heuristic” mean?'],
+  ready: ['What does the score mean?', 'Why is it this grade?', 'What is a hard failure?'],
+  xp: ['What does this function do, in plain words?', 'Why does this function matter?'],
+};
+// The report's own "Ask Lantern" button (same origin) opens the assistant with that page and its selection.
+window.askAbout = ctx => { ASK.page = ctx && typeof ctx === 'object' ? ctx : null; ASK.open = true; renderAsk(); };
+function askRun() { return S.view === 'run' && S.run && S.run.id === S.runId && S.run.status === 'done' ? S.run : null; }
+function renderAsk() {
+  const el = document.getElementById('ask');
+  if (!S.me) { el.innerHTML = ''; return; }
+  const r = askRun(), tab = ASK.page && ASK.page.tab;
+  const chips = r ? (PAGE_CHIPS[tab] || ['What should I fix first?', 'Why is it critical?', 'Summarize this check']) : ['What does Lantern check?', 'Is my code kept?', 'What does “likely” mean?'];
+  const where = r ? repoName(r.link) + (ASK.page && ASK.page.page ? ' · ' + ASK.page.page : '') : S.view === 'help' ? 'Help' : 'My runs';
+  const msgs = ASK.log.map(m => m.role === 'me' ? `<div class="me">${esc(m.text)}</div>` :
+    `<div class="bot ${m.wait ? 'wait' : ''}">${fmtAsk(m.text)}${(m.cited || []).length ? `<div class="cites">${m.cited.map(c => `<button data-cite="${esc(c)}" title="Open What to fix">${esc(c)}</button>`).join('')}</div>` : ''}</div>`).join('');
+  el.innerHTML = (ASK.open ? `<div class="win" style="opacity:${ASK.opacity}">
+    <div class="hd">${MARK}<div style="flex:1;min-width:0"><div class="t">Ask Lantern</div><div class="s">Facts from your check · words from your free allowance</div></div>
+      <label title="Window opacity" style="display:flex;align-items:center;gap:6px;color:var(--muted);flex:none"><svg viewBox="0 0 20 20" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6"><circle cx="10" cy="10" r="6.5"/><path d="M10 3.5v13a6.5 6.5 0 0 0 0-13z" fill="currentColor"/></svg><input type="range" min="0.3" max="1" step="0.05" value="${ASK.opacity}" id="askop" aria-label="Window opacity"></label>
+      <button class="x" id="askclose" aria-label="Close">×</button></div>
+    <div class="log" id="asklog"><div class="ctx">Looking at <b>${esc(where)}</b></div>${msgs || `<div class="bot">${r ? 'Ask anything about this check, or a word you don’t know. I answer from Lantern’s own results and never guess.' : 'Ask about Lantern, or open one of your runs to ask about its results.'}</div>`}</div>
+    <div class="ft"><div class="chips">${chips.map(c => `<button data-chip="${esc(c)}">${esc(c)}</button>`).join('')}</div>
+      ${ASK.shot ? `<div class="shot"><span style="width:52px;height:36px;border-radius:7px;background:var(--code-bg);display:grid;place-items:center;flex:none"><svg viewBox="0 0 20 20" style="width:16px;height:16px;fill:none;stroke:var(--code-dim);stroke-width:1.6;stroke-linejoin:round"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="m3 14 4-4 3 3 2-2 5 5"/><circle cx="13" cy="8" r="1.3"/></svg></span><div style="flex:1;min-width:0"><div class="nm">${esc(ASK.shot.name)}</div><div class="sm">${esc(ASK.shot.info)}</div></div><button id="askrm">Remove</button></div>` : ''}
+      <div class="comp"><button class="att" id="askatt" title="Attach a screenshot (or paste / drop one)" aria-label="Attach a screenshot"><svg viewBox="0 0 20 20" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round;stroke-linecap:round"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="m3 14 4-4 3 3 2-2 5 5"/><circle cx="13" cy="8" r="1.3"/></svg></button><input type="file" id="askfile" accept="image/png,image/jpeg,image/webp" hidden><textarea id="askin" rows="1" placeholder="${ASK.shot ? 'What went wrong here?' : 'Ask, or drop a screenshot…'}" aria-label="Your question"></textarea><button class="send" id="asksend" aria-label="Send"><svg viewBox="0 0 20 20" style="width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M10 15V5M5.5 9.5 10 5l4.5 4.5"/></svg></button></div>
+      <div class="asknote">Answers cite your results. It cannot create, close or accept findings.</div></div></div>` : '') +
+    `<button class="pill" id="askpill" aria-label="Ask Lantern">${MARK}<span class="lbl">Ask Lantern</span></button>`;
+  const log = el.querySelector('#asklog'); if (log) log.scrollTop = log.scrollHeight;
+  const ta = el.querySelector('#askin'); if (ta && ASK.open && !ASK.busy && innerWidth > 760) ta.focus();
+}
+function fmtAsk(t) { return esc(t).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\[([0-9a-f]{12})\]/g, '<code>$1</code>'); }
+async function askSend(text) {
+  if (!text || ASK.busy) return;
+  const r = askRun(), focus = {};
+  if (r && ASK.page && typeof ASK.page.node === 'string') focus.node = ASK.page.node;
+  if (r && ASK.page && typeof ASK.page.finding === 'string') focus.finding = ASK.page.finding;
+  let q = r && ASK.page && ASK.page.page ? `(I am on the “${ASK.page.page}” page.) ${text}` : text;
+  if (ASK.shot && ASK.shot.text) q += '\n\nText read from my screenshot:\n' + ASK.shot.text.split('\n').map(l => '> ' + l).join('\n');
+  const go = async () => {
+    ASK.log.push({role: 'me', text}); ASK.log.push({role: 'bot', text: 'Thinking…', wait: true}); ASK.busy = true; renderAsk();
+    try {
+      const a = await api('/v1/ask', {method: 'POST', body: {run: r ? r.id : null, question: q, focus}});
+      ASK.log.pop(); ASK.log.push({role: 'bot', text: a.answer, cited: a.cited || []}); ASK.shot = null;
+    } catch (e) {
+      ASK.log.pop(); ASK.log.pop();
+      if (e.type === 'consent_needed') { ASK.busy = false; AI.state = null; renderAsk(); return withConsent(() => askSend(text)); }
+      ASK.log.push({role: 'me', text}); ASK.log.push({role: 'bot', text: 'I could not answer: ' + e.message});
+    }
+    ASK.busy = false; renderAsk();
+  };
+  if (AI.state && AI.state.consent) go(); else withConsent(go);
+}
+document.getElementById('ask').addEventListener('click', e => {
+  const t = e.target.closest('button'); if (!t) return;
+  if (t.id === 'askpill') { ASK.open = !ASK.open; renderAsk(); return; }
+  if (t.id === 'askclose') { ASK.open = false; renderAsk(); return; }
+  if (t.id === 'asksend') { const ta = document.getElementById('askin'); const v = ta.value.trim(); ta.value = ''; askSend(v); return; }
+  if (t.dataset.chip) { askSend(t.dataset.chip); return; }
+  if (t.id === 'askatt') { document.getElementById('askfile').click(); return; }
+  if (t.id === 'askrm') { ASK.shot = null; renderAsk(); return; }
+  if (t.dataset.cite && askRun()) { S.tab = 'findings'; renderReport(document.getElementById('view'), S.run); }
+});
+document.getElementById('ask').addEventListener('input', e => { if (e.target.id === 'askop') { ASK.opacity = +e.target.value; const w = document.querySelector('#ask .win'); if (w) w.style.opacity = ASK.opacity; } });
+document.getElementById('ask').addEventListener('change', e => { if (e.target.id === 'askfile' && e.target.files[0]) askAttach(e.target.files[0]); });
+document.addEventListener('paste', e => { if (!ASK.open) return; const f = [...(e.clipboardData.files || [])].find(x => x.type.startsWith('image/')); if (f) askAttach(f); });
+document.addEventListener('dragover', e => { if (ASK.open && e.target.closest('#ask')) e.preventDefault(); });
+document.addEventListener('drop', e => { if (!ASK.open || !e.target.closest('#ask')) return; e.preventDefault(); const f = [...(e.dataTransfer.files || [])].find(x => x.type.startsWith('image/')); if (f) askAttach(f); });
+// A screenshot's text is read by Lantern's server (Pillow + Tesseract, in memory, never kept); only the text comes
+// back, shown here, and it reaches the model only inside a question the person sends.
+async function askAttach(file) {
+  if (file.size > 8 * 1024 * 1024) { ASK.shot = {name: file.name, info: 'too large: 8 MB at most', text: ''}; return renderAsk(); }
+  ASK.shot = {name: file.name, info: 'reading the text…', text: ''}; renderAsk();
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const res = await fetch('/v1/ask/screenshot', {method: 'POST', body: fd, credentials: 'same-origin', headers: {'X-Lantern-Site': '1'}});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) ASK.shot = {name: file.name, info: (j.error && j.error.message) || 'could not read the image', text: ''};
+    else if (typeof j.text !== 'string') ASK.shot = {name: file.name, info: `${j.width || '?'}×${j.height || '?'} · ${j.reason || 'text not read'}`, text: ''};
+    else ASK.shot = {name: file.name, info: `${j.width}×${j.height} · read by Lantern, not kept · ${j.lines} line${j.lines === 1 ? '' : 's'} of text found`, text: j.text};
+  } catch (err) { ASK.shot = {name: file.name, info: 'could not read the image', text: ''}; }
+  renderAsk();
+}
+document.getElementById('ask').addEventListener('keydown', e => { if (e.target.id === 'askin' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('asksend').click(); } });
+
 // ---- help
 const FAQ = [
   ['Privacy', 'What happens to my code?', 'Lantern copies the repository into a sealed box on its server, reads it without installing or running anything, and deletes the copy when the check ends. What stays is the result: the map, the findings and the grade. With <b>Map and findings only</b> no code is kept at all; with <b>Include code snippets</b> the short lines the report talks about are kept too.'],
@@ -481,6 +664,7 @@ const FAQ = [
   ['Using it', 'How long does a check take, and how many can I run?', 'Usually about a minute. Each account can run a few checks a day and one at a time; the number left today is under your name, top right.'],
   ['Using it', 'Does Lantern run my app or my tests?', 'No. In the cloud Lantern only reads the code. To watch your tests run, use the Lantern app on your own computer: <code>pip install lantern</code> then <code>lantern serve</code>.'],
   ['Results', 'What do the grade and the colours mean?', 'The grade (A to F) and the readiness number come from ten checks a senior engineer would make before launch. Red means a serious problem, orange and yellow smaller ones, green means it passed. Every colour sits next to a word, so you never have to guess.'],
+  ['Results', 'What does “Explain in plain words” do with my code?', 'It asks a language model to describe what each function on your app’s main paths does, in everyday words, with every phrase tied to a real line or name in your code (a phrase that is not is thrown away). For that, Lantern copies the repository again for a moment, sends the code of up to 40 functions to the model through your free allowance, and deletes the copy. It asks you first, says exactly where the code goes, and you can turn it off under your name. Ask Lantern sends your question and the check’s results, not your code. A screenshot you add is read by Lantern for its text and never kept; only that text goes with your question.'],
   ['Results', 'Can I trust what it says?', 'Every finding comes from a deterministic check, with the file, the line, and how a visitor reaches it. Lantern shows how sure it is about each connection, and never lets an AI create or dismiss a finding.'],
 ];
 function renderHelp(el) {
@@ -509,7 +693,7 @@ function route() {
 }
 function render() {
   const el = document.getElementById('view');
-  setBackdrop(); drawViewMode(); drawAcct();
+  setBackdrop(); drawViewMode(); drawAcct(); renderAsk();
   if (S.view === 'run') return renderRun(el, S.runId);
   if (S.view === 'help') return renderHelp(el);
   renderHome(el);
