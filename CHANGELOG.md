@@ -5,6 +5,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Findings in Simple view read as an audit memo, as designed: serif headings, the severity in the margin, entries split by
+  thin rules. Each heading is a plain sentence ("The backup button can run shell commands on your server") chosen from a
+  fixed list by the rule and filled only with names from the map; the scanner's own words stay right underneath.
 - Project screens have one header row, as designed: logo, "My apps" (Simple) or "Projects /" (Advanced), the app's
   name and grade, the tabs (a segmented control in Simple), then the actions and the Simple/Advanced switch. The
   global header and the report's own stats strip no longer stack above it, so at 1200px nothing is cut off. The cloud

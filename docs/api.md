@@ -153,7 +153,10 @@ page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`), `rank
 lives on: the pinned node's `lane`, or from the file for a finding with no node, e.g. a secret in `settings.py` →
 `server`), `lanes` (every lane the finding's path crosses, in strip order, de-duplicated: the `ui_path` (or `reachable`
 path) nodes' lanes, plus `hot_lane`, plus `data` when the pinned node calls a data-lane external — the glyph fills these
-dots and colours the `hot_lane` dot by rank), `scenario` (`{"kind", "who", "steps": [str], "harm", "after_fix",
+dots and colours the `hot_lane` dot by rank), `headline` (optional: the finding's heading in plain words for Simple
+view, from a fixed sentence per kind in `scenarios.HEADLINES`/`FIXED_HEADLINES`, filled only with the clicked thing, page or
+route from the map, and only when input reaches the line; absent for rules with no sentence, so show `title`; when
+shown, also show `title` as "<tool> says: …"), `scenario` (`{"kind", "who", "steps": [str], "harm", "after_fix",
 "basis"}`: a short story of one person meeting the finding, built by `scenarios.py` from this finding's own facts; show
 `steps` as a numbered list, then "What goes wrong" and "After the fix", and `basis` small underneath; prefer the model's
 `findings[].scenario` from `explanations.json` when there is one).

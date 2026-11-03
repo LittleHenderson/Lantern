@@ -27,6 +27,7 @@
   --ease:cubic-bezier(.2,.8,.2,1); --t:160ms;
   --font:"DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --display:-apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif:"Lora", Georgia, "Times New Roman", serif;   /* the app loads Lora; the report never fetches fonts */
   --mono:ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
 }
 :root[data-theme=dark]{
@@ -173,6 +174,20 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 
 /* Findings (design 4a): Simple audit memo grouped by severity; Advanced table + detail panel */
 .countrow{display:flex;gap:18px;margin:0 0 18px;font-size:13px;color:var(--muted)} .countrow b{font:600 15px var(--font);color:var(--ink);margin-right:5px}
+/* Simple findings read as an audit memo (design 4a): serif headings, severity in the margin, entries split by rules. */
+.memo .toolbar h2{font:400 34px/1.15 var(--serif);letter-spacing:-.01em}
+.memo .fcard>.top:first-child>.badge{display:none}   /* the severity is in the margin */
+.memo .countrow{gap:22px;padding-bottom:14px;border-bottom:1px solid var(--ink-2)}
+.memo .countrow span{display:flex;flex-direction:column;gap:2px} .memo .countrow b{font:400 26px/1 var(--serif);margin:0}
+.memo .countrow .critical b{color:var(--critical)} .memo .countrow .high b{color:var(--serious)} .memo .countrow .medium b{color:var(--warning)}
+.memogrp{display:grid;grid-template-columns:130px minmax(0,1fr);border-bottom:1px solid var(--line)}
+.memogrp>.sevhead{margin:0;align-self:center}
+.memo .fcard{border:0;border-radius:0;box-shadow:none;background:none;margin:0;padding:18px 4px 18px 12px;overflow:visible}
+.memo .fcard+.fcard{border-top:1px solid var(--line)}
+.memo .fcard.critical{border-color:var(--line)}
+.memo .fcard h4{font:400 21px/1.3 var(--serif);letter-spacing:0;margin:8px 0 4px}
+.toolsays{font-size:12px;color:var(--muted);margin:0 0 6px}
+@media (max-width:760px){.memogrp{grid-template-columns:1fr}.memogrp>.sevhead{margin:18px 0 0}.memo .fcard{padding-left:0}}
 .sevhead{display:flex;align-items:center;gap:8px;font:600 12px var(--font);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:22px 0 10px}
 .sevhead i{width:8px;height:8px;border-radius:99px;background:var(--faint)} .sevhead.critical i{background:var(--critical)} .sevhead.high i{background:var(--serious)} .sevhead.medium i{background:var(--warning)} .sevhead.low i{background:var(--good)}
 .fdesc{margin:6px 0 0;font-size:13.5px;line-height:1.55;color:var(--ink-2)} .fdesc code{font:12px var(--mono);background:var(--hover);padding:1px 5px;border-radius:5px}
@@ -1069,7 +1084,7 @@ function renderExplanations() {
 const RANK_WORD = {critical: 'Critical · fix this first', high: 'High · fix this soon', medium: 'Medium · worth fixing', low: 'Low · when you get to it'};
 function plainTitle(f) {
   const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
-  return ex && ex.lens2 && ex.lens2.length < 90 ? ex.lens2.replace(/\.$/, '') : f.title.replace(/\.$/, '');
+  return ex && ex.lens2 && ex.lens2.length < 90 ? ex.lens2.replace(/\.$/, '') : (f.headline || f.title).replace(/\.$/, '');
 }
 function fixPrompt(f) {
   const n = N[f.node], ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
@@ -1258,7 +1273,7 @@ function findingCard(f) {
   return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE\u2011' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
     ${hotLane(f) ? `<div class="top" style="margin-top:8px;gap:10px">${laneGlyph(fLanes(f), hotLane(f), f.rank)}${onLane(f)}</div>` : ''}
     ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
-    <h4>${esc(f.title)}</h4><p class="fdesc">${where}.${reach}${input}</p>
+    <h4>${esc(S.simple && f.headline ? f.headline : f.title)}</h4>${S.simple && f.headline ? `<div class="toolsays">${esc(f.tool)} says: “${esc(f.title)}”</div>` : ''}<p class="fdesc">${where}.${reach}${input}</p>
     ${pathsHtml(f)}
     ${findingScenario(f, ex) ? `<details class="scenbox"><summary>See it happen: a scenario</summary>${findingScenario(f, ex)}</details>` : ''}
     ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
@@ -1330,12 +1345,12 @@ function renderFindings() {
   const acc = all.length - open.length;
   if (S.simple) {
     const sevs = RANKS.filter(by);
-    el.innerHTML = `<div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
+    el.innerHTML = `<div class="memo"><div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
       <p class="lede">${countWord(open.length)} open. Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.</p></div>${modeSeg()}</div>
-      <div class="countrow">${RANKS.map(r => `<span><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>
+      <div class="countrow">${RANKS.map(r => `<span class="${cls(r, RANKS)}"><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>
       <p class="note" style="margin:-8px 0 10px">Each one says which part of your app it lives on. Hover a stop to learn what that part does.</p>${laneStrip(null, new Set(), {legend: true})}
-      ${sevs.map(r => `<div class="sevhead ${r}"><i></i>${r[0].toUpperCase() + r.slice(1)}</div>${open.filter(f => f.rank === r).map(findingCard).join('')}`).join('')}
-      ${acc ? `<div class="sevhead"><i></i>Accepted with a reason</div>${all.filter(f => f.status === 'accepted').map(findingCard).join('')}` : ''}`;
+      ${sevs.map(r => `<section class="memogrp"><div class="sevhead ${r}"><i></i>${r[0].toUpperCase() + r.slice(1)}</div><div>${open.filter(f => f.rank === r).map(findingCard).join('')}</div></section>`).join('')}
+      ${acc ? `<section class="memogrp"><div class="sevhead"><i></i>Accepted with a reason</div><div>${all.filter(f => f.status === 'accepted').map(findingCard).join('')}</div></section>` : ''}</div>`;
     wireFindings(el); wireMode(el); return;
   }
   let fs = S.fsev === 'all' ? all : all.filter(f => f.rank === S.fsev);

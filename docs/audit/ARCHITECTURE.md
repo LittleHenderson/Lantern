@@ -44,7 +44,7 @@ lines and the server streams them to the browser.
 | `readiness.py` | Readiness checks, shape classifier, advisor, hotspots, starter files | `assess`, `Repo`, `check_*` |
 | `evidence.py` | Evidence Report, digest, badge, git facts | `build`, `digest_payload`, `render_html`, `git_info` |
 | `explain.py` | Prompt, JSON parsing, anchor validation, scenario checks, selection, cache | `validate`, `check_scenarios`, `select_nodes`, `run` |
-| `scenarios.py` | A short story per finding (who, steps, what goes wrong, after the fix, basis) from the finding's own facts; no model | `for_finding`, `kind_of`, `attach` |
+| `scenarios.py` | A short story per finding (who, steps, what goes wrong, after the fix, basis) and a plain heading, both from the finding's own facts; no model | `for_finding`, `headline`, `kind_of`, `attach` |
 | `providers.py` | Anthropic, OpenAI-compatible presets, fixture stub | `make_provider` |
 | `report.py` | Bundle data into `viewer/report.html` | `write_report`, `collect_sources` |
 | `server.py` | Local HTTP app, jobs, settings and keys store | `serve`, `Handler`, `Store`, `Jobs` |
