@@ -63,6 +63,8 @@ def test_tester_guide_and_issue_form():
     readme, site = (root / "README.md").read_text(encoding="utf-8"), (root / "site/index.html").read_text(encoding="utf-8")
     pinned = lambda text: set(re.findall(re.escape(cmd) + r'[^"]*"', text))  # noqa: E731
     assert pinned(doc) == pinned(readme) == pinned(site) and len(pinned(doc)) == 1
+    import lantern as _l
+    assert pinned(doc) == {cmd + f'@v{_l.__version__}"'}            # testers install the tagged release
     assert "docs/try-lantern.md" in readme and "docs/try-lantern.md" in site
     form = (root / ".github/ISSUE_TEMPLATE/tester-report.yml").read_text(encoding="utf-8")
     assert 'labels: ["tester", "v0.9"]' in form and "id: version" in form
