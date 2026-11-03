@@ -168,8 +168,9 @@ def test_default_order_is_anthropic_first_then_deepseek(tmp_path):
     assert s.primary == "anthropic" and [p["name"] for p in s.order()] == ["anthropic", "deepseek"]
     assert s.model == "claude-haiku-5-5"
     client = TestClient(create_app(s, transport=_two_upstreams(402, calls)))   # DeepSeek would fail, Anthropic answers
-    assert client.get("/v1/health").json() == {"ok": True, "model": "claude-haiku-5-5", "configured": True,
-                                               "primary": "anthropic", "fallback": "deepseek-flash"}
+    from lantern_gateway import __version__
+    assert client.get("/v1/health").json() == {"ok": True, "version": __version__, "model": "claude-haiku-5-5",
+                                               "configured": True, "primary": "anthropic", "fallback": "deepseek-flash"}
     tok = client.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
     r = chat(client, tok)
     assert r.status_code == 200 and r.headers["x-lantern-model"] == "claude-haiku-5-5"
@@ -187,3 +188,18 @@ def test_default_order_is_anthropic_first_then_deepseek(tmp_path):
     r2 = chat(client2, tok2)
     assert r2.status_code == 200 and r2.headers["x-lantern-model"] == "deepseek-flash" and calls2 == ["anthropic.test", "upstream.test"]
     assert "credit balance" not in r2.text
+
+
+def test_health_names_version_and_model_but_no_counters(tmp_path):
+    import tomllib
+    from pathlib import Path as _P
+    from lantern_gateway import __version__
+    assert __version__ == tomllib.loads((_P(__file__).parents[1] / "gateway/pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    s = Settings(anthropic_key="sk-ant-owner", admin_secret=ADMIN, db_path=str(tmp_path / "g.db"))
+    client = TestClient(create_app(s))
+    tok = client.post("/v1/tokens", json={"label": "t"}, headers={"authorization": f"Bearer {ADMIN}"}).json()["token"]
+    assert tok
+    h = client.get("/v1/health").json()
+    assert set(h) == {"ok", "version", "model", "configured", "primary", "fallback"}
+    assert h["version"] == __version__ and h["model"] == "claude-haiku-5-5"
+    assert not any(w in json.dumps(h) for w in ("used", "usd", "spend", "requests", "tokens", "users"))
