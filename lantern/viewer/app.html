@@ -620,6 +620,7 @@ function drawViewMode() {
   try { localStorage.setItem('lantern.simple', viewMode() === 'simple' ? '1' : '0'); } catch (e) {}   // the Atlas (report.html, same origin) follows
   try { if (S.frame && S.frame.el.contentWindow.setSimple) S.frame.el.contentWindow.setSimple(viewMode() === 'simple'); } catch (e) {}
 }
+window.lanternViewMode = settings => { if (settings && S.state) { S.state.settings = settings; drawViewMode(); } };   // the Atlas saved a new mode
 document.getElementById('viewmode').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
   try { const r = await api('/api/settings', {method: 'POST', body: {view_mode: b.dataset.m}}); S.state.settings = r.settings; } catch (err) { /* keep going with the old value */ }
