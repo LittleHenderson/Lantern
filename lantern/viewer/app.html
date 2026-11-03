@@ -278,6 +278,7 @@ pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--co
 @media (max-width:860px){.gsplit{grid-template-columns:1fr}}
 
 /* Watch my tests run: sheet + toast */
+.sbx{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:12px 0;background:var(--surface)} .sbx .sbxh{display:flex;align-items:center;gap:8px} .sbx .sbxh svg{width:16px;height:16px;color:var(--good, #1f8a5a)} .sbx ul{margin:6px 0 4px 22px;padding:0;font-size:13.5px;color:var(--ink-2, inherit)} .sbx .sbxl{font-size:13px;color:var(--muted)}
 .sheetwrap{position:fixed;inset:0;z-index:30;background:rgba(14,14,16,.45);display:grid;place-items:center;padding:20px}
 .sheet{width:min(620px,100%);background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px 24px;box-shadow:0 20px 60px -20px rgba(0,0,0,.5)}
 .sheet .sh{display:flex;align-items:flex-start;gap:12px} .sheet h2{font:650 19px/1.3 var(--display);margin:0;flex:1} .sheet .x{background:none;border:0;font-size:22px;color:var(--muted);cursor:pointer}
@@ -674,23 +675,24 @@ document.addEventListener('keydown', e => {
 
 // ---------------------------------------------------------------- Watch my tests run (design 6a/6b/8f)
 async function watchTestsSheet(p) {
-  let d = {command: 'python -m pytest -q', how: '', supported: true, note: ''};
+  let d = {command: 'python -m pytest -q', how: '', supported: true, note: '', sandbox: null, leaves: '', confirmed: false};
   try { d = await api(`/api/projects/${p.id}/testcmd`); } catch (e) {}
   const el = document.createElement('div'); el.className = 'sheetwrap'; el.id = 'sheet';
   el.innerHTML = `<div class="sheet" role="dialog" aria-label="Watch my tests run"><div class="sh"><h2>Lantern will run your tests, not your app.</h2><button class="x" id="shx" aria-label="Close">×</button></div>
     <label for="testcmd">The exact command${d.how ? ` <span class="muted">(from ${esc(d.how)}; change it if yours is different)</span>` : ''}</label>
     <input type="text" id="testcmd" value="${esc(d.command)}" spellcheck="false">
     ${d.note ? `<div class="hint">${esc(d.note)}</div>` : ''}
-    ${note('warn', `It runs in <code>${esc(p.path)}</code> as you, with a call recorder attached, exactly like running it yourself. Only a Python test runner is accepted (<code>python -m pytest</code>, <code>pytest</code>, <code>python -m unittest</code>); nothing else is run. It is not sandboxed yet, so only run tests you would run anyway.`)}
+    ${d.sandbox ? `<div class="sbx"><div class="sbxh">${icon('check')}<b>Where it runs: ${esc(d.sandbox.label)}</b>${d.sandbox.image ? ` <span class="muted">${esc(String(d.sandbox.image).split('@')[0])}</span>` : ''}</div><ul>${(d.sandbox.details || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul><div class="sbxl">${esc(d.leaves || 'Nothing leaves this computer.')}</div></div>` : ''}
+    ${note('info', `Only a test command is accepted (pytest, unittest, npm/pnpm/yarn test, Jest, Vitest, Mocha, go test, cargo test, Maven, Gradle); nothing else is run. Your app itself never runs outside its tests.`)}
     <div class="rewards"><div>${icon('check')}<span>Dashed “likely” lines that your tests go through turn solid: <b>seen running</b>.</span></div><div>${icon('check')}<span>Functions and routes your tests reach get the <b>seen running</b> mark.</span></div><div>${icon('check')}<span>Readiness can only go up: the tests check earns its points.</span></div></div>
-    <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn" id="shskip">Skip</button><button class="btn primary" id="shrun" ${d.supported ? '' : 'disabled'}>${icon('play')}Run the tests</button></div></div>`;
+    <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn" id="shskip">Skip</button><button class="btn primary" id="shrun" ${d.supported ? '' : 'disabled'}>${icon('play')}${d.confirmed ? 'Run the tests' : 'Confirm and run'}</button></div></div>`;
   document.body.appendChild(el);
   const close = () => el.remove();
   el.querySelector('#shx').onclick = close; el.querySelector('#shskip').onclick = close; el.addEventListener('click', e => { if (e.target === el) close(); });
   el.querySelector('#shrun').onclick = async () => {
     const command = el.querySelector('#testcmd').value.trim();
     try {
-      const j = await api(`/api/projects/${p.id}/trace`, {method: 'POST', body: {command}});
+      const j = await api(`/api/projects/${p.id}/trace`, {method: 'POST', body: {command, confirm: true}});
       close();
       S.toast = {pid: p.id, html: `<div class="toastin"><span class="pulse"></span>Running <code>${esc(command)}</code>… you can keep browsing; the Atlas updates when it finishes.</div>`};
       renderProject(document.getElementById('view'));
@@ -703,13 +705,18 @@ async function watchTrace(jobId, p, command) {
   for (;;) { try { j = await api('/api/jobs/' + jobId); } catch (e) { await new Promise(r => setTimeout(r, 2000)); continue; } if (j.status !== 'running') break; await new Promise(r => setTimeout(r, 1000)); }
   const r = j.result || {};
   const tail = (j.log || []).slice(-6).join('\n');
-  if (j.status === 'error' || (r.returncode !== undefined && r.returncode !== 0 && !r.observed)) {
+  const blocked = Array.isArray(r.blocked) ? r.blocked : [];
+  if (blocked.length || r.timed_out) {
+    const why = r.timed_out ? 'They ran longer than 10 minutes, so the sandbox stopped them and everything they started.'
+      : 'The sandbox refused ' + blocked.map(b => b.kind === 'network' ? 'a network connection' : 'a write outside its temp folder').filter((x, i, a) => a.indexOf(x) === i).join(' and ') + '. Tests here cannot change your project or reach the internet.';
+    S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests were stopped by the sandbox.</b> ${esc(why)}<pre class="log" style="margin-top:8px;max-height:120px">${esc(blocked.map(b => b.what).join('\n') || tail)}</pre></div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+  } else if (j.status === 'error' || (r.returncode !== undefined && r.returncode !== 0 && !r.observed)) {
     const code = r.returncode !== undefined ? r.returncode : '?';
     const likely = /No module named|ModuleNotFoundError/.test(tail + (j.error || '')) ? 'A package your tests import is not installed in the Python that runs Lantern.' : /not recognized|No such file|command not found/.test(tail + (j.error || '')) ? 'The command was not found. Is pytest installed?' : /collected 0 items|no tests ran/.test(tail) ? 'No tests were found by that command.' : 'Look at the last lines below.';
     S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests didn’t finish, so nothing changed.</b> Exit code ${esc(code)}. ${esc(likely)}<pre class="log" style="margin-top:8px;max-height:120px">${esc(j.error || tail)}</pre></div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn sm" data-retry>Change the command</button><button class="btn ghost sm" data-dismiss>Skip</button></div>`};
   } else {
     const d = r.score_after != null && r.score_before != null ? r.score_after - r.score_before : null;
-    S.toast = {pid: p.id, html: `<div class="toastin ok">${icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}.</b> ${esc(r.observed || 0)} call${r.observed === 1 ? '' : 's'} seen running${r.recall != null ? `, ${Math.round(r.recall * 100)}% of them already on the map` : ''}.${d == null ? '' : d > 0 ? ` Readiness up ${d}, now ${r.score_after}.` : ` Readiness unchanged at ${r.score_after}.`} The edges your tests went through are now solid in the Atlas.</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+    S.toast = {pid: p.id, html: r.traced === false ? `<div class="toastin ok">${icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}${r.backend ? ` in the ${r.backend === 'docker' ? 'Docker' : 'restricted'} sandbox` : ''}.</b> ${esc(r.note || 'Tests run; your map upgrades for Python only for now.')}</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>` : `<div class="toastin ok">${icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}.</b> ${esc(r.observed || 0)} call${r.observed === 1 ? '' : 's'} seen running${r.recall != null ? `, ${Math.round(r.recall * 100)}% of them already on the map` : ''}.${d == null ? '' : d > 0 ? ` Readiness up ${d}, now ${r.score_after}.` : ` Readiness unchanged at ${r.score_after}.`} The edges your tests went through are now solid in the Atlas.</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
   }
   S.frame = null; await refresh();
 }
@@ -1248,7 +1255,7 @@ function renderSettings(el) {
 
 const FAQ = [
   ['Safety', 'Does my code leave my computer?', 'No, unless you turn on explanations or Ask Lantern with a cloud model. Analysis (the map, findings, readiness, the Evidence Report) runs here. A GitHub link is cloned onto this computer, not a server. With a local model (Ollama, LM Studio) nothing leaves either. Lantern tells you once, before the first time code would be sent.'],
-  ['Safety', 'Does Lantern run my app or my tests?', 'It reads your code; it never runs your app. Tests run only if you ask (“Watch my tests run” or <code>lantern analyze --trace -- pytest</code>), with your own test command, shown first.'],
+  ['Safety', 'Does Lantern run my app or my tests?', 'It reads your code; it never runs your app. Tests run only if you ask (“Watch my tests run”), with the command shown first, inside a sandbox: a Docker container or a read-only temp copy, with the network off and your environment variables left out.'],
   ['Safety', 'What does the free allowance store?', 'A hash of your sign-in token and request counts. No code, no prompts, no email address. Each account gets one token; signing in again rotates it.'],
   ['Findings', 'What makes a finding critical?', 'Two yes answers: a page or route leads to that line (reachable), and the line uses something the visitor sent (input). Reachable but no input is high; not reachable stays low even when the scanner says high.'],
   ['Findings', 'What does “reachable” mean?', 'Lantern found a path from a place a visitor can start (a page, a route, a command) to the function that holds the finding. The path is drawn on the finding so you can follow it.'],
