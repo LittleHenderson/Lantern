@@ -21,7 +21,7 @@ bash tools/audit.sh --browser    # adds the Chromium viewer and app checks
 
 CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every push (`.github/workflows/ci.yml`).
 The `install` job does what a tester does on Linux, macOS and Windows: a clean venv, `pip install
-"git+https://github.com/LittleHenderson/Lantern@<commit>"` with no extras, then `lantern --version` (0.9.0),
+"git+https://github.com/LittleHenderson/Lantern@<commit>"` with no extras, then `lantern --version` (0.10.0),
 `lantern analyze tests/fixtures/shop --offline` (prints an `off` line naming the scanners that are not installed)
 and `lantern serve tests/fixtures/shop --check` (starts, prints the link, loads the app once, exits 0).
 The `gateway` job curls the live gateway's `/v1/health` (`https://lantern-gateway.fly.dev`) on every push and prints
