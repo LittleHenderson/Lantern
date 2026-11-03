@@ -203,3 +203,58 @@ def test_health_names_version_and_model_but_no_counters(tmp_path):
     assert set(h) == {"ok", "version", "model", "configured", "primary", "fallback"}
     assert h["version"] == __version__ and h["model"] == "claude-haiku-5-5"
     assert not any(w in json.dumps(h) for w in ("used", "usd", "spend", "requests", "tokens", "users"))
+
+
+def test_retention_deletes_idle_hashes_and_old_counters(tmp_path):
+    import datetime as dt
+    import sqlite3
+
+    from lantern_gateway.app import Store, _hash
+    db = str(tmp_path / "r.db")
+    st = Store(db)
+    old_tok, new_tok = st.mint("old"), st.mint("new")
+    acct_tok = st.sign_in("github:1", "idle")
+    rotated = st.sign_in("github:2", "busy")
+    st.sign_in("github:2", "busy")                       # rotates: the first hash is disabled now
+    st.record(_hash(new_tok), "2026-11-03", 10, 0.01, "m")
+    st.record_usage("a" * 32, "2026-11-03", "0.9", "linux", {"analyze": 1})
+    long_ago = "2026-07-01T00:00:00+00:00"
+    st.db.execute("update users set last_used = ? where token_hash in (?, ?)", (long_ago, _hash(old_tok), _hash(acct_tok)))
+    st.db.execute("update users set last_used = ? where token_hash = ?", (long_ago, _hash(rotated)))
+    for day in ("2026-07-01", "2026-08-05"):          # 125 and 90 days before 2026-11-03
+        st.record(_hash(new_tok), day, 1, 0.001, "m")
+    st.record_usage("b" * 32, "2026-07-01", "0.8", "mac", {"analyze": 2})
+    st.db.execute("update installs set last_seen = ? where install = ?", (long_ago, "b" * 32))
+    st.db.commit()
+
+    out = st.prune("2026-11-03", 90)
+    assert out["token_hashes"] == 3                   # two idle tokens and the rotated-out hash
+    assert out["spend"] == 1 and out["models"] == 1 and out["usage"] == 1 and out["installs"] == 1
+    assert st.user(old_tok) is None and st.user(acct_tok) is None and st.user(rotated) is None
+    assert st.user(new_tok)["used_requests"] == 3      # lifetime counter kept while the token is in use
+    days = [r[0] for r in st.db.execute("select day from daily order by day")]
+    assert days == ["2026-08-05", "2026-11-03"]        # exactly 90 days old is kept
+    assert [r[0] for r in st.db.execute("select account from accounts")] == ["github:2"]
+    assert st.prune("2026-11-03", 0) == {}             # 0 keeps everything
+
+    # A later sign-in on the deleted account starts fresh; the busy account still carries its counters.
+    again = st.sign_in("github:1", "idle")
+    assert st.user(again)["used_requests"] == 0
+    # The column is added to a database created before it existed.
+    legacy = sqlite3.connect(str(tmp_path / "legacy.db"))
+    legacy.execute("create table users (token_hash text primary key, label text, created text, "
+                   "used_requests integer default 0, used_tokens integer default 0, disabled integer default 0)")
+    legacy.execute("insert into users (token_hash, created) values ('h', ?)", (dt.datetime.now(dt.UTC).isoformat(),))
+    legacy.commit()
+    legacy.close()
+    st2 = Store(str(tmp_path / "legacy.db"))
+    assert st2.prune(dt.datetime.now(dt.UTC).date().isoformat(), 90)["token_hashes"] == 0   # falls back to created
+
+
+def test_gateway_prunes_once_a_day(gw):
+    client, tok, _, s = gw
+    store = client.app.state.store
+    assert s.retention_days == 90 and store.pruned_day      # ran at start-up
+    store.pruned_day = "2000-01-01"
+    chat(client, tok)
+    assert store.pruned_day != "2000-01-01"                 # and again on the first request of a new day

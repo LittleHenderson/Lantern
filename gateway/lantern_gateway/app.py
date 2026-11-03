@@ -85,6 +85,9 @@ class Settings:
     global_daily_usd: float = field(default_factory=lambda: _env_float("LANTERN_GLOBAL_DAILY_USD", 10.0))
     max_tokens_cap: int = field(default_factory=lambda: _env_int("LANTERN_MAX_TOKENS", 3000))
     max_body_bytes: int = field(default_factory=lambda: _env_int("LANTERN_MAX_BODY", 250_000))
+    # Token hashes not used (or signed in with) for this many days, and per-day counters older than this, are
+    # deleted once a day. 0 or less keeps everything.
+    retention_days: int = field(default_factory=lambda: _env_int("LANTERN_RETENTION_DAYS", 90))
 
     def oauth(self, provider: str) -> tuple[str, str] | None:
         """(client id, client secret) when that sign-in is configured."""
@@ -152,19 +155,25 @@ class Store:
             create table if not exists pending (
               cli_hash text primary key, token text, created real);
         """)
+        # last_used: the last request, sign-in, or rotation (for a disabled hash). Retention counts from it.
+        if "last_used" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
+            self.db.execute("alter table users add column last_used text")
         self.db.commit()
+        self.pruned_day = ""
 
     def mint(self, label: str) -> str:
         token = "lt_" + secrets.token_urlsafe(32)
         with self.lock:
-            self.db.execute("insert into users (token_hash, label, created) values (?, ?, ?)",
-                            (_hash(token), label[:100], dt.datetime.now(dt.UTC).isoformat()))
+            now = dt.datetime.now(dt.UTC).isoformat()
+            self.db.execute("insert into users (token_hash, label, created, last_used) values (?, ?, ?, ?)",
+                            (_hash(token), label[:100], now, now))
             self.db.commit()
         return token
 
     def sign_in(self, account: str, label: str) -> str:
         """One token per account. A first sign-in mints it; a later one rotates it (the old token stops working)
-        and carries the lifetime and today's counters over, so signing in again is never a fresh allowance."""
+        and carries the lifetime and today's counters over, so signing in again is never a fresh allowance
+        (unless the account was idle past the retention window and `prune` deleted it)."""
         token = "lt_" + secrets.token_urlsafe(32)
         now = dt.datetime.now(dt.UTC)
         today = now.date().isoformat()
@@ -178,9 +187,9 @@ class Store:
                     used_req, used_tok = u[0], u[1]
                 d = self.db.execute("select requests from daily where day = ? and token_hash = ?", (today, old)).fetchone()
                 today_req = d[0] if d else 0
-                self.db.execute("update users set disabled = 1 where token_hash = ?", (old,))
-            self.db.execute("insert into users (token_hash, label, created, used_requests, used_tokens) values (?, ?, ?, ?, ?)",
-                            (_hash(token), label[:100], now.isoformat(), used_req, used_tok))
+                self.db.execute("update users set disabled = 1, last_used = ? where token_hash = ?", (now.isoformat(), old))
+            self.db.execute("insert into users (token_hash, label, created, used_requests, used_tokens, last_used) "
+                            "values (?, ?, ?, ?, ?, ?)", (_hash(token), label[:100], now.isoformat(), used_req, used_tok, now.isoformat()))
             if today_req:
                 self.db.execute("insert into daily (day, token_hash, requests) values (?, ?, ?)", (today, _hash(token), today_req))
             self.db.execute("insert into accounts (account, token_hash, label, created, last_signin, signins) values (?, ?, ?, ?, ?, 1) "
@@ -227,8 +236,8 @@ class Store:
                 self.db.execute("insert into models (day, model, requests, usd) values (?, ?, 1, ?) "
                                 "on conflict(day, model) do update set usd = usd + excluded.usd, requests = requests + 1",
                                 (day, model, usd))
-            self.db.execute("update users set used_requests = used_requests + 1, used_tokens = used_tokens + ? "
-                            "where token_hash = ?", (tokens, h))
+            self.db.execute("update users set used_requests = used_requests + 1, used_tokens = used_tokens + ?, last_used = ? "
+                            "where token_hash = ?", (tokens, dt.datetime.now(dt.UTC).isoformat(), h))
             self.db.execute("insert into daily (day, token_hash, requests) values (?, ?, 1) "
                             "on conflict(day, token_hash) do update set requests = requests + 1", (day, h))
             self.db.execute("insert into spend (day, usd, requests) values (?, ?, 1) "
@@ -236,6 +245,35 @@ class Store:
                             (day, usd))
             self.db.commit()
 
+    def prune(self, today: str, days: int = 90) -> dict:
+        """Retention: delete token hashes with no request, sign-in or rotation for `days` days (with the account
+        mapping that points at them), per-day counters older than `days`, and app installs not seen since.
+        An account idle that long starts again with a fresh allowance on its next sign-in."""
+        if days <= 0:
+            return {}
+        cut = (dt.date.fromisoformat(today) - dt.timedelta(days=days)).isoformat()   # rows dated before this go
+        out = {}
+        with self.lock:
+            q = self.db.execute
+            out["token_hashes"] = q("select count(*) from users where coalesce(last_used, created) < ?", (cut,)).fetchone()[0]
+            q("delete from accounts where token_hash in "
+              "(select token_hash from users where coalesce(last_used, created) < ?)", (cut,))
+            q("delete from daily where token_hash in "
+              "(select token_hash from users where coalesce(last_used, created) < ?)", (cut,))
+            q("delete from users where coalesce(last_used, created) < ?", (cut,))
+            out["daily"] = q("delete from daily where day < ?", (cut,)).rowcount
+            out["spend"] = q("delete from spend where day < ?", (cut,)).rowcount
+            out["models"] = q("delete from models where day < ?", (cut,)).rowcount
+            out["usage"] = q("delete from usage where day < ?", (cut,)).rowcount
+            out["installs"] = q("delete from installs where last_seen < ?", (cut,)).rowcount
+            self.db.commit()
+            self.pruned_day = today
+        return out
+
+    def prune_daily(self, today: str, days: int) -> None:
+        """Run `prune` at most once per UTC day (called on requests, so an idle gateway prunes on its next one)."""
+        if self.pruned_day != today:
+            self.prune(today, days)
 
     # ---- opt-in usage pings from the app (counts per feature per day; no code, no paths, no names) ----
     def record_usage(self, install: str, day: str, version: str, os_name: str, features: dict[str, int]) -> None:
@@ -390,7 +428,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     def today() -> str:
         return dt.datetime.now(dt.UTC).date().isoformat()
 
+    store.prune_daily(today(), s.retention_days)
+
     def auth(authorization: str | None) -> dict:
+        store.prune_daily(today(), s.retention_days)
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(401, "missing token")
         u = store.user(authorization[7:].strip())
@@ -524,6 +565,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         for k, v in list(feats.items())[:40]:
             if isinstance(k, str) and k in USAGE_FEATURES and isinstance(v, int) and not isinstance(v, bool) and v > 0:
                 clean[k] = min(v, 100_000)
+        store.prune_daily(today(), s.retention_days)
         store.record_usage(install, d.isoformat(), str(body.get("version") or "")[:20], str(body.get("os") or "")[:20], clean)
         return {"ok": True, "recorded": sorted(clean)}
 

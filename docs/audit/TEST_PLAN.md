@@ -26,6 +26,9 @@ and `lantern serve tests/fixtures/shop --check` (starts, prints the link, loads 
 The `gateway` job curls the live gateway's `/v1/health` (`https://lantern-gateway.fly.dev`) on every push and prints
 it to the job summary; it fails when the gateway does not answer `ok` with a model configured. The limits it enforces
 are listed in `docs/deploy.md` ("Free allowance limits as configured").
+Retention (90 days for token hashes and per-day counters, `Store.prune`) is tested in `tests/test_gateway.py`:
+idle and rotated-out hashes and their account mapping go, a hash in use and rows exactly 90 days old stay, an old
+database gains the `last_used` column, and the app prunes at start-up and on the first request of a new day.
 A pushed `v*` tag runs `.github/workflows/release.yml`: build sdist + wheel, the test suite against the built wheel
 with the source folder moved away, the live gateway's `/v1/health`, then a GitHub Release with both files.
 
