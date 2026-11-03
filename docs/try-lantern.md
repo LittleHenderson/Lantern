@@ -81,7 +81,9 @@ Explanations ("What does this do?") are written by a model, so they need one:
 
 * **Free allowance**: in **Settings**, press **Sign in with GitHub** or **Sign in with Google** (or run
   `lantern login --github`). Lantern stores a token, never your email. Explanations then come from Claude Haiku
-  through Lantern's gateway, with daily and lifetime limits.
+  through Lantern's gateway, with daily and lifetime limits. The gateway keeps a fingerprint (hash) of your token
+  and how many requests you made each day, never your code, the prompts or the answers. It deletes both after 90
+  days without use; after that, signing in again starts a fresh allowance.
 * **Your own key**: in Settings, pick a provider (Anthropic, OpenAI, OpenRouter, Mistral, Gemini, DeepSeek) and
   paste a key. Keys stay in memory unless you tick "remember".
 * **Fully local**: pick Ollama or LM Studio. Nothing leaves your computer.
