@@ -168,7 +168,7 @@ def ocr_image(img) -> str:
     return r.stdout.decode("utf-8", "replace")
 
 
-def read_screenshot(raw: bytes, ctype: str) -> dict:
+def read_screenshot(raw: bytes, ctype: str, max_pixels: int | None = None) -> dict:
     """A screenshot dropped into Ask Lantern, read on this computer: PNG, JPEG or WebP up to 8 MB, decoded with
     Pillow, its text read by Tesseract when the program is installed. Without Tesseract the answer says so and how to
     install it (`text: None`, `reason`, `how`). The image is held in memory for this request only: it is never written
@@ -197,6 +197,8 @@ def read_screenshot(raw: bytes, ctype: str) -> dict:
         fmt = img.format
         if fmt not in SCREENSHOT_FORMATS:
             raise ValueError(f"{fmt or 'this file'} is not PNG, JPEG or WebP")
+        if max_pixels and img.width * img.height > max_pixels:   # checked before decoding (a server's memory)
+            raise ValueError(f"image too large ({img.width}×{img.height}); a screenshot of one screen is enough")
         img.load()
     except ValueError:
         raise

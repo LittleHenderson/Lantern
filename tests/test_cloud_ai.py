@@ -235,3 +235,39 @@ def test_delete_me_forgets_the_consent_too(env):
     assert db.execute("select count(*) from users where ai_consent is not null").fetchone()[0] == 0
     db.close()
     assert cloud.get("/v1/ai", headers=bearer(tok)).json()["consent"] is False    # signing in again: asked again
+
+
+def _multipart(data: bytes, name="shot.png", ctype="image/png"):
+    b = "----lantern" + os.urandom(8).hex()
+    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n"
+            f"Content-Type: {ctype}\r\n\r\n").encode() + data + f"\r\n--{b}--\r\n".encode()
+    return body, {"content-type": f"multipart/form-data; boundary={b}"}
+
+
+def test_ask_reads_a_screenshots_text_like_the_app(env):
+    PIL = pytest.importorskip("PIL")  # noqa: F841
+    import shutil as _sh
+    from test_ocr import KNOWN, _png
+    cloud, tok, s, sent, app = env
+    body, h = _multipart(_png())
+    assert TestClient(app).post("/v1/ask/screenshot", content=body, headers=h).status_code == 401
+    c = TestClient(app)
+    c.cookies.set("lt", tok)
+    assert c.post("/v1/ask/screenshot", content=body, headers=h).status_code == 403       # not from Lantern's page
+    r = c.post("/v1/ask/screenshot", content=body, headers={**h, "x-lantern-site": "1"})
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["width"] == 900 and j["format"] == "PNG"
+    if _sh.which("tesseract"):
+        assert "4821" in j["text"] and KNOWN.split()[0] in j["text"].upper()
+    else:
+        assert j["text"] is None and j["how"] is None and "cannot read text" in j["reason"]
+    assert sent == []                                  # reading a screenshot never involves the model
+    # not an image, too many pixels, too large
+    bad, h2 = _multipart(b"<svg onload=alert(1)>", "x.svg", "image/svg+xml")
+    assert cloud.post("/v1/ask/screenshot", content=bad, headers={**h2, **bearer(tok)}).status_code == 400
+    big, h3 = _multipart(_png(size=(9000, 5000)))
+    r = cloud.post("/v1/ask/screenshot", content=big, headers={**h3, **bearer(tok)})
+    assert r.status_code == 400 and "too large" in r.json()["error"]["message"]
+    huge, h4 = _multipart(b"\x89PNG" + b"0" * (9 * 1024 * 1024))
+    assert cloud.post("/v1/ask/screenshot", content=huge, headers={**h4, **bearer(tok)}).status_code == 413

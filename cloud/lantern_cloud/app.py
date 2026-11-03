@@ -459,6 +459,41 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(503, "The model did not answer. Try again in a minute.") from None
         return {"answer": res["answer"], "cited": res["cited"], "invented": len(res["invented"])}
 
+    shot_slots = threading.BoundedSemaphore(2)    # screenshots read at once on this machine (Tesseract is CPU-heavy)
+    SHOT_PIXELS = 40_000_000                       # 8K × 5K: any real screenshot, never a decompression bomb
+
+    @app.post("/v1/ask/screenshot")
+    async def ask_screenshot(request: Request):
+        """Read the text in a screenshot for Ask Lantern, the way the app does (`lantern.ask.read_screenshot`: Pillow,
+        then the Tesseract program through a pipe). The image stays in this request's memory: never written to disk,
+        never stored, never sent to a model. Only the text comes back; the website shows it, and it goes to the model
+        only as part of a question the person sends."""
+        await signed_in(request)
+        from lantern.ask import SCREENSHOT_MAX, read_screenshot
+        try:
+            n = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            n = 0
+        if not 0 < n <= SCREENSHOT_MAX + 64 * 1024:
+            raise HTTPException(413 if n else 400, "Send one PNG, JPEG or WebP screenshot, up to 8 MB.")
+        raw = await request.body()
+        if len(raw) > SCREENSHOT_MAX + 64 * 1024:
+            raise HTTPException(413, "Send one PNG, JPEG or WebP screenshot, up to 8 MB.")
+        if not shot_slots.acquire(blocking=False):
+            raise HTTPException(429, "Lantern is reading other screenshots right now. Try again in a few seconds.")
+        try:
+            from fastapi.concurrency import run_in_threadpool
+            res = await run_in_threadpool(read_screenshot, raw, request.headers.get("content-type") or "", SHOT_PIXELS)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        finally:
+            shot_slots.release()
+            del raw
+        if res.get("text") is None:     # the server's own setup, not something the person can install
+            res = {**res, "how": None, "reason": "this server cannot read text in images yet"
+                   if res.get("reason") in ("tesseract not installed", "Pillow not installed") else res.get("reason")}
+        return res
+
     # ---- the website (same origin as the API, so no CORS is offered or needed) ----
     secure = s.public_url.startswith("https://")
 

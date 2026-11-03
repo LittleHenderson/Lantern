@@ -512,7 +512,7 @@ function consentSheet(st, then) {
   const el = sheet(`<div class="sh"><h2>Before Lantern uses a model</h2><button class="x" data-close aria-label="Close">×</button></div>
     <p>Lantern's findings, map and grade come from its own checks. To put them into plain words, it sends some of your work to a language model:</p>
     <ul class="sendlist"><li><b>Explain in plain words</b> sends the code of up to 40 functions on your app's main paths. Lantern copies the repository again for a moment to read them, runs nothing, and deletes the copy.</li>
-      <li><b>Ask Lantern</b> sends your question and this check's results (findings, routes, grade), not your code.</li></ul>
+      <li><b>Ask Lantern</b> sends your question and this check's results (findings, routes, grade), not your code. If you add a screenshot, Lantern reads its text, never keeps the image, and sends only that text with your question.</li></ul>
     ${st && st.notice ? note('info', esc(st.notice)) : note('warn', 'Lantern could not reach the free allowance just now. Try again in a minute.')}
     <p class="muted small">It is paid from your free allowance, so it costs you nothing. ${leftLine(st)} The model only explains: it cannot add, close or change a finding. You can turn this off again under your name, top right.</p>
     <div id="agmsg"></div>
@@ -568,7 +568,7 @@ function watchExplain(id) {
 }
 
 // ---- Ask Lantern: the app's assistant, answering from this check's results through the free allowance
-const ASK = {open: false, log: [], busy: false, page: null};
+const ASK = {open: false, opacity: 1, log: [], busy: false, page: null, shot: null};
 const MARK = (document.querySelector('.brand .mark') || {}).outerHTML || '';
 const PAGE_CHIPS = {
   map: ['What am I looking at?', 'What is a hop?', 'What does “likely” mean?'],
@@ -588,12 +588,14 @@ function renderAsk() {
   const where = r ? repoName(r.link) + (ASK.page && ASK.page.page ? ' · ' + ASK.page.page : '') : S.view === 'help' ? 'Help' : 'My runs';
   const msgs = ASK.log.map(m => m.role === 'me' ? `<div class="me">${esc(m.text)}</div>` :
     `<div class="bot ${m.wait ? 'wait' : ''}">${fmtAsk(m.text)}${(m.cited || []).length ? `<div class="cites">${m.cited.map(c => `<button data-cite="${esc(c)}" title="Open What to fix">${esc(c)}</button>`).join('')}</div>` : ''}</div>`).join('');
-  el.innerHTML = (ASK.open ? `<div class="win">
+  el.innerHTML = (ASK.open ? `<div class="win" style="opacity:${ASK.opacity}">
     <div class="hd">${MARK}<div style="flex:1;min-width:0"><div class="t">Ask Lantern</div><div class="s">Facts from your check · words from your free allowance</div></div>
+      <label title="Window opacity" style="display:flex;align-items:center;gap:6px;color:var(--muted);flex:none"><svg viewBox="0 0 20 20" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6"><circle cx="10" cy="10" r="6.5"/><path d="M10 3.5v13a6.5 6.5 0 0 0 0-13z" fill="currentColor"/></svg><input type="range" min="0.3" max="1" step="0.05" value="${ASK.opacity}" id="askop" aria-label="Window opacity"></label>
       <button class="x" id="askclose" aria-label="Close">×</button></div>
     <div class="log" id="asklog"><div class="ctx">Looking at <b>${esc(where)}</b></div>${msgs || `<div class="bot">${r ? 'Ask anything about this check, or a word you don’t know. I answer from Lantern’s own results and never guess.' : 'Ask about Lantern, or open one of your runs to ask about its results.'}</div>`}</div>
     <div class="ft"><div class="chips">${chips.map(c => `<button data-chip="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-      <div class="comp"><textarea id="askin" rows="1" placeholder="Ask about ${r ? 'this check' : 'Lantern'}…" aria-label="Your question"></textarea><button class="send" id="asksend" aria-label="Send"><svg viewBox="0 0 20 20" style="width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M10 15V5M5.5 9.5 10 5l4.5 4.5"/></svg></button></div>
+      ${ASK.shot ? `<div class="shot"><span style="width:52px;height:36px;border-radius:7px;background:var(--code-bg);display:grid;place-items:center;flex:none"><svg viewBox="0 0 20 20" style="width:16px;height:16px;fill:none;stroke:var(--code-dim);stroke-width:1.6;stroke-linejoin:round"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="m3 14 4-4 3 3 2-2 5 5"/><circle cx="13" cy="8" r="1.3"/></svg></span><div style="flex:1;min-width:0"><div class="nm">${esc(ASK.shot.name)}</div><div class="sm">${esc(ASK.shot.info)}</div></div><button id="askrm">Remove</button></div>` : ''}
+      <div class="comp"><button class="att" id="askatt" title="Attach a screenshot (or paste / drop one)" aria-label="Attach a screenshot"><svg viewBox="0 0 20 20" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round;stroke-linecap:round"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="m3 14 4-4 3 3 2-2 5 5"/><circle cx="13" cy="8" r="1.3"/></svg></button><input type="file" id="askfile" accept="image/png,image/jpeg,image/webp" hidden><textarea id="askin" rows="1" placeholder="${ASK.shot ? 'What went wrong here?' : 'Ask, or drop a screenshot…'}" aria-label="Your question"></textarea><button class="send" id="asksend" aria-label="Send"><svg viewBox="0 0 20 20" style="width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M10 15V5M5.5 9.5 10 5l4.5 4.5"/></svg></button></div>
       <div class="asknote">Answers cite your results. It cannot create, close or accept findings.</div></div></div>` : '') +
     `<button class="pill" id="askpill" aria-label="Ask Lantern">${MARK}<span class="lbl">Ask Lantern</span></button>`;
   const log = el.querySelector('#asklog'); if (log) log.scrollTop = log.scrollHeight;
@@ -605,12 +607,13 @@ async function askSend(text) {
   const r = askRun(), focus = {};
   if (r && ASK.page && typeof ASK.page.node === 'string') focus.node = ASK.page.node;
   if (r && ASK.page && typeof ASK.page.finding === 'string') focus.finding = ASK.page.finding;
-  const q = r && ASK.page && ASK.page.page ? `(I am on the “${ASK.page.page}” page.) ${text}` : text;
+  let q = r && ASK.page && ASK.page.page ? `(I am on the “${ASK.page.page}” page.) ${text}` : text;
+  if (ASK.shot && ASK.shot.text) q += '\n\nText read from my screenshot:\n' + ASK.shot.text.split('\n').map(l => '> ' + l).join('\n');
   const go = async () => {
     ASK.log.push({role: 'me', text}); ASK.log.push({role: 'bot', text: 'Thinking…', wait: true}); ASK.busy = true; renderAsk();
     try {
       const a = await api('/v1/ask', {method: 'POST', body: {run: r ? r.id : null, question: q, focus}});
-      ASK.log.pop(); ASK.log.push({role: 'bot', text: a.answer, cited: a.cited || []});
+      ASK.log.pop(); ASK.log.push({role: 'bot', text: a.answer, cited: a.cited || []}); ASK.shot = null;
     } catch (e) {
       ASK.log.pop(); ASK.log.pop();
       if (e.type === 'consent_needed') { ASK.busy = false; AI.state = null; renderAsk(); return withConsent(() => askSend(text)); }
@@ -626,8 +629,30 @@ document.getElementById('ask').addEventListener('click', e => {
   if (t.id === 'askclose') { ASK.open = false; renderAsk(); return; }
   if (t.id === 'asksend') { const ta = document.getElementById('askin'); const v = ta.value.trim(); ta.value = ''; askSend(v); return; }
   if (t.dataset.chip) { askSend(t.dataset.chip); return; }
+  if (t.id === 'askatt') { document.getElementById('askfile').click(); return; }
+  if (t.id === 'askrm') { ASK.shot = null; renderAsk(); return; }
   if (t.dataset.cite && askRun()) { S.tab = 'findings'; renderReport(document.getElementById('view'), S.run); }
 });
+document.getElementById('ask').addEventListener('input', e => { if (e.target.id === 'askop') { ASK.opacity = +e.target.value; const w = document.querySelector('#ask .win'); if (w) w.style.opacity = ASK.opacity; } });
+document.getElementById('ask').addEventListener('change', e => { if (e.target.id === 'askfile' && e.target.files[0]) askAttach(e.target.files[0]); });
+document.addEventListener('paste', e => { if (!ASK.open) return; const f = [...(e.clipboardData.files || [])].find(x => x.type.startsWith('image/')); if (f) askAttach(f); });
+document.addEventListener('dragover', e => { if (ASK.open && e.target.closest('#ask')) e.preventDefault(); });
+document.addEventListener('drop', e => { if (!ASK.open || !e.target.closest('#ask')) return; e.preventDefault(); const f = [...(e.dataTransfer.files || [])].find(x => x.type.startsWith('image/')); if (f) askAttach(f); });
+// A screenshot's text is read by Lantern's server (Pillow + Tesseract, in memory, never kept); only the text comes
+// back, shown here, and it reaches the model only inside a question the person sends.
+async function askAttach(file) {
+  if (file.size > 8 * 1024 * 1024) { ASK.shot = {name: file.name, info: 'too large: 8 MB at most', text: ''}; return renderAsk(); }
+  ASK.shot = {name: file.name, info: 'reading the text…', text: ''}; renderAsk();
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const res = await fetch('/v1/ask/screenshot', {method: 'POST', body: fd, credentials: 'same-origin', headers: {'X-Lantern-Site': '1'}});
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) ASK.shot = {name: file.name, info: (j.error && j.error.message) || 'could not read the image', text: ''};
+    else if (typeof j.text !== 'string') ASK.shot = {name: file.name, info: `${j.width || '?'}×${j.height || '?'} · ${j.reason || 'text not read'}`, text: ''};
+    else ASK.shot = {name: file.name, info: `${j.width}×${j.height} · read by Lantern, not kept · ${j.lines} line${j.lines === 1 ? '' : 's'} of text found`, text: j.text};
+  } catch (err) { ASK.shot = {name: file.name, info: 'could not read the image', text: ''}; }
+  renderAsk();
+}
 document.getElementById('ask').addEventListener('keydown', e => { if (e.target.id === 'askin' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('asksend').click(); } });
 
 // ---- help
@@ -639,7 +664,7 @@ const FAQ = [
   ['Using it', 'How long does a check take, and how many can I run?', 'Usually about a minute. Each account can run a few checks a day and one at a time; the number left today is under your name, top right.'],
   ['Using it', 'Does Lantern run my app or my tests?', 'No. In the cloud Lantern only reads the code. To watch your tests run, use the Lantern app on your own computer: <code>pip install lantern</code> then <code>lantern serve</code>.'],
   ['Results', 'What do the grade and the colours mean?', 'The grade (A to F) and the readiness number come from ten checks a senior engineer would make before launch. Red means a serious problem, orange and yellow smaller ones, green means it passed. Every colour sits next to a word, so you never have to guess.'],
-  ['Results', 'What does “Explain in plain words” do with my code?', 'It asks a language model to describe what each function on your app’s main paths does, in everyday words, with every phrase tied to a real line or name in your code (a phrase that is not is thrown away). For that, Lantern copies the repository again for a moment, sends the code of up to 40 functions to the model through your free allowance, and deletes the copy. It asks you first, says exactly where the code goes, and you can turn it off under your name. Ask Lantern sends your question and the check’s results, not your code.'],
+  ['Results', 'What does “Explain in plain words” do with my code?', 'It asks a language model to describe what each function on your app’s main paths does, in everyday words, with every phrase tied to a real line or name in your code (a phrase that is not is thrown away). For that, Lantern copies the repository again for a moment, sends the code of up to 40 functions to the model through your free allowance, and deletes the copy. It asks you first, says exactly where the code goes, and you can turn it off under your name. Ask Lantern sends your question and the check’s results, not your code. A screenshot you add is read by Lantern for its text and never kept; only that text goes with your question.'],
   ['Results', 'Can I trust what it says?', 'Every finding comes from a deterministic check, with the file, the line, and how a visitor reaches it. Lantern shows how sure it is about each connection, and never lets an AI create or dismiss a finding.'],
 ];
 function renderHelp(el) {
