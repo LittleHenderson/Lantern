@@ -51,4 +51,4 @@ def test_screenshot_without_tesseract_reports_size():
     body = (b"--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"shot.png\"\r\nContent-Type: image/png\r\n\r\n"
             + buf.getvalue() + b"\r\n--b--\r\n")
     r = ask.read_screenshot(body, "multipart/form-data; boundary=b")
-    assert r["width"] == 40 and r["height"] == 30 and ("lines" in r or "error" in r)
+    assert r["width"] == 40 and r["height"] == 30 and ("lines" in r or r["text"] is None)
