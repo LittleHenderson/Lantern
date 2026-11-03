@@ -5,6 +5,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- The Evidence Report reads as a printed document, as designed: paper sheets with a serif heading and opening
+  paragraph, the four numbers as a ruled row (fixed in green, open in red), section labels in small capitals, and
+  inside the app the moving shapes drift around the sheets. "Save as PDF" works inside the app again: it used an
+  inline click handler, which the page's script policy refused.
 - What protects you (Simple) is laid out as designed: the protections Lantern found fill the page under an uppercase
   count and a large heading, and what it looked for and didn't find is a full-height column down the right edge, each
   card with its "How do I add one?" under the text instead of squeezing it. On phones the column follows below.
