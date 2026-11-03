@@ -56,7 +56,7 @@ when the project came from Learn).
 **Provider row**: `name`, `local` (true for Ollama/LM Studio, false for cloud, null for openai-compatible),
 `needs_key`, `env` (environment variable name), `default_url`, `key` (where a key is set: "this session",
 "remembered on this computer", "environment variable X", or null), `notice` (data-location text to show before
-code is sent). The `deepseek` row adds `default: true` and `allowance: true` when the free allowance is usable.
+code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; Haiku 5.5) adds `default: true`, and `allowance: true` when the free allowance is usable.
 
 ### Projects
 
