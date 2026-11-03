@@ -5,6 +5,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Paths, as designed: Advanced opens on the whole-app Graph with the riskiest route already selected; Simple opens
+  on Lanes, full width, starting on the path that reaches the worst finding, with a line naming where it goes wrong.
+  The lanes now fit the screen instead of running off the right edge, and the page title is no longer cut short.
+  Flowchart and Graph sit on a dotted canvas, as in the mock-ups.
 - Findings in Simple view read as an audit memo, as designed: serif headings, the severity in the margin, entries split by
   thin rules. Each heading is a plain sentence ("The backup button can run shell commands on your server") chosen from a
   fixed list by the rule and filled only with names from the map; the scanner's own words stay right underneath.
