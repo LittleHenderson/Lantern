@@ -165,6 +165,41 @@ class Store:
                          "order by created", ACTIVE)
         return [self._run_dict(r) for r in rows]
 
+    # ---- share, delete, retention ----
+    def set_share(self, rid: str, on: bool) -> str | None:
+        """Turn the run's public link on (keeping the slug it already has) or off. Returns the slug, or None."""
+        with self.lock:
+            if not on:
+                self.db.execute("update runs set share_slug = null where id = ?", (rid,))
+                self.db.commit()
+                return None
+            row = self.db.execute("select share_slug from runs where id = ?", (rid,)).fetchone()
+            if row and row[0]:
+                return row[0]
+            slug = secrets.token_urlsafe(18)     # 144 random bits: unguessable, and unrelated to the run id
+            self.db.execute("update runs set share_slug = ? where id = ?", (slug, rid))
+            self.db.commit()
+            return slug
+
+    def run_by_slug(self, slug: str) -> dict | None:
+        if not isinstance(slug, str) or not 16 <= len(slug) <= 40:
+            return None
+        row = self._one(f"select {', '.join(RUN_FIELDS)} from runs where share_slug = ?", (slug,))   # nosec B608
+        return self._run_dict(row) if row else None
+
+    def delete_run(self, rid: str) -> None:
+        with self.lock:
+            self.db.execute("delete from runs where id = ?", (rid,))
+            self.db.commit()
+
+    def expired(self, days: int) -> list[str]:
+        """Finished runs older than `days` (0 = none: results are kept until the person deletes them)."""
+        if days <= 0:
+            return []
+        cutoff = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).isoformat()
+        return [r[0] for r in self._all("select id from runs where status in (?, ?, ?) and coalesce(finished, created) < ?",
+                                        (*FINISHED, cutoff))]
+
     @staticmethod
     def _run_dict(row) -> dict:
         d = dict(zip(RUN_FIELDS, row))

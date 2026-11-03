@@ -65,3 +65,14 @@ is where an auditor is most likely to find the claim false. Mark each as **held*
 | L2 | Only this computer can use it, and other websites can't drive it | 127.0.0.1 bind, token link + SameSite=Strict cookie, `X-Lantern-Token` on writes, Host check | See THREAT_MODEL T2. |
 | L3 | Keys stay in memory unless "remember" is ticked, then 0600; the API never returns them | `Store.set_key`, `test_keys_stay_private` | Logs, job errors, tracebacks, or reports that echo a key. |
 | L4 | Works offline for recently opened reports (PWA) | `viewer/sw.js` | Stop the server and reload an opened report. |
+
+## Cloud service
+
+| # | Claim | Evidence | Try to break it |
+|---|---|---|---|
+| C1 | The cloud never runs the pasted repository's code, and analysis has no network | `worker.py` (restricted process, `--offline`); `tests/test_cloud_runs.py` | Plant `setup.py`, `conftest.py`, a `postinstall`; a repo whose analysis would fetch something. |
+| C2 | The clone is deleted when the check ends; only result files are kept | `worker.py` `finally`; `tests/test_cloud_runs.py` | Kill the worker mid-run, restart, look in the work folder. |
+| C3 | Results are private to the person until they click Share | owner check on every run route; `tests/test_cloud_view.py`, `tests/test_cloud_share.py` | Guess run ids, reuse an expired `?k=`, use another account's token or cookie. |
+| C4 | "Stop sharing" turns the link off for good | `store.set_share`; `test_stop_sharing_turns_the_link_off_for_good` | Share, stop, share again: does the first link come back? |
+| C5 | "Delete" and "Delete my account" remove everything the cloud keeps about the run or the person | `store.delete_run`, `store.delete_user`; `test_delete_a_run_removes_its_results_and_its_link`, `test_delete_me_forgets_everything` | Look in the database and the results folder after deleting; delete while a run is going. |
+| C6 | No other website can act for a signed-in person | `X-Lantern-Site` on cookie writes, SameSite=Strict HttpOnly cookie; `tests/test_cloud_site.py` | A cross-site form POST or `fetch` with credentials to any changing route. |
