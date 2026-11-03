@@ -403,10 +403,10 @@ function subBar(r, tabs) {
   const W = sm ? {atlas: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', evidence: 'Report'}
                : {atlas: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', evidence: 'Evidence'};
   const tab = t => `<button data-t="${t}" class="${S.tab === t ? 'on' : ''}">${W[t]}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${esc(nf)}</span>` : ''}</button>`;
-  return `<div class="sub"><button class="back" id="back" aria-label="Back to my runs">${icon('back')}</button><span class="title">${esc(repoName(r.link))}</span>
+  return `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to my runs">${icon('back')}<span>My runs</span></button>${sm ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(repoName(r.link))}</span>
     ${r.status === 'done' && s.grade ? `<span class="gchip ${tone(s.grade)}" title="Readiness ${esc(s.score)}/100">${esc(s.grade)}${sm ? '' : ' · ' + esc(s.score)}</span>` : ''}
     ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].map(tab).join('')}</div>` : ''}
-    <span class="spacer"></span>${tabs ? `${explainBtn(r)}<button class="btn sm" id="share">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button><a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#">${icon('open')}<span>Open in new tab</span></a><button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}</div>`;
+    <span class="spacer"></span>${tabs ? `${explainBtn(r)}<button class="btn sm" id="share">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button><a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#">${icon('open')}<span>Open in new tab</span></a><button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}<span class="dock" data-dock="end"></span></div>`;
 }
 async function renderRun(el, id) {
   let r = S.run && S.run.id === id ? S.run : null;
@@ -425,7 +425,7 @@ function renderProgress(el, r) {
     const cls = !run ? (r.status === 'done' || i < at ? 'done' : '') : i < at ? 'done' : i === at ? 'now' : '';
     return `<div class="st ${cls}"><span class="dot">${cls === 'done' ? icon('check') : ''}</span><div><b>${esc(t)}</b>${esc(d)}</div></div>`;
   }).join('');
-  el.innerHTML = `${subBar(r, false)}<main class="progress"><div class="card">
+  dock(false); el.innerHTML = `${subBar(r, false)}<main class="progress"><div class="card">
     <div class="head"><div style="flex:1;min-width:0"><span class="eyebrow">${run ? (r.status === 'queued' ? 'Waiting for a free worker' : 'Checking now') : r.status === 'blocked' ? 'Stopped by a safety rule' : 'This check stopped'}</span>
       <h1>${esc(repoName(r.link))}</h1><p class="lede">${run ? 'This usually takes about a minute. You can leave this page; the check keeps going and appears in My runs.' : esc(r.error || 'The check did not finish.')}</p></div>${ring(null)}</div>
     ${run ? '<div class="indeterminate"></div>' : ''}
@@ -433,7 +433,7 @@ function renderProgress(el, r) {
     <pre class="log" id="runlog">${esc(r.log_tail || '')}</pre>
     <div class="runmeta"><span>${icon('lock')}${esc(PRIV[r.privacy] || r.privacy)}</span><span>${icon('cloud')}${esc(r.host)}</span><span>${icon('clock')}Started ${esc(ago(r.started || r.created))}</span></div>
     ${run ? '' : `<div class="row" style="margin-top:18px"><button class="btn primary" data-again="${esc(r.id)}">Try again</button><a class="btn ghost" href="#/">Back to my runs</a></div>`}
-  </div></main>`;
+  </div></main>`; dock(true);
   el.querySelector('#back').onclick = () => go('home');
   addControls(el);
   if (run) follow(r.id);
@@ -462,7 +462,7 @@ function stopFollow() { if (S.stream) { S.stream.es.close(); S.stream = null; } 
 async function renderReport(el, r) {
   if (!['atlas', 'findings', 'prot', 'ready', 'evidence'].includes(S.tab)) S.tab = 'findings';
   const old = S.frame && S.frame.rid === r.id ? S.frame.el : null;
-  el.innerHTML = `${subBar(r, true)}<div id="pbody"></div>`;
+  dock(false); el.innerHTML = `${subBar(r, true)}<div id="pbody"></div>`; dock(true);
   el.querySelector('#back').onclick = () => go('home');
   el.querySelector('#share').onclick = () => shareSheet(r);
   el.querySelector('#explain').onclick = () => explainClick(r);
@@ -691,8 +691,19 @@ function route() {
   render(); scrollTo(0, 0);
   if (S.view === 'home' && S.me) loadRuns().then(() => { if (S.view === 'home') render(); });
 }
+// One header row on a run's screens, as in the app: the logo, Simple/Advanced, appearance and account buttons move
+// (not copied, so their listeners stay) from the global header into the run's bar, and back on every other screen.
+function dock(inRun) {
+  const top = document.querySelector('header.top'), brand = document.getElementById('home'), nav = document.getElementById('nav');
+  const a = inRun && document.querySelector('.sub [data-dock="brand"]'), b = inRun && document.querySelector('.sub [data-dock="end"]');
+  const rest = ['viewmode', 'theme', 'acct'].map(i => document.getElementById(i));
+  document.body.classList.toggle('inproj', !!(a && b));
+  if (a && b) { a.replaceWith(brand); b.replaceWith(...rest); return; }
+  if (brand.parentElement !== top) { top.insertBefore(brand, nav); top.append(...rest); }
+}
 function render() {
   const el = document.getElementById('view');
+  dock(false);
   setBackdrop(); drawViewMode(); drawAcct(); renderAsk();
   if (S.view === 'run') return renderRun(el, S.runId);
   if (S.view === 'help') return renderHelp(el);

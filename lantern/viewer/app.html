@@ -386,7 +386,28 @@ pre.log:empty::before{content:"Starting…";color:var(--code-dim)}
 pre.cmd{background:var(--sunken);color:var(--ink);font:12.5px/1.6 var(--mono);padding:12px 14px;border-radius:12px;overflow:auto;margin:10px 0;white-space:pre}
 
 /* ---------- project bar ---------- */
-.sub{position:sticky;top:56px;z-index:9;display:flex;align-items:center;gap:12px;height:52px;padding:0 16px 0 12px;background:var(--surface);border-bottom:1px solid var(--line)}
+.sub{position:sticky;top:0;z-index:9;display:flex;align-items:center;gap:12px;height:var(--hh);padding:0 16px 0 14px;background:color-mix(in srgb, var(--bg) 82%, transparent);backdrop-filter:saturate(180%) blur(18px);-webkit-backdrop-filter:saturate(180%) blur(18px);border-bottom:1px solid var(--line)}
+/* Project screens have one header row (design: Simple 60px, Advanced 48px): the global header hides and its logo,
+   Simple/Advanced switch and appearance button move into the project bar (dock() in render). */
+body{--hh:60px} body[data-mode=advanced]{--hh:48px}
+body.inproj header.top{display:none}
+.sub .brand{padding:0} .sub .brand>span:not(.mark){display:none}
+body[data-mode=advanced] .sub .brand .mark{transform:scale(.8)}
+.sub .back{width:auto!important;padding:0 8px;gap:6px;display:flex!important;align-items:center;font:500 13.5px var(--font)}
+.sub .back .ic{width:15px;height:15px}
+.sub .crumbsep{color:var(--line-2);margin:0 -4px}
+.sub>*{flex:none} .sub>.spacer{flex:1} .sub>.title{flex:0 1 auto;min-width:48px} .sub .tabs{flex:0 1 auto;min-width:0;margin-left:4px} .sub .back,.sub .gchip{white-space:nowrap}
+.sub .tabs button{height:var(--hh);padding:0 10px}
+/* Simple: the tabs are a segmented control, like the global nav (design 7a); Advanced keeps the underlined tabs (3c). */
+@media (min-width:761px){
+body[data-mode=simple] .sub .tabs{padding:3px;border-radius:12px;background:var(--hover);gap:2px}
+body[data-mode=simple] .sub .tabs button{height:34px;border-radius:9px;padding:0 12px}
+body[data-mode=simple] .sub .tabs button.on{background:var(--surface);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
+body[data-mode=simple] .sub .tabs button.on::after{display:none}
+}
+@media (max-width:1440px){.sub #termbtn span,.sub .newtab span{display:none}}
+@media (max-width:1280px){.sub{gap:8px;padding:0 12px} .sub .tabs button,body[data-mode=simple] .sub .tabs button{padding:0 8px;font-size:13px}}
+@media (max-width:1240px){.sub #watchtests span{display:none}}
 .sub .back{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;border:0;background:none;color:var(--muted)}
 .sub .back:hover{background:var(--hover);color:var(--ink)}
 .sub .title{font:650 15px/1 var(--display);letter-spacing:-.012em;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
@@ -399,8 +420,8 @@ pre.cmd{background:var(--sunken);color:var(--ink);font:12.5px/1.6 var(--mono);pa
 .tabs button:hover{color:var(--ink)}
 .tabs button.on{color:var(--ink)}
 .tabs button.on::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
-iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px);display:block;background:var(--bg)}
-.withbar iframe{height:calc(100vh - 164px);height:calc(100dvh - 164px)}
+iframe{border:0;width:100%;height:calc(100vh - var(--hh));height:calc(100dvh - var(--hh));display:block;background:var(--bg)}
+.withbar iframe{height:calc(100vh - var(--hh) - 56px);height:calc(100dvh - var(--hh) - 56px)}
 .xbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:56px;padding:8px 20px;background:var(--surface);border-bottom:1px solid var(--line);font-size:13px}
 .xbar>.ic{width:18px;height:18px;color:var(--accent);flex:none} .xbar .t{flex:1;min-width:240px} .xbar .t b{color:var(--ink)} .xbar .d{font-size:12px;color:var(--muted);margin-top:2px}
 .xbar .xlog{flex-basis:100%;max-height:140px;margin:0}
@@ -482,7 +503,8 @@ iframe{border:0;width:100%;height:calc(100vh - 108px);height:calc(100dvh - 108px
   .fixgrid{grid-template-columns:1fr}
   .tabs{order:3;width:100%;margin:0 -8px;padding:0 4px;border-top:1px solid var(--line)}
   .tabs button{height:44px;padding:0 10px}
-  iframe{height:calc(100vh - 152px);height:calc(100dvh - 152px)}
+  iframe{height:calc(100vh - 114px);height:calc(100dvh - 114px)}
+  .sub .back span{display:none}
   .tiles{grid-template-columns:1fr}
 }
 .conn{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -1020,7 +1042,8 @@ async function browse(path) {
 }
 
 // ---------------------------------------------------------------- project
-function renderProject(el) {
+function renderProject(el) { dock(false); drawProject(el); dock(true); }
+function drawProject(el) {
   const p = S.state.projects.find(x => x.id === S.project);
   if (!p) return go('home');
   if (S.tab === 'guide' && !p.starter) S.tab = 'atlas';
@@ -1031,10 +1054,10 @@ function renderProject(el) {
   const REPORT_TABS = {atlas: 'map', findings: 'findings', prot: 'prot', ready: 'ready', explain: 'xp'};
   const c = p.counts || {}, nf = (c.critical || 0) + (c.high || 0) + (c.medium || 0);
   const tab = (t, label) => `<button data-t="${t}" class="${S.tab === t ? 'on' : ''}">${label}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${nf}</span>` : ''}</button>`;
-  el.innerHTML = `<div class="sub"><button class="back" id="back" aria-label="Back to projects">${icon('back')}</button><span class="title">${esc(p.name)}</span>
+  el.innerHTML = `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to ${simple ? 'my apps' : 'projects'}">${icon('back')}<span>${simple ? 'My apps' : 'Projects'}</span></button>${simple ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(p.name)}</span>
     ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100">${esc(p.grade)}${simple ? '' : ' · ' + esc(p.score)}</span>` : ''}
     <div class="tabs" role="tablist">${p.starter ? tab('guide', W.guide) : ''}${['atlas', 'findings', 'prot', 'ready', 'evidence', 'explain'].map(t => tab(t, W[t])).join('')}</div>
-    <span class="spacer"></span><button class="btn ghost sm" id="termbtn" title="Terminal (press \`)">${icon('bolt')}<span>Terminal</span></button>${p.has_report ? `<button class="btn sm" id="watchtests" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a></div>
+    <span class="spacer"></span><button class="btn ghost sm" id="termbtn" title="Terminal (press \`)">${icon('bolt')}<span>Terminal</span></button>${p.has_report ? `<button class="btn sm" id="watchtests" title="Watch my tests run" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a><span class="dock" data-dock="end"></span></div>
     <div id="toast"></div>
     <div id="pbody"></div>`;
   el.querySelector('#back').onclick = () => go('home');
@@ -1382,10 +1405,21 @@ function renderHelp(el) {
   const tl = el.querySelector('#tolearn2'); if (tl) tl.onclick = e => { e.preventDefault(); go('learn'); };
 }
 
+// The logo, the Simple/Advanced switch and the appearance button live in the global header, and move into the project
+// bar on project screens (one header row, as designed). They are moved, not copied, so their listeners stay.
+function dock(inProject) {
+  const top = document.querySelector('header.top'), brand = document.getElementById('home'), nav = document.getElementById('nav');
+  const vm = document.getElementById('viewmode'), th = document.getElementById('theme');
+  const a = inProject && document.querySelector('.sub [data-dock="brand"]'), b = inProject && document.querySelector('.sub [data-dock="end"]');
+  if (a && b) { a.replaceWith(brand); b.replaceWith(vm, th); return; }
+  if (brand.parentElement !== top) { top.insertBefore(brand, nav); top.append(vm, th); }
+}
 function render() {
   const el = document.getElementById('view');
   if (!S.state) { el.innerHTML = '<div class="empty">Loading…</div>'; return; }
   setBackdrop(); drawViewMode(); renderAsk();
+  dock(false);
+  document.body.classList.toggle('inproj', S.view === 'project');
   if (S.view === 'project') { el.className = ''; return renderProject(el); }
   if (S.view === 'settings') return renderSettings(el);
   if (S.view === 'help') return renderHelp(el);
