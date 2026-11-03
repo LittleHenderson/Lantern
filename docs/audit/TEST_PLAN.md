@@ -17,6 +17,7 @@ bash tools/audit.sh --browser    # adds the Chromium viewer and app checks
 | CLI surface | `lantern --help`, `starter`, `accept`, `evidence` | exit codes as documented |
 | Offline model end to end | `tools/fake_model.py` + `lantern explain --model openai-compatible/demo` | explanations validated for the demo units |
 | Browser (optional) | `node tools/viewer_smoke.js` | "no JS errors" at desktop and phone sizes; also on a report whose every field carries an HTML payload (`tools/poison_report.py`): nothing lands as markup, the title never changes |
+| Live app (with `--browser`) | `node tools/viewer_smoke.js --app URL OUT --image shot.png --expect-text 7351` against `lantern serve tests/fixtures/shop` | "no JS errors" and each step answers: "Watch my tests run" is confirmed and runs in the sandbox (toast says tests ran), the Terminal drawer runs `analyze --offline` (prints `ready`) and refuses `rm -rf /`, a generated screenshot dropped into Ask Lantern is read on this computer (the text when Tesseract is installed; CI installs it), Settings → Analysis packs turns Django off (the project card goes "Re-check to apply") and back on |
 
 CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every push (`.github/workflows/ci.yml`).
 The `install` job does what a tester does on Linux, macOS and Windows: a clean venv, `pip install
