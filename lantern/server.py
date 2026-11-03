@@ -665,6 +665,41 @@ def _load(p: Path):
         return None
 
 
+def result_page(out: Path, name: str, live: dict | None = None) -> tuple[int, str, str, dict]:
+    """(status, body, content type, headers) for a result file: `report.html`, `evidence.html`, `badge.svg`, or a
+    JSON file. Result folders can be planted (a cloned repo's `.lantern/`, or anything the cloud worker copied out),
+    so never send their bytes as a page: read only the data back and rebuild every page from our own templates, with
+    a per-response nonce so nothing but our scripts can run. Used by `lantern serve` and by the cloud service."""
+    from .evidence import badge_svg, render_html
+    from .report import read_bundle, render
+    f = out / name.replace("badge.svg", "readiness.json")
+    if not f.exists():
+        return 404, "<p>Not analyzed yet.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)}
+    try:
+        if name == "report.html":
+            nonce = secrets.token_urlsafe(16)
+            return 200, render(read_bundle(f), live, nonce), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)}
+        if name == "evidence.html":
+            ev = _load(f.with_suffix(".json"))
+            nonce = secrets.token_urlsafe(16)   # the page's one script: Simple/Advanced, copy the verify command
+            return 200, render_html(ev, nonce), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)}
+        if name == "badge.svg":
+            rd = _load(f) or {}
+            ev = _load(f.with_name("evidence.json")) or {}
+            grade = rd.get("grade") if rd.get("grade") in ("A", "B", "C", "D", "F") else "?"
+            # only the fields the badge shows are read back from the (plantable) file, and each is coerced
+            now = (ev.get("scorecard") or {}).get("now") if isinstance(ev.get("scorecard"), dict) else {}
+            safe = {"header": {"commit": re.sub(r"[^0-9a-f]", "", str((ev.get("header") or {}).get("commit") or ""))[:40] or None,
+                               "generated_at": _str((ev.get("header") or {}).get("generated_at"))},
+                    "scorecard": {"now": {k: _int((now or {}).get(k)) or 0 for k in ("critical", "high")} if now else {}}}
+            return 200, badge_svg(_int(rd.get("score")) or 0, grade, safe), "image/svg+xml", {
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"}
+        return 200, json.dumps(_load(f)), "application/json", {}
+    except Exception as exc:  # noqa: BLE001: a damaged or hand-made file
+        return (409, f"<p>This result file can't be read ({html.escape(type(exc).__name__)}). Analyze the project again.</p>",
+                "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = f"lantern/{__version__}"
     app: App  # set by serve()
@@ -787,44 +822,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, p.read_bytes(), ctype)
 
     def _result_file(self, p: dict, name: str):
-        """Serve a result page. Files in `.lantern/` sit inside the analyzed folder, so a cloned repo can plant them:
-        never send their bytes as a page. Read only the data back and rebuild every page from our own templates,
-        with a per-response nonce so nothing but our scripts can run."""
-        from .evidence import badge_svg, render_html
-        from .report import read_bundle, render
-        f = self.app.out(p) / name.replace("badge.svg", "readiness.json")
-        if not f.exists():
-            return self._send(404, "<p>Not analyzed yet.</p>", "text/html; charset=utf-8",
-                              {"Content-Security-Policy": _csp(None)})
-        try:
-            if name == "report.html":
-                usage.record("report_open")
-                s = self.app.store.settings()
-                live = {"api": f"/api/projects/{p['id']}", "token": self.app.token, "model": s.get("model") and
-                        f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS,
-                        "view_mode": "advanced" if s.get("view_mode") == "advanced" else "simple"}
-                nonce = secrets.token_urlsafe(16)
-                return self._send(200, render(read_bundle(f), live, nonce), "text/html; charset=utf-8",
-                                  {"Content-Security-Policy": _csp(nonce)})
-            if name == "evidence.html":
-                ev = _load(f.with_suffix(".json"))
-                nonce = secrets.token_urlsafe(16)   # the page's one script: Simple/Advanced, copy the verify command
-                return self._send(200, render_html(ev, nonce), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)})
-            if name == "badge.svg":
-                rd = _load(f) or {}
-                ev = _load(f.with_name("evidence.json")) or {}
-                grade = rd.get("grade") if rd.get("grade") in ("A", "B", "C", "D", "F") else "?"
-                # only the fields the badge shows are read back from the (plantable) file, and each is coerced
-                now = (ev.get("scorecard") or {}).get("now") if isinstance(ev.get("scorecard"), dict) else {}
-                safe = {"header": {"commit": re.sub(r"[^0-9a-f]", "", str((ev.get("header") or {}).get("commit") or ""))[:40] or None,
-                                   "generated_at": _str((ev.get("header") or {}).get("generated_at"))},
-                        "scorecard": {"now": {k: _int((now or {}).get(k)) or 0 for k in ("critical", "high")} if now else {}}}
-                return self._send(200, badge_svg(_int(rd.get("score")) or 0, grade, safe), "image/svg+xml",
-                                  {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
-            return self._send(200, json.dumps(_load(f)), "application/json")
-        except Exception as exc:  # noqa: BLE001: a damaged or hand-made file
-            return self._send(409, f"<p>This result file can't be read ({html.escape(type(exc).__name__)}). "
-                              "Analyze the project again.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
+        """Serve a result page (see `result_page`) with the app's live actions on the report."""
+        live = None
+        if name == "report.html" and (self.app.out(p) / name).exists():
+            usage.record("report_open")
+            s = self.app.store.settings()
+            live = {"api": f"/api/projects/{p['id']}", "token": self.app.token, "model": s.get("model") and
+                    f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS,
+                    "view_mode": "advanced" if s.get("view_mode") == "advanced" else "simple"}
+        return self._send(*result_page(self.app.out(p), name, live))
 
     # ------------------------------------------------------------------ GET routes
     def _get(self, path: str, q: dict):

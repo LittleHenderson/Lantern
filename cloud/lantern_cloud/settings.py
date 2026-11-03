@@ -55,6 +55,10 @@ class Settings:
     # Comma-separated hosts allowed for clones. Empty = every host `lantern.remote` accepts.
     allowed_hosts: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_HOSTS", ""))
     default_privacy: str = "structure"
+    # Signs the short-lived links that open a run's report in a browser (a browser tab cannot send the sign-in
+    # header). Empty: derived from the admin secret, or random for this process (links then end at a restart).
+    view_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_VIEW_SECRET", ""))
+    view_minutes: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_VIEW_MINUTES", 60))
 
     def limits(self) -> dict:
         """The limits a person may see (health, /v1/me). No secrets, no counters of other people."""

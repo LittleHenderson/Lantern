@@ -150,6 +150,11 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "which model wrote them.")
     if privacy != "full":
         out.append("Source code was left out of this report (structure-only privacy).")
+    if run_meta.get("place") == "cloud":
+        out.append("Made by Lantern's cloud service: the repository was copied into a sandboxed container on Lantern's "
+                   "server (no network during the analysis, writes only to its own temp folder), analysed without "
+                   "running any of its code, and the copy was deleted afterwards. The sandbox is a restricted process, "
+                   "not a separate virtual machine.")
     return out
 
 

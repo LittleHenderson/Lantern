@@ -13,13 +13,16 @@ Run:  LANTERN_ADMIN_SECRET=... uvicorn lantern_cloud.app:create_app --factory --
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
+import secrets
+import time
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import __version__
 from .identity import GatewayUnavailable, Identity
@@ -29,6 +32,10 @@ from .store import FINISHED, LimitReached, Store
 from .worker import Worker
 
 PRIVACY = {"structure", "full"}
+# What /r/{id}/<name> serves, and the result file behind each. Every page is rebuilt from our templates
+# (`lantern.server.result_page`); nothing in the run's folder is sent as a page.
+VIEWABLE = {"report.html": "report.html", "evidence.html": "evidence.html", "badge.svg": "badge.svg",
+            "findings.json": "security.json", "graph.json": "graph.json", "readiness.json": "readiness.json"}
 FULL_NOTICE = ("Short source snippets of your code will be stored on Lantern's server so the report can show them. "
                "Send stored_snippets_ok: true to agree, or choose privacy \"structure\" (no code kept).")
 
@@ -55,6 +62,14 @@ def _host_of(link: str, allowed: list[str] | None) -> str:
     if allowed is not None and host not in allowed:
         raise ValueError("Cloud mode accepts links from " + ", ".join(allowed) + " for now.")
     return host
+
+
+def _page_headers(extra: dict | None) -> dict:
+    """Every result response: never cached, never sniffed, no referrer (the link carries its key)."""
+    h = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"}
+    h.update(extra or {})
+    return h
 
 
 def run_view(r: dict, logs=None) -> dict:
@@ -186,6 +201,54 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 await asyncio.sleep(0.4)
         return StreamingResponse(events(), media_type="text/event-stream",
                                  headers={"cache-control": "no-store", "x-accel-buffering": "no"})
+
+    # ---- results in the browser (owner only, through a short-lived signed link) ----
+    vsecret = (s.view_secret or (hashlib.sha256(("view:" + s.admin_secret).encode()).hexdigest() if s.admin_secret
+                                 else secrets.token_hex(32))).encode()
+
+    def view_key(rid: str, exp: int) -> str:
+        return f"{exp}.{hmac.new(vsecret, f'{rid}:{exp}'.encode(), hashlib.sha256).hexdigest()[:32]}"
+
+    def key_ok(rid: str, k: str | None) -> bool:
+        try:
+            exp = int((k or "").split(".", 1)[0])
+        except ValueError:
+            return False
+        return exp > time.time() and hmac.compare_digest(view_key(rid, exp), k or "")
+
+    @app.post("/v1/runs/{rid}/view")
+    async def view_link(rid: str, authorization: str | None = Header(default=None)):
+        """Links that open this run's report, evidence and files in a browser for the next `view_minutes`. Anyone
+        holding a link can open it until then, so the website opens it at once and never stores it."""
+        who = await signed_in(authorization)
+        r = own_run(rid, who)
+        if r["status"] != "done":
+            raise HTTPException(409, "This run has no report yet.")
+        exp = int(time.time()) + s.view_minutes * 60
+        k = view_key(rid, exp)
+        base = f"{s.public_url}/r/{rid}/"
+        return {"expires_in": s.view_minutes * 60,
+                **{name.split(".")[0]: f"{base}{name}?k={k}" for name in VIEWABLE}}
+
+    @app.get("/r/{rid}/{name}")
+    def view(rid: str, name: str, request: Request, k: str | None = None):
+        if name not in VIEWABLE or len(rid) > 40:
+            raise HTTPException(404, "Not found.")
+        cookie = request.cookies.get("lv")
+        if not (key_ok(rid, k) or key_ok(rid, cookie)):
+            return Response("<p>This link has expired. Open the run again from your list of runs.</p>", 401,
+                            media_type="text/html; charset=utf-8", headers=_page_headers(None))
+        r = store.run(rid)
+        if not r or r["status"] != "done":
+            raise HTTPException(404, "No report here.")
+        from lantern.server import result_page
+        code, body, ctype, headers = result_page(Path(s.results_dir) / rid, VIEWABLE[name], None)
+        resp = Response(body, code, media_type=ctype, headers=_page_headers(headers))
+        if k and key_ok(rid, k):
+            # the report links to evidence.html and badge.svg by relative path; the cookie lets those open too
+            resp.set_cookie("lv", k, max_age=max(1, int(k.split(".", 1)[0]) - int(time.time())), path=f"/r/{rid}/",
+                            secure=s.public_url.startswith("https://"), httponly=True, samesite="lax")
+        return resp
 
     @app.get("/v1/admin/stats")
     def admin_stats(authorization: str | None = Header(default=None)):

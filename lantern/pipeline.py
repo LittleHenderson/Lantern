@@ -6,6 +6,7 @@ Each step reports progress through `log(line)`; results land in the output folde
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Callable
@@ -51,6 +52,8 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     from .depaudit import offline as offline_env
     offline = offline_env() if offline is None else offline
     run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
+    if os.environ.get("LANTERN_CLOUD_RUN") == "1":   # set only by Lantern's cloud worker (cloud/lantern_cloud/worker.py)
+        run_meta["place"] = "cloud"
     if trace_cmd:
         t = time.perf_counter()
         extra: dict = {}

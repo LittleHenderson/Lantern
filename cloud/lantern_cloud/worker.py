@@ -160,7 +160,9 @@ class Worker:
             stage("analyze")
             out = tmp / "out"
             out.mkdir()
-            cmd = self.analyze_cmd(repo, out, r["privacy"])
+            # With the audit file in hand the analysis is "online" as far as the report and `lantern verify` are
+            # concerned (dependencies were checked); it still has no network, and reads the audits from the file.
+            cmd = self.analyze_cmd(repo, out, r["privacy"], offline=audits is None)
             rc, output, timed_out = self._jailed(rid, root, cmd, cwd=tmp, net=False, log=log,
                                                  timeout=self._left(start), audits=audits)
             blocked = sandbox.blocked_reasons(output)
@@ -197,9 +199,9 @@ class Worker:
                                   finished=_now(), stage="finished", log_tail=self.logs.tail(rid))
 
     @staticmethod
-    def analyze_cmd(repo: Path, out: Path, privacy: str) -> list[str]:
+    def analyze_cmd(repo: Path, out: Path, privacy: str, offline: bool = True) -> list[str]:
         return [sys.executable, "-m", "lantern.cli", "analyze", str(repo), "--out", str(out), "--privacy", privacy,
-                "--offline"]
+                *(["--offline"] if offline else [])]
 
     def _left(self, start: float) -> float:
         left = self.s.job_timeout - (time.monotonic() - start)
@@ -220,7 +222,7 @@ class Worker:
             (hook / "sitecustomize.py").write_text(sandbox.SITECUSTOMIZE, encoding="utf-8")
             paths.insert(0, str(hook))
         env.update({"PYTHONPATH": os.pathsep.join(paths), "LANTERN_HOME": str(tmp / "home"),
-                    "LANTERN_OFFLINE": "0" if net else "1", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
+                    "LANTERN_OFFLINE": "0" if net or audits else "1", "LANTERN_CLOUD_RUN": "1", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
                     "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": "*",
                     "LANTERN_SHARE_USAGE": "0"})
         if audits:

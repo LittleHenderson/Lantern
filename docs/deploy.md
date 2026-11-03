@@ -138,8 +138,8 @@ allowance) and the cloud service asks the gateway `GET /v1/whoami` who the token
 OAuth app and no model key to set here**: the only secret is the cloud service's own admin secret.
 
 What it runs: `GET /v1/health` (public), `GET /v1/me`, `POST /v1/repos` and `GET /v1/runs…` (signed in),
-`GET /v1/admin/stats` (admin secret). Viewing a finished report in the browser is milestone 3; the website pages
-are milestone 4.
+`POST /v1/runs/{id}/view` and the report pages under `/r/` (the run's owner, through a short-lived link),
+`GET /v1/admin/stats` (admin secret). The website pages are milestone 4.
 
 Cost: the service **sleeps when nobody uses it**. After 10 minutes with no visitor and no run going, it stops
 itself, and Fly bills a stopped machine only for its stored disk image and the 1 GB volume (Fly's price list put
@@ -191,6 +191,8 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 | `LANTERN_CLOUD_JOB_SECONDS` | 600 | Wall clock per run; the analysis is stopped after it |
 | `LANTERN_CLOUD_IDLE_MINUTES` | 0 (10 in `cloud/fly.toml`) | Minutes with no visitor and no run before the service stops itself; 0 = never |
 | `LANTERN_CLOUD_RETENTION_DAYS` | 0 | 0 = results kept until the person deletes them; a number deletes older runs |
+| `LANTERN_CLOUD_VIEW_MINUTES` | 60 | How long a "open my report" link works |
+| `LANTERN_CLOUD_VIEW_SECRET` | derived from the admin secret | Signs those links; set it only to make all open links stop working at once (`fly secrets set`) |
 | `LANTERN_CLOUD_HOSTS` | (empty) | Comma-separated clone hosts; empty = every public forge Lantern knows |
 | `LANTERN_GATEWAY_URL` | `https://lantern-gateway.fly.dev/v1` | Where sign-ins are checked |
 | `LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS`, `LANTERN_CLOUD_WORK` | on the volume | Run list (SQLite), result folders, temp folders of runs in progress (emptied after each run and at start-up) |

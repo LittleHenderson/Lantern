@@ -236,7 +236,7 @@ def test_the_analysis_cannot_reach_the_network_or_write_outside(tmp_path, clone_
               f"try:\n    open({str(outside)!r}, 'w').write('x')\nexcept Exception as e:\n    print('write refused', e)\n"
               "try:\n    socket.create_connection(('203.0.113.9', 443), timeout=2)\nexcept Exception as e:\n"
               "    print('net refused', e)\nsys.exit(3)\n")
-    monkeypatch.setattr(worker_mod.Worker, "analyze_cmd", staticmethod(lambda repo, out, privacy: [sys.executable, "-c", script]))
+    monkeypatch.setattr(worker_mod.Worker, "analyze_cmd", staticmethod(lambda repo, out, privacy, offline=True: [sys.executable, "-c", script]))
     cloud, gw, s = make(tmp_path)
     tok = gw.sign_in("github:1", "github:octo")
     done = wait(cloud, tok, cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"])
@@ -248,7 +248,7 @@ def test_the_analysis_cannot_reach_the_network_or_write_outside(tmp_path, clone_
 
 def test_the_wall_clock_stops_a_run(tmp_path, clone_from, monkeypatch):
     monkeypatch.setattr(worker_mod.Worker, "analyze_cmd",
-                        staticmethod(lambda repo, out, privacy: [sys.executable, "-c", "import time; time.sleep(60)"]))
+                        staticmethod(lambda repo, out, privacy, offline=True: [sys.executable, "-c", "import time; time.sleep(60)"]))
     cloud, gw, s = make(tmp_path, job_timeout=8)
     tok = gw.sign_in("github:1", "github:octo")
     t = time.time()
