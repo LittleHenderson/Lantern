@@ -78,6 +78,8 @@ jobs:
           node-version: "20"
       - run: pip install -e ".[scan,dev]"
       - run: npm i --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+      - name: Tesseract, so the live-app smoke can check a screenshot's text is read
+        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
       - run: bash tools/audit.sh --browser
 
   install:
