@@ -222,6 +222,19 @@ class Store:
             return None
         return {"hash": row[0], "used_requests": row[1], "used_tokens": row[2], "disabled": bool(row[3])}
 
+    def identity(self, h: str) -> dict:
+        """Who a token belongs to, for Lantern's cloud service: the signed-in account (`github:<id>`, `google:<sub>`)
+        and its label. A token minted by hand has no account; it is named by a prefix of its hash. Counts as a use,
+        so a person who only uses cloud mode keeps their token past the retention window."""
+        with self.lock:
+            row = self.db.execute("select account, label from accounts where token_hash = ?", (h,)).fetchone()
+            if not row:
+                lab = self.db.execute("select label from users where token_hash = ?", (h,)).fetchone()
+                row = ("token:" + h[:16], (lab[0] if lab else "") or "token")
+            self.db.execute("update users set last_used = ? where token_hash = ?", (dt.datetime.now(dt.UTC).isoformat(), h))
+            self.db.commit()
+        return {"account": row[0], "label": row[1] or ""}
+
     def today_requests(self, h: str, day: str) -> int:
         row = self.db.execute("select requests from daily where day = ? and token_hash = ?", (day, h)).fetchone()
         return row[0] if row else 0
@@ -577,6 +590,12 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 "used_tokens": u["used_tokens"], "limit_tokens": s.free_tokens,
                 "remaining_requests": r["requests"], "remaining_tokens": r["tokens"],
                 "remaining_today": r["today"], "model": s.model}
+
+    @app.get("/v1/whoami")
+    def whoami(authorization: str | None = Header(default=None)):
+        """The account behind a token, for Lantern's cloud service (one sign-in for both). Never the email."""
+        u = auth(authorization)
+        return store.identity(u["hash"])
 
     @app.post("/v1/chat/completions")
     async def chat(request: Request, authorization: str | None = Header(default=None)):

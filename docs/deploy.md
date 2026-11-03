@@ -1,10 +1,11 @@
 # Deploying Lantern's hosted pieces
 
-Two hosted pieces, two hosts. Everything else runs on people's own computers.
+Three hosted pieces. Everything else runs on people's own computers.
 
 | Piece | Host | Why |
 |---|---|---|
 | **Gateway** (free allowance on Claude Haiku with DeepSeek as fallback, owner dashboard, usage counts) | Fly.io | One small always-on server with a disk; the Dockerfile deploys as is. About $2–4/month plus the DeepSeek bill, which the gateway caps at `LANTERN_GLOBAL_DAILY_USD` per day |
+| **Cloud service** (cloud mode: sign in, paste a repository link, get a report in the browser; `cloud/`) | Fly.io, a second app | Handles strangers' repositories, so it runs apart from the machine that holds the model keys. See "Cloud service on Fly.io" |
 | **Landing page** (public website) | Cloudflare Pages | Static files, free, deploys from GitHub; Cloudflare Web Analytics (free, no cookies) for visitor numbers |
 
 ## Gateway on Fly.io
@@ -122,7 +123,105 @@ What the 90 days mean for a tester: a GitHub or Google account that makes no req
 days is forgotten. Its old token stops working, and the next sign-in starts a fresh allowance (300 requests). An
 account in use keeps its counters, and signing in again within 90 days still carries them over. Retention applies
 to the running gateway only after `fly deploy`; the first prune runs when the new version starts, and
-`/v1/health` then reports `"version": "0.2.0"`.
+`/v1/health` then reports `"version": "0.2.0"` (or later). Version 0.2.1 adds `GET /v1/whoami`, which the cloud
+service below uses to recognise a signed-in person; deploy it before the cloud service.
+
+## Cloud service on Fly.io (cloud mode, milestone 1)
+
+The cloud service is the "analyze my repo in the browser" part (`cloud/`, brief: `docs/cloud-mode-brief.md`). It is
+a **second Fly app**, `lantern-cloud`, separate from the gateway on purpose: it handles strangers' repositories, and
+the gateway holds the model keys. If something ever went wrong while reading a repository, the keys are on a
+different machine.
+
+It has no sign-in of its own. A person signs in once at the gateway (GitHub or Google, the same as the app's free
+allowance) and the cloud service asks the gateway `GET /v1/whoami` who the token belongs to. So there is **no new
+OAuth app and no model key to set here**: the only secret is the cloud service's own admin secret.
+
+What milestone 1 runs: `GET /v1/health` (public), `GET /v1/me` (signed in), `GET /v1/admin/stats` (admin secret).
+Nothing analyses repositories yet; that is milestone 2.
+
+Cost: the service **sleeps when nobody uses it**. After 10 minutes with no visitor and no run going, it stops
+itself, and Fly bills a stopped machine only for its stored disk image and the 1 GB volume (Fly's price list put
+those at about $0.15 per GB per month each when this was written; check fly.io/pricing). While it runs it is a
+`shared-cpu-1x` machine with 1 GB of memory, billed by the second (roughly a cent per hour of use). The first
+visitor after a sleep waits a few seconds while it starts. Fly has also been waiving monthly bills under $5, but
+that is not a written promise; to be sure, ask billing@fly.io. Free alternatives and their trade-offs:
+"Free hosting options" below.
+
+From the **repository root** (not `cloud/`: the image also packs the analysis engine):
+
+```bash
+# 0. The gateway first, so it has /v1/whoami (version 0.2.1).
+cd gateway && fly deploy --depot=false && cd ..
+curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.1"
+
+# 1. Create the empty app (once). `fly orgs list` shows your organisation's short name.
+fly apps create lantern-cloud --org <your-org>
+#    If "lantern-cloud" is taken, pick another name and tell Claude, so `app` and LANTERN_PUBLIC_URL in cloud/fly.toml match.
+
+# 2. The disk that keeps results and the run list across restarts (one, San Jose).
+fly volumes create lantern_cloud_data --region sjc --size 1 -a lantern-cloud
+
+# 3. The one secret: the cloud service's own admin secret (opens /v1/admin/stats). Copy it somewhere safe.
+fly secrets set -a lantern-cloud LANTERN_ADMIN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
+# 4. Deploy (about three minutes the first time; the image includes git, Node's npm and the engine).
+#    Fly may offer to create a second machine for redundancy; one is enough (`fly scale count 1 -a lantern-cloud`).
+fly deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --depot=false
+
+# 5. Check.
+curl https://lantern-cloud.fly.dev/v1/health
+#    -> {"ok": true, "service": "lantern-cloud", "version": "0.1.0", "engine": "0.9.0", "limits": {...}, "hosts": "all"}
+```
+
+Windows PowerShell: step 3 is `fly secrets set -a lantern-cloud LANTERN_ADMIN_SECRET=(python -c "import secrets; print(secrets.token_urlsafe(32))")`.
+Or set it on the Fly website: lantern-cloud → Secrets → New secret, then **Deploy Secrets**.
+
+Limits (environment variables; the values in `cloud/fly.toml` are the owner's choices of 2026-11-03):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LANTERN_CLOUD_RUNS_PER_DAY` | 10 | Runs per person per UTC day |
+| `LANTERN_CLOUD_GLOBAL_RUNS_PER_DAY` | 300 | Runs for everyone per UTC day |
+| `LANTERN_CLOUD_CONCURRENT_JOBS` | 2 | Runs analysed at the same time; the rest wait in the queue |
+| `LANTERN_CLONE_MAX_MB` | 200 | A repository larger than this is refused before its files are written |
+| `LANTERN_CLOUD_JOB_SECONDS` | 600 | Wall clock per run; the analysis is stopped after it |
+| `LANTERN_CLOUD_IDLE_MINUTES` | 0 (10 in `cloud/fly.toml`) | Minutes with no visitor and no run before the service stops itself; 0 = never |
+| `LANTERN_CLOUD_RETENTION_DAYS` | 0 | 0 = results kept until the person deletes them; a number deletes older runs |
+| `LANTERN_CLOUD_HOSTS` | (empty) | Comma-separated clone hosts; empty = every public forge Lantern knows |
+| `LANTERN_GATEWAY_URL` | `https://lantern-gateway.fly.dev/v1` | Where sign-ins are checked |
+| `LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS` | on the volume | Run list (SQLite) and result folders |
+
+What the cloud database holds: the account id the gateway gives (`github:<number>`, `google:<id>`), its label (the
+GitHub login), and later each run's link, privacy level, status, times, commit and counts. Never a token (not
+even its hash), an email, or the repository's files.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `/v1/me` answers 503 "can't check your sign-in" | The gateway is down, or older than 0.2.1 (no `/v1/whoami`) | step 0 |
+| `fly deploy` says it can't find `lantern/` or `pyproject.toml` | Run from `cloud/` instead of the repository root | `cd ..`, repeat step 4 |
+| Health check fails right after deploy | Volume not created, so the database can't be written | step 2, then `fly deploy` again |
+| The first request after a quiet spell takes a few seconds | The service was asleep (normal, it saves money) | nothing |
+| A large repository's run ends with an error about memory | 1 GB is not enough for it | `fly scale memory 2048 -a lantern-cloud` (doubles the running cost) |
+
+### Free hosting options (checked 2026-11-03)
+
+The cloud service needs: a Docker container with about 1 GB of memory, a disk that survives restarts (the run list
+and results), and, for the safety wall around the analysis, a Linux kernel with Landlock (any recent one). What the
+free offers give, from the providers' pages and a dated comparison (snapdeploy.dev "state of free hosting",
+2026-09-28; InfoQ on Oracle, 2026-07):
+
+| Host | Free? | Fits? | The catch |
+|---|---|---|---|
+| **Fly.io, sleeping** (the setup above) | No free tier for new accounts, but a sleeping app costs cents; bills under $5 have been waived in practice | Yes: same account as the gateway, disk, Landlock | Not a written guarantee of $0 |
+| **Oracle Cloud Always Free** | Yes: 2 Arm cores and 12 GB of memory (halved in June 2026), plus disk | Yes, a real server | Card and phone to sign up; free-tier servers idle for 7 days can be reclaimed; popular regions often have no free capacity; you look after the server yourself (updates, HTTPS) |
+| Render free web service | Yes | No | 512 MB, sleeps after 15 minutes, no disk that survives a restart, so results vanish |
+| Koyeb free | Yes (card hold) | No | 512 MB, no volumes on the free plan |
+| Hugging Face Spaces | Docker Spaces need the $9/month plan | No | |
+| Railway | Trial credit, then 0.5 GB per service | No | Stops when the credit runs out |
+| Your own laptop with a free tunnel | Yes | Not safe | Strangers' repositories would be read on your personal computer, and it only works while the laptop is on |
+
+The Docker image runs the same on any of them; only the steps in this file are Fly-specific.
 
 ## Releases (GitHub now, PyPI later)
 

@@ -258,3 +258,17 @@ def test_gateway_prunes_once_a_day(gw):
     store.pruned_day = "2000-01-01"
     chat(client, tok)
     assert store.pruned_day != "2000-01-01"                 # and again on the first request of a new day
+
+
+def test_whoami_names_the_account_never_the_token(gw):
+    client, tok, _, _ = gw
+    assert client.get("/v1/whoami").status_code == 401
+    assert client.get("/v1/whoami", headers={"authorization": "Bearer lt_nope"}).status_code == 401
+    d = client.get("/v1/whoami", headers={"authorization": f"Bearer {tok}"}).json()
+    assert d["account"].startswith("token:") and d["label"] == "tester" and tok not in str(d)
+    store = client.app.state.store
+    t = store.sign_in("google:abcdef123456", "google:…123456")
+    assert client.get("/v1/whoami", headers={"authorization": f"Bearer {t}"}).json() == {
+        "account": "google:abcdef123456", "label": "google:…123456"}
+    store.sign_in("google:abcdef123456", "google:…123456")   # rotation disables the old token
+    assert client.get("/v1/whoami", headers={"authorization": f"Bearer {t}"}).status_code == 401

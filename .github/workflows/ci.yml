@@ -42,6 +42,28 @@ jobs:
               print("::notice::the live gateway predates the version field; deploy gateway/ to add it")
           PY
 
+  cloud-image:
+    # Cloud mode's server image (cloud/Dockerfile, built from the repository root) builds, starts as a non-root
+    # user, and answers its health check with the engine inside.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f cloud/Dockerfile -t lantern-cloud .
+      - name: start it and read /v1/health
+        run: |
+          docker run -d --name lc -p 8090:8080 -e LANTERN_CLOUD_DB=/tmp/c.db -e LANTERN_CLOUD_RESULTS=/tmp/r lantern-cloud
+          curl -fsS --retry 10 --retry-delay 2 --retry-all-errors --max-time 10 http://127.0.0.1:8090/v1/health | tee health.json
+          echo
+          test "$(docker exec lc id -u)" != "0"
+          docker exec lc git --version
+          docker exec lc npm --version
+          python3 - <<'PY'
+          import json, re
+          d = json.load(open("health.json"))
+          want = re.search(r'^version = "([^"]+)"', open("pyproject.toml").read(), re.M).group(1)
+          assert d["ok"] is True and d["service"] == "lantern-cloud" and d["engine"] == want, d
+          PY
+
   windows:
     # Stock Windows settings: the system code page, not UTF-8, and backslash paths.
     runs-on: windows-latest
