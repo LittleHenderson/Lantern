@@ -555,8 +555,8 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
               if memo.get("delta") else "")
     tiles = (f"<div class='tiles'>"
              f"<div><div class='v'>{E(rd['score']) if rd else '–'} {d_html}</div><div class='k'>Readiness, grade {E(rd['grade']) if rd else '–'}</div></div>"
-             f"<div><div class='v'>{len(se['fixed'])}</div><div class='k'>Fixed since baseline</div></div>"
-             f"<div><div class='v'>{memo['open']}</div><div class='k'>Open · {memo['crit']} critical, {memo['high']} high</div></div>"
+             f"<div class='{'fixed' if se['fixed'] else ''}'><div class='v'>{len(se['fixed'])}</div><div class='k'>Fixed since baseline</div></div>"
+             f"<div class='{'open' if memo['crit'] or memo['high'] else ''}'><div class='v'>{memo['open']}</div><div class='k'>Open · {memo['crit']} critical, {memo['high']} high</div></div>"
              f"<div><div class='v'>{len(se['accepted'])}</div><div class='k'>Accepted with a reason</div></div></div>")
     fixed_list = "".join(f"<div class='fx'><b>✓</b><span>{E(f['title'])} · <code>{E(f['file'] or '')}</code></span>"
                          f"<span class='muted'>{E(f['rank'])} · {E(f['id'][:6])}</span></div>" for f in se["fixed"]) \
@@ -591,14 +591,15 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
 <style>
 :root{{color-scheme:light;--bg:#F5F5F2;--panel:#FFFFFF;--panel-2:#FAFAF8;--ink:#161618;--body:#46464C;--muted:#6E6E74;--faint:#A3A3A8;--line:rgba(22,22,24,.09);--line-2:rgba(22,22,24,.16);--soft:#EEEEEA;--hover:rgba(22,22,24,.045);
 --accent:#0F7B74;--accent-ink:#0B5F5A;--good:#0CA30C;--warning:#FAB219;--serious:#EC835A;--critical:#D03B3B;
---good-soft:rgba(12,163,12,.11);--warning-soft:rgba(250,178,25,.17);--serious-soft:rgba(236,131,90,.16);--critical-soft:rgba(208,59,59,.11);--good-ink:#0A7A0A;--warn-ink:#8A5A00;
+--good-soft:rgba(12,163,12,.11);--warning-soft:rgba(250,178,25,.17);--serious-soft:rgba(236,131,90,.16);--critical-soft:rgba(208,59,59,.11);--good-ink:#0A7A0A;--warn-ink:#8A5A00;--crit-ink:#B02A2A;
 --font:"DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
 --display:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI Variable Display","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
---mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace}}
+--mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+--serif:"Lora",Georgia,"Times New Roman",serif}}
 :root[data-theme=dark]{{color-scheme:dark;--bg:#0E0E10;--panel:#161618;--panel-2:#1B1B1E;--ink:#F3F3F1;--body:#BEBEC3;--muted:#8C8C92;--faint:#5E5E64;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.15);--soft:#0A0A0B;--hover:rgba(255,255,255,.05);
---accent:#4FC3BA;--accent-ink:#7FDBD3;--good-soft:rgba(12,163,12,.20);--warning-soft:rgba(250,178,25,.18);--serious-soft:rgba(236,131,90,.20);--critical-soft:rgba(208,59,59,.22);--good-ink:#5BD15B;--warn-ink:#FAC55A}}
+--accent:#4FC3BA;--accent-ink:#7FDBD3;--good-soft:rgba(12,163,12,.20);--warning-soft:rgba(250,178,25,.18);--serious-soft:rgba(236,131,90,.20);--critical-soft:rgba(208,59,59,.22);--good-ink:#5BD15B;--warn-ink:#FAC55A;--crit-ink:#FF8A8A}}
 @media (prefers-color-scheme: dark){{:root:not([data-theme=light]){{color-scheme:dark;--bg:#0E0E10;--panel:#161618;--panel-2:#1B1B1E;--ink:#F3F3F1;--body:#BEBEC3;--muted:#8C8C92;--faint:#5E5E64;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.15);--soft:#0A0A0B;--hover:rgba(255,255,255,.05);
---accent:#4FC3BA;--accent-ink:#7FDBD3;--good-soft:rgba(12,163,12,.20);--warning-soft:rgba(250,178,25,.18);--serious-soft:rgba(236,131,90,.20);--critical-soft:rgba(208,59,59,.22);--good-ink:#5BD15B;--warn-ink:#FAC55A}}}}
+--accent:#4FC3BA;--accent-ink:#7FDBD3;--good-soft:rgba(12,163,12,.20);--warning-soft:rgba(250,178,25,.18);--serious-soft:rgba(236,131,90,.20);--critical-soft:rgba(208,59,59,.22);--good-ink:#5BD15B;--warn-ink:#FAC55A;--crit-ink:#FF8A8A}}}}
 *{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--body);font:14px/1.6 var(--font);-webkit-font-smoothing:antialiased}}
 main{{max-width:880px;margin:0 auto;padding:40px 20px 80px}}
 section{{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:24px 26px;margin:0 0 16px;box-shadow:0 1px 2px rgba(16,16,20,.05)}}
@@ -641,13 +642,33 @@ p.lead{{font-size:15px;line-height:1.65;color:var(--body);margin:0 0 18px}} p.le
 td.good{{color:var(--good-ink)}} td.bad{{color:var(--critical)}}
 body[data-mode=simple] .adv{{display:none}} body[data-mode=advanced] .simp{{display:none}}
 @media (max-width:700px){{.tiles{{grid-template-columns:1fr 1fr}}}}
+/* design 4b: the report reads as a printed document. Sheets of paper with square-ish corners, serif headings and lead,
+   the four numbers as a ruled row (no boxes), section labels in small capitals. Inside the app (framed) the page is
+   transparent so the app's backdrop drifts around the sheets. */
+html.framed body{{background:transparent}}
+section{{border-radius:6px;padding:44px 64px;box-shadow:0 1px 2px rgba(0,0,0,.08),0 18px 40px -24px rgba(0,0,0,.45)}}
+section:first-of-type{{padding-top:56px}} section:first-child::after{{display:none}}
+main{{max-width:960px}}
+.eyebrow{{font:500 11.5px var(--mono);letter-spacing:.06em}}
+h1.memo{{font:400 40px/1.18 var(--serif);letter-spacing:-.012em;margin:26px 0 18px;color:var(--ink)}}
+p.lead{{font:16.5px/1.75 var(--serif);margin:0 0 26px}}
+h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 small{{font-family:var(--font)}}
+.tiles{{gap:0;border-top:2px solid var(--ink);border-bottom:1px solid var(--line);padding:6px 0 4px;margin:0 0 22px}}
+.tiles>div{{border:0;background:none;border-radius:0;padding:12px 16px 12px 0}}
+.tiles .v{{font:400 32px/1.15 var(--serif);letter-spacing:-.01em}} .tiles .k{{font-size:12.5px}}
+.tiles .fixed .v{{color:var(--good-ink)}} .tiles .open .v{{color:var(--crit-ink)}}
+.delta{{font:500 13px var(--font);background:none;padding:0 0 0 4px}} .delta.up,.delta.down{{background:none}}
+.simp h4{{font:600 11.5px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:22px 0 8px}}
+.fx{{border-top:0;padding:4px 0}} .fx span:last-child{{font:12px var(--mono)}}
+.contents{{text-align:center;margin-top:34px;font-size:12.5px}}
+@media (max-width:700px){{section{{padding:28px 22px}} h1.memo{{font-size:30px}}}}
 @media print{{.topbar{{display:none}} body{{background:#fff}} section{{break-inside:avoid;border-color:#ccc;box-shadow:none}} section:first-child::after{{display:none}} button.print{{display:none}}}}
 @media (max-width:560px){{main{{padding:20px 12px 60px}} section{{padding:18px}} .kv{{grid-template-columns:1fr;gap:2px}} .kv div:nth-child(odd){{margin-top:8px}}}}
 </style></head><body data-mode="simple"><main>
 <div class="topbar"><span class="muted" style="font-weight:600;color:var(--ink)">{E(h['name'])} / Evidence Report</span><span class="sp"></span>
 <div class="seg" id="mode"><button data-m="simple" class="on">Simple</button><button data-m="advanced">Advanced</button></div>
 <span class="dg" title="{E(ev['digest'])}">digest {E(ev['digest'][:14])}…{E(ev['digest'][-4:])}</span>
-<button class="btn" id="copyverify">Copy verify command</button><button class="btn" onclick="window.print()">Save as PDF</button></div>
+<button class="btn" id="copyverify">Copy verify command</button><button class="btn" id="savepdf">Save as PDF</button></div>
 <section><div class="eyebrow"><span>Evidence Report · Lantern {E(__version__)}</span><span>{E(h['name'])}{(' · commit ' + E(commit[:7])) if commit else ''} · {E(h['generated_at'][:10])}</span></div>
 <h1 class="memo">{memo['title']}</h1>
 <p class="lead">{memo['lead']}</p>
@@ -715,7 +736,8 @@ body[data-mode=simple] .adv{{display:none}} body[data-mode=advanced] .simp{{disp
   draw();
   var cv = document.getElementById('copyverify'), cmd = {verify_js};
   cv.onclick = function () {{ if (navigator.clipboard) navigator.clipboard.writeText(cmd); cv.textContent = 'Copied'; }};
-  try {{ if (window.self !== window.top) document.querySelector('.topbar .seg').style.display = 'none'; }} catch (e) {{}}
+  document.getElementById('savepdf').onclick = function () {{ window.print(); }};   // no inline handler: the page's script policy refuses them
+  try {{ if (window.self !== window.top) {{ document.querySelector('.topbar .seg').style.display = 'none'; document.documentElement.classList.add('framed'); }} }} catch (e) {{}}
 }})();
 </script></body></html>"""
 

@@ -144,3 +144,15 @@ def test_render_escapes_every_field(tmp_path):
     ev = poison(ev)
     ev["header"]["commit"] = x
     assert "<img" not in evidence.render_html(ev)
+
+
+def test_page_has_no_inline_handlers(tmp_path):
+    """Served pages run only scripts carrying the response's nonce, so an onclick="…" attribute would never fire
+    (Save as PDF used one and did nothing inside the app). Every control is wired from the page's own script."""
+    import re
+    repo = _repo(tmp_path)
+    assert main(["analyze", str(repo)]) == 0
+    ev = json.loads((repo / ".lantern/evidence.json").read_text(encoding="utf-8"))
+    html = evidence.render_html(ev, nonce="n0nce")
+    assert not re.search(r"<[^>]+\son[a-z]+\s*=", html)
+    assert 'id="savepdf"' in html and "getElementById('savepdf')" in html
