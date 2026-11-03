@@ -65,6 +65,10 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
         c = sec["counts"]
         log(f"scan    {c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low "
             f"({timings['scan']}s)")
+        off = [t["tool"] for t in sec.get("tools", []) if "lantern[scan]" in str(t.get("status", ""))]
+        if off:
+            log(f"off     {', '.join(off)} not installed; Lantern's own rules ran. "
+                f'For these too: pip install "lantern[scan]"')
         (out / "security.json").write_text(json.dumps(sec, indent=1), encoding="utf-8")
     g.save(out / "graph.json")
     rd = assess(g, sec, run_meta)

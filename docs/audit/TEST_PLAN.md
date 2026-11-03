@@ -19,6 +19,12 @@ bash tools/audit.sh --browser    # adds the Chromium viewer and app checks
 | Browser (optional) | `node tools/viewer_smoke.js` | "no JS errors" at desktop and phone sizes; also on a report whose every field carries an HTML payload (`tools/poison_report.py`): nothing lands as markup, the title never changes |
 
 CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every push (`.github/workflows/ci.yml`).
+The `install` job does what a tester does on Linux, macOS and Windows: a clean venv, `pip install
+"git+https://github.com/LittleHenderson/Lantern@<commit>"` with no extras, then `lantern --version` (0.9.0),
+`lantern analyze tests/fixtures/shop --offline` (prints an `off` line naming the scanners that are not installed)
+and `lantern serve tests/fixtures/shop --check` (starts, prints the link, loads the app once, exits 0).
+A pushed `v*` tag runs `.github/workflows/release.yml`: build sdist + wheel, the test suite against the built wheel
+with the source folder moved away, the live gateway's `/v1/health`, then a GitHub Release with both files.
 
 ## 2. What the test files cover
 
@@ -32,6 +38,7 @@ CI runs the tests and the self-audit on Python 3.11, 3.12, and 3.13 for every pu
 | `tests/test_providers.py` | Provider presets (including DeepSeek), key requirements, URL scheme checks |
 | `tests/test_readiness.py` | Weights, failing and fixed projects, skip logic for libraries, fixtures ignored, accept + `--fail-on`, starter files never overwrite |
 | `tests/test_evidence.py` | Commit pinning, verify match/mismatch, fixed-vs-baseline, narrative escaping, no-git message, remote credential stripping |
+| `tests/test_release.py` | One version in `pyproject.toml` and `lantern/__init__.py`, a CHANGELOG section per tag, `serve --check`, Bandit missing reported as skipped (not a silent "ok") |
 | `tests/test_server.py` | Access control (token, cookie, write header, Host), project lifecycle over HTTP, key privacy and file mode, explain end to end with the fake model |
 
 ## 3. Manual walkthrough (15 minutes)
@@ -123,7 +130,7 @@ by `if not cmd: cmd = "ls"` (expect critical, naming the request line).
 
 * All of section 1 passes on Linux with Python 3.11–3.13 and on Windows with Python 3.12 under stock settings
   (`PYTHONUTF8=0`, the system code page). CI runs both, plus `tools/audit.sh --browser` in Chromium. macOS is not in
-  CI. (Before PR #7, Windows failed 24 of 88 tests; see `AUDIT_HISTORY.md`.)
+  CI except in the clean-install job. (Before PR #7, Windows failed 24 of 88 tests; see `AUDIT_HISTORY.md`.)
 * No critical or high issue open from sections 4.1–4.5 and 4.9.
 * Section 4.6: analysis of a 100k-line repo finishes in under 60 s and under 2 GB.
 * Every claim in `CLAIMS.md` is held or its text is corrected.

@@ -141,10 +141,10 @@ def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     if not pins:
         return [], info | {"status": "skipped: no exact versions to check (commit a lock file such as uv.lock or "
                                      "poetry.lock, or pin with ==)", "files": files, "unpinned": len(loose)}
+    if not shutil.which("pip-audit"):
+        return [], info | {"status": 'skipped: not installed (pip install "lantern[scan]")', "files": files}
     if offline() if no_network is None else no_network:
         return [], info | {"status": "skipped: offline", "files": files}
-    if not shutil.which("pip-audit"):
-        return [], info | {"status": "skipped: not installed (pip install pip-audit)", "files": files}
     with tempfile.TemporaryDirectory() as td:
         req = Path(td) / "requirements.txt"
         req.write_text("".join(f"{n}=={v}\n" for n, (v, _) in sorted(pins.items())), encoding="utf-8")
