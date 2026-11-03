@@ -23,3 +23,17 @@ First build for outside testers.
 - Release workflow: a pushed `v*` tag builds the sdist and wheel, runs the tests against the built wheel in a clean
   environment, and attaches both files to a GitHub Release.
 - Clean-install test in CI on Linux, macOS and Windows.
+- **Watch my tests run** (Paths): runs the project's test command in a sandbox (Docker with a pinned image, no
+  network, read-only project; or a restricted subprocess with Landlock, rlimits and a job object on Windows), stopped
+  after 10 minutes. Python tests upgrade the map's links to "seen running"; other languages run untraced for now.
+- **Terminal drawer**: runs Lantern's own commands only (`analyze`, `trace`, `explain`, `report`, `verify`, `accept`,
+  `packs`, `export`, `learn`); anything else is refused.
+- **Screenshots in Ask Lantern**: Tesseract reads a dropped PNG/JPEG/WebP through a pipe on your computer; the image is
+  never saved or uploaded. `[ocr]` extra.
+- **Analysis packs on/off**: per-pack switches in Settings for every project's packs, with a "Re-check to apply" card.
+- **Simple / Advanced** is saved by the app and followed by the Atlas, including after a restart.
+- Free allowance gateway: `/v1/health` reports its version and model; CI checks it. Token hashes are deleted after 90
+  days without use and per-day counters after 90 days (`LANTERN_RETENTION_DAYS`). The limits are listed in
+  `docs/deploy.md`.
+- Tester guide `docs/try-lantern.md` and a "Tester report" issue form.
+- Live-app browser smoke in CI: the test sheet, the terminal, a screenshot upload and a pack switch, with no JS errors.
