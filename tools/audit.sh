@@ -91,6 +91,9 @@ EOF
   # every string and number in the data carries an HTML payload: none of it may reach the page as markup
   check "viewer: poisoned report data stays text (every field escaped, content policy holds)" \
     bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison/report.html' && node tools/viewer_smoke.js '$W/poison/report.html' '$W/pshot'"
+  # the same for scenarios alone, with the rest intact so the finding cards and Fix page that show them are drawn
+  check "viewer: poisoned scenarios stay text (finding cards, Fix page, Scenario lens)" \
+    bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-sc/report.html' --only scenario,dropped_scenarios && node tools/viewer_smoke.js '$W/poison-sc/report.html' '$W/sshot'"
 fi
 
 printf '\n%s\n' "$([ $FAILS -eq 0 ] && echo 'ALL PASS' || echo "$FAILS FAILED")  (work dir: $W)"

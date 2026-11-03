@@ -1,8 +1,12 @@
-"""Three-Lens explanations with mechanical anchor validation.
+"""Three-Lens explanations with mechanical anchor validation, plus a scenario.
 
 Lens 1 (technical), Lens 2 (everyday, no jargon, one example, one analogy from a single
 "metaphor world" per repo), Lens 3 (the everyday text again, where each plain phrase is pinned
-1:1 to a technical term, symbol or line range).
+1:1 to a technical term, symbol or line range), and a Scenario: a short story of one named person
+using the app so that this code runs (and, per finding, meeting the finding). Scenarios follow the
+Lens 2 rules (no code identifiers) and may only name pages and routes the context shows; a scenario
+that breaks those rules is removed, never shown, and the viewer falls back to the deterministic
+scenario `scenarios.py` builds for every finding.
 
 The model only explains facts the graph and scanners already established. Every Lens 3 pair has
 an anchor that is checked against the graph and the source; explanations that fail are retried
@@ -21,7 +25,7 @@ from pathlib import Path
 from .graph import Graph, Node
 from .providers import AllowanceExhausted, Provider, ProviderError
 
-PROMPT_VERSION = "lens-v3"
+PROMPT_VERSION = "lens-v4"
 
 # Technical vocabulary a Lens 3 "term" anchor may use even if it doesn't appear verbatim in the code.
 GLOSSARY = {
@@ -73,8 +77,16 @@ Before you answer, check every pair: find its `plain` inside `text` with an exac
 not there, change `plain` to words that are, or drop the pair.
 Use exactly 4 or 5 pairs covering the main ideas. Plain phrases must be short (1-6 words) and distinct.
 
+SCENARIO: one short story (2 to 4 sentences) of a named person using the app so that this unit
+runs: what they do (a page they open, a button they press, what they type), what this code then
+does, and what they see. Plain words, no code identifiers. Name only pages and routes listed under
+ENTRY POINT, REACHED FROM or MAKES HTTP REQUESTS; if none is listed, tell it from the point of view
+of whoever calls this code.
+
 If SECURITY FINDINGS are listed, add `findings` explaining each one in lens1 and lens2 terms,
-including why it matters and the safest fix in one sentence. Do not judge whether a finding is a
+including why it matters and the safest fix in one sentence, and a `scenario`: 2 to 4 plain
+sentences in which a named tester (for example "Maria, a tester") meets this finding through the
+page or route shown, what goes wrong, and what the fix changes. Do not judge whether a finding is a
 false positive.
 
 Rarely, this unit's own CODE lines are not enough to explain it honestly (the body is cut off, or it
@@ -88,7 +100,8 @@ Respond with ONLY a json object (valid JSON), no markdown fences:
  "undetermined": str (only instead of lens2 and lens3, see above),
  "lens2":{"text":str,"example":str,"analogy":str},
  "lens3":{"text":str,"pairs":[{"plain":str,"technical":str,"anchor":{...}}]},
- "findings":[{"id":str,"lens1":str,"lens2":str,"fix":str}]}"""
+ "scenario":{"who":str,"story":str},
+ "findings":[{"id":str,"lens1":str,"lens2":str,"fix":str,"scenario":str}]}"""
 
 METAPHOR_SYSTEM = """Pick ONE everyday setting to use as a consistent metaphor world for explaining
 this whole codebase to a non-programmer (examples: a restaurant kitchen, a hotel, a post office,
@@ -111,11 +124,13 @@ class Context:
     callees: list[str] = field(default_factory=list)
     callee_summaries: dict[str, str] = field(default_factory=dict)
     metaphor: str = "a restaurant"
+    reached_from: list[str] = field(default_factory=list)   # node ids from a page/route to this unit (the map's path)
+    places: set[str] = field(default_factory=set)            # pages, routes and HTTP calls the prompt shows
 
     def hash(self) -> str:
         h = hashlib.sha256()
         h.update(json.dumps([self.node.fingerprint, sorted(self.callees), sorted(self.callers),
-                             sorted(f["id"] for f in self.findings), self.metaphor]).encode())
+                             sorted(f["id"] for f in self.findings), self.metaphor, self.reached_from]).encode())
         return h.hexdigest()[:12]
 
 
@@ -139,7 +154,8 @@ def read_source(repo: Path, node: Node, max_lines: int = 160) -> str:
     return "\n".join(f"{start + i:>5} | {ln}" for i, ln in enumerate(chunk))
 
 
-def build_context(g: Graph, nid: str, findings: list[dict], done: dict[str, dict], metaphor: str) -> Context:
+def build_context(g: Graph, nid: str, findings: list[dict], done: dict[str, dict], metaphor: str,
+                  reach: dict[str, dict] | None = None) -> Context:
     n = g.nodes[nid]
     repo = Path(g.repo_root)
     callees = [e.dst for e in g.callees(nid)]
@@ -149,10 +165,18 @@ def build_context(g: Graph, nid: str, findings: list[dict], done: dict[str, dict
         if x in g.nodes:
             allowed[x] = g.nodes[x].qualname
     summaries = {c: done[c]["lens1"]["summary"] for c in callees if c in done and done[c].get("lens1")}
+    mine = [f for f in findings if f.get("node") == nid]
+    # The path from a page or route to this unit, for the scenario: a finding's own path first, else the map's.
+    f_path = next((f.get("ui_path") or (f.get("reachable") or {}).get("path") for f in mine
+                   if f.get("ui_path") or f.get("reachable")), None)
+    path = [x for x in (f_path or ((reach or {}).get(nid) or {}).get("path") or []) if x in g.nodes]
+    places = {str(g.nodes[x].entry.get("detail") or "") for x in path + [nid] if g.nodes[x].entry}
+    places |= {str(e.detail or "") for x in path + [nid] for e in g.callees(x) if (e.via or "").startswith("http-")}
+    places |= {str(e.detail or "") for e in g.callers(nid) if (e.via or "").startswith("http-")}
     return Context(node=n, source=read_source(repo, n), allowed_symbols=allowed,
                    line_range=(n.start_line or 1, n.end_line or n.start_line or 1),
-                   findings=[f for f in findings if f.get("node") == nid],
-                   callers=callers, callees=callees, callee_summaries=summaries, metaphor=metaphor)
+                   findings=mine, callers=callers, callees=callees, callee_summaries=summaries, metaphor=metaphor,
+                   reached_from=path if len(path) > 1 else [], places={p for p in places if p})
 
 
 def render_prompt(ctx: Context, g: Graph) -> str:
@@ -170,6 +194,14 @@ def render_prompt(ctx: Context, g: Graph) -> str:
         parts.append(f"ENTRY POINT: {n.entry['kind']} - {n.entry.get('detail', '')}")
     if n.docstring:
         parts.append(f"DOCSTRING: {n.docstring}")
+    if ctx.reached_from:
+        hops = []
+        for a, b in zip(ctx.reached_from, ctx.reached_from[1:] + [None]):
+            na = g.nodes[a]
+            label = f"{na.entry['kind']} {na.entry.get('detail', '')}".strip() if na.entry else na.qualname
+            e = next((e for e in g.callees(a) if e.dst == b), None) if b else None
+            hops.append(label + (f" ({e.detail})" if e and e.detail else ""))
+        parts.append("REACHED FROM (from the map, for the scenario): " + " -> ".join(hops))
     parts.append("SOURCE:\n" + (ctx.source or "(source unavailable)"))
     if ctx.callers:
         parts.append("CALLED BY: " + ", ".join(g.nodes[c].qualname for c in ctx.callers[:10] if c in g.nodes))
@@ -248,10 +280,54 @@ def _unknown_names_in_lens1(l1: dict, ctx: Context) -> list[str]:
     return sorted(set(out))
 
 
+_PLACE_RE = re.compile(r"(?<![\w.])/[\w\-{}:\[\]]+(?:/[\w\-{}:\[\]]+)*")
+
+
+def _scenario_problem(story: str, ctx: Context) -> str | None:
+    """Why a scenario cannot be shown, or None. Lens 2 rules (no code identifiers), and every page or route it names
+    (`/admin`, `/users/42`) must start like one the prompt showed: a scenario walks through the app the map knows."""
+    story = story.strip()
+    if len(story) < 30 or " " not in story:
+        return "scenario is too short to be a story"
+    leaked = sorted(i for i in _code_identifiers(ctx) if re.search(rf"\b{re.escape(i)}\b", story))
+    if leaked:
+        return "scenario must not use code identifiers: " + ", ".join(leaked[:5])
+    known = [p.split()[-1].lower() for p in ctx.places if p.split()]
+    for m in _PLACE_RE.finditer(story):
+        tok = m.group(0).lower().rstrip(".")
+        first = "/" + tok.strip("/").split("/")[0]
+        if not any(tok in k or k.startswith(first) for k in known):
+            return f"scenario names a page or route the map does not show: {m.group(0)}"
+    return None
+
+
+def check_scenarios(rec: dict, ctx: Context) -> None:
+    """Scenarios are extra: one that breaks the rules is removed (and kept under `dropped_scenarios` for the record),
+    never shown and never a reason to reject the lenses. The viewer then shows the deterministic scenario."""
+    dropped = []
+    sc = rec.get("scenario")
+    if sc is not None:
+        story = sc.get("story") if isinstance(sc, dict) else sc
+        why = _scenario_problem(story, ctx) if isinstance(story, str) else "scenario has no story"
+        if why or rec.get("undetermined") and not isinstance(rec.get("lens2"), dict):
+            dropped.append({"scenario": sc, "reason": why or "no plain-words lenses to go with it"})
+            rec.pop("scenario", None)
+        else:
+            rec["scenario"] = {"who": str(sc.get("who") or "")[:80] if isinstance(sc, dict) else "", "story": story.strip()}
+    for f in rec.get("findings") or []:
+        if isinstance(f, dict) and "scenario" in f:
+            why = _scenario_problem(f["scenario"], ctx) if isinstance(f["scenario"], str) else "scenario is not text"
+            if why:
+                dropped.append({"finding": f.get("id"), "scenario": f.pop("scenario"), "reason": why})
+    if dropped:
+        rec["dropped_scenarios"] = (rec.get("dropped_scenarios") or []) + dropped
+
+
 def validate(rec: dict, ctx: Context) -> list[str]:
     errs: list[str] = []
     if not isinstance(rec, dict):
         return ["response is not a JSON object"]
+    check_scenarios(rec, ctx)
     l1, l2, l3 = rec.get("lens1"), rec.get("lens2"), rec.get("lens3")
     if not isinstance(l1, dict) or not str(l1.get("summary", "")).strip():
         errs.append("lens1.summary is missing")
@@ -573,8 +649,12 @@ def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nid
         metaphor: str | None = None, progress=None, fresh: bool = False) -> dict:
     cache = Cache(cache_dir)
     done: dict[str, dict] = {}
+    from .security import reachability
+    reach = reachability(g, kinds={"page", "main"})   # pages first: a scenario starts where a visitor starts
+    for k, v in reachability(g).items():
+        reach.setdefault(k, v)
     stats = {"generated": 0, "cached": 0, "validated": 0, "failed": 0, "first_try": 0, "repaired": 0,
-             "pairs_dropped": 0, "undetermined": 0, "invented_findings": 0, "stopped": None}
+             "pairs_dropped": 0, "undetermined": 0, "invented_findings": 0, "scenarios_dropped": 0, "stopped": None}
     # the same model gives the same cache entries whether billed to the allowance or your own key
     model_id = getattr(provider, "cache_model", provider.label)
     try:
@@ -584,7 +664,7 @@ def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nid
         world = {"world": "a restaurant", "why": "default", "roles": {}}
         nids = []
     for i, nid in enumerate(nids):
-        ctx = build_context(g, nid, findings, done, world["world"])
+        ctx = build_context(g, nid, findings, done, world["world"], reach)
         k = cache.key(ctx, model_id)
         rec = None if fresh else cache.get(k)   # fresh: 'Re-explain' asks the model again and overwrites the cache
         if rec is not None:
@@ -602,6 +682,7 @@ def run(g: Graph, provider: Provider, findings: list[dict], cache_dir: Path, nid
         stats["invented_findings"] += len(rec.get("dropped_findings") or [])
         stats["repaired"] += 1 if rec.get("repaired") else 0
         stats["pairs_dropped"] += len(rec.get("dropped_pairs") or [])
+        stats["scenarios_dropped"] += len(rec.get("dropped_scenarios") or [])
         stats["undetermined"] += 1 if rec.get("undetermined") and rec.get("validated") else 0   # rejected ones are failures
         if rec.get("validated"):
             stats["validated"] += 1
