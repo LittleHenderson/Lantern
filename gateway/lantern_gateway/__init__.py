@@ -1,1 +1,3 @@
-"""Lantern gateway: hosts the free DeepSeek allowance for Lantern users."""
+"""Lantern gateway: hosts the free model allowance for Lantern users (Claude Haiku 5.5 first, DeepSeek as fallback)."""
+
+__version__ = "0.2.0"   # keep equal to gateway/pyproject.toml
