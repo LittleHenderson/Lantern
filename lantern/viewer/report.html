@@ -248,6 +248,7 @@ code.cmd{font:11.5px var(--mono);color:var(--muted);background:var(--hover);padd
 .helppanel .hh{display:flex;align-items:center;gap:10px;margin-bottom:6px} .helppanel .hh b{font-size:15px;color:var(--ink)} .helppanel .x{margin-left:auto;background:none;border:0;font-size:18px;color:var(--muted);cursor:pointer}
 .helppanel p{margin:6px 0;font-size:13.5px;line-height:1.6;color:var(--ink-2)}
 @media (max-width:760px){.btn.help span{display:none}}
+@media (max-width:760px){.seg.mode{display:none !important}}
 
 /* Fix (design 1k) */
 .fixgrid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:28px;align-items:start}
@@ -593,6 +594,9 @@ const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'ris
 try { S.simple = localStorage.getItem('lantern.simple') !== '0'; } catch (e) {}
 // Opened from `lantern serve`: the saved setting (Settings → view_mode) wins over this browser's memory.
 try { const lv = window.LANTERN_LIVE; if (lv && (lv.view_mode === 'simple' || lv.view_mode === 'advanced')) S.simple = lv.view_mode === 'simple'; } catch (e) {}
+// Phones get Simple only (design rule); the Simple/Advanced switch is hidden below 760px.
+const PHONE = matchMedia('(max-width:760px)');
+if (PHONE.matches) S.simple = true;
 try { S.view = ['lanes', 'tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : (S.simple ? 'lanes' : 'tree'); S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
 try { S.lens = [1, 2, 3, 4].includes(+localStorage.getItem('lantern.lens')) ? +localStorage.getItem('lantern.lens') : 1; } catch (e) {}
 // Icons and the status tone of a 0-100 value: fixed markup and fixed words, never data.
@@ -1534,7 +1538,7 @@ function renderProtections() {
     el.innerHTML = `<div class="page"><div class="toolbar" style="justify-content:flex-end">${modeSeg()}</div>
       <div class="split"><div class="smain"><div class="k">${found.length} protection${found.length === 1 ? '' : 's'} found · ${missing.length} Lantern looked for and didn’t find</div>
         <h1 style="margin:6px 0 8px">${found.length ? `Here’s what is already keeping ${name} safe. Don’t break these.` : `Lantern found no protections in ${name} yet.`}</h1>
-        <p class="lede">Lantern found each one in your code and, where it could, watched it work under your tests. Your evidence report lists them too.</p>
+        ${found.length ? '<p class="lede">Lantern found each one in your code and, where it could, watched it work under your tests. Your evidence report lists them too.</p>' : ''}
         <div class="plist">${found.map(p => `<div class="pitem"><span class="pic good">${icon('check')}</span><div><div class="t">${esc(p.title)}</div><div class="d">${esc(p.why)}</div><div class="ev">${arr(p.found).map(esc).join(' · ')}</div></div><span class="badge ${observed(p) ? 'good' : 'neutral'}">${observed(p) ? 'seen running' : 'confirmed'}</span></div>`).join('') || '<div class="note">Nothing found yet. The list on the right is where to start.</div>'}</div>
       </div><aside class="rside"><div class="k2" style="margin-top:0">Lantern looked for these and didn’t find them</div>
         ${missing.map((p, i) => `<div class="pitem miss"><span class="pic"></span><div><div class="t">${esc(p.title)}</div><div class="d">${esc(p.why)}${p.heuristic ? ' Heuristic: Lantern may be wrong about this.' : ''}</div><div class="how" id="how-${i}" hidden>${esc(p.how)}${arr(p.evidence).length ? `<div class="ev">Why Lantern thinks so: ${arr(p.evidence).map(esc).join(' · ')}</div>` : ''}</div></div><button class="linkbtn" data-how="${i}">How do I add one?</button></div>`).join('') || '<div class="note">Everything Lantern looks for is in place.</div>'}
@@ -1758,7 +1762,8 @@ async function rAskSend(text) {
   el.addEventListener('keydown', e => { if (e.target.id === 'raskin' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('rasksend').click(); } });
 })();
 
-window.setSimple = v => { setMode(v, false); if (LIVE) LIVE.view_mode = S.simple ? 'simple' : 'advanced'; render(); };   // the app's toggle, already saved
+window.setSimple = v => { setMode(PHONE.matches || v, false); if (LIVE) LIVE.view_mode = S.simple ? 'simple' : 'advanced'; render(); };   // the app's toggle, already saved
+PHONE.addEventListener('change', () => { if (PHONE.matches && !S.simple) { S.simple = true; render(); } });
 function render() {
   renderRAsk();
   renderLeft();

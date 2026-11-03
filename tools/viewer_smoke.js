@@ -41,6 +41,15 @@ async function appSmoke(url, out, image, expectText) {
       await p.reload(); await p.waitForSelector('[data-open]');
       await p.click('[data-open]'); await p.waitForTimeout(1500);
       await p.screenshot({ path: `${out}-${name}-project.png` });
+      if (name === 'phone') {
+        // phones get Simple only, even though the desktop pass saved Advanced
+        const mode = await p.evaluate(() => document.body.dataset.mode);
+        if (mode !== 'simple') errs.push(`phone: the app shows ${mode} (phones must get Simple only)`);
+        const fr = p.frames().find(f => /report\.html/.test(f.url()));
+        const rs = fr ? await fr.evaluate(() => S.simple).catch(() => null) : null;
+        if (rs !== true) errs.push(`phone: the Atlas frame is not Simple (${rs})`);
+        step(name, `view mode ${mode}, Atlas simple ${rs}`);
+      }
       if (name === 'desk') {
         // 1. the sheet: confirm the test command, run it in the sandbox, wait for the toast
         await p.click('#watchtests'); await p.waitForSelector('#shrun');

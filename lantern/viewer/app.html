@@ -617,7 +617,10 @@ function setBackdrop() {
 }
 
 // ---------------------------------------------------------------- Simple / Advanced (persisted per user)
-function viewMode() { return (S.state && S.state.settings && S.state.settings.view_mode) || 'simple'; }
+// Phones get Simple only (design rule): the saved choice is kept for wider screens, never applied below 760px.
+const PHONE = matchMedia('(max-width:760px)');
+function viewMode() { return PHONE.matches ? 'simple' : (S.state && S.state.settings && S.state.settings.view_mode) || 'simple'; }
+PHONE.addEventListener('change', () => { drawViewMode(); if (typeof render === 'function' && S.state) render(); });
 function drawViewMode() {
   for (const b of document.querySelectorAll('#viewmode button')) b.classList.toggle('on', b.dataset.m === viewMode());
   document.body.dataset.mode = viewMode();
