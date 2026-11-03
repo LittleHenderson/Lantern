@@ -261,6 +261,16 @@ code.cmd{font:11.5px var(--mono);color:var(--muted);background:var(--hover);padd
 .pitem .t{font-weight:600;color:var(--ink);font-size:14px} .pitem .d{font-size:13px;color:var(--ink-2);margin-top:2px;line-height:1.5} .pitem .ev{font:11.5px var(--mono);color:var(--muted);margin-top:4px;overflow-wrap:anywhere} .pitem .how{font-size:13px;color:var(--ink-2);margin-top:8px;padding:8px 10px;border-radius:9px;background:var(--hover)}
 .pic{width:22px;height:22px;border-radius:99px;display:grid;place-items:center;flex:none;border:1.5px solid var(--line-2);margin-top:1px} .pic.good{border-color:var(--good);background:var(--good-soft);color:var(--good-ink)} .pic .ic{width:13px;height:13px}
 .pitem.miss{background:transparent;border-style:dashed} .pitem.miss .pic{border-style:dashed}
+/* design 7d: what protects you is the page; what Lantern did not find is a column down the right edge, full height */
+.psplit{display:grid;grid-template-columns:minmax(0,1fr) 380px;margin:-20px -24px -40px;min-height:calc(100% + 60px)}
+.psplit>.smain{padding:20px 48px 48px;max-width:780px;width:100%;justify-self:center}
+.psplit>.smain>.k{font:600 12px var(--font);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-top:4px}
+.psplit>.smain h1{font:650 32px/1.15 var(--display);letter-spacing:-.02em;text-wrap:balance;color:var(--ink)}
+.psplit>.rside{border-left:1px solid var(--line);background:color-mix(in srgb, var(--surface) 55%, transparent);padding:28px 24px;display:flex;flex-direction:column;gap:12px}
+.psplit>.rside .pitem.miss .linkbtn{display:inline-block;margin-top:8px;padding:0}
+.psplit>.rside .pfoot{margin-top:auto;padding-top:16px}
+@media (max-width:1100px){.psplit{grid-template-columns:minmax(0,1fr) 320px}.psplit>.smain{padding:20px 28px 40px}}
+@media (max-width:760px){.psplit{display:block;margin:0}.psplit>.smain{padding:0}.psplit>.rside{border-left:0;background:none;padding:24px 0 0}.psplit>.smain h1{font-size:26px}}
 .badge.medium{background:var(--warning-soft);color:var(--warn-ink)}
 @media (max-width:900px){.split,.split.wide{grid-template-columns:1fr}.strip5{grid-template-columns:repeat(2,1fr)}.ctable .r{grid-template-columns:1fr 1fr;gap:6px}.ctable .r.h{display:none}}
 
@@ -1613,14 +1623,13 @@ function renderProtections() {
   if (!prot.length) { el.innerHTML = `<div class="empty">${ART}<b>No protections checked yet</b>Run <code>lantern analyze</code> again to look for rate limits, headers, login checks and the rest.</div>`; return; }
   const name = esc(PROJECT);
   if (S.simple) {
-    el.innerHTML = `<div class="page"><div class="toolbar" style="justify-content:flex-end">${modeSeg()}</div>
-      <div class="split"><div class="smain"><div class="k">${found.length} protection${found.length === 1 ? '' : 's'} found · ${missing.length} Lantern looked for and didn’t find</div>
+    el.innerHTML = `<div class="psplit"><div class="smain"><div class="toolbar" style="justify-content:flex-end">${modeSeg()}</div><div class="k">${found.length} protection${found.length === 1 ? '' : 's'} found · ${missing.length} Lantern looked for and didn’t find</div>
         <h1 style="margin:6px 0 8px">${found.length ? `Here’s what is already keeping ${name} safe. Don’t break these.` : `Lantern found no protections in ${name} yet.`}</h1>
         ${found.length ? '<p class="lede">Lantern found each one in your code and, where it could, watched it work under your tests. Your evidence report lists them too.</p>' : ''}
-        <div class="plist">${found.map(p => `<div class="pitem"><span class="pic good">${icon('check')}</span><div><div class="t">${esc(p.title)}</div><div class="d">${esc(p.why)}</div><div class="ev">${arr(p.found).map(esc).join(' · ')}</div></div><span class="badge ${observed(p) ? 'good' : 'neutral'}">${observed(p) ? 'seen running' : 'confirmed'}</span></div>`).join('') || '<div class="note">Nothing found yet. The list on the right is where to start.</div>'}</div>
+        <div class="plist">${found.map(p => `<div class="pitem"><span class="pic good">${icon('check')}</span><div><div class="t">${esc(p.title)}</div><div class="d">${esc(p.why)}</div><div class="ev">${arr(p.found).map(esc).join(' · ')}</div></div><span class="badge ${observed(p) ? 'good' : 'neutral'}">${observed(p) ? 'seen running' : 'confirmed'}</span></div>`).join('') || '<div class="note">Nothing found yet. Start with what Lantern looked for and didn’t find.</div>'}</div>
       </div><aside class="rside"><div class="k2" style="margin-top:0">Lantern looked for these and didn’t find them</div>
-        ${missing.map((p, i) => `<div class="pitem miss"><span class="pic"></span><div><div class="t">${esc(p.title)}</div><div class="d">${esc(p.why)}${p.heuristic ? ' Heuristic: Lantern may be wrong about this.' : ''}</div><div class="how" id="how-${i}" hidden>${esc(p.how)}${arr(p.evidence).length ? `<div class="ev">Why Lantern thinks so: ${arr(p.evidence).map(esc).join(' · ')}</div>` : ''}</div></div><button class="linkbtn" data-how="${i}">How do I add one?</button></div>`).join('') || '<div class="note">Everything Lantern looks for is in place.</div>'}
-        <div class="note" style="margin-top:12px">Missing protections lower your readiness score but are never counted as hard failures unless a finding depends on them.</div></aside></div></div>`;
+        ${missing.map((p, i) => `<div class="pitem miss"><span class="pic"></span><div><div class="t">${esc(p.title)}</div><div class="d">${esc(p.why)}${p.heuristic ? ' Heuristic: Lantern may be wrong about this.' : ''}</div><div class="how" id="how-${i}" hidden>${esc(p.how)}${arr(p.evidence).length ? `<div class="ev">Why Lantern thinks so: ${arr(p.evidence).map(esc).join(' · ')}</div>` : ''}</div><button class="linkbtn" data-how="${i}">How do I add one?</button></div></div>`).join('') || '<div class="note">Everything Lantern looks for is in place.</div>'}
+        <div class="note pfoot">Missing protections lower your readiness score but are never counted as hard failures unless a finding depends on them.</div></aside></div>`;
   } else {
     el.innerHTML = `<div class="page wide"><div class="toolbar"><h2>Protections <span class="c">${found.length} of ${prot.length}</span></h2>${modeSeg()}</div>
       <p class="note" style="margin:-6px 0 14px">Coverage of the protections a senior engineer expects. Heuristic checks say so; they never change findings or count as hard failures.</p>

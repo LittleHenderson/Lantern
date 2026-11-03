@@ -5,6 +5,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- What protects you (Simple) is laid out as designed: the protections Lantern found fill the page under an uppercase
+  count and a large heading, and what it looked for and didn't find is a full-height column down the right edge, each
+  card with its "How do I add one?" under the text instead of squeezing it. On phones the column follows below.
 - The moving shapes behind the app now show behind the Atlas too (the report inside the app is see-through, and its
   lanes sit on the page instead of a grey box), and a report opened on its own draws the same shapes: full behind
   About and the other pages, quieter behind the map, findings and fix pages. Settings › Backdrop (off, subtle, bold)
