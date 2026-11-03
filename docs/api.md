@@ -76,7 +76,7 @@ code is sent). The `deepseek` row adds `default: true` and `allowance: true` whe
 
 | Route | Content |
 |---|---|
-| `GET /p/<id>/report.html` | The Atlas page, rebuilt from the data with live actions enabled (`window.LANTERN_LIVE = {api, token, model, local}`) |
+| `GET /p/<id>/report.html` | The Atlas page, rebuilt from the data with live actions enabled (`window.LANTERN_LIVE = {api, token, model, local, view_mode}`). `view_mode` (`simple`/`advanced`) is the saved setting and wins over the browser's `localStorage`; switching inside the Atlas saves it with `POST /api/settings` and calls the app's `window.lanternViewMode(settings)` so its toggle agrees |
 | `GET /p/<id>/evidence.html` | The Evidence Report |
 | `GET /p/<id>/evidence.json` | Its data (schema below) |
 | `GET /p/<id>/badge.svg` | `Lantern · commit 1a2b3c · 0 critical · Oct 31` |
@@ -85,7 +85,7 @@ code is sent). The `deepseek` row adds `default: true` and `allowance: true` whe
 
 | Route | Body / returns |
 |---|---|
-| `POST /api/settings` | `{"provider", "model", "base_url", "privacy": "full"\|"structure", "key"?, "remember"?: bool, "forget_key"?: true}` → `{"settings", "providers"}` |
+| `POST /api/settings` | `{"provider", "model", "base_url", "privacy": "full"\|"structure", "view_mode"?: "simple"\|"advanced", "backdrop"?: "off"\|"subtle"\|"bold", "share_usage"?: bool, "key"?, "remember"?: bool, "forget_key"?: true}` (fields left out keep their saved values; an unknown `view_mode` is saved as `simple`) → `{"settings", "providers"}` |
 | `GET /api/allowance` | `{"available": bool, "used_requests", "limit_requests", "remaining_requests", "remaining_today", "used_tokens", "limit_tokens"}` |
 | `GET /api/connections` | `{"connections": [{"name", "version", "last_used" (unix s), "calls", "last_tool"}], "now", "setup": {"claude_code": "claude mcp add lantern -- … mcp", "json": {mcpServers…}}}` |
 | `GET /api/starters`, `/api/starters/<id>`, `/api/starters/<id>/fix?file=` | Learn catalog, one starter, the fixed version of a file |

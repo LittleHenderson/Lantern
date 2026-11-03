@@ -39,6 +39,7 @@ with the source folder moved away, the live gateway's `/v1/health`, then a GitHu
 | `tests/test_readiness.py` | Weights, failing and fixed projects, skip logic for libraries, fixtures ignored, accept + `--fail-on`, starter files never overwrite |
 | `tests/test_evidence.py` | Commit pinning, verify match/mismatch, fixed-vs-baseline, narrative escaping, no-git message, remote credential stripping |
 | `tests/test_release.py` | One version in `pyproject.toml` and `lantern/__init__.py`, a CHANGELOG section per tag, `serve --check`, Bandit missing reported as skipped (not a silent "ok") |
+| `tests/test_view_mode.py` | Simple/Advanced saved by `POST /api/settings`, read back after a restart, and handed to the Atlas as `LANTERN_LIVE.view_mode` (the saved value wins over the browser's memory); an unknown value is saved as `simple`; no change without the write header |
 | `tests/test_server.py` | Access control (token, cookie, write header, Host), project lifecycle over HTTP, key privacy and file mode, explain end to end with the fake model |
 
 ## 3. Manual walkthrough (15 minutes)
