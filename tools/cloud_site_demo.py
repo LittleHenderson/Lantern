@@ -8,6 +8,10 @@ put straight into the database (no worker, no cloning): one finished run analyse
 going, one that failed (and a second account, token in --token-file + ".2", with one failed run).
 With --poison every text the website shows from a run (link, error, stage, log, and the
 summary read from result files) carries an HTML payload that must stay text.
+
+The finished run is explained with the hand-written demo explanations (examples/shop_demo_explanations.json, no
+model), and Ask Lantern answers from a fixture that cites the run's first finding (with --poison, the answer carries
+the payload too). Consent starts off, so the website asks first.
 """
 
 from __future__ import annotations
@@ -49,7 +53,21 @@ def main() -> None:
     s = Settings(gateway_url="http://gateway.test/v1", public_url=f"http://127.0.0.1:{a.port}", admin_secret="d" * 24,
                  db_path=str(base / "cloud.db"), results_dir=str(base / "results"), work_dir=str(base / "work"),
                  audits=False)
-    app = create_app(s, transport=httpx.ASGITransport(app=gw), start_worker=False)
+    from lantern.providers import FixtureProvider
+    demo = json.loads((ROOT / "examples" / "shop_demo_explanations.json").read_text(encoding="utf-8"))
+
+    def explain_answer(system, user):
+        import re
+        m = re.search(r"^UNIT: (\S+)", user, re.M)
+        return json.dumps(demo["units"].get(m.group(1), {}) if m else demo["metaphor"])
+
+    def ask_answer(system, user):
+        import re
+        ids = re.findall(r"\[([0-9a-f]{12})\]", user)
+        return (f"Start with [{ids[0]}]: a visitor can reach it. " if ids else "Lantern maps your app. ") + bad
+
+    app = create_app(s, transport=httpx.ASGITransport(app=gw), start_worker=False,
+                     provider_for=lambda token: FixtureProvider(ask_answer))
     store = app.state.store
 
     def add(rid, link, status, account="github:1", **f):
@@ -63,11 +81,17 @@ def main() -> None:
     subprocess.run([sys.executable, "-m", "lantern.cli", "analyze", str(ROOT / "tests" / "fixtures" / "shop"), "--out", str(out),
                     "--offline", "--privacy", "structure"], check=True, capture_output=True, text=True, encoding="utf-8",
                    env={**os.environ, "LANTERN_OFFLINE": "1"})
+    from lantern.pipeline import explain, plan_explain
+    ex = explain(out, FixtureProvider(explain_answer), plan_explain(out)["nodes"])
+    exps = ex["explanations"]
+    explained = {"functions": len(exps), "validated": sum(1 for v in exps.values() if v.get("validated")),
+                 "failed": ex["stats"].get("failed") or 0, "stopped": None}
     summary = _summary(out)
     if a.poison:   # what a planted result file could hold, if the worker did not clean it
         summary = {"score": bad, "grade": bad, "shape": bad, "counts": {"critical": bad, "high": 1}, "files": bad}
     add("done1", "https://github.com/octo/shop" + (f"/tree/{bad}" if bad else ""), "done", started=now(), finished=now(),
-        stage="finished", summary=summary, commit_sha="9cc6c88" + bad, log_tail="done" + bad)
+        stage="finished", summary=summary, commit_sha="9cc6c88" + bad, log_tail="done" + bad,
+        explain_status="done", explain_summary=explained)
     add("going1", "https://gitlab.com/maya/notes-api", "running", started=now(), stage=STAGES["analyze"] + bad,
         log_tail="· " + STAGES["clone"] + "\n· " + STAGES["analyze"] + "\nreading 12 files" + bad)
     add("failed1", "https://codeberg.org/sam/blog", "error", started=now(), finished=now(), stage="finished",

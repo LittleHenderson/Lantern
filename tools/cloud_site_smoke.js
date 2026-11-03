@@ -76,6 +76,29 @@ async function until(p, fn, timeout) {
     await clean(p, 'report');
     await p.click('.sub [data-t="evidence"]'); await p.waitForTimeout(1200);
     await clean(p, 'evidence');
+    // Explain: the demo run is explained already; the button says so and opens a summary
+    const xl = await p.$eval('#explain', b => b.textContent);
+    if (!/Explained/.test(xl)) errs.push(`${tag}: the Explain button says "${xl}" on an explained run`);
+    await p.click('#explain'); await p.waitForSelector('#again'); await p.click('.sheet [data-close]');
+    // Ask Lantern: the pill opens the assistant; the first question asks for consent, then the answer cites a finding
+    await p.click('#askpill'); await p.waitForSelector('#ask .win');
+    await p.click('#ask [data-chip]');
+    const asked = await Promise.race([p.waitForSelector('#agree').then(() => 'consent'), p.waitForSelector('#ask .bot code').then(() => 'answer')]);
+    if (asked === 'consent') {
+      if (!(await p.$eval('.sheet', s => /DeepSeek/.test(s.textContent) && /40 functions/.test(s.textContent)))) errs.push(`${tag}: the consent sheet does not say where the code goes`);
+      await p.screenshot({ path: `${out}-${tag}-consent.png` });
+      await p.click('#agree');
+    }
+    await p.waitForSelector('#ask .bot code');
+    await clean(p, 'ask');
+    await p.screenshot({ path: `${out}-${tag}-ask.png` });
+    await p.click('#askclose');
+    if (name === 'desk') {   // the report's own "Ask Lantern" button opens the same assistant, on that page
+      await p.click('.sub [data-t="findings"]');
+      const fr = p.frameLocator('#pbody iframe');
+      await fr.locator('#pageask').click(); await p.waitForSelector('#ask .win');
+      await p.click('#askclose');
+    }
     // Share: a link anyone can open, read-only; Stop sharing turns it off
     await p.click('#share'); await p.waitForSelector('#doshare');
     await p.screenshot({ path: `${out}-${tag}-share.png` });

@@ -201,9 +201,14 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 | `LANTERN_GATEWAY_URL` | `https://lantern-gateway.fly.dev/v1` | Where sign-ins are checked |
 | `LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS`, `LANTERN_CLOUD_WORK` | on the volume | Run list (SQLite), result folders, temp folders of runs in progress (emptied after each run and at start-up) |
 
+Explanations and Ask Lantern (milestone 6) need no new setting or secret: they go to the same gateway the
+sign-in uses, with each person's own allowance token, and only after that person agrees on the website. The gateway's
+per-person and daily dollar limits apply to them as to the app.
+
 What the cloud database holds: the account id the gateway gives (`github:<number>`, `google:<id>`), its label (the
-GitHub login), and later each run's link, privacy level, status, times, commit and counts. Never a token (not
-even its hash), an email, or the repository's files.
+GitHub login), when the person agreed to send work to a model (if they did), and each run's link, privacy level,
+status, times, commit, counts, share link and explanation counts. Never a token (not even its hash), an email, or the
+repository's files.
 
 | Symptom | Cause | Fix |
 |---|---|---|

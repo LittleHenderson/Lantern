@@ -1,11 +1,13 @@
-"""Lantern cloud service (docs/cloud-mode-brief.md): the website, sign-in, runs from a link, results in the browser.
+"""Lantern cloud service (docs/cloud-mode-brief.md): the website, sign-in, runs from a link, results in the browser,
+sharing and deleting, and plain-words explanations and Ask Lantern through the person's free allowance.
 
-Still to come: explanations through the allowance (milestone 6).
 The rules that hold from the first line:
   * the analysed code is never executed: no builds, installs or test runs, no runtime tracing;
   * the clone is deleted when the job ends; only derived results are kept, at the privacy level chosen first;
   * no tokens, emails, request bodies or repository contents in the database or the logs;
-  * a run is readable by its owner only, until the owner clicks Share (off by default).
+  * a run is readable by its owner only, until the owner clicks Share (off by default);
+  * nothing goes to a model until the person has read where it goes and agreed (`/v1/ai/consent`), and then only
+    with their own allowance token: facts from tools, words from models, and the model never changes a finding.
 
 Run:  LANTERN_ADMIN_SECRET=... uvicorn lantern_cloud.app:create_app --factory --port 8080
 """
@@ -31,7 +33,7 @@ from .idle import IdleExit
 from .settings import Settings
 from . import site
 from .store import FINISHED, LimitReached, Store
-from .worker import STAGES, Worker
+from .worker import ACTIVE_EXPLAIN, STAGES, Worker
 
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
@@ -117,11 +119,20 @@ def run_view(r: dict, logs=None) -> dict:
             "stage": r["stage"], "error": r["error"], "created": r["created"], "started": r["started"],
             "finished": r["finished"], "commit": r["commit_sha"], "summary": r["summary"],
             "shared": bool(r["share_slug"]), "log_tail": tail,
-            "step": next((k for k, v in STAGES.items() if v == r["stage"]), None)}
+            "step": next((k for k, v in STAGES.items() if v == r["stage"]), None),
+            "explain": {"status": r.get("explain_status"), "error": r.get("explain_error"),
+                        "summary": r.get("explain_summary"),
+                        "log": logs.tail("x:" + r["id"], 12) if logs and r.get("explain_status") in ACTIVE_EXPLAIN else ""}}
+
+
+def hosted(token: str, gateway_url: str):
+    """The person's free allowance at the gateway (Claude Haiku, DeepSeek if Anthropic is down)."""
+    from lantern.providers import LanternHostedProvider
+    return LanternHostedProvider(token, gateway_url.rstrip("/"))
 
 
 def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None,
-               start_worker: bool = True) -> FastAPI:
+               start_worker: bool = True, provider_for=None) -> FastAPI:
     s = settings or Settings()
     Path(s.results_dir).mkdir(parents=True, exist_ok=True)
     store = Store(s.db_path)
@@ -129,7 +140,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     worker = Worker(s, store) if start_worker else None
     app = FastAPI(title="Lantern cloud", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store, app.state.settings, app.state.identity, app.state.worker = store, s, ident, worker
-    idle = IdleExit(s.idle_minutes, busy=lambda: store.active_runs() > 0)
+    provider_for = provider_for or (lambda token: hosted(token, s.gateway_url))
+    idle = IdleExit(s.idle_minutes, busy=lambda: store.busy() > 0)
     app.state.idle = idle
     idle.start()
     if s.retention_days > 0:
@@ -149,8 +161,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
     @app.exception_handler(HTTPException)
     async def _http_error(request: Request, exc: HTTPException):
-        kind = {401: "signed_out", 403: "forbidden", 404: "not_found", 429: "limit", 503: "unavailable"}.get(
-            exc.status_code, "error")
+        kind = {401: "signed_out", 402: "allowance", 403: "forbidden", 404: "not_found", 412: "consent_needed",
+                429: "limit", 503: "unavailable"}.get(exc.status_code, "error")
         return JSONResponse({"error": {"type": kind, "message": str(exc.detail)}}, status_code=exc.status_code)
 
     async def signed_in(request: Request) -> dict:
@@ -174,6 +186,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if who is None:
             raise HTTPException(401, "That sign-in has expired or was replaced. Sign in again.")
         store.touch_user(who["account"], who["label"])
+        request.state.token = token      # for the person's own allowance; never stored or logged
         return who
 
     def admin(authorization: str | None) -> None:
@@ -355,6 +368,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         r = own_run(rid, who)
         if r["status"] not in FINISHED:
             raise HTTPException(409, "This check is still going. Delete it once it has finished.")
+        if r.get("explain_status") in ACTIVE_EXPLAIN:
+            raise HTTPException(409, "Lantern is still writing this check's explanations. Delete it once they are done.")
         store.delete_run(r["id"])
         remove_results(s.results_dir, r["id"])
         return {"deleted": r["id"]}
@@ -364,7 +379,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         """Forget the person here: every run, result file, share link and daily counter, and the sign-in cookie.
         Their sign-in at the gateway (and its free allowance) is separate and stays."""
         who = await signed_in(request)
-        if store.active_runs(who["account"]):
+        if store.busy(who["account"]):
             raise HTTPException(409, "A check is still going. Delete your account once it has finished.")
         ids = store.delete_user(who["account"])
         for rid in ids:
@@ -372,6 +387,77 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         resp = JSONResponse({"deleted": True, "runs": len(ids)})
         resp.delete_cookie(SESSION_COOKIE, path="/")
         return resp
+
+    # ---- words from a model: explanations and Ask Lantern, through the person's own free allowance ----
+    from lantern.providers import DATA_NOTICES
+
+    AI_NOTICE = DATA_NOTICES["lantern"]
+
+    def agreed(who: dict) -> None:
+        if not store.consent(who["account"]):
+            raise HTTPException(412, "Before Lantern sends anything to a model, read where it goes and agree. " + AI_NOTICE)
+
+    @app.get("/v1/ai")
+    async def ai_state(request: Request):
+        """Whether the person has agreed, what they agree to, and what is left of their free allowance."""
+        who = await signed_in(request)
+        try:
+            left = await ident.allowance(request.state.token)
+        except GatewayUnavailable:
+            left = None
+        return {"consent": bool(store.consent(who["account"])), "notice": AI_NOTICE, "allowance": left}
+
+    @app.post("/v1/ai/consent")
+    async def ai_consent(payload: dict, request: Request):
+        who = await signed_in(request)
+        on = payload.get("agree")
+        if not isinstance(on, bool):
+            raise HTTPException(400, "agree is true or false.")
+        store.set_consent(who["account"], on)
+        return {"consent": on, "notice": AI_NOTICE}
+
+    @app.post("/v1/runs/{rid}/explain", status_code=202)
+    async def explain_run(rid: str, request: Request):
+        """Write plain-words explanations for this finished run (entry points and three levels down, up to 40
+        functions), with the person's allowance. The repository is copied again at the run's commit to read the code,
+        and deleted afterwards; the report is rebuilt with the explanations, at the privacy chosen before the run."""
+        who = await signed_in(request)
+        if worker is None:
+            raise HTTPException(503, "Explanations are paused on this server.")
+        r = done_run(rid, who)
+        agreed(who)
+        if not store.queue_explain(r["id"]):
+            raise HTTPException(409, "Lantern is already writing this check's explanations.")
+        worker.submit_explain(r["id"], request.state.token)
+        return run_view(store.run(r["id"]), worker.logs)
+
+    @app.post("/v1/ask")
+    async def ask_lantern(payload: dict, request: Request):
+        """Ask Lantern: the answer comes from the run's own results (or, with no run, from what Lantern is), in the
+        model's words. Finding ids the model makes up are replaced with "[unknown finding]"."""
+        who = await signed_in(request)
+        agreed(who)
+        q = payload.get("question")
+        if not isinstance(q, str) or not q.strip():
+            raise HTTPException(400, "Type a question.")
+        out, name = None, None
+        if payload.get("run") is not None:
+            r = done_run(str(payload["run"]), who)
+            out, name = Path(s.results_dir) / r["id"], r["link"].rstrip("/").rsplit("/", 1)[-1][:80]
+        f = payload.get("focus") if isinstance(payload.get("focus"), dict) else {}
+        focus = {k: f[k][:300] for k in ("node", "finding") if isinstance(f.get(k), str) and f[k]}
+        from fastapi.concurrency import run_in_threadpool
+        from lantern import ask as _ask
+        from lantern.providers import AllowanceExhausted, ProviderError
+        try:
+            res = await run_in_threadpool(_ask.ask, provider_for(request.state.token), q[:2000], None, focus or None,
+                                          out, name)
+        except AllowanceExhausted:
+            raise HTTPException(402, "Your free allowance is used up for now. Everything else on Lantern still works; "
+                                     "the local app can use your own key.") from None
+        except ProviderError:
+            raise HTTPException(503, "The model did not answer. Try again in a minute.") from None
+        return {"answer": res["answer"], "cited": res["cited"], "invented": len(res["invented"])}
 
     # ---- the website (same origin as the API, so no CORS is offered or needed) ----
     secure = s.public_url.startswith("https://")

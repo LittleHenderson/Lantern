@@ -15,7 +15,9 @@ the finished report, evidence, badge and data in a browser through a short-lived
 two look and behave alike: sign in with GitHub or Google, paste a link, choose what is kept, watch the run, open the
 report, all runs in "My runs". Installable like the app. Milestone 5: Share (off until the person clicks it; a
 random `/s/<slug>/` link, read-only, that dies for good on "Stop sharing"), deleting a run, and deleting your account
-(everything the cloud keeps about you). Optional retention sweep (`LANTERN_CLOUD_RETENTION_DAYS`).
+(everything the cloud keeps about you). Optional retention sweep (`LANTERN_CLOUD_RETENTION_DAYS`). Milestone 6: "Explain in plain words" and Ask Lantern,
+paid from the person's own free allowance after they agree to the same data notice the app shows (`/v1/ai`,
+`/v1/ai/consent`, `/v1/runs/{id}/explain`, `/v1/ask`).
 
 ## Run locally
 
