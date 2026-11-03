@@ -309,7 +309,78 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                      "your code and did not try any of this."}
 
 
+# One plain sentence per kind, for the finding's heading in Simple view (design board 11c: "The Export button can run
+# shell commands on your server"). Fixed text chosen by the rule; the only words filled in are the thing a visitor
+# clicks or the route, both from the map, and only when the map shows they reach the line. "{who}" is that thing, or
+# a neutral subject when nothing reaches it. A kind with no sentence keeps the scanner's own title.
+HEADLINES: dict[str, tuple[str, str]] = {
+    # kind: (when a visitor's input reaches the line, otherwise)
+    "shell": ("{who} can run shell commands on your server", "A shell command is put together from text"),
+    "sql": ("{who} can change what your database is asked", "A database query is put together from text"),
+    "xss": ("Text a visitor writes can run as script in other people's browsers", "Text is put into the page as HTML"),
+    "eval": ("{who} can make your app run text as code", "Your app runs text as code"),
+    "deserialize": ("Data from outside is unpacked in a way that can run code",
+                    "Data is unpacked in a way that can run code"),
+    "model-to-tool": ("The AI model's answer is run as a command", "The AI model's answer is run as a command"),
+    "prompt": ("What a visitor types goes into the AI prompt", "Outside text goes into the AI prompt"),
+}
+FIXED_HEADLINES = {
+    "weak-hash": "A weak scrambling method (such as MD5) is used",
+    "secret": "A password or key is written in the code",
+    "service-role": "The master database key is sent to every visitor's browser",
+    "open-db": "Anyone can read this database table",
+    "cors": "Any website can call your server as your visitors",
+    "tls-off": "A secure-connection check is switched off",
+    "debug": "Debug mode can show your code to visitors",
+    "token-storage": "A login token is kept where page scripts can read it",
+    "unsafe": "This code switches off the language's memory safety",
+    "assert": "A safety check uses assert, which can be switched off",
+    "subprocess-note": "This file starts other programs (a note, not a problem)",
+}
+
+
+def headline(f: dict, g: Graph | None = None) -> str | None:
+    """The finding's heading in plain words, or None to keep the scanner's title. Deterministic: fixed sentences,
+    filled only with names from the map (the clicked thing, the route) or the package from the lock file."""
+    kind = kind_of(f)
+    if kind == "dependency":
+        pkg = f.get("package")
+        return f"{pkg} has a published weakness at the version you use" if pkg else None
+    if kind == "auth":
+        route, _ = _route_word(g, f)
+        return f"{route} works without checking who is signed in" if route else "A route works without checking who is signed in"
+    if kind == "wallet":
+        route, _ = _route_word(g, f)
+        return (f"Anyone can make {route} spend your money on paid calls" if route
+                else "Anyone can make your app spend money on paid calls")
+    if kind == "secret" and (f.get("category") == "exposure" or str(f.get("rule")) == "LW-PUBLIC-SECRET"):
+        return "A secret setting is sent to every visitor's browser"
+    if kind in FIXED_HEADLINES:
+        return FIXED_HEADLINES[kind]
+    if kind not in HEADLINES:
+        return None
+    reached, otherwise = HEADLINES[kind]
+    if not f.get("input") or f.get("in_tests"):
+        return otherwise
+    who = None
+    ui = f.get("ui_path") or None
+    if ui:
+        clicks = _clicks(g, ui)
+        if clicks:   # "click the backup button" -> "The backup button"
+            who = "The " + clicks[-1].split(" the ", 1)[-1]
+        elif _page(g, ui[0]):
+            who = f"The {_page(g, ui[0])} page"
+    if not who:
+        route, rkind = _route_word(g, f)
+        who = f"A request to {route}" if route and rkind == "route" else "What a visitor types"
+    return reached.format(who=who)
+
+
 def attach(findings: list[dict], g: Graph | None) -> None:
-    """Give every finding its scenario (security.scan calls this once everything else about the finding is known)."""
+    """Give every finding its scenario and plain heading (security.scan calls this once everything else about the
+    finding is known)."""
     for f in findings:
         f["scenario"] = for_finding(f, g)
+        h = headline(f, g)
+        if h:
+            f["headline"] = h

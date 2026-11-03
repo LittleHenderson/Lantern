@@ -189,3 +189,39 @@ def test_connector_finding_view_carries_the_scenario(gs):
     exp = {"explanations": {f["node"]: {"model": "m", "findings": [{"id": f["id"], "lens2": "y", "fix": "z",
                                                                   "scenario": "Priya types a name and it runs."}]}}}
     assert _finding_view(f, g, exp)["scenario"] == {"story": "Priya types a name and it runs.", "written_by": "m"}
+
+
+# ------------------------------------------------------------------ plain headings (Simple view)
+
+def test_headline_names_the_clicked_thing_only_when_input_reaches_the_line(gs):
+    g, fs = gs
+    shell = by_rule(fs, "B602")
+    assert shell["input"] and shell["headline"] == "The backup button can run shell commands on your server"
+    # the same rule with no input reaching the line keeps a neutral sentence and names nothing
+    f = dict(shell, input=False)
+    assert scenarios.headline(f, g) == "A shell command is put together from text"
+
+
+def test_headline_uses_only_fixed_words_and_map_names(gs):
+    g, fs = gs
+    for f in fs:
+        h = f.get("headline")
+        if not h:
+            continue
+        left = h
+        for name in ("The backup button", "The /users/:id page", "POST /backup"):
+            left = left.replace(name, "")
+        templates = [t for pair in scenarios.HEADLINES.values() for t in pair] + list(scenarios.FIXED_HEADLINES.values())
+        assert any(left == t.replace("{who}", "") or h == t for t in templates) or "works without checking" in h \
+            or "sent to every visitor" in h, h
+
+
+def test_headline_for_a_route_without_login_and_a_public_secret(gs):
+    g, fs = gs
+    assert by_rule(fs, "LW-AUTH-MISSING")["headline"] == "POST /backup works without checking who is signed in"
+    assert by_rule(fs, "LW-PUBLIC-SECRET")["headline"] == "A secret setting is sent to every visitor's browser"
+
+
+def test_unknown_rule_keeps_the_scanners_title(gs):
+    g, _ = gs
+    assert scenarios.headline({"rule": "X-NEW", "tool": "x", "title": "Something"}, g) is None
