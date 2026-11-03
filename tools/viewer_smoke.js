@@ -11,6 +11,17 @@
 //   same screens.
 const { chromium } = require('playwright');
 
+// page.waitForFunction polls through eval in older Playwright, which the app's script-src policy (rightly) refuses;
+// poll with page.evaluate instead, which the policy allows.
+async function until(p, fn, timeout) {
+  const end = Date.now() + timeout;
+  for (;;) {
+    if (await p.evaluate(fn).catch(() => false)) return;
+    if (Date.now() > end) throw new Error(`timed out after ${timeout} ms waiting for ${fn.toString().slice(0, 90)}`);
+    await p.waitForTimeout(250);
+  }
+}
+
 async function appSmoke(url, out, image, expectText) {
   const b = await chromium.launch();
   const errs = [];
@@ -45,10 +56,10 @@ async function appSmoke(url, out, image, expectText) {
         // 2. the terminal drawer: a Lantern command runs, a shell command is refused
         await p.click('#termbtn'); await p.waitForSelector('#tcmd');
         await p.fill('#tcmd', 'analyze --offline'); await p.press('#tcmd', 'Enter');
-        await p.waitForFunction(() => /ready\s+\d+\/100/.test(document.getElementById('tout').innerText), null, { timeout: 180000 });
+        await until(p, () => /ready\s+\d+\/100/.test(document.getElementById('tout').innerText), 180000);
         allow400 = true;
         await p.fill('#tcmd', 'rm -rf /'); await p.press('#tcmd', 'Enter');
-        await p.waitForFunction(() => /not an allowed command|not a Lantern command/.test(document.getElementById('tout').innerText), null, { timeout: 20000 });
+        await until(p, () => /not an allowed command|not a Lantern command/.test(document.getElementById('tout').innerText), 20000);
         await p.waitForTimeout(300); allow400 = false;
         const lines = (await p.$eval('#tout', el => el.innerText)).split('\n').filter(l => /ready|allowed command|Lantern command/.test(l));
         step(name, `terminal → ${lines.slice(0, 3).join(' | ')}`);
@@ -59,7 +70,7 @@ async function appSmoke(url, out, image, expectText) {
       await p.click('#askpill'); await p.waitForSelector('#ask .win');
       if (image) {
         await p.setInputFiles('#askfile', image);
-        await p.waitForFunction(() => { const s = document.querySelector('#ask .shot .sm'); return s && !/reading on this computer/.test(s.textContent); }, null, { timeout: 30000 });
+        await until(p, () => { const s = document.querySelector('#ask .shot .sm'); return s && !/reading on this computer/.test(s.textContent); }, 30000);
         const info = await p.$eval('#ask .shot .sm', el => el.textContent);
         step(name, `screenshot → ${info}`);
         if (expectText) {
