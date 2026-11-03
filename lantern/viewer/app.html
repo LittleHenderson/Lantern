@@ -228,8 +228,12 @@ h3{font:650 15px/1.35 var(--display);letter-spacing:-.01em;color:var(--ink);marg
 .probar .addf .btn{height:22px;padding:0 8px;font-size:11px;border-radius:5px}
 .probar .btn.sm{height:26px;font-weight:500;font-size:12px;color:var(--muted)}
 .ptable{margin:12px 16px 0;border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:auto}
-.ptable .r{display:grid;grid-template-columns:180px 150px 140px 46px 46px 46px 56px 84px 112px minmax(160px,1fr);gap:0 12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;min-width:1000px}
+.ptable .r{display:grid;grid-template-columns:180px 150px 140px 46px 46px 46px 56px 84px 112px minmax(160px,1fr);gap:0 12px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
 .ptable .r:last-child{border-bottom:0}
+.ptable .r > :nth-child(2){min-width:0}
+@media (min-width:1181px){.ptable .r{min-width:1000px}}
+@media (max-width:1180px){.ptable .r{grid-template-columns:180px 140px 46px 46px 46px 56px 112px minmax(150px,1fr)}.ptable .r > :nth-child(2),.ptable .r > :nth-child(8){display:none}}
+@media (max-width:1000px){.ptable .r{grid-template-columns:minmax(140px,1fr) 130px 46px 46px 46px 56px minmax(150px,auto)}.ptable .r > :nth-child(9){display:none}.ptable .acts .btn{padding:0 8px}}
 .ptable .r.h{padding:8px 14px;background:var(--surface-2);font:600 11px var(--font);color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
 .ptable .r.h button{background:none;border:0;padding:0;font:inherit;color:inherit;text-align:inherit;cursor:pointer;text-transform:inherit;letter-spacing:inherit}
 .ptable .r:not(.h):hover{background:var(--hover)}
@@ -945,7 +949,7 @@ function renderHome(el) {
     <div class="dropzone">${icon('folder')}<input type="text" id="addpath" placeholder="Drop a folder here, or paste a GitHub link" autocomplete="off" spellcheck="false" aria-label="Folder path or GitHub link"><button class="btn ghost" id="browsebtn">Browse…</button><button class="btn primary" id="add">Check my app</button></div>
     <div id="browse" style="max-width:720px;margin:0 auto"></div><div id="adderr" style="max-width:720px;margin:0 auto"></div>
     <div class="steps3"><span><b>1</b>Add your app</span><span><b>2</b>Lantern maps every path a visitor can take</span><span><b>3</b>Fix what it finds, with a guide and proof</span></div>
-    <p class="privline">${icon('lock')}Everything here runs on this computer; your code is not uploaded. Plain-word explanations and Ask Lantern are off until you turn them on in Settings, and send the piece being explained to the model you pick, at your own risk.</p>
+    <p class="privline">${icon('lock')}Nothing is uploaded. Plain-word explanations and Ask Lantern are off until you turn them on in Settings.</p>
     ${ps.length ? `<div class="apps-head"><h2>Your apps</h2><span>${checked} checked${running ? `, ${running} checking now` : ''}</span></div><div class="apps">${cards}</div>`
       : `<div class="firstrun"><div class="card"><div class="k">No app handy?</div><h3>Try the practice app</h3><p>notes-api is a small Python app with real problems planted on purpose. Fix them with a guide; Lantern checks each one is really gone.</p><a href="#" id="tolearn" class="btn primary">Create notes-api · 35 min</a></div>
          <div class="card"><div class="k">What happens next</div><div class="li">${icon('clock')}Reading usually takes under a minute</div><div class="li">${icon('check')}You get a map, a list of what to fix, and a grade</div><div class="li">${icon('layers')}Python, TypeScript, Go, Rust and Java apps work today</div></div></div>`}</main>`;
@@ -992,7 +996,7 @@ function renderHomePro(el, ps) {
       : `<div class="empty">${LANTERN_ART}<b>No projects yet</b>Add a folder or a link above, or try a starter app in <a href="#" id="tolearn">Learn</a>.</div>`}</main>`;
   addControls(el);
   el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { S.sort = b.dataset.s; renderHome(el); });
-  el.querySelectorAll('[data-log]').forEach(b => b.onclick = () => { const l = document.getElementById('log-' + b.dataset.log); if (l) l.scrollIntoView({behavior: 'smooth'}); });
+  el.querySelectorAll('[data-log]').forEach(b => b.onclick = () => { const l = document.getElementById('log-' + b.dataset.log); if (l) window.scrollTo({top: l.getBoundingClientRect().top + window.scrollY - 80, behavior: 'smooth'}); });
   el.querySelector('#recheckall').onclick = async () => { for (const p of ps) if (p.exists && !isRunning(p)) { try { const j = await api(`/api/projects/${p.id}/analyze`, {method: 'POST'}); watch(j.id, p.id); } catch (e) {} } render(); };
   el.querySelector('#csv').onclick = () => {
     const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';

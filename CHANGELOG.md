@@ -5,6 +5,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Design drop 01: the Atlas lanes use straight 2px connectors in a staircase, report tabs and stat chips no longer wrap,
+  the phone tab row scrolls, finding cards lose the coloured left bar (critical cards get a tinted border), code chips
+  don't break mid-word, and Advanced tables drop less important columns on narrower screens.
 - Scenarios: every finding now comes with a short story of one tester meeting it ("Priya opens the /admin page, clicks
   the backup button, types `report; whoami`…"), then what goes wrong and what the fix changes. Lantern builds it from
   its own facts (the page, the clicks, the route, whether typed input reaches the line), so it is there with no model.

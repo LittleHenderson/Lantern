@@ -85,8 +85,10 @@ header{flex:none;background:var(--surface);border-bottom:1px solid var(--line);z
 .iconbtn .ic{width:17px;height:17px}
 body.embed .brand{display:none} body.embed nav.tabs{display:none} body.embed .seg.mode{display:none} body.embed .xnote{display:none}
 .bar2{display:flex;align-items:center;gap:16px;padding:0 16px;min-height:48px}
+@media (max-width:1100px){.bar2 .chips .chip{display:none}}
+@media (max-width:720px){nav.tabs{overflow-x:auto;scrollbar-width:none;min-width:0;flex:1}nav.tabs::-webkit-scrollbar{display:none}.bar2 .chips{display:none}}
 nav.tabs{display:flex;gap:2px;flex:none}
-nav.tabs button{position:relative;display:flex;align-items:center;gap:6px;height:48px;padding:0 11px;font-weight:550;font-size:13.5px;color:var(--muted);transition:color var(--t) var(--ease)}
+nav.tabs button{position:relative;display:flex;align-items:center;gap:6px;height:48px;padding:0 11px;font-weight:550;font-size:13.5px;color:var(--muted);white-space:nowrap;transition:color var(--t) var(--ease)}
 nav.tabs button:hover{color:var(--ink)}
 nav.tabs button.on{color:var(--ink)}
 nav.tabs button.on::after{content:"";position:absolute;left:9px;right:9px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
@@ -383,7 +385,7 @@ input.search::placeholder{color:var(--faint)}
 .lenses button[data-l="1"] i{background:var(--l1)} .lenses button[data-l="2"] i{background:var(--l2)} .lenses button[data-l="3"] i{background:var(--l3)} .lenses button[data-l="4"] i{background:var(--l4)}
 .lenses button:hover{color:var(--ink)}
 .lenses button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
-.lens{border-radius:12px;padding:14px 16px;font-size:13.5px;line-height:1.6;color:var(--ink);border-left:3px solid}
+.lens{border-radius:12px;padding:14px 16px;font-size:13.5px;line-height:1.6;color:var(--ink);border:1px solid}
 .lens.l1{background:var(--l1s);border-color:var(--l1)} .lens.l2{background:var(--l2s);border-color:var(--l2)} .lens.l3{background:var(--l3s);border-color:var(--l3)} .lens.l4{background:var(--l4s);border-color:var(--l4)}
 .scen ol{margin:6px 0 0;padding-left:20px} .scen li{margin:3px 0} .scen .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:10px} .scenbox{margin-top:10px} .scenbox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .scenbox .lens{margin-top:8px}
 .scen .basis{font-size:12px;color:var(--muted);margin-top:10px}
@@ -422,12 +424,11 @@ pre.src span.h{background:var(--code-hl);box-shadow:inset 3px 0 0 #FFB547}
 .fchip b{font-weight:650;color:var(--ink);font-variant-numeric:tabular-nums}
 .fchip:hover{border-color:var(--faint)}
 .fchip.on{background:var(--primary);border-color:var(--primary);color:var(--on-primary)} .fchip.on b{color:var(--on-primary)}
-.fcard{position:relative;border:1px solid var(--line);border-radius:14px;padding:16px 18px 16px 20px;margin:0 0 12px;background:var(--surface);box-shadow:var(--shadow-1);overflow:hidden}
-.fcard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--faint)}
-.fcard.critical::before{background:var(--critical)} .fcard.high::before{background:var(--serious)} .fcard.medium::before{background:var(--warning)} .fcard.low::before{background:var(--good)}
+.fcard{position:relative;border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin:0 0 12px;background:var(--surface);box-shadow:var(--shadow-1);overflow:hidden}
+.fcard.critical{border-color:color-mix(in srgb, var(--critical) 45%, var(--line))}
 .fcard.accepted{opacity:.72}
 .fcard .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.fcard .rule{font:11.5px var(--mono);color:var(--muted)}
+.fcard .rule{font:11.5px var(--mono);color:var(--muted);white-space:nowrap}
 .fcard h4{margin:10px 0 4px;font:650 15px/1.4 var(--display);letter-spacing:-.01em;color:var(--ink)}
 .fcard .acts{margin-top:12px;display:flex;gap:6px;flex-wrap:wrap}
 .sendmenu{margin-top:8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--soft);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
@@ -436,10 +437,10 @@ pre.src span.h{background:var(--code-hl);box-shadow:inset 3px 0 0 #FFB547}
 .tag{display:inline-flex;align-items:center;font-size:11px;font-weight:550;color:var(--ink-2);padding:1px 8px;border-radius:99px;border:1px solid var(--line-2);white-space:nowrap}
 .path{display:flex;flex-wrap:wrap;gap:5px;align-items:center;font:11.5px var(--mono);margin-top:10px}
 .path .note{font-family:var(--font);margin-right:2px}
-.path button{display:inline-flex;align-items:center;gap:6px;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);padding:2px 8px;border-radius:7px}
+.path button{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);padding:2px 8px;border-radius:7px}
 .path button:hover{border-color:var(--accent-line);color:var(--accent-ink)}
 .path .sep{color:var(--faint)}
-.plain{margin-top:12px;padding:12px 14px;border-radius:10px;background:var(--l2s);border-left:3px solid var(--l2);color:var(--ink);font-size:13px}
+.plain{margin-top:12px;padding:12px 14px;border-radius:10px;background:var(--l2s);color:var(--ink);font-size:13px}
 .fid{font:10.5px var(--mono);color:var(--faint);user-select:all;margin-left:auto}
 
 /* ---------- readiness and about ---------- */
@@ -804,7 +805,7 @@ function renderLanes() {
   if (!placed.length) return `<div class="empty">${ART}<b>Nothing to place</b>This report carries no stack lanes for these functions (an older analysis, or data Lantern could not read). Use Path or Flowchart.</div>`;
   // staircase layout: each function steps right of its callers; boxes in different lanes may overlap in x, boxes
   // in the same lane take a sub-row when they would collide, so a long path still fits on one screen
-  const LBL = 150, W = 222, H = 52, STEP = 64, GX = 18, RH = H + 12, MINLH = 96;
+  const LBL = 150, W = 222, H = 52, STEP = 120, GX = 18, RH = H + 12, MINLH = 96;
   const col = {}, row = {}, taken = {browser: [], frontend: [], server: [], data: []};
   for (const id of placed) {
     const l = laneOf(id); let c = 0;
@@ -828,11 +829,15 @@ function renderLanes() {
     if (!(e.src in col) || !(e.dst in col)) continue;
     const [x1, y1] = xy(e.src), [x2, y2] = xy(e.dst);
     const bad = hot(e.dst) || (laneOf(e.dst) === 'data' && hot(e.src));
-    const down = y2 >= y1;
-    const sx = x1 + W * .6, tx = x2 + W * .35;
-    const d = down ? `M${sx} ${y1 + H} C ${sx} ${y1 + H + 36}, ${tx} ${y2 - 36}, ${tx} ${y2}` : `M${sx} ${y1} C ${sx} ${y1 - 36}, ${tx} ${y2 + H + 36}, ${tx} ${y2 + H}`;
+    const down = y2 >= y1, sameLane = laneOf(e.src) === laneOf(e.dst);
+    // design 11b: connectors drop from the caller, run along the lane boundary, and drop into the callee
+    const sx = Math.round(x1 + W * .5), tx = Math.round(x2 + W * .5);
+    let d;
+    if (sameLane) { const my = y1 + H + 6; d = `M${sx} ${y1 + H} L${sx} ${my} L${tx} ${my} L${tx} ${y2 + (y2 > y1 ? 0 : H)}`; }
+    else if (down) { const by = laneY[laneOf(e.dst)]; d = `M${sx} ${y1 + H} L${sx} ${by} L${tx} ${by} L${tx} ${y2}`; }
+    else { const by = laneY[laneOf(e.src)]; d = `M${sx} ${y1} L${sx} ${by} L${tx} ${by} L${tx} ${y2 + H}`; }
     const dash = e.confidence === 'inferred' ? '5 4' : e.confidence === 'possible' ? '1.5 3.5' : '';
-    svg += `<path d="${d}" fill="none" stroke="${bad ? 'var(--critical)' : e.confidence === 'observed' ? 'var(--accent)' : 'var(--line-2)'}" stroke-width="${bad ? 2 : 1.4}" ${dash ? `stroke-dasharray="${dash}"` : ''}><title>${esc(e.confidence)}${e.via ? ` (${esc(e.via)})` : ''}${e.detail ? ` · ${esc(e.detail)}` : ''}</title></path>`;
+    svg += `<path d="${d}" fill="none" stroke="${bad ? 'var(--critical)' : e.confidence === 'observed' ? 'var(--accent)' : 'var(--ink-2)'}" stroke-width="2" stroke-linejoin="round" ${dash ? `stroke-dasharray="${dash}"` : ''}><title>${esc(e.confidence)}${e.via ? ` (${esc(e.via)})` : ''}${e.detail ? ` · ${esc(e.detail)}` : ''}</title></path>`;
   }
   for (const id of placed) {
     const [x, y] = xy(id), n = N[id], w = worstRank(id), on = S.sel === id, ext = id.startsWith('ext:');
@@ -1246,7 +1251,7 @@ function findingCard(f) {
   const where = `<code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${f.node && N[f.node] ? ' in <code>' + esc(short(N[f.node].qualname)) + '</code>' : ''}`;
   const reach = f.ui_path ? ` Reached from the <b>${esc(entryOf(f))}</b> page in ${esc(WORDS[hops(f)] || hops(f))} hop${hops(f) === 1 ? '' : 's'}${seenHops(f) ? `; ${esc(WORDS[seenHops(f)] || seenHops(f))} of them seen running under the test suite` : ''}.` : f.reachable ? ` Reachable from ${esc(f.reachable.kind)} <b>${esc(entryOf(f))}</b>.` : '';
   const input = f.input ? ` Uses outside input: ${esc(f.input.via)}.` : f.input === false ? ' Reachable, but no parameter or request data reaches this line inside this function, so it is not ranked critical.' : '';
-  return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
+  return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE\u2011' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
     ${hotLane(f) ? `<div class="top" style="margin-top:8px;gap:10px">${laneGlyph(fLanes(f), hotLane(f), f.rank)}${onLane(f)}</div>` : ''}
     ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
     <h4>${esc(f.title)}</h4><p class="fdesc">${where}.${reach}${input}</p>
