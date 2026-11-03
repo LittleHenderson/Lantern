@@ -5,6 +5,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Phones always show the Simple view, as the design says, even when Advanced was picked on a computer; the
+  Simple/Advanced switch is hidden below 760px. Protections no longer says "Lantern found each one in your code" when
+  it found none.
 - Design drop 01: the Atlas lanes use straight 2px connectors in a staircase, report tabs and stat chips no longer wrap,
   the phone tab row scrolls, finding cards lose the coloured left bar (critical cards get a tinted border), code chips
   don't break mid-word, and Advanced tables drop less important columns on narrower screens.
