@@ -42,6 +42,9 @@ def _fid(*parts) -> str:
 # ---------------------------------------------------------------------------- scanners
 
 def run_bandit(repo: Path) -> tuple[list[dict], dict]:
+    import importlib.util
+    if importlib.util.find_spec("bandit") is None:
+        return [], {"tool": "bandit", "status": 'skipped: not installed (pip install "lantern[scan]")', "version": "-"}
     excl = ",".join(str(repo / d) for d in SKIP_DIRS if (repo / d).exists())
     cmd = [sys.executable, "-m", "bandit", "-r", str(repo), "-f", "json", "-q", "--exit-zero"]
     if excl:

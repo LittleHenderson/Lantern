@@ -97,6 +97,21 @@ fly secrets set LANTERN_AUTH_SECRET="$(python -c 'import secrets; print(secrets.
 A provider with no id/secret is simply not offered: `GET /v1/auth/providers` lists what is on. The client secrets are
 used only for the server-side code exchange and never reach a browser or the CLI.
 
+## Releases (GitHub now, PyPI later)
+
+A pushed tag `v*` runs `.github/workflows/release.yml`: it builds the sdist and wheel, runs the tests against the
+built wheel in a clean venv, checks `https://lantern-gateway.fly.dev/v1/health`, and creates a GitHub Release with
+both files and the matching `CHANGELOG.md` section. Testers install with
+`pip install "git+https://github.com/LittleHenderson/Lantern@v0.9.0"`.
+
+TODO (not in wave 1): publish to PyPI so the command becomes `pip install lantern`.
+1. Create a PyPI account (pypi.org → Register) with two-factor sign-in, and check the name `lantern` is free
+   (if not, pick one such as `lantern-code` and change `[project] name`).
+2. PyPI → Your account → Publishing → **Add a new pending publisher**: owner `LittleHenderson`, repository `Lantern`,
+   workflow `release.yml`, environment `pypi` (a *trusted publisher*: no token is stored anywhere).
+3. In `release.yml`, add a `pypi` job after `test-wheel` with `environment: pypi`, `permissions: id-token: write`,
+   that downloads the `dist` artifact and runs `pypa/gh-action-pypi-publish@release/v1` with `packages-dir: built/dist`.
+
 ## Landing page on Cloudflare Pages
 
 You need: a Cloudflare account (free) and the landing page files in the repository (the design package's

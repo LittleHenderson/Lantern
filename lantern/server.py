@@ -997,9 +997,15 @@ def _unspecified(host: str) -> bool:
 
 
 def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True,
-          analyze_first: bool = True) -> int:
+          analyze_first: bool = True, check: bool = False) -> int:
+    """`check`: start, print the link, fetch the home page once through it, stop. Adds no project, runs no
+    analysis, opens no browser and sends nothing; exits 0 only if the page came back (used by install tests)."""
+    missing = [p for p in paths if not Path(p).is_dir()]
+    if check and missing:
+        print(f"not a folder: {', '.join(missing)}")
+        return 2
     store = Store(home_dir())
-    added = [store.add_project(Path(p)) for p in paths if Path(p).is_dir()]
+    added = [] if check else [store.add_project(Path(p)) for p in paths if Path(p).is_dir()]
     httpd = None
     for candidate in range(port, port + 20):
         try:
@@ -1024,6 +1030,22 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
             app.jobs.start(p["id"], "analyze",
                            lambda log, repo=repo: pipeline.analyze(repo, pipeline.out_dir(repo), privacy, log=log))
     url = f"http://{'127.0.0.1' if _unspecified(host) else host}:{port}/?token={token}"
+    if check:
+        print(f"Lantern {__version__} is running. Open:\n\n  {url}\n", flush=True)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        import urllib.request   # the token link sets the cookie, then redirects to the app
+        local = f"http://127.0.0.1:{port}/?token={token}" if _unspecified(host) else url
+        try:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor()).open(local, timeout=20) as r:
+                ok = r.status == 200 and b"Lantern" in r.read()
+        except OSError as e:
+            print(f"check failed: {e}")
+            ok = False
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        print("check   the app answered; stopped" if ok else "check   the app did not answer")
+        return 0 if ok else 1
     print(f"Lantern {__version__} is running. Open:\n\n  {url}\n\nPress Ctrl-C to stop.", flush=True)
     usage.record("serve")
     _usage_sender()

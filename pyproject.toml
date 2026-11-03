@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lantern"
-version = "0.1.0"
+version = "0.9.0"
 license = "MIT"
 description = "Map every call path in a full-stack app (Python + TypeScript/JavaScript), explain it in three lenses, and audit it."
 readme = "README.md"
@@ -18,6 +18,11 @@ dependencies = [
   "tree-sitter-rust>=0.23",
   "tree-sitter-java>=0.23",
 ]
+
+[project.urls]
+Homepage = "https://littlehenderson.github.io/Lantern/"
+Issues = "https://github.com/LittleHenderson/Lantern/issues"
+Source = "https://github.com/LittleHenderson/Lantern"
 
 [project.optional-dependencies]
 scan = ["bandit>=1.7", "pip-audit>=2.7"]
