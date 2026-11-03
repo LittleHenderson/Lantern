@@ -19,7 +19,7 @@ break the product while you do it.
 | Area | What is there | Where |
 |---|---|---|
 | Engine | Python, TS/JS, Go, Rust, Java call graphs; HTTP bridge frontend→backend; Bandit/npm/pip audits; `LW-*`/`LJ-*`/`LG-*`/`LR-*`/`LV-*` rules; reachability, click paths (`ui_path`), "uses input"; readiness score; protections; evidence report with SHA-256 digest; stack lanes | `lantern/*.py` (map in `CLAUDE.md`) |
-| Local app | `lantern serve`: Projects (Simple/Advanced), project tabs, Atlas iframe, Evidence, Explanations, Settings (Simple/Advanced, Connections card), Learn/Guide, Help/FAQ, first-run / running / zero-findings / bad-path / no-model states, Ask Lantern pill + window with screenshot OCR, terminal drawer (Lantern commands only), Watch my tests run (Python runners only, no sandbox), keyboard shortcuts, backdrop, Simple/Advanced toggle, dark/light/system | `lantern/server.py`, `lantern/viewer/app.html` (1308 lines) |
+| Local app | `lantern serve`: Projects (Simple/Advanced), project tabs, Atlas iframe, Evidence, Explanations, Settings (Simple/Advanced, Connections card), Learn/Guide, Help/FAQ, first-run / running / zero-findings / bad-path / no-model states, Ask Lantern pill + window with screenshot OCR, terminal drawer (Lantern commands only), Watch my tests run (in the test sandbox, `lantern/sandbox.py`), keyboard shortcuts, backdrop, Simple/Advanced toggle, dark/light/system | `lantern/server.py`, `lantern/viewer/app.html` (1308 lines) |
 | Report / Atlas | One self-contained file, offline, phone-capable: Paths (Lanes · Path · Flowchart · Graph), Findings (memo + table), Fix screen with "I fixed it, check again", Protections, Readiness, Explanations (three lenses), About, "? What am I looking at" on every page, Ask Lantern pill when standalone, stack strip + 4-dot glyph, rails that retract to 30px | `lantern/viewer/report.html` (1735 lines), `lantern/report.py` |
 | Evidence Report | Commit-pinned HTML/JSON, baseline → fixed/changed, scorecard, provenance, Limits, badge SVG, `lantern verify` | `lantern/evidence.py` |
 | Connector | MCP over stdio (`lantern mcp`), 8 tools, **no accept/close/dismiss tool**, connections log for Settings › Connections, "Send to…" on every finding, SARIF export | `lantern/mcp_server.py`, `lantern/exporters.py`, `docs/connectors.md` |
@@ -31,7 +31,7 @@ break the product while you do it.
 ## 2. Rules that must not break (the owner holds these; CI enforces several)
 
 1. **Facts from tools, words from models.** Edges, findings, paths, protections, scores, lanes are deterministic. A model only writes explanations; `explain.validate()` rejects unanchored phrases — do not loosen it. Nothing (model, connector, plugin, UI) may create, close, dismiss or re-rank a finding. Accepting a risk needs a person's written reason.
-2. **Read, don't run.** Lantern never executes the user's app. The terminal drawer runs Lantern commands only; "Watch my tests run" runs only recognised Python test runners (`server.detect_test_command`) and says so. No sandbox exists yet — the sheet must not promise one.
+2. **Read, don't run.** Lantern never executes the user's app. The terminal drawer runs Lantern commands only; "Watch my tests run" runs only recognised test runners (`sandbox.check_command`) inside the test sandbox (`lantern/sandbox.py`: Docker, or a restricted process on a read-only temp copy), and the sheet says which before Run.
 3. **Secrets never in the client or the repo.** Provider keys live only on the user's machine (`~/.lantern/keys.json`, 0600) or on Fly for the gateway. Never commit real-looking secrets in fixtures (GitHub push protection; build them at test time). Never put the owner's keys in chat, code or docs.
 4. **Everything rendered from data is escaped.** `esc()` for values, `cls()` for class names, in both viewers; the report carries a hash-based CSP; CI opens a poisoned report (`tools/poison_report.py`) in Chromium and fails if any payload lands as markup. Validate every enum from the data against a known list before using it as a key (see `laneOk` in `report.html`).
 5. **Lantern passes its own audit.** `lantern analyze .` must report 0 critical / 0 high / 0 medium; CI enforces it.
@@ -95,7 +95,7 @@ Honest list, screen by screen. "Verify" means I believe it is partly there and y
 
 **Terminal drawer (5a)** — built; Lantern commands only; ids/paths as links: verify. Phone bottom sheet at 46%: not built as designed.
 
-**Watch my tests run (8f)** — sheet, rewards, success toast and failure toast (exit code, last lines, Try again / Change the command / Skip) exist. **No sandbox** (Docker / restricted subprocess) and JS test runners are refused; the sheet says Python only.
+**Watch my tests run (8f)** — sheet, rewards, success toast and failure toast (exit code, last lines, Try again / Change the command / Skip) exist. Runs in the sandbox (`lantern/sandbox.py`); the sheet names the backend and its limits. JavaScript, Go, Rust and Java tests run but only Python calls are recorded yet ("Tests run; your map upgrades for Python only for now").
 
 **States (turn 8)** — first run, running, zero findings, bad path, no model exist; verify each against the board's copy.
 

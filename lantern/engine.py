@@ -34,9 +34,11 @@ def build_graph(repo: str | Path) -> Graph:
     })
     # Analysis packs (pattern files) can add entry points for frameworks without built-in support, before the
     # bridge links frontend calls to them.
-    loaded, _ = packs.load_all(Path(repo))
-    if loaded:
-        packs.apply_entries(g, Path(repo), loaded)
+    on, off = packs.split_enabled(packs.load_all(Path(repo), keep_disabled=True)[0])
+    if on:
+        packs.apply_entries(g, Path(repo), on)
+    if off:   # turned off in Settings: listed, so the map says what it did not use
+        g.meta.setdefault("packs", {"added": 0, "ambiguous": 0, "unresolved": 0, "packs": []})["disabled"] = [p["pack"] for p in off]
     bridge.link(g)
     lanes.assign(g)
     return g

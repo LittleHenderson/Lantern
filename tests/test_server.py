@@ -314,22 +314,41 @@ def test_connections_list_assistants_by_name(srv):
     assert len(d["connections"][0]["name"]) == 80 and d["connections"][0]["calls"] == 0
 
 
-def test_watch_tests_accepts_only_python_test_runners(tmp_path):
+def test_watch_tests_accepts_only_test_runners(tmp_path):
     """'Watch my tests run' runs the command the user confirmed, so it must never become 'run anything'."""
-    from lantern.server import _python_test_command, detect_test_command
-    ok = ["python -m pytest -q", "pytest", "py.test tests/", "python3 -m unittest", "python run_tests.py"]
-    bad = ["rm -rf /", "python app.py", "npm test", "bash -c pytest", "python -m http.server", "python -c print(1)"]
-    for c in ok:
-        assert _python_test_command(c.split()), c
+    from lantern.sandbox import check_command
+    from lantern.server import detect_test_command
+    ok = {"python -m pytest -q": "python", "pytest": "python", "py.test tests/": "python", "python3 -m unittest": "python",
+          "python run_tests.py": "python", "npm test": "node", "pnpm test": "node", "yarn run test": "node",
+          "npx jest": "node", "npx vitest run": "node", "npx mocha": "node", "go test ./...": "go",
+          "cargo test": "rust", "mvn -q test": "java", "./gradlew test": "java"}
+    bad = ["rm -rf /", "python app.py", "bash -c pytest", "python -m http.server", "python -c print(1)", "npm install",
+           "npx some-tool", "go run .", "cargo run", "node index.js", "curl x", "npm run build"]
+    for c, lang in ok.items():
+        assert check_command(c.split()) == lang, c
     for c in bad:
-        assert not _python_test_command(c.split()), c
+        with pytest.raises(ValueError):
+            check_command(c.split())
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
-    assert detect_test_command(tmp_path)["supported"]
+    d = detect_test_command(tmp_path)
+    assert d["supported"] and d["traced"] and d["sandbox"]["name"] in ("docker", "subprocess") and "Nothing leaves" in d["leaves"]
     js = tmp_path / "js"; js.mkdir()
     (js / "package.json").write_text('{"scripts": {"test": "vitest"}}', encoding="utf-8")
     d = detect_test_command(js)
-    assert d["command"] == "npm test" and not d["supported"]
-    assert not detect_test_command(tmp_path / "nowhere")["supported"] if (tmp_path / "nowhere").mkdir() is None else True
+    assert d["command"] == "npm test" and d["supported"] and not d["traced"] and d["note"] == "Tests run; your map upgrades for Python only for now."
+    (js / "pnpm-lock.yaml").write_text("", encoding="utf-8")
+    assert detect_test_command(js)["command"] == "pnpm test"
+    for files, want in ((["go.mod"], "go test ./..."), (["Cargo.toml"], "cargo test"), (["pom.xml"], "mvn -q -o test"),
+                        (["build.gradle", "gradlew"], "./gradlew test --offline")):
+        d = tmp_path / want.split()[0].strip("./"); d.mkdir(exist_ok=True)
+        for f in files:
+            (d / f).write_text("", encoding="utf-8")
+        assert detect_test_command(d)["command"] == want
+    jest = tmp_path / "jestonly"; jest.mkdir()
+    (jest / "package.json").write_text('{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}, "devDependencies": {"jest": "29"}}', encoding="utf-8")
+    assert detect_test_command(jest)["command"] == "npx jest"
+    (tmp_path / "nowhere").mkdir()
+    assert not detect_test_command(tmp_path / "nowhere")["supported"]
 
 
 def test_terminal_drawer_runs_lantern_commands_only(tmp_path):

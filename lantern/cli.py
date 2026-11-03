@@ -121,6 +121,7 @@ def cmd_packs(a) -> int:
     for pk in loaded:
         req = pk.get("requires") or {}
         why = "" if pk["active"] else "  not used here: needs " + ", ".join(req.get("files", []) + req.get("text", []))
+        why += "" if pk.get("enabled", True) else "  off (turned off in Settings)"
         print(f"{pk['pack']:<20} v{str(pk.get('version', '-')):<6} {len(pk.get('rules', [])):>2} rule(s), "
               f"{len(pk.get('entries', []))} entry pattern(s)  [{pk['source']}]{why}")
     for where, msg in problems:

@@ -83,3 +83,11 @@ can slow a scan but not hang it.
 * Fake certainty: third-party pack findings are always marked heuristic; pack entry points always say which
   pack registered them and where (`registered_at`).
 * Run code, read files outside the repository, or make network calls. There is no hook for any of it.
+
+## Turning a pack off
+
+Any pack (built-in, project or user) can be turned off in the app (Settings → Analysis packs) or by hand in
+`~/.lantern/settings.json`: `{"packs": {"disabled": ["django"]}}`. A disabled pack adds no findings and no entry
+points; `graph.json` lists it under `meta.packs.disabled`, `lantern packs` marks it `off`, and the Evidence Report's
+provenance names it as `off (turned off in Settings)`, so a reader can see which packs were on. Reports made before a
+change show "Re-check to apply" on the project's card.

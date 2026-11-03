@@ -33,6 +33,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__, learn, pipeline, remote, usage
+from .packs import PACK_NAME
 from .providers import DEFAULT_MODEL_NAME, DEFAULT_PROVIDER, PRESETS
 from .readiness import SHAPES
 
@@ -178,10 +179,29 @@ class Store:
         keep["share_usage"] = bool(s.get("share_usage"))
         keep["view_mode"] = "advanced" if s.get("view_mode") == "advanced" else "simple"
         keep["backdrop"] = s.get("backdrop") if s.get("backdrop") in ("off", "subtle", "bold") else "subtle"
+        pk = s.get("packs") if isinstance(s.get("packs"), dict) else {}
+        names = [n for n in pk.get("disabled") or [] if isinstance(n, str) and PACK_NAME.match(n)]
+        if names or pk.get("changed_at"):
+            keep["packs"] = {"disabled": sorted(set(names))[:100],
+                             "changed_at": pk.get("changed_at") if isinstance(pk.get("changed_at"), (int, float)) else None}
         with self.lock:
             self._write("settings.json", keep)
         if keep["share_usage"]:
             usage.install_id()
+
+    def confirmed_tests(self, pid: str) -> list[str]:
+        d = self._read("test-confirmations.json", {})
+        v = d.get(pid) if isinstance(d, dict) else None
+        return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+
+    def confirm_test(self, pid: str, command: str) -> None:
+        with self.lock:
+            d = self._read("test-confirmations.json", {})
+            d = d if isinstance(d, dict) else {}
+            have = [x for x in (d.get(pid) or []) if isinstance(x, str)]
+            if command not in have:
+                d[pid] = (have + [command])[-20:]
+                self._write("test-confirmations.json", d)
 
     def key_for(self, provider: str) -> str | None:
         env = (PRESETS.get(provider) or (None, None, "LANTERN_API_KEY"))[2]
@@ -289,7 +309,18 @@ class App:
                 "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
                 "finished_at": _str(run.get("finished_at")),
                 "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"],
-                "starter": learn.starter_of(Path(p["path"]))}
+                "starter": learn.starter_of(Path(p["path"])), "stale": self._stale(out)}
+
+    def _stale(self, out: Path) -> str | None:
+        """'packs' when analysis packs were turned on or off after this report was made (the card says
+        "Re-check to apply")."""
+        pk = self.store.settings().get("packs")
+        changed = pk.get("changed_at") if isinstance(pk, dict) else None
+        try:
+            made = (out / "report.html").stat().st_mtime
+        except OSError:
+            return None
+        return "packs" if isinstance(changed, (int, float)) and changed > made else None
 
     def clone_project(self, link: str) -> dict:
         """A repository link pasted instead of a folder: the project is listed at once (so its card shows the job
@@ -472,38 +503,35 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, line: str) -> dict
     raise ValueError(f"'{verb}' is not a Lantern command; type help. This drawer never runs shell commands or your code.")
 
 
-def _python_test_command(words: list[str]) -> bool:
-    """Only a Python test runner, so 'Watch my tests run' never becomes 'run anything'."""
-    head = Path(words[0]).name.lower()
-    if head in ("pytest", "py.test"):
-        return True
-    if head.startswith("python"):
-        rest = words[1:]
-        return bool(rest) and (rest[0] == "-m" and len(rest) > 1 and rest[1] in ("pytest", "unittest")
-                               or rest[0].endswith(".py") and "test" in rest[0].lower())
-    return False
+def packs_list(app, pid: str = "", all_projects: bool = False) -> list[dict]:
+    """GET /api/packs: built-in and user packs, plus the project's own when `pid` names one (every project's with
+    `all_projects`). Shape per pack: name, version, source (builtin|project|user), rules, entry_patterns, path,
+    enabled, active (its `requires` match the project), about."""
+    from . import packs
+    projects = app.store.projects() if all_projects else [x for x in [app.store.project(pid)] if x] if pid else []
+    seen, rows = set(), []
+    for repo in [Path(x["path"]) for x in projects if Path(x["path"]).is_dir()] or [None]:
+        loaded, _ = packs.load_all(repo, keep_inactive=True)
+        for pk in loaded:
+            if pk["pack"] in seen:
+                continue
+            seen.add(pk["pack"])
+            where = {"builtin": "lantern/packs/", "project": packs.PROJECT_DIR + "/", "user": "~/.lantern/packs/"}[pk["source"]]
+            rows.append({"name": pk["pack"], "version": str(pk.get("version", "-")), "source": pk["source"],
+                         "rules": len(pk.get("rules", [])), "entry_patterns": len(pk.get("entries", [])),
+                         "path": where + pk["file"], "enabled": pk.get("enabled", True),
+                         "active": bool(pk.get("active", True)) if repo is not None else None,
+                         "about": str(pk.get("about") or "")[:300]})
+    return rows
 
 
 def detect_test_command(repo: Path) -> dict:
-    """The command the sheet shows first: read from the project, editable before it runs."""
-    py = any((repo / f).exists() for f in ("pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "requirements.txt"))
-    has_tests = any(d.is_dir() for d in (repo / "tests", repo / "test")) or any(repo.glob("test_*.py")) or any(repo.glob("*/tests"))
-    pkg = repo / "package.json"
-    js_test = None
-    if pkg.exists():
-        try:
-            js_test = (json.loads(pkg.read_text(encoding="utf-8")).get("scripts") or {}).get("test")
-        except (OSError, ValueError):
-            js_test = None
-    if py or has_tests:
-        return {"command": "python -m pytest -q", "how": "pyproject.toml / tests folder", "supported": True,
-                "note": "Python tests are recorded function by function. JavaScript tests are not traced yet."}
-    if js_test:
-        return {"command": f"npm test", "how": "package.json scripts.test", "supported": False,
-                "note": "This project's tests are JavaScript. Lantern cannot record JavaScript calls yet, so watching them "
-                        "would change nothing. Python tests are supported today."}
-    return {"command": "python -m pytest -q", "how": "default", "supported": False,
-            "note": "No test setup was found. Add a tests folder with pytest tests, then try again."}
+    """The command the sheet shows first (see `sandbox.detect`), plus which sandbox will run it."""
+    from . import sandbox
+    d = sandbox.detect(repo)
+    d["sandbox"] = sandbox.describe(repo, d["language"])
+    d["leaves"] = "Nothing leaves this computer: the tests run with the network off."
+    return d
 
 
 def _csp(nonce: str | None) -> str:
@@ -706,6 +734,8 @@ class Handler(BaseHTTPRequestHandler):
             from .providers import gateway_url
             return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
                                "features": sorted(usage.FEATURES), "text": usage.describe()})
+        if path == "/api/packs":
+            return self._json({"packs": packs_list(app, (q.get("project") or [""])[0])})
         if path == "/api/connections":
             import shutil
             from .mcp_server import connections
@@ -764,7 +794,9 @@ class Handler(BaseHTTPRequestHandler):
             p = app.store.project(m.group(1))
             if not p:
                 return self._err(404, "unknown project")
-            return self._json(detect_test_command(Path(p["path"])))
+            d = detect_test_command(Path(p["path"]))
+            d["confirmed"] = d["command"] in app.store.confirmed_tests(p["id"])
+            return self._json(d)
         m = re.fullmatch(r"/api/projects/(\w+)/plan", path)
         if m:
             p = app.store.project(m.group(1)) or {}
@@ -838,6 +870,21 @@ class Handler(BaseHTTPRequestHandler):
             if provider not in ("github", "google"):
                 raise ValueError("provider is github or google")
             return self._json(sign_in_start(provider))
+        if path == "/api/packs":
+            # Settings → Analysis packs: turn one pack on or off for every project. Reports made before the change
+            # are marked stale ("Re-check to apply"); nothing is re-analyzed by itself.
+            name, enabled = str(b.get("name") or ""), b.get("enabled")
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled must be true or false")
+            if name not in {x["name"] for x in packs_list(app, "", all_projects=True)}:
+                raise ValueError(f"no analysis pack called {name!r}")
+            s = app.store.settings()
+            pk = s.get("packs") if isinstance(s.get("packs"), dict) else {}
+            off = set(pk.get("disabled") or [])
+            off = off - {name} if enabled else off | {name}
+            s["packs"] = {"disabled": sorted(off), "changed_at": time.time()}
+            app.store.save_settings(s)
+            return self._json({"ok": True, "packs": packs_list(app, str(b.get("project") or ""))})
         if path == "/api/settings":
             s = app.store.settings()
             for k in ("provider", "model", "base_url", "privacy"):
@@ -879,25 +926,33 @@ class Handler(BaseHTTPRequestHandler):
             # The terminal drawer: Lantern commands only, run through the same code paths as the buttons.
             return self._json(run_terminal_command(app, p, repo, out, str(b.get("line") or "")), 202)
         if action == "trace":
-            # "Watch my tests run": Lantern runs the test command you confirmed, in the project folder, with the
-            # call recorder attached, then analyzes again so the edges that ran become "seen running".
+            # "Watch my tests run": the confirmed test command runs in the sandbox (lantern/sandbox.py: Docker, or a
+            # restricted process on a read-only temp copy), then the project is analyzed again so the calls the
+            # tests made become "seen running". The user confirms once per project per command.
             usage.record("trace")
+            from . import sandbox
             cmd = str(b.get("command") or "").strip()
-            words = shlex.split(cmd, posix=os.name != "nt") if cmd else []
-            if not words or not _python_test_command(words):
-                raise ValueError("Lantern can watch Python tests only for now: the command must start with python, "
-                                 "python -m pytest, or pytest (JavaScript test tracing is not built yet)")
+            words = sandbox.split(cmd)
+            language = sandbox.check_command(words)   # ValueError -> 400 with the accepted runners
+            canon = " ".join(words)
+            if not b.get("confirm") and canon not in app.store.confirmed_tests(p["id"]):
+                return self._err(409, "confirm this command first: the sheet shows what will run and where")
+            app.store.confirm_test(p["id"], canon)
+            det = sandbox.detect(repo)
+            test_cwd = det.get("cwd", "") if det.get("language") == language else ""
             privacy = app.store.settings().get("privacy", "full")
             before = _load(out / "readiness.json") or {}
             before_score = _int(before.get("score"))
 
             def work(log):
-                log(f"running: {' '.join(words)}   (in {repo}, as you; Lantern records which functions run)")
-                res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log)
+                res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log, sandbox=True, test_cwd=test_cwd)
                 run = _load(out / "run.json") or {}
                 tr = run.get("trace") or {}
                 after = _load(out / "readiness.json") or {}
                 return {"returncode": tr.get("returncode"), "observed": tr.get("observed_edges"), "recall": tr.get("recall"),
+                        "backend": tr.get("backend"), "language": tr.get("language"), "traced": tr.get("traced"),
+                        "timed_out": tr.get("timed_out"), "blocked": tr.get("blocked") or [],
+                        "note": None if tr.get("traced") else sandbox.JS_NOTE,
                         "score_before": before_score, "score_after": _int(after.get("score")), "summary": res}
             return self._json(app.jobs.start(p["id"], "trace", work), 202)
         if action == "explain":
