@@ -221,9 +221,8 @@ _DEV = {_os.devnull, "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"}
 _NET = {getattr(_socket, "AF_INET", 2), getattr(_socket, "AF_INET6", 10)}
 _WFLAGS = _os.O_WRONLY | _os.O_RDWR | _os.O_CREAT | _os.O_APPEND | getattr(_os, "O_TRUNC", 0)
 for _p in _os.environ.get("LANTERN_SANDBOX_SITE", "").split(_os.pathsep):
-    if _p:
-        import site as _site
-        _site.addsitedir(_p)
+    if _p and _p not in _sys.path:   # the host's packages (Docker); their .pth files name host paths, so skip them
+        _sys.path.append(_p)
 def _ok(path):
     try:
         p = _os.path.realpath(_os.fsdecode(path))
