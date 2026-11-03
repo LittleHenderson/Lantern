@@ -24,6 +24,12 @@ The `install` job does what a tester does on Linux, macOS and Windows: a clean v
 "git+https://github.com/LittleHenderson/Lantern@<commit>"` with no extras, then `lantern --version` (0.9.0),
 `lantern analyze tests/fixtures/shop --offline` (prints an `off` line naming the scanners that are not installed)
 and `lantern serve tests/fixtures/shop --check` (starts, prints the link, loads the app once, exits 0).
+The `gateway` job curls the live gateway's `/v1/health` (`https://lantern-gateway.fly.dev`) on every push and prints
+it to the job summary; it fails when the gateway does not answer `ok` with a model configured. The limits it enforces
+are listed in `docs/deploy.md` ("Free allowance limits as configured").
+Retention (90 days for token hashes and per-day counters, `Store.prune`) is tested in `tests/test_gateway.py`:
+idle and rotated-out hashes and their account mapping go, a hash in use and rows exactly 90 days old stay, an old
+database gains the `last_used` column, and the app prunes at start-up and on the first request of a new day.
 A pushed `v*` tag runs `.github/workflows/release.yml`: build sdist + wheel, the test suite against the built wheel
 with the source folder moved away, the live gateway's `/v1/health`, then a GitHub Release with both files.
 
@@ -39,7 +45,7 @@ with the source folder moved away, the live gateway's `/v1/health`, then a GitHu
 | `tests/test_providers.py` | Provider presets (including DeepSeek), key requirements, URL scheme checks |
 | `tests/test_readiness.py` | Weights, failing and fixed projects, skip logic for libraries, fixtures ignored, accept + `--fail-on`, starter files never overwrite |
 | `tests/test_evidence.py` | Commit pinning, verify match/mismatch, fixed-vs-baseline, narrative escaping, no-git message, remote credential stripping |
-| `tests/test_release.py` | One version in `pyproject.toml` and `lantern/__init__.py`, a CHANGELOG section per tag, `serve --check`, Bandit missing reported as skipped (not a silent "ok") |
+| `tests/test_release.py` | One version in `pyproject.toml` and `lantern/__init__.py`, a CHANGELOG section per tag, `serve --check`, Bandit missing reported as skipped (not a silent "ok"), the tester guide `docs/try-lantern.md` (eight sections in order, one install command shared with README and the site) and the tester issue form |
 | `tests/test_view_mode.py` | Simple/Advanced saved by `POST /api/settings`, read back after a restart, and handed to the Atlas as `LANTERN_LIVE.view_mode` (the saved value wins over the browser's memory); an unknown value is saved as `simple`; no change without the write header |
 | `tests/test_pack_toggle.py` | Per-pack on/off: Django turned off → no `LP-*` findings, no pack entry points, `meta.packs.disabled`, provenance says off; back on → findings return; `GET`/`POST /api/packs`, the stale card, refusals; `?all=1` lists every project's packs for the Settings screen and a project pack turns off like a built-in one |
 | `tests/test_ocr.py` | Ask Lantern screenshots: a generated PNG/JPEG/WebP with a known string is read (needs Tesseract; CI installs it on Linux), the no-Tesseract answer carries the install line, an image over 8 MB, a GIF and a non-image are refused, the image reaches Tesseract through a pipe and no temp file is made |

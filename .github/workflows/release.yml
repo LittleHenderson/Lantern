@@ -60,7 +60,8 @@ jobs:
       - name: curl the live gateway's health check
         run: |
           curl -fsS --retry 3 --retry-delay 5 --max-time 20 https://lantern-gateway.fly.dev/v1/health | tee health.json
-          python3 -c "import json; d=json.load(open('health.json')); assert d.get('ok') is True, d"
+          python3 -c "import json; d=json.load(open('health.json')); assert d.get('ok') is True and d.get('configured') is True, d"
+          { echo '### Live gateway'; echo '```'; cat health.json; echo; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     needs: [build, test-wheel, gateway-up]
