@@ -39,6 +39,7 @@ with the source folder moved away, the live gateway's `/v1/health`, then a GitHu
 | `tests/test_readiness.py` | Weights, failing and fixed projects, skip logic for libraries, fixtures ignored, accept + `--fail-on`, starter files never overwrite |
 | `tests/test_evidence.py` | Commit pinning, verify match/mismatch, fixed-vs-baseline, narrative escaping, no-git message, remote credential stripping |
 | `tests/test_release.py` | One version in `pyproject.toml` and `lantern/__init__.py`, a CHANGELOG section per tag, `serve --check`, Bandit missing reported as skipped (not a silent "ok") |
+| `tests/test_ocr.py` | Ask Lantern screenshots: a generated PNG/JPEG/WebP with a known string is read (needs Tesseract; CI installs it on Linux), the no-Tesseract answer carries the install line, an image over 8 MB, a GIF and a non-image are refused, the image reaches Tesseract through a pipe and no temp file is made |
 | `tests/test_sandbox.py` | The test sandbox in both backends (Docker skipped with the reason when no daemon): the shop's pytest runs and its calls are mapped back to the project, at least one edge becomes `observed`, a planted test cannot write to the project (Python and `sh`), open a socket or see the user's environment, the toast's `blocked` reasons, the 10-minute wall clock kills the tree, the copy is read-only and removed, the server's confirm-once rule |
 | `tests/test_server.py` | Access control (token, cookie, write header, Host), project lifecycle over HTTP, key privacy and file mode, explain end to end with the fake model |
 
