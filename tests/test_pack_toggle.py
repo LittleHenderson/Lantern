@@ -74,6 +74,11 @@ def test_packs_endpoints_and_stale_card(srv, tmp_path, monkeypatch):  # noqa: F8
     code, st = call(base, "/api/state")
     card = next(p for p in st["projects"] if p["id"] == pid)
     assert card["stale"] == "packs"   # "Re-check to apply"
+    (repo / ".lantern" / "report.html").write_text("y", encoding="utf-8")   # a re-check writes a newer report
+    later = time.time() + 5
+    os.utime(repo / ".lantern" / "report.html", (later, later))
+    card = next(p for p in call(base, "/api/state")[1]["projects"] if p["id"] == pid)
+    assert card["stale"] is None      # the note goes away
     store.save_settings({**store.settings(), "backdrop": "off"})   # another settings save keeps the packs choice
     assert store.settings()["packs"]["disabled"] == ["django"]
 
