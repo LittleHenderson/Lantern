@@ -801,7 +801,8 @@ class Handler(BaseHTTPRequestHandler):
                 usage.record("report_open")
                 s = self.app.store.settings()
                 live = {"api": f"/api/projects/{p['id']}", "token": self.app.token, "model": s.get("model") and
-                        f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS}
+                        f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS,
+                        "view_mode": "advanced" if s.get("view_mode") == "advanced" else "simple"}
                 nonce = secrets.token_urlsafe(16)
                 return self._send(200, render(read_bundle(f), live, nonce), "text/html; charset=utf-8",
                                   {"Content-Security-Policy": _csp(nonce)})
@@ -838,7 +839,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
                                "features": sorted(usage.FEATURES), "text": usage.describe()})
         if path == "/api/packs":
-            return self._json({"packs": packs_list(app, (q.get("project") or [""])[0])})
+            return self._json({"packs": packs_list(app, (q.get("project") or [""])[0],
+                                                   all_projects=(q.get("all") or [""])[0] == "1")})
         if path == "/api/connections":
             import shutil
             from .mcp_server import connections

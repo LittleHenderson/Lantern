@@ -1,0 +1,87 @@
+name: Tester report (v0.9)
+description: Something broke, confused you, or looked wrong while trying Lantern.
+title: "[tester] "
+labels: ["tester", "v0.9"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying Lantern. The guide is [docs/try-lantern.md](https://github.com/LittleHenderson/Lantern/blob/main/docs/try-lantern.md).
+        Please do not paste API keys, tokens, or code you cannot share.
+  - type: input
+    id: version
+    attributes:
+      label: Lantern version
+      description: The output of `lantern --version`.
+      placeholder: lantern 0.9.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Install
+        - Home / projects
+        - Paths (the map)
+        - What to fix (findings)
+        - Ready to ship? (readiness)
+        - Evidence report
+        - Explanations / model / sign-in
+        - Watch my tests run (sandbox)
+        - Terminal drawer
+        - Ask Lantern (incl. screenshots)
+        - Settings / analysis packs
+        - Learn (starter apps)
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem
+      options:
+        - It broke (error, crash, nothing happened)
+        - A finding looks wrong (false alarm)
+        - Lantern missed a real problem
+        - Confusing words or screen
+        - Too slow
+        - Idea
+    validations:
+      required: true
+  - type: textarea
+    id: did
+    attributes:
+      label: What you did
+      description: The steps, as exactly as you can.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: Paste any error text from the terminal or the page. Drag a screenshot in if it helps.
+    validations:
+      required: true
+  - type: input
+    id: stack
+    attributes:
+      label: Your app's stack (optional)
+      placeholder: e.g. Next.js + Supabase, FastAPI + React

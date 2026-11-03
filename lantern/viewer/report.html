@@ -589,7 +589,10 @@ const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv):/.test(id || '') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
 const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
-try { S.simple = localStorage.getItem('lantern.simple') !== '0'; S.view = ['lanes', 'tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : (S.simple ? 'lanes' : 'tree'); S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
+try { S.simple = localStorage.getItem('lantern.simple') !== '0'; } catch (e) {}
+// Opened from `lantern serve`: the saved setting (Settings → view_mode) wins over this browser's memory.
+try { const lv = window.LANTERN_LIVE; if (lv && (lv.view_mode === 'simple' || lv.view_mode === 'advanced')) S.simple = lv.view_mode === 'simple'; } catch (e) {}
+try { S.view = ['lanes', 'tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : (S.simple ? 'lanes' : 'tree'); S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
 try { S.lens = [1, 2, 3, 4].includes(+localStorage.getItem('lantern.lens')) ? +localStorage.getItem('lantern.lens') : 1; } catch (e) {}
 // Icons and the status tone of a 0-100 value: fixed markup and fixed words, never data.
 const ICONS = {
@@ -1297,7 +1300,18 @@ function wireHelp(el) {
   const a = el.querySelector('#pageask'); if (a) a.onclick = () => { try { window.parent.askAbout({tab: S.tab, page: TAB_WORDS[S.simple ? 'simple' : 'advanced'][S.tab], node: S.tab === 'xp' ? S.xsel : S.sel, finding: S.fsel}); } catch (e) {} };
 }
 function modeSeg() { return `<div class="seg mode" title="Pick how much detail you want to see"><button data-vm="simple" class="${S.simple ? 'on' : ''}">Simple</button><button data-vm="advanced" class="${S.simple ? '' : 'on'}">Advanced</button></div>${helpBtns()}`; }
-function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { S.simple = b.dataset.vm === 'simple'; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); }); wireHelp(el); }
+// One place that changes Simple/Advanced from inside the report. In the app it is saved on the server (POST
+// /api/settings) and the app's own toggle is told, so the next visit and every other screen agree.
+function setMode(simple, save = true) {
+  S.simple = !!simple;
+  try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {}
+  if (save && LIVE && LIVE.token) {
+    const m = S.simple ? 'simple' : 'advanced'; LIVE.view_mode = m;
+    fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Lantern-Token': LIVE.token}, body: JSON.stringify({view_mode: m}), credentials: 'same-origin'})
+      .then(r => r.ok ? r.json() : null).then(d => { try { if (d && window.parent !== window && window.parent.lanternViewMode) window.parent.lanternViewMode(d.settings); } catch (e) {} }).catch(() => {});
+  }
+}
+function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { setMode(b.dataset.vm === 'simple'); render(); }); wireHelp(el); }
 function renderFindings() {
   const el = document.getElementById('center');
   const all = SEC.findings;
@@ -1496,7 +1510,7 @@ function renderReady() {
   el.querySelectorAll('[data-go]').forEach(b => b.onclick = () => {
     const g = b.dataset.go;
     if (g === 'findings') { S.tab = 'findings'; for (const x of document.querySelectorAll('#tabs button')) x.classList.toggle('on', x.dataset.t === 'findings'); render(); }
-    else if (g === 'advanced' || g === 'starters') { S.simple = false; try { localStorage.setItem('lantern.simple', '0'); } catch (e) {} render(); if (g === 'starters') { const st = document.getElementById('starters'); if (st) st.scrollIntoView({behavior: 'smooth'}); } }
+    else if (g === 'advanced' || g === 'starters') { setMode(false); render(); if (g === 'starters') { const st = document.getElementById('starters'); if (st) st.scrollIntoView({behavior: 'smooth'}); } }
   });
   el.querySelectorAll('[data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
   el.querySelectorAll('[data-starter]').forEach(b => b.onclick = () => starterLive(b.dataset.starter, b));
@@ -1739,7 +1753,7 @@ async function rAskSend(text) {
   el.addEventListener('keydown', e => { if (e.target.id === 'raskin' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('rasksend').click(); } });
 })();
 
-window.setSimple = v => { S.simple = !!v; try { localStorage.setItem('lantern.simple', S.simple ? '1' : '0'); } catch (e) {} render(); };
+window.setSimple = v => { setMode(v, false); if (LIVE) LIVE.view_mode = S.simple ? 'simple' : 'advanced'; render(); };   // the app's toggle, already saved
 function render() {
   renderRAsk();
   renderLeft();

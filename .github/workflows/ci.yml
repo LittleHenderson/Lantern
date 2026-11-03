@@ -23,6 +23,25 @@ jobs:
         if: matrix.python == '3.13'
         run: bash tools/audit.sh
 
+  gateway:
+    # The free allowance testers get by default: the live gateway must answer. Prints its health (version and
+    # model, no counters) to the job summary.
+    runs-on: ubuntu-latest
+    steps:
+      - name: curl the live gateway's health check
+        run: |
+          curl -fsS --retry 3 --retry-delay 5 --retry-all-errors --max-time 20 https://lantern-gateway.fly.dev/v1/health | tee health.json
+          echo
+          python3 - <<'PY'
+          import json, os
+          d = json.load(open("health.json"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### Live gateway\n```\n$ curl -fsS https://lantern-gateway.fly.dev/v1/health\n" + json.dumps(d) + "\n```\n")
+          assert d.get("ok") is True and d.get("configured") is True, d
+          if "version" not in d:
+              print("::notice::the live gateway predates the version field; deploy gateway/ to add it")
+          PY
+
   windows:
     # Stock Windows settings: the system code page, not UTF-8, and backslash paths.
     runs-on: windows-latest
@@ -59,6 +78,8 @@ jobs:
           node-version: "20"
       - run: pip install -e ".[scan,dev]"
       - run: npm i --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+      - name: Tesseract, so the live-app smoke can check a screenshot's text is read
+        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
       - run: bash tools/audit.sh --browser
 
   install:

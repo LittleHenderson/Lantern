@@ -94,6 +94,29 @@ EOF
   # the same for scenarios alone, with the rest intact so the finding cards and Fix page that show them are drawn
   check "viewer: poisoned scenarios stay text (finding cards, Fix page, Scenario lens)" \
     bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-sc/report.html' --only scenario,dropped_scenarios && node tools/viewer_smoke.js '$W/poison-sc/report.html' '$W/sshot'"
+  # the live app: the test sheet (sandboxed run), the terminal drawer, a screenshot in Ask Lantern, a pack toggle
+  A="$W/app"; mkdir -p "$A"; cp -r tests/fixtures/shop "$A/shop"
+  "$PY" - "$A/shot.png" <<'PYEOF'
+import sys
+from PIL import Image, ImageDraw, ImageFont
+img = Image.new("RGB", (640, 120), "white")
+try:
+    font = ImageFont.truetype("DejaVuSans-Bold.ttf", 44)
+except OSError:
+    font = ImageFont.load_default(size=44)
+ImageDraw.Draw(img).text((20, 30), "LANTERN SMOKE 7351", fill="black", font=font)
+img.save(sys.argv[1])
+PYEOF
+  EXPECT=(); command -v tesseract >/dev/null && EXPECT=(--expect-text 7351)
+  LANTERN_HOME="$A/home" LANTERN_OFFLINE=1 LANTERN_SANDBOX="${LANTERN_SANDBOX:-subprocess}" \
+    lantern serve "$A/shop" --no-open --port 8871 > "$A/serve.log" 2>&1 &
+  SPID=$!
+  for _ in $(seq 100); do grep -q 'token=' "$A/serve.log" && break; sleep 0.2; done
+  URL="$(grep -o 'http://[^ ]*token=[^ ]*' "$A/serve.log" | head -1)"
+  check "app: test sheet, terminal drawer, screenshot upload and pack toggle work with no JS errors" \
+    node tools/viewer_smoke.js --app "$URL" "$W/app" --image "$A/shot.png" "${EXPECT[@]}"
+  cat "$W/log"
+  kill $SPID 2>/dev/null; wait $SPID 2>/dev/null
 fi
 
 printf '\n%s\n' "$([ $FAILS -eq 0 ] && echo 'ALL PASS' || echo "$FAILS FAILED")  (work dir: $W)"
