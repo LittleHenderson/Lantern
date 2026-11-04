@@ -213,3 +213,24 @@ def test_fastapi_depends_and_aliases(tmp_path):
     # the aliased parameter's type is the real external class, not a fake "app.deps" library
     assert edge(g, "app.items.read_item", "ext:sqlmodel.Session().exec") is not None
     assert not any(e.dst.startswith("ext:app.") for e in g.call_edges())
+
+
+def test_tree_sitter_keeps_line_numbers_past_row_256_alive():
+    """py-tree-sitter 0.26.0 freed a Point's row while it was still in use (a reader crashed on any node past line
+    256, e.g. devr22/HerSheild's Main2Activity.java). The parse happens in a child process so a bad build fails the
+    test instead of killing the test run."""
+    import subprocess
+    import sys
+    code = (
+        "import tree_sitter_java\n"
+        "from tree_sitter import Parser, Language\n"
+        "src = b'\\n' * 300 + b'class A { void m() {} }\\n'\n"
+        "tree = Parser(Language(tree_sitter_java.language())).parse(src)\n"
+        "cls = next(c for c in tree.root_node.children if c.type == 'class_declaration')\n"
+        "for _ in range(200000):\n"
+        "    assert cls.start_point.row + 1 == 301 and cls.end_point.row + 1 == 301\n"
+        "    _keep = [object() for _ in range(3)]\n"
+        "print('ok')\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert r.returncode == 0 and r.stdout.strip() == "ok", (r.returncode, r.stderr[-500:])

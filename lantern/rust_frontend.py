@@ -957,12 +957,13 @@ def add_rust(g: Graph, repo: str | Path) -> dict:
         lines = src.count(b"\n") + 1
         total += lines
         crate, path, is_test = module_of(rel, roots)
-        root = parser.parse(src).root_node
+        tree = parser.parse(src)     # kept in `files`: a node outlives its tree only as a dangling pointer (segfault)
+        root = tree.root_node
         mod = mods.get((crate, path))
         if mod is None:
             mod = mods[(crate, path)] = RsModule(crate=crate, path=path, file=rel, is_test=is_test)
-        files.append((rel, lines, mod, root))
-    for rel, _lines, mod, root in files:
+        files.append((rel, lines, mod, root, tree))
+    for rel, _lines, mod, root, _tree in files:
         _collect(mod, root, mods, mod.crate, mod.path, rel)
     # a file module declared by `mod x;` whose file exists is a child even when the parent never names it (bins)
     for (crate, path) in list(mods):
@@ -973,7 +974,7 @@ def add_rust(g: Graph, repo: str | Path) -> dict:
     crate_names = set(roots.values())
     link = Linker(mods, crate_names)
 
-    for rel, lines, _mod, _root in files:
+    for rel, lines, _mod, _root, _tree in files:
         g.add_node(Node(id=f"rs:{rel}", kind=MODULE, name=Path(rel).name, qualname=rel, file=rel, start_line=1, end_line=lines))
     for mod in mods.values():
         for rt in mod.types.values():

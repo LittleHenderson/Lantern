@@ -761,18 +761,19 @@ def add_java(g: Graph, repo: str | Path) -> dict:
             continue
         lines = src.count(b"\n") + 1
         total += lines
-        root = parser.parse(src).root_node
+        tree = parser.parse(src)     # kept in `files`: a node outlives its tree only as a dangling pointer (segfault)
+        root = tree.root_node
         pd = next((c for c in root.children if c.type == "package_declaration"), None)
         pkg_name = _text(next((c for c in pd.children if c.type in ("scoped_identifier", "identifier")), None)) if pd is not None else ""
         f = JFile(rel=rel, pkg=pkg_name, lines=lines, is_test=bool(re.search(r"(^|/)src/test/|(^|/)tests?/", rel)))
         pkg = pkgs.setdefault(pkg_name, JPackage(name=pkg_name))
         pkg.files.append(f)
-        files.append((f, root, pkg))
-    for f, root, pkg in files:
+        files.append((f, root, pkg, tree))
+    for f, root, pkg, _tree in files:
         _collect_file(pkg, f, root)
 
     link = Linker(pkgs)
-    for f, _root, _pkg in files:
+    for f, _root, _pkg, _tree in files:
         g.add_node(Node(id=f"jv:{f.rel}", kind=MODULE, name=Path(f.rel).name, qualname=f.rel, file=f.rel, start_line=1, end_line=f.lines))
         if f.is_test:
             g.nodes[f"jv:{f.rel}"].entry = {"kind": "test", "detail": f.rel}

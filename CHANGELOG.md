@@ -10,6 +10,13 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   links, findings), with a byline that says no model wrote them and every phrase anchored to a real symbol. The
   Explain button still asks a model for the fuller wording and an analogy. The Explanations list now reads "Explained
   by a model" and "From the map so far". `tools/viewer_smoke.js` checks the map-built lenses render.
+- Fixed: the analysis crashed outright (a segmentation fault, shown on the website as a bare "stopped with an error")
+  on repositories with a function past line 256 of a file, for example devr22/HerSheild. The cause was the
+  `tree-sitter` Python package 0.26.0, which frees a node's line number while it is still in use; Lantern now refuses
+  that version (`tree-sitter>=0.23,!=0.26.0`) and a test parses past row 256 in a child process so a bad build fails
+  the suite instead of killing it. The Java and Rust readers also keep each parse tree alive for as long as its nodes
+  are used. The cloud now says when the analysis died before writing anything ("crashed (signal 11) … a bug on
+  Lantern's side") instead of a sentence with no cause.
 - Website: Connect GitHub, for private repositories. When the owner sets up Lantern's GitHub App (`docs/deploy.md`), a
   private repository's check offers "Connect GitHub": the person picks repositories on GitHub, clicks Try again, and
   Lantern reads them with a one-repository, read-only token that lasts an hour at most, only for someone GitHub says
