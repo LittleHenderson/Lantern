@@ -5,6 +5,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Website: a private repository (or a wrong link) no longer stops with git's "could not read Username… clone it yourself"
+  message. The check says in plain words that Lantern could not open it, and offers "Upload your code instead", which
+  opens the upload window; git's own words stay in the log.
 - Website home: the warm light behind the headline, as in the mock-ups (the app's home has it too); "Your repositories"
   (GitHub sign-ins) and "Explore GitHub" buttons under the link box, to find a repository to paste; and "Try a sample app":
   Lantern's four built-in starter apps, each with planted problems, checked with one click (written from the package,

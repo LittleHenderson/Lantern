@@ -70,6 +70,8 @@ def clone_repo(link: str, dest: Path, log) -> Path:
 
 
 SAMPLE_PREFIX = "lantern:sample/"   # a run's "link" for one of Lantern's own starter apps (`lantern.learn`)
+NOT_PUBLIC = ("Lantern could not open this repository: it is private, or the link is wrong. "
+              "Upload your app's folder instead, and Lantern checks it the same way.")
 UPLOAD_PREFIX = "lantern:upload/"   # a run's "link" for an app uploaded as a .zip; the name is only a label
 
 
@@ -94,7 +96,13 @@ def get_source(link: str, dest: Path, log) -> Path:
         log(f"sample app {sid}: written from Lantern's built-in starter apps (nothing downloaded)")
         learn.scaffold(sid, dest)
         return dest
-    repo = clone_repo(link, dest, log)
+    try:
+        repo = clone_repo(link, dest, log)
+    except RuntimeError as e:
+        if "private" in str(e) and "could not clone" in str(e):   # git asked for a password: private, or no such repository
+            log(str(e))
+            raise RuntimeError(NOT_PUBLIC) from None
+        raise
     remote.check_complete(repo)
     return repo
 
