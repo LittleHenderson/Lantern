@@ -202,6 +202,14 @@ def test_headline_names_the_clicked_thing_only_when_input_reaches_the_line(gs):
     assert scenarios.headline(f, g) == "A shell command is put together from text"
 
 
+def test_headline_for_a_command_the_owner_runs_names_no_visitor(gs):
+    """A script or CLI entry is run by hand; nobody on the web reaches it, so the sentence stays neutral."""
+    g, fs = gs
+    shell = by_rule(fs, "B602")
+    f = dict(shell, ui_path=None, reachable={**shell["reachable"], "kind": "cli"})
+    assert scenarios.headline(f, g) == "A shell command is put together from text"
+
+
 def test_headline_uses_only_fixed_words_and_map_names(gs):
     g, fs = gs
     for f in fs:

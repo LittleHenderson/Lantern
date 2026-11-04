@@ -372,6 +372,8 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
             who = f"The {_page(g, ui[0])} page"
     if not who:
         route, rkind = _route_word(g, f)
+        if rkind in ("cli", "script", "main"):   # a command the owner runs by hand: no visitor reaches it
+            return otherwise
         who = f"A request to {route}" if route and rkind == "route" else "What a visitor types"
     return reached.format(who=who)
 
