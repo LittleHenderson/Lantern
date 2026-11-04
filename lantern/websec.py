@@ -595,7 +595,7 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
 def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
     its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
-    js = n.id.startswith(("js:", "go:", "jv:", "kt:"))   # JS, Go, Java and Kotlin use camelCase; Python and Rust snake_case
+    js = n.id.startswith(("js:", "go:", "jv:", "kt:", "sw:"))   # JS, Go, Java, Kotlin, Swift: camelCase; Python and Rust snake_case
     for d in n.decorators:
         if auth_ident(d, js):
             return f"decorator @{d.split('(')[0]}"
@@ -610,7 +610,7 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
                 if v in seen:
                     continue
                 seen.add(v)
-                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:"))):
+                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:", "sw:"))):
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt
@@ -691,4 +691,14 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
         g.meta["mobile"] = mobile
         n = len(mobile["modules"])
         tools.append({"tool": "lantern-android", "status": f"ok ({n} app module{'s' if n != 1 else ''})", "version": "0.1"})
+    from . import ios
+    inf, imobile = ios.scan(g)
+    findings += inf
+    if imobile:
+        n = len(imobile["modules"])
+        tools.append({"tool": "lantern-ios", "status": f"ok ({n} app{'s' if n != 1 else ''})", "version": "0.1"})
+        if mobile:   # Android and iOS apps in one repository: one card per app, Android's platform name kept
+            mobile["modules"] += [dict(m, platform="ios") for m in imobile["modules"]]
+        else:
+            g.meta["mobile"] = imobile
     return findings, tools

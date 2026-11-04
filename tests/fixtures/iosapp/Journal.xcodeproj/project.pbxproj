@@ -1,0 +1,12 @@
+// !$*UTF8*$!
+{
+	objects = {
+		1A /* Debug */ = {
+			buildSettings = {
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.journal;
+				CODE_SIGN_ENTITLEMENTS = Journal/Journal.entitlements;
+			};
+		};
+	};
+}

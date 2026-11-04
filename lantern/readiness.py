@@ -34,8 +34,8 @@ CATEGORIES = [
 ]
 
 CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
-MOBILE_EXTS = {".java", ".kt"}            # an Android app's code: counted for tests and the Android checks only
-MOBILE_TEST_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/")
+MOBILE_EXTS = {".java", ".kt", ".swift"}  # a phone app's code: counted for tests and the Android/iOS checks only
+MOBILE_TEST_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/|(^|/)[^/]*(Tests|UITests)/[^/]*\.swift$")
 # What Android Studio writes into every new project: a test that checks 2 + 2 and one that reads the package name.
 TEMPLATE_TEST_RE = re.compile(r"(^|/)Example(Unit|Instrumented)Test\.(java|kt)$")
 CRASH_REPORTING = re.compile(r"firebase[-:]crashlytics|io\.sentry|com\.bugsnag|com\.instabug|datadog|newrelic|"
@@ -47,7 +47,14 @@ ANDROID_TIMEOUT = re.compile(r"\.(connectTimeout|readTimeout|writeTimeout|callTi
                              r"setConnectTimeout\s*\(|setReadTimeout\s*\(|requestTimeoutMillis|HttpTimeout")
 ANDROID_RETRY = re.compile(r"DefaultRetryPolicy|setBackoffCriteria|BackoffPolicy|retryOnConnectionFailure\s*\(\s*true|"
                            r"\bretryWhen\b|\bHttpRequestRetry\b|\bretry\s*\(")
-MOBILE_SHAPES = {"Android app"}
+IOS_CRASH = re.compile(r"FirebaseCrashlytics|Crashlytics|sentry-cocoa|getsentry/sentry|\bSentry\b|Bugsnag|Instabug|"
+                       r"Datadog|AppCenterCrashes|EmbraceIO|\bembrace-apple")
+IOS_HTTP = re.compile(r"\bURLSession\b|\bAF\.request\b|\bAlamofire\b|\bSession\.default\b")
+IOS_TIMEOUT = re.compile(r"timeoutIntervalForRequest|timeoutIntervalForResource|\.timeoutInterval\b|timeoutInterval:|"
+                         r"requestModifier[^\n]*timeout")
+IOS_RETRY = re.compile(r"RequestRetrier|RetryPolicy|\bretry\s*\(|maxRetries|retryCount|for\s+attempt\s+in|"
+                       r"waitsForConnectivity\s*=\s*true")
+MOBILE_SHAPES = {"Android app", "iOS app"}
 JS_TEST_RE = re.compile(r"(\.(test|spec)\.[cm]?[jt]sx?$)|(^|/)(__tests__|tests?|e2e|cypress|playwright)/")
 PY_LOCKS = ("poetry.lock", "uv.lock", "Pipfile.lock", "pdm.lock")
 JS_LOCKS = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb")
@@ -185,6 +192,8 @@ def detect_stack(repo: Repo, g: Graph) -> dict:
     deploy = sorted({v for k, v in DEPLOY_FILES.items() if repo.has(k)})
     if g.meta.get("platform") == "android":
         fw.insert(0, "Android")
+    if g.meta.get("platform") == "ios" or g.meta.get("ios"):
+        fw.insert(0, "iOS")
     return {"frameworks": fw, "entries": dict(entries), "languages": langs, "deploy_targets": deploy,
             "platform": g.meta.get("platform")}
 
@@ -192,6 +201,8 @@ def detect_stack(repo: Repo, g: Graph) -> dict:
 def classify_shape(stack: dict) -> str:
     if stack.get("platform") == "android":
         return "Android app"
+    if stack.get("platform") == "ios":
+        return "iOS app"
     e = stack["entries"]
     pages, routes = e.get("page", 0), e.get("route", 0)
     if pages and routes:
@@ -208,7 +219,7 @@ def classify_shape(stack: dict) -> str:
 
 
 SHAPES = frozenset({"full-stack web app", "web API", "frontend web app", "command-line tool", "script or worker", "library",
-                    "Android app"})
+                    "Android app", "iOS app"})
 SERVICE_SHAPES = {"full-stack web app", "web API"}
 
 
@@ -276,6 +287,8 @@ def check_secrets(repo: Repo, sec: dict | None, env: dict[str, str]) -> list[dic
                           "no environment variables read"))
     if any(f.rsplit("/", 1)[-1] == "AndroidManifest.xml" for f in repo.files):
         out += _mobile_secrets(repo, sec)
+    if any(f.endswith(".xcodeproj/project.pbxproj") for f in repo.files):
+        out += _ios_secrets(repo, sec)
     envs = [f for f in repo.project_files if f.rsplit("/", 1)[-1] in (".env", ".env.local", ".env.production")]
     gi = repo.text(".gitignore") if repo.has(".gitignore") else ""
     if envs:
@@ -529,6 +542,8 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
 
 
 def check_observability(repo: Repo, g: Graph, shape: str) -> list[dict]:
+    if shape == "iOS app":
+        return _ios_observability(repo)
     if shape in MOBILE_SHAPES:
         return _mobile_observability(repo)
     out = []
@@ -563,6 +578,8 @@ def check_observability(repo: Repo, g: Graph, shape: str) -> list[dict]:
 
 
 def check_packaging(repo: Repo, shape: str, stack: dict, sec: dict | None = None) -> list[dict]:
+    if shape == "iOS app":
+        return _ios_packaging(sec)
     if shape in MOBILE_SHAPES:
         return _mobile_packaging(sec)
     out = []
@@ -625,6 +642,8 @@ def check_ci(repo: Repo) -> list[dict]:
 
 
 def check_resilience(repo: Repo, shape: str, stack: dict) -> list[dict]:
+    if shape == "iOS app":
+        return _ios_resilience(repo)
     if shape in MOBILE_SHAPES:
         return _mobile_resilience(repo)
     out = []
@@ -751,6 +770,13 @@ def advice(shape: str, stack: dict) -> list[str]:
             "Lock down your Firebase database and storage rules to signed-in users and their own records, and test "
             "them in the Firebase emulator.",
             "Release to a small group first (Play Console internal testing), with crash reporting on.",
+        ],
+        "iOS app": [
+            "Ship through TestFlight to a small group first, with crash reporting on, before the App Store.",
+            "Keep private keys and paid-API calls on a small server (or Firebase Functions); the app calls it. "
+            "Anything inside the app bundle can be read by whoever downloads it.",
+            "Save logins and tokens in the Keychain, never in UserDefaults or a file.",
+            "Leave App Transport Security on, and use Universal Links on your own domain for links that carry data.",
         ],
     }[shape][:]
     if "Supabase" in fw:
@@ -1024,4 +1050,93 @@ def _mobile_resilience(repo: Repo) -> list[dict]:
                "" if r else "Retry with backoff (Volley DefaultRetryPolicy, WorkManager setBackoffCriteria), "
                "especially for anything that must not get lost, like an alert.", how="pattern"),
         _check("res-shutdown", "Graceful shutdown", 2, "skip", "an app: Android manages its lifecycle"),
+    ]
+
+
+# ---------------------------------------------------------------------------- iOS apps
+
+def _ios_rules(sec: dict | None) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for f in (sec or {}).get("findings", []):
+        if f.get("rule", "").startswith("LI-") and f.get("status") != "accepted":
+            out.setdefault(f["rule"], []).append(f)
+    return out
+
+
+def _ios_secrets(repo: Repo, sec: dict | None) -> list[dict]:
+    signing = [f for f in repo.files if f.endswith((".p12", ".p8", ".mobileprovision", ".cer"))]
+    keys = _ios_rules(sec).get("LI-PLIST-KEY", [])
+    return [
+        _check("secrets-signing", "Signing certificates and keys are not in the repository", 3,
+               "fail" if signing else "pass", ", ".join(signing[:3]) if signing else "no .p12, .p8 or profile committed",
+               "" if not signing else "Remove them from git (and its history) and keep them in your password manager or "
+               "let Xcode manage signing. Anyone with a .p12 or .p8 can sign apps or send push notifications as you.",
+               how="file check"),
+        _check("secrets-app-keys", "No private keys built into the app", 2, "fail" if keys else "pass",
+               _where([(f["file"], f["line"], "") for f in keys]) if keys else "none found",
+               "" if not keys else "Anything inside the app bundle can be read by whoever downloads it. Keep private "
+               "keys on a server and have the app call it.", how="LI-PLIST-KEY"),
+    ]
+
+
+def _ios_observability(repo: Repo) -> list[dict]:
+    deps = "\n".join(repo.text(f) for f in repo.files if f.rsplit("/", 1)[-1] in
+                     ("Podfile", "Podfile.lock", "Package.swift", "Package.resolved", "project.pbxproj", "Cartfile"))
+    crash = IOS_CRASH.search(deps)
+    prints = [h for h in repo.mobile_grep(re.compile(r"(?<![\w.])(?:print|NSLog|debugPrint)\s*\("), limit=500)
+              if h[0].endswith(".swift") and "#if DEBUG" not in repo.text(h[0])]
+    return [
+        _check("obs-crash", "Crash reporting", 3, "pass" if crash else "fail",
+               f"uses {crash.group(0)}" if crash else "no crash reporter found",
+               "" if crash else "Add Firebase Crashlytics or Sentry, so you hear about crashes on people's phones "
+               "before the reviews do.", how="pattern in Podfile / Package.swift / the Xcode project"),
+        _check("obs-health", "Health-check endpoint", 3, "skip", "an app, not a service"),
+        _check("obs-print", "print() is kept out of release builds", 2, "fail" if prints else "pass",
+               f"{len(prints)} print/NSLog call{'s ship' if len(prints) != 1 else ' ships'} in the release app "
+               f"({_where(prints)})" if prints else "no print or NSLog outside #if DEBUG",
+               "" if not prints else "Log with Logger (import os), which hides private values, or wrap print in "
+               "#if DEBUG.", how="pattern"),
+    ]
+
+
+def _ios_packaging(sec: dict | None) -> list[dict]:
+    rules = _ios_rules(sec)
+
+    def st(rule_ids, pts, cid, title, ok, bad, fix):
+        hits = [f for r in rule_ids for f in rules.get(r, [])]
+        return _check(cid, title, pts, "fail" if hits else "pass",
+                      (bad + ": " + _where([(f["file"], f["line"], "") for f in hits])) if hits else ok,
+                      fix if hits else "", how=" / ".join(rule_ids))
+    return [
+        st(["LI-DEBUGGABLE"], 3, "pkg-debuggable", "A debugger cannot attach to the shipped app", "get-task-allow not set",
+           "get-task-allow is true", "Remove get-task-allow from the entitlements file; Xcode adds it to debug builds "
+           "only."),
+        st(["LI-ATS-OFF"], 2, "pkg-ats", "App Transport Security is on", "on", "turned off",
+           "Remove NSAllowsArbitraryLoads and move every server to https."),
+        st(["LI-OLD-TARGET", "LI-UIWEBVIEW"], 2, "pkg-target", "Built for iPhone software Apple still updates",
+           "recent minimum iOS", "old", "Raise the minimum iOS version (Xcode → target → General → Minimum "
+           "Deployments) and replace UIWebView with WKWebView."),
+        _check("pkg-signing", "Signed for the App Store", 1, "skip", "Xcode and App Store Connect handle signing"),
+    ]
+
+
+def _ios_resilience(repo: Repo) -> list[dict]:
+    http = repo.mobile_grep(IOS_HTTP, limit=50)
+    if not http:
+        return [_check("res-timeout", "Network calls have timeouts", 4, "skip", "no network calls in code"),
+                _check("res-retry", "Retries with backoff on network calls", 2, "skip", "no network calls in code"),
+                _check("res-shutdown", "Graceful shutdown", 2, "skip", "an app: iOS manages its lifecycle")]
+    t = repo.mobile_grep(IOS_TIMEOUT, limit=1)
+    r = repo.mobile_grep(IOS_RETRY, limit=1)
+    return [
+        _check("res-timeout", "Network calls have timeouts", 4, "pass" if t else "fail",
+               f"{t[0][0]}:{t[0][1]}" if t else f"{len(http)} network call{'s' if len(http) != 1 else ''} "
+               f"({_where(http)}), no timeout set (URLSession waits 60 seconds by default)",
+               "" if t else "Set timeoutIntervalForRequest on a URLSessionConfiguration (for example 15 seconds), so "
+               "a bad connection fails quickly instead of freezing the screen.", how="pattern"),
+        _check("res-retry", "Retries with backoff on network calls", 2, "pass" if r else "fail",
+               f"{r[0][0]}:{r[0][1]}" if r else "no retry found",
+               "" if r else "Retry with backoff for anything that must not get lost (Alamofire's RetryPolicy, or a "
+               "small loop with Task.sleep), and set waitsForConnectivity.", how="pattern"),
+        _check("res-shutdown", "Graceful shutdown", 2, "skip", "an app: iOS manages its lifecycle"),
     ]

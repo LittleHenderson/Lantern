@@ -87,6 +87,12 @@ def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> s
     return "frontend"
 
 
+def phone_roots(meta: dict) -> dict | None:
+    """The folders of the phone apps in the repo (Android modules, iOS apps), shaped like `meta["android"]`."""
+    roots = [r for k in ("android", "ios") for r in ((meta.get(k) or {}).get("roots") or [])]
+    return {"roots": roots} if roots else None
+
+
 def _in_roots(file: str | None, android: dict) -> bool:
     return bool(file) and any(file.startswith(r) for r in android.get("roots") or [])
 
@@ -94,7 +100,7 @@ def _in_roots(file: str | None, android: dict) -> bool:
 def assign(g: Graph) -> dict:
     """Set ``node.lane`` on every node. Returns counts per lane for ``graph.meta``."""
     servers = _server_modules(g)
-    android = g.meta.get("android")
+    android = phone_roots(g.meta)
     counts = {k: 0 for k in LANES}
     for n in g.nodes.values():
         n.lane = lane_of(n, servers, android)
@@ -124,7 +130,7 @@ def lane_for_file(file: str | None, android: dict | None = None) -> str | None:
         return None
     if android and _in_roots(file, android):
         return "frontend"                     # the manifest, the build file and the app's code ship on the phone
-    if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs")):
+    if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs", ".swift")):
         return "server"
     if re.search(r"\.[cm]?[jt]sx?$", file):
         return "server" if SERVER_PATH_RE.search(file) else "frontend"

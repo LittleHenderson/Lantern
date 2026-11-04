@@ -5,6 +5,17 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- iOS apps are read as iPhone apps. Lantern now reads Swift: types, extensions, protocols and SwiftUI views are on the map
+  with their calls, and the app's screens (UIKit view controllers, SwiftUI views the app or a navigation link opens) and
+  the code that handles incoming links (`.onOpenURL`, the app and scene delegates) are where paths start. A link whose
+  id reaches a database query built with `\(id)` is critical, with an iPhone story ("Sam sends a link to your app…").
+  16 new `LI-*` checks cover Info.plist (App Transport Security off, URL schemes any app can send, file sharing, keys
+  written in it, permissions the code never uses), entitlements (`get-task-allow`), the Xcode project (old minimum iOS)
+  and Swift code (passwords in the log or in UserDefaults, Keychain items readable while locked, trusting any
+  certificate, SQL built from variables, weak hashes, web view file access and bridges, UIWebView, plain `http://`,
+  secrets on the clipboard). The "On the phone" card lists what the app asks to use, and Readiness grades it as an iOS
+  app (crash reporting, print kept out of release, ATS, debugger, minimum iOS, timeouts, signing files not committed).
+  Vapor routes in Swift servers are entry points too. New sample: `tests/fixtures/iosapp`.
 - Kotlin is read and mapped, not just checked line by line. Kotlin classes, `object`s, companions and functions are on
   the map with their calls (to their own class, objects, companions, typed properties and locals, interfaces, `::f`
   references), so an Android app written in Kotlin gets the same paths as one in Java: a link that opens a screen and

@@ -46,6 +46,15 @@ s = json.load(open(sys.argv[1] + "/security.json"))
 sql = [f for f in s["findings"] if f["rule"].endswith("SQL-CONCAT")]
 assert len(sql) == 1 and sql[0]["rank"] == "critical" and sql[0]["node"].startswith("kt:"), sql
 EOF
+check "iosapp (iOS, Swift) analyzes" lantern analyze tests/fixtures/iosapp --out "$W/ia"
+check "iosapp: a link reaching a Swift query is critical, graded as an iOS app" "$PY" - "$W/ia" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["rule"] == "LI-SQL-CONCAT"]
+assert len(sql) == 1 and sql[0]["rank"] == "critical" and sql[0]["node"].startswith("sw:"), sql
+assert s["mobile"]["platform"] == "ios"
+assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "iOS app"
+EOF
 check "nextapp (Next.js + Supabase) analyzes" lantern analyze tests/fixtures/nextapp --out "$W/nx"
 check "nextapp: auth, RLS, and service-role findings" "$PY" - "$W/nx" <<'EOF'
 import json, sys
@@ -113,6 +122,9 @@ EOF
   # an Android app: the "On the phone" card, phone stories and entry details, poisoned, with the platform kept
   check "viewer: poisoned Android data stays text (On the phone card, screens, stories)" \
     bash -c "'$PY' tools/poison_report.py '$W/aa/report.html' '$W/poison-aa/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-aa/report.html' '$W/ashot'"
+  # an iOS app: the same card and stories with iPhone words, poisoned
+  check "viewer: poisoned iOS data stays text (On the phone card, screens, links)" \
+    bash -c "'$PY' tools/poison_report.py '$W/ia/report.html' '$W/poison-ia/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ia/report.html' '$W/ishot'"
   # the live app: the test sheet (sandboxed run), the terminal drawer, a screenshot in Ask Lantern, a pack toggle
   A="$W/app"; mkdir -p "$A"; cp -r tests/fixtures/shop "$A/shop"
   "$PY" - "$A/shot.png" <<'PYEOF'
