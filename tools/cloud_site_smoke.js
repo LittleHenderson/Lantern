@@ -18,6 +18,7 @@ async function until(p, fn, timeout) {
 
 (async () => {
   const [base, tokenFile, out] = process.argv.slice(2);
+  const site = base.replace(/\/?$/, '/') + '?intro=0';   // the site itself, without the landing intro (checked once below)
   const token = fs.readFileSync(tokenFile, 'utf8').trim();
   const b = await chromium.launch();
   const errs = [];
@@ -39,7 +40,11 @@ async function until(p, fn, timeout) {
     };
     // signed out: the home page and the sign-in sheet
     let p = await ctx.newPage(); watch(p);
-    await p.goto(base); await p.waitForSelector('#signin');
+    // the landing intro plays on every visit to the home page; Escape jumps to its end card, "Add your app" lands on the page
+    await p.goto(base); await p.waitForSelector('#intro:not(.hidden)');
+    await p.waitForTimeout(400); await p.keyboard.press('Escape'); await p.waitForSelector('#introend.on');
+    await p.click('#end-start'); await p.waitForSelector('#intro.hidden', { state: 'attached' });
+    await p.goto(site); await p.waitForSelector('#signin');
     await p.screenshot({ path: `${out}-${tag}-signed-out.png` });
     await p.click('#signin'); await p.waitForSelector('.signbtns [data-p="github"]');
     await p.screenshot({ path: `${out}-${tag}-sign-in.png` });
@@ -47,7 +52,7 @@ async function until(p, fn, timeout) {
     // signed in: My runs, a run in progress, a failed run, the report
     await ctx.addCookies([{ name: 'lt', value: token, url: base }]);
     p = await ctx.newPage(); watch(p);
-    await p.goto(base); await p.waitForSelector('article.app');
+    await p.goto(site); await p.waitForSelector('article.app');
     const cards = await p.$$eval('article.app', a => a.length);
     if (cards !== 3) errs.push(`${tag}: expected 3 run cards, saw ${cards}`);
     await p.screenshot({ path: `${out}-${tag}-runs.png`, fullPage: true });
@@ -58,10 +63,10 @@ async function until(p, fn, timeout) {
       await clean(p, 'advanced');
       await p.click('#viewmode [data-m="simple"]'); await p.waitForSelector('article.app');
     }
-    await p.goto(base + '#/run/going1'); await p.waitForSelector('.progress .running-steps'); await p.waitForSelector('.progress .indeterminate');
+    await p.goto(site + '#/run/going1'); await p.waitForSelector('.progress .running-steps'); await p.waitForSelector('.progress .indeterminate');
     await p.screenshot({ path: `${out}-${tag}-progress.png` });
     await clean(p, 'progress');
-    await p.goto(base + '#/run/failed1'); await p.reload(); await p.waitForSelector('.progress [data-again]');
+    await p.goto(site + '#/run/failed1'); await p.reload(); await p.waitForSelector('.progress [data-again]');
     await clean(p, 'failed run');
     // "Try again" starts the same link again (the demo server has no worker, so it answers 503: that is fine here)
     allow503 = true;
@@ -69,7 +74,7 @@ async function until(p, fn, timeout) {
     await p.click('.progress [data-again]');
     if (!(await again)) errs.push(`${tag}: "Try again" on a failed run sent nothing`);
     await p.waitForTimeout(300); allow503 = false;
-    await p.goto(base + '#/run/done1'); await p.reload();
+    await p.goto(site + '#/run/done1'); await p.reload();
     await until(p, () => { try { return !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('#tabs'); } catch (e) { return false; } }, 20000);
     await p.waitForTimeout(800);
     await p.screenshot({ path: `${out}-${tag}-report.png` });
@@ -124,7 +129,7 @@ async function until(p, fn, timeout) {
     await p.screenshot({ path: `${out}-${tag}-account.png` });
     if (name === 'phone' && scheme === 'dark') {   // last pass: delete a run, then the whole account
       await p.click('.sheet [data-close]');
-      await p.goto(base + '#/'); await p.waitForSelector('article.app');
+      await p.goto(site + '#/'); await p.waitForSelector('article.app');
       await p.click('[data-del="failed1"]'); await p.waitForSelector('#dodel');
       await p.screenshot({ path: `${out}-${tag}-delete-run.png` });
       await p.click('#dodel'); await until(p, () => document.querySelectorAll('article.app').length === 2, 5000);
@@ -141,7 +146,7 @@ async function until(p, fn, timeout) {
       const ctx2 = await b.newContext({ viewport, colorScheme: scheme });
       await ctx2.addCookies([{ name: 'lt', value: token2, url: base }]);
       const r = await ctx2.newPage(); watch(r);
-      await r.goto(base); await r.waitForSelector('article.app');
+      await r.goto(site); await r.waitForSelector('article.app');
       await r.click('#who'); await r.click('#delme'); await r.waitForSelector('#sure');
       await r.check('#sure'); await r.click('#dodel'); await r.waitForSelector('#signin');
       await r.reload(); await r.waitForSelector('#signin');

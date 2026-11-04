@@ -22,6 +22,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   and ends on a card with "Add your app" (lands on the install card with an accent ring) and "See a finished report
   first"; Skip and Escape jump to that card. The hero's first button is now "Add your app". The React scripts carry SRI
   hashes, and the page opens even if they do not load. On phones the page is no longer wider than the screen.
+- Website (lantern-cloud): the same 20-second intro plays on every visit to the home page, ends on "Add your app" (lands
+  on the link box with an accent ring) and "Try a sample app first", and Skip or Escape jump to that card. Links to a
+  run or to Help (`#/run/…`, `#/help`) and `?intro=0` skip it. Its scripts and React are served from the website itself
+  under the page's nonce, never from another host; if they fail to load, the page shows as before.
 
 ## 0.10.0
 
