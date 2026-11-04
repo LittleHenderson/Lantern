@@ -482,6 +482,7 @@ function addControls(el) {
     up.onclick = () => uploadSheet(dir, zip);
     dir.onchange = () => { const fs = [...dir.files]; dir.value = ''; if (fs.length) uploadFiles(fs.map(f => [f.webkitRelativePath || f.name, f])); };
     zip.onchange = () => { const f = zip.files[0]; zip.value = ''; if (f) uploadZip(f); };
+    if (S.openUpload) { S.openUpload = false; uploadSheet(dir, zip); }   // "Upload your code instead" on a run that could not be opened
     zone.ondragover = e => { e.preventDefault(); zone.classList.add('over'); };
     zone.ondragleave = () => zone.classList.remove('over');
     zone.ondrop = async e => {
@@ -615,8 +616,12 @@ function renderProgress(el, r) {
     <div class="running-steps">${steps}</div>
     <pre class="log" id="runlog">${esc(r.log_tail || '')}</pre>
     <div class="runmeta"><span>${icon('lock')}${esc(PRIV[r.privacy] || r.privacy)}</span><span>${icon('cloud')}${esc(r.host)}</span><span>${icon('clock')}Started ${esc(ago(r.started || r.created))}</span></div>
-    ${run ? '' : `<div class="row" style="margin-top:18px"><button class="btn primary" data-again="${esc(r.id)}">Try again</button><a class="btn ghost" href="#/">Back to my runs</a></div>`}
+    ${run ? '' : r.hint === 'upload'
+      ? `<div class="row" style="margin-top:18px"><button class="btn primary" id="upinstead">${icon('up')}<span>Upload your code instead</span></button><button class="btn" data-again="${esc(r.id)}">Try again</button><a class="btn ghost" href="#/">Back to my runs</a></div>`
+      : `<div class="row" style="margin-top:18px"><button class="btn primary" data-again="${esc(r.id)}">Try again</button><a class="btn ghost" href="#/">Back to my runs</a></div>`}
   </div></main>`; dock(true);
+  const ui = el.querySelector('#upinstead');
+  if (ui) ui.onclick = () => { S.openUpload = true; go('home'); };
   el.querySelector('#back').onclick = () => go('home');
   addControls(el);
   if (run) follow(r.id);

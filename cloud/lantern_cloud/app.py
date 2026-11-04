@@ -34,7 +34,7 @@ from .idle import IdleExit
 from .settings import Settings
 from . import site
 from .store import FINISHED, LimitReached, Store
-from .worker import ACTIVE_EXPLAIN, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, is_upload
+from .worker import ACTIVE_EXPLAIN, NOT_PUBLIC, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, is_upload
 
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
@@ -128,6 +128,7 @@ def run_view(r: dict, logs=None) -> dict:
             "stage": r["stage"], "error": r["error"], "created": r["created"], "started": r["started"],
             "finished": r["finished"], "commit": r["commit_sha"], "summary": r["summary"],
             "shared": bool(r["share_slug"]), "log_tail": tail,
+            "hint": "upload" if r["error"] == NOT_PUBLIC else None,   # the website offers Upload in place of the link
             "step": next((k for k, v in STAGES.items() if v == r["stage"]), None),
             "explain": {"status": r.get("explain_status"), "error": r.get("explain_error"),
                         "summary": r.get("explain_summary"),

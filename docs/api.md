@@ -258,7 +258,7 @@ reaching the network or writing outside its folder). `stage` is a plain sentence
 plain sentence (never a traceback or a server path). `summary` (when done) = `{score, grade, shape, counts:
 {critical, high, medium, low}, files}`, read from the result files. `shared` is false until the person clicks Share
 (`POST /v1/runs/{id}/share`). `log_tail`: the last 40 log lines, server paths removed. `explain`: `{status: null|queued|running|done|error, error, summary: {functions, validated, failed, stopped}, log}` (`log`: the explain job's last lines while it runs). `step`: `clone` | `audit` | `analyze` |
-`save` while running (the key of `stage`), else null. `summary` values are checked when read (score and files whole
+`save` while running (the key of `stage`), else null. `hint`: `"upload"` when the repository could not be opened (private, or no such repository; git asked for a password), so the website offers "Upload your code instead"; else null. `summary` values are checked when read (score and files whole
 numbers or null, grade A–F or null, counts whole numbers), since a stranger's repository wrote the files.
 
 Retention: with `LANTERN_CLOUD_RETENTION_DAYS` = 0 (the default, the owner's decision) results are kept until the

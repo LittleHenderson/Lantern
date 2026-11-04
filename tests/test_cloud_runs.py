@@ -229,6 +229,20 @@ def test_a_failed_clone_leaves_nothing_behind(tmp_path, monkeypatch):
     assert not (Path(s.results_dir) / done["id"]).exists()
 
 
+def test_a_private_repository_says_so_and_offers_upload(tmp_path, monkeypatch):
+    """git asks for a password (a private repository, or no such one): the person reads plain words and the website
+    offers Upload instead; git's own words stay in the log."""
+    def private(link, dest, log):
+        raise RuntimeError("could not clone it: fatal: could not read Username for 'https://github.com': terminal "
+                           "prompts disabled. If the repository is private, clone it yourself and add the folder.")
+    monkeypatch.setattr(worker_mod, "clone_repo", private)
+    cloud, gw, s = make(tmp_path)
+    tok = gw.sign_in("github:1", "github:octo")
+    done = wait(cloud, tok, cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"])
+    assert done["status"] == "error" and done["error"] == worker_mod.NOT_PUBLIC and done["hint"] == "upload"
+    assert "could not read Username" in done["log_tail"] and "clone it yourself" not in done["error"]
+
+
 def test_the_analysis_cannot_reach_the_network_or_write_outside(tmp_path, clone_from, monkeypatch):
     """A tricked analyser is stopped by the sandbox: no network, no writes outside its temp folder."""
     outside = tmp_path / "planted.txt"
