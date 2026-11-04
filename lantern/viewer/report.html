@@ -205,6 +205,7 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 .memo .countrow .critical b{color:var(--critical)} .memo .countrow .high b{color:var(--serious)} .memo .countrow .medium b{color:var(--warning)}
 .memogrp{display:grid;grid-template-columns:130px minmax(0,1fr);border-bottom:1px solid var(--line)}
 .memogrp>.sevhead{margin:0;align-self:center}
+.testgrp{display:block;padding:6px 0 14px}.testgrp>summary{cursor:pointer;margin:18px 0 6px}.testgrp>summary::marker{color:var(--muted)}
 .memo .fcard{border:0;border-radius:0;box-shadow:none;background:none;margin:0;padding:18px 4px 18px 12px;overflow:visible}
 .memo .fcard+.fcard{border-top:1px solid var(--line)}
 .memo .fcard.critical{border-color:var(--line)}
@@ -1422,27 +1423,32 @@ function renderFindings() {
   const el = document.getElementById('center');
   const all = SEC.findings;
   if (!all.length) { el.innerHTML = `<div class="empty">${ART}<b>No findings</b>None from the scanners that ran. See About for which tools ran.</div>`; return; }
-  const open = all.filter(f => f.status !== 'accepted');
-  const by = r => all.filter(f => f.rank === r && f.status !== 'accepted').length;
-  const acc = all.length - open.length;
+  // Counts are for the app itself, the same numbers as the summary, readiness and Ask Lantern: findings in test code
+  // (test files and fixtures, often planted on purpose) are listed last and not counted.
+  const app = all.filter(f => !f.in_tests), tests = all.filter(f => f.in_tests);
+  const open = app.filter(f => f.status !== 'accepted');
+  const by = r => open.filter(f => f.rank === r).length;
+  const acc = app.length - open.length;
+  const TESTS_SHOWN = 200;
   if (S.simple) {
     const sevs = RANKS.filter(by);
     el.innerHTML = `<div class="memo"><div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
-      <p class="lede">${countWord(open.length)} open. Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.</p></div>${modeSeg()}</div>
+      <p class="lede">${countWord(open.length)} open in your app${tests.length ? ` (${esc(tests.length)} more in test code are listed at the end and not counted)` : ''}. Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.</p></div>${modeSeg()}</div>
       <div class="countrow">${RANKS.map(r => `<span class="${cls(r, RANKS)}"><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>
       <p class="note" style="margin:-8px 0 10px">Each one says which part of your app it lives on. Hover a stop to learn what that part does.</p>${laneStrip(null, new Set(), {legend: true})}
       ${sevs.map(r => `<section class="memogrp"><div class="sevhead ${r}"><i></i>${r[0].toUpperCase() + r.slice(1)}</div><div>${open.filter(f => f.rank === r).map(findingCard).join('')}</div></section>`).join('')}
-      ${acc ? `<section class="memogrp"><div class="sevhead"><i></i>Accepted with a reason</div><div>${all.filter(f => f.status === 'accepted').map(findingCard).join('')}</div></section>` : ''}</div>`;
+      ${acc ? `<section class="memogrp"><div class="sevhead"><i></i>Accepted with a reason</div><div>${app.filter(f => f.status === 'accepted').map(findingCard).join('')}</div></section>` : ''}
+      ${tests.length ? `<details class="memogrp testgrp"><summary class="sevhead"><i></i>In test code: ${esc(tests.length)}, not counted</summary><p class="lede">Test files and fixtures. Your visitors never run them, so they do not count toward the numbers above or the grade. Keys in them are still worth replacing.</p><div>${tests.slice(0, TESTS_SHOWN).map(findingCard).join('')}</div>${tests.length > TESTS_SHOWN ? `<p class="lede">Showing ${TESTS_SHOWN} of ${esc(tests.length)}. Advanced lists them all.</p>` : ''}</details>` : ''}</div>`;
     wireFindings(el); wireMode(el); return;
   }
-  let fs = S.fsev === 'all' ? all : all.filter(f => f.rank === S.fsev);
+  let fs = S.fsev === 'tests' ? tests : S.fsev === 'all' ? app : app.filter(f => f.rank === S.fsev);
   if (S.freach) fs = fs.filter(f => f.reachable || f.ui_path);
   if (S.finput) fs = fs.filter(f => f.input);
   if (S.ftool) fs = fs.filter(f => f.tool === S.ftool);
   const tools = [...new Set(all.map(f => f.tool))];
   const fchip = (k, label, n) => `<button class="fchip ${k === 'all' ? '' : k} ${S.fsev === k ? 'on' : ''}" data-sev="${k}">${k === 'all' ? '' : '<i></i>'}${label} <b>${esc(n)}</b></button>`;
   el.innerHTML = `<div class="toolbar"><h2>Security findings <span class="c">${esc(open.length)}</span></h2>${modeSeg()}<button class="btn" id="exportjson">Export JSON</button></div>
-    <div class="filters">${fchip('all', 'All', all.length)}${RANKS.filter(r => all.some(f => f.rank === r)).map(r => fchip(r, r[0].toUpperCase() + r.slice(1), all.filter(f => f.rank === r).length)).join('')}<span class="spacer"></span>
+    <div class="filters">${fchip('all', 'All', app.length)}${RANKS.filter(r => app.some(f => f.rank === r)).map(r => fchip(r, r[0].toUpperCase() + r.slice(1), app.filter(f => f.rank === r).length)).join('')}${tests.length ? fchip('tests', 'In test code', tests.length) : ''}<span class="spacer"></span>
       <button class="fchip ${S.freach ? 'on' : ''}" id="freach">Reachable only</button><button class="fchip ${S.finput ? 'on' : ''}" id="finput">Uses input</button>
       <select id="ftool" class="fsel" aria-label="Tool"><option value="">Tool ▾</option>${tools.map(t => `<option value="${esc(t)}" ${S.ftool === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
       <span class="note">Showing ${fs.length} · sorted by rank</span></div>
