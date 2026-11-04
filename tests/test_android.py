@@ -204,3 +204,33 @@ def test_network_config_cleartext_for_some_domains_is_low(tmp_path):
     sec = scan(build_graph(tmp_path))
     assert [f["rank"] for f in by_rule(sec, "LM-CLEARTEXT")] == ["low"]
     assert by_rule(sec, "LM-USER-CERTS") == []                   # user certificates in debug builds only: fine
+
+
+def test_signing_passwords_read_from_key_properties_are_fine(tmp_path):
+    # Flutter's template: the passwords come from key.properties, which is not committed
+    _write(tmp_path, {
+        "android/app/build.gradle": "android {\n  signingConfigs {\n    release {\n"
+                                    "      keyAlias keystoreProperties['keyAlias']\n"
+                                    "      keyPassword keystoreProperties['keyPassword']\n"
+                                    "      storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null\n"
+                                    "      storePassword keystoreProperties['storePassword']\n    }\n  }\n}\n",
+        "android/app/src/main/AndroidManifest.xml": '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+                                                    'package="a.b"><application android:allowBackup="false"/></manifest>',
+    })
+    sec = scan(build_graph(tmp_path))
+    assert by_rule(sec, "LM-SIGNING-SECRET") == []
+
+
+def test_the_release_build_type_is_read_not_the_signing_config(tmp_path):
+    _write(tmp_path, {
+        "app/build.gradle": "android {\n  signingConfigs {\n    release {\n      keyAlias 'k'\n    }\n  }\n"
+                            "  buildTypes {\n    release {\n      minifyEnabled true\n      shrinkResources true\n"
+                            "    }\n  }\n}\n",
+        "app/src/main/AndroidManifest.xml": '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+                                            'package="a.b"><application android:allowBackup="false"/></manifest>',
+        "app/src/profile/AndroidManifest.xml": '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+                                               '<uses-permission android:name="android.permission.INTERNET"/></manifest>',
+    })
+    assert len(android.find_modules(tmp_path)) == 1                # the profile manifest is merged into main's
+    sec = scan(build_graph(tmp_path))
+    assert by_rule(sec, "LM-NO-SHRINK") == []

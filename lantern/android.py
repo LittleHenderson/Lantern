@@ -190,6 +190,9 @@ def find_modules(repo: Path) -> list[Module]:
         rel = p.relative_to(repo).as_posix()
         if re.search(r"(^|/)src/(debug|test|androidTest)\w*/|(^|/)(tests?|fixtures)/", rel) or not MANIFEST_RE.search(rel):
             continue
+        variant = re.search(r"(^|/)src/([^/]+)/AndroidManifest\.xml$", rel)
+        if variant and variant.group(2) != "main" and (repo / rel.replace(f"src/{variant.group(2)}/", "src/main/")).is_file():
+            continue          # a build variant's manifest (profile, release, a flavor) is merged into main's
         xml = parse_xml(_read(p))
         if xml is None or xml.tag != "manifest":
             continue
@@ -564,7 +567,10 @@ def gradle_findings(repo: Path, mod: Module) -> list[dict]:
     def ln(pos: int) -> int:
         return t.count("\n", 0, pos) + 1
 
-    release = _block(t, "release")
+    types = _block(t, "buildTypes")             # `release { }` also names a signing config: read the build type
+    release = _block(types[1], "release") if types else None
+    if release is not None:
+        release = (types[0] + release[0], release[1])
     if release is not None:
         start, body = release
         if re.search(r"\b(?:is)?[Dd]ebuggable\s*=?\s*true\b", body):
@@ -600,7 +606,9 @@ def gradle_findings(repo: Path, mod: Module) -> list[dict]:
                       "version", "LOW", rel, ln(m.start()), cwe=1104, rank="low", snippet=_line_text(t, ln(m.start()))))
     keystore = any(p.suffix in (".jks", ".keystore") and "debug" not in p.name for p in (repo / mod.root).rglob("*")
                    if p.is_file() and "build" not in p.relative_to(repo).parts)
-    for m in re.finditer(r"\b(storePassword|keyPassword)\s*=?\s*[\"']([^\"'$]{4,})[\"']", t):
+    # `storePassword "s3cret"` / `storePassword = "s3cret"`; not `keystoreProperties['storePassword']` (Flutter's
+    # template reads the password from key.properties) and never across lines
+    for m in re.finditer(r"(?<![\"'\w])(storePassword|keyPassword)[ \t]*(?:=[ \t]*|[ \t]+|\([ \t]*)[\"']([^\"'$\n]{4,})[\"']", t):
         if m.group(2).lower() == "android":          # the well-known password of the debug key
             continue
         out.append(_f("LM-SIGNING-SECRET", f"The signing key's password ({m.group(1)}) is written in the build file"
