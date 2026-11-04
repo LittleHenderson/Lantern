@@ -13,6 +13,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 - Findings page: its counts now match the summary, the grade and Ask Lantern. Findings in test code (test files and
   fixtures, often planted on purpose) were counted in the page's "open" number and severity tiles but nowhere else; they
   are now listed at the end under "In test code: N, not counted" (Advanced: an "In test code" filter).
+- Script written inside HTML pages is now read (an app's own `index.html`, Jinja/Django templates, the pages of a
+  server-rendered app): its functions appear on the map with the page's line numbers, its `fetch` calls link to the
+  backend routes, and the page sits in the Browser lane with its functions in Frontend. JSON blocks, `src=` tags,
+  `text/babel` and `.min.html` are left alone. Lantern's own map now shows its four pages and 389 of their functions,
+  and its shape reads "full-stack web app". The pattern rules (`LJ-*`) still read only `.js`/`.ts` files.
 - Website: a private repository (or a wrong link) no longer stops with git's "could not read Username… clone it yourself"
   message. The check says in plain words that Lantern could not open it, and offers "Upload your code instead", which
   opens the upload window; git's own words stay in the log.

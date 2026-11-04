@@ -108,6 +108,12 @@ functions are attributed to the enclosing named function. HTTP calls: `fetch`/`$
 `x.get|post|...(url)`, `x.get({url})` (generated clients), `axios({url, method})`; URLs from strings,
 template literals (`${id}` → `{}`), `+` concatenation, and module-level string constants.
 
+Script inside HTML pages (`.html`/`.htm`, `js_frontend.inline_script`): the JavaScript `<script>` bodies are laid over a
+buffer of spaces at their original offsets (line numbers are the page's own) and parsed with the JS grammar; the module
+keeps the `.html` in its name (`js:site/index.html::load`), the file node is a `page` entry (Browser lane; its functions
+Frontend). JSON/importmap/`text/babel` blocks, `src=` tags and `.min.html` are skipped. `LJ-*` pattern rules do not run on
+pages (a page that builds itself with `innerHTML` from escaped values would light up on every line).
+
 Entries: Next.js (`app/**/page`, `app/**/route` exports, `pages/**`, `pages/api/**`, only when the
 nearest `package.json` depends on `next`), `createFileRoute`, React Router `<Route>` and route objects,
 `createRoot().render` (SPA start), Express-style `app.get('/x', handler)`, test files.
