@@ -62,6 +62,18 @@ class Settings:
     # header). Empty: derived from the admin secret, or random for this process (links then end at a restart).
     view_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_VIEW_SECRET", ""))
     view_minutes: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_VIEW_MINUTES", 60))
+    # "Connect GitHub" (private repositories): Lantern's GitHub App. All three set, or the feature is off and a
+    # private repository offers only Upload. The key is the app's private key (.pem text; Fly secret).
+    github_app_id: str = field(default_factory=lambda: os.environ.get("LANTERN_GITHUB_APP_ID", ""))
+    github_app_key: str = field(default_factory=lambda: os.environ.get("LANTERN_GITHUB_APP_KEY", "").replace("\\n", "\n"))
+    github_app_slug: str = field(default_factory=lambda: os.environ.get("LANTERN_GITHUB_APP_SLUG", ""))
+
+    def github_app(self):
+        """The GitHub App client, or None when it is not configured."""
+        if not (self.github_app_id and self.github_app_key and self.github_app_slug):
+            return None
+        from .ghapp import GitHubApp
+        return GitHubApp(self.github_app_id, self.github_app_key, self.github_app_slug)
 
     def uploads(self) -> str:
         return self.uploads_dir or (self.work_dir.rstrip("/\\") + "-uploads")

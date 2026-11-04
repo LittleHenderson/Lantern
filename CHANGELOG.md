@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Website: Connect GitHub, for private repositories. When the owner sets up Lantern's GitHub App (`docs/deploy.md`), a
+  private repository's check offers "Connect GitHub": the person picks repositories on GitHub, clicks Try again, and
+  Lantern reads them with a one-repository, read-only token that lasts an hour at most, only for someone GitHub says
+  may read that repository. The token reaches git through its environment, never a link, file or log. "Connect private
+  repositories" also sits beside "Explore GitHub". Off (Upload only) until the app is configured.
 - Website: a private repository (or a wrong link) no longer stops with git's "could not read Username… clone it yourself"
   message. The check says in plain words that Lantern could not open it, and offers "Upload your code instead", which
   opens the upload window; git's own words stay in the log.

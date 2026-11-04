@@ -53,7 +53,7 @@
 @media (max-width:760px){#xtoast{left:12px;bottom:84px;max-width:calc(100vw - 24px)}.sub #explain span,.sub #share span{display:none}}
 .dropzone.over{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .ghrow{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;max-width:720px;margin:12px auto 0;font:13px var(--font);color:var(--muted)}
-.ghrow .btn svg{width:15px;height:15px;flex:none}.ghrow .btn .ic{width:13px;height:13px;opacity:.6}
+.ghrow .btn svg,#connectgh svg{width:15px;height:15px;flex:none}.ghrow .btn .ic{width:13px;height:13px;opacity:.6}
 .samples{margin-top:40px}
 .sgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
 .sample{display:flex;flex-direction:column;border-radius:18px}
@@ -451,8 +451,12 @@ function ghRow() {
   const mine = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(login) ? `https://github.com/${encodeURIComponent(login)}?tab=repositories` : '';
   return `<div class="ghrow"><span>Need a link?</span>
     ${mine ? `<a class="btn sm" href="${esc(mine)}" target="_blank" rel="noopener noreferrer">${GH}Your repositories${icon('open')}</a>` : ''}
-    <a class="btn sm" href="https://github.com/explore" target="_blank" rel="noopener noreferrer">${GH}Explore GitHub${icon('open')}</a></div>`;
+    <a class="btn sm" href="https://github.com/explore" target="_blank" rel="noopener noreferrer">${GH}Explore GitHub${icon('open')}</a>
+    ${connectUrl() ? `<a class="btn sm" href="${esc(connectUrl())}" target="_blank" rel="noopener noreferrer" title="Choose private repositories Lantern may read">${GH}Connect private repositories${icon('open')}</a>` : ''}</div>`;
 }
+// Connect GitHub: the GitHub App's install page, where the person picks the private repositories Lantern may read.
+// Only a github.com/apps/ address is used, whatever the server says.
+const connectUrl = () => { const u = S.me && S.me.connect_url; return typeof u === 'string' && /^https:\/\/github\.com\/apps\/[A-Za-z0-9-]{1,100}\/installations\/new$/.test(u) ? u : ''; };
 // Lantern's built-in sample apps, each with planted problems, so a beginner sees a real report in one click.
 function samplesBlock() {
   const xs = (S.samples || []).slice(0, 4);
@@ -616,7 +620,10 @@ function renderProgress(el, r) {
     <div class="running-steps">${steps}</div>
     <pre class="log" id="runlog">${esc(r.log_tail || '')}</pre>
     <div class="runmeta"><span>${icon('lock')}${esc(PRIV[r.privacy] || r.privacy)}</span><span>${icon('cloud')}${esc(r.host)}</span><span>${icon('clock')}Started ${esc(ago(r.started || r.created))}</span></div>
-    ${run ? '' : r.hint === 'upload'
+    ${run ? '' : r.hint === 'connect' && connectUrl()
+      ? `<div class="row" style="margin-top:18px"><a class="btn primary" id="connectgh" href="${esc(connectUrl())}" target="_blank" rel="noopener noreferrer">${GH}<span>Connect GitHub</span></a><button class="btn" id="upinstead">${icon('up')}<span>Upload instead</span></button><button class="btn" data-again="${esc(r.id)}">Try again</button></div>
+        <p style="margin:10px 0 0;font-size:13px;color:var(--muted)">On GitHub, choose this repository and click Install. Then come back here and click Try again.</p>`
+      : r.hint === 'upload' || r.hint === 'connect'
       ? `<div class="row" style="margin-top:18px"><button class="btn primary" id="upinstead">${icon('up')}<span>Upload your code instead</span></button><button class="btn" data-again="${esc(r.id)}">Try again</button><a class="btn ghost" href="#/">Back to my runs</a></div>`
       : `<div class="row" style="margin-top:18px"><button class="btn primary" data-again="${esc(r.id)}">Try again</button><a class="btn ghost" href="#/">Back to my runs</a></div>`}
   </div></main>`; dock(true);

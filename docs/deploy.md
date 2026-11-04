@@ -221,6 +221,46 @@ repository's files.
 | The first request after a quiet spell takes a few seconds | The service was asleep (normal, it saves money) | nothing |
 | A large repository's run ends with an error about memory | 1 GB is not enough for it | `fly scale memory 2048 -a lantern-cloud` (doubles the running cost) |
 
+### Connect GitHub: private repositories (optional)
+
+Without this, a private repository's check stops and the website offers Upload. With it, the website also offers
+**Connect GitHub**: the person installs Lantern's GitHub App on the repositories they choose, and Lantern then reads
+those with a token that covers one repository, is read-only, and lasts an hour at most. It reads one only for someone
+GitHub says may read it (their GitHub account id, from the sign-in), so a stranger who pastes the link gets nothing.
+Nothing about installations is stored; the token is never written to disk or a log.
+
+Create the app once (about 5 minutes, in a browser signed in as the account that owns Lantern):
+
+1. Open https://github.com/settings/apps/new
+2. **GitHub App name**: `Lantern Checks` (names are unique across GitHub; if it is taken, add your name).
+3. **Homepage URL**: `https://lantern-cloud.fly.dev`
+4. **Callback URL**: leave empty. Leave "Request user authorization (OAuth) during installation" unticked.
+5. **Setup URL**: `https://lantern-cloud.fly.dev/`, and tick **Redirect on update**.
+6. **Webhook**: untick **Active**.
+7. **Permissions → Repository permissions → Contents**: **Read-only** (Metadata turns Read-only by itself). Nothing else.
+8. **Where can this GitHub App be installed?**: **Any account**. Click **Create GitHub App**.
+9. On the page that opens, note the **App ID** (a number) and the app's short name in the address bar
+   (`github.com/settings/apps/<short-name>`).
+10. Scroll to **Private keys**, click **Generate a private key**; a `.pem` file downloads.
+
+Then, in PowerShell from `C:\Users\<you>\Lantern` (the key goes to Fly without being shown; never `echo` it):
+
+```powershell
+fly secrets set LANTERN_GITHUB_APP_ID=<App ID> LANTERN_GITHUB_APP_SLUG=<short-name> -a lantern-cloud
+$k = (Get-Content (Get-ChildItem "$HOME\Downloads\*.private-key.pem" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName -Raw) -replace "`r?`n", "\n"
+fly secrets set LANTERN_GITHUB_APP_KEY="$k" -a lantern-cloud
+Remove-Variable k
+```
+
+Then delete the `.pem` from Downloads (keep a copy in your password manager if you like; GitHub can make a new one
+any time). All three settings are needed; with any missing, Connect GitHub stays off.
+
+| Setting | Meaning |
+|---|---|
+| `LANTERN_GITHUB_APP_ID` | The app's number |
+| `LANTERN_GITHUB_APP_SLUG` | Its short name (the install page is `https://github.com/apps/<slug>/installations/new`) |
+| `LANTERN_GITHUB_APP_KEY` | Its private key, the `.pem` text (line breaks may be written as `\n`); a Fly secret |
+
 ### Free hosting options (checked 2026-11-03)
 
 The cloud service needs: a Docker container with about 1 GB of memory, a disk that survives restarts (the run list
