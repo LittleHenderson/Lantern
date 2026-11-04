@@ -294,8 +294,12 @@ class Worker:
                                 + "; ".join(b["what"] for b in blocked[:3]) + ") and was stopped.", "blocked")
             if rc != 0 or not (out / "report.html").is_file():
                 last = [ln for ln in output.splitlines() if ln.strip() and not ln.startswith("sandbox:")][-1:]
-                raise RunFailed("The analysis stopped with an error"
-                                + (": " + _scrub(last[0], scrub)[:300] if last else "") + ".")
+                if last:
+                    raise RunFailed("The analysis stopped with an error: " + _scrub(last[0], scrub)[:300] + ".")
+                if rc is not None and rc < 0:    # killed by a signal before it could say anything: Lantern's own fault
+                    raise RunFailed(f"Lantern's analysis crashed (signal {-rc}) before it could write anything. "
+                                    "This is a bug on Lantern's side, not in your code.")
+                raise RunFailed(f"The analysis stopped with an error (exit code {rc}) and wrote nothing.")
             stage("save")
             dest = self.results / rid
             dest.mkdir(parents=True, exist_ok=True)
