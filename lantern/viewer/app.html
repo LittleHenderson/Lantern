@@ -383,6 +383,16 @@ label{display:block;font-weight:600;color:var(--ink);margin:16px 0 6px;font-size
 .indeterminate{height:3px;border-radius:99px;background:var(--accent-soft);overflow:hidden;position:relative}
 .indeterminate::after{content:"";position:absolute;inset:0 auto 0 0;width:35%;border-radius:99px;background:var(--accent);animation:slide 1.3s var(--ease) infinite}
 @keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(300%)}}
+/* Work in progress must always be visible. With reduced motion on (Windows "Animation effects" off), nothing slides:
+   the bar and the dot breathe instead (opacity only), and the elapsed timer below counts in text. */
+@keyframes breathe{0%,100%{opacity:.3}50%{opacity:1}}
+@media (prefers-reduced-motion: reduce){
+  .indeterminate::after{width:100%;transform:none;animation:breathe 1.6s ease-in-out infinite !important}
+  .pulse,.app .checking i,.btn.busy::before{animation:breathe 1.6s ease-in-out infinite !important}}
+.elapsed{font:500 12.5px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.btn.busy{pointer-events:none;opacity:.85}
+.btn.busy::before{content:"";width:13px;height:13px;border-radius:99px;border:2px solid currentColor;border-right-color:transparent;animation:spin .8s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
 pre.log{background:var(--code-bg);color:var(--code-ink);font:11.5px/1.6 var(--mono);padding:12px 14px;border-radius:12px;max-height:220px;overflow:auto;white-space:pre-wrap;margin:0;border:1px solid var(--line)}
 pre.log:empty::before{content:"Starting…";color:var(--code-dim)}
 pre.cmd{background:var(--sunken);color:var(--ink);font:12.5px/1.6 var(--mono);padding:12px 14px;border-radius:12px;overflow:auto;margin:10px 0;white-space:pre}

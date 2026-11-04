@@ -97,7 +97,7 @@ const api = async (path, opts = {}) => {
   if (!r.ok) { const e = new Error((d.error && d.error.message) || 'Lantern did not answer. Try again in a moment.'); e.status = r.status; e.type = d.error && d.error.type; throw e; }
   return d;
 };
-const S = {view: 'home', addMsg: null, me: undefined, runs: null, run: null, tab: 'findings', links: {}, privacy: 'structure', agreed: false, link: '', pending: null, health: null, help: {open: null}, samples: []};
+const S = {view: 'home', addMsg: null, starting: null, me: undefined, runs: null, run: null, tab: 'findings', links: {}, privacy: 'structure', agreed: false, link: '', pending: null, health: null, help: {open: null}, samples: []};
 const SAMPLE = 'lantern:sample/';   // a run's link for one of Lantern's built-in sample apps
 const UPLOAD = 'lantern:upload/';   // a run's link for an app uploaded from the person's computer (a label, not a path)
 const ACTIVE = ['queued', 'running'];
@@ -146,6 +146,11 @@ function ago(t) {
   if (s < 60) return 'just now'; if (s < 3600) return `${Math.round(s / 60)} min ago`;
   if (s < 86400) return `${Math.round(s / 3600)} h ago`; return new Date(t).toLocaleDateString();
 }
+// "1:05" since an ISO time; the ticker below rewrites every [data-since] each second, so a check in progress always
+// shows something changing on screen, even with animations off.
+function elapsed(t) { const s = Math.max(0, Math.floor((Date.now() - Date.parse(t)) / 1000)); return isFinite(s) ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : ''; }
+const since = (t, label) => t ? `<span class="elapsed" data-since="${esc(t)}" data-label="${esc(label)}">${esc(label)} ${esc(elapsed(t))}</span>` : '';
+setInterval(() => document.querySelectorAll('[data-since]').forEach(e => { e.textContent = `${e.dataset.label} ${elapsed(e.dataset.since)}`; }), 1000);
 function lastLine(r) { const l = String(r.log_tail || '').trim().split('\n').pop(); return l || r.stage || 'Waiting for a free worker…'; }
 function sentence(sum) {
   // The app's one plain sentence per app, from the run's counts (design 3b).
@@ -298,6 +303,13 @@ function deleteMeSheet() {
 
 // ---- starting a run
 async function startRun(link, privacy, agreed) {
+  // While the start request is out, the button that started it spins (kept in S: the page redraws while runs go).
+  const busy = on => { S.starting = on ? link : null; document.querySelectorAll(link.startsWith(SAMPLE) ? `[data-sample="${CSS.escape(link.slice(SAMPLE.length))}"]` : '#add').forEach(b => { b.classList.toggle('busy', on); b.disabled = on; }); };
+  if (S.me) { busy(true); upMsg('info', 'Starting your check…'); }
+  try { return await startRun2(link, privacy, agreed); } finally { busy(false); }
+}
+const startingAttr = on => on ? ' busy" disabled data-busy="1' : '';   // closes class="…", adds disabled; only fixed text
+async function startRun2(link, privacy, agreed) {
   if (!S.me) { S.pending = {link, privacy, agreed}; return signInSheet('Sign in, and Lantern checks this link straight after.'); }
   try {
     const what = link.startsWith(SAMPLE) ? {sample: link.slice(SAMPLE.length)} : {link};
@@ -382,7 +394,7 @@ async function sendUpload(blob, name) {
 }
 function addBox() {
   const full = S.privacy === 'full';
-  return `<div class="dropzone">${icon('cloud')}<input type="text" id="link" placeholder="Paste a link, like https://github.com/you/app" value="${esc(S.link)}" autocomplete="off" spellcheck="false" inputmode="url" aria-label="Link to a public repository"><button class="btn ghost" id="upload" title="Check an app from this computer: a folder, or a .zip of it">Upload…</button><button class="btn primary" id="add">Check my app</button></div>
+  return `<div class="dropzone">${icon('cloud')}<input type="text" id="link" placeholder="Paste a link, like https://github.com/you/app" value="${esc(S.link)}" autocomplete="off" spellcheck="false" inputmode="url" aria-label="Link to a public repository"><button class="btn ghost" id="upload" title="Check an app from this computer: a folder, or a .zip of it">Upload…</button><button class="btn primary${startingAttr(S.starting && !S.starting.startsWith(SAMPLE))}" id="add">Check my app</button></div>
     <input type="file" id="pickdir" webkitdirectory multiple hidden><input type="file" id="pickzip" accept=".zip,application/zip" hidden>
     <div class="privacy" role="radiogroup" aria-label="What Lantern keeps">
       <label class="choice"><input type="radio" name="priv" value="structure" ${full ? '' : 'checked'}><span><b>Map and findings only <span class="tag priv">Private</span></b>No code is kept. The report names files and lines.</span></label>
@@ -406,7 +418,7 @@ function samplesBlock() {
   if (!xs.length) return '';
   return `<section class="samples"><div class="apps-head"><h2>Try a sample app</h2><span>Small apps with planted problems, made for learning. One click checks one.</span></div>
     <div class="sgrid">${xs.map(x => `<article class="card sample"><div class="k">${esc(x.level || 'Sample')}</div><h3>${esc(x.title)}</h3><div class="stack">${esc(x.stack || '')}</div>
-      <p>${esc(String(x.summary || '').split('. ')[0].replace(/\.$/, ''))}.</p><button class="btn" data-sample="${esc(x.id)}">${icon('play')}Check this sample</button></article>`).join('')}</div></section>`;
+      <p>${esc(String(x.summary || '').split('. ')[0].replace(/\.$/, ''))}.</p><button class="btn${startingAttr(S.starting === SAMPLE + x.id)}" data-sample="${esc(x.id)}">${icon('play')}Check this sample</button></article>`).join('')}</div></section>`;
 }
 function addControls(el) {
   const input = el.querySelector('#link');
@@ -457,7 +469,7 @@ function addControls(el) {
 function runCard(r) {
   const sum = r.summary || {}, run = ACTIVE.includes(r.status), name = repoName(r.link);
   return `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(name)}${r.shared ? ' <span class="tag shared">Shared</span>' : ''}</div><div class="path">${esc(r.host)} · ${esc(PRIV[r.privacy] || r.privacy)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</div></div>${ring(r.status === 'done' ? sum.score : null, sum.grade)}</div>
-    ${run ? `<div class="checking"><i></i>${r.status === 'queued' ? 'Waiting for a free worker…' : 'Checking… about a minute'}</div><div class="indeterminate"></div><p class="lastline">${esc(lastLine(r))}</p>`
+    ${run ? `<div class="checking"><i></i>${r.status === 'queued' ? 'Waiting for a free worker…' : 'Checking… about a minute'}<span style="flex:1"></span>${since(r.started || r.created, 'running')}</div><div class="indeterminate"></div><p class="lastline">${esc(lastLine(r))}</p>`
       : r.status === 'done' ? `<p class="sentence">${sentence(sum)}</p>`
       : note(r.status === 'blocked' ? 'warn' : 'err', esc(r.error || 'This check stopped before it finished.'))}
     <div class="actions">${r.status === 'done' ? `<button class="btn primary" data-open="${esc(r.id)}" data-tab="findings">Show me what to fix</button>` : run ? `<button class="btn" data-open="${esc(r.id)}">Watch it run</button>` : ''}
@@ -556,7 +568,7 @@ function renderProgress(el, r) {
     return `<div class="st ${cls}"><span class="dot">${cls === 'done' ? icon('check') : ''}</span><div><b>${esc(t)}</b>${esc(d)}</div></div>`;
   }).join('');
   dock(false); el.innerHTML = `${subBar(r, false)}<main class="progress"><div class="card">
-    <div class="head"><div style="flex:1;min-width:0"><span class="eyebrow">${run ? (r.status === 'queued' ? 'Waiting for a free worker' : 'Checking now') : r.status === 'blocked' ? 'Stopped by a safety rule' : 'This check stopped'}</span>
+    <div class="head"><div style="flex:1;min-width:0"><span class="eyebrow">${run ? (r.status === 'queued' ? 'Waiting for a free worker' : 'Checking now') : r.status === 'blocked' ? 'Stopped by a safety rule' : 'This check stopped'}${run ? ' ' + since(r.started || r.created, '· running for') : ''}</span>
       <h1>${esc(repoName(r.link))}</h1><p class="lede">${run ? 'This usually takes about a minute. You can leave this page; the check keeps going and appears in My runs.' : esc(r.error || 'The check did not finish.')}</p></div>${ring(null)}</div>
     ${run ? '<div class="indeterminate"></div>' : ''}
     <div class="running-steps">${steps}</div>
