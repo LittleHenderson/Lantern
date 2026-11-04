@@ -40,6 +40,11 @@ LANGS = {
     ".cjs": Language(tsj.language()),
 }
 RESOLVE_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]
+HTML_EXTS = {".html", ".htm"}   # script written inside a page (an app's own pages, Jinja/Django templates, index.html)
+# <script> blocks that hold JavaScript: no type, a JavaScript type, or a module. JSON, templates, importmaps and
+# JSX-in-the-browser (text/babel) are left alone.
+_SCRIPT_RE = re.compile(rb"<script\b([^>]*)>(.*?)</script\s*>", re.I | re.S)
+_JS_TYPES = {b"", b"module", b"text/javascript", b"application/javascript", b"text/ecmascript", b"application/ecmascript"}
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 # Globals and browser/runtime APIs: calls to these are noise in a call map.
@@ -171,6 +176,7 @@ class JSModule:
     path: Path
     lines: int
     is_test: bool
+    html: bool = False         # script taken from inside an HTML page (module name keeps the .html)
     defs: dict[str, JSDef] = field(default_factory=dict)
     imports: dict[str, tuple[str | None, str, str]] = field(default_factory=dict)  # local -> (mod, name, spec)
     exports: dict[str, str] = field(default_factory=dict)       # exported -> local
@@ -756,12 +762,34 @@ def discover(repo: Path) -> list[Path]:
             p = Path(dirpath) / fn
             if not inside_repo(p, repo):
                 continue
-            if p.suffix in LANGS and not fn.endswith((".d.ts", ".min.js", ".bundle.js")) \
+            if p.suffix.lower() in HTML_EXTS and not fn.endswith(".min.html"):
+                out.append(p)
+            elif p.suffix in LANGS and not fn.endswith((".d.ts", ".min.js", ".bundle.js")) \
                     and not fn.startswith(("vite.config", "next.config", "tailwind.config", "postcss.config",
                                            "eslint.config", "jest.config", "vitest.config", "playwright.config",
                                            "webpack.config", "babel.config", "rollup.config")):
                 out.append(p)
     return out
+
+
+def inline_script(src: bytes) -> bytes | None:
+    """The JavaScript written inside an HTML page, as one source the JS grammar can parse, with every byte at its
+    original offset (markup becomes spaces, newlines stay), so line numbers point into the HTML file itself.
+    None when the page holds no such script."""
+    out = bytearray(re.sub(rb"[^\n]", b" ", src))
+    found = False
+    for m in _SCRIPT_RE.finditer(src):
+        attrs, body = m.group(1), m.group(2)
+        if re.search(rb"\bsrc\s*=", attrs, re.I):
+            continue
+        t = re.search(rb"\btype\s*=\s*[\"']?\s*([^\"'\s>]*)", attrs, re.I)
+        if (t.group(1).strip().lower() if t else b"") not in _JS_TYPES:
+            continue
+        if not body.strip():
+            continue
+        out[m.start(2):m.end(2)] = body
+        found = True
+    return bytes(out) if found else None
 
 
 def _nearest_package(path: Path, repo: Path, cache: dict) -> dict:
@@ -916,7 +944,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     files = {}
     for p in paths:
         rel = p.relative_to(repo).as_posix()
-        files[rel] = re.sub(r"\.[cm]?[jt]sx?$", "", rel)
+        files[rel] = rel if p.suffix.lower() in HTML_EXTS else re.sub(r"\.[cm]?[jt]sx?$", "", rel)
     spec = SpecResolver(repo, files)
     parsers = {ext: Parser(lang) for ext, lang in LANGS.items()}
     mods: dict[str, JSModule] = {}
@@ -930,9 +958,15 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             continue
         if len(src) > 1_500_000:
             continue
+        html = p.suffix.lower() in HTML_EXTS
+        if html:
+            src = inline_script(src)
+            if src is None:
+                continue
         total += src.count(b"\n") + 1
-        tree = parsers[p.suffix].parse(src)
-        m = JSModule(name=files[rel], rel=rel, path=p, lines=src.count(b"\n") + 1, is_test=bool(TEST_RE.search(rel)))
+        tree = parsers[".js" if html else p.suffix].parse(src)
+        m = JSModule(name=files[rel], rel=rel, path=p, lines=src.count(b"\n") + 1, is_test=bool(TEST_RE.search(rel)),
+                     html=html)
         w = Walker(m, lambda s, _p=p: spec.resolve(s, _p))
         for c in tree.root_node.children:
             w.walk(c, "")
@@ -1030,7 +1064,9 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 tid = target_id(r.resolve_parts(m, reg["scope"], reg["handler"] or []))
             if tid and tid in g.nodes:
                 g.nodes[tid].entry = {"kind": "route", "detail": f"{reg['method']} {reg['path']}"}
-        if m.mounts_app:
+        if m.html:   # a page: what the visitor's browser runs, so its script starts in the Browser lane
+            g.nodes[nid(m.name)].entry = {"kind": "page", "detail": m.rel}
+        elif m.mounts_app:
             g.nodes[nid(m.name)].entry = {"kind": "main", "detail": f"app start ({m.rel})"}
         elif m.listens and m.route_regs:
             g.nodes[nid(m.name)].entry = {"kind": "main", "detail": f"server start ({m.rel})"}

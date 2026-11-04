@@ -350,3 +350,45 @@ def test_login_check_reads_hostile_code_in_bounded_time():
         body_auth_sign(src, 1, src.count("\n"), js, signature="def f(payload, params)")
     took = time.perf_counter() - t
     assert took < 5, f"{took:.1f}s on {len(src):,} bytes"
+
+
+# ---- script written inside HTML files (the app's own pages, Jinja/Django templates, a plain index.html) ----
+HTML_APP = {
+    "app/main.py": "from fastapi import FastAPI\napp = FastAPI()\n\n@app.get('/api/items')\ndef list_items():\n    return []\n",
+    "app/templates/index.html": """<!doctype html>
+<title>Shop</title>
+<script type="application/json" id="cfg">{"notScript": function(){}}</script>
+<script src="/static/vendor.js"></script>
+<div id="list"></div>
+<script>
+function render(items) {
+  document.getElementById('list').innerHTML = items.map(i => i.name).join(', ');
+}
+async function load() {
+  const r = await fetch('/api/items');
+  render(await r.json());
+}
+document.getElementById('list').onclick = () => load();
+load();
+</script>
+""",
+    "app/static/vendor.min.js": "x=1",
+}
+
+
+def test_script_inside_html_is_read_and_linked_to_the_backend(tmp_path):
+    _write(tmp_path, HTML_APP)
+    g = build_graph(tmp_path)
+    page, load, render = "js:app/templates/index.html", "js:app/templates/index.html::load", "js:app/templates/index.html::render"
+    assert {page, load, render} <= set(g.nodes)
+    assert g.nodes[load].file == "app/templates/index.html" and g.nodes[load].start_line == 10   # the HTML file's own line numbers
+    assert g.nodes[page].entry == {"kind": "page", "detail": "app/templates/index.html"}
+    assert g.nodes[page].lane == "browser" and g.nodes[load].lane == "frontend"
+    assert edge(g, load, render) is not None
+    assert g.meta["http_calls"][0]["src"] == load and g.meta["http_calls"][0]["path"] == "/api/items"
+    assert edge(g, load, "py:app.main.list_items").via == "http-exact"                        # the bridge
+    assert g.meta["lanes"]["browser"] == 1 and g.meta["lanes"]["frontend"] == 2
+    assert not any("notScript" in n or "vendor" in n for n in g.nodes)        # JSON blocks, src= tags and .min.js are left out
+    # the pattern rules still read only .js/.ts files (running them on pages is a separate decision: a page that
+    # builds itself with innerHTML from escaped values would light up on every line)
+    assert not any(f["rule_id"].startswith("LJ-") for f in scan(g)["findings"])

@@ -109,7 +109,9 @@ The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`
 
 * Node: `id`, `kind` (`module`|`class`|`callable`|`external`), `name`, `qualname`, `file`, `start_line`, `end_line`,
   `parent`, `signature`, `docstring`, `decorators`, `entry` (null or `{"kind": "page"|"route"|"main"|"cli"|"script"|"test",
-  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?}`), `lane` (the stack strip stop the
+  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?}`; an HTML page with script inside it is
+  a `page` entry whose `detail` is the file path, and its functions are `js:<path>.html::<name>` with the page's own
+  line numbers), `lane` (the stack strip stop the
   node lives on: `browser`|`frontend`|`server`|`data`, or null for an external that is not a data hop — see
   **Stack lanes** below).
 * Edge: `src`, `dst`, `kind` (`calls`|`may_call`|`contains`|`implements`), `confidence`
