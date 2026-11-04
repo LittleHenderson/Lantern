@@ -64,9 +64,50 @@
 .sample .btn{align-self:flex-start}
 @media (max-width:1000px){.sgrid{grid-template-columns:1fr 1fr}}
 @media (max-width:760px){.privacy{grid-template-columns:1fr}.sgrid{grid-template-columns:1fr}.acct .who .nm{display:none}.acct .who{padding:0 4px}}
+/* The 20-second intro (the landing page's, from site/intro): plays on every visit to the home page; a link to a run,
+   to Help, or ?intro=0 skips it. While it shows, the page under it does not paint or take focus. */
+#intro{position:fixed;inset:0;z-index:90;background:#0E0E10;transition:opacity .9s ease,visibility .9s}
+#intro.fading{opacity:0}#intro.hidden{opacity:0;visibility:hidden}
+#intro:not(.hidden):not(.fading) ~ *{visibility:hidden}
+#stage{position:absolute;inset:0}
+#skipzone{position:absolute;left:0;right:0;top:0;bottom:44px;z-index:2;cursor:pointer}
+#introbar{position:absolute;top:18px;right:20px;z-index:3;display:flex;gap:8px;align-items:center}
+.pillbtn{height:36px;padding:0 14px;border-radius:99px;border:1px solid rgba(255,255,255,.18);background:rgba(14,14,16,.6);color:#BEBEC3;cursor:pointer;display:inline-flex;align-items:center;gap:8px;font:500 13px var(--font);white-space:nowrap;backdrop-filter:blur(6px)}
+.pillbtn:hover{color:#F3F3F1;border-color:rgba(255,255,255,.35)}
+.pillbtn svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+#introend{position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:0 24px clamp(48px,10vh,96px);text-align:center;gap:18px;opacity:0;transition:opacity .6s ease .2s;pointer-events:none}
+#introend.on{opacity:1;pointer-events:auto}
+#introend[hidden]{display:none}
+#introend .end-tag{margin:0;font:500 clamp(17px,1.6vw,22px)/1.4 var(--font);color:#BEBEC3}
+#introend .end-ctas{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+#introend .cta{height:54px;padding:0 26px;border-radius:14px;border:0;cursor:pointer;font:600 16px var(--font);white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;background:#F3F3F1;color:#0E0E10;box-shadow:0 1px 2px rgba(0,0,0,.4),0 10px 28px -10px rgba(255,170,60,.35)}
+#introend .cta.alt{background:transparent;color:#F3F3F1;border:1px solid rgba(255,255,255,.22);box-shadow:none}
+#introend .end-fine{margin:0;font:13px var(--font);color:#8C8C92}
+@media (max-width:520px){#introend .end-ctas{flex-direction:column;align-items:stretch;width:100%;max-width:320px}#introbar{top:12px;right:12px}}
+.dropzone.hi{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 </style>
 </head>
 <body data-mode="simple">
+<div id="intro" class="" aria-label="Intro">
+  <div id="stage"></div>
+  <div id="skipzone" title="Click anywhere to skip"></div>
+  <div id="introbar">
+    <button class="pillbtn" id="soundbtn" title="Unmute (subtle tones)"><svg viewBox="0 0 20 20"><path d="M3 8v4h3l4 3V5L6 8z"/><path id="snd-on" d="M13 7.5a3.5 3.5 0 0 1 0 5M15 5a7 7 0 0 1 0 10" style="display:none"/><path id="snd-off" d="M13 8l4 4M17 8l-4 4"/></svg><span id="soundlabel">Sound off</span></button>
+    <button class="pillbtn" id="skipbtn">Skip intro</button>
+  </div>
+  <div id="introend" hidden>
+    <p class="end-tag">Build with vibes. Ship with confidence.</p>
+    <div class="end-ctas">
+      <button class="cta" id="end-start">Add your app</button>
+      <button class="cta alt" id="end-sample">Try a sample app first</button>
+    </div>
+    <p class="end-fine">Checked in a sealed box. Your copy is deleted when the check ends.</p>
+  </div>
+</div>
+<script>
+// A link to a run or to Help, or ?intro=0, goes straight to the page: hide the overlay before anything paints.
+{ const h = location.hash.replace(/^#\/?/, ''); if (h || new URLSearchParams(location.search).get('intro') === '0') { const i = document.getElementById('intro'); i.style.transition = 'none'; i.className = 'hidden'; } }
+</script>
 <div id="bg" aria-hidden="true"></div>
 <header class="top">
   <button class="brand" id="home" aria-label="Lantern home" title="My runs"><!--__APP_BRAND__--></button>
@@ -862,6 +903,83 @@ setInterval(() => {
 addEventListener('hashchange', () => { S.addMsg = null; route(); });
 addEventListener('resize', () => { const m = document.body.dataset.mode; drawViewMode(); if (document.body.dataset.mode !== m) render(); });
 (async () => { await Promise.all([loadMe(), loadSamples()]); await loadRuns(); route(); })();
+</script>
+<script src="/react.production.min.js"></script>
+<script src="/react-dom.production.min.js"></script>
+<script>
+window.OM_SCENES = [{"name":"Dark","dur":3},{"name":"Click","dur":5},{"name":"Lit","dur":5},{"name":"Ready","dur":5},{"name":"Tagline","dur":2}];
+window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
+</script>
+<script src="/intro-runtime.js"></script>
+<script src="/intro.js"></script>
+<script>
+// The intro: the landing page's 20 seconds, on every visit to the home page (Skip, a click or Escape jumps to its end
+// card). Nothing is remembered. If the scripts above did not load, the overlay hides and the page shows.
+(function () {
+  const intro = document.getElementById('intro'), end = document.getElementById('introend'), skipzone = document.getElementById('skipzone');
+  let state = intro.classList.contains('hidden') ? 'hidden' : 'playing', sound = false, root = null;
+  const control = { current: null };
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function mount() {
+    if (!window.LanternIntro || !window.ReactDOM || !window.React) return false;
+    if (!root) root = ReactDOM.createRoot(document.getElementById('stage'));
+    root.render(React.createElement(window.LanternIntro, { sound, control, onDone: showEnd }));
+    return true;
+  }
+  function resetEnd() { end.classList.remove('on'); end.hidden = true; skipzone.hidden = false; }
+  function play() {
+    resetEnd();
+    if (!mount()) { state = 'hidden'; intro.className = 'hidden'; return; }
+    state = 'playing'; intro.style.transition = ''; intro.className = '';
+    if (control.current) control.current.restart();
+  }
+  function showEnd() {
+    if (state !== 'playing') return;
+    state = 'ended'; skipzone.hidden = true; end.hidden = false;
+    requestAnimationFrame(() => { end.classList.add('on'); document.getElementById('end-start').focus({ preventScroll: true }); });
+  }
+  function skip() {
+    if (state !== 'playing') return;
+    if (control.current && control.current.seekToEnd) control.current.seekToEnd(); else showEnd();
+  }
+  function finish() {
+    if (state !== 'playing' && state !== 'ended') return;
+    state = 'fading'; intro.className = 'fading';
+    setTimeout(() => { if (state === 'fading') { state = 'hidden'; intro.className = 'hidden'; resetEnd(); } }, 950);
+  }
+  // Land on the home page's link box (with a short accent ring) or on the sample apps.
+  function land(where) {
+    if (location.hash.replace(/^#\/?/, '')) location.hash = '#/';
+    setTimeout(() => {
+      const t = where === 'samples' ? document.querySelector('.samples') : document.querySelector('.dropzone');
+      if (!t) return;
+      t.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+      const inp = document.getElementById('link');
+      if (where !== 'samples' && inp) inp.focus({ preventScroll: true });
+      t.classList.add('hi'); setTimeout(() => t.classList.remove('hi'), 1200);
+    }, 60);
+  }
+  skipzone.onclick = skip;
+  document.getElementById('skipbtn').onclick = () => { if (state === 'ended') finish(); else skip(); };
+  document.getElementById('end-start').onclick = () => { finish(); land('box'); };
+  document.getElementById('end-sample').onclick = () => { finish(); land('samples'); };
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && state === 'playing') { e.preventDefault(); skip(); }
+    else if ((e.key === 'Enter' || e.key === ' ') && state === 'ended' && !(e.target.closest && e.target.closest('#introbar, #end-sample'))) {
+      e.preventDefault(); finish(); land('box');
+    }
+  });
+  document.getElementById('soundbtn').onclick = () => {
+    sound = !sound;
+    document.getElementById('snd-on').style.display = sound ? '' : 'none';
+    document.getElementById('snd-off').style.display = sound ? 'none' : '';
+    document.getElementById('soundlabel').textContent = sound ? 'Sound on' : 'Sound off';
+    document.getElementById('soundbtn').title = sound ? 'Mute' : 'Unmute (subtle tones)';
+    if (state === 'playing') mount();
+  };
+  window.replayIntro = () => { scrollTo(0, 0); play(); };
+  if (state === 'playing') play();
+})();
 </script>
 </body>
 </html>

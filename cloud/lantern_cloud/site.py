@@ -64,7 +64,12 @@ def _template(version: str) -> str:
 def page(version: str) -> tuple[str, str]:
     """(html, nonce) for the website, with the nonce on every script tag."""
     nonce = secrets.token_urlsafe(16)
-    return _template(version).replace("<script>", f'<script nonce="{nonce}">'), nonce
+    html = _template(version).replace("<script>", f'<script nonce="{nonce}">')
+    return html.replace('<script src="/', f'<script nonce="{nonce}" src="/'), nonce
+
+
+# The intro's scripts, served from this origin so the page's nonce CSP covers them (no outside script host).
+INTRO_FILES = ("react.production.min.js", "react-dom.production.min.js", "intro-runtime.js", "intro.js")
 
 
 def asset(name: str) -> tuple[bytes, str] | None:
@@ -75,4 +80,6 @@ def asset(name: str) -> tuple[bytes, str] | None:
         return (HERE / "manifest.webmanifest").read_bytes(), "application/manifest+json"
     if name == "sw.js":
         return (HERE / "sw.js").read_bytes(), "text/javascript"
+    if name in INTRO_FILES:   # the landing page's intro (site/intro, copied here; a test keeps them equal) and React
+        return (HERE / name).read_bytes(), "text/javascript"
     return None

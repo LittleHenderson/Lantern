@@ -101,6 +101,24 @@ def test_page_and_pwa_files(env):
     assert c.get("/cloud.db").status_code == 404 and c.get("/app.html").status_code == 404
 
 
+def test_the_intro_plays_on_the_website_from_this_origin(env):
+    """The landing page's 20-second intro is on the website too (every visit to the home page): its scripts are the
+    landing page's own files and React, served from this origin under the page's nonce, never from another host."""
+    c, _, _ = env
+    for ours, theirs in (("intro-runtime.js", "runtime.js"), ("intro.js", "intro.js")):
+        assert (site.HERE / ours).read_bytes() == (ROOT / "site" / "intro" / theirs).read_bytes(), \
+            f"copy site/intro/{theirs} to cloud/lantern_cloud/site/{ours}"
+    r = c.get("/")
+    nonce = re.search(r"'nonce-([^']+)'", r.headers["content-security-policy"]).group(1)
+    srcs = re.findall(r'<script nonce="([^"]+)" src="([^"]+)"></script>', r.text)
+    assert [x for _, x in srcs] == ["/react.production.min.js", "/react-dom.production.min.js", "/intro-runtime.js", "/intro.js"]
+    assert all(n == nonce for n, _ in srcs)
+    assert '<div id="intro" class=""' in r.text and 'id="introend" hidden' in r.text   # shown from the first paint
+    for _, src in srcs:
+        a = c.get(src)
+        assert a.status_code == 200 and a.headers["content-type"].startswith("text/javascript") and len(a.content) > 1000
+
+
 # ---- sign-in ----
 def test_sign_in_through_the_gateway_puts_the_token_in_an_httponly_cookie(env):
     c, gw, _ = env
