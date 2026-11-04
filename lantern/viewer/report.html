@@ -1440,8 +1440,13 @@ function renderFindings() {
       <p class="note" style="margin:-8px 0 10px">Each finding says which part of your app it lives on; the filled dot on its card marks that part. Hover a name below to learn what each part does.</p>${laneStrip(null, new Set(), {legend: true})}
       ${sevs.map(r => `<section class="memogrp"><div class="sevhead ${r}"><i></i>${r[0].toUpperCase() + r.slice(1)}</div><div>${open.filter(f => f.rank === r).map(findingCard).join('')}</div></section>`).join('')}
       ${acc ? `<section class="memogrp"><div class="sevhead"><i></i>Accepted with a reason</div><div>${app.filter(f => f.status === 'accepted').map(findingCard).join('')}</div></section>` : ''}
-      ${tests.length ? `<details class="memogrp testgrp"><summary class="sevhead"><i></i>In test code: ${esc(tests.length)}, not counted</summary><p class="lede">Test files and fixtures. Your visitors never run them, so they do not count toward the numbers above or the grade. Keys in them are still worth replacing.</p><div>${tests.slice(0, TESTS_SHOWN).map(findingCard).join('')}</div>${tests.length > TESTS_SHOWN ? `<p class="lede">Showing ${TESTS_SHOWN} of ${esc(tests.length)}. Advanced lists them all.</p>` : ''}</details>` : ''}</div>`;
-    wireFindings(el); wireMode(el); return;
+      ${tests.length ? `<details class="memogrp testgrp"><summary class="sevhead"><i></i>In test code: ${esc(tests.length)}, not counted</summary><p class="lede">Test files and fixtures. Your visitors never run them, so they do not count toward the numbers above or the grade. Keys in them are still worth replacing.</p><div class="testcards"></div>${tests.length > TESTS_SHOWN ? `<p class="lede">Showing ${TESTS_SHOWN} of ${esc(tests.length)}. Advanced lists them all.</p>` : ''}</details>` : ''}</div>`;
+    wireFindings(el); wireMode(el);
+    // the test-code cards are drawn only when the section is opened: they can run to thousands, and a closed
+    // section should hold nothing a reader (or a keyboard) can reach
+    const tg = el.querySelector('.testgrp');
+    if (tg) tg.addEventListener('toggle', () => { const box = tg.querySelector('.testcards'); if (tg.open && box && !box.childElementCount) { box.innerHTML = tests.slice(0, TESTS_SHOWN).map(findingCard).join(''); wireFindings(box); } });
+    return;
   }
   let fs = S.fsev === 'tests' ? tests : S.fsev === 'all' ? app : app.filter(f => f.rank === S.fsev);
   if (S.freach) fs = fs.filter(f => f.reachable || f.ui_path);
