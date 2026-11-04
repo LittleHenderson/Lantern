@@ -14,6 +14,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   (`POST /v1/uploads`). The new `lantern.archive` unpacks it inside the sealed box with no network and refuses names
   that leave the folder, links, password-protected files and archives that grow past the size cap; the upload is
   deleted when its check ends. Messages under the link box no longer vanish when the page refreshes its runs.
+- Website: a check in progress always shows that it is working. The button you clicked spins while the check starts
+  ("Starting your check…"), and each running check shows a timer that counts every second ("running for 0:42") on its
+  card and its progress page. With animations turned off in Windows or macOS (reduced motion), the progress bar and dots
+  now fade in and out instead of standing still. The app (`lantern serve`) shares the bar and dot change.
 
 ## 0.10.0
 
