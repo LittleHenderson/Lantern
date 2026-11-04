@@ -174,6 +174,11 @@ async function appSmoke(url, out, image, expectText) {
       }
       await pwned('detail');
       await p.screenshot({ path: `${out}-${name}-detail.png` });
+      // every function has three lenses from the map alone, before any model writes one: open one no model explained
+      const mapLens = await p.evaluate(() => { const n = G.nodes.find(x => x.kind === 'callable' && !EXP[x.id]); if (!n) return 'none'; select(n.id, true); S.lens = 2; renderRight();
+        const el = document.querySelector('#right'); return (el.querySelector('.lens.l2') ? 'lens ' : 'nolens ') + (el.innerText.includes('Built from the map') ? 'byline' : 'nobyline'); });
+      if (mapLens !== 'none' && mapLens !== 'lens byline') errs.push(`${name}: a function no model explained has no lenses from the map (${mapLens})`);
+      await pwned('maplens');
       if (name === 'phone' && await p.$('#close')) { await p.click('#close'); await p.waitForTimeout(250); }
     }
     if (name === 'desk' && await p.$('.seg button[data-v="chart"]')) {

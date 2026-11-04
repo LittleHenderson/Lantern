@@ -196,7 +196,8 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   the request body. Missed: a check hidden behind a helper with a neutral name (`load()`), or a bare local flag
   (`ok = role == "admin"`). Both land on `add`/`check`, the safe side.
 * The report embeds source by default; `--privacy structure` omits it.
-* Explanations exist only for selected nodes (entry points + 3 levels, capped at 40 by default).
+* Model explanations exist only for selected nodes (entry points + 3 levels, capped at 40 by default); every other
+  function shows lenses the viewer builds from the map (`mapRecord` in `report.html`: facts only, byline says so).
 
 ## Conventions
 
