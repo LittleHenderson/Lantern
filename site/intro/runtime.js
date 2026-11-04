@@ -39,15 +39,19 @@
     }, [scenes]);
     const [time, setTime] = React.useState(0);
     const [playing, setPlaying] = React.useState(true);
-    const startRef = React.useRef(null), rafRef = React.useRef(0);
+    const startRef = React.useRef(null), rafRef = React.useRef(0), fromRef = React.useRef(0);   // fromRef: where the clock restarts
     const control = props.control;
     React.useEffect(() => {
-      if (control) control.current = { restart() { startRef.current = null; setTime(0); setPlaying(true); } };
-    }, [control]);
+      // seekToEnd: the clock jumps to the last 0.1 s, so the piece finishes (and calls its onDone) the normal way.
+      if (control) control.current = {
+        restart() { fromRef.current = 0; startRef.current = null; setTime(0); setPlaying(true); },
+        seekToEnd() { fromRef.current = Math.max(0, duration - 0.1); startRef.current = null; setTime(fromRef.current); setPlaying(true); },
+      };
+    }, [control, duration]);
     React.useEffect(() => {
       if (!playing) return;
       const tick = now => {
-        if (startRef.current == null) startRef.current = now - time * 1000;
+        if (startRef.current == null) startRef.current = now - fromRef.current * 1000;
         const t = (now - startRef.current) / 1000;
         if (t >= duration) { setTime(duration); setPlaying(false); return; }
         setTime(t); rafRef.current = requestAnimationFrame(tick);

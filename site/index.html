@@ -8,6 +8,8 @@
 <meta property="og:title" content="Lantern">
 <meta property="og:description" content="Build with vibes. Ship with confidence.">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preload" as="script" href="intro/runtime.js">
+<link rel="preload" as="script" href="intro/intro.js">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -48,9 +50,11 @@ header nav a:hover{background:var(--hover);color:var(--ink);text-decoration:none
 .ghost{height:34px;padding:0 12px;border-radius:9px;border:1px solid var(--line-2);background:transparent;color:var(--ink-2);cursor:pointer;font:500 13px var(--font);white-space:nowrap}
 .ghost:hover{background:var(--hover);color:var(--ink)}
 @media (max-width:640px){header nav a.hide{display:none}}
+/* phones: the header fits 390 px (nothing wider than the screen, so the page and the intro's end card are not pushed sideways) */
+@media (max-width:440px){header{gap:6px;padding:0 16px}header nav{gap:0}header nav a{padding:7px 7px}header .name{font-size:17px}#replay{padding:0 10px;font-size:13px}}
 
 main{flex:1;display:flex;flex-direction:column;align-items:center;text-align:center;padding:clamp(72px,14vh,160px) 24px 96px;position:relative}
-.halo{position:absolute;left:50%;top:-240px;width:900px;height:520px;transform:translateX(-50%);background:radial-gradient(closest-side,var(--glow),transparent);pointer-events:none}
+.halo{position:absolute;left:50%;top:-240px;width:min(900px,100%);height:520px;transform:translateX(-50%);background:radial-gradient(closest-side,var(--glow),transparent);pointer-events:none}
 h1{position:relative;margin:0;max-width:1000px;font:500 clamp(28px,3.6vw,46px)/1.3 var(--font);letter-spacing:-.02em;color:var(--ink);text-wrap:pretty}
 .sub{position:relative;margin:18px 0 0;font:500 clamp(17px,1.6vw,22px)/1.4 var(--font);color:var(--muted)}
 .cta{position:relative;margin-top:40px;height:54px;padding:0 26px;border-radius:14px;border:0;background:var(--ink);color:var(--bg);cursor:pointer;font:600 16px var(--font);white-space:nowrap;box-shadow:0 1px 2px rgba(16,16,20,.08),0 10px 28px -10px rgba(16,16,20,.35);transition:transform .15s}
@@ -97,11 +101,25 @@ footer{padding:28px clamp(20px,5vw,64px);border-top:1px solid var(--line);displa
 footer .sp{flex:1}
 footer a{color:var(--ink-2)}
 
-/* Intro overlay: plays once, click anywhere to skip */
+/* Intro overlay: plays on every visit to / (not on deep links or ?intro=0); skip goes to the end card */
 #intro{position:fixed;inset:0;z-index:40;background:#0E0E10;transition:opacity .9s ease,visibility .9s}
 #intro.fading{opacity:0}#intro.hidden{opacity:0;visibility:hidden}
 #stage{position:absolute;inset:0}
 #skipzone{position:absolute;left:0;right:0;top:0;bottom:44px;z-index:2;cursor:pointer}
+/* the page under the overlay does not paint or take focus until the intro is done (it shows again as the overlay fades) */
+#intro:not(.hidden):not(.fading) ~ .page{visibility:hidden}
+#introend{position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:0 24px clamp(48px,10vh,96px);text-align:center;gap:18px;opacity:0;transition:opacity .6s ease .2s;pointer-events:none}
+#introend.on{opacity:1;pointer-events:auto}
+#introend[hidden]{display:none}
+#introend .end-tag{margin:0;font:500 clamp(17px,1.6vw,22px)/1.4 var(--font);color:#BEBEC3}
+#introend .end-ctas{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+#introend .cta{margin:0;background:#F3F3F1;color:#0E0E10;box-shadow:0 1px 2px rgba(0,0,0,.4),0 10px 28px -10px rgba(255,170,60,.35)}
+#introend .cta.alt{background:transparent;color:#F3F3F1;border:1px solid rgba(255,255,255,.22);display:inline-flex;align-items:center}
+#introend .end-fine{margin:0;font:13px var(--font);color:#8C8C92}
+@media (max-width:520px){#introend .end-ctas{flex-direction:column;align-items:stretch;width:100%;max-width:320px}#introend .cta{justify-content:center}}
+#get .card.dest{scroll-margin-top:24px}
+.card.hi{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+#getapp:focus{outline:none}   /* focused only to move the keyboard there; the ring above shows where */
 #introbar{position:absolute;top:18px;right:20px;z-index:3;display:flex;gap:8px;align-items:center}
 .pillbtn{height:36px;padding:0 14px;border-radius:99px;border:1px solid rgba(255,255,255,.18);background:rgba(14,14,16,.6);color:#BEBEC3;cursor:pointer;display:inline-flex;align-items:center;gap:8px;font:500 13px var(--font);white-space:nowrap;backdrop-filter:blur(6px)}
 .pillbtn:hover{color:#F3F3F1;border-color:rgba(255,255,255,.35)}
@@ -111,14 +129,26 @@ footer a{color:var(--ink-2)}
 <body>
 <div id="bg" aria-hidden="true"></div>
 
-<div id="intro" class="hidden" aria-label="Intro">
+<div id="intro" class="" aria-label="Intro">
   <div id="stage"></div>
   <div id="skipzone" title="Click anywhere to skip"></div>
   <div id="introbar">
     <button class="pillbtn" id="soundbtn" title="Unmute (subtle tones)"><svg viewBox="0 0 20 20"><path d="M3 8v4h3l4 3V5L6 8z"/><path id="snd-on" d="M13 7.5a3.5 3.5 0 0 1 0 5M15 5a7 7 0 0 1 0 10" style="display:none"/><path id="snd-off" d="M13 8l4 4M17 8l-4 4"/></svg><span id="soundlabel">Sound off</span></button>
     <button class="pillbtn" id="skipbtn">Skip intro</button>
   </div>
+  <div id="introend" hidden>
+    <p class="end-tag">Build with vibes. Ship with confidence.</p>
+    <div class="end-ctas">
+      <button class="cta" id="end-start">Add your app</button>
+      <a class="cta alt" id="end-demo" href="demo/report.html">See a finished report first</a>
+    </div>
+    <p class="end-fine">Runs on your computer. Your code never leaves it.</p>
+  </div>
 </div>
+<script>
+// A deep link (/#get, /#privacy…) or ?intro=0 goes straight to the page: hide the overlay before anything paints.
+if (location.hash || new URLSearchParams(location.search).get('intro') === '0') { const i = document.getElementById('intro'); i.style.transition = 'none'; i.className = 'hidden'; }
+</script>
 
 <div class="page">
 <header>
@@ -142,7 +172,7 @@ footer a{color:var(--ink-2)}
   <h1>Ship your vibe-coded app like a senior engineer built it.</h1>
   <p class="sub">Build with vibes. Ship with confidence.</p>
   <div class="ctas">
-    <button class="cta" id="gosteps">See how it works</button>
+    <button class="cta" id="gosteps">Add your app</button>
     <a class="cta alt" href="demo/report.html" style="display:inline-flex;align-items:center">Open a live example</a>
   </div>
   <p class="tiny">Runs on your computer. Your code never leaves it. <a href="#privacy">How to keep it that way →</a></p>
@@ -163,7 +193,7 @@ footer a{color:var(--ink-2)}
   <div class="in">
     <div class="eyebrow">Get Lantern</div>
     <div class="get">
-      <div class="card">
+      <div class="card dest" id="getapp" tabindex="-1">
         <h3>Open the app on your computer</h3>
         <p>One install, then <code style="font-family:var(--mono);font-size:13px">lantern serve</code> opens Lantern in your browser. Add a folder or a GitHub link and press Analyze.</p>
         <pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.10.0"
@@ -239,8 +269,8 @@ footer a{color:var(--ink-2)}
 </footer>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" integrity="sha512-QVs8Lo43F9lSuBykadDb0oSXDL/BbZ588urWVCRwSIoewQv/Ewg1f84mK3U790bZ0FfhFa1YSQUmIhG+pIRKeg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" integrity="sha512-6a1107rTlA4gYpgHAqbwLAtxmWipBdJFcq8y5S/aTge3Bp+VAklABm2LO+Kg51vOWR9JMZq1Ovjl5tpluNpTeQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
 window.OM_SCENES = [{"name":"Dark","dur":3},{"name":"Click","dur":5},{"name":"Lit","dur":5},{"name":"Ready","dur":5},{"name":"Tagline","dur":2}];
 window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
@@ -260,34 +290,61 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
       <g stroke="var(--accent)" stroke-opacity=".3" stroke-width="1" fill="var(--accent)" opacity=".7"><line x1="300" y1="640" x2="400" y2="690"/><line x1="400" y1="690" x2="480" y2="630"/><line x1="400" y1="690" x2="430" y2="770"/><circle cx="300" cy="640" r="3.5" fill-opacity=".7"/><circle cx="400" cy="690" r="5" fill-opacity=".9"/><circle cx="480" cy="630" r="3" fill-opacity=".6"/><circle cx="430" cy="770" r="3" fill-opacity=".6"/></g>
       <g stroke="var(--ink)" stroke-opacity=".25" stroke-width="1" fill="var(--ink)" opacity=".7"><line x1="880" y1="620" x2="980" y2="560"/><line x1="980" y1="560" x2="1090" y2="610"/><line x1="980" y1="560" x2="1000" y2="470"/><circle cx="880" cy="620" r="3" fill-opacity=".5"/><circle cx="980" cy="560" r="4.5" fill-opacity=".7"/><circle cx="1090" cy="610" r="3" fill-opacity=".5"/><circle cx="1000" cy="470" r="2.5" fill-opacity=".5"/></g>`);
 
-  // Intro: 20 s, plays on a visitor's first three visits (skip anywhere, Replay in the header any time), tones muted by default.
-  const intro = document.getElementById('intro');
+  // Intro: 20 s, plays on every visit to / (Skip jumps to its end card; Replay in the header), tones muted by default.
+  // A deep link or ?intro=0 skips it (the overlay was hidden by the script right after it). Nothing is remembered.
+  const intro = document.getElementById('intro'), end = document.getElementById('introend');
+  const skipzone = document.getElementById('skipzone');
   let state = 'hidden', sound = false, root = null;
-  const control = React.createRef();
+  const control = { current: null };   // not React.createRef(): when the React scripts are blocked, the page must still open
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const INTRO_PLAYS = 3;
-  let visits = 0; try { visits = parseInt(localStorage.getItem('lantern-intro-visits') || (localStorage.getItem('lantern-intro-seen') === '1' ? '1' : '0'), 10) || 0; } catch (e) {}
-  const seen = visits >= INTRO_PLAYS;
-  try { localStorage.setItem('lantern-intro-visits', String(visits + 1)); } catch (e) {}
+  const direct = !!location.hash || new URLSearchParams(location.search).get('intro') === '0';
   function mount() {
     if (!window.LanternIntro || !window.ReactDOM) return false;
     if (!root) root = ReactDOM.createRoot(document.getElementById('stage'));
-    root.render(React.createElement(window.LanternIntro, { sound, control, onDone: finish }));
+    root.render(React.createElement(window.LanternIntro, { sound, control, onDone: showEnd }));
     return true;
   }
+  function resetEnd() { end.classList.remove('on'); end.hidden = true; skipzone.hidden = false; }
   function play() {
-    if (!mount()) return;
-    state = 'playing'; intro.className = '';
+    resetEnd();
+    if (!mount()) { state = 'hidden'; intro.className = 'hidden'; return; }   // the scripts did not load: show the page
+    state = 'playing'; intro.style.transition = ''; intro.className = '';
     if (control.current) control.current.restart();
   }
-  function finish() {
+  // The story ended (or was skipped to its end): the end card stays until the visitor picks where to go.
+  function showEnd() {
     if (state !== 'playing') return;
-    state = 'fading'; intro.className = 'fading';
-    setTimeout(() => { if (state === 'fading') { state = 'hidden'; intro.className = 'hidden'; } }, 950);
+    state = 'ended'; skipzone.hidden = true; end.hidden = false;
+    requestAnimationFrame(() => { end.classList.add('on'); document.getElementById('end-start').focus({ preventScroll: true }); });
   }
-  document.getElementById('skipzone').onclick = finish;
-  document.getElementById('skipbtn').onclick = finish;
+  function skip() {
+    if (state !== 'playing') return;
+    if (control.current && control.current.seekToEnd) control.current.seekToEnd(); else showEnd();
+  }
+  function finish() {
+    if (state !== 'playing' && state !== 'ended') return;
+    state = 'fading'; intro.className = 'fading';
+    setTimeout(() => { if (state === 'fading') { state = 'hidden'; intro.className = 'hidden'; resetEnd(); } }, 950);
+  }
+  // "Add your app": land on the install card with a short accent ring.
+  function toGet() {
+    const card = document.getElementById('getapp');
+    window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - 24, behavior: reduced ? 'auto' : 'smooth' });
+    card.focus({ preventScroll: true });
+    card.classList.add('hi');
+    setTimeout(() => card.classList.remove('hi'), 1200);
+  }
+  skipzone.onclick = skip;
+  document.getElementById('skipbtn').onclick = () => { if (state === 'ended') finish(); else skip(); };
+  document.getElementById('end-start').onclick = () => { finish(); toGet(); };
+  document.getElementById('gosteps').onclick = toGet;
   document.getElementById('replay').onclick = () => { window.scrollTo({top: 0}); play(); };
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && state === 'playing') { e.preventDefault(); skip(); }
+    else if ((e.key === 'Enter' || e.key === ' ') && state === 'ended' && !(e.target.closest && e.target.closest('#introbar, #end-demo'))) {
+      e.preventDefault(); finish(); toGet();
+    }
+  });
   document.getElementById('soundbtn').onclick = () => {
     sound = !sound;
     document.getElementById('snd-on').style.display = sound ? '' : 'none';
@@ -296,12 +353,8 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
     document.getElementById('soundbtn').title = sound ? 'Mute' : 'Unmute (subtle tones)';
     if (state === 'playing') mount();
   };
-  if (!seen && !reduced) play();
-
-  document.getElementById('gosteps').onclick = () => {
-    const el = document.getElementById('how');
-    window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 24, behavior: 'smooth' });
-  };
+  // Reduced motion: the intro has no still version, so it plays as it is (the directive's fallback); Skip is one key away.
+  if (!direct) play(); else { state = 'hidden'; intro.className = 'hidden'; }
 })();
 </script>
 </body>
