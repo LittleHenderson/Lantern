@@ -5,7 +5,7 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
-- Cloud: 50 runs per person per day (was 10), the owner's choice of 2026-11-04; `docs/deploy.md` says how to change it with one command.
+- Cloud: 50 runs per person per day (was 10) and 1000 for everyone together (was 300), the owner's choices of 2026-11-04; `docs/deploy.md` says how to change it with one command.
 - Every function has its three lenses from the moment a check ends. Where no model has explained a function yet, the
   Technical, Everyday and Mapped lenses are built from the map alone (file, lines, signature, entry point, calls, HTTP
   links, findings), with a byline that says no model wrote them and every phrase anchored to a real symbol. The
