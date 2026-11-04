@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Android and Java libraries are checked for known security holes. Lantern reads the libraries written in
+  `build.gradle`, `build.gradle.kts`, `gradle/libs.versions.toml` and `pom.xml` (test libraries left out, `$version`
+  variables and Maven properties filled in) and asks the public OSV database about each exact version. Each finding
+  points at the line the library is written on and names the version that fixes it. `--offline` skips it, and the
+  Evidence Report says that libraries pulled in by other libraries were not checked.
 - Android apps are read as phone apps. Lantern finds the app's screens and the parts other apps can start from
   `AndroidManifest.xml`, so findings get a real path ("a link opens NoteActivity and the id it carries reaches a
   database query" is critical), and the map says Screen and App instead of Browser and Server. 26 new `LM-*` checks

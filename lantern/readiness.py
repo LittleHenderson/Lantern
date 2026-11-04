@@ -13,7 +13,7 @@ import tomllib
 from collections import Counter
 from pathlib import Path
 
-from .depaudit import NOTHING_TO_CHECK
+from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
 from .graph import Graph
 from .protections import advise as advise_protections
 from .python_frontend import SKIP_DIRS, TEST_FILE_RE, inside_repo
@@ -372,25 +372,25 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
                           f"not expected: a {shape} usually leaves exact versions to whoever installs it"
                           if has_py else "no dependency manifest"))
     tools = {t.get("tool"): t for t in (sec or {}).get("tools", [])}
-    audited = [n for n in ("pip-audit", "npm-audit") if (tools.get(n) or {}).get("status") == "ok"]
-    unchecked = [f"{n} ({str(tools[n].get('status', ''))[:90]})" for n in ("pip-audit", "npm-audit")
+    audited = [n for n in AUDIT_TOOLS if (tools.get(n) or {}).get("status") == "ok"]
+    unchecked = [f"{n} ({str(tools[n].get('status', ''))[:90]})" for n in AUDIT_TOOLS
                  if n in tools and n not in audited and tools[n].get("status") not in NOTHING_TO_CHECK]
     vuln = [f for f in (sec or {}).get("findings", []) if f["category"] == "dependency" and f.get("status") != "accepted"]
     if vuln:
         out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "fail",
                           f"{len(vuln)} known vulnerabilit{'ies' if len(vuln) != 1 else 'y'} in "
                           f"{len({f.get('package') for f in vuln})} package(s)",
-                          "Upgrade to the fixed versions listed in Findings.", how="pip-audit, npm audit"))
+                          "Upgrade to the fixed versions listed in Findings.", how="pip-audit, npm audit, OSV (Gradle/Maven)"))
     elif audited:
         out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "partial" if unchecked else "pass",
                           f"{' and '.join(audited)} found none" + (f"; not checked: {'; '.join(unchecked)}"
                                                                    if unchecked else ""),
                           "" if not unchecked else "Commit a lock file so exact versions can be checked.",
-                          how="pip-audit, npm audit"))
+                          how="pip-audit, npm audit, OSV (Gradle/Maven)"))
     else:
         out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "skip",
                           "not checked: " + ("; ".join(unchecked) if unchecked else "no dependency files"),
-                          how="pip-audit, npm audit"))
+                          how="pip-audit, npm audit, OSV (Gradle/Maven)"))
     loose = []
     for pj in js_manifests:
         try:
