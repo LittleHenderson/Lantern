@@ -8,7 +8,7 @@ primary_region = 'sjc'
 [env]
   LANTERN_GATEWAY_URL = 'https://lantern-gateway.fly.dev/v1'
   LANTERN_PUBLIC_URL = 'https://lantern-cloud.fly.dev'
-  LANTERN_CLOUD_RUNS_PER_DAY = '10'
+  LANTERN_CLOUD_RUNS_PER_DAY = '50'
   LANTERN_CLOUD_CONCURRENT_JOBS = '2'
   LANTERN_CLONE_MAX_MB = '200'
   LANTERN_CLOUD_JOB_SECONDS = '600'
