@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.4.pdf`.
-This repo is Phase 0 plus the full-stack layer: Python, TypeScript/JavaScript, Go, Rust and Java engines, the API bridge
+This repo is Phase 0 plus the full-stack layer: Python, TypeScript/JavaScript, Go, Rust, Java and Kotlin engines, the API bridge
 between them, scanners, the Three-Lens explainer, and a static HTML report.
 
 **Audience:** AI-assisted ("vibe") coders whose apps are usually full stack, often TypeScript. The
@@ -44,13 +44,14 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 
 | File | Role |
 |---|---|
-| `lantern/engine.py` | **Entry point for analysis**: Python frontend → JS/TS frontend → Go frontend → Rust frontend → Java frontend → packs → bridge. Use `engine.build_graph`, not the per-language builders. |
+| `lantern/engine.py` | **Entry point for analysis**: Python frontend → JS/TS frontend → Go frontend → Rust frontend → Java frontend → Kotlin frontend → packs → Android entries → bridge. Use `engine.build_graph`, not the per-language builders. |
 | `lantern/graph.py` | Unified Code Graph: `Node`, `Edge` (`via`, `detail`), confidence ranks, JSON round-trip, `stats()` |
 | `lantern/python_frontend.py` | Python: discover → tree-sitter parse (`_visit_body`, `CallSite`s) → `Resolver` |
 | `lantern/js_frontend.py` | TS/JS: `Walker` (defs, imports/exports, refs, HTTP calls, route/page registrations) → `SpecResolver` (relative, tsconfig paths, `@/`) → `JSResolver` (barrels, classes, `this`) → entries |
 | `lantern/go_frontend.py` | Go: packages from `go.mod`, functions/methods/structs/interfaces, calls resolved by `name`, `import`, `receiver-type` (written types and repo function results; types stored by import path so every file reads them alike), `embedded`, `interface` (one `possible` edge per repo type implementing the whole interface), `callback`; routes for net/http (Go 1.22 `"GET /p"` patterns), gin/echo/fiber/chi/gorilla with `Group`/`Route`/`PathPrefix().Subrouter()` prefixes; outgoing `http.Get`/`NewRequest`/client calls to `meta["http_calls"]`. Untyped receivers go to `graph.unresolved`. Sample: `tests/fixtures/goapp` (Go API + React, planted SQL/shell concatenation, unprotected DELETE) |
 | `lantern/rust_frontend.py` | Rust: crates from every `Cargo.toml` `[package]` (workspaces), modules from file paths and inline `mod`, functions, `impl` blocks, traits; calls resolved by `name`, `use` (`crate::`/`self::`/`super::`/child modules/globs), `assoc` (`Type::f()`), `receiver-type` (params incl. `State(state): State<Arc<T>>` patterns, fields, `let`, return types; types canonicalised to `[crate, mod…, Name]`), `trait` (`dyn`/`impl`/`T: Trait` → one `possible` edge per `impl Trait for X`), `callback`; routes for axum (`.route("/p", get(h).post(h2))`, `.nest("/api", f())` and inline nests), actix (`#[get("/p")]`, `web::scope`, `.service`, `.route(p, web::get().to(h))`), rocket (`#[get]`, `.mount("/api", routes![…])`); outgoing `reqwest`/`ureq`/client calls with `format!` and consts folded. Untyped receivers go to `graph.unresolved`; chains on foreign calls are not counted. Sample: `tests/fixtures/rustapp` (axum + React, planted `format!` SQL/shell, unprotected DELETE) |
 | `lantern/java_frontend.py` | Java: packages, classes (nested as `Outer.Inner`), interfaces, enums, records, methods (overloads share one node; constructor is `Class.Class`); calls resolved by `name`, `inherited` (`extends` chain, interface default methods), `static` (`Class.m()`), `receiver-type` (fields incl. `= new T()`, params, locals, try-resources, `var` from `new`/return types), `interface` (one `possible` edge per class that implements/extends the interface or abstract class), `constructor`, `callback` (`Class::m`); routes for Spring (`@RequestMapping` class prefix, `@GetMapping`…, `@RequestMapping(method=…)`), JAX-RS (`@Path` + `@GET`…), Micronaut, Javalin/Spark (`app.get("/p", Class::h)`); outgoing `RestTemplate`, `WebClient.get().uri()`, `HttpRequest.newBuilder().uri()`, OkHttp `Request.Builder().url()`. Imports: explicit, wildcard (repo packages), static. Sample: `tests/fixtures/javaapp` (Spring Boot + React, planted SQL/shell concatenation, unprotected DELETE) |
+| `lantern/kotlin_frontend.py` | Kotlin (2026-11-05, tree-sitter-kotlin): packages, classes (nested `Outer.Inner`), interfaces, `object`s, companions (their functions belong to the class), top-level functions, overloads share one node; calls resolved by `name` (own class, `extends` chain, then package top level), `import`, `this`, `assoc` (`Obj.f()`, `Class.companionFn()`), `receiver-type` (params, constructor `val`s, properties, locals typed by `: T`, `T()` or a repo function's written return type), `interface` (one `possible` edge per implementing class), `constructor` (`init`), `callback` (`::f`); library calls `ext:<Type>.<fun>`; unknown receivers counted in `graph.unresolved`. Entries: `fun main`, `@Test`/test folders, Spring routes, Jetpack Compose screens (`@Composable fun …Screen` → `page`, detail `Home screen (Compose) · HomeScreen`); Android entries come from `android.add_entries` exactly as for Java. `LV-*` Java patterns also run on `.kt` (string templates `"…$x"` count as building SQL/commands), and `security._blank_string` keeps template names so input is followed into them. Sample: `tests/fixtures/kotlinapp` (deep link → `rawQuery` built with `+`, critical). Tests: `tests/test_kotlin.py` |
 | `lantern/sandbox.py` + `lantern/_jail.py` | Test sandbox for "Watch my tests run": `detect` (pytest, Jest, Vitest, Mocha, npm/pnpm/yarn test, go test, cargo test, Maven, Gradle), `check_command` (test runners only), backends Docker (Linux + daemon; images pinned by digest in `IMAGES`, project ro at `/app`, `--network none`, 2 CPU/2 GB, uid 65534, host Python packages mounted ro) or restricted subprocess (read-only temp copy, env allow-list, `_jail`: rlimits, Landlock writes-only-in-temp + no TCP, uid 65534 if root; Python audit hook `SITECUSTOMIZE`; Windows Job Object), 10-min wall clock killing the tree; `blocked` reasons from `LANTERN-SANDBOX-BLOCKED:` markers. Python calls are traced and merged; other languages run untraced ("Tests run; your map upgrades for Python only for now"). `LANTERN_SANDBOX=subprocess\|docker` forces a backend. Tests: `tests/test_sandbox.py` |
 | `lantern/lanes.py` | Stack lanes for the stack strip (design turn 11): `browser` → `frontend` → `server` → `data`, assigned from node id, file path and entry kind only (`assign(g)` sets `node.lane`, `meta["lanes"]`; `security.scan` sets `hot_lane` and `lanes` on each finding; `lane_for_file` for findings with no node). The viewer draws the strip on Finding/Fix/function panels, the Lanes view (Simple default on Paths), the four-dot glyph on list rows, hover definitions; it validates every lane value against the four stops. Rules and words: `docs/api.md` “Stack lanes” |
 | `lantern/bridge.py` | Links `g.meta["http_calls"]` to route entry points by method + path segments; exact / suffix / unknown-prefix / ambiguous |
@@ -89,6 +90,7 @@ Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.na
 Go `go:<import path>::<Func>` / `go:<import path>::<Type>.<Method>` (file module: `go:<path>.go`);
 Rust `rs:<crate>::<mod path>::<fn>` / `rs:<crate>::<mod path>::<Type>::<method>` (file module: `rs:<path>.rs`);
 Java `jv:<package>.<Class>.<method>` (class: `jv:<package>.<Class>`, file module: `jv:<path>.java`);
+Kotlin `kt:<package>.<Class>.<fun>` / `kt:<package>.<fun>` (class: `kt:<package>.<Class>`, file module: `kt:<path>.kt`);
 external `ext:<pkg.member>` or `ext:HTTP <METHOD> <path-or-host>`.
 
 ## How Python resolution works
@@ -156,7 +158,7 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
    precision measurement Python has.
 5. **Cloud mode + local agent pairing** (spec sections 5 and 12): accounts, GitHub App, remote "analyze now",
    WebGL network view (Sigma.js) for very large graphs. The local app (`lantern serve`) is the base.
-6. **Kotlin, C#, PHP, Ruby, then C++** frontends (spec 6.3), reusing the same graph, bridge, and viewer, the way
+6. **Swift, Dart, C#, PHP, Ruby, then C++** frontends (Kotlin added 2026-11-05) (spec 6.3), reusing the same graph, bridge, and viewer, the way
    `go_frontend.py`, `rust_frontend.py` and `java_frontend.py` do (all added 2026-11-01; their edge confidences are
    provisional until a benchmark per language exists).
 7. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
@@ -170,8 +172,10 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   `routes!` are opaque (a route declared inside a macro is missed); closures stored in variables, trait objects
   built through generic constructors, and associated types are unresolved; `impl Trait for X` matching is by trait
   name, not path. Confidence levels are not yet backed by a Rust benchmark.
-* Android: Kotlin code is checked by the `LM-*` line rules but not mapped (no Kotlin reader yet), so Kotlin findings
-  have no function or reachability; the Gradle/Maven audit checks only the libraries written in the build files, not
+* Kotlin: no runtime tracing; extension functions, scope-function receivers (`with(x) { f() }`, `apply`), and calls
+  on a lambda's `it` are unresolved; Ktor `routing { get("/p") { } }` routes are not entry points yet (Spring's are);
+  types are matched by simple name. Confidence levels are not yet backed by a Kotlin benchmark.
+* Android: the Gradle/Maven audit checks only the libraries written in the build files, not
   the ones they pull in;
   only the main manifest is read (flavors and library manifests are not merged); `LM-LOG-SENSITIVE` and
   `LM-UNUSED-PERMISSION` read names, not meaning. iOS, Flutter and React Native native config are not read yet.
@@ -185,8 +189,9 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 * Dependency audits need exact versions: Python ranges without a lock file, pnpm/yarn/bun lock files, and Gradle
   versions with `+`, ranges or unresolved variables are reported as not checked.
 * "Uses input" follows assignments inside one function, in order (parameters, request data, and variables set
-  from them), not across functions, branches, or loops. Parameters are read from the signature per language (Java/Kotlin/C#:
-  the last identifier of each `Type name`; Go: without the receiver; Rust: the pattern before `:`, unwrapping
+  from them), not across functions, branches, or loops. Parameters are read from the signature per language (Java/C#:
+  the last identifier of each `Type name`; Kotlin: the name before each `:`, and `$x`/`${x}` string templates count
+  as using `x`; Go: without the receiver; Rust: the pattern before `:`, unwrapping
   `State(x)`/`Path(x)`/`Json(x)`); request data patterns cover Flask/Django/Express/Next, Go's net/http, gin, echo,
   fiber and chi, and Java servlets. A value that arrives through another function's return
   value is missed; a parameter that is always a constant is over-ranked. A plain `x = <safe value>` at the same

@@ -37,6 +37,7 @@ lines and the server streams them to the browser.
 | `graph.py` | Node/Edge dataclasses, confidence ranks, JSON round-trip, stats | `Graph.add_edge` keeps the strongest confidence |
 | `python_frontend.py` | Python discovery, parsing, name and type resolution | `discover`, `inside_repo`, `build_graph`, `Resolver` |
 | `js_frontend.py` | TS/JS discovery, ES module resolution, React/Next/Express entry points | `add_js`, `Walker`, `SpecResolver`, `JSResolver` |
+| `java_frontend.py`, `kotlin_frontend.py` | Java and Kotlin parsing, packages/classes/methods, call resolution (`name`, `import`, `receiver-type`, `interface`, …), Spring routes | `add_java`, `add_kotlin`, `Linker` |
 | `bridge.py` | Match `g.meta["http_calls"]` to route entries | `link`, `match` |
 | `trace.py`, `tracehook.py` | Runtime tracing (Python only), merge into graph | `run_trace`, `merge_trace` |
 | `security.py` | Scanner orchestration, node pinning, reachability, ranking, accepted risks | `scan`, `reachability`, `rank`, `load_accepted` |

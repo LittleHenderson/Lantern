@@ -5,6 +5,13 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Kotlin is read and mapped, not just checked line by line. Kotlin classes, `object`s, companions and functions are on
+  the map with their calls (to their own class, objects, companions, typed properties and locals, interfaces, `::f`
+  references), so an Android app written in Kotlin gets the same paths as one in Java: a link that opens a screen and
+  whose id reaches a database query is critical. Screens drawn with Jetpack Compose (`@Composable fun HomeScreen`) are screens on the map. Spring routes in Kotlin are
+  entry points, Java's server checks (SQL and
+  shell commands built from variables, weak hashes, trust-all certificates) run on Kotlin too, and a value put into a
+  Kotlin string (`"… '$id'"`) counts as used. New sample: `tests/fixtures/kotlinapp`.
 - Android and Java libraries are checked for known security holes. Lantern reads the libraries written in
   `build.gradle`, `build.gradle.kts`, `gradle/libs.versions.toml` and `pom.xml` (test libraries left out, `$version`
   variables and Maven properties filled in) and asks the public OSV database about each exact version. Each finding
