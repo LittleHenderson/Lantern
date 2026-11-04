@@ -31,7 +31,12 @@ DATA_RE = re.compile(
     r"openai|anthropic|resend|sendgrid|twilio|mailgun|supabase|firebase|firestore|prisma|@prisma|mongoose|"
     r"pg|mysql2|knex|drizzle|typeorm|sequelize|kysely|ioredis|fs|fs/promises|node:fs|child_process|"
     r"node:child_process|axios|\$?fetch|ky|got|@aws-sdk|aws-sdk|@google-cloud|@supabase|@upstash|"
-    r"@vercel/(kv|postgres|blob)|@planetscale|@neondatabase|@libsql|better-sqlite3|level|nodemailer)"
+    r"@vercel/(kv|postgres|blob)|@planetscale|@neondatabase|@libsql|better-sqlite3|level|nodemailer|"
+    # Android (Java/Kotlin externals are named Type.method)
+    r"FirebaseDatabase|DatabaseReference|FirebaseFirestore|CollectionReference|DocumentReference|FirebaseStorage|"
+    r"StorageReference|FirebaseAuth|FirebaseMessaging|SharedPreferences|SQLiteDatabase|RoomDatabase|SmsManager|"
+    r"OkHttpClient|Retrofit|RequestQueue|Volley|HttpURLConnection|URL\.openConnection|FileOutputStream|"
+    r"MediaRecorder|LocationManager|FusedLocationProviderClient|ContentResolver|TelephonyManager|WorkManager)"
     r"(\.|\(|$|/)"
 )
 
@@ -59,13 +64,19 @@ def _server_modules(g: Graph) -> set[str]:
     return out
 
 
-def lane_of(n: Node, server_modules: set[str]) -> str | None:
-    """The lane for one node, given the set of server-side JS modules. ``None`` = not part of the stack picture."""
+def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> str | None:
+    """The lane for one node, given the set of server-side JS modules. ``None`` = not part of the stack picture.
+    In an Android app (``android`` = ``graph.meta["android"]``) the app's own code runs on the phone: screens are
+    ``browser`` (the viewer calls it "Screen") and the rest ``frontend`` ("App")."""
     if n.id.startswith("ext:HTTP "):
         target = n.id[len("ext:HTTP "):].split(" ", 1)[-1]
         return "server" if target.startswith("/") else "data"
     if n.id.startswith("ext:"):
         return "data" if DATA_RE.match(n.id[4:]) else None
+    if android and _in_roots(n.file, android):
+        e = n.entry or {}
+        screen = e.get("kind") == "page" or (e.get("kind") == "route" and " screen " in str(e.get("detail", "")))
+        return "browser" if screen else "frontend"
     if not n.id.startswith("js:"):
         return "server"
     if _module_id(n) in server_modules:
@@ -76,12 +87,17 @@ def lane_of(n: Node, server_modules: set[str]) -> str | None:
     return "frontend"
 
 
+def _in_roots(file: str | None, android: dict) -> bool:
+    return bool(file) and any(file.startswith(r) for r in android.get("roots") or [])
+
+
 def assign(g: Graph) -> dict:
     """Set ``node.lane`` on every node. Returns counts per lane for ``graph.meta``."""
     servers = _server_modules(g)
+    android = g.meta.get("android")
     counts = {k: 0 for k in LANES}
     for n in g.nodes.values():
-        n.lane = lane_of(n, servers)
+        n.lane = lane_of(n, servers, android)
         if n.lane:
             counts[n.lane] += 1
     g.meta["lanes"] = counts
@@ -102,10 +118,12 @@ def lanes_for_path(g: Graph, ids: list[str] | None, hot: str | None = None, extr
     return [l for l in LANES if l in seen]
 
 
-def lane_for_file(file: str | None) -> str | None:
+def lane_for_file(file: str | None, android: dict | None = None) -> str | None:
     """Fallback for a finding with no node (e.g. a secret in a config file)."""
     if not file:
         return None
+    if android and _in_roots(file, android):
+        return "frontend"                     # the manifest, the build file and the app's code ship on the phone
     if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs")):
         return "server"
     if re.search(r"\.[cm]?[jt]sx?$", file):

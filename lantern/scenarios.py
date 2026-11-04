@@ -126,6 +126,57 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                "crash the program or, at worst, let crafted input take it over.",
                "The block is kept as small as possible, with a comment saying why it is safe, or replaced with "
                "safe code."),
+    # Android apps (android.py, LM-* rules)
+    "android-exported": (None,
+                         "Their app passes in whatever data it likes, and your code treats it as if it came from your "
+                         "own screens. Anything this part can do (read notes, send a text, start a recording), their "
+                         "app can now make it do.",
+                         "The part is marked android:exported=\"false\", or guarded by a permission only your own "
+                         "apps hold, so other apps are refused."),
+    "android-backup": (None,
+                       "They copy the app's private files (saved logins, contacts, location history) onto their own "
+                       "laptop, or restore them onto another phone, without knowing the phone's PIN for the app.",
+                       "android:allowBackup=\"false\", or backup rules that leave out the private files, so a backup "
+                       "holds nothing worth taking."),
+    "android-debuggable": (None,
+                           "With the phone plugged in, they attach a debugger to your app, read its private files, "
+                           "and change what it does while it runs.",
+                           "The release build is not debuggable, so the phone refuses the debugger."),
+    "android-log": (None,
+                    "The log lines include where the person was, or their id. Logs end up in bug reports, crash "
+                    "tools and on any laptop the phone is plugged into.",
+                    "Those lines are removed from release builds, or no longer include the private value."),
+    "cleartext": (None,
+                  "They sit on the same Wi-Fi (a café, a bus, a hotel) and read the plain-http traffic as it goes "
+                  "past, or change the answers your app gets back.",
+                  "Everything goes over https, and the app refuses plain http."),
+    "android-webview": (None,
+                        "A web page shown inside the app (or one an attacker manages to load there) runs its own "
+                        "script, which can reach into the app or read local files.",
+                        "The WebView only loads your own pages, with JavaScript, bridges and file access off unless "
+                        "a page really needs them."),
+    "android-shared-file": (None,
+                            "Another app on the same phone, one that only asked for storage access, opens the file and "
+                            "reads (or changes) what your app saved.",
+                            "The file is saved in the app's own private folder (getFilesDir), which other apps cannot open."),
+    "android-plain-secret": (None,
+                             "On a rooted phone, or from a backup, the saved login is a line of plain text in the "
+                             "app's settings file. Whoever copies it is signed in as that person.",
+                             "The token is saved with EncryptedSharedPreferences (or the Android Keystore), so the copy "
+                             "is unreadable."),
+    "android-app-key": (None,
+                        "They download your app, unzip it (an Android app is a zip file) and open it with a free tool "
+                        "such as jadx. The key is right there, and they use it from their own computer.",
+                        "The key is restricted to your app in the provider's console, or kept on your server and never "
+                        "shipped in the app."),
+    "android-permission": (None,
+                           "People see the permission prompt and wonder why a safety app wants it; store reviewers "
+                           "ask the same question, and an unused permission is one more thing that can be misused.",
+                           "The permission is removed from the manifest, so nobody is asked for it."),
+    "android-release": (None,
+                        "This does not open a door by itself. It makes the app easier to read back, run old, unsafe "
+                        "defaults, or change between builds, which makes every other problem easier to find and use.",
+                        "The release build setting is changed as the finding says, and the app is built and tested again."),
 }
 
 RULE_KIND = {
@@ -142,6 +193,30 @@ RULE_KIND = {
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
     "LA-WALLET-DRAIN": "wallet", "LA-MODEL-OUTPUT-TO-TOOL": "model-to-tool", "LA-PROMPT-FROM-INPUT": "prompt",
     "LA-NOTEBOOK-SECRET": "secret", "LP-DJANGO-DEBUG": "debug",
+    "LM-EXPORTED": "android-exported", "LM-BACKUP": "android-backup", "LM-DEBUGGABLE": "android-debuggable",
+    "LM-RELEASE-DEBUGGABLE": "android-debuggable", "LM-LOG-SENSITIVE": "android-log", "LM-CLEARTEXT": "cleartext",
+    "LM-CLEARTEXT-URL": "cleartext", "LM-USER-CERTS": "tls-off", "LM-TLS-OFF": "tls-off",
+    "LM-WEBVIEW-JS": "android-webview", "LM-WEBVIEW-BRIDGE": "android-webview", "LM-WEBVIEW-FILE-URL": "android-webview",
+    "LM-WEBVIEW-SSL": "tls-off", "LM-WORLD-MODE": "android-shared-file", "LM-EXTERNAL-STORAGE": "android-shared-file",
+    "LM-PREFS-SECRET": "android-plain-secret", "LM-SQL-CONCAT": "sql", "LM-GOOGLE-KEY": "android-app-key",
+    "LM-KEY-IN-APP": "android-app-key", "LM-SIGNING-SECRET": "secret", "LM-UNUSED-PERMISSION": "android-permission",
+    "LM-NO-SHRINK": "android-release", "LM-OLD-TARGET": "android-release", "LM-RELEASE-DEBUG-KEY": "android-release",
+    "LM-DYNAMIC-VERSION": "android-release", "LM-IMPLICIT-BROADCAST": "android-exported",
+}
+# Where each Android story starts (the manifest and build-file problems have no page or route to start from)
+ANDROID_START = {
+    "android-exported": "{who} installs a small app of their own on the same phone (or sends a link). It opens {part} "
+                        "directly, skipping your other screens.",
+    "android-backup": "{who} borrows the phone for two minutes and plugs it into a laptop (or gets hold of a phone backup).",
+    "android-debuggable": "{who} borrows the phone and plugs it into a laptop with Android Studio.",
+    "android-log": "{who} plugs the phone into a laptop and runs `adb logcat`, or reads a bug report the person sent you.",
+    "cleartext": "{who} joins the same public Wi-Fi as someone using your app.",
+    "android-webview": "{who} gets a page of their own shown in your app's WebView (a link, an ad, or a plain-http page they changed on the way).",
+    "android-shared-file": "{who} has another app installed on the same phone.",
+    "android-plain-secret": "{who} gets a copy of the app's files: a rooted phone, a backup, or a lost phone.",
+    "android-app-key": "{who} downloads your app from the store like anyone else.",
+    "android-permission": "{who} installs your app and reads the permission list.",
+    "android-release": "{who} downloads your app and looks at how it was built.",
 }
 
 CWE_KIND = {78: "shell", 77: "shell", 89: "sql", 79: "xss", 94: "eval", 95: "eval", 502: "deserialize",
@@ -217,9 +292,17 @@ def _route_word(g: Graph | None, f: dict) -> tuple[str | None, str | None]:
     return detail or None, r.get("kind")
 
 
+def _android_part(f: dict, g: Graph | None) -> str:
+    """The component a manifest finding is about, in words ("NotesProvider"), from the node it is pinned to."""
+    n = g.nodes.get(f.get("node") or "") if g else None
+    return (n.name if n is not None else None) or "that part of your app"
+
+
 def _typed_into(f: dict) -> str:
     via = str((f.get("input") or {}).get("via") or "")
     m = re.search(r"`([^`]+)`", via)
+    if "Extra(" in via or "getQueryParameter" in via or "intent." in via or "getIntent" in via:
+        return "the link or message their app sends"
     return f"the box that fills in `{m.group(1)}`" if m else "a box on the page"
 
 
@@ -256,12 +339,27 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
         steps.append(f"Your app ships {pkg} at a version with a published weakness ({f.get('title') or 'see the finding'}).")
         steps.append(f"{who} runs a free scanner against apps like yours and it lists that version.")
         basis.append("the version comes from your lock file and the advisory database")
+    elif kind in ANDROID_START and (kind not in ("cleartext", "android-webview") or not (ui or route)) \
+            and not (kind == "android-exported" and f.get("rule") == "LM-IMPLICIT-BROADCAST"):
+        part = _android_part(f, g)
+        steps.append(ANDROID_START[kind].format(who=who, part=part))
+        if f.get("line") and f.get("file"):
+            steps.append(f"What lets them is in {f['file']}, line {f['line']}.")
+        basis.append("the setting comes from your app's manifest, build file or code")
     elif kind == "open-db":
         steps.append(f"{who} opens your site and copies the public database address and key from the page (they "
                      "are meant to be public).")
         steps.append("From their own computer they ask the database for every row of this table.")
     else:
-        if ui and page:
+        if ui and page and " screen" in page:          # an Android screen (android.py)
+            steps.append(f"{who}, who is testing your app, opens the {page.split(' · ')[0]} on their phone.")
+            steps += [f"They {c}." for c in _clicks(g, ui)]
+            basis.append("the screen comes from the map of your app")
+        elif route and rkind == "route" and route.startswith("INTENT "):
+            steps.append(f"{who} installs a small app of their own on the same phone (or sends a link). It opens "
+                         f"{route.split()[1]} directly and passes in data of their choosing.")
+            basis.append("the manifest says other apps can start this part of your app")
+        elif ui and page:
             steps.append(f"{who}, who is testing your app, opens the {page} page.")
             steps += [f"They {c}." for c in _clicks(g, ui)]
             basis.append("the page and clicks come from the map of your app")
@@ -281,7 +379,10 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                          if kind == "wallet" else f"They are not signed in when they send {route}.")
         if typed and kind in TYPED:
             if f.get("input"):
-                steps.append(f"In {_typed_into(f)} they type: {typed}")
+                if route and rkind == "route" and route.startswith("INTENT "):
+                    steps.append(f"In the data their app sends, they put: {typed}")
+                else:
+                    steps.append(f"In {_typed_into(f)} they type: {typed}")
                 basis.append("what they type reaching this line comes from Lantern's input check ("
                              + str(f["input"].get("via")) + ")")
             elif f.get("input") is False:
@@ -325,6 +426,16 @@ HEADLINES: dict[str, tuple[str, str]] = {
     "prompt": ("What a visitor types goes into the AI prompt", "Outside text goes into the AI prompt"),
 }
 FIXED_HEADLINES = {
+    "android-exported": "Other apps can start part of your app",
+    "android-backup": "Your app's private data can be copied off the phone",
+    "android-debuggable": "Anyone with a USB cable can take over the app",
+    "android-log": "Private details are written to the phone's log",
+    "cleartext": "Some traffic travels without encryption",
+    "android-webview": "A web view inside the app has risky settings",
+    "android-shared-file": "Files are saved where other apps can read them",
+    "android-plain-secret": "A login is saved in plain text on the phone",
+    "android-app-key": "A key is built into the app where anyone can read it",
+    "android-permission": "The app asks for a permission it does not seem to use",
     "weak-hash": "A weak scrambling method (such as MD5) is used",
     "secret": "A password or key is written in the code",
     "service-role": "The master database key is sent to every visitor's browser",
@@ -369,9 +480,12 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
         if clicks:   # "click the backup button" -> "The backup button"
             who = "The " + clicks[-1].split(" the ", 1)[-1]
         elif _page(g, ui[0]):
-            who = f"The {_page(g, ui[0])} page"
+            pg = _page(g, ui[0])
+            who = f"The {pg.split(' · ')[0]}" if " screen" in pg else f"The {pg} page"
     if not who:
         route, rkind = _route_word(g, f)
+        if route and rkind == "route" and route.startswith("INTENT "):
+            return reached.format(who="Another app or a link").replace("your database", "your app's database")
         if rkind in ("cli", "script", "main"):   # a command the owner runs by hand: no visitor reaches it
             return otherwise
         who = f"A request to {route}" if route and rkind == "route" else "What a visitor types"

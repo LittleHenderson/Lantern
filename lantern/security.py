@@ -132,7 +132,10 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
                           r"PostForm|BindJSON|ShouldBind\w*|Bind|GetHeader|FormFile|URL\.Query)\b|\bchi\.URLParam\(|"
                           # Java: servlet / Spring
                           r"\.(getParameter|getParameterMap|getHeader|getInputStream|getReader|getCookies|getQueryString|"
-                          r"getPathInfo|getRequestURI)\(")
+                          r"getPathInfo|getRequestURI)\(|"
+                          # Android: data another app or a link put into an Intent
+                          r"\bget(?:String|Int|Long|Boolean|Bundle|Parcelable|Serializable|CharSequence)(?:Array)?(?:List)?Extra\(|"
+                          r"\bgetQueryParameter\(|\bgetIntent\(\)\.(?:getData|getExtras|getDataString)\(|\bintent\.(?:data|extras|dataString)\b")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
@@ -430,7 +433,8 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     lines_cache: dict[str, list[str]] = {}
     for f in findings:
         f["in_tests"] = bool(f["file"] and (TEST_FILE_RE.search(f["file"]) or JS_TEST_RE.search(f["file"])))
-        f["node"] = _node_at(g, f["file"], f["line"])
+        pin = f.pop("pin", None)          # a manifest finding names the class it is about (android.py)
+        f["node"] = (pin if pin in g.nodes else None) or _node_at(g, f["file"], f["line"])
         r = reach.get(f["node"]) if f["node"] else None
         f["reachable"] = r
         f["reachable_from_tests_only"] = bool(not r and f["node"] in test_reach)
@@ -438,7 +442,7 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
         f["ui_path"] = u["path"] if u else None
         # Stack strip: the lane the problem lives on, and every lane its path crosses (lanes.py).
         node = g.nodes.get(f["node"]) if f["node"] else None
-        f["hot_lane"] = (node.lane if node else None) or lanes.lane_for_file(f["file"])
+        f["hot_lane"] = (node.lane if node else None) or lanes.lane_for_file(f["file"], g.meta.get("android"))
         data_hops = ["data"] if node and any((g.nodes.get(e.dst) and g.nodes[e.dst].lane == "data")
                                              for e in g.callees(node.id)) else []
         f["lanes"] = lanes.lanes_for_path(g, (u["path"] if u else None) or (r["path"] if r else None),
@@ -460,4 +464,4 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     counts["accepted"] = sum(1 for f in findings if f["status"] == "accepted")
     return {"findings": findings, "tools": tools, "counts": counts, "id_version": ID_VERSION,
             "reachable_nodes": len(reach), "total_callables": sum(1 for n in g.nodes.values() if n.kind == "callable"),
-            "ai": ai}
+            "ai": ai, "mobile": g.meta.get("mobile")}

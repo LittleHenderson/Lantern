@@ -39,6 +39,8 @@ def build_graph(repo: str | Path) -> Graph:
         packs.apply_entries(g, Path(repo), on)
     if off:   # turned off in Settings: listed, so the map says what it did not use
         g.meta.setdefault("packs", {"added": 0, "ambiguous": 0, "unresolved": 0, "packs": []})["disabled"] = [p["pack"] for p in off]
+    from . import android
+    android.add_entries(g, repo)   # Android starts apps through manifest components, not main()
     bridge.link(g)
     lanes.assign(g)
     return g

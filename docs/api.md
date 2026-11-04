@@ -141,10 +141,26 @@ model, no extra analysis — so the UI never guesses:
 The UI must keep the four stops in that order and use the same four words everywhere; a lane with no nodes in the
 project is still drawn, dimmed.
 
+In an Android app (`graph.meta.platform == "android"`, `meta.android.roots` lists the app module folders) the app's own
+Java/Kotlin code runs on the phone: a screen (a `page` entry, or a `route` entry whose detail says ` screen `) is
+`browser` and every other node under an app module is `frontend`; findings in the manifest or build file are
+`frontend`. The UI then shows the first two stops as **Screen** and **App** (hover: "what the person sees and taps on
+their phone" / "the rest of your app's code, running on the person's phone"); the order and the four lane values do
+not change.
+
 ### `security.json`
 
 `{"findings": [...], "tools": [{"tool", "status", "version"}], "counts": {critical, high, medium, low, in_tests, accepted},
-"id_version", "reachable_nodes", "total_callables"}`
+"id_version", "reachable_nodes", "total_callables", "ai", "mobile"}`
+
+`mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
+"package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
+[{"kind", "name", "exported", "launcher", "permission", "line"}]}]}`. `words` is the permission in plain words
+("exact location"); `used` is true/false when Lantern knows what code would use it (a heuristic) and null otherwise.
+The Findings screen shows it as "On the phone". Android findings (`rule` `LM-*`, `tool` `lantern-web`) carry
+`platform: "android"`. Android entry details: `<Class> screen[ (app start)] · <method>` (page),
+`INTENT <Class> screen (other apps and links can open it) · <method>` or `INTENT <Class> <kind> (other apps can start
+it) · <method>` (route), `Android starts <Class> (<kind>) · <method>` / `app start (<Class>) · <method>` (main).
 
 Finding: `id` (stable across moves: tool, rule, file and the flagged line's text), `tool` (`bandit`, `pip-audit`,
 `npm-audit`, `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
