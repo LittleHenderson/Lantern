@@ -187,8 +187,8 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LANTERN_CLOUD_RUNS_PER_DAY` | 10 | Runs per person per UTC day |
-| `LANTERN_CLOUD_GLOBAL_RUNS_PER_DAY` | 300 | Runs for everyone per UTC day |
+| `LANTERN_CLOUD_RUNS_PER_DAY` | 10 | Runs per person per UTC day (`cloud/fly.toml` sets 50, the owner's choice of 2026-11-04). To change it without a full deploy: `fly secrets set LANTERN_CLOUD_RUNS_PER_DAY=<n> -a lantern-cloud` (the machine restarts with the new value; a secret wins over the `[env]` value until `fly secrets unset`) |
+| `LANTERN_CLOUD_GLOBAL_RUNS_PER_DAY` | 300 | Runs for everyone per UTC day (`cloud/fly.toml` sets 1000; change it the same way) |
 | `LANTERN_CLOUD_CONCURRENT_JOBS` | 2 | Runs analysed at the same time; the rest wait in the queue |
 | `LANTERN_CLOUD_ACTIVE_PER_USER` | 1 | Runs one person may have waiting or going at once |
 | `LANTERN_CLOUD_AUDITS` | 1 | Dependency audits (pip-audit, npm audit on lock files); `0` skips them and reports say so |
