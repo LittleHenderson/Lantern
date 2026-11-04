@@ -396,14 +396,14 @@ def _osv_post(path: str, body: dict, timeout: float = 60) -> dict:
     import urllib.request
     req = urllib.request.Request(f"{OSV_API}/{path}", data=json.dumps(body).encode(), method="POST",
                                  headers={"Content-Type": "application/json", "User-Agent": "lantern"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:     # noqa: S310 - fixed https URL
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310: fixed https://api.osv.dev URL
         return json.loads(r.read(20_000_000).decode("utf-8", "replace"))
 
 
 def _osv_get(path: str, timeout: float = 30) -> dict:
     import urllib.request
     req = urllib.request.Request(f"{OSV_API}/{path}", headers={"User-Agent": "lantern"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:     # noqa: S310 - fixed https URL
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310: fixed https://api.osv.dev URL
         return json.loads(r.read(5_000_000).decode("utf-8", "replace"))
 
 
