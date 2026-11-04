@@ -595,7 +595,7 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
 def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
     its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
-    js = n.id.startswith(("js:", "go:", "jv:", "kt:", "sw:"))   # JS, Go, Java, Kotlin, Swift: camelCase; Python and Rust snake_case
+    js = n.id.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:"))   # JS, Go, Java, Kotlin, Swift, Dart: camelCase; Python and Rust snake_case
     for d in n.decorators:
         if auth_ident(d, js):
             return f"decorator @{d.split('(')[0]}"
@@ -610,7 +610,7 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
                 if v in seen:
                     continue
                 seen.add(v)
-                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:", "sw:"))):
+                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:"))):
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt
@@ -691,7 +691,15 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
         g.meta["mobile"] = mobile
         n = len(mobile["modules"])
         tools.append({"tool": "lantern-android", "status": f"ok ({n} app module{'s' if n != 1 else ''})", "version": "0.1"})
-    from . import ios
+    from . import flutter, ios
+    findings += flutter.scan(g)
+    if g.meta.get("flutter"):
+        tools.append({"tool": "lantern-flutter", "status": "ok", "version": "0.1"})
+    from . import rn
+    rnf, rmobile = rn.scan(g)
+    findings += rnf
+    if rmobile:
+        tools.append({"tool": "lantern-react-native", "status": "ok", "version": "0.1"})
     inf, imobile = ios.scan(g)
     findings += inf
     if imobile:
@@ -701,4 +709,9 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
             mobile["modules"] += [dict(m, platform="ios") for m in imobile["modules"]]
         else:
             g.meta["mobile"] = imobile
+    if rmobile:
+        if g.meta.get("mobile"):
+            g.meta["mobile"]["modules"] += [dict(m, platform="react-native") for m in rmobile["modules"]]
+        else:
+            g.meta["mobile"] = rmobile
     return findings, tools

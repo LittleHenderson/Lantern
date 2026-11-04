@@ -89,7 +89,7 @@ def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> s
 
 def phone_roots(meta: dict) -> dict | None:
     """The folders of the phone apps in the repo (Android modules, iOS apps), shaped like `meta["android"]`."""
-    roots = [r for k in ("android", "ios") for r in ((meta.get(k) or {}).get("roots") or [])]
+    roots = [r for k in ("android", "ios", "flutter", "rn") for r in ((meta.get(k) or {}).get("roots") or [])]
     return {"roots": roots} if roots else None
 
 
@@ -130,7 +130,7 @@ def lane_for_file(file: str | None, android: dict | None = None) -> str | None:
         return None
     if android and _in_roots(file, android):
         return "frontend"                     # the manifest, the build file and the app's code ship on the phone
-    if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs", ".swift")):
+    if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs", ".swift", ".dart")):
         return "server"
     if re.search(r"\.[cm]?[jt]sx?$", file):
         return "server" if SERVER_PATH_RE.search(file) else "frontend"

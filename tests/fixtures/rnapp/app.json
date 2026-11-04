@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Pocket Notes",
+    "slug": "pocket-notes",
+    "scheme": "pocketnotes",
+    "android": {
+      "package": "com.example.pocketnotes",
+      "permissions": ["android.permission.CAMERA", "android.permission.READ_CONTACTS"]
+    },
+    "ios": {
+      "infoPlist": {
+        "NSAppTransportSecurity": { "NSAllowsArbitraryLoads": true }
+      }
+    }
+  }
+}

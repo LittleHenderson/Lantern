@@ -140,7 +140,11 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
                           r"|\.queryItems\b|\bURLComponents\s*\(\s*(?:url|string):|\buserActivity\.webpageURL\b|"
                           r"\burl\.(?:query|path|host|absoluteString|pathComponents|fragment)\b"
                           # Vapor (Swift servers)
-                          r"|\breq\.(?:parameters|query|content|headers|body)\b")
+                          r"|\breq\.(?:parameters|query|content|headers|body)\b"
+                          # Flutter: what a link or a route carries
+                          r"|\.(?:queryParameters|pathParameters|queryParametersAll)\b|\bgetInitial(?:Link|Uri|AppLink)\s*\("
+                          # React Native / Expo: what a link or a navigation carries
+                          r"|\broute\.params\b|\buse(?:Local|Global)SearchParams\s*\(|\bLinking\.parse\s*\(")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var|val)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
@@ -235,6 +239,12 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
             m = re.fullmatch(r"\w+\((\w+)\)", pat)             # State(state), Path(id), Json(body)
             params.append(m.group(1) if m else pat)
         params = [x for x in params if re.fullmatch(r"[A-Za-z_]\w*", x)]
+    elif f["file"].endswith(".dart"):
+        # Dart writes `Type name` (and `{required String id}`, `this.id`): the last identifier of each parameter
+        inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
+        inner = re.sub(r"<[^<>]*>", "", re.sub(r"@\w+(\([^)]*\))?|\brequired\b|[{}\[\]]", " ", inner))
+        params = [m.group(1) for piece in inner.split(",")
+                  for m in [re.search(r"([A-Za-z_$][\w$]*)\s*(?:=[^,]*)?$", piece.strip())] if m]
     elif f["file"].endswith((".kt", ".swift")):
         # Kotlin and Swift write `name: Type` (after `vararg`/`val`, an argument label, annotations): the name before
         # each top-level colon

@@ -39,6 +39,8 @@ lines and the server streams them to the browser.
 | `js_frontend.py` | TS/JS discovery, ES module resolution, React/Next/Express entry points | `add_js`, `Walker`, `SpecResolver`, `JSResolver` |
 | `java_frontend.py`, `kotlin_frontend.py` | Java and Kotlin parsing, packages/classes/methods, call resolution (`name`, `import`, `receiver-type`, `interface`, …), Spring routes | `add_java`, `add_kotlin`, `Linker` |
 | `swift_frontend.py`, `ios.py` | Swift parsing and call resolution (types, extensions, protocols, SwiftUI `body`); iOS apps from the Xcode project / Info.plist, screens and link handlers as entries, `LI-*` rules, the `security.mobile` summary | `add_swift`, `ios.add_entries`, `ios.scan` |
+| `dart_frontend.py`, `flutter.py` | Dart parsing and call resolution (classes, mixins, extensions, widget `build`); Flutter projects from `pubspec.yaml`, screens and link listeners as entries, `LF-*` rules | `add_dart`, `flutter.add_entries`, `flutter.scan` |
+| `rn.py` | React Native / Expo projects from `package.json` + `app.json`; React Navigation and Expo Router screens, `Linking` handlers as entries (on the JS/TS map), `LN-*` code and `app.json` rules, the `security.mobile` summary | `rn.add_entries`, `rn.scan` |
 | `bridge.py` | Match `g.meta["http_calls"]` to route entries | `link`, `match` |
 | `trace.py`, `tracehook.py` | Runtime tracing (Python only), merge into graph | `run_trace`, `merge_trace` |
 | `security.py` | Scanner orchestration, node pinning, reachability, ranking, accepted risks | `scan`, `reachability`, `rank`, `load_accepted` |
