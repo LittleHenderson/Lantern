@@ -9,6 +9,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   (GitHub sign-ins) and "Explore GitHub" buttons under the link box, to find a repository to paste; and "Try a sample app":
   Lantern's four built-in starter apps, each with planted problems, checked with one click (written from the package,
   nothing cloned), so a beginner sees a real report without a repository of their own.
+- Website: upload an app from your computer. "Upload…" next to the link box (or drop a folder or a .zip on it) sends a
+  folder, zipped in the browser without `node_modules`, `.git`, virtual environments and build output, or a .zip
+  (`POST /v1/uploads`). The new `lantern.archive` unpacks it inside the sealed box with no network and refuses names
+  that leave the folder, links, password-protected files and archives that grow past the size cap; the upload is
+  deleted when its check ends. Messages under the link box no longer vanish when the page refreshes its runs.
 
 ## 0.10.0
 

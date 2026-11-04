@@ -44,11 +44,16 @@ EXPLAINED_FILES = ("explanations.json", "report.html", "evidence.html", "evidenc
 ACTIVE_EXPLAIN = ("queued", "running")
 EXPLAIN_MAX = 40       # functions explained per click (entry points and three levels down, as in the app)
 STAGES = {"clone": "Copying the repository (nothing is run or installed)",
+          "unpack": "Unpacking your upload (nothing is run or installed)",
           "audit": "Checking dependency versions against public advisories",
           "analyze": "Mapping the code and running the checks",
           "save": "Saving your results"}
 PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy",
               "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS")
+
+
+UPLOAD_EXPLAIN = ("An uploaded app is deleted when its check ends, so Lantern cannot read its code again to explain it. "
+                  "Explanations work for apps checked from a link, or in the Lantern app on your computer.")
 
 
 class RunFailed(Exception):
@@ -65,6 +70,11 @@ def clone_repo(link: str, dest: Path, log) -> Path:
 
 
 SAMPLE_PREFIX = "lantern:sample/"   # a run's "link" for one of Lantern's own starter apps (`lantern.learn`)
+UPLOAD_PREFIX = "lantern:upload/"   # a run's "link" for an app uploaded as a .zip; the name is only a label
+
+
+def is_upload(link: str) -> bool:
+    return isinstance(link, str) and link.startswith(UPLOAD_PREFIX)
 
 
 def sample_id(link: str) -> str | None:
@@ -130,6 +140,8 @@ class Worker:
         self.results = Path(settings.results_dir)
         self.work = Path(settings.work_dir)
         self.work.mkdir(parents=True, exist_ok=True)
+        self.uploads = Path(settings.uploads())
+        self.uploads.mkdir(parents=True, exist_ok=True)
         os.chmod(self.work, 0o711)   # nosec B103 - a folder: others may pass through (the analysis user, when we run as root), not list
         self.pool = ThreadPoolExecutor(max_workers=max(1, settings.concurrent_jobs), thread_name_prefix="lantern-run")
         self.tokens: dict[str, str] = {}    # run id -> allowance token, only while its explanations wait
@@ -138,7 +150,9 @@ class Worker:
             store.db.execute("update runs set explain_status = 'error', explain_error = ? where explain_status in "
                              "('queued', 'running')", ("Lantern restarted while writing these. Click Explain again.",))
             store.db.commit()
-        for r in store.unfinished():   # the service restarted: queued runs go again, a half-done one is reported
+        unfinished = store.unfinished()
+        self._sweep_uploads({r["id"] for r in unfinished if r["status"] != "running"})
+        for r in unfinished:   # the service restarted: queued runs go again, a half-done one is reported
             if r["status"] == "running":
                 store.update_run(r["id"], status="error", stage="stopped", finished=_now(),
                                  error="Lantern restarted while this run was going. Start it again.")
@@ -149,6 +163,13 @@ class Worker:
         """Anything left in the work folder belongs to a run that was cut off (a crash): remove it."""
         for p in self.work.iterdir():
             sandbox._rm(p) if p.is_dir() else p.unlink(missing_ok=True)
+
+    def _sweep_uploads(self, waiting: set[str]) -> None:
+        """Keep only the uploads of runs still waiting to start; a half-received upload (`.part-*`) or one whose run
+        is gone was cut off by a restart: remove it."""
+        for p in self.uploads.iterdir():
+            if not (p.is_file() and p.suffix == ".zip" and p.stem in waiting):
+                sandbox._rm(p) if p.is_dir() else p.unlink(missing_ok=True)
 
     def submit(self, rid: str):
         return self.pool.submit(self.run, rid)
@@ -180,16 +201,20 @@ class Worker:
         start = time.monotonic()
         status, error, summary, commit = "error", None, None, None
         try:
-            stage("clone")
-            try:
-                repo = get_source(r["link"], root / "repo", log)
-            except (RuntimeError, ValueError) as e:
-                raise RunFailed(_scrub(str(e), scrub)) from None
+            tmp = root / "tmp"
+            tmp.mkdir()
+            if is_upload(r["link"]):
+                stage("unpack")
+                repo = self._unpack(rid, root, log, start)
+            else:
+                stage("clone")
+                try:
+                    repo = get_source(r["link"], root / "repo", log)
+                except (RuntimeError, ValueError) as e:
+                    raise RunFailed(_scrub(str(e), scrub)) from None
             commit = _commit(repo)
             if commit:
                 log(f"commit {commit[:12]}")
-            tmp = root / "tmp"
-            tmp.mkdir()
             audits = None
             if self.s.audits:
                 stage("audit")
@@ -235,10 +260,37 @@ class Worker:
             log(f"internal error ({type(e).__name__})")
         finally:
             sandbox._rm(root)    # the clone and every temp file, whatever happened
+            self.upload_path(rid).unlink(missing_ok=True)   # an upload never outlives its run's start
             if status != "done":
                 shutil.rmtree(self.results / rid, ignore_errors=True)
             self.store.update_run(rid, status=status, error=error, summary=summary, commit_sha=commit,
                                   finished=_now(), stage="finished", log_tail=self.logs.tail(rid))
+
+    def upload_path(self, rid: str) -> Path:
+        return self.uploads / f"{rid}.zip"
+
+    def _unpack(self, rid: str, root: Path, log, start: float) -> Path:
+        """An uploaded .zip: moved into the run's temp folder, then unpacked by `lantern.archive` inside the
+        restricted process (no network, writes only in the temp folder), so a hostile archive meets the same walls
+        as the analysis."""
+        src = self.upload_path(rid)
+        if not src.is_file():
+            raise RunFailed("The uploaded file is no longer here (Lantern restarted before this run began). "
+                            "Upload it again.")
+        tmp = root / "tmp"
+        zipped = tmp / "upload.zip"
+        shutil.move(str(src), zipped)
+        repo = tmp / "app"
+        rc, output, timed_out = self._jailed(rid, root, [sys.executable, "-m", "lantern.archive", str(zipped), str(repo),
+                                                         "--max-mb", str(self.s.clone_max_mb)],
+                                             cwd=tmp, net=False, log=log, timeout=min(self._left(start), 180))
+        zipped.unlink(missing_ok=True)
+        if timed_out:
+            raise RunFailed("Unpacking the upload took too long and was stopped.")
+        if rc != 0 or not repo.is_dir():
+            said = [ln for ln in output.splitlines() if ln.strip() and not ln.startswith("sandbox:")][-1:]
+            raise RunFailed(said[0][:300] if said and rc == 2 else "The upload could not be unpacked.")
+        return repo
 
     # ------------------------------------------------------------------ explanations for a finished run
     def explain(self, rid: str) -> None:
@@ -258,6 +310,8 @@ class Worker:
         try:
             if not r or not token:
                 raise RunFailed("Lantern restarted while these were waiting. Click Explain again.")
+            if is_upload(r["link"]):
+                raise RunFailed(UPLOAD_EXPLAIN)
             log("· Copying the repository again to read the code (nothing is run or installed)")
             try:
                 repo = get_source(r["link"], root / "repo", log)
