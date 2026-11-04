@@ -160,6 +160,8 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 .strip .ln2{width:52px;height:1px;background:var(--line-2);flex:none} .strip .ln2.lit{background:var(--muted)}
 .strip .stop[data-def]:hover::after,.strip .stop[data-def]:focus::after{content:attr(data-def);display:block;position:absolute;left:0;top:calc(100% + 8px);z-index:5;width:220px;white-space:normal;font:400 12px var(--font);line-height:1.4;color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.14)}
 .strip.legend2{border:0;background:none;padding:0 0 0 0;margin:0 0 14px} .strip.legend2 .yah{margin-right:8px}
+/* the key on the findings page: words only (hollow dots read as switched off), each hoverable for its meaning */
+.strip.legend2 .stop{color:var(--ink-2);cursor:help;border-bottom:1px dotted var(--line-2);padding-bottom:1px} .strip.legend2 .stop i{display:none} .strip.legend2 .ln2{display:none}
 .lanesay{font-size:14px;color:var(--ink-2);margin:0 0 18px;line-height:1.5} .lanesay b{color:var(--ink)}
 .lanewalk{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0 0 16px}
 .lanewalk .lw{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:12px 14px;font-size:13px;color:var(--ink-2);line-height:1.45;min-width:0}
@@ -1435,7 +1437,7 @@ function renderFindings() {
     el.innerHTML = `<div class="memo"><div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
       <p class="lede">${countWord(open.length)} open in your app${tests.length ? ` (${esc(tests.length)} more in test code are listed at the end and not counted)` : ''}. Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.</p></div>${modeSeg()}</div>
       <div class="countrow">${RANKS.map(r => `<span class="${cls(r, RANKS)}"><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>
-      <p class="note" style="margin:-8px 0 10px">Each one says which part of your app it lives on. Hover a stop to learn what that part does.</p>${laneStrip(null, new Set(), {legend: true})}
+      <p class="note" style="margin:-8px 0 10px">Each finding says which part of your app it lives on; the filled dot on its card marks that part. Hover a name below to learn what each part does.</p>${laneStrip(null, new Set(), {legend: true})}
       ${sevs.map(r => `<section class="memogrp"><div class="sevhead ${r}"><i></i>${r[0].toUpperCase() + r.slice(1)}</div><div>${open.filter(f => f.rank === r).map(findingCard).join('')}</div></section>`).join('')}
       ${acc ? `<section class="memogrp"><div class="sevhead"><i></i>Accepted with a reason</div><div>${app.filter(f => f.status === 'accepted').map(findingCard).join('')}</div></section>` : ''}
       ${tests.length ? `<details class="memogrp testgrp"><summary class="sevhead"><i></i>In test code: ${esc(tests.length)}, not counted</summary><p class="lede">Test files and fixtures. Your visitors never run them, so they do not count toward the numbers above or the grade. Keys in them are still worth replacing.</p><div>${tests.slice(0, TESTS_SHOWN).map(findingCard).join('')}</div>${tests.length > TESTS_SHOWN ? `<p class="lede">Showing ${TESTS_SHOWN} of ${esc(tests.length)}. Advanced lists them all.</p>` : ''}</details>` : ''}</div>`;
