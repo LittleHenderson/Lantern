@@ -720,10 +720,10 @@ chipHtml += chip((st.nodes || {}).callable ?? 0, 'functions') + chip(st.entry_po
 if (BR && BR.matched) chipHtml += chip(BR.matched, 'frontend→backend links');
 if (AI.is_ai_app) chipHtml += chip((AI.calls || []).filter(c => c.kind === 'model').length, 'model calls') + ((AI.notebooks || []).length ? chip((AI.notebooks || []).length, 'notebooks') : '');
 const nexp = Object.keys(EXP).length;
-const openCount = SEC.findings.filter(f => f.status !== 'accepted' && !f.in_tests).length;   // the app's own, as every other count
+chipHtml += nexp ? chip(nexp, 'explained') : '<span class="chip">no explanations yet</span>';
 if (DATA.readiness) chipHtml += `<span class="sev ${toneOf(DATA.readiness.score)}" title="Deployment readiness"><i></i>Readiness ${esc(DATA.readiness.score)}/100 · ${esc(DATA.readiness.grade)}</span>`;
 document.getElementById('chips').innerHTML = chipHtml;
-const openCount = SEC.findings.filter(f => f.status !== 'accepted').length;
+const openCount = SEC.findings.filter(f => f.status !== 'accepted' && !f.in_tests).length;   // the app's own, as every other count
 if (openCount) document.querySelector('#tabs [data-t="findings"]').insertAdjacentHTML('beforeend', `<span class="n ${SEC.counts.critical ? 'crit' : ''}">${esc(openCount)}</span>`);
 document.getElementById('tabs').onclick = ev => {
   const t = ev.target.closest('button'); if (!t) return;
