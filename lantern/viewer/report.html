@@ -1089,6 +1089,83 @@ function situation(n) {
   const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
   return `${where}, called by ${callers.length ? callers.slice(0, 2).map(x => `<b>${esc(short(N[x].qualname))}</b>`).join(' and ') + (callers.length > 2 ? ` and ${callers.length - 2} more` : '') : 'nothing in the repo'}.`;
 }
+// ---------- Lenses from the map alone. Every function has three lenses from the moment the check ends; a model's
+// explanation, when one is written, replaces them. Facts only: file, lines, signature, entry, call edges, HTTP
+// links and findings. Nothing here is guessed, and the byline says no model wrote it. ----------
+const plainWords = q => {
+  const parts = String(q || '').split(/::|[./]/).filter(Boolean);
+  const base = (parts[parts.length - 1] || '').replace(/^[_$]+/, '');
+  const w = base.replace(/(?<=[a-z0-9])(?=[A-Z])/g, ' ').replace(/[_$]+/g, ' ').trim().toLowerCase();
+  return w || base || String(q || '');
+};
+const sigParams = sig => {
+  const m = String(sig || '').match(/\(([^()]*(?:\([^()]*\)[^()]*)*)\)/); if (!m) return [];
+  const out = []; let depth = 0, cur = '';
+  for (const ch of m[1]) { if ('([{<'.includes(ch)) depth++; if (')]}>'.includes(ch)) depth--; if (ch === ',' && !depth) { out.push(cur); cur = ''; } else cur += ch; }
+  out.push(cur);
+  return out.map(p => p.trim().replace(/^(mut\s+|\.\.\.)/, '').replace(/[:=].*$/, '').replace(/^(?:[\w<>\[\],?.&*]+\s+)+(?=[\w$]+$)/, '').replace(/^[&*]+/, '').trim())
+    .filter(p => p && !['self', 'cls', 'this', '*', '/', '&self', '&mut self'].includes(p) && /^[\w$]+$/.test(p));
+};
+const entryPhrase = e => !e ? '' : ({page: `the page ${e.detail || ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
+  main: 'the program starts', test: 'the tests run', script: `the script${e.detail ? ' ' + e.detail : ''} is run`})[e.kind] || `${e.kind}${e.detail ? ' ' + e.detail : ''}`;
+const extWords = id => { const n = String(id || '').replace(/^ext:/, ''); if (n.startsWith('HTTP ')) return n; const lib = n.split(/[./]/)[0]; return `the ${lib} library`; };
+function mapRecord(n) {
+  if (!n || n.kind === 'class') return null;
+  const where = isJS(n.id) ? 'in the visitor’s browser' : layer(n.id) === 'backend' ? 'on your server' : 'in a library';
+  const lines = n.start_line && n.end_line ? n.end_line - n.start_line + 1 : 0;
+  const kindWord = n.kind === 'module' ? 'file' : n.kind === 'external' ? 'library call' : isJS(n.id) ? 'component or function' : 'function';
+  const callers = (IN[n.id] || []).filter(e => N[e.src] && !e.src.startsWith('ext:') && !(e.via || '').startsWith('http-')).map(e => e.src);
+  const served = (IN[n.id] || []).filter(e => N[e.src] && (e.via || '').startsWith('http-'));
+  const outs = OUT[n.id] || [];
+  const callees = outs.filter(e => N[e.dst] && !e.dst.startsWith('ext:') && !(e.via || '').startsWith('http-')).map(e => e.dst);
+  const http = outs.filter(e => (e.via || '').startsWith('http-') || e.dst.startsWith('ext:HTTP '));
+  const exts = [...new Set(outs.filter(e => e.dst.startsWith('ext:') && !e.dst.startsWith('ext:HTTP ')).map(e => e.dst))];
+  const fs = FIND_BY_NODE[n.id] || [];
+  const uniq = a => [...new Set(a)];
+  const names = ids => uniq(ids.map(x => short(N[x].qualname)));
+  const list = (a, k = 3) => a.slice(0, k).join(', ') + (a.length > k ? ` and ${a.length - k} more` : '');
+  const andList = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+  if (n.kind === 'external') {
+    const who = names(callers);
+    const s = `${n.qualname} is outside your repository: a library or framework your code calls. Lantern maps the calls to it but does not read the library’s own code.`;
+    return {from_map: true, validated: true, lens1: {summary: s, inputs: [], outputs: '', side_effects: [], errors: [], role: who.length ? `Called from ${list(who)}.` : 'Nothing in the repo calls it directly.'},
+      lens2: {text: `This is ${extWords(n.id)}, code your app relies on but did not write. ${who.length ? `Your ${andList(who.slice(0, 3))} use${who.length === 1 ? 's' : ''} it.` : ''}`.trim(), example: '', analogy: ''},
+      lens3: {text: `${extWords(n.id)} is used by ${andList(who.slice(0, 5)) || 'nothing the map found'}.`, pairs: callers.slice(0, 5).map(x => ({plain: short(N[x].qualname), technical: N[x].qualname, anchor: {type: 'symbol', id: x}}))}};
+  }
+  const params = sigParams(n.signature);
+  const runs = n.entry ? `It runs when ${entryPhrase(n.entry)}.` : served.length ? `It answers requests from ${andList(names(served.map(e => e.src)).slice(0, 3))} in the browser.`
+    : callers.length ? `It runs when ${andList(names(callers).slice(0, 3))} call${callers.length === 1 ? 's' : ''} it.` : 'Nothing in your code calls it directly: a framework may call it, or it may be unused.';
+  const uses = callees.length ? `Along the way it uses ${andList(names(callees).slice(0, 4))}${callees.length > 4 ? ` and ${callees.length - 4} more of your functions` : ''}.` : '';
+  const talks = http.length ? `It calls your backend: ${list(uniq(http.map(e => e.detail || e.dst.replace(/^ext:/, ''))), 3)}.` : exts.length ? `It relies on ${andList(uniq(exts.map(extWords)).slice(0, 3))}.` : '';
+  const found = fs.length ? ` Scanners found ${fs.length === 1 ? 'a problem' : fs.length + ' problems'} inside it: ${list(uniq(fs.map(f => String(f.title).replace(/[.\s]+$/, ''))), 2)}.` : '';
+  const lens1 = {
+    summary: `${short(n.qualname)} is a ${kindWord} in ${n.file || 'an unknown file'}${lines ? `, lines ${n.start_line}–${n.end_line} (${lines} lines)` : ''}, running ${where}.${n.entry ? ` Entry point: ${n.entry.kind === 'test' ? 'a test' : n.entry.kind + (n.entry.detail ? ' ' + n.entry.detail : '')}.` : ''}${n.docstring ? ` Its own docstring: “${String(n.docstring).split('\n')[0].slice(0, 160)}”` : ''}`,
+    inputs: params.length ? params.map(p => `${p}`) : [],
+    outputs: '',
+    side_effects: [...http.map(e => `HTTP ${e.detail || e.dst.replace(/^ext:HTTP /, '')}${N[e.dst] ? ` → ${short(N[e.dst].qualname)}` : ''}`), ...exts.slice(0, 6).map(x => `calls ${x.replace(/^ext:/, '')}`)],
+    errors: [],
+    role: `Called by ${callers.length}${served.length ? ` (and over HTTP by ${served.length})` : ''} · calls ${callees.length} of your functions${exts.length ? ` and ${exts.length} librar${exts.length === 1 ? 'y' : 'ies'}` : ''}.${fs.length ? ` ${fs.length} finding${fs.length === 1 ? '' : 's'} inside.` : ''}`,
+  };
+  const lens2 = {
+    text: `This is “${plainWords(n.qualname)}”, a ${kindWord} running ${where}. ${runs} ${uses} ${talks}${found}`.replace(/\s+/g, ' ').trim(),
+    example: n.entry && n.entry.kind === 'page' ? `Someone opens ${n.entry.detail || 'this page'} and this is what builds it.` : n.entry && n.entry.kind === 'route' ? `A request to ${n.entry.detail || 'this route'} lands here, and this code decides what to answer.`
+      : served.length ? `Someone in the browser uses ${short(N[served[0].src].qualname)}, which sends a request this code answers.` : callers.length ? `${short(N[callers[0]].qualname)} needs “${plainWords(n.qualname)}” done and hands the job to this code.` : 'No example from the map: nothing in your code was seen calling it.',
+    analogy: '',
+  };
+  const pairs = [], seen = new Set();
+  const add = (plain, technical, anchor) => { const k = plain.toLowerCase(); if (!plain || seen.has(k)) return; seen.add(k); pairs.push({plain, technical, anchor}); };
+  add(plainWords(n.qualname), n.qualname, {type: 'symbol', id: n.id});
+  for (const x of callees.slice(0, 6)) add(plainWords(N[x].qualname), N[x].qualname, {type: 'symbol', id: x});
+  for (const e of http.slice(0, 3)) if (N[e.dst]) add(`the request ${e.detail || ''}`.trim(), N[e.dst].qualname, {type: 'symbol', id: e.dst});
+  for (const x of callers.slice(0, 3)) add(plainWords(N[x].qualname), N[x].qualname, {type: 'symbol', id: x});
+  const l3 = [`“${plainWords(n.qualname)}” is ${short(n.qualname)}${lines ? `, lines ${n.start_line}–${n.end_line}` : ''}.`];
+  if (callees.length) l3.push(`It uses ${andList(callees.slice(0, 6).map(x => plainWords(N[x].qualname)))}.`);
+  for (const e of http.slice(0, 3)) if (N[e.dst]) l3.push(`${`The request ${e.detail || ''}`.trim()} goes to ${short(N[e.dst].qualname)} on the server.`);
+  if (callers.length) l3.push(`It is used by ${andList(uniq(callers.slice(0, 3).map(x => plainWords(N[x].qualname))))}.`);
+  return {from_map: true, validated: true, lens1, lens2, lens3: {text: l3.join(' '), pairs}};
+}
+const expOf = n => n ? (EXP[n.id] || mapRecord(n)) : null;
+const MAP_BYLINE = `<div class="byline">${icon('check')}Built from the map by Lantern, no model involved · facts only, nothing guessed · explain it to get a model’s words</div>`;
 // ---------- Scenarios: one person meeting a finding, or using a function. Facts from the map, words escaped. ----------
 // A model-written story (validated: no code names, only pages the map shows) wins; otherwise the scenario
 // security.json carries for every finding (scenarios.py), so a story is there with no model at all.
@@ -1102,7 +1179,7 @@ function findingScenario(f, ex) {
 function scenarioLens(r, n) {
   if (r && r.scenario && r.scenario.story) return `<div class="lens l4 scen">${r.scenario.who ? `<b>${esc(r.scenario.who)}</b><br>` : ''}${esc(r.scenario.story)}</div><div class="byline">${icon('sparkle')}Written by ${esc(r.model)} · an illustration, nothing was run</div>`;
   const f = n ? (FIND_BY_NODE[n.id] || []).find(x => x.scenario) : null;
-  if (f) return `<div class="note" style="margin-bottom:6px">${r ? 'The model did not write a story for this function, so here' : 'Here'} is how someone meets its ${esc(f.rank)} finding:</div>` + findingScenario(f, null);
+  if (f) return `<div class="note" style="margin-bottom:6px">${r && !r.from_map ? 'The model did not write a story for this function, so here' : 'Here'} is how someone meets its ${esc(f.rank)} finding:</div>` + findingScenario(f, null);
   return `<div class="lens l4 scen">${n ? situation(n) : ''}<div class="basis">A sketch from the map only. ${LIVE && LIVE.model ? 'Explain this function to get a full story of someone using it.' : 'Explain this function (choose a model in Settings) to get a full story of someone using it.'}</div></div>`;
 }
 function renderExplanations() {
@@ -1115,13 +1192,13 @@ function renderExplanations() {
   const weight = n => (worstRank(n.id) ? 0 : 2) + (EXP[n.id] ? 0 : 1) + (n.entry ? 0 : .5);
   list = list.sort((a, b) => weight(a) - weight(b) || a.qualname.localeCompare(b.qualname)).slice(0, 300);
   if (!S.xsel || !N[S.xsel]) S.xsel = (list.find(x => EXP[x.id]) || list[0] || {}).id || null;
-  const n = N[S.xsel], r = n && EXP[n.id];
+  const n = N[S.xsel], r = n && expOf(n), byModel = n && EXP[n.id];
   const lang = id => id.startsWith('js:') ? 'ts' : id.startsWith('py:') ? 'py' : id.startsWith('go:') ? 'go' : id.startsWith('rs:') ? 'rs' : id.startsWith('jv:') ? 'java' : '';
   const row = x => { const w = worstRank(x.id); return `<button class="xrow ${S.xsel === x.id ? 'on' : ''}" data-x="${esc(x.id)}"><span class="layer ${layer(x.id)}"></span><div><div class="t">${esc(short(x.qualname))}</div><div class="d">${esc(x.file)}${S.simple ? '' : ':' + esc(x.start_line)}${S.simple && w ? ' · ' + (w === 'critical' ? 'the risky one' : 'has a ' + esc(w) + ' finding') : ''}</div></div>${!S.simple && w ? sevChip(w) : ''}${EXP[x.id] ? '<i class="dotx" title="explained"></i>' : ''}</button>`; };
   const side = S.simple
     ? `<div class="xside"><input class="search" id="xq" placeholder="Find a function or a page" value="${esc(S.xq)}" spellcheck="false" autocomplete="off">
-        <div class="k2">Explained · ${explained.length} of ${fns.length}</div>${list.filter(x => EXP[x.id]).slice(0, 40).map(row).join('') || '<div class="note">None yet.</div>'}
-        <div class="k2">Not explained yet · ${fns.length - explained.length}</div>${list.filter(x => !EXP[x.id]).slice(0, 40).map(row).join('')}
+        <div class="k2">Explained by a model · ${explained.length} of ${fns.length}</div>${list.filter(x => EXP[x.id]).slice(0, 40).map(row).join('') || '<div class="note">None yet.</div>'}
+        <div class="k2">From the map so far · ${fns.length - explained.length}</div>${list.filter(x => !EXP[x.id]).slice(0, 40).map(row).join('')}
         <div class="note" style="margin-top:14px">Explanations are written by <b>${esc(LIVE && LIVE.model ? LIVE.model + (LIVE.local ? ' on this computer' : '') : (r ? r.model : 'the model you choose in Settings'))}</b>. ${LIVE && LIVE.local ? 'Nothing left your machine, and a' : 'A'} model only explains: it never creates, closes or accepts a finding.</div></div>`
     : `<div class="xside"><input class="search" id="xq" placeholder="Filter" value="${esc(S.xq)}" spellcheck="false" autocomplete="off">
         <div class="filters" style="margin:8px 0 10px">${[['all', `All ${fns.length}`], ['explained', `Explained ${explained.length}`], ['findings', `Findings ${withF.length}`]].map(([k, l]) => `<button class="fchip ${S.xf === k ? 'on' : ''}" data-xf="${k}">${l}</button>`).join('')}</div>${list.map(row).join('')}</div>`;
@@ -1129,7 +1206,7 @@ function renderExplanations() {
   const chips = r ? anchorChips(r) : [];
   const path = (() => { const f = n && SEC.findings.find(x => x.node === n.id && (x.ui_path || x.reachable)); return f ? chainHtml('', f.ui_path || f.reachable.path) : ''; })();
   const fs = n ? FIND_BY_NODE[n.id] || [] : [];
-  const explainBtn = n && LIVE && LIVE.model ? `<button class="btn ${r ? '' : 'primary'}" id="xexplain">${icon('sparkle')}${r ? 'Re-explain' : `Explain with ${esc(LIVE.model)}`}</button>` : '';
+  const explainBtn = n && LIVE && LIVE.model ? `<button class="btn ${byModel ? '' : 'primary'}" id="xexplain">${icon('sparkle')}${byModel ? 'Re-explain' : `Explain with ${esc(LIVE.model)}`}</button>` : '';
   const main = !n ? `<div class="empty">${ART}<b>Pick a function</b>The list shows what has been explained and what has not.</div>` : S.simple
     ? `<div class="xmain"><div class="xhead"><h1>${esc(short(n.qualname))}</h1><span class="note">${esc(n.file)} · lines ${esc(n.start_line)}–${esc(n.end_line)}</span><span class="lang">${lang(n.id)}</span></div>
         <div class="xsit">${situation(n)}</div>
@@ -1139,17 +1216,17 @@ function renderExplanations() {
     : `<div class="xmain pro"><div class="xhead"><h2>${esc(short(n.qualname))}</h2><span class="note">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}</span><span class="lang">${lang(n.id)}</span></div>
         ${r ? `<div class="three">${[1, 2, 3].map(l => { const keep = S.lens; S.lens = l; const h = `<div class="col"><div class="k2" style="margin-top:0">${{1: 'Technical', 2: 'Everyday', 3: 'Mapped'}[l]}</div>${l === 3 && path ? path : ''}${lensBody(r).replace(/<div class="byline">.*?<\/div>/s, '')}</div>`; S.lens = keep; return h; }).join('')}</div>
         <div class="k2">Scenario</div>${(() => { const keep = S.lens; S.lens = 4; const h = lensBody(r, n).replace(/<div class="byline">.*?<\/div>/s, ''); S.lens = keep; return h; })()}
-        <div class="acts">${explainBtn}<button class="btn" id="xcopy">Copy all four</button><span class="note">Rejected drafts are regenerated with the failing phrase quoted back to the model.</span></div><div id="explainmsg" class="note"></div>`
+        <div class="acts">${explainBtn}<button class="btn" id="xcopy">Copy all four</button><span class="note">${byModel ? 'Rejected drafts are regenerated with the failing phrase quoted back to the model.' : 'These lenses come from the map alone. A model adds the everyday wording and an analogy.'}</span></div><div id="explainmsg" class="note"></div>`
         : `<div class="unexplained" style="margin-top:14px">Not explained yet.</div><div class="acts">${explainBtn}</div><div id="explainmsg" class="note"></div>`}
         ${srcBlock(n)}</div>`;
   const prov = !S.simple && r ? `<aside class="xprov"><div class="k2" style="margin-top:0">Provenance</div><dl>
-      <dt>Model</dt><dd>${esc(r.model)}</dd><dt>Metaphor</dt><dd>${esc(r.metaphor_world || '–')}</dd><dt>Attempts</dt><dd>${esc(r.attempts || 1)}${r.repaired ? ' · repaired once' : ''}</dd>
+      ${r.from_map ? `<dt>Source</dt><dd>Built from the map by Lantern: file, lines, signature, calls, HTTP links and findings. No model wrote it.</dd>` : `<dt>Model</dt><dd>${esc(r.model)}</dd><dt>Metaphor</dt><dd>${esc(r.metaphor_world || '–')}</dd><dt>Attempts</dt><dd>${esc(r.attempts || 1)}${r.repaired ? ' · repaired once' : ''}</dd>`}
       <dt>Anchors</dt><dd><b>${r.validated ? `${chips.length} of ${chips.length} verified` : 'failed checks'}</b></dd>
       ${(r.dropped_pairs || []).length ? `<dt>Rejected</dt><dd>${r.dropped_pairs.length} phrase${r.dropped_pairs.length === 1 ? '' : 's'} had no anchor and ${r.dropped_pairs.length === 1 ? 'was' : 'were'} removed</dd>` : ''}
       ${r.undetermined ? `<dt>Undetermined</dt><dd>${esc(r.undetermined)}</dd>` : ''}</dl>
       ${chips.length ? `<div class="k2">Anchored phrases</div><div class="xanchors">${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}
       <div class="note" style="margin-top:14px"><b>Rule.</b> A model only explains. Every phrase must anchor to a real symbol, line or term, or the draft is rejected. It can never create, close or accept a finding.</div></aside>` : '';
-  el.innerHTML = `<div class="page wide"><div class="toolbar"><h2>${S.simple ? 'What does this do?' : 'Explanations'} <span class="c">${explained.length} of ${fns.length}</span></h2>${modeSeg()}${LIVE && LIVE.model && fns.length - explained.length ? `<span class="note xnote">${fns.length - explained.length} unexplained · use the app’s Explanations tab to explain them in one go</span>` : ''}</div>
+  el.innerHTML = `<div class="page wide"><div class="toolbar"><h2>${S.simple ? 'What does this do?' : 'Explanations'} <span class="c">${explained.length} of ${fns.length} by a model · the rest from the map</span></h2>${modeSeg()}${LIVE && LIVE.model && fns.length - explained.length ? `<span class="note xnote">${fns.length - explained.length} from the map only · use the app’s Explanations tab to have the model explain them in one go</span>` : ''}</div>
     <div class="xgrid ${prov ? 'three' : ''}">${side}${main}${prov}</div></div>`;
   wireMode(el);
   const qi = el.querySelector('#xq'); qi.oninput = () => { S.xq = qi.value; renderExplanations(); const z = document.getElementById('xq'); z.focus(); z.setSelectionRange(z.value.length, z.value.length); };
@@ -1685,7 +1762,7 @@ function renderAbout() {
       <li>Behavior that isn't exercised by detected entry points or tests.</li>
       <li>Business-logic flaws. Scanners find known patterns, not wrong rules.</li>
       <li>Calls through very dynamic code (getattr, plugins, monkey-patching) may be missing. They're counted above as unresolved.</li>
-      <li>Explanations are written by a model. Their technical anchors are checked; their wording is not proof.</li></ul></div>`;
+      <li>Lenses marked “built from the map” are assembled from facts only. Lenses written by a model have their technical anchors checked; their wording is not proof.</li></ul></div>`;
 }
 
 // ---------- right: node detail ----------
@@ -1702,19 +1779,19 @@ function lensBody(r, n) {
   if (!r) return `<div class="unexplained">Not explained yet. Run <code>lantern explain</code> to add the three lenses for this function.</div>`;
   if (r.error) return `<div class="warn">${icon('warn')}<div>Explanation failed: ${esc(r.error)}</div></div>`;
   const warn = r.validated ? '' : `<div class="warn">${icon('warn')}<div>This explanation failed Lantern's checks and may be inaccurate:<br>${(r.validation_errors || []).map(esc).join('<br>')}</div></div>`;
-  const by = `<div class="byline">${icon('sparkle')}Written by ${esc(r.model)} · metaphor: ${esc(r.metaphor_world)}</div>`;
+  const by = r.from_map ? MAP_BYLINE : `<div class="byline">${icon('sparkle')}Written by ${esc(r.model)} · metaphor: ${esc(r.metaphor_world)}</div>`;
   if (S.lens === 1) {
     const l = r.lens1 || {};
     const list = a => (Array.isArray(a) && a.length) ? '<ul style="margin:2px 0 0;padding-left:18px">' + a.map(x => `<li>${esc(x)}</li>`).join('') + '</ul>' : '<span class="note">none noted</span>';
-    return warn + `<div class="lens l1">${esc(l.summary)}<dl><dt>Inputs</dt><dd>${list(l.inputs)}</dd><dt>Output</dt><dd>${esc(l.outputs) || '<span class="note">none noted</span>'}</dd>
-      <dt>Side effects</dt><dd>${list(l.side_effects)}</dd><dt>Errors</dt><dd>${list(l.errors)}</dd><dt>Role in the path</dt><dd>${esc(l.role)}</dd></dl></div>` + by;
+    return warn + `<div class="lens l1">${esc(l.summary)}<dl><dt>Inputs</dt><dd>${list(l.inputs)}</dd><dt>Output</dt><dd>${esc(l.outputs) || `<span class="note">${r.from_map ? 'not read from the map' : 'none noted'}</span>`}</dd>
+      <dt>Side effects</dt><dd>${list(l.side_effects)}</dd>${r.from_map ? '' : `<dt>Errors</dt><dd>${list(l.errors)}</dd>`}<dt>Role in the path</dt><dd>${esc(l.role)}</dd></dl></div>` + by;
   }
   if (r.undetermined && S.lens !== 1) {
     return warn + `<div class="lens l2"><b>No plain-words explanation.</b> The model said it could not explain this honestly from what it was shown: ${esc(r.undetermined)}<br><span class="note">Lantern asks a model to say so rather than guess. The technical lens is still here, and so is the code.</span></div>` + by;
   }
   if (S.lens === 2) {
     const l = r.lens2 || {};
-    return warn + `<div class="lens l2">${esc(l.text)}<span class="k">Example</span>${esc(l.example)}<span class="k">Analogy</span>${esc(l.analogy)}</div>` + by;
+    return warn + `<div class="lens l2">${esc(l.text)}${l.example ? `<span class="k">Example</span>${esc(l.example)}` : ''}${l.analogy ? `<span class="k">Analogy</span>${esc(l.analogy)}` : ''}</div>` + by;
   }
   const l = r.lens3 || {}, pairs = l.pairs || [];
   let text = esc(l.text || '');
@@ -1759,7 +1836,7 @@ function renderRight() {
   if (fsel && !S.rrail) { el.innerHTML = chrome + findingPanel(fsel); wire(); wireFindings(el); const c = el.querySelector('.closebtn'); if (c) c.onclick = () => el.classList.remove('open'); return; }
   if (!n) { el.innerHTML = chrome + '<div class="empty">Select a function to see what it does.</div>'; wire(); return; }
   if (S.rrail) { el.innerHTML = chrome; wire(); return; }
-  const r = EXP[n.id];
+  const r = expOf(n);
   const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
   const callees = (OUT[n.id] || []).map(e => e.dst).filter(x => N[x]);
   const fs = FIND_BY_NODE[n.id] || [];
@@ -1791,7 +1868,7 @@ function renderRight() {
     ${srcBlock(n)}
     <div class="links"><div><h5>Called by · ${callers.length}</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
       <div><h5>Calls · ${callees.length}</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div>
-    <div class="acts">${fs.length ? `<button class="btn primary" id="openfinding">Open finding</button>` : ''}${LIVE && LIVE.model && r ? `<button class="btn" id="reexplain">${icon('sparkle')}Re-explain</button>` : ''}</div></div>`;
+    <div class="acts">${fs.length ? `<button class="btn primary" id="openfinding">Open finding</button>` : ''}${LIVE && LIVE.model && n.kind !== 'external' ? `<button class="btn" id="reexplain">${icon('sparkle')}${EXP[n.id] ? 'Re-explain' : `Explain with ${esc(LIVE.model)}`}</button>` : ''}</div></div>`;
   wire();
   const of = document.getElementById('openfinding'); if (of) of.onclick = () => { S.tab = 'findings'; S.fsev = 'all'; for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b.dataset.t === 'findings'); render(); const card = document.getElementById('f-' + fs[0].id); if (card) { card.scrollIntoView({behavior: 'smooth', block: 'center'}); card.classList.add('flash'); } };
   const re = document.getElementById('reexplain'); if (re) re.onclick = () => explainLive(S.sel, true);

@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Every function has its three lenses from the moment a check ends. Where no model has explained a function yet, the
+  Technical, Everyday and Mapped lenses are built from the map alone (file, lines, signature, entry point, calls, HTTP
+  links, findings), with a byline that says no model wrote them and every phrase anchored to a real symbol. The
+  Explain button still asks a model for the fuller wording and an analogy. The Explanations list now reads "Explained
+  by a model" and "From the map so far". `tools/viewer_smoke.js` checks the map-built lenses render.
 - Website: Connect GitHub, for private repositories. When the owner sets up Lantern's GitHub App (`docs/deploy.md`), a
   private repository's check offers "Connect GitHub": the person picks repositories on GitHub, clicks Try again, and
   Lantern reads them with a one-repository, read-only token that lasts an hour at most, only for someone GitHub says
