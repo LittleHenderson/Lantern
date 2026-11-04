@@ -157,16 +157,18 @@ def tree_mb(dest: Path) -> float:
     return total / 1_000_000
 
 
-def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900) -> None:
+def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900, auth: str | None = None) -> None:
     """`git clone --depth 1` of `url` into `dest` (an empty or missing folder), without a checkout first: the files
     are measured from the index and refused above the size cap, then checked out. RuntimeError with a plain message.
     The 900 s limit is for a slow transfer; a server that never answers the connection is given up on by git itself
     after about 300 s (libcurl's connect timeout), so that message ("Connection timed out after 300015 milliseconds")
-    comes first."""
+    comes first.
+    `auth`: a read-only GitHub token (Lantern cloud's "Connect GitHub"), handed to git as an HTTP header through
+    environment variables only (never in the link, `.git/config` or the log)."""
     args = (["clone", "--depth", "1", "--single-branch", "--no-checkout"] + (["--branch", branch] if branch else [])
             + ["--", url, str(dest)])
     try:
-        r = _git(args, cwd=None, timeout=timeout)
+        r = _git(args, cwd=None, timeout=timeout, **({"env": _auth_env(url, auth)} if auth else {}))
     except RuntimeError:
         if dest.is_dir():   # a clone stopped by the timeout can leave a partial folder behind
             remove_tree(dest)
@@ -263,8 +265,18 @@ def remove_tree(path: Path) -> None:
         shutil.rmtree(path, onerror=unlock)
 
 
-def _git(args: list[str], cwd: Path | None, timeout: int = 900) -> subprocess.CompletedProcess:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_ASKPASS": "", "SSH_ASKPASS": ""}
+def _auth_env(url: str, token: str) -> dict:
+    """`http.<origin>/.extraHeader` for this one git call, set through GIT_CONFIG_* (git 2.31+), scoped to the host."""
+    import base64
+    origin = "/".join(url.split("/")[:3]) + "/"
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"http.{origin}.extraHeader",
+            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}"}
+
+
+def _git(args: list[str], cwd: Path | None, timeout: int = 900, env: dict | None = None) -> subprocess.CompletedProcess:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_ASKPASS": "", "SSH_ASKPASS": "",
+           **(env or {})}
     try:
         return run_bounded(["git", *args], cwd=cwd, env=env, timeout=timeout)
     except FileNotFoundError:

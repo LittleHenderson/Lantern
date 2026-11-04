@@ -33,8 +33,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import httpx
+
 from lantern import learn, remote, sandbox
 
+from .ghapp import NoAccess
 from .settings import Settings
 from .store import Store
 
@@ -64,14 +67,27 @@ class RunFailed(Exception):
         self.status = status
 
 
-def clone_repo(link: str, dest: Path, log) -> Path:
-    """Step 1. Replaced in tests (the real clone is https only; `tests/test_remote.py` covers it)."""
-    return remote.clone(link, log=log, dest=dest)
+def clone_repo(link: str, dest: Path, log, token: str | None = None) -> Path:
+    """Step 1. Replaced in tests (the real clone is https only; `tests/test_remote.py` covers it). With `token` (a
+    private repository through Connect GitHub), a fresh shallow clone that hands git the token in its environment."""
+    if not token:
+        return remote.clone(link, log=log, dest=dest)
+    info = remote.parse(link)
+    log(f"cloning {info['url']}" + (f" (branch {info['branch']})" if info["branch"] else ""))
+    remote.fetch(info["url"], dest, info["branch"], auth=token)
+    return dest
 
 
 SAMPLE_PREFIX = "lantern:sample/"   # a run's "link" for one of Lantern's own starter apps (`lantern.learn`)
 NOT_PUBLIC = ("Lantern could not open this repository: it is private, or the link is wrong. "
               "Upload your app's folder instead, and Lantern checks it the same way.")
+CONNECT = ("Lantern can't read this private repository yet. Click Connect GitHub and choose it there "
+           "(Lantern only reads it), or upload your app's folder instead.")
+NO_ACCESS = ("Your GitHub account cannot read this repository, so Lantern won't either. "
+             "If it is yours, upload your app's folder instead.")
+GITHUB_ONLY = ("This repository is private. Sign in with GitHub to check private repositories, "
+               "or upload your app's folder instead.")
+HINTS = {NOT_PUBLIC: "upload", NO_ACCESS: "upload", GITHUB_ONLY: "upload", CONNECT: "connect"}
 UPLOAD_PREFIX = "lantern:upload/"   # a run's "link" for an app uploaded as a .zip; the name is only a label
 
 
@@ -88,7 +104,7 @@ def sample_id(link: str) -> str | None:
     return sid
 
 
-def get_source(link: str, dest: Path, log) -> Path:
+def get_source(link: str, dest: Path, log, access=None) -> Path:
     """Step 1: the code to read. A sample app is written from the starter templates inside the package (no network,
     nothing cloned); anything else is cloned and checked for missing files."""
     sid = sample_id(link)
@@ -99,10 +115,17 @@ def get_source(link: str, dest: Path, log) -> Path:
     try:
         repo = clone_repo(link, dest, log)
     except RuntimeError as e:
-        if "private" in str(e) and "could not clone" in str(e):   # git asked for a password: private, or no such repository
-            log(str(e))
+        if not ("private" in str(e) and "could not clone" in str(e)):   # git asked for a password: private, or no such repository
+            raise
+        log(str(e))
+        token = access() if access else None   # Connect GitHub: RuntimeError with a sentence when it cannot
+        if not token:
             raise RuntimeError(NOT_PUBLIC) from None
-        raise
+        log("private repository: copying it with your GitHub connection (read-only)")
+        try:
+            repo = clone_repo(link, dest, lambda m: log(m.replace(token, "***")), token=token)
+        except RuntimeError as e2:
+            raise RuntimeError(str(e2).replace(token, "***")) from None
     remote.check_complete(repo)
     return repo
 
@@ -143,6 +166,27 @@ class Logs:
 
 
 class Worker:
+    def access(self, r: dict):
+        """For a github.com link: a function that returns a read-only token through Connect GitHub, or raises
+        RuntimeError with the sentence to show. None when Connect GitHub is off or the host is another forge."""
+        try:
+            info = remote.parse(r["link"])
+        except ValueError:
+            return None
+        if not self.github or info["host"] != "github.com" or info["port"]:
+            return None
+
+        def get() -> str:
+            u = self.store.user(r["account"]) or {}
+            try:
+                return self.github.token_for(info["owner"], info["name"], r["account"], u.get("label"))
+            except NoAccess as e:
+                raise RuntimeError({"connect": CONNECT, "denied": NO_ACCESS}.get(e.kind, GITHUB_ONLY)) from None
+            except (httpx.HTTPError, KeyError, ValueError):
+                raise RuntimeError("GitHub did not answer Lantern's request to read this repository. "
+                                   "Try again in a minute, or upload your app's folder instead.") from None
+        return get
+
     def __init__(self, settings: Settings, store: Store):
         self.s, self.store, self.logs = settings, store, Logs()
         self.results = Path(settings.results_dir)
@@ -153,6 +197,7 @@ class Worker:
         os.chmod(self.work, 0o711)   # nosec B103 - a folder: others may pass through (the analysis user, when we run as root), not list
         self.pool = ThreadPoolExecutor(max_workers=max(1, settings.concurrent_jobs), thread_name_prefix="lantern-run")
         self.tokens: dict[str, str] = {}    # run id -> allowance token, only while its explanations wait
+        self.github = settings.github_app()   # Connect GitHub, or None
         self._sweep_work()
         with store.lock:   # tokens were in memory only: explanations cut off by a restart are reported, not retried
             store.db.execute("update runs set explain_status = 'error', explain_error = ? where explain_status in "
@@ -217,7 +262,7 @@ class Worker:
             else:
                 stage("clone")
                 try:
-                    repo = get_source(r["link"], root / "repo", log)
+                    repo = get_source(r["link"], root / "repo", log, self.access(r))
                 except (RuntimeError, ValueError) as e:
                     raise RunFailed(_scrub(str(e), scrub)) from None
             commit = _commit(repo)
@@ -322,7 +367,7 @@ class Worker:
                 raise RunFailed(UPLOAD_EXPLAIN)
             log("· Copying the repository again to read the code (nothing is run or installed)")
             try:
-                repo = get_source(r["link"], root / "repo", log)
+                repo = get_source(r["link"], root / "repo", log, self.access(r))
             except (RuntimeError, ValueError) as e:
                 raise RunFailed(_scrub(str(e), scrub)) from None
             now_at = _commit(repo)

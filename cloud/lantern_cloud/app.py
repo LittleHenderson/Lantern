@@ -34,7 +34,7 @@ from .idle import IdleExit
 from .settings import Settings
 from . import site
 from .store import FINISHED, LimitReached, Store
-from .worker import ACTIVE_EXPLAIN, NOT_PUBLIC, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, is_upload
+from .worker import ACTIVE_EXPLAIN, HINTS, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, is_upload
 
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
@@ -128,7 +128,7 @@ def run_view(r: dict, logs=None) -> dict:
             "stage": r["stage"], "error": r["error"], "created": r["created"], "started": r["started"],
             "finished": r["finished"], "commit": r["commit_sha"], "summary": r["summary"],
             "shared": bool(r["share_slug"]), "log_tail": tail,
-            "hint": "upload" if r["error"] == NOT_PUBLIC else None,   # the website offers Upload in place of the link
+            "hint": HINTS.get(r["error"]),   # "upload" / "connect": what the website offers in place of the link
             "step": next((k for k, v in STAGES.items() if v == r["stage"]), None),
             "explain": {"status": r.get("explain_status"), "error": r.get("explain_error"),
                         "summary": r.get("explain_summary"),
@@ -148,6 +148,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     store = Store(s.db_path)
     ident = Identity(s.gateway_url, s.identity_ttl, transport=transport)
     worker = Worker(s, store) if start_worker else None
+    gh = s.github_app()     # Connect GitHub (private repositories), or None
     app = FastAPI(title="Lantern cloud", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store, app.state.settings, app.state.identity, app.state.worker = store, s, ident, worker
     provider_for = provider_for or (lambda token: hosted(token, s.gateway_url))
@@ -221,7 +222,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         acc = who["account"]
         return {"account": acc.split(":", 1)[0], "label": who["label"],
                 "runs_today": store.runs_today(acc), "runs_active": store.active_runs(acc),
-                "limits": s.limits()}
+                "limits": s.limits(), "connect_url": gh.install_url if gh else None}
 
     # ---- runs ----
     def own_run(rid: str, who: dict) -> dict:
