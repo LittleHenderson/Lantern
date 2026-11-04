@@ -10,6 +10,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   Lantern reads them with a one-repository, read-only token that lasts an hour at most, only for someone GitHub says
   may read that repository. The token reaches git through its environment, never a link, file or log. "Connect private
   repositories" also sits beside "Explore GitHub". Off (Upload only) until the app is configured.
+- Findings page: its counts now match the summary, the grade and Ask Lantern. Findings in test code (test files and
+  fixtures, often planted on purpose) were counted in the page's "open" number and severity tiles but nowhere else; they
+  are now listed at the end under "In test code: N, not counted" (Advanced: an "In test code" filter).
 - Website: a private repository (or a wrong link) no longer stops with git's "could not read Username… clone it yourself"
   message. The check says in plain words that Lantern could not open it, and offers "Upload your code instead", which
   opens the upload window; git's own words stay in the log.
