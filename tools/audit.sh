@@ -39,6 +39,13 @@ assert len(sql) == 1 and sql[0]["rank"] == "critical", sql
 assert s["mobile"]["platform"] == "android"
 assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "Android app"
 EOF
+check "kotlinapp (Android, Kotlin) analyzes" lantern analyze tests/fixtures/kotlinapp --out "$W/ka"
+check "kotlinapp: Kotlin is mapped and a deep link reaching rawQuery is critical" "$PY" - "$W/ka" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["rule"].endswith("SQL-CONCAT")]
+assert len(sql) == 1 and sql[0]["rank"] == "critical" and sql[0]["node"].startswith("kt:"), sql
+EOF
 check "nextapp (Next.js + Supabase) analyzes" lantern analyze tests/fixtures/nextapp --out "$W/nx"
 check "nextapp: auth, RLS, and service-role findings" "$PY" - "$W/nx" <<'EOF'
 import json, sys

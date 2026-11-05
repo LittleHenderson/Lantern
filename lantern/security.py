@@ -137,7 +137,7 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
                           r"\bget(?:String|Int|Long|Boolean|Bundle|Parcelable|Serializable|CharSequence)(?:Array)?(?:List)?Extra\(|"
                           r"\bgetQueryParameter\(|\bgetIntent\(\)\.(?:getData|getExtras|getDataString)\(|\bintent\.(?:data|extras|dataString)\b")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
-ASSIGN = re.compile(r"^\s*(?:(?:const|let|var)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
+ASSIGN = re.compile(r"^\s*(?:(?:const|let|var|val)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
                     re.S)
 BINDS = [   # loops and context managers that bind a name to a value
@@ -146,6 +146,14 @@ BINDS = [   # loops and context managers that bind a name to a value
     re.compile(r"^\s*for\s*\(\s*(?:const|let|var)\s+(?P<lhs>[\w{}\[\], $]+?)\s+(?:of|in)\s+(?P<rhs>[^)]+)\)", re.S),
 ]
 _STRINGS = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
+_TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)")
+
+
+def _blank_string(m: re.Match) -> str:
+    """A string literal becomes `''`, keeping the names a template puts into it (`"id = $id"` in Kotlin,
+    `${id}` in a JS template literal) so a value spliced into SQL or a command is still seen as used."""
+    refs = [a or b for a, b in _TEMPLATE_REF.findall(m.group(0))]
+    return "''" + "".join(f" + {r}" for r in refs)
 
 
 def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple[int, int, str]]:
@@ -156,7 +164,7 @@ def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple
     out, buf, start, depth = [], [], 0, 0
     for ln in range(first, min(last, len(lines)) + 1):
         raw = lines[ln - 1]
-        code = _STRINGS.sub("''", raw)
+        code = _STRINGS.sub(_blank_string, raw)
         code = re.sub(r"//.*$" if js else r"#.*$", "", code)
         if not buf:
             start = ln
@@ -222,7 +230,13 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
             m = re.fullmatch(r"\w+\((\w+)\)", pat)             # State(state), Path(id), Json(body)
             params.append(m.group(1) if m else pat)
         params = [x for x in params if re.fullmatch(r"[A-Za-z_]\w*", x)]
-    elif f["file"].endswith((".java", ".kt", ".cs")):
+    elif f["file"].endswith(".kt"):
+        # Kotlin writes `name: Type` (after `vararg`, `val`, annotations): the name before each top-level colon
+        inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
+        inner = re.sub(r"<[^<>]*>", "", re.sub(r"@\w+(\([^)]*\))?", "", inner))
+        params = [m.group(1) for piece in re.split(r",(?![^(]*\))", inner)
+                  for m in [re.search(r"([A-Za-z_]\w*)\s*:", piece)] if m]
+    elif f["file"].endswith((".java", ".cs")):
         # `Type name` order: the last identifier of each parameter (annotations and generics stripped)
         inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
         inner = re.sub(r"<[^<>]*>", "", re.sub(r"@\w+(\([^)]*\))?", "", inner))

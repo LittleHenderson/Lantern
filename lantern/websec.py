@@ -60,9 +60,10 @@ JS_RULES = [
 ]
 
 JAVA_RULES = [
-    ("LV-SQL-CONCAT", re.compile(r"(?:executeQuery|executeUpdate|execute|createQuery|createNativeQuery|prepareStatement|query|queryForObject|queryForList|update)\s*\(\s*(?:\"[^\"]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b[^\"]*\"\s*\+|String\.format\(\s*\"[^\"]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b)", re.I), "HIGH",
-     "Builds SQL from variables (SQL injection risk)", 89),
-    ("LV-EXEC-CONCAT", re.compile(r"(?:Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder)\s*\([^)\n]*(?:\+|String\.format)"), "HIGH",
+    ("LV-SQL-CONCAT", re.compile(r"(?:executeQuery|executeUpdate|execute|createQuery|createNativeQuery|prepareStatement|query|queryForObject|queryForList|update)\s*\(\s*(?:\"[^\"]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b[^\"]*\"\s*\+|String\.format\(\s*\"[^\"]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b"
+                               r"|\"[^\"]*\b(?:SELECT|INSERT|UPDATE|DELETE)\b[^\"]*\$\{?[A-Za-z_])", re.I), "HIGH",
+     "Builds SQL from variables (SQL injection risk)", 89),     # the last form is a Kotlin string template
+    ("LV-EXEC-CONCAT", re.compile(r"(?:Runtime\.getRuntime\(\)\.exec|(?:new\s+)?ProcessBuilder)\s*\((?:[^)\n]*(?:\+|String\.format)|\s*\"[^\"\n]*\$\{?[A-Za-z_])"), "HIGH",
      "Builds a shell command from variables (command injection risk)", 78),
     ("LV-TLS-OFF", re.compile(r"setHostnameVerifier\s*\(\s*\([^)]*\)\s*->\s*true|ALLOW_ALL_HOSTNAME_VERIFIER|checkServerTrusted\s*\([^)]*\)\s*\{\s*\}"), "MEDIUM",
      "Turns off HTTPS certificate checks", 295),
@@ -205,7 +206,9 @@ def rust_rules(repo: Path) -> list[dict]:
 
 
 def java_rules(repo: Path) -> list[dict]:
-    return _pattern_rules(repo, {".java"}, JAVA_RULES, skip=lambda rel: "/src/test/" in rel or rel.startswith("src/test/"))
+    # Kotlin servers (Spring, Ktor) call the same Java APIs, so the same patterns apply to .kt files
+    return _pattern_rules(repo, {".java", ".kt"}, JAVA_RULES,
+                          skip=lambda rel: "/src/test/" in rel or rel.startswith("src/test/"))
 
 
 def _pattern_rules(repo: Path, exts: set[str], rules, skip) -> list[dict]:
@@ -592,7 +595,7 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
 def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
     its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
-    js = n.id.startswith(("js:", "go:", "jv:"))      # JS, Go and Java use camelCase; Python and Rust snake_case
+    js = n.id.startswith(("js:", "go:", "jv:", "kt:"))   # JS, Go, Java and Kotlin use camelCase; Python and Rust snake_case
     for d in n.decorators:
         if auth_ident(d, js):
             return f"decorator @{d.split('(')[0]}"
@@ -607,7 +610,7 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
                 if v in seen:
                     continue
                 seen.add(v)
-                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:"))):
+                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:"))):
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt

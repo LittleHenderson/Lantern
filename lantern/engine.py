@@ -1,10 +1,10 @@
-"""Build the full-stack graph: Python, then TypeScript/JavaScript, then the API bridge between them."""
+"""Build the full-stack graph: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, then the API bridge between them."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, go_frontend, java_frontend, js_frontend, lanes, packs, python_frontend, rust_frontend
+from . import bridge, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, python_frontend, rust_frontend
 from .graph import Graph
 
 
@@ -15,6 +15,7 @@ def build_graph(repo: str | Path) -> Graph:
     go = go_frontend.add_go(g, repo)
     rs = rust_frontend.add_rust(g, repo)
     jv = java_frontend.add_java(g, repo)
+    kt = kotlin_frontend.add_kotlin(g, repo)
     langs = {}
     if py["files"]:
         langs["python"] = py
@@ -26,10 +27,12 @@ def build_graph(repo: str | Path) -> Graph:
         langs["rust"] = rs
     if jv.get("files"):
         langs["java"] = jv
+    if kt.get("files"):
+        langs["kotlin"] = kt
     g.meta.update({
         "languages": langs,
-        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv)),
-        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv)),
+        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv, kt)),
+        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv, kt)),
         "language": " + ".join(langs) or "none",
     })
     # Analysis packs (pattern files) can add entry points for frameworks without built-in support, before the
