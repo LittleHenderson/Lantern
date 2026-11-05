@@ -22,7 +22,7 @@ async function axe(p, tag, errs, opts = {}) {
   for (const t of targets) {
     const where = t === p ? '' : ` (frame ${path.basename((t.url && t.url()) || '')})`;
     try {
-      await t.evaluate(new Function(AXE));
+      await t.evaluate(AXE);   // a string: Playwright runs it in the page itself, as a function would be
       // inside a frame the report is transparent and the host page's backdrop shows through, which axe cannot see
       // (it would measure every colour against white); contrast is measured on the report opened by itself instead
       const run = t === p ? RUN : { ...RUN, rules: { ...RUN.rules, 'color-contrast': { enabled: false } } };
