@@ -688,7 +688,7 @@ def add_cpp(g: Graph, repo: str | Path) -> dict:
         env = dict(fn.params)
         add_refs(fid, link.walk(body, fn, env, set()))
         # route lambdas become their own nodes; their calls move from the enclosing function to them
-        for verb, path, h, owner, line in link.routes[before:]:
+        for verb, path, h, _owner, _line in link.routes[before:]:
             detail = f"{verb} {path}"
             if isinstance(h, str):
                 if h in g.nodes and not (g.nodes[h].entry and g.nodes[h].entry.get("kind") == "route"):
@@ -711,7 +711,7 @@ def add_cpp(g: Graph, repo: str | Path) -> dict:
             add_refs(lid, link.walk(h.child_by_field_name("body"), lfn, lenv, set()))
 
     # Drogon controllers declare their routes in the class body: ADD_METHOD_TO(Ctrl::m, "/p", Get, Post)
-    for rel, text in texts.items():
+    for text in texts.values():
         for m in DROGON_RE.finditer(text):
             qual, _, name = m.group(2).rpartition("::")
             hit = model.find(qual, "") if qual else None

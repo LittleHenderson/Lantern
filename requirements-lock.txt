@@ -121,6 +121,12 @@ tomli-w==1.2.0
     # via pip-audit
 tree-sitter==0.25.2
     # via lantern (pyproject.toml)
+tree-sitter-c==0.24.2
+    # via lantern (pyproject.toml)
+tree-sitter-c-sharp==0.23.5
+    # via lantern (pyproject.toml)
+tree-sitter-cpp==0.23.4
+    # via lantern (pyproject.toml)
 tree-sitter-dart==0.1.0
     # via lantern (pyproject.toml)
 tree-sitter-go==0.25.0
@@ -131,7 +137,11 @@ tree-sitter-javascript==0.25.0
     # via lantern (pyproject.toml)
 tree-sitter-kotlin==1.1.0
     # via lantern (pyproject.toml)
+tree-sitter-php==0.25.1
+    # via lantern (pyproject.toml)
 tree-sitter-python==0.25.0
+    # via lantern (pyproject.toml)
+tree-sitter-ruby==0.23.1
     # via lantern (pyproject.toml)
 tree-sitter-rust==0.24.2
     # via lantern (pyproject.toml)

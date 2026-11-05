@@ -750,7 +750,7 @@ def add_csharp(g: Graph, repo: str | Path) -> dict:
         """Minimal APIs: a named handler becomes the route; an inline lambda becomes its own node."""
         nonlocal routes
         lambdas = set()
-        for verb, path, h, line in _minimal_apis(model, f, ns, scope_nodes, owner_id):
+        for verb, path, h, _line in _minimal_apis(model, f, ns, scope_nodes, owner_id):
             detail = f"{verb} {path if path.startswith('/') else '/' + path}"
             if h.type == "member_access_expression":    # MapGet("/n/{id}", NoteEndpoints.Get)
                 hit = model.find_class(f, ns, cls, _t(h.child_by_field_name("expression")))
