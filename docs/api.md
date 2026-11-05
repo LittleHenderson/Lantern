@@ -176,6 +176,10 @@ Sinatra blocks are their own node `rb:<file>::GET /path`); a job's `perform` is 
 action covered by a `before_action` named with an auth word (`authenticate_user!`, `require_login`; inherited, `only:`/
 `except:`, not removed by `skip_before_action`) has a `middleware` edge to `ext:middleware.auth`.
 
+A C/C++ program's start is `main` (`program start (<file>)`, id `cc:main@<file>`: each program keeps its own); its web routes
+(cpp-httplib `svr.Get`, Crow `CROW_ROUTE`, Drogon `ADD_METHOD_TO`/`registerHandler`, Pistache `Routes::Get`) are `route`
+entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch2 blocks are `test` (`cc:<file>::TEST Suite.Name`).
+
 ### `security.json`
 
 `{"findings": [...], "tools": [{"tool", "status", "version"}], "counts": {critical, high, medium, low, in_tests, accepted},

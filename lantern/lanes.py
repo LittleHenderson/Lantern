@@ -47,7 +47,10 @@ DATA_RE = re.compile(
     r"Http|Storage|Mail|Redis|Cache|Client|wpdb|wp_remote_\w+|wp_mail|"
     # Ruby (`ext:ActiveRecord.where`, `ext:Net.HTTP.get`, Kernel's shell and eval)
     r"ActiveRecord|Net\.HTTP|HTTParty|Faraday|RestClient|Open3|Kernel\.(system|exec|spawn|open|`|eval)|IO|Marshal|"
-    r"FileUtils|Aws|Stripe|Sidekiq|ActionMailer)"
+    r"FileUtils|Aws|Stripe|Sidekiq|ActionMailer|"
+    # C/C++ (`ext:sqlite3_exec`, `ext:std.system`, libcurl, sockets, files)
+    r"sqlite3_\w+|mysql_\w+|PQ\w+|curl_\w+|popen|execl\w*|execv\w*|fopen|fwrite|std\.system|"
+    r"std\.ifstream|std\.ofstream|std\.fstream|sendto|recv|socket|soci|pqxx|httplib\.Client)"
     r"(\.|\(|$|/)"
 )
 
@@ -141,7 +144,7 @@ def lane_for_file(file: str | None, android: dict | None = None) -> str | None:
         return None
     if android and _in_roots(file, android):
         return "frontend"                     # the manifest, the build file and the app's code ship on the phone
-    if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs", ".swift", ".dart", ".php", ".rb")):
+    if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs", ".swift", ".dart", ".php", ".rb", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp")):
         return "server"
     if re.search(r"\.[cm]?[jt]sx?$", file):
         return "server" if SERVER_PATH_RE.search(file) else "frontend"

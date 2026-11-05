@@ -159,6 +159,13 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
 RUBY_REQUEST_DATA = re.compile(REQUEST_DATA.pattern + r"|\bparams\b(?:\[[^\]\n]*\])?(?!\s*=[^=])|\brequest\.(?:body|raw_post|headers|"
                                r"query_string|query_parameters|request_parameters|params|env|fullpath|url)\b|"
                                r"\bcookies\s*\[|\bARGV\b|\bgets\b")
+# C/C++: program arguments, the environment, what arrives on a socket or stdin, and the request objects of cpp-httplib,
+# Crow, Drogon and Pistache.
+C_EXTS = (".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".ipp")
+C_REQUEST_DATA = re.compile(REQUEST_DATA.pattern + r"|\bargv\s*\[\s*\w*\s*\]|\bgetenv\s*\(|\b(?:recv|recvfrom|fgets|gets)\s*\(|"
+                            r"\bgetline\s*\(\s*(?:std::)?cin\b|\bstd::cin\b|\bscanf\s*\(|\breq(?:uest)?(?:\.|->)(?:get_param_value|get_header_value|"
+                            r"get_file_value|body|params|path_params|url_params|matches|getParameter|getBody|getJsonObject|"
+                            r"getHeader|query|param|resource)\b|\breq->getParameter\b")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var|val)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
@@ -201,6 +208,22 @@ def _rb_line(raw: str) -> str:
     action), `%x(...)`/`%Q(...)` read as strings."""
     t = re.sub(r"%[xQqw]?\((.*?)\)", lambda m: '"' + m.group(1).replace('"', "'") + '"', raw)
     return re.sub(r"(?<![\w@])@(?=[A-Za-z_])", "", t)
+
+
+_C_DECL = re.compile(r"^(\s*)(?:(?:const|static|unsigned|signed|auto|struct|volatile|register)\s+)*[A-Za-z_][\w:]*"
+                     r"(?:<[^;=()]*>)?(?:\s+const)?[\s*&]+(?=[A-Za-z_]\w*\s*(?:\[[^\]]*\]\s*)?=)")
+_C_FILL = re.compile(r"^(\s*)(?:std::)?(sn?printf|strn?cpy|strn?cat|memcpy|asprintf)\s*\(\s*&?([A-Za-z_]\w*)\s*,(.*)\)\s*;")
+
+
+def _c_line(raw: str) -> str:
+    """A C/C++ line for the input check: a declaration `std::string q = …` read as `q = …`, and a buffer filled by
+    `sprintf(buf, …, x)` / `strcpy(buf, x)` read as `buf = … x` (`strcat` as `buf += x`)."""
+    t = _C_DECL.sub(r"\1", raw)
+    m = _C_FILL.match(t)
+    if m:
+        op = "+=" if "cat" in m.group(2) else "="
+        t = f"{m.group(1)}{m.group(3)} {op} {m.group(4)};"
+    return t
 
 
 def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple[int, int, str]]:
@@ -265,7 +288,9 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
     if f["file"].endswith(".php"):
         src = [_php_line(x) for x in src]
         show = (lambda x: re.sub(r"^(request|_[A-Z]+)\b", r"$\1", x).replace(".", "->"))   # back to PHP spelling
-    req_re = REQUEST_DATA
+    req_re = C_REQUEST_DATA if f["file"].endswith(C_EXTS) else REQUEST_DATA
+    if f["file"].endswith(C_EXTS):
+        src = [_c_line(x) for x in src]
     if f["file"].endswith(".rb"):
         src = [_rb_line(x) for x in src]
         req_re = RUBY_REQUEST_DATA
@@ -300,6 +325,12 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         inner = re.sub(r"<[^<>]*>", "", re.sub(r"@\w+(\([^)]*\))?", "", inner))
         params = [m.group(1) for piece in re.split(r",(?![^(]*\))", inner)
                   for m in [re.search(r"([A-Za-z_]\w*)\s*:", piece)] if m]
+    elif f["file"].endswith(C_EXTS):
+        # C/C++ write `const std::string& name`, `char **argv`, `int n = 3`: the identifier before any default
+        inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
+        inner = re.sub(r"<[^<>]*>", "", inner)
+        params = [m.group(1) for piece in inner.split(",")
+                  for m in [re.search(r"([A-Za-z_]\w*)\s*(?:\[[^\]]*\])*\s*(?:=[^,]*)?$", piece.strip())] if m]
     elif f["file"].endswith((".java", ".cs")):
         # `Type name` order: the last identifier of each parameter (annotations and generics stripped)
         inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]

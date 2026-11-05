@@ -1,10 +1,10 @@
-"""Build the full-stack graph: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, Swift, Dart, C#, PHP, Ruby, then the API bridge between them."""
+"""Build the full-stack graph: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, Swift, Dart, C#, PHP, Ruby, C/C++, then the API bridge between them."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, csharp_frontend, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, php_frontend, python_frontend, ruby_frontend, rust_frontend, swift_frontend
+from . import bridge, cpp_frontend, csharp_frontend, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, php_frontend, python_frontend, ruby_frontend, rust_frontend, swift_frontend
 from .graph import Graph
 
 
@@ -21,6 +21,7 @@ def build_graph(repo: str | Path) -> Graph:
     cs = csharp_frontend.add_csharp(g, repo)
     ph = php_frontend.add_php(g, repo)
     rb = ruby_frontend.add_ruby(g, repo)
+    cc = cpp_frontend.add_cpp(g, repo)
     langs = {}
     if py["files"]:
         langs["python"] = py
@@ -44,10 +45,12 @@ def build_graph(repo: str | Path) -> Graph:
         langs["php"] = ph
     if rb.get("files"):
         langs["ruby"] = rb
+    if cc.get("files"):
+        langs["c/c++"] = cc
     g.meta.update({
         "languages": langs,
-        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs, ph, rb)),
-        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs, ph, rb)),
+        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs, ph, rb, cc)),
+        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs, ph, rb, cc)),
         "language": " + ".join(langs) or "none",
     })
     # Analysis packs (pattern files) can add entry points for frameworks without built-in support, before the

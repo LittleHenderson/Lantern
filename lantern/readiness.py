@@ -33,7 +33,7 @@ CATEGORIES = [
     ("docs", "Documentation", 6),
 ]
 
-CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".php", ".rb"}
+CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".php", ".rb", ".c", ".cc", ".cpp", ".cxx"}
 MOBILE_EXTS = {".java", ".kt", ".swift", ".dart", ".cs"}  # a phone app's code: counted for tests and the Android/iOS checks only
 MOBILE_TEST_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/|(^|/)[^/]*(Tests|UITests)/[^/]*\.swift$|(^|/)(test|integration_test)/.*_test\.dart$|(^|/)[^/]*\.Tests?/[^/]*\.cs$")
 # What Android Studio writes into every new project: a test that checks 2 + 2 and one that reads the package name.
@@ -89,7 +89,7 @@ SHUTDOWN = re.compile(r"signal\.signal\(\s*signal\.SIGTERM|SIGTERM|lifespan|@app
 HEALTH_PATH = re.compile(r"/(health|healthz|healthcheck|ready|readyz|livez|ping|status)\b", re.I)
 TEST_CMD = re.compile(r"\b(pytest|unittest|tox|nox|npm (run )?test|pnpm (run )?test|yarn test|vitest|jest|playwright test|go test|cargo test|make test|"
                       r"gradlew?(?:\.bat)?(?:\s+[-\w:]+)*?\s+[\w:]*(?:test\w*|check|connected\w*AndroidTest)|mvn\s+(?:-\S+\s+)*(?:test|verify)|"
-                      r"xcodebuild\s+(?:\S+\s+)*test|flutter test|swift test|dotnet test|phpunit|pest|artisan test|composer test|rspec|rails test|rake test|bundle exec rake)\b")
+                      r"xcodebuild\s+(?:\S+\s+)*test|flutter test|swift test|dotnet test|phpunit|pest|artisan test|composer test|rspec|rails test|rake test|bundle exec rake|ctest|make (?:test|check)|meson test|bazel test)\b")
 SCAN_CMD = re.compile(r"\b(lantern|bandit|pip-audit|npm audit|pnpm audit|yarn audit|semgrep|opengrep|codeql|trivy|snyk|gitleaks|safety|osv-scanner|dependabot|mobsf|dependency-check)\b", re.I)
 
 
@@ -183,7 +183,7 @@ class Repo:
 def detect_stack(repo: Repo, g: Graph) -> dict:
     deps_text = " ".join(repo.text(f) for f in repo.project_files
                          if f.rsplit("/", 1)[-1] in ("pyproject.toml", "package.json", "Pipfile", "go.mod", "Cargo.toml",
-                                                     "pom.xml", "build.gradle", "build.gradle.kts", "composer.json", "Gemfile")
+                                                     "pom.xml", "build.gradle", "build.gradle.kts", "composer.json", "Gemfile", "CMakeLists.txt", "conanfile.txt", "conanfile.py", "vcpkg.json", "meson.build")
                          or re.search(r"(^|/)requirements[^/]*\.txt$", f)).lower()
     fw = []
     for key, label in (("fastapi", "FastAPI"), ("flask", "Flask"), ("django", "Django"), ("starlette", "Starlette"),
@@ -197,7 +197,9 @@ def detect_stack(repo: Repo, g: Graph) -> dict:
                        ("micronaut", "Micronaut"), ("javalin", "Javalin"), ("laravel/framework", "Laravel"),
                        ("symfony/framework-bundle", "Symfony"), ("slim/slim", "Slim"), ("laravel/lumen", "Lumen"),
                        ("gem \"rails\"", "Rails"), ("gem 'rails'", "Rails"), ("gem \"sinatra\"", "Sinatra"),
-                       ("gem 'sinatra'", "Sinatra"), ("gem \"hanami\"", "Hanami")):
+                       ("gem 'sinatra'", "Sinatra"), ("gem \"hanami\"", "Hanami"),
+                       ("httplib", "cpp-httplib"), ("crow", "Crow"), ("drogon", "Drogon"), ("pistache", "Pistache"),
+                       ("find_package(qt", "Qt"), ("boost", "Boost")):
         if key in deps_text:
             fw.append(label)
     entries = Counter((n.entry or {}).get("kind") for n in g.entry_points())
@@ -742,7 +744,7 @@ def check_docs(repo: Repo) -> list[dict]:
     readme = repo.has("README.md", "README.rst", "README.txt", "README")
     t = repo.text(readme) if readme else ""
     runs = bool(re.search(r"(pip install|npm (install|i|run)|pnpm|yarn|uv |poetry|docker|make |python -m|npx |gradlew|"
-                          r"Android Studio|flutter (run|build)|xcodebuild|pod install|cargo (run|build)|go (run|build)|dotnet (run|build|publish)|composer install|php artisan|php -S|bundle install|bundle exec|rails (s|server|db:)|bin/rails|rackup|ruby \S+\.rb)", t))
+                          r"Android Studio|flutter (run|build)|xcodebuild|pod install|cargo (run|build)|go (run|build)|dotnet (run|build|publish)|composer install|php artisan|php -S|bundle install|bundle exec|rails (s|server|db:)|bin/rails|rackup|ruby \S+\.rb|cmake (-S|-B|--build|\.\.)|make\b|meson (setup|compile)|ninja)", t))
     lic = repo.has("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
     sec = repo.has("SECURITY.md", ".github/SECURITY.md")
     return [
