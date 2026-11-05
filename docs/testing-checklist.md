@@ -374,3 +374,47 @@ much work it is.
   `docs/audit/CLAIMS.md`.
 - **Incident notes**: when something breaks in the live service, a short write-up of what happened and what now
   prevents it (the tree-sitter crash is a good first one to write).
+
+## What this checklist does not cover yet
+
+Added after a first read. These are areas serious companies also check that the ten sections above leave out.
+
+**Lantern's own supply chain.** Whether a stranger can trust the download itself: GitHub Actions pinned to exact
+versions, a list of everything inside the package (an "SBOM"), and signed releases. *Scenario:* an action Lantern's CI
+uses is taken over; pinned versions mean the takeover never runs on Lantern's builds.
+
+**Upgrades.** Results saved by an older version open in the newer one, and the lantern-cloud database survives a
+schema change. *Scenario:* a tester's saved v0.9 report shows a blank page after they update to v0.11.
+
+**Outside services failing.** GitHub, the vulnerability database (OSV), Anthropic or DeepSeek going down or slow.
+*Scenario:* OSV is down during a cloud run; the run should finish and say "libraries not checked", not hang or fail.
+
+**Model changes.** When the model behind the free allowance is updated or retired, the explanation pass rate is
+re-measured before testers see it. *Scenario:* a new Haiku version quietly halves the share of explanations that pass.
+
+**Ask Lantern answers.** An eval of the assistant's answers (does it stick to the facts, admit when it doesn't know),
+the way section 8.4 covers explanations.
+
+**Abuse and cost.** Someone using lantern-cloud as free computing, or making many accounts to multiply the free
+allowance; the money spent per run and per day watched with an alert. *Scenario:* one person signs in with 20 GitHub
+accounts and spends the month's allowance in a night.
+
+**Do the tests catch bugs? ("mutation testing").** A tool makes small deliberate mistakes in the code and checks that
+some test fails each time. A test suite can be large and still miss things; this measures that.
+
+**Time and dates.** Daily limits reset at midnight UTC, 90-day expiry, Evidence dates. *Scenario:* a tester in
+California hits the daily limit at 4:59 p.m. and is surprised it resets at 5:00 p.m.
+
+**Licences.** Every library and grammar Lantern ships has a licence that allows it (spec 9.1 already flags scanner
+licensing for cloud mode), and lantern-cloud has terms of use.
+
+**One-person risk.** Deploys run only from one laptop and the admin secret lives in one password manager. *Scenario:*
+the laptop is lost the day lantern-cloud needs an urgent fix. A written deploy-from-anywhere step and a second
+recovery path close this.
+
+**Security reports from strangers.** `SECURITY.md` says where to report a hole; a company also tests that path
+(someone reads the inbox, there is a promised reply time).
+
+**Lantern grades others on what it skips itself.** Lantern's Readiness score checks other apps for monitoring,
+backups and accessibility. Lantern should pass its own Readiness checks, the way it already must pass its own security
+audit (principle 4).
