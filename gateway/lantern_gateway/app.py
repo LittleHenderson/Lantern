@@ -136,6 +136,17 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def until_midnight_utc(now: dt.datetime | None = None) -> str:
+    """"in 5 h 20 min (00:00 UTC)": the daily limits reset at midnight UTC, which is not midnight for most people, so
+    every message that says when also says how long from now."""
+    now = now or dt.datetime.now(dt.UTC)
+    nxt = (now + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    mins = max(1, int((nxt - now).total_seconds() // 60))
+    h, m = divmod(mins, 60)
+    when = f"{h} h {m} min" if h else f"{m} min"
+    return f"in {when} (00:00 UTC)"
+
+
 class SignupsPaused(Exception):
     """Today's cap on new accounts is reached; existing accounts keep working."""
 
@@ -653,7 +664,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                         remaining=0)
         if r["today"] <= 0:
             return _err(402, "daily_limit",
-                        f"You've reached today's free limit ({s.daily_requests}). It resets at 00:00 UTC.",
+                        f"You've reached today's free limit ({s.daily_requests}). It resets {until_midnight_utc()}.",
                         remaining=r["requests"])
         if store.spend_today(day) >= s.global_daily_usd:
             return _err(503, "allowance_paused",

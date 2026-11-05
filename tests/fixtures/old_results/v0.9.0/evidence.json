@@ -1,0 +1,607 @@
+{
+ "evidence_version": 1,
+ "header": {
+  "repo": "shop-v0.9.0",
+  "name": "shop-v0.9.0",
+  "commit": null,
+  "note": "not a git repository",
+  "generated_at": "2026-11-05 05:36 UTC",
+  "mode": "local",
+  "privacy": "full"
+ },
+ "scorecard": {
+  "readiness": {
+   "score": 24,
+   "grade": "F",
+   "shape": "full-stack web app",
+   "categories": [
+    {
+     "title": "Security findings",
+     "weight": 20,
+     "score": 0.0,
+     "percent": 0
+    },
+    {
+     "title": "Secrets and config",
+     "weight": 12,
+     "score": 3.6,
+     "percent": 30
+    },
+    {
+     "title": "Input and error handling",
+     "weight": 10,
+     "score": 10.0,
+     "percent": 100
+    },
+    {
+     "title": "Dependencies",
+     "weight": 10,
+     "score": 3.3,
+     "percent": 33
+    },
+    {
+     "title": "Tests",
+     "weight": 10,
+     "score": 5.0,
+     "percent": 50
+    },
+    {
+     "title": "Observability",
+     "weight": 8,
+     "score": 2.0,
+     "percent": 25
+    },
+    {
+     "title": "Packaging",
+     "weight": 8,
+     "score": 0.0,
+     "percent": 0
+    },
+    {
+     "title": "CI/CD",
+     "weight": 8,
+     "score": 0.0,
+     "percent": 0
+    },
+    {
+     "title": "Resilience",
+     "weight": 8,
+     "score": 0.0,
+     "percent": 0
+    },
+    {
+     "title": "Documentation",
+     "weight": 6,
+     "score": 0.0,
+     "percent": 0
+    }
+   ]
+  },
+  "now": {
+   "critical": 2,
+   "high": 2,
+   "medium": 2,
+   "low": 2
+  },
+  "before": {
+   "critical": 2,
+   "high": 2,
+   "medium": 2,
+   "low": 2
+  },
+  "baseline_date": "2026-11-05",
+  "baseline_commit": null,
+  "baseline_readiness": {
+   "score": 24,
+   "grade": "F",
+   "categories": {
+    "Security findings": 0.0,
+    "Secrets and config": 3.6,
+    "Input and error handling": 10.0,
+    "Dependencies": 3.3,
+    "Tests": 5.0,
+    "Observability": 2.0,
+    "Packaging": 0.0,
+    "CI/CD": 0.0,
+    "Resilience": 0.0,
+    "Documentation": 0.0
+   }
+  },
+  "new": []
+ },
+ "architecture": {
+  "languages": {
+   "python": {
+    "files": 6,
+    "lines": 106
+   },
+   "typescript/javascript": {
+    "files": 6,
+    "lines": 75,
+    "unresolved": 4,
+    "components": 5,
+    "http_calls": 3
+   }
+  },
+  "files": 12,
+  "lines": 181,
+  "entries": [
+   {
+    "kind": "route",
+    "detail": "GET /users/{user_id}",
+    "name": "shop.app.read_user",
+    "file": "shop/app.py"
+   },
+   {
+    "kind": "route",
+    "detail": "POST /backup",
+    "name": "shop.app.backup",
+    "file": "shop/app.py"
+   },
+   {
+    "kind": "cli",
+    "detail": "click.command()",
+    "name": "shop.cli.admin",
+    "file": "shop/cli.py"
+   },
+   {
+    "kind": "main",
+    "detail": "python shop/cli.py",
+    "name": "shop.cli.<main>",
+    "file": "shop/cli.py"
+   },
+   {
+    "kind": "main",
+    "detail": "app start (web/src/main.tsx)",
+    "name": "web/src/main",
+    "file": "web/src/main.tsx"
+   },
+   {
+    "kind": "page",
+    "detail": "/admin",
+    "name": "web/src/pages/Admin::Admin",
+    "file": "web/src/pages/Admin.tsx"
+   },
+   {
+    "kind": "page",
+    "detail": "/users/:id",
+    "name": "web/src/pages/UserPage::UserPage",
+    "file": "web/src/pages/UserPage.tsx"
+   }
+  ],
+  "bridge": {
+   "http_calls": 3,
+   "routes": 2,
+   "matched": 2,
+   "exact": 1,
+   "suffix": 1,
+   "unknown-prefix": 0,
+   "exact-path-only": 0,
+   "ambiguous": 0,
+   "external": 1,
+   "unmatched": 0,
+   "unmatched_examples": []
+  },
+  "advice": [
+   "Deploy the frontend and the API as two pieces: the frontend as static files or on a platform such as Vercel or Netlify, the API as a container (Fly.io, Render, Railway, Cloud Run).",
+   "Keep all configuration in environment variables, with an .env.example listing every name.",
+   "Use a managed database with automatic backups, and connect through a pooled connection string.",
+   "Put the API behind HTTPS only, and allow your frontend's origin in CORS (not `*`)."
+  ],
+  "shape": "full-stack web app",
+  "frameworks": [
+   "React",
+   "Vite"
+  ],
+  "edges": {
+   "resolved": 29,
+   "inferred": 8,
+   "possible": 1
+  }
+ },
+ "security": {
+  "open": [
+   {
+    "id": "57fa455f7b3b",
+    "rank": "critical",
+    "rule": "B602",
+    "tool": "bandit",
+    "title": "subprocess call with shell=True identified, security issue.",
+    "file": "shop/app.py",
+    "line": 16,
+    "tool_confidence": "HIGH",
+    "hot_lane": "server",
+    "lanes": [
+     "browser",
+     "frontend",
+     "server",
+     "data"
+    ],
+    "path": [
+     "js:web/src/pages/Admin::Admin",
+     "js:web/src/pages/Admin::BackupButton",
+     "js:web/src/pages/Admin::BackupButton.start",
+     "js:web/src/api::runBackup",
+     "py:shop.app.backup"
+    ]
+   },
+   {
+    "id": "12771352490c",
+    "rank": "critical",
+    "rule": "B324",
+    "tool": "bandit",
+    "title": "Use of weak MD5 hash for security. Consider usedforsecurity=False",
+    "file": "shop/auth.py",
+    "line": 18,
+    "tool_confidence": "HIGH",
+    "hot_lane": "server",
+    "lanes": [
+     "browser",
+     "frontend",
+     "server"
+    ],
+    "path": [
+     "js:web/src/pages/UserPage::UserPage",
+     "js:web/src/api::getUser",
+     "py:shop.app.read_user",
+     "py:shop.auth.Session.login",
+     "py:shop.auth.check_password"
+    ]
+   },
+   {
+    "id": "271ac69ef170",
+    "rank": "high",
+    "rule": "B608",
+    "tool": "bandit",
+    "title": "Possible SQL injection vector through string-based query construction.",
+    "file": "shop/repo.py",
+    "line": 15,
+    "tool_confidence": "MEDIUM",
+    "hot_lane": "server",
+    "lanes": [
+     "browser",
+     "frontend",
+     "server"
+    ],
+    "path": [
+     "js:web/src/pages/UserPage::UserPage",
+     "js:web/src/api::getUser",
+     "py:shop.app.read_user",
+     "py:shop.auth.Session.login",
+     "py:shop.repo.UserRepo.get"
+    ]
+   },
+   {
+    "id": "3009f20c07ea",
+    "rank": "high",
+    "rule": "LW-PUBLIC-SECRET",
+    "tool": "lantern-web",
+    "title": "Secret-looking setting VITE_ADMIN_SECRET is sent to every visitor's browser",
+    "file": "web/src/pages/Admin.tsx",
+    "line": 4,
+    "tool_confidence": "HIGH",
+    "hot_lane": "frontend",
+    "lanes": [
+     "frontend"
+    ],
+    "path": null
+   },
+   {
+    "id": "27105c2e3afc",
+    "rank": "medium",
+    "rule": "LW-AUTH-MISSING",
+    "tool": "lantern-web",
+    "title": "POST /backup changes data, is called by the app, and no login check was found",
+    "file": "shop/app.py",
+    "line": 14,
+    "tool_confidence": "LOW",
+    "hot_lane": "server",
+    "lanes": [
+     "browser",
+     "frontend",
+     "server",
+     "data"
+    ],
+    "path": [
+     "js:web/src/pages/Admin::Admin",
+     "js:web/src/pages/Admin::BackupButton",
+     "js:web/src/pages/Admin::BackupButton.start",
+     "js:web/src/api::runBackup",
+     "py:shop.app.backup"
+    ]
+   },
+   {
+    "id": "408d05131176",
+    "rank": "medium",
+    "rule": "LJ-XSS-HTML",
+    "tool": "lantern-web",
+    "title": "Inserts raw HTML into the page (cross-site scripting risk)",
+    "file": "web/src/components/Bio.tsx",
+    "line": 3,
+    "tool_confidence": "HIGH",
+    "hot_lane": "frontend",
+    "lanes": [
+     "browser",
+     "frontend"
+    ],
+    "path": [
+     "js:web/src/pages/UserPage::UserPage",
+     "js:web/src/components/Bio::Bio"
+    ]
+   },
+   {
+    "id": "6715dbeeddd8",
+    "rank": "low",
+    "rule": "B404",
+    "tool": "bandit",
+    "title": "Consider possible security implications associated with the subprocess module.",
+    "file": "shop/app.py",
+    "line": 1,
+    "tool_confidence": "HIGH",
+    "hot_lane": "server",
+    "lanes": [
+     "server"
+    ],
+    "path": null
+   },
+   {
+    "id": "311ab0c79578",
+    "rank": "low",
+    "rule": "B105",
+    "tool": "bandit",
+    "title": "Possible hardcoded password: 'hunter2-super-secret'",
+    "file": "shop/auth.py",
+    "line": 5,
+    "tool_confidence": "MEDIUM",
+    "hot_lane": "server",
+    "lanes": [
+     "server"
+    ],
+    "path": null
+   }
+  ],
+  "accepted": [],
+  "fixed": [],
+  "changed": [],
+  "in_tests": 1,
+  "protections": [
+   {
+    "id": "rate-limit",
+    "title": "Rate limiting",
+    "status": "add",
+    "why": "1 route(s) that change data can be called as fast as an attacker likes: password guessing, sign-up spam, or running up your bill.",
+    "evidence": [
+     "POST /backup (shop/app.py:14)"
+    ],
+    "how": "Limit requests per user and per IP on these routes: slowapi (FastAPI), Flask-Limiter, express-rate-limit, or @upstash/ratelimit (Next.js / serverless)."
+   },
+   {
+    "id": "security-headers",
+    "title": "Security headers",
+    "status": "add",
+    "why": "Browsers protect your users from clickjacking, mixed content, and injected scripts only when the app sends headers such as Content-Security-Policy, Strict-Transport-Security, and X-Frame-Options.",
+    "evidence": [
+     "full-stack web app; no header setup found in code or hosting config"
+    ],
+    "how": "Set them once for every response: helmet (Express), the headers() block in next.config.js, a vercel.json/netlify.toml headers rule, or a small middleware in FastAPI/Flask."
+   },
+   {
+    "id": "password-hashing",
+    "title": "Slow password hashing",
+    "status": "add",
+    "why": "Passwords are handled in the code, and a fast hash (MD5/SHA) is used in the same files: a leaked database could be cracked in hours.",
+    "evidence": [
+     "shop/auth.py:18"
+    ],
+    "how": "Store only argon2 or bcrypt hashes (passlib/pwdlib/bcrypt in Python, bcrypt or argon2 in Node), or use a managed auth service so you never store passwords."
+   },
+   {
+    "id": "route-auth",
+    "title": "Login check on routes that change data",
+    "status": "add",
+    "why": "1 route(s) change data with no sign of a login check in the handler, in what it calls, or in app-wide middleware, so anyone on the internet can call them.",
+    "evidence": [
+     "POST /backup (shop/app.py:14)"
+    ],
+    "how": "Check the signed-in user at the top of each handler (or in shared middleware), and check they may act on this record, not just that they are signed in."
+   }
+  ]
+ },
+ "understanding": null,
+ "provenance": {
+  "tools": [
+   {
+    "tool": "lantern",
+    "version": "0.9.0",
+    "role": "graph, bridge, web rules, readiness"
+   },
+   {
+    "tool": "python",
+    "version": "3.13.18",
+    "role": "runtime"
+   },
+   {
+    "tool": "tree-sitter",
+    "version": "0.25.2",
+    "role": "parser"
+   },
+   {
+    "tool": "tree-sitter-python",
+    "version": "0.25.0",
+    "role": "parser"
+   },
+   {
+    "tool": "tree-sitter-typescript",
+    "version": "0.23.2",
+    "role": "parser"
+   },
+   {
+    "tool": "tree-sitter-javascript",
+    "version": "0.25.0",
+    "role": "parser"
+   },
+   {
+    "tool": "bandit",
+    "version": "1.9.4",
+    "role": "scanner",
+    "status": "ok"
+   },
+   {
+    "tool": "pip-audit",
+    "version": "2.10.1",
+    "role": "scanner",
+    "status": "skipped: no Python dependency files"
+   },
+   {
+    "tool": "npm-audit",
+    "version": null,
+    "role": "scanner",
+    "status": "skipped: no package-lock.json, so exact versions are unknown (commit your lock file)"
+   },
+   {
+    "tool": "lantern-secrets",
+    "version": null,
+    "role": "scanner",
+    "status": "ok (built-in patterns; install gitleaks for full coverage)"
+   },
+   {
+    "tool": "lantern-web",
+    "version": "0.1",
+    "role": "scanner",
+    "status": "ok"
+   },
+   {
+    "tool": "lantern-ai",
+    "version": "0.1",
+    "role": "scanner",
+    "status": "ok (no model, vector or paid API calls found)"
+   }
+  ],
+  "models": [],
+  "rules": [
+   "bandit default profile",
+   "lantern-web LW-*/LJ-* rules",
+   "lantern secret patterns",
+   "readiness checks v1",
+   "graph schema ucg-0.2"
+  ]
+ },
+ "limits": [
+  "Business-logic flaws. Scanners and graph checks find known patterns; they can't tell whether your rules (who may see what, what a price should be) are right.",
+  "Calls Lantern could not trace. 6 call sites were left unresolved rather than guessed, mostly calls into libraries or very dynamic code (getattr, plugins, hooks returning objects).",
+  "Runtime behavior. No code was run for this report, so every edge is from static analysis and tests were not executed.",
+  "Frontend call edges are static only (no JavaScript runtime tracing yet).",
+  "npm dependencies were not fully checked for known vulnerabilities (skipped: no package-lock.json, so exact versions are unknown (commit your lock file)).",
+  "1 finding is from heuristic checks that can misfire; they are labeled as such.",
+  "The readiness score uses file and pattern checks. A check passing means the thing exists, not that it is configured well."
+ ],
+ "digest": "sha256:c0971ecf1298b6a491ce6b94a0bb63dcbeaeab789c00703a434336b669ba69c6",
+ "payload": {
+  "evidence_version": 1,
+  "schema": "ucg-0.2",
+  "lantern": "0.9.0",
+  "commit": null,
+  "uncommitted_changes": false,
+  "run": {
+   "scan": true,
+   "trace": null,
+   "offline": true
+  },
+  "graph": {
+   "files": 12,
+   "lines": 181,
+   "nodes": {
+    "module": 12,
+    "callable": 28,
+    "class": 5,
+    "external": 10
+   },
+   "call_edges": 38,
+   "entry_points": [
+    "cli:click.command()",
+    "main:app start (web/src/main.tsx)",
+    "main:python shop/cli.py",
+    "page:/admin",
+    "page:/users/:id",
+    "route:GET /users/{user_id}",
+    "route:POST /backup",
+    "test:test_check_password"
+   ],
+   "bridge": {
+    "http_calls": 3,
+    "routes": 2,
+    "matched": 2,
+    "exact": 1,
+    "suffix": 1,
+    "unknown-prefix": 0,
+    "exact-path-only": 0,
+    "ambiguous": 0,
+    "external": 1,
+    "unmatched": 0
+   }
+  },
+  "findings": [
+   "12771352490c:B324:critical:open",
+   "27105c2e3afc:LW-AUTH-MISSING:medium:open",
+   "271ac69ef170:B608:high:open",
+   "3009f20c07ea:LW-PUBLIC-SECRET:high:open",
+   "311ab0c79578:B105:low:open",
+   "408d05131176:LJ-XSS-HTML:medium:open",
+   "57fa455f7b3b:B602:critical:open",
+   "6715dbeeddd8:B404:low:open",
+   "b4dd2b0afe1e:B101:low:open"
+  ],
+  "scanners": [
+   "bandit:1.9.4:ok",
+   "lantern-ai:0.1:ok",
+   "lantern-secrets:None:ok",
+   "lantern-web:0.1:ok",
+   "npm-audit:None:sk",
+   "pip-audit:2.10.1:sk"
+  ],
+  "readiness": {
+   "score": 24,
+   "checks": [
+    "ci-exists:fail",
+    "ci-scan:fail",
+    "ci-tests:fail",
+    "deps-lock:fail",
+    "deps-pinned:pass",
+    "deps-vuln:skip",
+    "docs-license:fail",
+    "docs-readme:fail",
+    "docs-security:fail",
+    "input-bare-except:pass",
+    "input-debug:pass",
+    "input-validation:pass",
+    "obs-health:fail",
+    "obs-logging:fail",
+    "obs-print:pass",
+    "pkg-docker:fail",
+    "pkg-dockerignore:fail",
+    "pkg-slim:fail",
+    "pkg-tag:fail",
+    "pkg-user:fail",
+    "res-retry:fail",
+    "res-shutdown:fail",
+    "res-timeout:fail",
+    "sec-critical:fail",
+    "sec-high:fail",
+    "sec-medium:fail",
+    "secrets-env:pass",
+    "secrets-example:fail",
+    "secrets-gitignore:skip",
+    "secrets-none:fail",
+    "tests-entries:fail",
+    "tests-exist:pass",
+    "tests-pass:skip"
+   ],
+   "protections": [
+    "password-hashing:add",
+    "rate-limit:add",
+    "route-auth:add",
+    "security-headers:add"
+   ]
+  }
+ }
+}

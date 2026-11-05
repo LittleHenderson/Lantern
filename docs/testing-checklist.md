@@ -385,7 +385,13 @@ commit; each release ships a CycloneDX SBOM (`lantern-sbom.cdx.json`); Dependabo
 releases.
 
 **Upgrades.** Results saved by an older version open in the newer one, and the lantern-cloud database survives a
-schema change. *Scenario:* a tester's saved v0.9 report shows a blank page after they update to v0.11.
+schema change. *Scenario:* a tester's saved v0.9 report shows a blank page after they update to v0.11. ✅
+`tests/fixtures/old_results/` keeps the result files Lantern v0.9.0 and v0.10.0 wrote for the shop sample;
+`tests/test_old_results.py` opens them with the current code everywhere results are read (the report, evidence and
+badge pages, the Projects screen, Ask Lantern, the SARIF export, the connector's tools, scenarios and lanes, `lantern
+verify`). `tests/test_cloud.py` opens a database made with the v0.10.0 schema and the first cloud schema, checks the
+missing columns are added and the old runs still listed. When a release changes a result file's shape, add that
+release's files to the fixture folder.
 
 **Outside services failing.** GitHub, the vulnerability database (OSV), Anthropic or DeepSeek going down or slow.
 *Scenario:* OSV is down during a cloud run; the run should finish and say "libraries not checked", not hang or fail.
@@ -414,7 +420,10 @@ lantern-cloud's 50 runs per person and 1,000 per day stand. Still open: an alert
 some test fails each time. A test suite can be large and still miss things; this measures that.
 
 **Time and dates.** Daily limits reset at midnight UTC, 90-day expiry, Evidence dates. *Scenario:* a tester in
-California hits the daily limit at 4:59 p.m. and is surprised it resets at 5:00 p.m.
+California hits the daily limit at 4:59 p.m. and is surprised it resets at 5:00 p.m. ✅ Every "limit reached" message
+(the gateway's daily explanations, lantern-cloud's runs per person and for everyone) now says how long until the reset,
+"in 5 h 20 min (00:00 UTC)", so no one has to convert; reports carry their time zone next to the time (evidence pages
+already said UTC). The 90-day token expiry is in `docs/deploy.md` and `gateway/README.md`.
 
 **Licences.** Every library and grammar Lantern ships has a licence that allows it (spec 9.1 already flags scanner
 licensing for cloud mode), and lantern-cloud has terms of use.
