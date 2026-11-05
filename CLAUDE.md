@@ -39,8 +39,9 @@ lantern analyze tests/fixtures/shop --out /tmp/shop   # React + FastAPI sample, 
 lantern analyze tests/fixtures/nextapp --out /tmp/nx  # Next.js + Supabase sample
 python examples/make_demo.py /tmp/demo                # report with hand-written explanations, no key
 python bench/run_bench.py /tmp/bench                  # clones 7 public repos; ~2 min with tracing
-node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS error check
-                                                      # (needs Playwright + Chromium)
+node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots, JS errors, accessibility (axe-core + a keyboard
+                                                      # walk, tools/a11y.js); PW_BROWSER=firefox|webkit for another engine
+                                                      # (needs Playwright + Chromium; npm i axe-core for the a11y pass)
 ```
 
 ## Layout

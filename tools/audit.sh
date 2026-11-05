@@ -146,7 +146,12 @@ EOF
 
 if [ "${1:-}" = "--browser" ]; then
   step "browser"
-  check "viewer: no JS errors (desktop + phone)" node tools/viewer_smoke.js "$W/shop/report.html" "$W/shot"
+  check "viewer: no JS errors, accessible (axe + keyboard), desktop light + phone dark" node tools/viewer_smoke.js "$W/shop/report.html" "$W/shot"
+  # the same report in the other browser engines Playwright ships (CI: LANTERN_BROWSERS="firefox webkit"; needs
+  # `npx playwright install firefox webkit`). Safari is WebKit; a CSS feature Chromium has and Safari lacks shows here.
+  for eng in ${LANTERN_BROWSERS:-}; do
+    PW_BROWSER=$eng check "viewer in $eng: no JS errors, accessible" node tools/viewer_smoke.js "$W/shop/report.html" "$W/shot-$eng"
+  done
   H="$W/hostile"; mkdir -p "$H"
   cat > "$H/main.py" <<'EOF'
 from fastapi import FastAPI
@@ -162,6 +167,9 @@ EOF
   lantern analyze "$H" >/dev/null 2>&1
   check "viewer: hostile docstrings and routes can't blank or hijack the report" \
     node tools/viewer_smoke.js "$H/.lantern/report.html" "$W/hshot"
+  for eng in ${LANTERN_BROWSERS:-}; do
+    PW_BROWSER=$eng check "viewer in $eng: hostile data stays text" node tools/viewer_smoke.js "$H/.lantern/report.html" "$W/hshot-$eng"
+  done
   # every string and number in the data carries an HTML payload: none of it may reach the page as markup
   check "viewer: poisoned report data stays text (every field escaped, content policy holds)" \
     bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison/report.html' && node tools/viewer_smoke.js '$W/poison/report.html' '$W/pshot'"
@@ -214,13 +222,17 @@ PYEOF
   kill $SPID 2>/dev/null; wait $SPID 2>/dev/null
   # the cloud website: signed out, sign-in sheet, My runs, progress, report; every run field carries an HTML payload
   if "$PY" -c "import fastapi, httpx, uvicorn" 2>/dev/null; then
-    C="$W/cloud"; mkdir -p "$C"
-    "$PY" tools/cloud_site_demo.py --port 8872 --token-file "$C/token" --poison > "$C/demo.log" 2>&1 &
-    CPID=$!
-    for _ in $(seq 150); do grep -q '"ready"' "$C/demo.log" && break; sleep 0.2; done
-    check "cloud website: no JS errors, poisoned run data stays text (desktop + phone, light + dark)" \
-      node tools/cloud_site_smoke.js http://127.0.0.1:8872/ "$C/token" "$C/shot"
-    kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+    # one demo server per browser engine: the smoke's last pass deletes a run and an account, so a second engine
+    # against the same server would find them gone
+    cloud_smoke() { local eng="$1" port="$2" C="$W/cloud-$1"; mkdir -p "$C"
+      "$PY" tools/cloud_site_demo.py --port "$port" --token-file "$C/token" --poison > "$C/demo.log" 2>&1 &
+      local CPID=$!
+      for _ in $(seq 150); do grep -q '"ready"' "$C/demo.log" && break; sleep 0.2; done
+      PW_BROWSER=$eng check "cloud website in $eng: no JS errors, accessible, poisoned run data stays text (desktop + phone, light + dark)" \
+        node tools/cloud_site_smoke.js "http://127.0.0.1:$port/" "$C/token" "$C/shot"
+      kill $CPID 2>/dev/null; wait $CPID 2>/dev/null; }
+    cloud_smoke chromium 8872
+    port=8873; for eng in ${LANTERN_BROWSERS:-}; do cloud_smoke "$eng" $port; port=$((port + 1)); done
   fi
 fi
 

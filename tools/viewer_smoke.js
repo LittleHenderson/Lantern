@@ -9,7 +9,10 @@
 //   dropped into Ask Lantern (read on this computer), and Settings → Analysis packs (one pack off, then on again).
 //   Fails on any JavaScript error or when one of those does not answer as it should. The phone pass loads the
 //   same screens.
-const { chromium } = require('playwright');
+// PW_BROWSER=firefox|webkit runs the same smoke in another engine (CI runs all three on the report and the app's home).
+const BROWSER = process.env.PW_BROWSER || 'chromium';
+const chromium = require('playwright')[BROWSER];
+const a11y = require('./a11y.js');
 
 // page.waitForFunction polls through eval in older Playwright, which the app's script-src policy (rightly) refuses;
 // poll with page.evaluate instead, which the policy allows.
@@ -37,10 +40,13 @@ async function appSmoke(url, out, image, expectText) {
     try {
       await p.goto(url);
       await p.waitForSelector('[data-open]', { timeout: 180000 });
+      await a11y.axe(p, `${name} home`, errs);
+      step(name, `keyboard: ${(await a11y.keyboard(p, `${name} home`, errs, 8)).join(' > ')}`);
       if (name === 'desk') await api('/api/settings', { view_mode: 'advanced' });
       await p.reload(); await p.waitForSelector('[data-open]');
       await p.click('[data-open]'); await p.waitForTimeout(1500);
       await p.screenshot({ path: `${out}-${name}-project.png` });
+      await a11y.axe(p, `${name} project`, errs, { frames: true });
       {
         // inside the app the report draws no backdrop of its own; the app's shows through
         const fr = p.frames().find(f => /report\.html/.test(f.url()));
@@ -95,6 +101,7 @@ async function appSmoke(url, out, image, expectText) {
         } else if (!/×/.test(info)) errs.push(`${name}: the screenshot was not opened (${info})`);
       }
       await p.screenshot({ path: `${out}-${name}-ask.png` });
+      await a11y.axe(p, `${name} ask`, errs);
       await p.click('#askclose');
       // 4. Settings → Analysis packs: turn one off, check the project goes stale, turn it back on
       await p.evaluate(() => go('settings')); await p.waitForTimeout(800);
@@ -110,6 +117,7 @@ async function appSmoke(url, out, image, expectText) {
         await api('/api/settings', { view_mode: 'simple' });
       }
       await p.screenshot({ path: `${out}-${name}-settings.png`, fullPage: true });
+      await a11y.axe(p, `${name} settings`, errs);
     } catch (e) { errs.push(`${name}: the smoke test could not drive the app: ${e.message.split('\n')[0]}`); }
     await p.close();
   }
@@ -129,7 +137,8 @@ async function appSmoke(url, out, image, expectText) {
   const b = await chromium.launch();
   const errs = [];
   for (const [name, vp] of [['desk', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
-    const p = await b.newPage({ viewport: vp });
+    // the phone pass runs in dark mode, so both appearances get the accessibility checks
+    const p = await b.newPage({ viewport: vp, colorScheme: name === 'phone' ? 'dark' : 'light' });
     try {
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
     p.on('dialog', d => { errs.push(`${name}: a dialog opened (script from the data ran): ${d.message()}`); d.dismiss(); });
@@ -145,6 +154,8 @@ async function appSmoke(url, out, image, expectText) {
     await pwned('load');
     if (await p.$('#expand')) { await p.click('#expand'); await p.waitForTimeout(150); }
     await p.screenshot({ path: `${out}-${name}-map.png` });
+    await a11y.axe(p, `${name} map`, errs);
+    { const walk = await a11y.keyboard(p, `${name} map`, errs, 8); console.log(`${name} keyboard: ${walk.join(' > ')}`); }
     // the backdrop (design directive): three drifting layers, quiet behind the map, full behind About
     const bd = await p.evaluate(() => { const el = document.querySelector('body>.backdrop'); return el ? {n: el.querySelectorAll(':scope>svg').length, quiet: el.hasAttribute('data-quiet'), hidden: el.getAttribute('aria-hidden')} : null; });
     if (!bd || bd.n !== 3 || !bd.quiet || bd.hidden !== 'true') errs.push(`${name}: the backdrop is missing or not quiet on the map (${JSON.stringify(bd)})`);
@@ -174,6 +185,7 @@ async function appSmoke(url, out, image, expectText) {
       }
       await pwned('detail');
       await p.screenshot({ path: `${out}-${name}-detail.png` });
+      await a11y.axe(p, `${name} detail`, errs);
       // every function has three lenses from the map alone, before any model writes one: open one no model explained
       const mapLens = await p.evaluate(() => { const n = G.nodes.find(x => x.kind === 'callable' && !EXP[x.id]); if (!n) return 'none'; select(n.id, true); S.lens = 2; renderRight();
         const el = document.querySelector('#right'); return (el.querySelector('.lens.l2') ? 'lens ' : 'nolens ') + (el.innerText.includes('Built from the map') ? 'byline' : 'nobyline'); });
@@ -188,6 +200,7 @@ async function appSmoke(url, out, image, expectText) {
     await p.click('#tabs button[data-t="findings"]'); await p.waitForTimeout(150);
     await pwned('findings');
     await p.screenshot({ path: `${out}-${name}-findings.png` });
+    await a11y.axe(p, `${name} findings`, errs);
     // scenarios: open the first finding's story, then its Fix page (which shows the story as a card)
     const scen = await p.$('details.scenbox summary');
     if (scen) { await scen.click(); await p.waitForTimeout(60); await pwned('scenario'); }
@@ -195,12 +208,14 @@ async function appSmoke(url, out, image, expectText) {
     if (fixb) {
       await fixb.click(); await p.waitForTimeout(150); await pwned('fix');
       await p.screenshot({ path: `${out}-${name}-fix.png`, fullPage: true });
+      await a11y.axe(p, `${name} fix`, errs);
       await p.click('#tabs button[data-t="findings"]'); await p.waitForTimeout(100);
     }
     if (await p.$('#tabs button[data-t="ready"]')) {
       await p.click('#tabs button[data-t="ready"]'); await p.waitForTimeout(150);
       await pwned('readiness');
       await p.screenshot({ path: `${out}-${name}-ready.png`, fullPage: true });
+      await a11y.axe(p, `${name} readiness`, errs);
     }
     await p.click('#tabs button[data-t="about"]'); await p.waitForTimeout(150);
     await pwned('about');

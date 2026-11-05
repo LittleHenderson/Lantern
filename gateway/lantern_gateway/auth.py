@@ -161,8 +161,8 @@ def _page(title: str, inner: str) -> str:
 <title>{html.escape(title)} · Lantern</title>
 {FONTS}
 <style>
-:root{{color-scheme:light;--bg:#F5F5F2;--glow:rgba(255,181,71,.2);--surface:#fff;--ink:#161618;--ink-2:#46464C;--muted:#6E6E74;--line:rgba(22,22,24,.09);--line-2:rgba(22,22,24,.16);--accent:#0B5F5A;--sunken:#EEEEEA;--primary:#161618;--on-primary:#fff}}
-@media(prefers-color-scheme:dark){{:root{{color-scheme:dark;--bg:#0E0E10;--glow:rgba(255,170,60,.09);--surface:#161618;--ink:#F3F3F1;--ink-2:#BEBEC3;--muted:#8C8C92;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.15);--accent:#7FDBD3;--sunken:#0A0A0B;--primary:#F3F3F1;--on-primary:#0E0E10}}}}
+:root{{color-scheme:light;--bg:#F5F5F2;--glow:rgba(255,181,71,.2);--surface:#fff;--ink:#161618;--ink-2:#46464C;--muted:#62626A;--line:rgba(22,22,24,.09);--line-2:rgba(22,22,24,.16);--accent:#0B5F5A;--sunken:#EEEEEA;--primary:#161618;--on-primary:#fff}}
+@media(prefers-color-scheme:dark){{:root{{color-scheme:dark;--bg:#0E0E10;--glow:rgba(255,170,60,.09);--surface:#161618;--ink:#F3F3F1;--ink-2:#BEBEC3;--muted:#9A9AA0;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.15);--accent:#7FDBD3;--sunken:#0A0A0B;--primary:#F3F3F1;--on-primary:#0E0E10}}}}
 *{{box-sizing:border-box}}
 body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink-2);font:15px/1.6 "DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}}
 header{{display:flex;align-items:center;gap:10px;height:56px;padding:0 20px;border-bottom:1px solid var(--line);font:600 16px "DM Sans",-apple-system,sans-serif;color:var(--ink);letter-spacing:-.02em}}

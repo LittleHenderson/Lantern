@@ -16,7 +16,7 @@
 :root{
   color-scheme: light;
   --bg:#F5F5F2; --glow:rgba(255,181,71,.2); --surface:#FFFFFF; --surface-2:#FAFAF8; --sunken:#EEEEEA; --hover:rgba(22,22,24,.045);
-  --ink:#161618; --ink-2:#46464C; --muted:#6E6E74; --faint:#A3A3A8;
+  --ink:#161618; --ink-2:#46464C; --muted:#62626A; --faint:#A3A3A8;
   --line:rgba(22,22,24,.09); --line-2:rgba(22,22,24,.16);
   --accent:#0F7B74; --accent-ink:#0B5F5A; --accent-soft:rgba(15,123,116,.10); --on-accent:#FFFFFF;
   --primary:#161618; --primary-hover:#2C2C30; --on-primary:#FFFFFF;
@@ -24,7 +24,7 @@
   --good:#0CA30C; --warning:#FAB219; --serious:#EC835A; --critical:#D03B3B;
   --good-soft:rgba(12,163,12,.11); --warning-soft:rgba(250,178,25,.17); --serious-soft:rgba(236,131,90,.16); --critical-soft:rgba(208,59,59,.11);
   --good-ink:#0A7A0A; --warn-ink:#8A5A00; --crit-ink:#B02A2A;
-  --code-bg:#151517; --code-ink:#E7E7E4; --code-dim:#6C6C72;
+  --code-bg:#151517; --code-ink:#E7E7E4; --code-dim:#8A8A91;
   --shadow-1:0 1px 2px rgba(16,16,20,.05);
   --shadow-2:0 1px 2px rgba(16,16,20,.04), 0 6px 20px -6px rgba(16,16,20,.10);
   --shadow-3:0 1px 3px rgba(16,16,20,.06), 0 24px 56px -16px rgba(16,16,20,.28);
@@ -38,7 +38,7 @@
 :root[data-theme=dark]{
   color-scheme: dark;
   --bg:#0E0E10; --glow:rgba(255,170,60,.1); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
-  --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
+  --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#9A9AA0; --faint:#5E5E64;
   --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
   --accent:#4FC3BA; --accent-ink:#7FDBD3; --accent-soft:rgba(79,195,186,.14); --on-accent:#0E0E10;
   --primary:#F3F3F1; --primary-hover:#FFFFFF; --on-primary:#0E0E10;
@@ -53,7 +53,7 @@
   :root:not([data-theme=light]){
     color-scheme: dark;
     --bg:#0E0E10; --glow:rgba(255,170,60,.1); --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
-    --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
+    --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#9A9AA0; --faint:#5E5E64;
     --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
     --accent:#4FC3BA; --accent-ink:#7FDBD3; --accent-soft:rgba(79,195,186,.14); --on-accent:#0E0E10;
     --primary:#F3F3F1; --primary-hover:#FFFFFF; --on-primary:#0E0E10;
@@ -108,7 +108,7 @@ header.top,#view{position:relative;z-index:1}
 #ask .hd input[type=range]{width:64px;accent-color:var(--accent);margin:0}
 #ask .x{width:26px;height:26px;border-radius:7px;border:0;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center;font:400 16px/1 var(--font)}#ask .x:hover{background:var(--hover);color:var(--ink)}
 #ask .log{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:10px}
-#ask .ctx{align-self:center;font:11px var(--font);color:var(--faint);white-space:nowrap}#ask .ctx b{color:var(--muted);font-weight:600}
+#ask .ctx{align-self:center;font:11px var(--font);color:var(--muted);white-space:nowrap}#ask .ctx b{color:var(--muted);font-weight:600}
 #ask .me{align-self:flex-end;max-width:85%;padding:8px 12px;border-radius:14px 14px 4px 14px;background:var(--primary);color:var(--on-primary);font:13px/1.45 var(--font);white-space:pre-wrap}
 #ask .bot{align-self:flex-start;max-width:92%;padding:10px 12px;border-radius:14px 14px 14px 4px;background:var(--surface-2);border:1px solid var(--line);font:13px/1.5 var(--font);color:var(--ink-2);white-space:pre-wrap;overflow-wrap:anywhere}
 #ask .bot code{font:11.5px var(--mono);background:var(--sunken);padding:0 4px;border-radius:4px;color:var(--ink)}
@@ -121,7 +121,7 @@ header.top,#view{position:relative;z-index:1}
 #ask .comp .att{width:30px;height:30px;border-radius:9px;border:0;background:transparent;color:var(--muted);cursor:pointer;display:grid;place-items:center;flex:none}#ask .comp .att:hover{background:var(--hover);color:var(--ink)}
 #ask .comp textarea{flex:1;resize:none;border:0;outline:0;background:transparent;font:13px/1.4 var(--font);color:var(--ink);min-height:20px;max-height:90px;padding:4px 2px}
 #ask .comp .send{width:30px;height:30px;border-radius:9px;border:0;background:var(--primary);color:var(--on-primary);display:grid;place-items:center;flex:none;cursor:pointer}
-#ask .asknote{font:10.5px var(--font);color:var(--faint);text-align:center}
+#ask .asknote{font:10.5px var(--font);color:var(--muted);text-align:center}
 #ask .peek{padding:8px 12px;border-radius:12px 12px 4px 12px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-2);font:12.5px/1.4 var(--font);color:var(--ink);max-width:230px}
 #ask .pill{display:flex;align-items:center;gap:8px;height:48px;padding:0 12px;border-radius:99px;border:0;background:var(--primary);color:var(--on-primary);cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.18),0 10px 28px -8px rgba(255,170,60,.55);transition:padding .15s,transform .15s;font:600 13.5px var(--font)}
 #ask .pill:hover{transform:translateY(-1px)}#ask .pill .lbl{display:none}#ask .pill:hover .lbl{display:inline}#ask .pill:hover{padding:0 14px 0 12px}
@@ -541,10 +541,10 @@ iframe{border:0;width:100%;height:calc(100vh - var(--hh));height:calc(100dvh - v
 <header class="top">
   <button class="brand" id="home" aria-label="Lantern home" title="My projects"><span class="mark" aria-hidden="true"><i class="gl"></i><svg viewBox="0 0 64 64"><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/></svg><svg viewBox="0 0 64 64" class="fl"><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><svg viewBox="0 0 64 64" class="fl2"><path d="M32 30.5c1.6 1.9 2.4 3.3 2.4 4.6a2.4 2.4 0 0 1-4.8 0c0-1.3.8-2.7 2.4-4.6z" fill="#FFE3A6"/></svg></span><span>Lantern</span></button>
   <nav id="nav" class="nav" aria-label="Main">
-    <button data-v="home" class="on"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>My projects</span></button>
-    <button data-v="learn"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 5.5C8.5 4.3 6.3 3.8 3.5 4v11c2.8-.2 5 .3 6.5 1.5 1.5-1.2 3.7-1.7 6.5-1.5V4c-2.8-.2-5 .3-6.5 1.5zM10 5.5v11"/></svg><span>Learn</span></button>
-    <button data-v="settings"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg><span>Settings</span></button>
-    <button data-v="help"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M10 14h.01"/></svg><span>Help</span></button>
+    <button data-v="home" class="on" aria-label="My projects"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>My projects</span></button>
+    <button data-v="learn" aria-label="Learn"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 5.5C8.5 4.3 6.3 3.8 3.5 4v11c2.8-.2 5 .3 6.5 1.5 1.5-1.2 3.7-1.7 6.5-1.5V4c-2.8-.2-5 .3-6.5 1.5zM10 5.5v11"/></svg><span>Learn</span></button>
+    <button data-v="settings" aria-label="Settings"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg><span>Settings</span></button>
+    <button data-v="help" aria-label="Help"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M10 14h.01"/></svg><span>Help</span></button>
   </nav>
   <div class="seg" id="viewmode" title="Simple: plain sentences and one next action. Advanced: every table and panel."><button data-m="simple">Simple</button><button data-m="advanced">Advanced</button></div>
   <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
@@ -1065,7 +1065,7 @@ function drawProject(el) {
                    : {atlas: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', evidence: 'Evidence', explain: 'Explanations', guide: 'Guide'};
   const REPORT_TABS = {atlas: 'map', findings: 'findings', prot: 'prot', ready: 'ready', explain: 'xp'};
   const c = p.counts || {}, nf = (c.critical || 0) + (c.high || 0) + (c.medium || 0);
-  const tab = (t, label) => `<button data-t="${t}" class="${S.tab === t ? 'on' : ''}">${label}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${nf}</span>` : ''}</button>`;
+  const tab = (t, label) => `<button data-t="${t}" role="tab" aria-selected="${S.tab === t}" class="${S.tab === t ? 'on' : ''}">${label}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${nf}</span>` : ''}</button>`;
   el.innerHTML = `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to ${simple ? 'my apps' : 'projects'}">${icon('back')}<span>${simple ? 'My apps' : 'Projects'}</span></button>${simple ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(p.name)}</span>
     ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100">${esc(p.grade)}${simple ? '' : ' · ' + esc(p.score)}</span>` : ''}
     <div class="tabs" role="tablist">${p.starter ? tab('guide', W.guide) : ''}${['atlas', 'findings', 'prot', 'ready', 'evidence', 'explain'].map(t => tab(t, W[t])).join('')}</div>

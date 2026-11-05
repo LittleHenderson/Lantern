@@ -112,8 +112,8 @@
 <header class="top">
   <button class="brand" id="home" aria-label="Lantern home" title="My runs"><!--__APP_BRAND__--></button>
   <nav id="nav" class="nav" aria-label="Main">
-    <button data-v="home" class="on"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>My runs</span></button>
-    <button data-v="help"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M10 14h.01"/></svg><span>Help</span></button>
+    <button data-v="home" class="on" aria-label="My runs"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>My runs</span></button>
+    <button data-v="help" aria-label="Help"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M10 14h.01"/></svg><span>Help</span></button>
   </nav>
   <div class="seg" id="viewmode" title="Simple: plain sentences and one next action. Advanced: every table and panel."><button data-m="simple">Simple</button><button data-m="advanced">Advanced</button></div>
   <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
@@ -224,6 +224,8 @@ function sheet(html) {
   if (!html) { w.innerHTML = ''; return null; }
   w.innerHTML = `<div class="sheetwrap"><div class="sheet" role="dialog" aria-modal="true">${html}</div></div>`;
   const wrap = w.firstElementChild;
+  const head = wrap.querySelector('h1, h2, h3');   // the sheet is named after its heading for screen readers
+  if (head) wrap.firstElementChild.setAttribute('aria-label', head.textContent.trim().slice(0, 120));
   wrap.onclick = e => { if (e.target === wrap || e.target.closest('[data-close]')) closeSheet(); };
   return wrap.firstElementChild;
 }
@@ -589,11 +591,11 @@ function subBar(r, tabs) {
   const s = r.summary || {}, c = s.counts || {}, nf = (c.critical || 0) + (c.high || 0) + (c.medium || 0), sm = simple();
   const W = sm ? {atlas: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', evidence: 'Report'}
                : {atlas: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', evidence: 'Evidence'};
-  const tab = t => `<button data-t="${t}" class="${S.tab === t ? 'on' : ''}">${W[t]}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${esc(nf)}</span>` : ''}</button>`;
+  const tab = t => `<button data-t="${t}" role="tab" aria-selected="${S.tab === t}" class="${S.tab === t ? 'on' : ''}">${W[t]}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${esc(nf)}</span>` : ''}</button>`;
   return `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to my runs">${icon('back')}<span>My runs</span></button>${sm ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(repoName(r.link))}</span>
     ${r.status === 'done' && s.grade ? `<span class="gchip ${tone(s.grade)}" title="Readiness ${esc(s.score)}/100">${esc(s.grade)}${sm ? '' : ' · ' + esc(s.score)}</span>` : ''}
     ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].map(tab).join('')}</div>` : ''}
-    <span class="spacer"></span>${tabs ? `${explainBtn(r)}<button class="btn sm" id="share">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button><a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#">${icon('open')}<span>Open in new tab</span></a><button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}<span class="dock" data-dock="end"></span></div>`;
+    <span class="spacer"></span>${tabs ? `${explainBtn(r)}<button class="btn sm" id="share" aria-label="${r.shared ? 'Shared: manage the link' : 'Share this report'}">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button><a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#" aria-label="Open the report in a new tab">${icon('open')}<span>Open in new tab</span></a><button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}<span class="dock" data-dock="end"></span></div>`;
 }
 async function renderRun(el, id) {
   let r = S.run && S.run.id === id ? S.run : null;
