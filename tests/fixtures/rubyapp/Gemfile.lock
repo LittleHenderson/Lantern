@@ -1,0 +1,21 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    nokogiri (1.13.0-x86_64-linux)
+      racc (~> 1.4)
+    racc (1.6.0)
+    rails (7.0.4)
+    rspec-rails (6.0.1)
+    sinatra (3.0.5)
+
+PLATFORMS
+  x86_64-linux
+
+DEPENDENCIES
+  nokogiri
+  rails (~> 7.0.4)
+  rspec-rails
+  sinatra
+
+BUNDLED WITH
+   2.4.10

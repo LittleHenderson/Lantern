@@ -84,6 +84,7 @@ SINKS = [
 VISITOR_INPUT = re.compile(r"\b(?:request|req)\.(?:json|body|args|form|query|params|get_json|data)\b|\bsearchParams\b|\bformData\b|"
                            r"\bmessages?\b.*\brequest\b|\bawait\s+(?:req|request)\.(?:json|text|formData)\(\)|\bctx\.(?:body|query|params)\b|"
                            r"\br\.(?:PathValue|FormValue|Body)\b|\bc\.(?:Param|Query|PostForm|BindJSON)\(|Json\(\w+\)|\.getParameter\(")
+MAX_LINE = 2000   # longer lines are minified bundles (jquery.min.js): vendored code, and quadratic for STRING_RE
 STRING_RE = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
 
 KEY_PATTERNS = [
@@ -130,7 +131,7 @@ def find_calls(g: Graph, cache: dict[str, list[str]] | None = None) -> list[dict
     for rel, nodes in by_file.items():
         lines = _lines(repo, rel, cache)
         for i, raw in enumerate(lines, 1):
-            if _comment(raw):
+            if _comment(raw) or len(raw) > MAX_LINE:
                 continue
             code = STRING_RE.sub("''", raw) if "'" in raw or '"' in raw else raw
             for kind, provider, rx in CALL_PATTERNS:
@@ -230,7 +231,7 @@ def model_output_sinks(g: Graph, calls: list[dict], cache: dict[str, list[str]])
         input_line = None
         for i in range(lo, hi + 1):
             raw = lines[i - 1]
-            if _comment(raw):
+            if _comment(raw) or len(raw) > MAX_LINE:
                 continue
             code = STRING_RE.sub("''", raw)
             if input_line is None and VISITOR_INPUT.search(code):
@@ -253,7 +254,7 @@ def model_output_sinks(g: Graph, calls: list[dict], cache: dict[str, list[str]])
                               "code chooses, not the text. Heuristic: assignments followed inside this function only."),
                         snippet=raw.strip()[:200]))
                     break
-        if input_line is not None and any(rx.search(STRING_RE.sub("''", lines[i - 1])) for i in range(lo, hi + 1) for _w, rx in SINKS):
+        if input_line is not None and any(rx.search(STRING_RE.sub("''", lines[i - 1])) for i in range(lo, hi + 1) if len(lines[i - 1]) <= MAX_LINE for _w, rx in SINKS):
             call_line = next((c["line"] for c in calls if c["node"] == nid and c["kind"] == "model"), lo)
             out.append(_finding(
                 "LA-PROMPT-FROM-INPUT", "Visitor text goes into a model call in a function that also runs tools", "LOW",

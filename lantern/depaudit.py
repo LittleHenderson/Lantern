@@ -19,6 +19,9 @@ Nothing from the analyzed repo is executed or trusted as configuration:
   * PHP: every library in composer.lock's shipped `packages` (not `packages-dev`), name and exact version, asked of
     OSV (ecosystem Packagist). Nothing runs Composer. The finding points at the line in composer.json that asks for
     the library, or at its entry in composer.lock when another library pulled it in.
+  * Ruby: every gem in Gemfile.lock's `specs` with its exact version, asked of OSV (ecosystem RubyGems), except gems the
+    Gemfile lists only in `group :development`/`:test` blocks. Nothing runs Bundler. The finding points at the
+    Gemfile's `gem "name"` line, or at the gem's line in Gemfile.lock when another gem pulled it in.
 """
 
 from __future__ import annotations
@@ -38,8 +41,8 @@ NPM_REGISTRY = "https://registry.npmjs.org/"
 TEST_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|fixtures|examples?)/")
 PIN_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._\-]*)(\[[^\]]*\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9.+!_\-]*)\s*(;.*)?$")
 NOTHING_TO_CHECK = ("skipped: no Python dependency files", "skipped: no package.json", "skipped: no Gradle or Maven files",
-                    "skipped: no composer.lock")
-AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit")
+                    "skipped: no composer.lock", "skipped: no Gemfile.lock")
+AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit")
 OSV_API = "https://api.osv.dev/v1"
 NPM_SEVERITY = {"critical": "HIGH", "high": "HIGH", "moderate": "MEDIUM", "low": "LOW", "info": "LOW"}
 
@@ -72,7 +75,7 @@ def run_all(repo: Path) -> dict:
     """All audits with the network on, as {tool: {findings, info}} (what LANTERN_AUDITS_FROM reads)."""
     out = {}
     for tool, fn in (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit), ("maven-audit", run_maven_audit),
-                     ("composer-audit", run_composer_audit)):
+                     ("composer-audit", run_composer_audit), ("gem-audit", run_gem_audit)):
         f, info = fn(repo, False)
         out[tool] = {"findings": f, "info": info}
     return out
@@ -533,6 +536,88 @@ def run_composer_audit(repo: Path, no_network: bool | None = None) -> tuple[list
         return [], info | {"status": "skipped: offline", "files": files}
     try:
         out = _osv_findings("composer-audit", "Packagist", pins)
+    except (OSError, ValueError) as exc:
+        return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
+    return out, info | {"status": "ok", "files": files, "checked": len(pins)}
+
+
+# ---------------------------------------------------------------------------- Ruby (Bundler, OSV)
+
+def _gemfile_dev_only(text: str) -> tuple[dict[str, int], set[str]]:
+    """Gemfile: gem name → line where it is written, and the gems written only inside development/test groups."""
+    lines: dict[str, int] = {}
+    shipped, dev = set(), set()
+    stack: list[bool] = []                       # one entry per open `do` block: is it a dev/test group?
+    for i, raw in enumerate(text.splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        g = re.match(r"group\s+(.+?)\s+do\b", line)
+        if g:
+            names = set(re.findall(r":(\w+)", g.group(1)))
+            stack.append(bool(names) and names <= {"development", "test"})
+            continue
+        if re.search(r"\bdo\s*(\|[^|]*\|)?\s*$", line):
+            stack.append(any(stack))
+            continue
+        if line == "end" and stack:
+            stack.pop()
+            continue
+        m = re.match(r"gem\s+['\"]([\w.-]+)['\"](.*)$", line)
+        if m:
+            lines.setdefault(m.group(1), i)
+            grp = re.search(r"group:\s*\[?([^\]]*)", m.group(2))
+            in_dev = any(stack) or bool(grp and set(re.findall(r":(\w+)", grp.group(1))) <= {"development", "test"}
+                                        and re.findall(r":(\w+)", grp.group(1)))
+            (dev if in_dev else shipped).add(m.group(1))
+    return lines, dev - shipped
+
+
+def gem_pins(repo: Path) -> tuple[dict[str, tuple[str, str, int]], list[str]]:
+    """Exact versions from every Gemfile.lock: name → (version, file, line)."""
+    pins: dict[str, tuple[str, str, int]] = {}
+    files = []
+    for lock in _project_files(repo, names=("Gemfile.lock",)):
+        rel = lock.relative_to(repo).as_posix()
+        try:
+            text = lock.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        files.append(rel)
+        gf = lock.with_name("Gemfile")
+        try:
+            gtext = gf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            gtext = ""
+        glines, dev_only = _gemfile_dev_only(gtext)
+        in_specs = False
+        for i, raw in enumerate(text.splitlines(), 1):
+            if re.match(r"^\S", raw):
+                in_specs = False
+                continue
+            if raw.strip() == "specs:":
+                in_specs = True
+                continue
+            m = re.match(r"^    ([A-Za-z0-9][\w.-]*) \((\d[\w.]*)(?:-[a-z][\w-]*)?\)\s*$", raw) if in_specs else None
+            if not m or m.group(1) in dev_only:
+                continue
+            where = (gf.relative_to(repo).as_posix(), glines[m.group(1)]) if m.group(1) in glines else (rel, i)
+            pins.setdefault(m.group(1), (m.group(2), *where))
+    return pins, files
+
+
+def run_gem_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
+    pre = precomputed("gem-audit")
+    if pre is not None:
+        return pre
+    info = {"tool": "gem-audit", "role": "known-vulnerable Ruby gems (Gemfile.lock, OSV database)", "version": "osv-v1"}
+    pins, files = gem_pins(repo)
+    if not files:
+        return [], info | {"status": "skipped: no Gemfile.lock"}
+    if offline() if no_network is None else no_network:
+        return [], info | {"status": "skipped: offline", "files": files}
+    try:
+        out = _osv_findings("gem-audit", "RubyGems", pins)
     except (OSError, ValueError) as exc:
         return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
     return out, info | {"status": "ok", "files": files, "checked": len(pins)}
