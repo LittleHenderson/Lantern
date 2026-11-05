@@ -148,6 +148,10 @@ Java/Kotlin code runs on the phone: a screen (a `page` entry, or a `route` entry
 their phone" / "the rest of your app's code, running on the person's phone"); the order and the four lane values do
 not change.
 
+An iOS app (`graph.meta.platform == "ios"`, `meta.ios.roots` lists the folders of each Xcode app, `meta.ios.apps` gives
+`root`, `plist`, `project`, `bundle_id`, `min_ios`) gets the same two stops: its Swift screens are `browser`, the rest of its
+code `frontend`. When a repository holds both, `platform` is `"android"` and both sets of roots count.
+
 ### `security.json`
 
 `{"findings": [...], "tools": [{"tool", "status", "version"}], "counts": {critical, high, medium, low, in_tests, accepted},
@@ -161,6 +165,14 @@ The Findings screen shows it as "On the phone". Android findings (`rule` `LM-*`,
 `platform: "android"`. Android entry details: `<Class> screen[ (app start)] · <method>` (page),
 `INTENT <Class> screen (other apps and links can open it) · <method>` or `INTENT <Class> <kind> (other apps can start
 it) · <method>` (route), `Android starts <Class> (<kind>) · <method>` / `app start (<Class>) · <method>` (main).
+
+For an iOS app `mobile` is `{"platform": "ios", "modules": [{"root", "manifest" (Info.plist or the Xcode project),
+"package" (bundle id), "min_ios", "permissions" (one per usage description: `name` is the Info.plist key, `sensitive` is
+always true), "components" (one `{"kind": "link", "name": "journal://", "exported": true, …}` per URL scheme)}]}`; with
+both platforms in one repository the iOS modules are added to Android's list with `"platform": "ios"`. iOS findings
+(`LI-*`) carry `platform: "ios"`. iOS entry details: `<Type> screen · <method>` (page, a UIKit view controller method or
+a SwiftUI `body`), `LINK <Type> handles links (other apps and web pages can open it) · <method>` (route),
+`app start (<Type>) · body` (main).
 
 Finding: `id` (stable across moves: tool, rule, file and the flagged line's text), `tool` (`bandit`, `pip-audit`,
 `npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`

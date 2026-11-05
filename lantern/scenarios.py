@@ -177,6 +177,56 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                         "This does not open a door by itself. It makes the app easier to read back, run old, unsafe "
                         "defaults, or change between builds, which makes every other problem easier to find and use.",
                         "The release build setting is changed as the finding says, and the app is built and tested again."),
+    # iOS apps (ios.py, LI-* rules)
+    "ios-link": (None,
+                 "Their link carries whatever data they like, and your code treats it as if it came from your own "
+                 "screens. Anything the link handler can do, their link can now make it do.",
+                 "The link handler checks what it is given (an id it expects, a page it knows) and ignores the rest; "
+                 "Universal Links on your own domain are used where only you should be able to send the link."),
+    "ios-debuggable": (None,
+                       "With the phone plugged in, they attach a debugger to your app, read what it holds in memory, "
+                       "and change what it does while it runs.",
+                       "get-task-allow is false in the build that goes to the App Store (Xcode sets it per build: it "
+                       "should not be written into the shipped entitlements)."),
+    "ios-log": (None,
+                "The log lines include a password or token. Logs end up in sysdiagnose bug reports, crash tools and "
+                "on any Mac the phone is plugged into.",
+                "Those lines are removed, or log with privacy: .private so the value is hidden."),
+    "ios-plain-secret": (None,
+                         "From an unencrypted backup, or a phone that is not theirs for a minute, the saved login is a "
+                         "line of plain text in the app's settings file. Whoever copies it is signed in as that person.",
+                         "The token is saved in the Keychain, which the phone encrypts and keeps out of backups you "
+                         "can read."),
+    "ios-app-key": (None,
+                    "They download your app, open the app bundle on a Mac and read Info.plist. The key is right there, "
+                    "and they use it from their own computer.",
+                    "The key is restricted to your app in the provider's console, or kept on your server and never "
+                    "shipped in the app."),
+    "ios-permission": (None,
+                       "People see the permission prompt and wonder why the app wants it; App Review asks the same "
+                       "question, and an unused permission is one more thing that can be misused.",
+                       "The usage description is removed, so nobody is asked for it."),
+    "ios-release": (None,
+                    "This does not open a door by itself. It keeps the app running on old iPhone software that no "
+                    "longer gets security fixes, which makes every other problem easier to use.",
+                    "The minimum iOS version is raised to one Apple still updates, and the app is tested again."),
+    "ios-shared-file": (None,
+                        "They plug the phone into a Mac (or open the Files app on it) and browse the app's Documents "
+                        "folder, copying or changing what your app saved there.",
+                        "File sharing is turned off, or only files the person chose to share are kept in Documents."),
+    "ios-webview": (None,
+                    "A web page shown inside the app (or one an attacker manages to load there) runs its own script, "
+                    "which can reach into the app or read local files.",
+                    "The web view only loads your own pages, with file access and script bridges off unless a page "
+                    "really needs them."),
+    "ios-tls-off": (None,
+                    "Their laptop pretends to be your server. The app accepts its certificate without checking it, so "
+                    "they read every password and answer as it passes, and can change them.",
+                    "The challenge handler only accepts the certificate after the system checks it "
+                    "(SecTrustEvaluateWithError), or the handler is removed so iOS checks it for you."),
+    "ios-clipboard": (None,
+                      "Another app reads the clipboard while the person switches to it, and gets the password or token.",
+                      "Secrets are never copied to the clipboard, or copied with an expiry and localOnly set."),
 }
 
 RULE_KIND = {
@@ -202,6 +252,12 @@ RULE_KIND = {
     "LM-KEY-IN-APP": "android-app-key", "LM-SIGNING-SECRET": "secret", "LM-UNUSED-PERMISSION": "android-permission",
     "LM-NO-SHRINK": "android-release", "LM-OLD-TARGET": "android-release", "LM-RELEASE-DEBUG-KEY": "android-release",
     "LM-DYNAMIC-VERSION": "android-release", "LM-IMPLICIT-BROADCAST": "android-exported",
+    "LI-ATS-OFF": "cleartext", "LI-CLEARTEXT-URL": "cleartext", "LI-URL-SCHEME": "ios-link",
+    "LI-DEBUGGABLE": "ios-debuggable", "LI-LOG-SENSITIVE": "ios-log", "LI-DEFAULTS-SECRET": "ios-plain-secret",
+    "LI-KEYCHAIN-ALWAYS": "ios-plain-secret", "LI-PLIST-KEY": "ios-app-key", "LI-UNUSED-PERMISSION": "ios-permission",
+    "LI-OLD-TARGET": "ios-release", "LI-UIWEBVIEW": "ios-release", "LI-FILE-SHARING": "ios-shared-file",
+    "LI-WEBVIEW-FILE": "ios-webview", "LI-WEBVIEW-BRIDGE": "ios-webview", "LI-PASTEBOARD": "ios-clipboard",
+    "LI-TLS-OFF": "ios-tls-off", "LI-SQL-CONCAT": "sql", "LI-WEAK-HASH": "weak-hash",
 }
 # Where each Android story starts (the manifest and build-file problems have no page or route to start from)
 ANDROID_START = {
@@ -217,6 +273,18 @@ ANDROID_START = {
     "android-app-key": "{who} downloads your app from the store like anyone else.",
     "android-permission": "{who} installs your app and reads the permission list.",
     "android-release": "{who} downloads your app and looks at how it was built.",
+    "ios-link": "{who} puts a link to your app on a web page or in a message (any app can send it, too).",
+    "ios-debuggable": "{who} borrows the phone and plugs it into a Mac with Xcode.",
+    "ios-log": "{who} plugs the phone into a Mac and opens Console, or reads a bug report the person sent you.",
+    "ios-plain-secret": "{who} gets a copy of the app's files: an unencrypted backup, or a phone left unlocked.",
+    "ios-app-key": "{who} downloads your app from the App Store like anyone else.",
+    "ios-permission": "{who} installs your app and reads the permission prompts.",
+    "ios-release": "{who} downloads your app and looks at how it was built.",
+    "ios-shared-file": "{who} has the phone in their hands for a minute, or plugs it into their Mac.",
+    "ios-webview": "{who} gets a page of their own shown in your app's web view (a link, an ad, or a plain-http page they changed on the way).",
+    "ios-clipboard": "{who} has another app installed on the same phone.",
+    "ios-tls-off": "{who} joins the same public Wi-Fi as someone using your app (iOS calls this check for every secure "
+                   "connection the app makes).",
 }
 
 CWE_KIND = {78: "shell", 77: "shell", 89: "sql", 79: "xss", 94: "eval", 95: "eval", 502: "deserialize",
@@ -292,6 +360,11 @@ def _route_word(g: Graph | None, f: dict) -> tuple[str | None, str | None]:
     return detail or None, r.get("kind")
 
 
+def _from_another_app(route: str | None, rkind: str | None) -> bool:
+    """An Android component other apps can start (`INTENT …`) or an iOS link handler (`LINK …`)."""
+    return bool(route) and rkind == "route" and str(route).startswith(("INTENT ", "LINK "))
+
+
 def _android_part(f: dict, g: Graph | None) -> str:
     """The component a manifest finding is about, in words ("NotesProvider"), from the node it is pinned to."""
     n = g.nodes.get(f.get("node") or "") if g else None
@@ -303,6 +376,8 @@ def _typed_into(f: dict) -> str:
     m = re.search(r"`([^`]+)`", via)
     if "Extra(" in via or "getQueryParameter" in via or "intent." in via or "getIntent" in via:
         return "the link or message their app sends"
+    if "queryItems" in via or "URLComponents" in via or "webpageURL" in via or "url." in via:
+        return "the link they send"
     return f"the box that fills in `{m.group(1)}`" if m else "a box on the page"
 
 
@@ -339,7 +414,7 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
         steps.append(f"Your app ships {pkg} at a version with a published weakness ({f.get('title') or 'see the finding'}).")
         steps.append(f"{who} runs a free scanner against apps like yours and it lists that version.")
         basis.append("the version comes from your lock file and the advisory database")
-    elif kind in ANDROID_START and (kind not in ("cleartext", "android-webview") or not (ui or route)) \
+    elif kind in ANDROID_START and (kind not in ("cleartext", "android-webview", "ios-webview") or not (ui or route)) \
             and not (kind == "android-exported" and f.get("rule") == "LM-IMPLICIT-BROADCAST"):
         part = _android_part(f, g)
         steps.append(ANDROID_START[kind].format(who=who, part=part))
@@ -351,14 +426,18 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                      "are meant to be public).")
         steps.append("From their own computer they ask the database for every row of this table.")
     else:
-        if ui and page and " screen" in page:          # an Android screen (android.py)
-            steps.append(f"{who}, who is testing your app, opens the {page.split(' · ')[0]} on their phone.")
-            steps += [f"They {c}." for c in _clicks(g, ui)]
-            basis.append("the screen comes from the map of your app")
-        elif route and rkind == "route" and route.startswith("INTENT "):
+        if _from_another_app(route, rkind) and route.startswith("LINK "):
+            steps.append(f"{who} sends a link to your app (from a web page, a message, or a small app of their own). "
+                         f"{route.split()[1]} handles it and reads data of their choosing.")
+            basis.append("the app opens links (Info.plist URL types, .onOpenURL or the app delegate)")
+        elif _from_another_app(route, rkind):
             steps.append(f"{who} installs a small app of their own on the same phone (or sends a link). It opens "
                          f"{route.split()[1]} directly and passes in data of their choosing.")
             basis.append("the manifest says other apps can start this part of your app")
+        elif ui and page and " screen" in page:          # a phone screen (android.py, ios.py)
+            steps.append(f"{who}, who is testing your app, opens the {page.split(' · ')[0]} on their phone.")
+            steps += [f"They {c}." for c in _clicks(g, ui)]
+            basis.append("the screen comes from the map of your app")
         elif ui and page:
             steps.append(f"{who}, who is testing your app, opens the {page} page.")
             steps += [f"They {c}." for c in _clicks(g, ui)]
@@ -379,7 +458,9 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                          if kind == "wallet" else f"They are not signed in when they send {route}.")
         if typed and kind in TYPED:
             if f.get("input"):
-                if route and rkind == "route" and route.startswith("INTENT "):
+                if _from_another_app(route, rkind) and route.startswith("LINK "):
+                    steps.append(f"In the link they send, they put: {typed}")
+                elif _from_another_app(route, rkind):
                     steps.append(f"In the data their app sends, they put: {typed}")
                 else:
                     steps.append(f"In {_typed_into(f)} they type: {typed}")
@@ -436,6 +517,17 @@ FIXED_HEADLINES = {
     "android-plain-secret": "A login is saved in plain text on the phone",
     "android-app-key": "A key is built into the app where anyone can read it",
     "android-permission": "The app asks for a permission it does not seem to use",
+    "ios-link": "Any app or web page can open your app with a link",
+    "ios-debuggable": "A debugger can attach to the app",
+    "ios-log": "Private details are written to the phone's log",
+    "ios-plain-secret": "A login is saved where it is not protected",
+    "ios-app-key": "A key is built into the app where anyone can read it",
+    "ios-permission": "The app asks for a permission it does not seem to use",
+    "ios-release": "The app is built for old or retired iPhone software",
+    "ios-shared-file": "The app's files can be browsed from a computer",
+    "ios-webview": "A web view inside the app has risky settings",
+    "ios-clipboard": "A secret is copied to the clipboard",
+    "ios-tls-off": "A secure-connection check is switched off",
     "weak-hash": "A weak scrambling method (such as MD5) is used",
     "secret": "A password or key is written in the code",
     "service-role": "The master database key is sent to every visitor's browser",
@@ -475,6 +567,9 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
         return otherwise
     who = None
     ui = f.get("ui_path") or None
+    route, rkind = _route_word(g, f)
+    if _from_another_app(route, rkind):          # another app or a link, even when a screen also reaches the line
+        return reached.format(who="Another app or a link").replace("your database", "your app's database")
     if ui:
         clicks = _clicks(g, ui)
         if clicks:   # "click the backup button" -> "The backup button"
@@ -483,9 +578,6 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
             pg = _page(g, ui[0])
             who = f"The {pg.split(' · ')[0]}" if " screen" in pg else f"The {pg} page"
     if not who:
-        route, rkind = _route_word(g, f)
-        if route and rkind == "route" and route.startswith("INTENT "):
-            return reached.format(who="Another app or a link").replace("your database", "your app's database")
         if rkind in ("cli", "script", "main"):   # a command the owner runs by hand: no visitor reaches it
             return otherwise
         who = f"A request to {route}" if route and rkind == "route" else "What a visitor types"

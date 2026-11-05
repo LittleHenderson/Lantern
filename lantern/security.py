@@ -135,7 +135,12 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
                           r"getPathInfo|getRequestURI)\(|"
                           # Android: data another app or a link put into an Intent
                           r"\bget(?:String|Int|Long|Boolean|Bundle|Parcelable|Serializable|CharSequence)(?:Array)?(?:List)?Extra\(|"
-                          r"\bgetQueryParameter\(|\bgetIntent\(\)\.(?:getData|getExtras|getDataString)\(|\bintent\.(?:data|extras|dataString)\b")
+                          r"\bgetQueryParameter\(|\bgetIntent\(\)\.(?:getData|getExtras|getDataString)\(|\bintent\.(?:data|extras|dataString)\b"
+                          # iOS: what a link carries (ios.py)
+                          r"|\.queryItems\b|\bURLComponents\s*\(\s*(?:url|string):|\buserActivity\.webpageURL\b|"
+                          r"\burl\.(?:query|path|host|absoluteString|pathComponents|fragment)\b"
+                          # Vapor (Swift servers)
+                          r"|\breq\.(?:parameters|query|content|headers|body)\b")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var|val)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
@@ -146,13 +151,13 @@ BINDS = [   # loops and context managers that bind a name to a value
     re.compile(r"^\s*for\s*\(\s*(?:const|let|var)\s+(?P<lhs>[\w{}\[\], $]+?)\s+(?:of|in)\s+(?P<rhs>[^)]+)\)", re.S),
 ]
 _STRINGS = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
-_TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)")
+_TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)|\\\(\s*([A-Za-z_]\w*)")
 
 
 def _blank_string(m: re.Match) -> str:
-    """A string literal becomes `''`, keeping the names a template puts into it (`"id = $id"` in Kotlin,
+    """A string literal becomes `''`, keeping the names a template puts into it (`"id = $id"` in Kotlin, `\\(id)` in Swift,
     `${id}` in a JS template literal) so a value spliced into SQL or a command is still seen as used."""
-    refs = [a or b for a, b in _TEMPLATE_REF.findall(m.group(0))]
+    refs = [a or b or c for a, b, c in _TEMPLATE_REF.findall(m.group(0))]
     return "''" + "".join(f" + {r}" for r in refs)
 
 
@@ -230,8 +235,9 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
             m = re.fullmatch(r"\w+\((\w+)\)", pat)             # State(state), Path(id), Json(body)
             params.append(m.group(1) if m else pat)
         params = [x for x in params if re.fullmatch(r"[A-Za-z_]\w*", x)]
-    elif f["file"].endswith(".kt"):
-        # Kotlin writes `name: Type` (after `vararg`, `val`, annotations): the name before each top-level colon
+    elif f["file"].endswith((".kt", ".swift")):
+        # Kotlin and Swift write `name: Type` (after `vararg`/`val`, an argument label, annotations): the name before
+        # each top-level colon
         inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
         inner = re.sub(r"<[^<>]*>", "", re.sub(r"@\w+(\([^)]*\))?", "", inner))
         params = [m.group(1) for piece in re.split(r",(?![^(]*\))", inner)
@@ -457,7 +463,7 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
         f["ui_path"] = u["path"] if u else None
         # Stack strip: the lane the problem lives on, and every lane its path crosses (lanes.py).
         node = g.nodes.get(f["node"]) if f["node"] else None
-        f["hot_lane"] = (node.lane if node else None) or lanes.lane_for_file(f["file"], g.meta.get("android"))
+        f["hot_lane"] = (node.lane if node else None) or lanes.lane_for_file(f["file"], lanes.phone_roots(g.meta))
         data_hops = ["data"] if node and any((g.nodes.get(e.dst) and g.nodes[e.dst].lane == "data")
                                              for e in g.callees(node.id)) else []
         f["lanes"] = lanes.lanes_for_path(g, (u["path"] if u else None) or (r["path"] if r else None),
