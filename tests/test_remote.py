@@ -1,5 +1,4 @@
 """Opening a repository from a link: parsing, cloning with git, the CLI, and the app."""
-import json
 import shutil
 import subprocess
 from pathlib import Path

@@ -22,7 +22,6 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from pathlib import Path
 

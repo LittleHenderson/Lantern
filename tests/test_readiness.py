@@ -198,3 +198,40 @@ def test_poetry_and_pipfile_dependencies_are_read(tmp_path):
     c = _checks(assess(build_graph(tmp_path), EMPTY_SEC))["deps-pinned"]
     assert c["status"] == "fail" and "pyproject.toml: flask" in c["evidence"] and "Pipfile: requests" in c["evidence"]
     assert "httpx" not in c["evidence"] and "click" not in c["evidence"]
+
+
+def test_routes_called_through_a_test_client_count_as_reached(tmp_path):
+    """A test that calls `client.get("/items/1")` never shows in the call graph (the framework dispatches), so the
+    route's path written in a test file counts; `{id}` matches one segment; `/` matches the root alone."""
+    _write(tmp_path, {
+        **API,
+        "svc/main.py": API["svc/main.py"] + (
+            "\n@app.get('/items/{item_id}')\ndef item(item_id: int):\n    return item_id\n\n"
+            "@app.get('/')\ndef home():\n    return 'hi'\n\n@app.delete('/items/{item_id}')\ndef drop(item_id: int):\n    return 1\n"),
+        "tests/test_api.py": (
+            "from fastapi.testclient import TestClient\nfrom svc.main import app\n\nclient = TestClient(app)\n\n"
+            "def test_item():\n    assert client.get('/items/7').status_code == 200\n\n"
+            "def test_home():\n    assert client.get('/').status_code == 200\n\n"
+            "def test_charge():\n    client.post('/charge')\n"),
+    })
+    g = build_graph(tmp_path)
+    c = _checks(assess(g, EMPTY_SEC))
+    ent = c["tests-entries"]
+    assert ent["status"] == "partial" and "3 of 4" in ent["evidence"] and "by path through a test client" in ent["evidence"]
+    assert "DELETE /items/{item_id}" in ent["evidence"]          # the one route no test calls is named
+
+
+def test_program_output_is_not_print_debugging(tmp_path):
+    """print() in the program's entry function, under __main__, or to a named stream is the program talking to the
+    person; a print inside a request handler is the leftover the check is for."""
+    _write(tmp_path, {
+        **API,
+        "svc/main.py": API["svc/main.py"] + (
+            "\nimport sys\n\n@app.get('/x')\ndef x():\n    print('debug here')\n    return 1\n\n"
+            "def helper():\n    print('warning', file=sys.stderr)\n\n"
+            "def main():\n    print('listening on 8000')\n    print('press Ctrl-C to stop')\n\n"
+            "if __name__ == '__main__':\n    print('starting')\n    main()\n"),
+    })
+    c = _checks(assess(build_graph(tmp_path), EMPTY_SEC))
+    assert c["obs-print"]["status"] == "partial" and "1 print() call" in c["obs-print"]["evidence"]
+    assert "svc/main.py:19" in c["obs-print"]["evidence"]

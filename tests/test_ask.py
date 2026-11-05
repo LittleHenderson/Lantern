@@ -3,7 +3,6 @@
 from pathlib import Path
 
 from lantern import ask
-from lantern.engine import build_graph
 from lantern.pipeline import analyze
 from lantern.providers import FixtureProvider
 

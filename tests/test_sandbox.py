@@ -186,7 +186,8 @@ def test_server_needs_confirmation_once_per_command(tmp_path, monkeypatch):
     import threading
     from http.server import ThreadingHTTPServer
     monkeypatch.setenv("LANTERN_SANDBOX", "subprocess")
-    store = Store(tmp_path / "home"); store.root.mkdir()
+    store = Store(tmp_path / "home")
+    store.root.mkdir()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     Handler.app = App(store, "tok-123", httpd.server_address[1])
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -213,4 +214,5 @@ def test_server_needs_confirmation_once_per_command(tmp_path, monkeypatch):
         code, d = call(base, f"/api/projects/{pid}/testcmd")
         assert d["confirmed"] is True   # once per project per command
     finally:
-        httpd.shutdown(); httpd.server_close()
+        httpd.shutdown()
+        httpd.server_close()

@@ -30,7 +30,10 @@ product's job is to make their code understandable and defensible to skeptical e
 
 ```bash
 pip install -e ".[scan,dev]"
-python -m pytest -q                                   # ~6 s
+python -m pytest -q                                   # ~3 min (511 tests); CI adds --cov with an 85% floor
+ruff check lantern gateway cloud tests tools bench examples   # the linter CI runs (config in pyproject.toml)
+python tools/self_readiness.py /tmp/self/readiness.json      # Lantern must grade A on its own readiness checks (CI)
+python tools/licences.py [--lock-matches]             # licences of Lantern's own libraries; requirements-lock.txt current
 lantern serve tests/fixtures/shop                     # the app; prints a one-time link
 lantern analyze tests/fixtures/shop --out /tmp/shop   # React + FastAPI sample, end to end
 lantern analyze tests/fixtures/nextapp --out /tmp/nx  # Next.js + Supabase sample

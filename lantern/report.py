@@ -10,7 +10,6 @@ import re
 from pathlib import Path
 
 from . import __version__
-from .explain import read_source
 from .graph import Graph
 
 TEMPLATE = Path(__file__).parent / "viewer" / "report.html"

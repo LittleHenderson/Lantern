@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from lantern.explain import (Context, build_context, parse_json, render_prompt, run, select_nodes,
+from lantern.explain import (build_context, parse_json, render_prompt, run, select_nodes,
                              validate)
 from lantern.providers import FixtureProvider
 from lantern.engine import build_graph

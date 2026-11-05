@@ -49,11 +49,10 @@ GLOSSARY = {
     "user", "record", "row", "table", "schema", "backup", "archive", "parameter binding", "placeholder",
     "injection", "hard-coded", "hardcoded", "plaintext", "entry point", "main", "startup",
     # web / full stack
-    "component", "react component", "hook", "props", "render", "jsx", "event handler", "click handler",
-    "fetch", "promise", "api route", "api call", "mutation", "form", "form submission", "page", "router",
-    "frontend", "backend", "server", "browser", "cors", "xss", "cross-site scripting", "local storage",
-    "environment variable", "row level security", "middleware", "dependency injection", "rest api",
-    "http method", "get request", "post request", "put request", "delete request", "url", "query string",
+    "react component", "jsx", "promise", "api route", "api call", "mutation", "form submission", "router",
+    "frontend", "backend", "server", "browser", "cors", "local storage",
+    "row level security", "middleware", "dependency injection", "rest api",
+    "http method", "get request", "post request", "put request", "delete request", "query string",
 }
 
 SYSTEM = """You explain code to people learning to understand software they built with AI help.
@@ -499,7 +498,6 @@ def select_nodes(g: Graph, depth: int = 3, include_tests: bool = False, limit: i
 
 
 def estimate(g: Graph, nids: list[str], findings: list[dict]) -> dict:
-    repo = Path(g.repo_root)
     inp = 0
     for nid in nids:
         ctx = build_context(g, nid, findings, {}, "x")

@@ -186,7 +186,7 @@ def _planted_repo(tmp_path):
     x = '<img src=x onerror="alert(1)">'
     (repo / "app.py").write_text("def f():\n    return 1\n", encoding="utf-8")
     (out / "report.html").write_text(f"<!doctype html><script>alert('planted')</script>{x}", encoding="utf-8")
-    (out / "evidence.html").write_text(f"<script>alert('planted')</script>", encoding="utf-8")
+    (out / "evidence.html").write_text("<script>alert('planted')</script>", encoding="utf-8")
     (out / "badge.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>', encoding="utf-8")
     (out / "security.json").write_text(json.dumps({"counts": {"critical": x, "high": 1, "medium": 0}, "findings": []}), encoding="utf-8")
     (out / "readiness.json").write_text(json.dumps({"score": x, "grade": x, "shape": x}), encoding="utf-8")
@@ -332,7 +332,8 @@ def test_watch_tests_accepts_only_test_runners(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     d = detect_test_command(tmp_path)
     assert d["supported"] and d["traced"] and d["sandbox"]["name"] in ("docker", "subprocess") and "Nothing leaves" in d["leaves"]
-    js = tmp_path / "js"; js.mkdir()
+    js = tmp_path / "js"
+    js.mkdir()
     (js / "package.json").write_text('{"scripts": {"test": "vitest"}}', encoding="utf-8")
     d = detect_test_command(js)
     assert d["command"] == "npm test" and d["supported"] and not d["traced"] and d["note"] == "Tests run; your map upgrades for Python only for now."
@@ -340,11 +341,13 @@ def test_watch_tests_accepts_only_test_runners(tmp_path):
     assert detect_test_command(js)["command"] == "pnpm test"
     for files, want in ((["go.mod"], "go test ./..."), (["Cargo.toml"], "cargo test"), (["pom.xml"], "mvn -q -o test"),
                         (["build.gradle", "gradlew"], "./gradlew test --offline")):
-        d = tmp_path / want.split()[0].strip("./"); d.mkdir(exist_ok=True)
+        d = tmp_path / want.split()[0].strip("./")
+        d.mkdir(exist_ok=True)
         for f in files:
             (d / f).write_text("", encoding="utf-8")
         assert detect_test_command(d)["command"] == want
-    jest = tmp_path / "jestonly"; jest.mkdir()
+    jest = tmp_path / "jestonly"
+    jest.mkdir()
     (jest / "package.json").write_text('{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}, "devDependencies": {"jest": "29"}}', encoding="utf-8")
     assert detect_test_command(jest)["command"] == "npx jest"
     (tmp_path / "nowhere").mkdir()
@@ -362,7 +365,8 @@ def test_terminal_drawer_runs_lantern_commands_only(tmp_path):
         def confirm_test(self, pid, cmd):
             self.confirmed = cmd
     class App:
-        jobs = Jobs(); store = Store()
+        jobs = Jobs()
+        store = Store()
     app, p, repo, out = App(), {"id": "x"}, tmp_path, tmp_path / ".lantern"
     assert run_terminal_command(app, p, repo, out, ["lantern", "analyze", "--offline"])["job"]["kind"] == "analyze"
     assert run_terminal_command(app, p, repo, out, ["trace", "--", "python", "-m", "pytest", "-q"])["job"]["kind"] == "trace"

@@ -39,7 +39,7 @@ def test_decorator_wrapper_hops_collapse(tmp_path):
         "if __name__ == '__main__':\n"
         "    main()\n")
     g = build_graph(tmp_path)
-    m = merge_trace(g, run_trace(tmp_path, ["python", "app.py"]))
+    merge_trace(g, run_trace(tmp_path, ["python", "app.py"]))
     e = next(e for e in g.call_edges() if e.src == "py:app.main" and e.dst == "py:app.App.route")
     assert e.confidence == "observed"
     assert not any(e.src == "py:app.main" and e.dst == "py:app.logged.wrapper" for e in g.call_edges())

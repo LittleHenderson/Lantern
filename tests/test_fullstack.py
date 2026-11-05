@@ -210,7 +210,7 @@ def test_tanstack_file_route_and_generated_client(tmp_path):
 ])
 def test_bridge_matching(call, routes, want, conf):
     rs = []
-    for i, r in enumerate(routes):
+    for r in routes:
         verb, path = r.split(" ")
         from lantern.bridge import _segs
         rs.append({"id": r, "verbs": {verb}, "segs": _segs(path), "detail": r})

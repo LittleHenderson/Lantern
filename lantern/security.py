@@ -346,7 +346,7 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
     head = _indent(src[n.start_line - 1])
     body = next((_indent(src[st[0] - 1]) for st in stmts if _indent(src[st[0] - 1]) > head), head + 1)
     level = {name: body for name in tainted}   # the block level at which each name was tainted
-    for start, end, text in stmts:
+    for start, _end, text in stmts:
         if start >= flagged[0]:
             break
         m = ASSIGN.match(text) or next((b.match(text) for b in BINDS if b.match(text)), None)

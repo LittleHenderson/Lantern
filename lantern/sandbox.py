@@ -282,7 +282,7 @@ _WRITE_BITS = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
 
 def _make_read_only(root: Path) -> None:
     """Take every write bit off the copy (read and execute bits are left as they were)."""
-    for dirpath, dirs, files in os.walk(root, topdown=False):
+    for dirpath, _dirs, files in os.walk(root, topdown=False):
         for f in files:
             p = os.path.join(dirpath, f)
             if not os.path.islink(p):
@@ -491,7 +491,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel) -> Resul
     env = _env_base(tmp)
     as_nobody = hasattr(os, "geteuid") and os.geteuid() == 0
     if as_nobody:   # root ignores file modes: run the tests as nobody, who owns only the sandbox folder and its temp
-        for dirpath, dirs, files in os.walk(tmp):
+        for dirpath, _dirs, files in os.walk(tmp):
             os.chown(dirpath, 65534, 65534)
             for f in files:
                 os.chown(os.path.join(dirpath, f), 65534, 65534)

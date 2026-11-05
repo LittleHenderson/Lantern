@@ -49,3 +49,12 @@ lantern = ["viewer/*.html", "viewer/*.js", "viewer/*.svg", "viewer/*.webmanifest
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["tests/fixtures"]
+
+[tool.ruff]
+line-length = 130
+extend-exclude = ["tests/fixtures", "lantern/starters", "site"]
+
+[tool.ruff.lint]
+# Mistakes that are not bugs yet: undefined and unused names, wrong imports, likely-bug patterns (B).
+select = ["E4", "E7", "E9", "F", "B"]
+ignore = ["B905", "E731", "E741"]   # zip(strict=) needs 3.10 semantics everywhere; one-letter names and lambdas are fine here

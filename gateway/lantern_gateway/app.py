@@ -23,6 +23,7 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -35,6 +36,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from . import __version__
+
+log = logging.getLogger("lantern.gateway")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -381,7 +384,7 @@ async def _call(transport, prov: dict, out: dict) -> tuple[dict | None, object]:
         return None, "unreachable"
     if r.status_code != 200:
         # Server log only (never the client): enough to diagnose a rejected request, never the prompt.
-        print(f"upstream {prov['name']} HTTP {r.status_code}: {r.text[:300]!r}", flush=True)
+        log.warning("upstream %s HTTP %s: %r", prov["name"], r.status_code, r.text[:300])
         if r.status_code == 400 and "credit balance" in r.text.lower():
             return None, 402   # Anthropic reports an empty account as 400; treat it as "no balance" so the fallback answers
         return None, r.status_code

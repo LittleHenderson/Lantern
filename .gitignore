@@ -9,3 +9,6 @@ demo-out/
 node_modules/
 .venv/
 site/demo/report.html
+.coverage
+coverage.xml
+.ruff_cache/

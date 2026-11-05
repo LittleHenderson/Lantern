@@ -9,19 +9,40 @@ jobs:
       matrix:
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ matrix.python }}
       - name: Tesseract, so the screenshot-reading tests run (tests/test_ocr.py)
         run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
-      - run: pip install -e ".[scan,dev]"
-      - run: python -m pytest -q
+      - run: pip install -e ".[scan,dev]" pytest-cov
+      - name: Tests, measuring how much of the code they run (coverage; the build fails under 85%)
+        run: |
+          python -m pytest -q --cov=lantern --cov=gateway --cov=cloud --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=85 | tee pytest.log
+          { echo "### Coverage (Python ${{ matrix.python }})"; echo '```'; grep -E '^(TOTAL|Required|FAIL)' pytest.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Lantern audits itself (no critical, high, or medium findings)
         run: lantern analyze . --out /tmp/self --fail-on medium
+      - name: Lantern passes its own readiness checks (grade A, every check pass or skip except the listed ones)
+        run: python tools/self_readiness.py /tmp/self/readiness.json
       - name: Audit package checks (tools/audit.sh)
         if: matrix.python == '3.13'
         run: bash tools/audit.sh
+
+  lint:
+    # Mistakes that are not bugs yet (undefined names, unused variables, likely-bug patterns), and every library
+    # Lantern ships with has a licence that allows it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff pip-licenses -e ".[scan,dev]"
+      - run: ruff check lantern gateway cloud tests tools bench examples
+      - name: Licences of Lantern's own libraries (allow-list in tools/licences.py)
+        run: python tools/licences.py
+      - name: The lock file matches pyproject.toml (every library it names is still declared)
+        run: python tools/licences.py --lock-matches
 
   gateway:
     # The free allowance testers get by default: the live gateway must answer. Prints its health (version and
@@ -47,7 +68,7 @@ jobs:
     # user, and answers its health check with the engine inside.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - run: docker build -f cloud/Dockerfile -t lantern-cloud .
       - name: start it and read /v1/health
         run: |
@@ -77,8 +98,8 @@ jobs:
     env:
       PYTHONUTF8: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - run: pip install -e ".[scan,dev]"
@@ -96,13 +117,15 @@ jobs:
 
   browser:
     # The viewer in a real browser: no JS errors, and hostile text can't break or hijack the page.
-    runs-on: ubuntu-latest
+    # Pinned to Ubuntu 24.04: `ubuntu-latest` moved to 26.04 on 2026-11-05 and Playwright 1.48's browser packages
+    # (libicu74, libvpx9, libx264-164) are not in it yet; the same image also runs Tesseract several times slower.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.13"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: "20"
       - run: pip install -e ".[scan,dev]"
@@ -124,8 +147,8 @@ jobs:
     env:
       SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4   # only for tests/fixtures/shop; Lantern itself comes from pip below
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4   # only for tests/fixtures/shop; Lantern itself comes from pip below
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - name: Clean-venv install from GitHub, then version, analyze, serve --check

@@ -26,7 +26,7 @@ import tree_sitter_javascript as tsj
 import tree_sitter_typescript as tst
 from tree_sitter import Language, Node as TSNode, Parser
 
-from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
+from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, RESOLVED, Graph, Node
 from .python_frontend import SKIP_DIRS, inside_repo
 
 LANGS = {
@@ -440,7 +440,6 @@ class Walker:
                 self.m.default = nm
                 return
             if val.type == "call_expression":
-                fch = _chain(val.child_by_field_name("function"))
                 args = val.child_by_field_name("arguments")
                 first = args.named_children[0] if args is not None and args.named_child_count else None
                 if first is not None and first.type == "identifier":   # export default connect(X)
@@ -625,7 +624,7 @@ class Walker:
         if not ch:
             return None
         last = ch[-1]
-        method, url_node, opts = None, None, None
+        method, url_node = None, None
         if last in ("fetch", "$fetch", "ofetch", "useSWR", "useFetch") and len(ch) <= 2 and argv:
             url_node = argv[0]
             method = self._method_of(argv[1] if len(argv) > 1 else None)
