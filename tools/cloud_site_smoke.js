@@ -8,6 +8,7 @@ const chromium = require('playwright')[process.env.PW_BROWSER || 'chromium'];
 const fs = require('fs');
 const a11y = require('./a11y.js');
 
+async function fresh(p, url) { await p.goto('about:blank'); await p.goto(url); await p.waitForLoadState('load'); }
 async function until(p, fn, timeout) {
   const end = Date.now() + timeout;
   for (;;) {
@@ -72,7 +73,11 @@ async function until(p, fn, timeout) {
     await p.screenshot({ path: `${out}-${tag}-progress.png` });
     await a11y.axe(p, `${tag} progress`, errs);
     await clean(p, 'progress');
-    await p.goto(site + '#/run/failed1'); await p.reload(); await p.waitForSelector('.progress [data-again]');
+    // a fresh load at the run's address (not a hash change plus reload: Firefox and WebKit can reload the page before the
+    // hash has moved, and the old run stays on screen)
+    await fresh(p, site + '#/run/failed1');
+    try { await p.waitForSelector('.progress [data-again]'); }
+    catch (e) { errs.push(`${tag}: no "Try again" on the failed run at ${p.url()}: ${(await p.$eval('#view', v => v.innerText).catch(() => '?')).slice(0, 300).replace(/\s+/g, ' ')}`); await p.close(); await ctx.close(); continue; }
     await clean(p, 'failed run');
     // "Try again" starts the same link again (the demo server has no worker, so it answers 503: that is fine here)
     allow503 = true;
@@ -80,7 +85,7 @@ async function until(p, fn, timeout) {
     await p.click('.progress [data-again]');
     if (!(await again)) errs.push(`${tag}: "Try again" on a failed run sent nothing`);
     await p.waitForTimeout(300); allow503 = false;
-    await p.goto(site + '#/run/done1'); await p.reload();
+    await fresh(p, site + '#/run/done1');
     await until(p, () => { try { return !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('#tabs'); } catch (e) { return false; } }, 20000);
     await p.waitForTimeout(800);
     await p.screenshot({ path: `${out}-${tag}-report.png` });

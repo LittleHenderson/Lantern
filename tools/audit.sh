@@ -229,16 +229,17 @@ PYEOF
   kill $SPID 2>/dev/null; wait $SPID 2>/dev/null
   # the cloud website: signed out, sign-in sheet, My runs, progress, report; every run field carries an HTML payload
   if "$PY" -c "import fastapi, httpx, uvicorn" 2>/dev/null; then
-    C="$W/cloud"; mkdir -p "$C"
-    "$PY" tools/cloud_site_demo.py --port 8872 --token-file "$C/token" --poison > "$C/demo.log" 2>&1 &
-    CPID=$!
-    for _ in $(seq 150); do grep -q '"ready"' "$C/demo.log" && break; sleep 0.2; done
-    check "cloud website: no JS errors, accessible, poisoned run data stays text (desktop + phone, light + dark)" \
-      node tools/cloud_site_smoke.js http://127.0.0.1:8872/ "$C/token" "$C/shot"
-    for eng in ${LANTERN_BROWSERS:-}; do
-      PW_BROWSER=$eng check "cloud website in $eng" node tools/cloud_site_smoke.js http://127.0.0.1:8872/ "$C/token" "$C/shot-$eng"
-    done
-    kill $CPID 2>/dev/null; wait $CPID 2>/dev/null
+    # one demo server per browser engine: the smoke's last pass deletes a run and an account, so a second engine
+    # against the same server would find them gone
+    cloud_smoke() { local eng="$1" port="$2" C="$W/cloud-$1"; mkdir -p "$C"
+      "$PY" tools/cloud_site_demo.py --port "$port" --token-file "$C/token" --poison > "$C/demo.log" 2>&1 &
+      local CPID=$!
+      for _ in $(seq 150); do grep -q '"ready"' "$C/demo.log" && break; sleep 0.2; done
+      PW_BROWSER=$eng check "cloud website in $eng: no JS errors, accessible, poisoned run data stays text (desktop + phone, light + dark)" \
+        node tools/cloud_site_smoke.js "http://127.0.0.1:$port/" "$C/token" "$C/shot"
+      kill $CPID 2>/dev/null; wait $CPID 2>/dev/null; }
+    cloud_smoke chromium 8872
+    port=8873; for eng in ${LANTERN_BROWSERS:-}; do cloud_smoke "$eng" $port; port=$((port + 1)); done
   fi
 fi
 
