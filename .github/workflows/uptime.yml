@@ -1,0 +1,28 @@
+# Is Lantern's live service up, and is it running the released version? (test checklist 9.3, 9.5)
+# Every 30 minutes GitHub asks lantern-cloud and the gateway for /v1/health. A failed run emails the repository owner
+# (GitHub's own "workflow failed" notification), which is the alert. Nothing here needs a secret: both health pages are
+# public and show versions and limits only.
+name: uptime
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - name: lantern-cloud and the gateway answer /v1/health
+        run: python tools/uptime.py --cloud https://lantern-cloud.fly.dev --gateway https://lantern-gateway.fly.dev --summary "$GITHUB_STEP_SUMMARY"
+      - name: the live engine is not behind the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LATEST=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null | sed 's/^v//')
+          python tools/uptime.py --cloud https://lantern-cloud.fly.dev --expect-engine "${LATEST:-}" --summary "$GITHUB_STEP_SUMMARY"

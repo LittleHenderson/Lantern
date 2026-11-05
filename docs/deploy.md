@@ -221,6 +221,64 @@ repository's files.
 | The first request after a quiet spell takes a few seconds | The service was asleep (normal, it saves money) | nothing |
 | A large repository's run ends with an error about memory | 1 GB is not enough for it | `fly scale memory 2048 -a lantern-cloud` (doubles the running cost) |
 
+### Watching the live services (uptime, and "is the live version behind?")
+
+`.github/workflows/uptime.yml` asks both services for `/v1/health` every 30 minutes (`tools/uptime.py`). A run fails,
+and GitHub emails the repository owner, when either service is down, answers without `"ok": true`, takes more than
+5 seconds, or when lantern-cloud's engine version is older than the latest GitHub release (the live service is behind;
+redeploy, below). The health pages are public and show versions and limits only, so the check needs no secret.
+`python tools/uptime.py --cloud https://lantern-cloud.fly.dev --gateway https://lantern-gateway.fly.dev` runs the same
+check by hand. Fly's own status page is https://status.flyio.net/. To get the mails, keep "Actions: send notifications
+for failed workflows" on in your GitHub notification settings (it is on by default for the repository owner).
+
+### Backups and a way back (rollback)
+
+Both apps keep everything on one Fly volume (`lantern_data` for the gateway, `lantern_cloud_data` for the cloud
+service): a SQLite database and, for the cloud service, the result folders. Fly takes a daily snapshot of every volume
+and keeps five days of them; nothing to set up, but worth knowing how to use:
+
+```bash
+fly volumes list -a lantern-cloud                       # the volume's id (vol_…)
+fly volumes snapshots list vol_XXXXXXXX                 # the daily snapshots, newest first
+# Restore = make a NEW volume from a snapshot, then point the app at it (the old volume is kept until you delete it):
+fly volumes create lantern_cloud_data --snapshot-id vs_XXXXXXXX --region sjc --size 1 -a lantern-cloud
+fly machines list -a lantern-cloud                      # the machine id
+fly machine update <machine-id> --volume <new-volume-id> -a lantern-cloud   # or destroy the old volume and redeploy
+```
+
+A copy of the database onto your own computer, any time (the database is small; no run is interrupted):
+
+```bash
+fly ssh sftp get /data/cloud.db ./cloud-backup-$(date +%F).db -a lantern-cloud
+fly ssh sftp get /data/lantern_gateway.db ./gateway-backup-$(date +%F).db -a lantern-gateway
+```
+
+(`fly ssh console -C "ls /data"` shows the exact file names if they differ.) Keep these with your password manager's
+attachments or another private place: the gateway file holds token hashes and counters, the cloud file holds account
+ids and run lists, never emails, tokens or repository files.
+
+Rolling back a bad release means deploying the previous image again, which takes a minute and loses nothing on the
+volume:
+
+```bash
+fly releases -a lantern-cloud                           # the list, newest first, with each image name
+fly deploy -a lantern-cloud --image <image of the previous good release>
+```
+
+If the database format changed between the two versions, the older code still opens it: both services create any
+missing table at start-up and never delete columns, so an old version reads a new database (new columns are ignored).
+
+### Deploying from GitHub, not only from one laptop
+
+`.github/workflows/deploy-cloud.yml` deploys either app from the Actions tab (Run workflow → pick `lantern-cloud` or
+`lantern-gateway`, optionally a git ref), builds on Fly's builders, and ends with the uptime check against the new
+version. It needs one repository secret, **`FLY_API_TOKEN`**: on any computer with `fly` signed in, run
+`fly tokens create deploy -a lantern-cloud` (a token that can deploy that one app and nothing else; make a second one
+for the gateway if you want both, or an org token), copy the output, and paste it under the repository's Settings →
+Secrets and variables → Actions → New repository secret. Without it the workflow stops at its first step and says so.
+With it, the laptop is no longer the only place a fix can ship from, and the admin secret never leaves Fly's secret
+store (the workflow does not need it).
+
 ### Connect GitHub: private repositories (optional)
 
 Without this, a private repository's check stops and the website offers Upload. With it, the website also offers
