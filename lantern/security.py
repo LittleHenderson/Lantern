@@ -154,6 +154,11 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
                           r"file|cookie|header|json|route|string|integer|boolean)\s*\(|\brequest\(\s*['\"]|"
                           r"(?:->|\.)(?:getParsedBody|getQueryParams|getUploadedFiles|getCookieParams)\s*\("
                           r"|\bfile_get_contents\(\s*['\"]php://input")
+# Ruby (Rails, Sinatra): `params[:q]`, `params.require(...)`, the raw request, cookies. Only for `.rb` files: a bare
+# `params` in JS is usually a router's own value.
+RUBY_REQUEST_DATA = re.compile(REQUEST_DATA.pattern + r"|\bparams\b(?:\[[^\]\n]*\])?(?!\s*=[^=])|\brequest\.(?:body|raw_post|headers|"
+                               r"query_string|query_parameters|request_parameters|params|env|fullpath|url)\b|"
+                               r"\bcookies\s*\[|\bARGV\b|\bgets\b")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var|val)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
@@ -164,13 +169,13 @@ BINDS = [   # loops and context managers that bind a name to a value
     re.compile(r"^\s*for\s*\(\s*(?:const|let|var)\s+(?P<lhs>[\w{}\[\], $]+?)\s+(?:of|in)\s+(?P<rhs>[^)]+)\)", re.S),
 ]
 _STRINGS = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
-_TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)|\\\(\s*([A-Za-z_]\w*)")
+_TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)|\\\(\s*([A-Za-z_]\w*)|#\{\s*@?([A-Za-z_]\w*)")
 
 
 def _blank_string(m: re.Match) -> str:
     """A string literal becomes `''`, keeping the names a template puts into it (`"id = $id"` in Kotlin, `\\(id)` in Swift,
     `${id}` in a JS template literal, `$"…{id}"` in C#) so a value spliced into SQL or a command is still seen as used."""
-    refs = [a or b or c for a, b, c in _TEMPLATE_REF.findall(m.group(0))]
+    refs = [a or b or c or d for a, b, c, d in _TEMPLATE_REF.findall(m.group(0))]
     head = m.string[max(0, m.start() - 2):m.start()]
     if "$" in head:   # C# `$"… {id}"`
         refs += re.findall(r"(?<!\{)\{\s*([A-Za-z_]\w*)", m.group(0))
@@ -189,6 +194,13 @@ def _php_line(raw: str) -> str:
     t = re.sub(r"(?<=[\w'\")\]])\s*\.(?!\.)\s*(?=[$\w'\"(])", " + ", t)
     t = t.replace("->", ".").replace("?.", ".")
     return re.sub(r"\$(?=[A-Za-z_])", "", t)
+
+
+def _rb_line(raw: str) -> str:
+    """A Ruby line for the input check: `@x` read as `x` (instance variables carry values between lines of a controller
+    action), `%x(...)`/`%Q(...)` read as strings."""
+    t = re.sub(r"%[xQqw]?\((.*?)\)", lambda m: '"' + m.group(1).replace('"', "'") + '"', raw)
+    return re.sub(r"(?<![\w@])@(?=[A-Za-z_])", "", t)
 
 
 def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple[int, int, str]]:
@@ -253,10 +265,14 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
     if f["file"].endswith(".php"):
         src = [_php_line(x) for x in src]
         show = (lambda x: re.sub(r"^(request|_[A-Z]+)\b", r"$\1", x).replace(".", "->"))   # back to PHP spelling
+    req_re = REQUEST_DATA
+    if f["file"].endswith(".rb"):
+        src = [_rb_line(x) for x in src]
+        req_re = RUBY_REQUEST_DATA
     line = f["line"]
     if not 0 < line <= len(src):
         return False
-    js = not f["file"].endswith(".py")
+    js = not f["file"].endswith((".py", ".rb"))
     sig = n.signature or ""
     if f["file"].endswith(".go"):
         sig = re.sub(r"^func\s*\([^)]*\)\s*", "func ", sig)      # the receiver is not input
@@ -306,7 +322,7 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         if not m:
             continue
         lhs, rhs = m.group("lhs"), m.group("rhs")
-        req = REQUEST_DATA.search(rhs)
+        req = req_re.search(rhs)
         src_name = next((t for t in tainted if _uses(t, rhs)), None)
         if req:
             origin = f"request data `{show(req.group(0))}`"
@@ -322,7 +338,7 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
             tainted[name] = f"`{name}`, which line {start} sets from {origin}"
             level[name] = _indent(src[start - 1])
     text = flagged[2]
-    m = REQUEST_DATA.search(text)
+    m = req_re.search(text)
     if m:
         return {"via": f"request data `{show(m.group(0))}`"}
     for name, origin in tainted.items():
@@ -460,9 +476,10 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     (None: follow LANTERN_OFFLINE)."""
     repo = Path(g.repo_root)
     findings, tools = [], []
-    from .depaudit import run_composer_audit, run_maven_audit, run_npm_audit, run_pip_audit
+    from .depaudit import run_composer_audit, run_gem_audit, run_maven_audit, run_npm_audit, run_pip_audit
     for fn in (run_bandit, lambda r: run_pip_audit(r, offline), lambda r: run_npm_audit(r, offline),
-               lambda r: run_maven_audit(r, offline), lambda r: run_composer_audit(r, offline), run_secrets):
+               lambda r: run_maven_audit(r, offline), lambda r: run_composer_audit(r, offline),
+               lambda r: run_gem_audit(r, offline), run_secrets):
         f, info = fn(repo)
         findings += f
         tools.append(info)

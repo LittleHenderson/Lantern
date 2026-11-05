@@ -284,6 +284,9 @@ RULE_KIND = {
     "LH-INCLUDE-VAR": "eval", "LH-UNSERIALIZE": "deserialize", "LH-XSS-ECHO": "xss", "LH-XSS-BLADE": "xss",
     "LH-WEAK-PASSWORD-HASH": "weak-hash", "LH-WEAK-HASH": "weak-hash", "LH-TLS-OFF": "tls-off", "LH-CORS-ALL": "cors",
     "LH-DEBUG": "debug", "LH-CLEARTEXT-URL": "cleartext",
+    "LB-SQL-INTERP": "sql", "LB-SQL-PARAMS": "sql", "LB-EXEC": "shell", "LB-EVAL": "eval", "LB-DESERIALIZE": "deserialize",
+    "LB-XSS-RAW": "xss", "LB-TLS-OFF": "tls-off", "LB-WEAK-PASSWORD-HASH": "weak-hash", "LB-WEAK-HASH": "weak-hash",
+    "LB-CORS-ALL": "cors", "LB-DEBUG": "debug", "LB-SECRET-BASE": "secret", "LB-CLEARTEXT-URL": "cleartext",
     "LC-PREFS-SECRET": "phone-plain-secret", "LC-CLEARTEXT-URL": "cleartext", "LC-CONN-PASSWORD": "secret",
 }
 # Where each Android story starts (the manifest and build-file problems have no page or route to start from)

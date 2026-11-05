@@ -1,10 +1,10 @@
-"""Build the full-stack graph: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, Swift, Dart, C#, PHP, then the API bridge between them."""
+"""Build the full-stack graph: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, Swift, Dart, C#, PHP, Ruby, then the API bridge between them."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, csharp_frontend, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, php_frontend, python_frontend, rust_frontend, swift_frontend
+from . import bridge, csharp_frontend, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, php_frontend, python_frontend, ruby_frontend, rust_frontend, swift_frontend
 from .graph import Graph
 
 
@@ -20,6 +20,7 @@ def build_graph(repo: str | Path) -> Graph:
     dt = dart_frontend.add_dart(g, repo)
     cs = csharp_frontend.add_csharp(g, repo)
     ph = php_frontend.add_php(g, repo)
+    rb = ruby_frontend.add_ruby(g, repo)
     langs = {}
     if py["files"]:
         langs["python"] = py
@@ -41,10 +42,12 @@ def build_graph(repo: str | Path) -> Graph:
         langs["c#"] = cs
     if ph.get("files"):
         langs["php"] = ph
+    if rb.get("files"):
+        langs["ruby"] = rb
     g.meta.update({
         "languages": langs,
-        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs, ph)),
-        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs, ph)),
+        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs, ph, rb)),
+        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs, ph, rb)),
         "language": " + ".join(langs) or "none",
     })
     # Analysis packs (pattern files) can add entry points for frameworks without built-in support, before the

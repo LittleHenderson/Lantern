@@ -277,6 +277,106 @@ PHP_RULES = [   # (id, pattern, severity, title, cwe, tool confidence, rank)
 ]
 
 
+_RB_INTERP = r"(?:\"[^\"\n]*#\{|%Q?[{(\[][^\n]*#\{|<<[~-]?['\"]?[A-Z]+['\"]?)"     # "…#{x}…", %Q(…#{x}…), heredocs
+_RB_BUILT = r"(?:" + _RB_INTERP + r"|['\"][^'\"\n]*['\"]\s*\+\s*[@\w])"
+_RB_SQL_CALL = (r"(?:\.|\b)(?:where|not|or|find_by_sql|count_by_sql|select|order|reorder|group|having|joins|pluck|"
+                r"exists\?|execute|exec_query|exec_update|exec_delete|exec_insert|select_all|select_one|select_value|"
+                r"select_values|select_rows|find_by|delete_all|destroy_all|update_all|from|lock|query|prepare)"
+                r"\s*\(?\s*")
+RUBY_RULES = [   # (id, pattern, severity, title, cwe, tool confidence, rank); ERB templates get only LB-XSS-RAW
+    ("LB-SQL-INTERP", re.compile(_RB_SQL_CALL + _RB_BUILT), "HIGH",
+     "Builds a database query from variables (SQL injection risk); use placeholders: where(\"title LIKE ?\", q)", 89,
+     "HIGH", None),
+    ("LB-SQL-PARAMS", re.compile(r"\.(?:order|reorder|group|pluck|select|from|joins|having)\s*\(?\s*params\s*\["),
+     "HIGH", "Puts a request value straight into a raw SQL part (ORDER BY, SELECT…); pick from a fixed list instead",
+     89, "HIGH", None),
+    ("LB-EXEC", re.compile(r"(?:\b(?:system|exec|spawn|IO\.popen|Open3\.\w+|Process\.spawn)\s*\(?[^\n]*#\{|`[^`\n]*#\{|"
+                           r"%x[{(\[][^\n]*#\{|\b(?:system|exec|spawn|IO\.popen|Open3\.\w+)\s*\(?\s*(?:params\b|[\"'][^\"'\n]*"
+                           r"[\"']\s*\+))"),
+     "HIGH", "Runs a shell command built from variables (command injection risk); pass the words as separate arguments",
+     78, "HIGH", None),
+    ("LB-EVAL", re.compile(r"\b(?:eval|instance_eval|class_eval|module_eval)\s*\(?\s*(?:params\b|\"[^\"\n]*#\{|[a-z_]\w*\s*"
+                           r"(?:\)|$))|\brender\s*\(?\s*inline:\s*(?:params\b|\"[^\"\n]*#\{)|"
+                           r"params\s*\[[^\]]+\](?:\s*\.\s*\w+)*?\s*\.\s*(?:safe_)?constantize\b|\.(?:public_)?send\s*\(\s*params\s*\[",
+                           re.M),
+     "HIGH", "Runs text, a class name or a method name the code was given (code injection risk)", 94, "HIGH", None),
+    ("LB-DESERIALIZE", re.compile(r"\bMarshal\.load\s*\(|\bYAML\.unsafe_load\s*\("), "HIGH",
+     "Turns data into Ruby objects (untrusted data can run code); use JSON.parse", 502, "HIGH", None),
+    ("LB-DESERIALIZE", re.compile(r"\bYAML\.load\s*\((?![^\n]*"
+                                  r"permitted_classes)(?=[^\n]*(?:params|request|body|read|cookies))"), "MEDIUM",
+     "Turns data into Ruby objects (untrusted data can run code); use JSON.parse or YAML.safe_load", 502, "LOW", None),
+    ("LB-XSS-RAW", re.compile(r"\.html_safe\b|<%==|\braw\s*\(?\s*(?:params|@?\w+)"), "MEDIUM",
+     "Prints a value into the page without escaping it (html_safe/raw/<%==); let Rails escape it unless you made the HTML",
+     79, "LOW", None),
+    ("LB-MASS-ASSIGN", re.compile(r"\.permit!|\bparams\.to_unsafe_h\b|\.(?:new|create|create!|update|update!|"
+                                  r"update_attributes|assign_attributes|insert_all|upsert)\s*\(\s*params\s*(?:\[[^\]]+\]\s*)?\)"),
+     "MEDIUM", "Saves every field the visitor sends (they can set fields like admin: true); list the allowed ones with "
+               "params.require(...).permit(...)", 915, "HIGH", None),
+    ("LB-REDIRECT", re.compile(r"\bredirect_to\s*\(?\s*(?:params\s*\[|request\.referr?er\b)(?![^\n]*allow_other_host:\s*"
+                               r"false)"), "MEDIUM",
+     "Sends the visitor to an address taken from the request (an attacker's link can bounce people to their own site)",
+     601, "HIGH", None),
+    ("LB-FILE-INPUT", re.compile(r"\b(?:send_file|send_data\s*\(?\s*File\.read|File\.(?:read|open|write|delete|"
+                                 r"binread|readlines|unlink)|IO\.(?:read|readlines)|FileUtils\.\w+|Pathname\.new|"
+                                 r"(?<![.\w])open)\s*\(?[^\n]*params\s*\["), "HIGH",
+     "Opens a file named by the request (a visitor can read or change other files; `open` can even run commands)", 22,
+     "HIGH", None),
+    ("LB-TLS-OFF", re.compile(r"VERIFY_NONE|\bverify(?:_ssl)?:\s*false|ssl_verify_mode\s*(?:=|:)\s*:?none|"
+                              r"ssl:\s*\{[^}\n]*verify:\s*false"), "HIGH",
+     "Turns off HTTPS certificate checks (anyone on the network can read and change the traffic)", 295, "HIGH", "high"),
+    ("LB-WEAK-PASSWORD-HASH", re.compile(r"Digest::(?:MD5|SHA1)\.(?:hex|base64)?digest\s*\(?\s*@?\w*(?i:pass|pwd)"),
+     "HIGH", "Stores passwords with a fast hash (MD5/SHA-1); use has_secure_password (bcrypt)", 916, "HIGH", "high"),
+    ("LB-WEAK-HASH", re.compile(r"^(?=[^\n]*(?i:token|secret|key|reset|session|nonce))[^\n]*?Digest::(?:MD5|SHA1)\."
+                                r"(?:hex|base64)?digest\b(?!\s*\(?\s*@?\w*(?i:pass|pwd))", re.M), "MEDIUM",
+     "Makes a token or key with MD5/SHA-1; use SecureRandom or OpenSSL::HMAC with SHA-256", 328, "LOW", None),
+    ("LB-CSRF-OFF", re.compile(r"\bskip_(?:before_action|forgery_protection)\b[^\n]*(?:verify_authenticity_token|$)|"
+                               r"protect_from_forgery\s+with:\s*:null_session", re.M), "MEDIUM",
+     "Turns off Rails' protection against forged form posts (another site can make a signed-in visitor's browser "
+     "submit forms)", 352, "LOW", None),
+    ("LB-CORS-ALL", re.compile(r"\borigins\s*\(?\s*['\"]\*['\"]|['\"]Access-Control-Allow-Origin['\"]\]?\s*(?:=|,)\s*"
+                               r"['\"]\*['\"]"), "MEDIUM", "Allows any website to call this API (CORS *)", 942, "HIGH",
+     None),
+    ("LB-DEBUG", re.compile(r"config\.consider_all_requests_local\s*=\s*true|\bset\s+:show_exceptions\s*,\s*true"),
+     "MEDIUM", "Shows full error pages to visitors in production (they reveal code, queries and settings)", 209, "HIGH",
+     None),
+    ("LB-SECRET-BASE", re.compile(r"\bsecret_key_base\s*=\s*['\"][0-9a-f]{30,}['\"]"), "HIGH",
+     "Writes the secret that signs every session cookie into the code (anyone with the code can sign in as anyone)",
+     798, "HIGH", None),
+    ("LB-CLEARTEXT-URL", re.compile(r"['\"]http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0|www\.w3\.org|schemas\.)"
+                                    r"[^'\"\s#]+['\"]"), "LOW", "Talks to a server over plain http", 319, "HIGH", "low"),
+]
+
+
+def ruby_rules(repo: Path) -> list[dict]:
+    out = []
+    for p in _files(repo, {".rb", ".erb", ".rake"}):
+        rel = p.relative_to(repo).as_posix()
+        if re.search(r"(^|/)(spec|tests?|vendor|tmp|log|db/migrate)/", rel):
+            continue
+        text = _read(p)
+        lines = text.splitlines()
+        erb = rel.endswith(".erb")
+        seen = set()
+        for rule, rx, sev, title, cwe, conf, rank in RUBY_RULES:
+            if erb and rule != "LB-XSS-RAW":
+                continue
+            if rule == "LB-DEBUG" and not re.search(r"(^|/)config/environments/production\.rb$|(^|/)(app|server|config)"
+                                                    r"\.(rb|ru)$", rel):
+                continue
+            if rule == "LB-CSRF-OFF" and "verify_authenticity_token" not in text and "null_session" not in text:
+                continue
+            for m in rx.finditer(text):
+                ln = _line_of(text, m.start() + (len(m.group(0)) - len(m.group(0).lstrip())))
+                src = lines[ln - 1] if ln <= len(lines) else ""
+                if src.lstrip().startswith("#") or (rule, ln) in seen:
+                    continue
+                if rule == "LB-CSRF-OFF" and "verify_authenticity_token" not in src and "null_session" not in src:
+                    continue
+                seen.add((rule, ln))
+                out.append(_finding(rule, title, sev, rel, ln, conf=conf, cwe=cwe, snippet=src.strip(), fixed_rank=rank))
+    return out
+
+
 def php_rules(repo: Path) -> list[dict]:
     out = []
     for p in _files(repo, {".php"}):
@@ -716,7 +816,7 @@ def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None) -> tup
         return "strong", sign
     if text is None or not n.file:
         return None
-    return body_auth_sign(text, n.start_line or 0, n.end_line or n.start_line or 0, js=not n.file.endswith(".py"),
+    return body_auth_sign(text, n.start_line or 0, n.end_line or n.start_line or 0, js=not n.file.endswith((".py", ".rb")),
                           signature=n.signature or "")
 
 
@@ -768,7 +868,7 @@ def missing_auth(g: Graph) -> list[dict]:
 
 def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
-    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
+    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]
