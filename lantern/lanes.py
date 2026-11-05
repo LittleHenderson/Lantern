@@ -36,7 +36,11 @@ DATA_RE = re.compile(
     r"FirebaseDatabase|DatabaseReference|FirebaseFirestore|CollectionReference|DocumentReference|FirebaseStorage|"
     r"StorageReference|FirebaseAuth|FirebaseMessaging|SharedPreferences|SQLiteDatabase|RoomDatabase|SmsManager|"
     r"OkHttpClient|Retrofit|RequestQueue|Volley|HttpURLConnection|URL\.openConnection|FileOutputStream|"
-    r"MediaRecorder|LocationManager|FusedLocationProviderClient|ContentResolver|TelephonyManager|WorkManager)"
+    r"MediaRecorder|LocationManager|FusedLocationProviderClient|ContentResolver|TelephonyManager|WorkManager|"
+    # C# (.NET externals are named Type.Method)
+    r"SqlConnection|SqlCommand|NpgsqlConnection|NpgsqlCommand|MySqlConnection|MySqlCommand|SqliteConnection|"
+    r"SqliteCommand|SQLiteConnection|SQLiteAsyncConnection|DbContext|DbSet|HttpClient|Process|File|Directory|"
+    r"Preferences|SecureStorage|BlobClient|SmtpClient)"
     r"(\.|\(|$|/)"
 )
 
