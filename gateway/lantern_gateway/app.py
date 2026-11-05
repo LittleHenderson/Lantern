@@ -86,6 +86,9 @@ class Settings:
     daily_requests: int = field(default_factory=lambda: _env_int("LANTERN_DAILY_REQUESTS", 120))
     # Everyone, per UTC day. When reached, the allowance pauses until tomorrow (HTTP 503).
     global_daily_usd: float = field(default_factory=lambda: _env_float("LANTERN_GLOBAL_DAILY_USD", 10.0))
+    # New accounts per UTC day, everyone together: one person making many GitHub/Google accounts to multiply the free
+    # allowance is slowed to this many a day (an existing account signing in again is never counted). 0 = no cap.
+    signups_per_day: int = field(default_factory=lambda: _env_int("LANTERN_SIGNUPS_PER_DAY", 200))
     max_tokens_cap: int = field(default_factory=lambda: _env_int("LANTERN_MAX_TOKENS", 3000))
     max_body_bytes: int = field(default_factory=lambda: _env_int("LANTERN_MAX_BODY", 250_000))
     # Token hashes not used (or signed in with) for this many days, and per-day counters older than this, are
@@ -133,6 +136,25 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def until_midnight_utc(now: dt.datetime | None = None) -> str:
+    """"in 5 h 20 min (00:00 UTC)": the daily limits reset at midnight UTC, which is not midnight for most people, so
+    every message that says when also says how long from now."""
+    now = now or dt.datetime.now(dt.UTC)
+    nxt = (now + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    mins = max(1, int((nxt - now).total_seconds() // 60))
+    h, m = divmod(mins, 60)
+    when = f"{h} h {m} min" if h else f"{m} min"
+    return f"in {when} (00:00 UTC)"
+
+
+class SignupsPaused(Exception):
+    """Today's cap on new accounts is reached; existing accounts keep working."""
+
+    def __init__(self, today: int):
+        super().__init__(f"{today} new accounts today")
+        self.today = today
+
+
 class Store:
     """SQLite: token hashes and counters only."""
 
@@ -173,15 +195,30 @@ class Store:
             self.db.commit()
         return token
 
-    def sign_in(self, account: str, label: str) -> str:
+    def is_new_account(self, account: str) -> bool:
+        with self.lock:
+            return self.db.execute("select 1 from accounts where account = ?", (account,)).fetchone() is None
+
+    def signups_today(self, today: str | None = None) -> int:
+        """Accounts first seen today (UTC)."""
+        today = today or dt.datetime.now(dt.UTC).date().isoformat()
+        with self.lock:
+            return (self.db.execute("select count(*) from accounts where substr(created, 1, 10) = ?", (today,)).fetchone() or [0])[0]
+
+    def sign_in(self, account: str, label: str, max_new_per_day: int = 0) -> str:
         """One token per account. A first sign-in mints it; a later one rotates it (the old token stops working)
         and carries the lifetime and today's counters over, so signing in again is never a fresh allowance
-        (unless the account was idle past the retention window and `prune` deleted it)."""
+        (unless the account was idle past the retention window and `prune` deleted it). With `max_new_per_day`, a
+        first sign-in past that many new accounts today raises SignupsPaused (abuse: many accounts, one person)."""
         token = "lt_" + secrets.token_urlsafe(32)
         now = dt.datetime.now(dt.UTC)
         today = now.date().isoformat()
         with self.lock:
             row = self.db.execute("select token_hash from accounts where account = ?", (account,)).fetchone()
+            if row is None and max_new_per_day > 0:
+                n = (self.db.execute("select count(*) from accounts where substr(created, 1, 10) = ?", (today,)).fetchone() or [0])[0]
+                if n >= max_new_per_day:
+                    raise SignupsPaused(n)
             old = row[0] if row else None
             used_req = used_tok = today_req = 0
             if old:
@@ -318,6 +355,8 @@ class Store:
                 "accounts": one("select count(*) from accounts"),
                 "accounts_github": one("select count(*) from accounts where account like 'github:%'"),
                 "accounts_google": one("select count(*) from accounts where account like 'google:%'"),
+                "accounts_new_today": one("select count(*) from accounts where substr(created, 1, 10) = ?", today),
+                "accounts_new_7d": one("select count(*) from accounts where substr(created, 1, 10) >= ?", week),
                 "users_ever_used": one("select count(*) from users where used_requests > 0"),
                 "users_active_today": one("select count(distinct token_hash) from daily where day = ?", today),
                 "users_active_7d": one("select count(distinct token_hash) from daily where day >= ?", week),
@@ -521,7 +560,13 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if who is None:
             return HTMLResponse(oauth.error_page("The provider did not confirm the sign-in. Try again."), status_code=502, headers=page_headers)
         account, label = who
-        token = store.sign_in(account, label)
+        try:
+            token = store.sign_in(account, label, s.signups_per_day)
+        except SignupsPaused:
+            log.warning("sign-ups paused: %s new accounts today (cap %s)", store.signups_today(), s.signups_per_day)
+            return HTMLResponse(oauth.error_page("Lantern's free allowance has had as many new sign-ups today as it can take. "
+                                                 "Existing accounts keep working; please try again tomorrow."),
+                                status_code=429, headers={**page_headers, "Retry-After": "86400"})
         cli = st.get("c") or ""
         if cli:
             store.park(cli, token)
@@ -619,7 +664,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                         remaining=0)
         if r["today"] <= 0:
             return _err(402, "daily_limit",
-                        f"You've reached today's free limit ({s.daily_requests}). It resets at 00:00 UTC.",
+                        f"You've reached today's free limit ({s.daily_requests}). It resets {until_midnight_utc()}.",
                         remaining=r["requests"])
         if store.spend_today(day) >= s.global_daily_usd:
             return _err(503, "allowance_paused",

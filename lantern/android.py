@@ -448,6 +448,20 @@ def _module_code(repo: Path, mod: Module, files: list[tuple[str, str]]) -> str:
     return "\n".join(t for rel, t in files if rel.startswith(mod.root))
 
 
+# Intent actions an app component answers for the system or a platform library, not for other apps: home-screen
+# widgets, boot and package events, push messages, media sessions. A user-facing action (VIEW, SEND, PICK, MAIN…) is
+# something another app or a link can send with data inside, so it is not in this list.
+USER_ACTIONS = re.compile(r"^android\.intent\.action\.(?:VIEW|SEND|SENDTO|SEND_MULTIPLE|PICK|GET_CONTENT|EDIT|INSERT|"
+                          r"MAIN|SEARCH|WEB_SEARCH|PROCESS_TEXT|CREATE_SHORTCUT|OPEN_DOCUMENT|ATTACH_DATA|DIAL|CALL|"
+                          r"INSERT_OR_EDIT|CREATE_DOCUMENT|SET_WALLPAPER|ASSIST|RUN|DELETE)$")
+SYSTEM_ACTION_PREFIX = ("android.", "com.google.firebase.", "com.google.android.c2dm.", "com.google.android.gms.",
+                        "com.android.", "com.htc.intent.action.", "androidx.", "com.sec.android.intent.action.")
+
+
+def _system_action(action: str) -> bool:
+    return action.startswith(SYSTEM_ACTION_PREFIX) and not USER_ACTIONS.match(action)
+
+
 def manifest_findings(repo: Path, mod: Module, files: list[tuple[str, str]], g: Graph | None) -> list[dict]:
     out = []
     mtext = _read(repo / mod.manifest)
@@ -463,7 +477,7 @@ def manifest_findings(repo: Path, mod: Module, files: list[tuple[str, str]], g: 
                           snippet=_line_text(mtext, app.line)))
         backup = (app.get("allowBackup") or "").lower()
         rules = app.get("fullBackupContent") or app.get("dataExtractionRules")
-        if backup != "false" and not rules:
+        if backup != "false" and not rules and (not mod.gradle or is_app_module(mod.gradle_text)):
             why = (" It can see " + ", ".join(p["words"] for p in sensitive[:3]) + ".") if sensitive else ""
             out.append(_f("LM-BACKUP", ("App data is copied into phone backups" if backup == "true" else
                                         "App data goes into phone backups by default (allowBackup is not set)") +
@@ -498,17 +512,19 @@ def manifest_findings(repo: Path, mod: Module, files: list[tuple[str, str]], g: 
                       "receiver": "broadcast receiver", "provider": "content provider"}[c.tag]
         sev, rank = {"provider": ("HIGH", "high"), "service": ("MEDIUM", "medium"),
                      "receiver": ("MEDIUM", "medium")}.get(c.tag, ("MEDIUM", "medium") if c.deep_link else ("LOW", "low"))
-        system_only = c.tag == "receiver" and c.actions and all(a.startswith("android.") for a in c.actions)
+        system_only = bool(c.actions) and all(_system_action(a) for a in c.actions)
         if system_only:
             sev, rank = "LOW", "low"
         how = "" if c.explicit else " (exported by default because it has an intent filter; set android:exported)"
+        if system_only:
+            how = " (it answers the system: " + ", ".join(_short(a) for a in c.actions[:3]) + "; the system is the only sender that matters)"
         what = {"provider": "Other apps can read and change this content provider's data",
                 "service": "Other apps can start or bind to this service",
                 "receiver": "Other apps can send this receiver broadcasts",
                 }.get(c.tag, "Any link can open this screen with data inside" if c.deep_link else
                       "Other apps can open this screen directly, skipping the screens before it")
         out.append(_f("LM-EXPORTED", f"{what}: {_short(c.name)} {kind_words}, no permission guards it{how}", sev, rel,
-                      c.line, cwe=926, conf="HIGH" if c.explicit else "LOW", rank=rank,
+                      c.line, cwe=926, conf="LOW" if system_only or not c.explicit else "HIGH", rank=rank,
                       snippet=_line_text(mtext, c.line), pin=class_ids.get(c.name)))
     for p in perms:
         if p["sensitive"] and p["used"] is False:
@@ -557,6 +573,17 @@ GRADLE_KEY = re.compile(r"buildConfigField\s*\(?\s*[\"']String[\"']\s*,\s*[\"'](
                         r"[\"']\\?\"([^\"'\\$]{12,})\\?\"[\"']", re.I)
 
 
+APP_PLUGIN = re.compile(r"com\.android\.application|\bandroid\.application\b|\bapplicationId\b")
+
+
+def is_app_module(gradle_text: str) -> bool:
+    """An application module (the one that becomes the APK), not a library, test or benchmark module. A build file
+    with no plugin line at all (an old project with everything in the root) counts as the app."""
+    if APP_PLUGIN.search(gradle_text):
+        return True
+    return not re.search(r"\bplugins\s*\{|\bapply\s+plugin\b|\bid\s*\(?\s*[\"']", gradle_text)
+
+
 def gradle_findings(repo: Path, mod: Module) -> list[dict]:
     if not mod.gradle:
         return []
@@ -583,13 +610,15 @@ def gradle_findings(repo: Path, mod: Module) -> list[dict]:
             out.append(_f("LM-RELEASE-DEBUG-KEY", "The release build is signed with the debug key, which is the same "
                           "on every developer's computer", "MEDIUM", rel, ln(start + m.start()), cwe=321, rank="medium",
                           snippet=_line_text(t, ln(start + m.start()))))
-        m = re.search(r"\b(?:is)?[Mm]inifyEnabled\s*=?\s*(true|false)\b", body)
-        if not m or m.group(1) == "false":
+        m = re.search(r"\b(?:is)?[Mm]inifyEnabled\s*=?\s*(\S+)", body)
+        # only an app module ships an APK (a library's build type is not what users install); a value computed
+        # at build time (`isMinifyEnabled = providers.gradleProperty(...)`) cannot be read here, so it is not reported
+        if is_app_module(t) and (not m or m.group(1).rstrip(";,)").lower() == "false"):
             line = ln(start + m.start()) if m else ln(start)
             out.append(_f("LM-NO-SHRINK", "The release build is not shrunk or obfuscated (minifyEnabled is off), so "
                           "anyone can turn the app back into readable code, including its keys and server addresses",
                           "LOW", rel, line, cwe=656, rank="low", snippet=_line_text(t, line)))
-    else:
+    elif is_app_module(t):
         out.append(_f("LM-NO-SHRINK", "No release build type is set up, so the release build is not shrunk or "
                       "obfuscated: anyone can turn the app back into readable code", "LOW", rel, 1, cwe=656,
                       conf="LOW", rank="low", snippet=""))
@@ -678,6 +707,36 @@ CODE_RANK = {"LM-LOG-SENSITIVE": "medium", "LM-WEBVIEW-JS": "low", "LM-EXTERNAL-
 TEST_PATH = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/|(^|/)tests?/")
 
 
+_STR = re.compile(r"\"(?:[^\"\\\n]|\\.)*\"")
+_CONST = re.compile(r"^(?:[A-Za-z_]\w*\.)*[A-Z][A-Z0-9_]*$")   # UPPER_CASE names are constants by convention
+_TEMPLATE = re.compile(r"\$\{?([A-Za-z_]\w*)\}?")
+
+
+def only_constants(stmt: str) -> bool:
+    """True when the query is glued together from string literals and UPPER_CASE constants only (table and column
+    names such as `"DELETE FROM " + TABLE_NAME + " WHERE " + KEY_ID + "=?"`): no variable, so no injection. The
+    statement is the flagged line plus the next few, up to the closing `)`; a variable anywhere in it keeps the
+    finding."""
+    m = re.search(r"\b(?:rawQuery|execSQL|compileStatement)\s*\(", stmt)
+    if not m:
+        return False
+    rest = stmt[m.end():]
+    end = rest.find(");")
+    rest = rest if end < 0 else rest[:end]
+    for name in _TEMPLATE.findall(rest):             # Kotlin "$TABLE" templates: constants only
+        if not _CONST.match(name):
+            return False
+    rest = _TEMPLATE.sub("", rest)
+    if "String.format(" in rest or "format(" in rest:
+        return False
+    # the first argument is the SQL; a second argument (bind values array) is fine, so stop at the first comma
+    sql = _STR.sub("", rest).replace("\n", " ")
+    first = sql.split(",")[0] if "," in sql else sql
+    pieces = [x.strip(" ;)") for x in first.split("+")]
+    pieces = [x for x in pieces if x]
+    return all(_CONST.match(x) for x in pieces)
+
+
 def code_findings(files: list[tuple[str, str]]) -> list[dict]:
     out = []
     for rel, text in files:
@@ -694,6 +753,8 @@ def code_findings(files: list[tuple[str, str]]) -> list[dict]:
                 ln = text.count("\n", 0, m.start()) + 1
                 src = lines[ln - 1] if ln <= len(lines) else ""
                 if src.lstrip().startswith(("//", "*", "/*")):
+                    continue
+                if rule == "LM-SQL-CONCAT" and only_constants("\n".join(lines[ln - 1:ln + 3])):
                     continue
                 out.append(_f(rule, title, sev, rel, ln, cwe=cwe, conf=conf, category="code", snippet=src.strip(),
                               rank=CODE_RANK.get(rule)))

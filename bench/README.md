@@ -1,5 +1,10 @@
 # Benchmark
 
+This file: the Python map benchmark (edges against a trace). Also here: `mobile/` (findings precision on real phone
+apps, labelled by engineers), `explain_eval.py` (explanation pass rate with a real model), `ask_eval.py` (Ask Lantern
+answers), `fuzz.py` (random file mutation), `large_apps_results.md` (speed and memory on big apps), `mutation_results.md`
+(do the tests catch deliberate mistakes).
+
 ```bash
 python bench/run_bench.py WORKDIR            # clone, analyze, trace; writes WORKDIR/bench_results.json
 python bench/run_bench.py WORKDIR --no-trace # speed only

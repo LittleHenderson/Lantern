@@ -41,6 +41,7 @@ The user runs `lantern login --token lt_...`. Next step for a public launch: iss
 | `LANTERN_FREE_TOKENS` | 1500000 | Free tokens per user, lifetime |
 | `LANTERN_DAILY_REQUESTS` | 120 | Per user per UTC day |
 | `LANTERN_GLOBAL_DAILY_USD` | 10 | Total spend per UTC day; the allowance pauses for everyone when reached |
+| `LANTERN_SIGNUPS_PER_DAY` | 200 | New accounts per UTC day, everyone together; past it a first sign-in gets a 429 page ("try again tomorrow"), existing accounts keep working. 0 = no cap |
 | `LANTERN_MAX_TOKENS` | 3000 | Cap on `max_tokens` per request |
 | `LANTERN_MAX_BODY` | 250000 | Max request body in bytes |
 | `LANTERN_PRIMARY` | anthropic | Which provider answers first: `anthropic` or `deepseek`; the other is the fallback |

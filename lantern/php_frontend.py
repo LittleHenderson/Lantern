@@ -207,15 +207,24 @@ class Model:
         return None
 
     def implementers(self, cid: str) -> list[str]:
+        """Concrete classes under `cid` (through subclasses). The children index is built once per model, after
+        resolve_supers: a scan of every class per call cost seconds on repositories with thousands of classes."""
+        children = getattr(self, "_children", None)
+        if children is None:
+            children = {}
+            for k in self.classes.values():
+                for s in k.supers:
+                    children.setdefault(s, []).append(k.id)
+            self._children = children
         out, seen, todo = [], {cid}, [cid]
         while todo:
             cur = todo.pop()
-            for k in self.classes.values():
-                if cur in k.supers and k.id not in seen:
-                    seen.add(k.id)
-                    todo.append(k.id)
-                    if k.kind not in ("interface", "trait"):
-                        out.append(k.id)
+            for kid in children.get(cur, ()):
+                if kid not in seen:
+                    seen.add(kid)
+                    todo.append(kid)
+                    if self.classes[kid].kind not in ("interface", "trait"):
+                        out.append(kid)
         return out
 
 
@@ -403,6 +412,7 @@ class Linker:
         self.m = model
         self.repo = repo
         self.http: list[dict] = []
+        self._supers_cache: dict[str, list[str]] = {}
 
     # ---- types ----
     def _cls(self, name: str | None, f: PFile) -> str | None:
@@ -423,7 +433,9 @@ class Linker:
             owner = self._type_of(f, cls, env, e.child_by_field_name("object"))
             c = self.m.classes.get(owner or "")
             prop = _t(e.child_by_field_name("name"))
-            while c is not None:
+            seen: set[str] = set()
+            while c is not None and c.id not in seen and len(seen) < 16:   # parents in a circle (Laravel has a few) end here
+                seen.add(c.id)
                 if prop in c.props:
                     return self.m.resolve_class(c.props[prop], c.ns, c.uses)
                 c = next((self.m.classes[s] for s in self._supers(c) if s in self.m.classes), None)
@@ -442,11 +454,16 @@ class Linker:
         return None
 
     def _supers(self, c: PClass) -> list[str]:
+        """Resolved parent ids of a class, remembered: the same lookups ran millions of times on the Laravel framework."""
+        hit = self._supers_cache.get(c.id)
+        if hit is not None:
+            return hit
         out = []
         for s in c.supers:
             r = s if s in self.m.classes else self.m.resolve_class(s, c.ns, c.uses)
             if r:
                 out.append(r)
+        self._supers_cache[c.id] = out
         return out
 
     def resolve_supers(self):

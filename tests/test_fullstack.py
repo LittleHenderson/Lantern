@@ -392,3 +392,17 @@ def test_script_inside_html_is_read_and_linked_to_the_backend(tmp_path):
     # the pattern rules still read only .js/.ts files (running them on pages is a separate decision: a page that
     # builds itself with innerHTML from escaped values would light up on every line)
     assert not any(f["rule_id"].startswith("LJ-") for f in scan(g)["findings"])
+
+
+def test_a_function_wrapped_in_as_or_parentheses_is_read_without_a_crash(tmp_path):
+    """From the mobile benchmark: a React Native app (mattermost-mobile) wrote `const X = ((p) => …) as Fn` and
+    the reader crashed looking for the wrapper call's name."""
+    _write(tmp_path, {
+        "package.json": '{"dependencies": {"react": "18"}}',
+        "src/a.tsx": "type P = {n: number};\nexport const A = ((p: P) => <b>{p.n}</b>) as React.FC<P>;\n"
+                     "export const B = (function () { return 1; });\nconst C = (() => A({n: 1})) satisfies () => unknown;\n"
+                     "export default function App() { return <A n={1}/>; }\n",
+    })
+    g = build_graph(tmp_path)
+    assert {"js:src/a::A", "js:src/a::B", "js:src/a::C"} <= set(g.nodes)
+    assert edge(g, "js:src/a::C", "js:src/a::A") is not None

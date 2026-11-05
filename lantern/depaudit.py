@@ -76,7 +76,10 @@ def run_all(repo: Path) -> dict:
     out = {}
     for tool, fn in (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit), ("maven-audit", run_maven_audit),
                      ("composer-audit", run_composer_audit), ("gem-audit", run_gem_audit)):
-        f, info = fn(repo, False)
+        try:
+            f, info = fn(repo, False)
+        except Exception as exc:  # noqa: BLE001 - one audit's surprise (a registry down, odd output) must not drop the others
+            f, info = [], {"tool": tool, "status": f"error: {type(exc).__name__} (network needed?)"}
         out[tool] = {"findings": f, "info": info}
     return out
 

@@ -50,6 +50,15 @@ def now() -> str:
     return dt.datetime.now(dt.UTC).isoformat()
 
 
+def until_midnight_utc(now: dt.datetime | None = None) -> str:
+    """"in 5 h 20 min (00:00 UTC)": limits reset at midnight UTC, which is not midnight where most people are."""
+    now = now or dt.datetime.now(dt.UTC)
+    nxt = (now + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    mins = max(1, int((nxt - now).total_seconds() // 60))
+    h, m = divmod(mins, 60)
+    return f"in {f'{h} h {m} min' if h else f'{m} min'} (00:00 UTC)"
+
+
 def today() -> str:
     return dt.datetime.now(dt.UTC).date().isoformat()
 
@@ -131,10 +140,10 @@ class Store:
             q = self.db.execute
             mine = q("select runs from daily where day = ? and account = ?", (day, account)).fetchone()
             if (mine[0] if mine else 0) >= per_day:
-                raise LimitReached(f"You've used today's {per_day} runs. More are available after 00:00 UTC.")
+                raise LimitReached(f"You've used today's {per_day} runs. More are available {until_midnight_utc()}.")
             allr = q("select runs from global_daily where day = ?", (day,)).fetchone()
             if (allr[0] if allr else 0) >= global_per_day:
-                raise LimitReached("Lantern has reached today's limit of runs for everyone. Try again after 00:00 UTC.")
+                raise LimitReached(f"Lantern has reached today's limit of runs for everyone. Try again {until_midnight_utc()}.")
             act = q("select count(*) from runs where account = ? and status in (?, ?)", (account, *ACTIVE)).fetchone()[0]
             if act >= per_user_active:
                 raise LimitReached("You already have a run going. Wait for it to finish, then start the next one.")

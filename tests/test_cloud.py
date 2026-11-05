@@ -189,3 +189,64 @@ def test_idle_exit_waits_for_runs_and_requests(env):
     time.sleep(0.01)
     cloud.get("/v1/health")
     assert cloud.app.state.idle.last > before
+
+
+OLD_SCHEMA_V0_10 = """
+create table if not exists users (
+  account text primary key, label text, created text, last_seen text, ai_consent text);
+create table if not exists runs (
+  id text primary key, account text not null, link text not null, host text, privacy text not null,
+  status text not null, stage text, error text, created text not null, started text, finished text,
+  commit_sha text, summary text, log_tail text, share_slug text unique,
+  explain_status text, explain_error text, explain_summary text);
+create index if not exists runs_by_account on runs (account, created);
+create table if not exists daily (day text, account text, runs integer default 0, primary key (day, account));
+create table if not exists global_daily (day text primary key, runs integer default 0);
+"""
+
+OLDER_SCHEMA = """
+create table if not exists users (account text primary key, label text, created text, last_seen text);
+create table if not exists runs (
+  id text primary key, account text not null, link text not null, host text, privacy text not null,
+  status text not null, stage text, error text, created text not null, started text, finished text,
+  commit_sha text, summary text, share_slug text unique);
+create table if not exists daily (day text, account text, runs integer default 0, primary key (day, account));
+create table if not exists global_daily (day text primary key, runs integer default 0);
+"""
+
+
+@pytest.mark.parametrize("schema", [OLD_SCHEMA_V0_10, OLDER_SCHEMA])
+def test_an_older_database_opens_and_keeps_its_rows(tmp_path, schema):
+    """Upgrades: the cloud database written by v0.10.0 (and the first cloud release) opens in this version, missing
+    columns are added, and the old rows are still listed and counted."""
+    from lantern_cloud.store import Store
+    db = tmp_path / "old.db"
+    con = sqlite3.connect(db)
+    con.executescript(schema)
+    con.execute("insert into users (account, label, created, last_seen) values ('github:1', 'octo', '2026-11-03T10:00:00', '2026-11-03T10:00:00')")
+    con.execute("insert into runs (id, account, link, host, privacy, status, created, finished, commit_sha, summary) values "
+                "('r1', 'github:1', 'https://github.com/o/shop', 'github.com', 'structure', 'done', '2026-11-03T10:00:00', "
+                "'2026-11-03T10:01:00', 'abc', '{\"score\": 71, \"counts\": {\"critical\": 1}}')")
+    con.execute("insert into daily (day, account, runs) values ('2026-11-03', 'github:1', 1)")
+    con.commit()
+    con.close()
+    s = Store(str(db))
+    cols = {r[1] for r in s.db.execute("pragma table_info(runs)")}
+    assert {"log_tail", "explain_status", "explain_error", "explain_summary"} <= cols
+    assert "ai_consent" in {r[1] for r in s.db.execute("pragma table_info(users)")}
+    runs = s.runs("github:1")
+    assert len(runs) == 1
+    r = s.run("r1")
+    assert r["status"] == "done" and r["link"].endswith("/shop")
+    assert s.runs_today("github:1", "2026-11-03") == 1
+    s2 = Store(str(db))                                # opening again is harmless (idempotent migration)
+    assert s2.run("r1")["id"] == "r1"
+
+
+def test_limit_messages_say_how_long_until_the_reset():
+    import datetime as dt
+    from lantern_cloud.store import until_midnight_utc
+    at = dt.datetime(2026, 11, 5, 18, 40, tzinfo=dt.UTC)
+    assert until_midnight_utc(at) == "in 5 h 20 min (00:00 UTC)"
+    assert until_midnight_utc(dt.datetime(2026, 11, 5, 23, 59, 30, tzinfo=dt.UTC)) == "in 1 min (00:00 UTC)"
+    assert until_midnight_utc(dt.datetime(2026, 11, 5, 0, 0, 0, tzinfo=dt.UTC)) == "in 24 h 0 min (00:00 UTC)"

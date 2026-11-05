@@ -1,0 +1,197 @@
+{
+ "hersheild": {
+  "590fa8a9449b": {
+   "rule": "LM-BACKUP",
+   "label": "real",
+   "reason": "allowBackup is true and the app targets API 30, so `adb backup` and device-to-device transfer copy the app's private files (Firebase session, recordings' paths).",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "44204c4e88db": {
+   "rule": "LM-EXPORTED",
+   "label": "false alarm",
+   "reason": "This is the standard Firebase Cloud Messaging service declaration (intent-filter com.google.firebase.MESSAGING_EVENT); Google's own docs require it and the library only acts on messages Google Play services delivers. Lantern should recognise this filter as a framework convention.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "bf9c107c6dea": {
+   "rule": "LM-LOG-SENSITIVE",
+   "label": "real",
+   "reason": "Logs the user's latitude and longitude on every location update; anyone with adb or a log-reading app on older Android versions sees where she is.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "1ec1aca08a9a": {
+   "rule": "LM-LOG-SENSITIVE",
+   "label": "real",
+   "reason": "Same as above in the second location service.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "97b23dc32994": {
+   "rule": "LM-LOG-SENSITIVE",
+   "label": "real",
+   "reason": "Logs the Firebase user id at error level with tag 'huy', a leftover debug line. Mild, but it is an account identifier in the log.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "41a032ad5ac9": {
+   "rule": "LM-LOG-SENSITIVE",
+   "label": "real",
+   "reason": "Logs the map camera position, which is the user's location when the map follows her.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "67ed9dc81bf0": {
+   "rule": "LM-LOG-SENSITIVE",
+   "label": "real",
+   "reason": "Same moveCamera log in the action screen.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "a524cbf7743c": {
+   "rule": "LM-OLD-TARGET",
+   "label": "real",
+   "reason": "targetSdkVersion 30: Google Play no longer accepts updates below API 33 and the app misses scoped storage and the exported-flag checks of newer versions.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "6261735e9e11": {
+   "rule": "LM-NO-SHRINK",
+   "label": "real",
+   "reason": "minifyEnabled false in the release build; the APK ships readable class and method names.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "9cf357d64a7e": {
+   "rule": "LM-UNUSED-PERMISSION",
+   "label": "real",
+   "reason": "READ_PHONE_STATE is requested at runtime but no TelephonyManager or phone-state API is called anywhere; SmsManager does not need it. Play's permission review would ask the same question.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "4763dfd5bf01": {
+   "rule": "LM-GOOGLE-KEY",
+   "label": "cannot tell",
+   "reason": "A Google Maps SDK key has to be in the manifest; whether it is safe depends on the key being restricted to this package and signing certificate in the Google Cloud console, which the code cannot show. Lantern's words should say 'make sure the key is restricted to this app', not that it must be hidden.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "73aaa72eefb8": {
+   "rule": "LM-CLEARTEXT-URL",
+   "label": "false alarm",
+   "reason": "The http:// link is text inside an SMS sent to an emergency contact, not a request the app makes; no traffic travels unencrypted. The rule should skip URLs that are only placed in message text.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "29f15ce01464": {
+   "rule": "LM-EXTERNAL-STORAGE",
+   "label": "real",
+   "reason": "Audio recordings are written to the root of shared external storage, where every app with storage permission can read them; on API 30 this path is also no longer writable.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  }
+ },
+ "simple-calendar": {
+  "590fa8a9449b": {
+   "rule": "LM-BACKUP",
+   "label": "real",
+   "reason": "allowBackup is true with no backup rules; the calendar database and settings go into device backups and `adb backup`.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "65a881e689d3": {
+   "rule": "LM-EXPORTED",
+   "label": "false alarm",
+   "reason": "BootCompletedReceiver answers BOOT_COMPLETED and MY_PACKAGE_REPLACED, which only the system sends in practice; the receiver reschedules reminders and reads nothing from the intent. The standard Android pattern, so a low heuristic note at most.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "71a861389a4e": {
+   "rule": "LM-EXPORTED",
+   "label": "real",
+   "reason": "MainActivity takes android.intent.action.VIEW with calendar data from any app or link; that is a real door with data inside, which is exactly what the finding says (low, as the rule ranks it).",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "652b7f62edbd": {
+   "rule": "LM-EXPORTED",
+   "label": "false alarm",
+   "reason": "WidgetMonthlyConfigureActivity answers APPWIDGET_CONFIGURE, which the launcher sends when the user places a widget. Android requires it exported.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "cc74aea02f89": {
+   "rule": "LM-EXPORTED",
+   "label": "false alarm",
+   "reason": "WidgetListConfigureActivity: same APPWIDGET_CONFIGURE convention.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "b5af8f399cf7": {
+   "rule": "LM-EXPORTED",
+   "label": "false alarm",
+   "reason": "WidgetDateConfigureActivity: same APPWIDGET_CONFIGURE convention.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "79064312ed4a": {
+   "rule": "LM-EXPORTED",
+   "label": "real",
+   "reason": "EventActivity is exported explicitly so other apps can open the event editor with extras; it reads them, so it is a door with data inside (low).",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "fd1fba7e4d2b": {
+   "rule": "LM-EXPORTED",
+   "label": "real",
+   "reason": "SettingsActivity is exported explicitly with no intent filter needed; any app can open the settings screen. Harmless but true, and the fix (exported=false) costs nothing.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "ec9f4daf485b": {
+   "rule": "LM-EXPORTED",
+   "label": "false alarm",
+   "reason": "MyWidgetMonthlyProvider answers APPWIDGET_UPDATE; a home-screen widget receiver has to be exported.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "2acb1545e4fe": {
+   "rule": "LM-EXPORTED",
+   "label": "false alarm",
+   "reason": "MyWidgetListProvider: same APPWIDGET_UPDATE convention.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "85035016fb09": {
+   "rule": "LM-EXPORTED",
+   "label": "false alarm",
+   "reason": "MyWidgetDateProvider: same APPWIDGET_UPDATE convention.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  }
+ },
+ "nowinandroid": {
+  "0c27cb9ab61d": {
+   "rule": "LM-NO-SHRINK",
+   "label": "real",
+   "reason": "app-nia-catalog's release block sets no minify switch, so the catalog app ships unshrunk. It is a developer catalog, so the harm is small, but the statement is true.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "93707dfbdca5": {
+   "rule": "LM-BACKUP",
+   "label": "real",
+   "reason": "The catalog app's manifest leaves allowBackup at its default (true) with no backup rules.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  },
+  "590fa8a9449b": {
+   "rule": "LM-BACKUP",
+   "label": "real",
+   "reason": "The main app's manifest leaves allowBackup at its default with no dataExtractionRules; the app keeps only public news data, so the harm is small, but the statement is true.",
+   "by": "Lantern's developers, first pass from reading the code; confirm in a tester round (docs/tester-round.md task 4)",
+   "date": "2026-11-05"
+  }
+ }
+}

@@ -1,4 +1,4 @@
-name: Tester report (v0.9)
+name: Tester report
 description: Something broke, confused you, or looked wrong while trying Lantern.
 title: "[tester] "
 labels: ["tester", "v0.9"]
@@ -36,6 +36,8 @@ body:
         - Home / projects
         - Paths (the map)
         - What to fix (findings)
+        - On the phone card (Android, iPhone, Flutter, React Native)
+        - The website (lantern-cloud.fly.dev)
         - Ready to ship? (readiness)
         - Evidence report
         - Explanations / model / sign-in
@@ -84,4 +86,4 @@ body:
     id: stack
     attributes:
       label: Your app's stack (optional)
-      placeholder: e.g. Next.js + Supabase, FastAPI + React
+      placeholder: e.g. Android (Kotlin), Flutter, Next.js + Supabase, FastAPI + React

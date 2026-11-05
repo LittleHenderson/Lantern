@@ -338,9 +338,9 @@ class Walker:
         if fn is not None and name_node.type == "identifier":
             local = self.add_def(fn, name, scope, "function", cls, outer=n)
             self._walk_body(fn, local, None, ui)
-            if value is not fn:  # memo(...)/forwardRef(...) wrapper call
+            if value is not fn and value.type == "call_expression":  # memo(...)/forwardRef(...) wrapper call
                 self.walk(value.child_by_field_name("function"), scope, cls, ui)
-            return
+            return   # `(fn) as T`, `(fn) satisfies T`: nothing besides the function to walk
         if value is not None and value.type in CLASS_DECLS:
             self._class(value, name, scope, ui)
             return

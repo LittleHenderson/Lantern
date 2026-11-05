@@ -110,3 +110,26 @@ def test_a_plain_web_app_is_not_a_phone_app(tmp_path):
     _write(tmp_path, {"package.json": '{"dependencies": {"react": "18"}}', "src/a.js": "export function a() {}\n"})
     g = build_graph(tmp_path)
     assert "rn" not in g.meta and g.meta.get("platform") is None
+
+
+def test_end_to_end_tooling_and_schema_links_are_not_app_findings(tmp_path):
+    """From the mobile benchmark: mattermost-mobile's Detox and Maestro folders raised 29 shell findings and 12 "SQL"
+    findings for `shell.exec(...)`, and `$schema: "http://adaptivecards.io/schemas/..."` counted as plain-http traffic."""
+    _write(tmp_path, {
+        "package.json": '{"dependencies": {"react-native": "0.74"}}',
+        "app.json": '{"expo": {"name": "x"}}',
+        "detox/utils/fill.js": "const shell = require('shelljs');\nshell.exec(`plutil -create xml1 \"${plist}\"`);\n"
+                               "console.log(`token ${SYNC_TOKEN}`);\n",
+        "app/components/test_fixtures.ts": "export const card = {$schema: 'http://adaptivecards.io/schemas/adaptive-card.json'};\n",
+        "app/utils/url/test.ts": "const SITE_URL = `http://${URL_NO_PROTOCOL}`;\n",
+        "app/screens/card.tsx": "export const schema = {\"$schema\": \"http://adaptivecards.io/schemas/adaptive-card.json\"};\n"
+                                "export const plain = fetch('http://api.example.org/v1');\nexport const bad = 'http://news.site.org/feed';\n",
+        "app/db.ts": "export function q(db: any, id: string) { return db.exec(`SELECT * FROM t WHERE id = ${id}`); }\n"
+                     "export function run(sh: any, id: string) { return sh.exec(`ls ${id}`); }\n",
+    })
+    sec = scan(build_graph(tmp_path))
+    rn = {(f["rule"], f["file"], f["line"]) for f in sec["findings"] if f["rule"].startswith("LN-")}
+    assert rn == {("LN-SQL-CONCAT", "app/db.ts", 1), ("LN-CLEARTEXT-URL", "app/screens/card.tsx", 2),
+                  ("LN-CLEARTEXT-URL", "app/screens/card.tsx", 3)}, rn
+    lj = {f["file"]: (f["rank"], f["tool_confidence"]) for f in sec["findings"] if f["rule"] == "LJ-EXEC"}
+    assert lj["detox/utils/fill.js"] == ("low", "LOW") and lj["app/db.ts"][1] == "HIGH"
