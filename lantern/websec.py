@@ -13,6 +13,7 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
   LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
+  LC-*               C# code patterns (dotnet.py: SQL/shell from variables, TLS off, weak hashes, BinaryFormatter, CORS *)
   LV-*               Java code patterns (SQL/shell from variables, TLS off, weak hashes, ObjectInputStream, CORS *)
 """
 
@@ -595,7 +596,7 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
 def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
     its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
-    js = n.id.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:"))   # JS, Go, Java, Kotlin, Swift, Dart: camelCase; Python and Rust snake_case
+    js = n.id.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:"))   # JS, Go, Java, Kotlin, Swift, Dart, C#: camelCase; Python and Rust snake_case
     for d in n.decorators:
         if auth_ident(d, js):
             return f"decorator @{d.split('(')[0]}"
@@ -610,7 +611,7 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
                 if v in seen:
                     continue
                 seen.add(v)
-                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:"))):
+                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:"))):
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt
@@ -695,6 +696,11 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     findings += flutter.scan(g)
     if g.meta.get("flutter"):
         tools.append({"tool": "lantern-flutter", "status": "ok", "version": "0.1"})
+    from . import dotnet
+    findings += dotnet.scan(g)
+    if "c#" in g.meta.get("languages", {}):
+        tools.append({"tool": "lantern-dotnet", "status": "ok" + (" (MAUI app)" if g.meta.get("maui") else ""),
+                      "version": "0.1"})
     from . import rn
     rnf, rmobile = rn.scan(g)
     findings += rnf

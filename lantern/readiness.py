@@ -34,8 +34,8 @@ CATEGORIES = [
 ]
 
 CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
-MOBILE_EXTS = {".java", ".kt", ".swift", ".dart"}  # a phone app's code: counted for tests and the Android/iOS checks only
-MOBILE_TEST_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/|(^|/)[^/]*(Tests|UITests)/[^/]*\.swift$|(^|/)(test|integration_test)/.*_test\.dart$")
+MOBILE_EXTS = {".java", ".kt", ".swift", ".dart", ".cs"}  # a phone app's code: counted for tests and the Android/iOS checks only
+MOBILE_TEST_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/|(^|/)[^/]*(Tests|UITests)/[^/]*\.swift$|(^|/)(test|integration_test)/.*_test\.dart$|(^|/)[^/]*\.Tests?/[^/]*\.cs$")
 # What Android Studio writes into every new project: a test that checks 2 + 2 and one that reads the package name.
 TEMPLATE_TEST_RE = re.compile(r"(^|/)Example(Unit|Instrumented)Test\.(java|kt)$|(^|/)test/widget_test\.dart$")
 CRASH_REPORTING = re.compile(r"firebase[-:]crashlytics|io\.sentry|com\.bugsnag|com\.instabug|datadog|newrelic|"
@@ -54,16 +54,17 @@ IOS_TIMEOUT = re.compile(r"timeoutIntervalForRequest|timeoutIntervalForResource|
                          r"requestModifier[^\n]*timeout")
 IOS_RETRY = re.compile(r"RequestRetrier|RetryPolicy|\bretry\s*\(|maxRetries|retryCount|for\s+attempt\s+in|"
                        r"waitsForConnectivity\s*=\s*true")
-XP_SHAPES = {"Flutter app", "React Native app"}    # one codebase for both phones, no android/ or ios/ folder read
+XP_SHAPES = {"Flutter app", "React Native app", ".NET MAUI app"}    # one codebase for both phones, no android/ or ios/ folder read
 MOBILE_SHAPES = {"Android app", "iOS app"} | XP_SHAPES
 XP_CRASH = re.compile(r"@sentry/react-native|sentry-expo|@react-native-firebase/crashlytics|@bugsnag/react-native|"
-                      r"@datadog/mobile-react-native|instabug-reactnative|embrace-io|" + CRASH_REPORTING.pattern, re.I)
+                      r"@datadog/mobile-react-native|instabug-reactnative|embrace-io|Sentry\.Maui|Microsoft\.AppCenter\.Crashes|"
+                      r"Plugin\.Firebase\.Crashlytics|Bugsnag\.|" + CRASH_REPORTING.pattern, re.I)
 XP_HTTP = re.compile(r"\bfetch\s*\(|\baxios\b|\bky\.|\bDio\s*\(|\bhttp\.(?:get|post|put|delete|patch)\s*\(|"
-                     r"\bhttp\.Client\s*\(")
+                     r"\bhttp\.Client\s*\(|\bnew\s+HttpClient\s*\(|\.(?:GetStringAsync|GetFromJsonAsync|PostAsJsonAsync)\s*\(")
 XP_TIMEOUT = re.compile(r"\btimeout\s*:|AbortSignal\.timeout|\bAbortController\b|connectTimeout|receiveTimeout|"
-                        r"\.timeout\s*\(")
+                        r"\.timeout\s*\(|\.Timeout\s*=\s*TimeSpan|\bTimeout\s*=\s*TimeSpan")
 XP_RETRY = re.compile(r"axios-retry|ky\.extend|\bretry\s*[:(]|dio_smart_retry|RetryInterceptor|retryCount|maxRetries|"
-                      r"\bp-retry\b")
+                      r"\bp-retry\b|\bPolly\b|AddStandardResilienceHandler|AddTransientHttpErrorPolicy|WaitAndRetry")
 JS_TEST_RE = re.compile(r"(\.(test|spec)\.[cm]?[jt]sx?$)|(^|/)(__tests__|tests?|e2e|cypress|playwright)/")
 PY_LOCKS = ("poetry.lock", "uv.lock", "Pipfile.lock", "pdm.lock")
 JS_LOCKS = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb")
@@ -88,7 +89,7 @@ SHUTDOWN = re.compile(r"signal\.signal\(\s*signal\.SIGTERM|SIGTERM|lifespan|@app
 HEALTH_PATH = re.compile(r"/(health|healthz|healthcheck|ready|readyz|livez|ping|status)\b", re.I)
 TEST_CMD = re.compile(r"\b(pytest|unittest|tox|nox|npm (run )?test|pnpm (run )?test|yarn test|vitest|jest|playwright test|go test|cargo test|make test|"
                       r"gradlew?(?:\.bat)?(?:\s+[-\w:]+)*?\s+[\w:]*(?:test\w*|check|connected\w*AndroidTest)|mvn\s+(?:-\S+\s+)*(?:test|verify)|"
-                      r"xcodebuild\s+(?:\S+\s+)*test|flutter test|swift test)\b")
+                      r"xcodebuild\s+(?:\S+\s+)*test|flutter test|swift test|dotnet test)\b")
 SCAN_CMD = re.compile(r"\b(lantern|bandit|pip-audit|npm audit|pnpm audit|yarn audit|semgrep|opengrep|codeql|trivy|snyk|gitleaks|safety|osv-scanner|dependabot|mobsf|dependency-check)\b", re.I)
 
 
@@ -205,6 +206,8 @@ def detect_stack(repo: Repo, g: Graph) -> dict:
         fw.insert(0, "iOS")
     if g.meta.get("flutter"):
         fw.insert(0, "Flutter")
+    if g.meta.get("maui"):
+        fw.insert(0, ".NET MAUI")
     if g.meta.get("rn"):
         fw.insert(0, "Expo" if any(a.get("expo") for a in g.meta["rn"].get("apps", [])) else "React Native")
     return {"frameworks": fw, "entries": dict(entries), "languages": langs, "deploy_targets": deploy,
@@ -220,6 +223,8 @@ def classify_shape(stack: dict) -> str:
         return "Flutter app"
     if stack.get("platform") == "react-native":
         return "React Native app"
+    if stack.get("platform") == "maui":
+        return ".NET MAUI app"
     e = stack["entries"]
     pages, routes = e.get("page", 0), e.get("route", 0)
     if pages and routes:
@@ -236,7 +241,7 @@ def classify_shape(stack: dict) -> str:
 
 
 SHAPES = frozenset({"full-stack web app", "web API", "frontend web app", "command-line tool", "script or worker", "library",
-                    "Android app", "iOS app", "Flutter app", "React Native app"})
+                    "Android app", "iOS app", "Flutter app", "React Native app", ".NET MAUI app"})
 SERVICE_SHAPES = {"full-stack web app", "web API"}
 
 
@@ -722,7 +727,7 @@ def check_docs(repo: Repo) -> list[dict]:
     readme = repo.has("README.md", "README.rst", "README.txt", "README")
     t = repo.text(readme) if readme else ""
     runs = bool(re.search(r"(pip install|npm (install|i|run)|pnpm|yarn|uv |poetry|docker|make |python -m|npx |gradlew|"
-                          r"Android Studio|flutter (run|build)|xcodebuild|pod install|cargo (run|build)|go (run|build))", t))
+                          r"Android Studio|flutter (run|build)|xcodebuild|pod install|cargo (run|build)|go (run|build)|dotnet (run|build|publish))", t))
     lic = repo.has("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
     sec = repo.has("SECURITY.md", ".github/SECURITY.md")
     return [
@@ -800,6 +805,15 @@ def advice(shape: str, stack: dict) -> list[str]:
             "Keep private keys and paid-API calls on a small server (or Firebase Functions); the app calls it. "
             "Anything inside the app can be read by whoever installs it.",
             "Save logins and tokens with flutter_secure_storage, never SharedPreferences.",
+            "Use App Links / Universal Links on your own domain for links that carry data, and check every value "
+            "a link brings before using it.",
+        ],
+        ".NET MAUI app": [
+            "Build releases with `dotnet publish -c Release` (Android: AAB with trimming on; iOS: through Xcode), and "
+            "ship to a small group first (Play internal testing, TestFlight) with crash reporting on.",
+            "Keep private keys and paid-API calls on a small server; the app calls it. Anything inside the app can be "
+            "read by whoever installs it.",
+            "Save logins and tokens with SecureStorage, never Preferences.",
             "Use App Links / Universal Links on your own domain for links that carry data, and check every value "
             "a link brings before using it.",
         ],
@@ -1099,14 +1113,25 @@ def _mobile_resilience(repo: Repo) -> list[dict]:
 def _xp_rules(sec: dict | None) -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
     for f in (sec or {}).get("findings", []):
-        if f.get("rule", "").startswith(("LN-", "LF-")) and f.get("status") != "accepted":
+        if f.get("rule", "").startswith(("LN-", "LF-", "LC-")) and f.get("status") != "accepted":
             out.setdefault(f["rule"], []).append(f)
     return out
 
 
+XP_EXTS = {"Flutter app": (".dart",), "React Native app": (".js", ".jsx", ".ts", ".tsx"), ".NET MAUI app": (".cs",)}
+
+
+def _xp_manifests(repo: Repo, shape: str) -> str:
+    """The files that list a cross-platform app's libraries, joined."""
+    if shape == ".NET MAUI app":
+        return "\n".join(repo.text(f) for f in repo.files if f.endswith((".csproj", "Directory.Packages.props")))
+    names = ("pubspec.yaml",) if shape == "Flutter app" else ("package.json", "app.json", "app.config.js", "app.config.ts")
+    return "\n".join(repo.text(f) for f in repo.files if f.rsplit("/", 1)[-1] in names)
+
+
 def _xp_code(repo: Repo, shape: str):
     for f in repo.files:
-        if Path(f).suffix in ((".dart",) if shape == "Flutter app" else (".js", ".jsx", ".ts", ".tsx")) \
+        if Path(f).suffix in XP_EXTS[shape] \
                 and not repo.is_test(f) and not f.endswith((".min.js", ".d.ts")):
             yield f, repo.text(f)
 
@@ -1123,11 +1148,14 @@ def _xp_grep(repo: Repo, shape: str, rx: re.Pattern, limit: int = 50) -> list[tu
 
 
 def _xp_observability(repo: Repo, shape: str) -> list[dict]:
-    names = ("pubspec.yaml",) if shape == "Flutter app" else ("package.json", "app.json", "app.config.js",
-                                                              "app.config.ts")
-    deps = "\n".join(repo.text(f) for f in repo.files if f.rsplit("/", 1)[-1] in names)
+    names = {"Flutter app": ("pubspec.yaml",), ".NET MAUI app": ("*.csproj",)}.get(shape, ("package.json", "app.json"))
+    deps = _xp_manifests(repo, shape)
     crash = XP_CRASH.search(deps)
-    if shape == "Flutter app":
+    if shape == ".NET MAUI app":   # Debug.WriteLine is compiled out of release builds; Console.WriteLine is not
+        logs = _xp_grep(repo, shape, re.compile(r"\bConsole\.Write(?:Line)?\s*\("), limit=500)
+        stripped = None
+        fix = "Log through ILogger (or Debug.WriteLine, which release builds leave out), not Console.WriteLine."
+    elif shape == "Flutter app":
         logs = _xp_grep(repo, shape, re.compile(r"(?<![\w.])print\s*\("), limit=500)
         stripped = None
         fix = "Use debugPrint or the logging package, and turn on the avoid_print lint in analysis_options.yaml."
@@ -1152,16 +1180,21 @@ def _xp_observability(repo: Repo, shape: str) -> list[dict]:
 
 def _xp_packaging(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
     rules = _xp_rules(sec)
-    lock = repo.has("pubspec.lock")
+    lock = repo.has("pubspec.lock") if shape == "Flutter app" else next(
+        (f for f in repo.files if f.endswith("packages.lock.json")), None)
     ats = rules.get("LN-ATS-OFF", [])
     backup = rules.get("LN-BACKUP", [])
     out = [   # a JS lock file is already the Dependencies category's check
-        _check("pkg-lock", "Library versions are locked", 2, "pass" if lock else "fail", lock or "no pubspec.lock",
-               "" if lock else "Commit pubspec.lock: an app's builds should use the same library versions every time.",
-               how="file check")] if shape == "Flutter app" else []
+        _check("pkg-lock", "Library versions are locked", 2, "pass" if lock else "fail",
+               lock or ("no pubspec.lock" if shape == "Flutter app" else "no packages.lock.json"),
+               "" if lock else ("Commit pubspec.lock" if shape == "Flutter app" else
+                                "Set <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile> and commit "
+                                "packages.lock.json") + ": an app's builds should use the same library versions every time.",
+               how="file check")] if shape in ("Flutter app", ".NET MAUI app") else []
     out += [
         _check("pkg-signing", "Signed for the stores", 1, "skip",
-               "flutter build / Xcode handle signing" if shape == "Flutter app" else "EAS Build or Xcode/Gradle handle "
+               "flutter build / Xcode handle signing" if shape == "Flutter app" else
+               "dotnet publish / Xcode handle signing" if shape == ".NET MAUI app" else "EAS Build or Xcode/Gradle handle "
                "signing"),
     ]
     if shape == "React Native app":
@@ -1183,9 +1216,10 @@ def _xp_resilience(repo: Repo, shape: str) -> list[dict]:
                 _check("res-retry", "Retries with backoff on network calls", 2, "skip", "no network calls in code"), end]
     t = _xp_grep(repo, shape, XP_TIMEOUT, limit=1)
     r = _xp_grep(repo, shape, XP_RETRY, limit=1)
-    deps = "\n".join(repo.text(f) for f in repo.files if f.rsplit("/", 1)[-1] in ("package.json", "pubspec.yaml"))
+    deps = _xp_manifests(repo, shape)
     r = r or ([("package.json", 1, m.group(0))] if (m := XP_RETRY.search(deps)) else [])
     tip = ("Give Dio a connectTimeout and receiveTimeout (or call .timeout() on http requests)" if shape == "Flutter app"
+           else "Set HttpClient.Timeout (the default waits 100 seconds)" if shape == ".NET MAUI app"
            else "Pass AbortSignal.timeout(15000) to fetch, or set timeout on your axios instance")
     return [
         _check("res-timeout", "Network calls have timeouts", 4, "pass" if t else "fail",
@@ -1195,6 +1229,7 @@ def _xp_resilience(repo: Repo, shape: str) -> list[dict]:
         _check("res-retry", "Retries with backoff on network calls", 2, "pass" if r else "fail",
                f"{r[0][0]}:{r[0][1]}" if r else "no retry found",
                "" if r else ("Retry with backoff (dio_smart_retry)" if shape == "Flutter app" else
+                             "Retry with backoff (Polly, or AddStandardResilienceHandler)" if shape == ".NET MAUI app" else
                              "Retry with backoff (axios-retry, or TanStack Query's retry)") +
                " for anything that must not get lost.", how="pattern"),
         end,

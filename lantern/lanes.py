@@ -36,7 +36,11 @@ DATA_RE = re.compile(
     r"FirebaseDatabase|DatabaseReference|FirebaseFirestore|CollectionReference|DocumentReference|FirebaseStorage|"
     r"StorageReference|FirebaseAuth|FirebaseMessaging|SharedPreferences|SQLiteDatabase|RoomDatabase|SmsManager|"
     r"OkHttpClient|Retrofit|RequestQueue|Volley|HttpURLConnection|URL\.openConnection|FileOutputStream|"
-    r"MediaRecorder|LocationManager|FusedLocationProviderClient|ContentResolver|TelephonyManager|WorkManager)"
+    r"MediaRecorder|LocationManager|FusedLocationProviderClient|ContentResolver|TelephonyManager|WorkManager|"
+    # C# (.NET externals are named Type.Method)
+    r"SqlConnection|SqlCommand|NpgsqlConnection|NpgsqlCommand|MySqlConnection|MySqlCommand|SqliteConnection|"
+    r"SqliteCommand|SQLiteConnection|SQLiteAsyncConnection|DbContext|DbSet|HttpClient|Process|File|Directory|"
+    r"Preferences|SecureStorage|BlobClient|SmtpClient)"
     r"(\.|\(|$|/)"
 )
 
@@ -89,7 +93,7 @@ def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> s
 
 def phone_roots(meta: dict) -> dict | None:
     """The folders of the phone apps in the repo (Android modules, iOS apps), shaped like `meta["android"]`."""
-    roots = [r for k in ("android", "ios", "flutter", "rn") for r in ((meta.get(k) or {}).get("roots") or [])]
+    roots = [r for k in ("android", "ios", "flutter", "rn", "maui") for r in ((meta.get(k) or {}).get("roots") or [])]
     return {"roots": roots} if roots else None
 
 

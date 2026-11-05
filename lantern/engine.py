@@ -1,10 +1,10 @@
-"""Build the full-stack graph: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, Swift, Dart, then the API bridge between them."""
+"""Build the full-stack graph: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, Swift, Dart, C#, then the API bridge between them."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, python_frontend, rust_frontend, swift_frontend
+from . import bridge, csharp_frontend, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, python_frontend, rust_frontend, swift_frontend
 from .graph import Graph
 
 
@@ -18,6 +18,7 @@ def build_graph(repo: str | Path) -> Graph:
     kt = kotlin_frontend.add_kotlin(g, repo)
     sw = swift_frontend.add_swift(g, repo)
     dt = dart_frontend.add_dart(g, repo)
+    cs = csharp_frontend.add_csharp(g, repo)
     langs = {}
     if py["files"]:
         langs["python"] = py
@@ -35,10 +36,12 @@ def build_graph(repo: str | Path) -> Graph:
         langs["swift"] = sw
     if dt.get("files"):
         langs["dart"] = dt
+    if cs.get("files"):
+        langs["c#"] = cs
     g.meta.update({
         "languages": langs,
-        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv, kt, sw, dt)),
-        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv, kt, sw, dt)),
+        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs)),
+        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv, kt, sw, dt, cs)),
         "language": " + ".join(langs) or "none",
     })
     # Analysis packs (pattern files) can add entry points for frameworks without built-in support, before the
@@ -54,6 +57,8 @@ def build_graph(repo: str | Path) -> Graph:
     ios.add_entries(g, repo)       # iPhone screens and links, from the Swift map and the Xcode project
     from . import flutter
     flutter.add_entries(g, repo)   # Flutter screens and links, from the Dart map
+    from . import dotnet
+    dotnet.add_entries(g, repo)    # .NET MAUI / Xamarin screens and links, from the C# map
     bridge.link(g)
     from . import rn
     rn.add_entries(g, repo)        # React Native / Expo screens and links, from the JS map
