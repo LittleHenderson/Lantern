@@ -148,7 +148,12 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
                           # C#: ASP.NET request data, what a link (`Uri`) or an Android intent carries (MAUI, Xamarin)
                           r"|\bRequest\.(?:Query|Form|Headers|Cookies|RouteValues|Body|QueryString)\b"
                           r"|\b(?:uri|url|link|appLink)\.(?:Query|AbsolutePath|AbsoluteUri|Segments|Fragment|Host|OriginalString)\b"
-                          r"|\bHttpUtility\.ParseQueryString\s*\(|\bIntent\.(?:Data|DataString|Extras)\b|\bIntent\.Get\w*Extra\s*\(")
+                          r"|\bHttpUtility\.ParseQueryString\s*\(|\bIntent\.(?:Data|DataString|Extras)\b|\bIntent\.Get\w*Extra\s*\("
+                          # PHP: superglobals, Laravel's request, PSR-7 (Slim) requests ($ and -> may be read as . )
+                          r"|\b_(?:GET|POST|REQUEST|COOKIE|FILES|SERVER)\b|\brequest(?:->|\.)(?:input|get|query|post|all|only|"
+                          r"file|cookie|header|json|route|string|integer|boolean)\s*\(|\brequest\(\s*['\"]|"
+                          r"(?:->|\.)(?:getParsedBody|getQueryParams|getUploadedFiles|getCookieParams)\s*\("
+                          r"|\bfile_get_contents\(\s*['\"]php://input")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var|val)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
@@ -170,6 +175,20 @@ def _blank_string(m: re.Match) -> str:
     if "$" in head:   # C# `$"… {id}"`
         refs += re.findall(r"(?<!\{)\{\s*([A-Za-z_]\w*)", m.group(0))
     return "''" + "".join(f" + {r}" for r in refs)
+
+
+def _php_line(raw: str) -> str:
+    """A PHP line in the shape the input check reads: strings blanked (keeping `$x` and `{$x}` put into double-quoted
+    ones), `.` concatenation read as `+`, `->` as `.`, and `$` dropped from variable names."""
+    def blank(m: re.Match) -> str:
+        if m.group(1) == "'":
+            return "''"
+        return "''" + "".join(f" + {r}" for r in re.findall(r"\{?\$([A-Za-z_]\w*)", m.group(0)))
+    t = re.sub(r"(['\"])(?:\\.|(?!\1).)*\1", blank, raw)
+    t = t.replace(".=", "+=")
+    t = re.sub(r"(?<=[\w'\")\]])\s*\.(?!\.)\s*(?=[$\w'\"(])", " + ", t)
+    t = t.replace("->", ".").replace("?.", ".")
+    return re.sub(r"\$(?=[A-Za-z_])", "", t)
 
 
 def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple[int, int, str]]:
@@ -230,6 +249,10 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         except OSError:
             cache[f["file"]] = []
     src = cache[f["file"]]
+    show = (lambda x: x)
+    if f["file"].endswith(".php"):
+        src = [_php_line(x) for x in src]
+        show = (lambda x: re.sub(r"^(request|_[A-Z]+)\b", r"$\1", x).replace(".", "->"))   # back to PHP spelling
     line = f["line"]
     if not 0 < line <= len(src):
         return False
@@ -246,6 +269,8 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
             m = re.fullmatch(r"\w+\((\w+)\)", pat)             # State(state), Path(id), Json(body)
             params.append(m.group(1) if m else pat)
         params = [x for x in params if re.fullmatch(r"[A-Za-z_]\w*", x)]
+    elif f["file"].endswith(".php"):
+        params = re.findall(r"\$(\w+)", plist)                # `Request $request, $id` → request, id
     elif f["file"].endswith(".dart"):
         # Dart writes `Type name` (and `{required String id}`, `this.id`): the last identifier of each parameter
         inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
@@ -284,7 +309,7 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         req = REQUEST_DATA.search(rhs)
         src_name = next((t for t in tainted if _uses(t, rhs)), None)
         if req:
-            origin = f"request data `{req.group(0)}`"
+            origin = f"request data `{show(req.group(0))}`"
         elif src_name:
             origin = tainted[src_name]
         else:
@@ -299,7 +324,7 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
     text = flagged[2]
     m = REQUEST_DATA.search(text)
     if m:
-        return {"via": f"request data `{m.group(0)}`"}
+        return {"via": f"request data `{show(m.group(0))}`"}
     for name, origin in tainted.items():
         if _uses(name, text):
             return {"via": origin}
@@ -435,9 +460,9 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     (None: follow LANTERN_OFFLINE)."""
     repo = Path(g.repo_root)
     findings, tools = [], []
-    from .depaudit import run_maven_audit, run_npm_audit, run_pip_audit
+    from .depaudit import run_composer_audit, run_maven_audit, run_npm_audit, run_pip_audit
     for fn in (run_bandit, lambda r: run_pip_audit(r, offline), lambda r: run_npm_audit(r, offline),
-               lambda r: run_maven_audit(r, offline), run_secrets):
+               lambda r: run_maven_audit(r, offline), lambda r: run_composer_audit(r, offline), run_secrets):
         f, info = fn(repo)
         findings += f
         tools.append(info)
