@@ -278,6 +278,18 @@ RULE_KIND = {
     "LN-WEBVIEW-ANY": "ios-webview", "LN-WEBVIEW-FILE": "ios-webview", "LN-CLEARTEXT-URL": "cleartext",
     "LN-ATS-OFF": "cleartext", "LN-URL-SCHEME": "ios-link", "LN-BACKUP": "android-backup",
     "LN-UNUSED-PERMISSION": "android-permission",
+    "LC-SQL-CONCAT": "sql", "LC-EXEC-CONCAT": "shell", "LC-TLS-OFF": "tls-off", "LC-WEAK-HASH": "weak-hash",
+    "LC-DESERIALIZE": "deserialize", "LC-CORS-ALL": "cors", "LC-HTML-RAW": "xss", "LC-LOG-SENSITIVE": "phone-log",
+    "LH-SQL-CONCAT": "sql", "LH-SQL-RAW": "sql", "LH-EXEC": "shell", "LH-EVAL": "eval", "LH-INCLUDE-INPUT": "eval",
+    "LH-INCLUDE-VAR": "eval", "LH-UNSERIALIZE": "deserialize", "LH-XSS-ECHO": "xss", "LH-XSS-BLADE": "xss",
+    "LH-WEAK-PASSWORD-HASH": "weak-hash", "LH-WEAK-HASH": "weak-hash", "LH-TLS-OFF": "tls-off", "LH-CORS-ALL": "cors",
+    "LH-DEBUG": "debug", "LH-CLEARTEXT-URL": "cleartext",
+    "LB-SQL-INTERP": "sql", "LB-SQL-PARAMS": "sql", "LB-EXEC": "shell", "LB-EVAL": "eval", "LB-DESERIALIZE": "deserialize",
+    "LB-XSS-RAW": "xss", "LB-TLS-OFF": "tls-off", "LB-WEAK-PASSWORD-HASH": "weak-hash", "LB-WEAK-HASH": "weak-hash",
+    "LB-CORS-ALL": "cors", "LB-DEBUG": "debug", "LB-SECRET-BASE": "secret", "LB-CLEARTEXT-URL": "cleartext",
+    "LX-SQL-BUILT": "sql", "LX-EXEC": "shell", "LX-TLS-OFF": "tls-off", "LX-WEAK-PASSWORD-HASH": "weak-hash",
+    "LX-CLEARTEXT-URL": "cleartext",
+    "LC-PREFS-SECRET": "phone-plain-secret", "LC-CLEARTEXT-URL": "cleartext", "LC-CONN-PASSWORD": "secret",
 }
 # Where each Android story starts (the manifest and build-file problems have no page or route to start from)
 ANDROID_START = {

@@ -144,7 +144,28 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
                           # Flutter: what a link or a route carries
                           r"|\.(?:queryParameters|pathParameters|queryParametersAll)\b|\bgetInitial(?:Link|Uri|AppLink)\s*\("
                           # React Native / Expo: what a link or a navigation carries
-                          r"|\broute\.params\b|\buse(?:Local|Global)SearchParams\s*\(|\bLinking\.parse\s*\(")
+                          r"|\broute\.params\b|\buse(?:Local|Global)SearchParams\s*\(|\bLinking\.parse\s*\("
+                          # C#: ASP.NET request data, what a link (`Uri`) or an Android intent carries (MAUI, Xamarin)
+                          r"|\bRequest\.(?:Query|Form|Headers|Cookies|RouteValues|Body|QueryString)\b"
+                          r"|\b(?:uri|url|link|appLink)\.(?:Query|AbsolutePath|AbsoluteUri|Segments|Fragment|Host|OriginalString)\b"
+                          r"|\bHttpUtility\.ParseQueryString\s*\(|\bIntent\.(?:Data|DataString|Extras)\b|\bIntent\.Get\w*Extra\s*\("
+                          # PHP: superglobals, Laravel's request, PSR-7 (Slim) requests ($ and -> may be read as . )
+                          r"|\b_(?:GET|POST|REQUEST|COOKIE|FILES|SERVER)\b|\brequest(?:->|\.)(?:input|get|query|post|all|only|"
+                          r"file|cookie|header|json|route|string|integer|boolean)\s*\(|\brequest\(\s*['\"]|"
+                          r"(?:->|\.)(?:getParsedBody|getQueryParams|getUploadedFiles|getCookieParams)\s*\("
+                          r"|\bfile_get_contents\(\s*['\"]php://input")
+# Ruby (Rails, Sinatra): `params[:q]`, `params.require(...)`, the raw request, cookies. Only for `.rb` files: a bare
+# `params` in JS is usually a router's own value.
+RUBY_REQUEST_DATA = re.compile(REQUEST_DATA.pattern + r"|\bparams\b(?:\[[^\]\n]*\])?(?!\s*=[^=])|\brequest\.(?:body|raw_post|headers|"
+                               r"query_string|query_parameters|request_parameters|params|env|fullpath|url)\b|"
+                               r"\bcookies\s*\[|\bARGV\b|\bgets\b")
+# C/C++: program arguments, the environment, what arrives on a socket or stdin, and the request objects of cpp-httplib,
+# Crow, Drogon and Pistache.
+C_EXTS = (".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".ipp")
+C_REQUEST_DATA = re.compile(REQUEST_DATA.pattern + r"|\bargv\s*\[\s*\w*\s*\]|\bgetenv\s*\(|\b(?:recv|recvfrom|fgets|gets)\s*\(|"
+                            r"\bgetline\s*\(\s*(?:std::)?cin\b|\bstd::cin\b|\bscanf\s*\(|\breq(?:uest)?(?:\.|->)(?:get_param_value|get_header_value|"
+                            r"get_file_value|body|params|path_params|url_params|matches|getParameter|getBody|getJsonObject|"
+                            r"getHeader|query|param|resource)\b|\breq->getParameter\b")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var|val)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
@@ -155,14 +176,54 @@ BINDS = [   # loops and context managers that bind a name to a value
     re.compile(r"^\s*for\s*\(\s*(?:const|let|var)\s+(?P<lhs>[\w{}\[\], $]+?)\s+(?:of|in)\s+(?P<rhs>[^)]+)\)", re.S),
 ]
 _STRINGS = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
-_TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)|\\\(\s*([A-Za-z_]\w*)")
+_TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)|\\\(\s*([A-Za-z_]\w*)|#\{\s*@?([A-Za-z_]\w*)")
 
 
 def _blank_string(m: re.Match) -> str:
     """A string literal becomes `''`, keeping the names a template puts into it (`"id = $id"` in Kotlin, `\\(id)` in Swift,
-    `${id}` in a JS template literal) so a value spliced into SQL or a command is still seen as used."""
-    refs = [a or b or c for a, b, c in _TEMPLATE_REF.findall(m.group(0))]
+    `${id}` in a JS template literal, `$"…{id}"` in C#) so a value spliced into SQL or a command is still seen as used."""
+    refs = [a or b or c or d for a, b, c, d in _TEMPLATE_REF.findall(m.group(0))]
+    head = m.string[max(0, m.start() - 2):m.start()]
+    if "$" in head:   # C# `$"… {id}"`
+        refs += re.findall(r"(?<!\{)\{\s*([A-Za-z_]\w*)", m.group(0))
     return "''" + "".join(f" + {r}" for r in refs)
+
+
+def _php_line(raw: str) -> str:
+    """A PHP line in the shape the input check reads: strings blanked (keeping `$x` and `{$x}` put into double-quoted
+    ones), `.` concatenation read as `+`, `->` as `.`, and `$` dropped from variable names."""
+    def blank(m: re.Match) -> str:
+        if m.group(1) == "'":
+            return "''"
+        return "''" + "".join(f" + {r}" for r in re.findall(r"\{?\$([A-Za-z_]\w*)", m.group(0)))
+    t = re.sub(r"(['\"])(?:\\.|(?!\1).)*\1", blank, raw)
+    t = t.replace(".=", "+=")
+    t = re.sub(r"(?<=[\w'\")\]])\s*\.(?!\.)\s*(?=[$\w'\"(])", " + ", t)
+    t = t.replace("->", ".").replace("?.", ".")
+    return re.sub(r"\$(?=[A-Za-z_])", "", t)
+
+
+def _rb_line(raw: str) -> str:
+    """A Ruby line for the input check: `@x` read as `x` (instance variables carry values between lines of a controller
+    action), `%x(...)`/`%Q(...)` read as strings."""
+    t = re.sub(r"%[xQqw]?\((.*?)\)", lambda m: '"' + m.group(1).replace('"', "'") + '"', raw)
+    return re.sub(r"(?<![\w@])@(?=[A-Za-z_])", "", t)
+
+
+_C_DECL = re.compile(r"^(\s*)(?:(?:const|static|unsigned|signed|auto|struct|volatile|register)\s+)*[A-Za-z_][\w:]*"
+                     r"(?:<[^;=()]*>)?(?:\s+const)?[\s*&]+(?=[A-Za-z_]\w*\s*(?:\[[^\]]*\]\s*)?=)")
+_C_FILL = re.compile(r"^(\s*)(?:std::)?(sn?printf|strn?cpy|strn?cat|memcpy|asprintf)\s*\(\s*&?([A-Za-z_]\w*)\s*,(.*)\)\s*;")
+
+
+def _c_line(raw: str) -> str:
+    """A C/C++ line for the input check: a declaration `std::string q = …` read as `q = …`, and a buffer filled by
+    `sprintf(buf, …, x)` / `strcpy(buf, x)` read as `buf = … x` (`strcat` as `buf += x`)."""
+    t = _C_DECL.sub(r"\1", raw)
+    m = _C_FILL.match(t)
+    if m:
+        op = "+=" if "cat" in m.group(2) else "="
+        t = f"{m.group(1)}{m.group(3)} {op} {m.group(4)};"
+    return t
 
 
 def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple[int, int, str]]:
@@ -223,10 +284,20 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         except OSError:
             cache[f["file"]] = []
     src = cache[f["file"]]
+    show = (lambda x: x)
+    if f["file"].endswith(".php"):
+        src = [_php_line(x) for x in src]
+        show = (lambda x: re.sub(r"^(request|_[A-Z]+)\b", r"$\1", x).replace(".", "->"))   # back to PHP spelling
+    req_re = C_REQUEST_DATA if f["file"].endswith(C_EXTS) else REQUEST_DATA
+    if f["file"].endswith(C_EXTS):
+        src = [_c_line(x) for x in src]
+    if f["file"].endswith(".rb"):
+        src = [_rb_line(x) for x in src]
+        req_re = RUBY_REQUEST_DATA
     line = f["line"]
     if not 0 < line <= len(src):
         return False
-    js = not f["file"].endswith(".py")
+    js = not f["file"].endswith((".py", ".rb"))
     sig = n.signature or ""
     if f["file"].endswith(".go"):
         sig = re.sub(r"^func\s*\([^)]*\)\s*", "func ", sig)      # the receiver is not input
@@ -239,6 +310,8 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
             m = re.fullmatch(r"\w+\((\w+)\)", pat)             # State(state), Path(id), Json(body)
             params.append(m.group(1) if m else pat)
         params = [x for x in params if re.fullmatch(r"[A-Za-z_]\w*", x)]
+    elif f["file"].endswith(".php"):
+        params = re.findall(r"\$(\w+)", plist)                # `Request $request, $id` → request, id
     elif f["file"].endswith(".dart"):
         # Dart writes `Type name` (and `{required String id}`, `this.id`): the last identifier of each parameter
         inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
@@ -252,6 +325,12 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         inner = re.sub(r"<[^<>]*>", "", re.sub(r"@\w+(\([^)]*\))?", "", inner))
         params = [m.group(1) for piece in re.split(r",(?![^(]*\))", inner)
                   for m in [re.search(r"([A-Za-z_]\w*)\s*:", piece)] if m]
+    elif f["file"].endswith(C_EXTS):
+        # C/C++ write `const std::string& name`, `char **argv`, `int n = 3`: the identifier before any default
+        inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
+        inner = re.sub(r"<[^<>]*>", "", inner)
+        params = [m.group(1) for piece in inner.split(",")
+                  for m in [re.search(r"([A-Za-z_]\w*)\s*(?:\[[^\]]*\])*\s*(?:=[^,]*)?$", piece.strip())] if m]
     elif f["file"].endswith((".java", ".cs")):
         # `Type name` order: the last identifier of each parameter (annotations and generics stripped)
         inner = plist[1:plist.rfind(")")] if ")" in plist else plist[1:]
@@ -274,10 +353,10 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         if not m:
             continue
         lhs, rhs = m.group("lhs"), m.group("rhs")
-        req = REQUEST_DATA.search(rhs)
+        req = req_re.search(rhs)
         src_name = next((t for t in tainted if _uses(t, rhs)), None)
         if req:
-            origin = f"request data `{req.group(0)}`"
+            origin = f"request data `{show(req.group(0))}`"
         elif src_name:
             origin = tainted[src_name]
         else:
@@ -290,9 +369,9 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
             tainted[name] = f"`{name}`, which line {start} sets from {origin}"
             level[name] = _indent(src[start - 1])
     text = flagged[2]
-    m = REQUEST_DATA.search(text)
+    m = req_re.search(text)
     if m:
-        return {"via": f"request data `{m.group(0)}`"}
+        return {"via": f"request data `{show(m.group(0))}`"}
     for name, origin in tainted.items():
         if _uses(name, text):
             return {"via": origin}
@@ -428,9 +507,10 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     (None: follow LANTERN_OFFLINE)."""
     repo = Path(g.repo_root)
     findings, tools = [], []
-    from .depaudit import run_maven_audit, run_npm_audit, run_pip_audit
+    from .depaudit import run_composer_audit, run_gem_audit, run_maven_audit, run_npm_audit, run_pip_audit
     for fn in (run_bandit, lambda r: run_pip_audit(r, offline), lambda r: run_npm_audit(r, offline),
-               lambda r: run_maven_audit(r, offline), run_secrets):
+               lambda r: run_maven_audit(r, offline), lambda r: run_composer_audit(r, offline),
+               lambda r: run_gem_audit(r, offline), run_secrets):
         f, info = fn(repo)
         findings += f
         tools.append(info)

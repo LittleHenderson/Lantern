@@ -36,7 +36,21 @@ DATA_RE = re.compile(
     r"FirebaseDatabase|DatabaseReference|FirebaseFirestore|CollectionReference|DocumentReference|FirebaseStorage|"
     r"StorageReference|FirebaseAuth|FirebaseMessaging|SharedPreferences|SQLiteDatabase|RoomDatabase|SmsManager|"
     r"OkHttpClient|Retrofit|RequestQueue|Volley|HttpURLConnection|URL\.openConnection|FileOutputStream|"
-    r"MediaRecorder|LocationManager|FusedLocationProviderClient|ContentResolver|TelephonyManager|WorkManager)"
+    r"MediaRecorder|LocationManager|FusedLocationProviderClient|ContentResolver|TelephonyManager|WorkManager|"
+    # C# (.NET externals are named Type.Method)
+    r"SqlConnection|SqlCommand|NpgsqlConnection|NpgsqlCommand|MySqlConnection|MySqlCommand|SqliteConnection|"
+    r"SqliteCommand|SQLiteConnection|SQLiteAsyncConnection|DbContext|DbSet|HttpClient|Process|File|Directory|"
+    r"Preferences|SecureStorage|BlobClient|SmtpClient|"
+    # PHP (library functions are `ext:<function>`, facades and classes `ext:<Class>.<method>`)
+    r"mysqli_\w+|mysqli|mysql_\w+|pg_\w+|sqlite_\w+|PDO|PDOStatement|DB|Schema|curl_\w+|file_get_contents|"
+    r"file_put_contents|fopen|fwrite|unlink|move_uploaded_file|shell_exec|exec|system|passthru|proc_open|popen|mail|"
+    r"Http|Storage|Mail|Redis|Cache|Client|wpdb|wp_remote_\w+|wp_mail|"
+    # Ruby (`ext:ActiveRecord.where`, `ext:Net.HTTP.get`, Kernel's shell and eval)
+    r"ActiveRecord|Net\.HTTP|HTTParty|Faraday|RestClient|Open3|Kernel\.(system|exec|spawn|open|`|eval)|IO|Marshal|"
+    r"FileUtils|Aws|Stripe|Sidekiq|ActionMailer|"
+    # C/C++ (`ext:sqlite3_exec`, `ext:std.system`, libcurl, sockets, files)
+    r"sqlite3_\w+|mysql_\w+|PQ\w+|curl_\w+|popen|execl\w*|execv\w*|fopen|fwrite|std\.system|"
+    r"std\.ifstream|std\.ofstream|std\.fstream|sendto|recv|socket|soci|pqxx|httplib\.Client)"
     r"(\.|\(|$|/)"
 )
 
@@ -89,7 +103,7 @@ def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> s
 
 def phone_roots(meta: dict) -> dict | None:
     """The folders of the phone apps in the repo (Android modules, iOS apps), shaped like `meta["android"]`."""
-    roots = [r for k in ("android", "ios", "flutter", "rn") for r in ((meta.get(k) or {}).get("roots") or [])]
+    roots = [r for k in ("android", "ios", "flutter", "rn", "maui") for r in ((meta.get(k) or {}).get("roots") or [])]
     return {"roots": roots} if roots else None
 
 
@@ -130,7 +144,7 @@ def lane_for_file(file: str | None, android: dict | None = None) -> str | None:
         return None
     if android and _in_roots(file, android):
         return "frontend"                     # the manifest, the build file and the app's code ship on the phone
-    if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs", ".swift", ".dart")):
+    if file.endswith((".py", ".go", ".rs", ".java", ".kt", ".cs", ".swift", ".dart", ".php", ".rb", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp")):
         return "server"
     if re.search(r"\.[cm]?[jt]sx?$", file):
         return "server" if SERVER_PATH_RE.search(file) else "frontend"

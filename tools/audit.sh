@@ -71,6 +71,39 @@ assert len(sql) == 1 and sql[0]["rank"] == "critical", sql
 assert s["mobile"]["platform"] == "react-native"
 assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "React Native app"
 EOF
+check "csharpapp (ASP.NET + .NET MAUI) analyzes" lantern analyze tests/fixtures/csharpapp --out "$W/ca"
+check "csharpapp: the phone's search reaching server SQL is critical, graded as a .NET MAUI app" "$PY" - "$W/ca" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["rule"] == "LC-SQL-CONCAT" and f["rank"] == "critical"]
+assert len(sql) == 2 and all(f["node"].startswith("cs:") for f in sql), sql
+assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == ".NET MAUI app"
+EOF
+check "phpapp (Laravel + React + a plain PHP page) analyzes" lantern analyze tests/fixtures/phpapp --out "$W/pa"
+check "phpapp: the React search reaching Laravel raw SQL is critical, the legacy page is checked" "$PY" - "$W/pa" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["rule"] == "LH-SQL-CONCAT" and f["rank"] == "critical"]
+assert {f["file"] for f in sql} == {"app/Http/Controllers/NoteController.php", "public/legacy/login.php"}, sql
+assert any(f["ui_path"] for f in sql), sql
+EOF
+check "rubyapp (Rails + React + Sinatra) analyzes" lantern analyze tests/fixtures/rubyapp --out "$W/ru"
+check "rubyapp: the React search reaching interpolated SQL is critical, the skipped login is reported" "$PY" - "$W/ru" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["rule"] == "LB-SQL-INTERP" and f["rank"] == "critical"]
+assert [f["node"] for f in sql] == ["rb:Api.NotesController.search"] and sql[0]["ui_path"], sql
+assert any(f["rule"] == "LW-AUTH-MISSING" and f["node"] == "rb:Api.NotesController.destroy" for f in s["findings"])
+EOF
+check "cppapp (C++ web server + C tool + React) analyzes" lantern analyze tests/fixtures/cppapp --out "$W/cx"
+check "cppapp: the React search reaching sprintf-built SQL is critical, the C tool's shell and format strings too" "$PY" - "$W/cx" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+crit = {(f["rule"], f["file"]) for f in s["findings"] if f["rank"] == "critical"}
+assert {("LX-SQL-BUILT", "server/note_store.cpp"), ("LX-EXEC", "server/main.cpp"), ("LX-EXEC", "tools/backup.c"),
+        ("LX-FORMAT", "tools/backup.c")} <= crit, crit
+assert any(f["rule"] == "LX-SQL-BUILT" and f["ui_path"] for f in s["findings"])
+EOF
 check "nextapp (Next.js + Supabase) analyzes" lantern analyze tests/fixtures/nextapp --out "$W/nx"
 check "nextapp: auth, RLS, and service-role findings" "$PY" - "$W/nx" <<'EOF'
 import json, sys
@@ -144,6 +177,18 @@ EOF
   # a React Native app: the same card with app.json words, poisoned
   check "viewer: poisoned React Native data stays text (On the phone card, screens, links)" \
     bash -c "'$PY' tools/poison_report.py '$W/ra/report.html' '$W/poison-ra/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ra/report.html' '$W/rshot'"
+  # a PHP app: Laravel routes, a legacy page and Blade, poisoned
+  check "viewer: poisoned PHP data stays text (routes, pages, findings)" \
+    bash -c "'$PY' tools/poison_report.py '$W/pa/report.html' '$W/poison-pa/report.html' --only detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-pa/report.html' '$W/pshot2'"
+  # a Ruby app: Rails routes, a Sinatra block and ERB, poisoned
+  check "viewer: poisoned Ruby data stays text (routes, findings)" \
+    bash -c "'$PY' tools/poison_report.py '$W/ru/report.html' '$W/poison-ru/report.html' --only detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ru/report.html' '$W/rbshot'"
+  # a C++ server and a C tool, poisoned
+  check "viewer: poisoned C/C++ data stays text (routes, programs, findings)" \
+    bash -c "'$PY' tools/poison_report.py '$W/cx/report.html' '$W/poison-cx/report.html' --only detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-cx/report.html' '$W/cxshot'"
+  # a .NET MAUI app with its ASP.NET server: screens, links and the phone-to-server path, poisoned
+  check "viewer: poisoned .NET MAUI data stays text (screens, links, phone-to-server path)" \
+    bash -c "'$PY' tools/poison_report.py '$W/ca/report.html' '$W/poison-ca/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ca/report.html' '$W/cshot'"
   # the live app: the test sheet (sandboxed run), the terminal drawer, a screenshot in Ask Lantern, a pack toggle
   A="$W/app"; mkdir -p "$A"; cp -r tests/fixtures/shop "$A/shop"
   "$PY" - "$A/shot.png" <<'PYEOF'

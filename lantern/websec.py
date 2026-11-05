@@ -13,6 +13,9 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
   LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
+  LH-*               PHP code patterns (SQL/shell/eval from variables, include from input, unserialize, echo of
+                     request data, Blade {!! !!}, MD5 passwords, TLS off, extract($_GET), CORS *, display_errors)
+  LC-*               C# code patterns (dotnet.py: SQL/shell from variables, TLS off, weak hashes, BinaryFormatter, CORS *)
   LV-*               Java code patterns (SQL/shell from variables, TLS off, weak hashes, ObjectInputStream, CORS *)
 """
 
@@ -208,6 +211,268 @@ def java_rules(repo: Path) -> list[dict]:
     # Kotlin servers (Spring, Ktor) call the same Java APIs, so the same patterns apply to .kt files
     return _pattern_rules(repo, {".java", ".kt"}, JAVA_RULES,
                           skip=lambda rel: "/src/test/" in rel or rel.startswith("src/test/"))
+
+
+_PHP_VAR = r"(?:\$\w|\{\$)"
+_PHP_SQL_WORD = r"(?i:\b(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|WHERE|FROM|ORDER\s+BY|VALUES)\b)"
+_PHP_SQL_CALL = (r"(?:\b(?:mysqli_query|mysqli_multi_query|mysqli_real_query|mysql_query|pg_query|sqlite_query)|"
+                 r"->(?:query|exec|prepare|multi_query|real_query|get_results|get_row|get_var|get_col)|"
+                 r"\bDB::(?:select|insert|update|delete|statement|unprepared|affectingStatement))\s*\(")
+_PHP_STR = r"(?:\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*')"
+_PHP_ARGS = r"(?:[^\"';\n]|" + _PHP_STR + r")*?"     # whole strings only, so a closing quote never starts one
+_PHP_BUILT = (r"(?:\"(?:[^\"\\\n]|\\.)*?" + _PHP_VAR + r"|" + _PHP_STR + r"\s*\.\s*\$|\$\w+\s*\.\s*['\"])")
+PHP_RULES = [   # (id, pattern, severity, title, cwe, tool confidence, rank)
+    ("LH-SQL-CONCAT", re.compile(_PHP_SQL_CALL + r"(?=[^;\n]*" + _PHP_SQL_WORD + r")" + _PHP_ARGS + _PHP_BUILT),
+     "HIGH", "Builds a database query from variables (SQL injection risk); use prepared statements with placeholders",
+     89, "HIGH", None),
+    ("LH-SQL-CONCAT", re.compile(r"^\s*\$\w+\s*\.?=\s*(?:\"(?=[^\"\n]*" + _PHP_SQL_WORD + r")[^\"\n]*" + _PHP_VAR +
+                                 r"|['\"](?=[^'\"\n]*" + _PHP_SQL_WORD + r")[^'\"\n]*['\"]\s*\.\s*\$)", re.M),
+     "HIGH", "Builds a database query from variables (SQL injection risk); use prepared statements with placeholders",
+     89, "HIGH", None),
+    ("LH-SQL-RAW", re.compile(r"(?:(?:->|::)(?:whereRaw|selectRaw|orderByRaw|havingRaw|groupByRaw|fromRaw)|\bDB::raw)\s*\("
+                              r"(?:\s*\$\w+\s*[,)]|" + _PHP_ARGS + _PHP_BUILT + r")"),
+     "HIGH", "Puts variables into a raw SQL fragment (SQL injection risk); pass them as bindings", 89, "HIGH", None),
+    ("LH-EXEC", re.compile(r"\b(?:exec|shell_exec|system|passthru|popen|proc_open|pcntl_exec)\s*\((?=[^;\n]*\$)|"
+                           r"`[^`\n]*\$\w[^`\n]*`"),
+     "HIGH", "Runs a shell command built from variables (command injection risk)", 78, "HIGH", None),
+    ("LH-EVAL", re.compile(r"\beval\s*\(\s*\$|\bassert\s*\(\s*\$|\bcreate_function\s*\(|"
+                           r"\bpreg_replace\s*\(\s*['\"]([^\w\s\\])[^'\"]*\1[a-zA-Z]*e[a-zA-Z]*['\"]"),
+     "HIGH", "Runs text as PHP code (code injection risk)", 94, "HIGH", None),
+    ("LH-INCLUDE-INPUT", re.compile(r"\b(?:include|require)(?:_once)?\b[\s(]*[^;\n]*\$_(?:GET|POST|REQUEST|COOKIE)"),
+     "HIGH", "Loads a PHP file named by the visitor (they can run or read other files)", 98, "HIGH", None),
+    ("LH-INCLUDE-VAR", re.compile(r"^\s*(?:include|require)(?:_once)?\b[\s(]*\$\w+", re.M),
+     "MEDIUM", "Loads a PHP file whose name is in a variable; make sure it can never come from a visitor", 98, "LOW",
+     None),
+    ("LH-UNSERIALIZE", re.compile(r"\bunserialize\s*\(\s*\$(?![^;\n]*allowed_classes)"), "MEDIUM",
+     "Unserializes data into PHP objects (untrusted data can run code); use json_decode", 502, "HIGH", None),
+    ("LH-XSS-ECHO", re.compile(r"(?:\b(?:echo|print)\b|<\?=)(?![^;\n]*(?:htmlspecialchars|htmlentities|esc_html|esc_attr|"
+                               r"intval|\(int\)|e\())[^;\n]*\$_(?:GET|POST|REQUEST|COOKIE|SERVER)"),
+     "MEDIUM", "Writes what the visitor sent straight into the page (cross-site scripting); wrap it in htmlspecialchars",
+     79, "HIGH", None),
+    ("LH-XSS-BLADE", re.compile(r"\{!!\s*(?!\s*(?:csrf_field|method_field|json_encode)\b)[^!]*!!\}"), "MEDIUM",
+     "Prints a value into the page without escaping it ({!! !!}); use {{ }} unless it is HTML you made yourself",
+     79, "LOW", None),
+    ("LH-WEAK-PASSWORD-HASH", re.compile(r"\b(?:md5|sha1|crc32)\s*\(\s*\$\w*(?i:pass|pwd)"), "HIGH",
+     "Stores passwords with a fast hash (MD5/SHA-1); use password_hash() and password_verify()", 916, "HIGH", "high"),
+    ("LH-WEAK-HASH", re.compile(r"\b(?:md5|sha1)\s*\((?!\s*\$\w*(?i:pass|pwd))(?=[^;\n]*(?i:token|secret|key|reset|"
+                                r"session|nonce))"), "MEDIUM",
+     "Makes a token or key with MD5/SHA-1; use random_bytes() or hash('sha256', …)", 328, "LOW", None),
+    ("LH-TLS-OFF", re.compile(r"CURLOPT_SSL_VERIFY(?:PEER|HOST)\s*(?:=>|,)\s*(?:false|0)\b|['\"]verify['\"]\s*=>\s*false|"
+                              r"->withoutVerifying\s*\(|['\"]sslverify['\"]\s*=>\s*false", re.I),
+     "HIGH", "Turns off HTTPS certificate checks (anyone on the network can read and change the traffic)", 295, "HIGH",
+     "high"),
+    ("LH-EXTRACT", re.compile(r"\b(?:extract|parse_str)\s*\(\s*\$_(?:GET|POST|REQUEST|COOKIE)"), "MEDIUM",
+     "Turns request fields into variables (a visitor can overwrite any variable, like $is_admin)", 621, "HIGH", None),
+    ("LH-CORS-ALL", re.compile(r"header\s*\(\s*['\"]Access-Control-Allow-Origin:\s*\*|['\"]allowed_origins['\"]\s*=>\s*"
+                               r"\[\s*['\"]\*['\"]"), "MEDIUM", "Allows any website to call this API (CORS *)", 942,
+     "HIGH", None),
+    ("LH-DEBUG", re.compile(r"ini_set\s*\(\s*['\"]display_errors['\"]\s*,\s*['\"]?(?:1|on|true)|"
+                            r"define\s*\(\s*['\"]WP_DEBUG_DISPLAY['\"]\s*,\s*true", re.I), "MEDIUM",
+     "Shows PHP errors to visitors (they reveal file paths, queries and sometimes passwords)", 209, "HIGH", None),
+    ("LH-UPLOAD-NAME", re.compile(r"move_uploaded_file\s*\([^;\n]*\$_FILES\s*\[[^\]]+\]\s*\[\s*['\"]name"), "MEDIUM",
+     "Saves an upload under the name the visitor chose (they can upload a .php file and run it)", 434, "LOW", None),
+    ("LH-CLEARTEXT-URL", re.compile(r"['\"]http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0|www\.w3\.org|schemas\.)"
+                                    r"[^'\"\s]+['\"]"), "LOW", "Talks to a server over plain http", 319, "HIGH", "low"),
+]
+
+
+_RB_INTERP = r"(?:\"[^\"\n]*#\{|%Q?[{(\[][^\n]*#\{|<<[~-]?['\"]?[A-Z]+['\"]?)"     # "…#{x}…", %Q(…#{x}…), heredocs
+_RB_BUILT = r"(?:" + _RB_INTERP + r"|['\"][^'\"\n]*['\"]\s*\+\s*[@\w])"
+_RB_SQL_CALL = (r"(?:\.|\b)(?:where|not|or|find_by_sql|count_by_sql|select|order|reorder|group|having|joins|pluck|"
+                r"exists\?|execute|exec_query|exec_update|exec_delete|exec_insert|select_all|select_one|select_value|"
+                r"select_values|select_rows|find_by|delete_all|destroy_all|update_all|from|lock|query|prepare)"
+                r"\s*\(?\s*")
+RUBY_RULES = [   # (id, pattern, severity, title, cwe, tool confidence, rank); ERB templates get only LB-XSS-RAW
+    ("LB-SQL-INTERP", re.compile(_RB_SQL_CALL + _RB_BUILT), "HIGH",
+     "Builds a database query from variables (SQL injection risk); use placeholders: where(\"title LIKE ?\", q)", 89,
+     "HIGH", None),
+    ("LB-SQL-PARAMS", re.compile(r"\.(?:order|reorder|group|pluck|select|from|joins|having)\s*\(?\s*params\s*\["),
+     "HIGH", "Puts a request value straight into a raw SQL part (ORDER BY, SELECT…); pick from a fixed list instead",
+     89, "HIGH", None),
+    ("LB-EXEC", re.compile(r"(?:\b(?:system|exec|spawn|IO\.popen|Open3\.\w+|Process\.spawn)\s*\(?[^\n]*#\{|`[^`\n]*#\{|"
+                           r"%x[{(\[][^\n]*#\{|\b(?:system|exec|spawn|IO\.popen|Open3\.\w+)\s*\(?\s*(?:params\b|[\"'][^\"'\n]*"
+                           r"[\"']\s*\+))"),
+     "HIGH", "Runs a shell command built from variables (command injection risk); pass the words as separate arguments",
+     78, "HIGH", None),
+    ("LB-EVAL", re.compile(r"\b(?:eval|instance_eval|class_eval|module_eval)\s*\(?\s*(?:params\b|\"[^\"\n]*#\{|[a-z_]\w*\s*"
+                           r"(?:\)|$))|\brender\s*\(?\s*inline:\s*(?:params\b|\"[^\"\n]*#\{)|"
+                           r"params\s*\[[^\]]+\](?:\s*\.\s*\w+)*?\s*\.\s*(?:safe_)?constantize\b|\.(?:public_)?send\s*\(\s*params\s*\[",
+                           re.M),
+     "HIGH", "Runs text, a class name or a method name the code was given (code injection risk)", 94, "HIGH", None),
+    ("LB-DESERIALIZE", re.compile(r"\bMarshal\.load\s*\(|\bYAML\.unsafe_load\s*\("), "HIGH",
+     "Turns data into Ruby objects (untrusted data can run code); use JSON.parse", 502, "HIGH", None),
+    ("LB-DESERIALIZE", re.compile(r"\bYAML\.load\s*\((?![^\n]*"
+                                  r"permitted_classes)(?=[^\n]*(?:params|request|body|read|cookies))"), "MEDIUM",
+     "Turns data into Ruby objects (untrusted data can run code); use JSON.parse or YAML.safe_load", 502, "LOW", None),
+    ("LB-XSS-RAW", re.compile(r"\.html_safe\b|<%==|\braw\s*\(?\s*(?:params|@?\w+)"), "MEDIUM",
+     "Prints a value into the page without escaping it (html_safe/raw/<%==); let Rails escape it unless you made the HTML",
+     79, "LOW", None),
+    ("LB-MASS-ASSIGN", re.compile(r"\.permit!|\bparams\.to_unsafe_h\b|\.(?:new|create|create!|update|update!|"
+                                  r"update_attributes|assign_attributes|insert_all|upsert)\s*\(\s*params\s*(?:\[[^\]]+\]\s*)?\)"),
+     "MEDIUM", "Saves every field the visitor sends (they can set fields like admin: true); list the allowed ones with "
+               "params.require(...).permit(...)", 915, "HIGH", None),
+    ("LB-REDIRECT", re.compile(r"\bredirect_to\s*\(?\s*(?:params\s*\[|request\.referr?er\b)(?![^\n]*allow_other_host:\s*"
+                               r"false)"), "MEDIUM",
+     "Sends the visitor to an address taken from the request (an attacker's link can bounce people to their own site)",
+     601, "HIGH", None),
+    ("LB-FILE-INPUT", re.compile(r"\b(?:send_file|send_data\s*\(?\s*File\.read|File\.(?:read|open|write|delete|"
+                                 r"binread|readlines|unlink)|IO\.(?:read|readlines)|FileUtils\.\w+|Pathname\.new|"
+                                 r"(?<![.\w])open)\s*\(?[^\n]*params\s*\["), "HIGH",
+     "Opens a file named by the request (a visitor can read or change other files; `open` can even run commands)", 22,
+     "HIGH", None),
+    ("LB-TLS-OFF", re.compile(r"VERIFY_NONE|\bverify(?:_ssl)?:\s*false|ssl_verify_mode\s*(?:=|:)\s*:?none|"
+                              r"ssl:\s*\{[^}\n]*verify:\s*false"), "HIGH",
+     "Turns off HTTPS certificate checks (anyone on the network can read and change the traffic)", 295, "HIGH", "high"),
+    ("LB-WEAK-PASSWORD-HASH", re.compile(r"Digest::(?:MD5|SHA1)\.(?:hex|base64)?digest\s*\(?\s*@?\w*(?i:pass|pwd)"),
+     "HIGH", "Stores passwords with a fast hash (MD5/SHA-1); use has_secure_password (bcrypt)", 916, "HIGH", "high"),
+    ("LB-WEAK-HASH", re.compile(r"^(?=[^\n]*(?i:token|secret|key|reset|session|nonce))[^\n]*?Digest::(?:MD5|SHA1)\."
+                                r"(?:hex|base64)?digest\b(?!\s*\(?\s*@?\w*(?i:pass|pwd))", re.M), "MEDIUM",
+     "Makes a token or key with MD5/SHA-1; use SecureRandom or OpenSSL::HMAC with SHA-256", 328, "LOW", None),
+    ("LB-CSRF-OFF", re.compile(r"\bskip_(?:before_action|forgery_protection)\b[^\n]*(?:verify_authenticity_token|$)|"
+                               r"protect_from_forgery\s+with:\s*:null_session", re.M), "MEDIUM",
+     "Turns off Rails' protection against forged form posts (another site can make a signed-in visitor's browser "
+     "submit forms)", 352, "LOW", None),
+    ("LB-CORS-ALL", re.compile(r"\borigins\s*\(?\s*['\"]\*['\"]|['\"]Access-Control-Allow-Origin['\"]\]?\s*(?:=|,)\s*"
+                               r"['\"]\*['\"]"), "MEDIUM", "Allows any website to call this API (CORS *)", 942, "HIGH",
+     None),
+    ("LB-DEBUG", re.compile(r"config\.consider_all_requests_local\s*=\s*true|\bset\s+:show_exceptions\s*,\s*true"),
+     "MEDIUM", "Shows full error pages to visitors in production (they reveal code, queries and settings)", 209, "HIGH",
+     None),
+    ("LB-SECRET-BASE", re.compile(r"\bsecret_key_base\s*=\s*['\"][0-9a-f]{30,}['\"]"), "HIGH",
+     "Writes the secret that signs every session cookie into the code (anyone with the code can sign in as anyone)",
+     798, "HIGH", None),
+    ("LB-CLEARTEXT-URL", re.compile(r"['\"]http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0|www\.w3\.org|schemas\.)"
+                                    r"[^'\"\s#]+['\"]"), "LOW", "Talks to a server over plain http", 319, "HIGH", "low"),
+]
+
+
+def ruby_rules(repo: Path) -> list[dict]:
+    out = []
+    for p in _files(repo, {".rb", ".erb", ".rake"}):
+        rel = p.relative_to(repo).as_posix()
+        if re.search(r"(^|/)(spec|tests?|vendor|tmp|log|db/migrate)/", rel):
+            continue
+        text = _read(p)
+        lines = text.splitlines()
+        erb = rel.endswith(".erb")
+        seen = set()
+        for rule, rx, sev, title, cwe, conf, rank in RUBY_RULES:
+            if erb and rule != "LB-XSS-RAW":
+                continue
+            if rule == "LB-DEBUG" and not re.search(r"(^|/)config/environments/production\.rb$|(^|/)(app|server|config)"
+                                                    r"\.(rb|ru)$", rel):
+                continue
+            if rule == "LB-CSRF-OFF" and "verify_authenticity_token" not in text and "null_session" not in text:
+                continue
+            for m in rx.finditer(text):
+                ln = _line_of(text, m.start() + (len(m.group(0)) - len(m.group(0).lstrip())))
+                src = lines[ln - 1] if ln <= len(lines) else ""
+                if src.lstrip().startswith("#") or (rule, ln) in seen:
+                    continue
+                if rule == "LB-CSRF-OFF" and "verify_authenticity_token" not in src and "null_session" not in src:
+                    continue
+                seen.add((rule, ln))
+                out.append(_finding(rule, title, sev, rel, ln, conf=conf, cwe=cwe, snippet=src.strip(), fixed_rank=rank))
+    return out
+
+
+_CX_SQL_WORD = (r"(?i:\bSELECT\b[^\"\n]*\bFROM\b|\bINSERT\s+(?:OR\s+\w+\s+)?INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b|"
+                r"\bWHERE\s+\w+\s*(?:=|<|>|LIKE\b|IN\b))")
+_CX_VAR = r"[A-Za-z_][\w.\->\[\]()]*"
+CPP_RULES = [   # (id, pattern, severity, title, cwe, tool confidence, rank)
+    ("LX-SQL-BUILT", re.compile(r"\b(?:sn?printf|asprintf|std::format|fmt::format|absl::StrFormat)\s*\([^;\n]*\"(?=[^\"\n]*"
+                                + _CX_SQL_WORD + r")[^\"\n]*%(?:s|d|ld|u)[^\"\n]*\"|\"(?=[^\"\n]*" + _CX_SQL_WORD +
+                                r")[^\"\n]*\"\s*\+\s*" + _CX_VAR + r"|\b(?:sqlite3_exec|sqlite3_prepare(?:_v[23])?|mysql_query|"
+                                r"mysql_real_query|PQexec)\s*\(\s*\w+\s*,\s*(?!\")[^,;\n]*\+"),
+     "HIGH", "Builds a database query from variables (SQL injection risk); use sqlite3_bind_* / prepared statements",
+     89, "HIGH", None),
+    ("LX-EXEC", re.compile(r"\b(?:std::)?(?:system|popen|_popen|wsystem|execl|execlp|execle|WinExec|ShellExecuteA?W?)\s*\(\s*"
+                           r"(?!\")(?!NULL\b)(?!nullptr\b)(?!0\s*\))[^;\n]"), "HIGH",
+     "Runs a shell command that is not a fixed string (command injection risk); use execv with an argument list", 78,
+     "HIGH", None),
+    ("LX-GETS", re.compile(r"\bgets\s*\(\s*\w"), "HIGH",
+     "Reads a line with gets(), which cannot stop at the end of the buffer (buffer overflow); use fgets", 242, "HIGH",
+     None),
+    ("LX-BUFFER", re.compile(r"\b(?:strcpy|strcat|sprintf|vsprintf|wcscpy|wcscat|stpcpy|lstrcpy\w?|StrCpy\w?)\s*\("),
+     "MEDIUM", "Copies into a fixed-size buffer without a length (a long value overflows it); use snprintf, strlcpy or "
+               "std::string", 120, "LOW", None),
+    ("LX-SCANF", re.compile(r"\b(?:f|s)?scanf\s*\([^;\n]*\"[^\"\n]*%s"), "MEDIUM",
+     "Reads text with scanf(\"%s\"), which has no length limit (buffer overflow); give a width like %63s", 120, "HIGH",
+     None),
+    ("LX-FORMAT", re.compile(r"\b(?:printf|vprintf)\s*\(\s*(?!\")" + _CX_VAR + r"\s*\)|\b(?:fprintf|syslog|dprintf)\s*\(\s*"
+                             r"\w+\s*,\s*(?!\")" + _CX_VAR + r"\s*\)|\bsn?printf\s*\(\s*\w+\s*,\s*(?:\w+\s*,\s*)?(?!\")"
+                             r"(?!sizeof)" + _CX_VAR + r"\s*\)"), "HIGH",
+     "Uses a variable as the format string (a value containing %n or %s can read or write memory); write printf(\"%s\", x)",
+     134, "HIGH", None),
+    ("LX-TLS-OFF", re.compile(r"(?:SSL_CTX_set_verify|SSL_set_verify|mbedtls_ssl_conf_authmode|wolfSSL_CTX_set_verify)\s*\("
+                              r"[^;\n?]*VERIFY_NONE|CURLOPT_SSL_VERIFY(?:PEER|HOST)\s*,\s*0L?\b|"
+                              r"enable_server_certificate_verification\s*\(\s*false|verify_mode\s*\(\s*(?:boost::)?asio::ssl::"
+                              r"verify_none|set_verify_mode\s*\([^)]*verify_none"), "HIGH",
+     "Turns off HTTPS certificate checks (anyone on the network can read and change the traffic)", 295, "HIGH", "high"),
+    ("LX-WEAK-RANDOM", re.compile(r"^(?=[^\n]*(?i:token|secret|session|nonce|salt|password|otp|key))[^\n]*?\b(?:rand|random|"
+                                  r"srand)\s*\(", re.M), "MEDIUM",
+     "Makes a secret value with rand(), which is predictable; use getrandom/RAND_bytes or std::random_device", 338,
+     "LOW", None),
+    ("LX-WEAK-PASSWORD-HASH", re.compile(r"\b(?:MD5|SHA1|EVP_md5|EVP_sha1)\s*\([^;\n]*(?i:pass|pwd)"), "HIGH",
+     "Stores passwords with a fast hash (MD5/SHA-1); use a password hash such as Argon2 or bcrypt", 916, "HIGH", "high"),
+    ("LX-TEMP-FILE", re.compile(r"\b(?:tmpnam|tempnam|mktemp|_mktemp)\s*\("), "MEDIUM",
+     "Picks a temporary file name another program can guess and take first; use mkstemp", 377, "HIGH", None),
+    ("LX-PATH-INPUT", re.compile(r"(?:(?<![\w.>:])(?:fopen|open|ifstream|ofstream|remove|unlink)|std::(?:ifstream|ofstream|"
+                                 r"fstream|filesystem::remove\w*))\s*[({]"
+                                 r"[^;\n]*(?:argv\s*\[|req(?:uest)?(?:\.|->)(?:get_param_value|body|matches|getParameter|"
+                                 r"path_params|url_params))"), "HIGH",
+     "Opens a file named by the request or the command line (a caller can read or change other files)", 22, "HIGH",
+     None),
+    ("LX-CLEARTEXT-URL", re.compile(r"\"http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0|www\.w3\.org|schemas\.)[^\"\s]+\""),
+     "LOW", "Talks to a server over plain http", 319, "HIGH", "low"),
+]
+
+
+def cpp_rules(repo: Path) -> list[dict]:
+    out = []
+    from .cpp_frontend import C_EXTS, CPP_EXTS, SKIP, VENDORED
+    for p in _files(repo, C_EXTS | CPP_EXTS | {".C", ".CPP"}):
+        rel = p.relative_to(repo).as_posix()
+        if SKIP.search(rel) or VENDORED.search(rel) or re.search(r"(^|/)(tests?|unittests?|spec|examples?|samples?|benchmarks?)/|_test\.|_unittest\.",
+                                         rel):
+            continue
+        text = _read(p)
+        lines = text.splitlines()
+        seen = set()
+        for rule, rx, sev, title, cwe, conf, rank in CPP_RULES:
+            for m in rx.finditer(text):
+                ln = _line_of(text, m.start() + (len(m.group(0)) - len(m.group(0).lstrip())))
+                src = lines[ln - 1] if ln <= len(lines) else ""
+                if src.lstrip().startswith(("//", "*", "/*", "#")) or (rule, ln) in seen:
+                    continue
+                if rule == "LX-BUFFER" and ("LX-SQL-BUILT", ln) in seen:
+                    continue
+                seen.add((rule, ln))
+                out.append(_finding(rule, title, sev, rel, ln, conf=conf, cwe=cwe, snippet=src.strip(), fixed_rank=rank))
+    return out
+
+
+def php_rules(repo: Path) -> list[dict]:
+    out = []
+    for p in _files(repo, {".php"}):
+        rel = p.relative_to(repo).as_posix()
+        if re.search(r"(^|/)tests?/|Test\.php$|(^|/)(storage|cache)/", rel):
+            continue
+        text = _read(p)
+        lines = text.splitlines()
+        blade = rel.endswith(".blade.php")
+        seen = set()
+        for rule, rx, sev, title, cwe, conf, rank in PHP_RULES:
+            if (rule == "LH-XSS-BLADE") != blade:
+                continue
+            for m in rx.finditer(text):
+                ln = _line_of(text, m.start() + (len(m.group(0)) - len(m.group(0).lstrip())))
+                src = lines[ln - 1] if ln <= len(lines) else ""
+                if src.lstrip().startswith(("//", "#", "*", "/*")) or (rule, ln) in seen:
+                    continue
+                seen.add((rule, ln))
+                out.append(_finding(rule, title, sev, rel, ln, conf=conf, cwe=cwe, snippet=src.strip(), fixed_rank=rank))
+    return out
 
 
 def _pattern_rules(repo: Path, exts: set[str], rules, skip) -> list[dict]:
@@ -594,7 +859,7 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
 def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
     its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
-    js = n.id.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:"))   # JS, Go, Java, Kotlin, Swift, Dart: camelCase; Python and Rust snake_case
+    js = n.id.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))   # JS, Go, Java, Kotlin, Swift, Dart, C#: camelCase; Python and Rust snake_case
     for d in n.decorators:
         if auth_ident(d, js):
             return f"decorator @{d.split('(')[0]}"
@@ -609,7 +874,7 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
                 if v in seen:
                     continue
                 seen.add(v)
-                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:"))):
+                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt
@@ -626,7 +891,7 @@ def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None) -> tup
         return "strong", sign
     if text is None or not n.file:
         return None
-    return body_auth_sign(text, n.start_line or 0, n.end_line or n.start_line or 0, js=not n.file.endswith(".py"),
+    return body_auth_sign(text, n.start_line or 0, n.end_line or n.start_line or 0, js=not n.file.endswith((".py", ".rb")),
                           signature=n.signature or "")
 
 
@@ -678,7 +943,7 @@ def missing_auth(g: Graph) -> list[dict]:
 
 def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
-    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
+    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]
@@ -694,6 +959,11 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     findings += flutter.scan(g)
     if g.meta.get("flutter"):
         tools.append({"tool": "lantern-flutter", "status": "ok", "version": "0.1"})
+    from . import dotnet
+    findings += dotnet.scan(g)
+    if "c#" in g.meta.get("languages", {}):
+        tools.append({"tool": "lantern-dotnet", "status": "ok" + (" (MAUI app)" if g.meta.get("maui") else ""),
+                      "version": "0.1"})
     from . import rn
     rnf, rmobile = rn.scan(g)
     findings += rnf

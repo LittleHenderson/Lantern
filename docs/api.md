@@ -157,6 +157,29 @@ Expo app (`meta.rn.roots`, `meta.rn.apps` with `root`, `expo`, `router`, `config
 same two stops for their Dart or JavaScript code. `platform` is `"flutter"` or `"react-native"` unless an `android/` or
 `ios/` app in the same repository set it first.
 
+A .NET MAUI or Xamarin app (`meta.maui.roots`: each folder whose `.csproj` sets `UseMaui`, targets `net…-android`/
+`net…-ios`, or uses Xamarin.Forms) gets the same two stops for its C# code; `platform` is `"maui"` (also when its own
+`Platforms/Android` manifest was read, since that folder is part of the MAUI project). Entry details: `<Page> screen ·
+<method>` (a page's constructor, lifecycle method or event handler; a view model's `[RelayCommand]` uses its page's name),
+`LINK <Class> handles links (other apps and web pages can open it) · <method>` (route). ASP.NET routes: `GET /api/notes/{id}`
+(controller or minimal API; an inline minimal-API lambda is its own node, id `cs:<file>::GET /path`). C# findings (`LC-*`)
+inside a MAUI project carry `platform: "maui"`; Readiness `shape` is `".NET MAUI app"`.
+
+A PHP project's routes use the same `route` entries: `GET /api/notes` (Laravel, Symfony, Slim; an inline closure is its
+own node `php:<file>::GET /path`), `POST /wp-admin/admin-ajax.php?action=<name> (anyone can call it)` or `(signed-in
+users)` (WordPress ajax), `GET /wp-json/<ns>/<route>` (WordPress REST), `ANY /<page>.php` (a page a browser opens,
+path from the web root: `public/`, `public_html/`, `htdocs/`, `www/`, `web/` dropped). A route inside an `auth`/`sanctum`/
+`can:` middleware (and a signed-in-only WordPress action) has a `middleware` edge to `ext:middleware.auth`.
+
+A Ruby project's routes: `GET /api/notes/:id` (Rails `config/routes.rb`, on the controller action `rb:Api.NotesController.show`;
+Sinatra blocks are their own node `rb:<file>::GET /path`); a job's `perform` is `main` (`background job (PruneJob)`). An
+action covered by a `before_action` named with an auth word (`authenticate_user!`, `require_login`; inherited, `only:`/
+`except:`, not removed by `skip_before_action`) has a `middleware` edge to `ext:middleware.auth`.
+
+A C/C++ program's start is `main` (`program start (<file>)`, id `cc:main@<file>`: each program keeps its own); its web routes
+(cpp-httplib `svr.Get`, Crow `CROW_ROUTE`, Drogon `ADD_METHOD_TO`/`registerHandler`, Pistache `Routes::Get`) are `route`
+entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch2 blocks are `test` (`cc:<file>::TEST Suite.Name`).
+
 ### `security.json`
 
 `{"findings": [...], "tools": [{"tool", "status", "version"}], "counts": {critical, high, medium, low, in_tests, accepted},
@@ -188,7 +211,7 @@ page), `<Component> screen · <Component>` or `· /<expo router path>` (React Na
 <fn>` (route). Readiness `shape` is `"Flutter app"` or `"React Native app"` for these.
 
 Finding: `id` (stable across moves: tool, rule, file and the flagged line's text), `tool` (`bandit`, `pip-audit`,
-`npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
+`npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
 (`LOW` = show "heuristic"), `file`, `line`, `cwe`, `more_info`, `snippet`, `category`, `in_tests`, `node`,
 `reachable` (null or `{"entry", "kind", "path": [node ids]}`), `reachable_from_tests_only`, `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`), `rank` (`critical`|`high`|`medium`|`low`),

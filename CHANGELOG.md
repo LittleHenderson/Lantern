@@ -5,6 +5,62 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- C and C++ are read: programs, libraries and C++ web servers (cpp-httplib, Crow, Drogon, Pistache). Namespaces,
+  classes, methods (in the class or `Class::m`), free and `static` functions are on the map with their calls (typed
+  locals and members through `const&`, pointers and `std::unique_ptr`, `auto p = std::make_unique<T>()`, `this->`,
+  `Class::f()`, `ns::f()`, `new T`); the C library's `system`, `sqlite3_exec`, `fopen` show in the Data lane. Each
+  program's `main` is a start point, route lambdas are their own steps, gtest/Catch2 blocks are tests, and copied-in
+  single-file libraries (`httplib.h`, `json.hpp`, `sqlite3.c`) and `third_party/` are left out. A React page whose
+  search box reaches `snprintf(sql, …, "… LIKE '%%%s%%'", q)` is critical, and so is a command-line tool that runs
+  `system()` or `printf(argv[1])` with its argument. 12 new `LX-*` checks: SQL built with `sprintf`/`+`, shell
+  commands, `gets`, unbounded `strcpy`/`sprintf`, `scanf("%s")`, format strings, TLS checks off, `rand()` for
+  secrets, MD5/SHA-1 passwords, `tmpnam`, files named by the request or `argv`, plain `http://`. Readiness reads
+  `CMakeLists.txt`/Conan/vcpkg/Meson and `ctest`. New sample: `tests/fixtures/cppapp`.
+- Ruby is read: Rails and Sinatra apps. Classes, modules, methods and top-level methods are on the map with their
+  calls (`@svc = NoteService.new` then `@svc.all`, `note = Note.find(id)` then `note.destroy`, included modules,
+  `self.`, class methods, `X.new` → `initialize`; Active Record queries and Kernel's `system`/backticks show in the
+  Data lane). Routes come from `config/routes.rb` (`resources`, `namespace`, `scope`, `member`/`collection`,
+  `get "p", to: "c#a"`, `root`) and Sinatra `get '/p' do`; jobs' `perform` is a start point. A controller's
+  `before_action :authenticate_user!` (inherited, `only:`/`except:`, `skip_before_action`) passes the login check, so
+  a skipped `destroy` is reported. A React page whose search box reaches `Note.where("… #{q} …")` is critical. 17 new
+  `LB-*` checks: SQL built with `#{}`, `order(params[:x])`, shell commands, `eval`/`constantize`, `Marshal.load`,
+  `html_safe`/`raw`/`<%==`, mass assignment, redirects and files from `params`, TLS checks off, MD5/SHA-1 passwords
+  and tokens, CSRF protection off, CORS `*`, full error pages in production, a written `secret_key_base`, plain
+  `http://`. Gems in `Gemfile.lock` are checked against the OSV vulnerability database (`gem-audit`). Readiness reads
+  the Gemfile/Gemfile.lock, Rails/Sinatra and `rspec`/`rails test`. New sample: `tests/fixtures/rubyapp`.
+  On OWASP RailsGoat: 7 critical findings (SQL, shell, `Marshal.load` of `params`, three `constantize` of `params`).
+- The AI-call scan skips lines over 2,000 characters (minified bundles such as `jquery.min.js`): one such line took
+  minutes to read, so a Rails app with vendored JavaScript never finished.
+- PHP is read: Laravel, Symfony, Slim, WordPress plugins and plain PHP pages. Namespaces, classes, interfaces, traits,
+  functions and the top-level code of a page are on the map with their calls (`$this->repo->find()` through typed and
+  promoted properties, `new Repo()`, `self::`/`static::`/`parent::`, static calls, interfaces fanning out as
+  `possible` edges, `[Controller::class, 'show']`, `'Controller@show'`, `require 'db.php'`). Routes come from Laravel
+  (`Route::get`, `resource`, `prefix()->group()`, `routes/api.php` adds `/api`; a route inside an `auth` middleware
+  passes the login check), Symfony `#[Route]`/`@Route`, Slim/Lumen `$app->get` and `group`, WordPress
+  `wp_ajax_nopriv_*` (anyone can call it) and `register_rest_route`, and plain pages a browser opens directly
+  (`ANY /legacy/login.php`). A React page whose search box reaches a Laravel `DB::select("…'%$q%'")` is critical, and
+  so is an old login page that builds SQL from `$_POST`. 18 new `LH-*` checks: SQL built from variables (also in
+  `whereRaw`/`DB::raw`), shell commands, `eval`, `include` of a visitor-chosen file, `unserialize`, echoing `$_GET`,
+  Blade `{!! !!}`, MD5/SHA-1 passwords and tokens, TLS checks off, `extract($_POST)`, CORS `*`, `display_errors`,
+  uploads saved under the visitor's name, plain `http://`. PHP libraries in `composer.lock` are checked against the
+  OSV vulnerability database (`composer-audit`). Readiness reads `composer.json`/`composer.lock`, Laravel/Symfony/Slim
+  and `phpunit`/`artisan test`. New sample: `tests/fixtures/phpapp`.
+- C# is read, for ASP.NET servers and .NET MAUI / Xamarin phone apps. Namespaces (block and file-scoped), classes,
+  structs, records, interfaces, `partial` classes written across files, constructors and top-level statements are on
+  the map with their calls (own class, typed fields, properties and locals, `var x = new T()`, static calls, `this`,
+  interfaces and abstract classes fan out as `possible` edges, `button.Clicked += OnSave`, method groups). Routes come
+  from controllers (`[Route("api/[controller]")]` + `[HttpGet("{id}")]`) and minimal APIs (`app.MapGet`, `MapGroup`
+  prefixes, inline lambdas and `Class.Method` handlers); `HttpClient` calls (`GetStringAsync`, `PostAsJsonAsync`,
+  `new HttpRequestMessage(HttpMethod.Put, …)`, paths relative to `BaseAddress`, `const` URLs) link the phone app to the
+  server. A MAUI app's pages (`ContentPage`, `Shell`, …: constructor, `OnAppearing`, event handlers), its view models'
+  `[RelayCommand]`s and its link handlers (`OnAppLinkRequestReceived` and what it hands the link to) are entry points,
+  so a search box whose text reaches server SQL built with `$"…{q}…"` is critical, and so is a shared link whose id
+  reaches a local SQLite query. 11 new `LC-*` checks: SQL and shell commands built from variables, trusting any
+  certificate, MD5/SHA-1, `BinaryFormatter`/`TypeNameHandling`, CORS for any site, `Html.Raw`, plain `http://`,
+  passwords in connection strings (code and `appsettings.json`), and on the phone: tokens in `Preferences` or the log.
+  Readiness grades a `.NET MAUI app` (crash reporting, `Console.WriteLine` in release, `packages.lock.json`,
+  `HttpClient.Timeout`, Polly retries). The viewer no longer calls Kotlin, Swift, Dart or C# server code "library".
+  New sample: `tests/fixtures/csharpapp`.
 - Flutter and React Native apps are read as phone apps. Lantern now reads Dart: classes, mixins, extensions and
   functions are on the map with their calls (to their own class, typed fields and locals, `final db = NoteDb();`,
   static methods, interfaces, `onPressed: _load`), and a widget built inside another (`HomeScreen()`) leads to its
