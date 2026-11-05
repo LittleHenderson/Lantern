@@ -1,16 +1,21 @@
-# Try Lantern (v0.9 tester guide)
+# Try Lantern (tester guide, v0.10)
 
 Thanks for testing. This takes about fifteen minutes. If something breaks or confuses you, that is exactly what we
 want to hear about: section 7 says how.
 
 ## 1. What it does, and the one rule
 
-Lantern reads an app's code (Python, TypeScript/JavaScript, Go, Rust, Java) and shows you:
+Lantern reads an app's code and shows you what it does and what to fix. It reads **phone apps** (Android in Java or
+Kotlin, iPhone in Swift, Flutter, React Native, .NET MAUI) and **web and server code** (Python, TypeScript/JavaScript,
+Go, Rust, Java, Kotlin, Swift, Dart, C#, PHP, Ruby, C/C++), in one map when an app has both sides. It shows you:
 
 * **Paths**: every route from a click or an API call, through the functions it reaches, down to the database.
 * **What to fix**: security problems, ranked by whether a visitor can reach them and whether outside input gets there.
 * **Ready to ship?**: a 0–100 score across ten areas, with the next things to do and starter files it can write.
 * **Evidence**: a report pinned to one commit that a skeptical engineer can check line by line.
+* **On the phone** (Android, iPhone, Flutter, React Native apps): the screens, the links other apps can open, the
+  permissions the app asks for and whether the code uses them, and phone-specific problems such as a deep link that
+  reaches a database query or a secret kept in plain storage.
 
 **The one rule: facts from tools, words from models.** Every path, finding and score comes from deterministic code that
 gives the same answer every time. An AI model may only explain what that code found. It never creates, dismisses or
@@ -46,6 +51,13 @@ pip install "lantern[scan,ocr] @ git+https://github.com/LittleHenderson/Lantern@
 
 ## 3. Run
 
+Two ways. **No install at all**: open **https://lantern-cloud.fly.dev/**, sign in with GitHub or Google, and paste the
+link of a public repository (or upload a folder or .zip from your computer). The check runs on Lantern's server, the
+copy of your code is deleted when it ends, and you can delete the results any time. Android creators: paste your app's
+GitHub link; a repository with an `app/` folder and an `AndroidManifest.xml` is read as an Android app.
+
+**On your own computer** (private code, or to watch your tests run):
+
 ```bash
 lantern serve path/to/your/app
 ```
@@ -61,7 +73,9 @@ Press Ctrl-C in the terminal to stop Lantern.
 
 ## 4. What to look at
 
-1. **Home**: your project's grade and open findings. The first analysis takes a few seconds.
+1. **Home**: your project's grade and open findings. The first analysis takes a few seconds (about a minute for a
+   large app). For a phone app the grade is for an app, not a website: the checks are about signing, permissions,
+   storage, network security and crash reporting.
 2. **Paths**: pick a page or route and follow it down to the database. Click any function to see what it does.
    Each link says how sure Lantern is: seen running, confirmed, likely or possible.
 3. **What to fix**: open the top finding. It shows the click path a user takes to reach it and how to fix it.
@@ -69,11 +83,18 @@ Press Ctrl-C in the terminal to stop Lantern.
 4. **Ready to ship?**: the score and the next three moves. "Write them for me" adds starter files and never
    overwrites one.
 5. **Evidence**: the report for a reviewer, pinned to your commit.
+7. **On the phone** (phone apps only, on the findings page): the card lists your screens, every way another app can
+   start yours, and each permission with a plain-words meaning and whether the code uses it. Check it against what you
+   know your app does: a permission you never asked for, or a screen you do not recognise, is worth a report.
 6. **Simple / Advanced** (top right): Simple uses plain words, Advanced shows the technical detail. Lantern
    remembers your choice.
 
 Things we especially want to know: which screen confused you, a finding you think is wrong (a false alarm or a
-missed problem), and anything that took longer than it should.
+missed problem), and anything that took longer than it should. For phone apps: did Lantern see all your screens, and
+did the permissions card match the app you know?
+
+If you are part of an organised tester round, your host will give you the four tasks in
+[docs/tester-round.md](tester-round.md) and a results sheet to fill in; the whole round takes about forty minutes.
 
 ## 5. Explanations
 

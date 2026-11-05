@@ -258,7 +258,7 @@ A **PWA** (progressive web app) is a website you can "install" on a phone or com
 **7.5 A privacy policy matches what the code does**
 - What it checks: a written page tells users what is stored, for how long, and where, and someone checks it against the code.
 - Scenario: a tester in Europe asks what you keep about them; you can point at one page.
-- Lantern: 🟡 the facts are written down for builders (`docs/deploy.md`, `docs/analytics.md`), not as a user-facing privacy page on lantern-cloud.
+- Lantern: ✅ the website's Help page (lantern-cloud.fly.dev/#/help) now answers, in plain words, what is stored and for how long (account id and public name, never email; per-run facts and result files until deleted; token fingerprint and daily counts for 90 days; no tracking, nothing sold), what the limits are and when they reset, who can see results and how to delete everything; the facts match `docs/deploy.md` and the code (`tests/test_cloud_site.py` keeps the page rendering).
 
 ---
 
@@ -326,22 +326,22 @@ product daily before customers do.
 
 **10.1 Tester guide and report form**
 - What it checks: testers know what to try and have an easy way to report problems.
-- Lantern: 🟡 `docs/try-lantern.md` and the `tester-report.yml` issue form exist (tested by `test_release.py`); the guide still lists only five languages and says nothing about Android, iOS, Flutter or React Native, the new main audience.
+- Lantern: ✅ `docs/try-lantern.md` now opens with phone apps (Android, iPhone, Flutter, React Native, .NET MAUI) and all twelve languages, offers lantern-cloud as the no-install way to try it, explains the "On the phone" card and what to check it against, and points organised rounds at `docs/tester-round.md`; the report form has "On the phone card" and "The website" as places and phone stacks as examples.
 
 **10.2 Tasks with a pass/fail per tester**
 - What it checks: each tester does the same few tasks ("analyze your app, find your worst problem, fix it, re-check") and you record who finished and where they stopped.
 - Scenario: four of five Android creators can't find the "On the phone" card; that is a design problem, not a tester problem.
-- Lantern: ❌ no task script or results sheet yet.
+- Lantern: ✅ `docs/tester-round.md`: four tasks read aloud word for word (check your own app; retell the top finding without code; check the On the phone card or find a route with no login; an engineer judges one finding real or false), pass/fail and minutes per task, a fixed results sheet (`docs/tester-rounds/<date>.md`), and what to do with the answers (false alarms go into the mobile benchmark labels, confusing moments into tester reports).
 
 **10.3 Real Android creators on their own apps**
 - What it checks: the main audience tries it on apps you didn't choose.
 - Scenario: a Flutter developer's app uses Riverpod everywhere; Lantern maps half of it and they lose trust.
-- Lantern: 🟡 HerSheild was run on lantern-cloud; no structured round with Android creators yet.
+- Lantern: 🟡 the round is scripted (`docs/tester-round.md`, task 3 is the phone-app check) and the website is ready for it; running it with five Android creators is Wakil's to schedule. HerSheild was the first real app through lantern-cloud.
 
 **10.4 A sceptical engineer checks the claims**
 - What it checks: Lantern's second goal, that a real engineer can verify the report.
 - Scenario: a senior engineer picks five findings from a tester's report and checks each line; you record how many they agree with.
-- Lantern: 🟡 the outside audits checked Lantern's own code; nobody has yet checked findings on a tester's app this way.
+- Lantern: 🟡 task 4 of `docs/tester-round.md` is exactly this (an engineer judges one finding and the verdict is recorded with the finding id), and `bench/mobile/` is where the verdicts accumulate; the first engineer has not sat down yet.
 
 ---
 
