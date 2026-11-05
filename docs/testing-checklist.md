@@ -304,17 +304,17 @@ see whether a change made the model better or worse. Lantern needs the same for 
 **9.3 Watching the live services ("monitoring")**
 - What it checks: something notices within minutes when lantern-cloud or the gateway is down or erroring, and tells you.
 - Scenario: lantern-cloud starts failing every run at 2 a.m. because a disk filled; without monitoring, the first sign is an annoyed tester.
-- Lantern: 🟡 CI curls the gateway's health on every push; nothing watches lantern-cloud between pushes, and there are no alerts or error reports.
+- Lantern: ✅ `.github/workflows/uptime.yml` runs `tools/uptime.py` every 30 minutes against both services' `/v1/health`; a failed run (down, not ok, slower than 5 s) emails the repository owner. `tests/test_uptime.py` proves it tells up, down, slow and behind apart. Still open: error reports from inside the services (a Sentry-style feed); for now `fly logs`.
 
 **9.4 Backups and a way back ("rollback")**
 - What it checks: the cloud database and results can be restored, and a bad release can be undone quickly.
 - Scenario: a bad deploy corrupts the runs database; you restore last night's copy and redeploy the previous version.
-- Lantern: ❌ no documented backup of the `lantern_cloud_data` volume; rolling back is possible (`fly deploy` of an older commit) but not written down as a step.
+- Lantern: ✅ `docs/deploy.md` "Backups and a way back": Fly's daily volume snapshots and how to restore one, a one-line copy of each database to your own computer, and the two-command rollback to the previous image; both services open an older database unchanged.
 
 **9.5 Deploy matches main**
 - What it checks: what is running on Fly is the version just merged.
 - Scenario: #104 to #107 are merged but lantern-cloud still runs the older engine, so testers don't see the mobile features.
-- Lantern: 🟡 `/v1/health` reports the engine version, but deploys are by hand from Wakil's laptop and nothing flags that the live version is behind.
+- Lantern: ✅ the uptime check also compares lantern-cloud's engine version with the latest GitHub release and fails (an email) when the live service is behind; `.github/workflows/deploy-cloud.yml` deploys either app from the Actions tab once a `FLY_API_TOKEN` secret is added, and ends with the same check.
 
 ---
 
@@ -421,10 +421,16 @@ licensing for cloud mode), and lantern-cloud has terms of use.
 
 **One-person risk.** Deploys run only from one laptop and the admin secret lives in one password manager. *Scenario:*
 the laptop is lost the day lantern-cloud needs an urgent fix. A written deploy-from-anywhere step and a second
-recovery path close this.
+recovery path close this. ✅ `.github/workflows/deploy-cloud.yml` deploys from GitHub's Actions tab (needs the
+`FLY_API_TOKEN` repository secret, one `fly tokens create deploy` command; `docs/deploy.md` "Deploying from GitHub");
+the admin secret is not needed to deploy. Still Wakil's to do: add that secret, and keep a second copy of the password
+manager's recovery key somewhere not on the laptop.
 
 **Security reports from strangers.** `SECURITY.md` says where to report a hole; a company also tests that path
-(someone reads the inbox, there is a promised reply time).
+(someone reads the inbox, there is a promised reply time). ✅ `SECURITY.md` now promises a reply within 3 days and a
+fix or decision within 14 days for the live services, names what is in and out of scope, and points at the threat
+model, audit history and incident notes. GitHub private advisories notify the repository owner by email. Still to do
+once: send a test report through the button to see the mail arrive.
 
 **Lantern grades others on what it skips itself.** Lantern's Readiness score checks other apps for monitoring,
 backups and accessibility. Lantern should pass its own Readiness checks, the way it already must pass its own security
