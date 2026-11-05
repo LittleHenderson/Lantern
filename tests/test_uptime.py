@@ -61,9 +61,9 @@ def test_down_slow_and_not_ok_fail(capsys):
         assert "| DOWN |" in capsys.readouterr().out                 # answered, but not ok
     finally:
         s.shutdown()
-    s, su = serve({"ok": True}, delay=0.6)
+    s, su = serve({"ok": True}, delay=0.5)                          # the script waits 3x --slow-s; leave Windows room
     try:
-        assert uptime.main(["--gateway", su, "--slow-s", "0.2"]) == 1
+        assert uptime.main(["--gateway", su, "--slow-s", "0.4"]) == 1
         assert "| SLOW |" in capsys.readouterr().out
     finally:
         s.shutdown()
