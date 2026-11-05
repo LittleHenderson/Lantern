@@ -234,3 +234,92 @@ def test_the_release_build_type_is_read_not_the_signing_config(tmp_path):
     assert len(android.find_modules(tmp_path)) == 1                # the profile manifest is merged into main's
     sec = scan(build_graph(tmp_path))
     assert by_rule(sec, "LM-NO-SHRINK") == []
+
+
+MANIFEST = ('<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="a.b">'
+            '<application android:allowBackup="false"/></manifest>')
+
+
+def test_a_library_module_is_not_asked_to_shrink_and_a_computed_switch_is_not_guessed(tmp_path):
+    """From the mobile benchmark (bench/mobile): nowinandroid raised LM-NO-SHRINK 25 times, once per library module
+    and once for a release block whose minify switch is read from a Gradle property."""
+    _write(tmp_path, {
+        "app/build.gradle.kts": "plugins { alias(libs.plugins.nowinandroid.android.application) }\nandroid {\n"
+                                "  buildTypes {\n    release {\n      isMinifyEnabled = providers.gradleProperty(\"minifyWithR8\")"
+                                ".map(String::toBooleanStrict).getOrElse(true)\n    }\n  }\n}\n",
+        "app/src/main/AndroidManifest.xml": MANIFEST,
+        "core/data/build.gradle.kts": "plugins { alias(libs.plugins.nowinandroid.android.library) }\nandroid {}\n",
+        "core/data/src/main/AndroidManifest.xml": '<manifest xmlns:android="http://schemas.android.com/apk/res/android"/>',
+        "feature/build.gradle": "apply plugin: 'com.android.library'\nandroid {\n  buildTypes {\n    release {\n"
+                                "      minifyEnabled false\n    }\n  }\n}\n",
+        "feature/src/main/AndroidManifest.xml": '<manifest xmlns:android="http://schemas.android.com/apk/res/android"/>',
+    })
+    sec = scan(build_graph(tmp_path))
+    assert by_rule(sec, "LM-NO-SHRINK") == []
+    _write(tmp_path, {"app/build.gradle.kts": "plugins { id(\"com.android.application\") }\nandroid {\n  buildTypes {\n"
+                                              "    release {\n      isMinifyEnabled = false\n    }\n  }\n}\n"})
+    sec = scan(build_graph(tmp_path))
+    assert [f["file"] for f in by_rule(sec, "LM-NO-SHRINK")] == ["app/build.gradle.kts"]
+
+
+def test_sql_glued_from_constants_only_is_not_injection(tmp_path):
+    """From the mobile benchmark: AntennaPod builds every statement from table and column constants
+    (`"DELETE FROM " + TABLE + " WHERE " + KEY_ID + "=?"`); 72 of them were reported as critical."""
+    _write(tmp_path, {
+        "app/build.gradle": "apply plugin: 'com.android.application'\nandroid { defaultConfig { applicationId 'a.b' } }\n",
+        "app/src/main/AndroidManifest.xml": MANIFEST,
+        "app/src/main/java/a/b/Db.java": (
+            "package a.b;\nclass Db {\n"
+            "  static final String T = \"notes\", KEY_ID = \"id\";\n"
+            "  void clear(SQLiteDatabase db, String[] args) {\n"
+            "    db.execSQL(\"DELETE FROM \" + T + \" WHERE \"\n        + Db.KEY_ID + \"=?\", args);\n"
+            "    db.execSQL(\"ALTER TABLE \" + T + \" ADD COLUMN \" + KEY_ID + \" INTEGER\");\n"
+            "  }\n"
+            "  Cursor one(SQLiteDatabase db, String id) {\n"
+            "    return db.rawQuery(\"SELECT * FROM \" + T + \" WHERE id = \" + id, null);\n"
+            "  }\n"
+            "  void fmt(SQLiteDatabase db, String t) { db.execSQL(String.format(\"DELETE FROM %s\", t)); }\n"
+            "}\n"),
+        "app/src/main/java/a/b/Dao.kt": (
+            "package a.b\nconst val TYPE_TASK = 1\ninterface Dao {\n"
+            "  @Query(\"SELECT * FROM events WHERE type = $TYPE_TASK AND id = :id\") fun one(id: Long): Event\n"
+            "  fun raw(db: SQLiteDatabase, id: String) = db.rawQuery(\"SELECT * FROM events WHERE id = $id\", null)\n"
+            "}\n"),
+    })
+    sec = scan(build_graph(tmp_path))
+    sql = sorted((f["file"].rsplit("/", 1)[1], f["line"]) for f in sec["findings"] if f["rule"] in ("LM-SQL-CONCAT", "LV-SQL-CONCAT"))
+    assert sql == [("Dao.kt", 5), ("Db.java", 10), ("Db.java", 12)], sql
+
+
+def test_components_the_system_starts_are_low_and_heuristic_and_library_manifests_skip_the_backup_check(tmp_path):
+    """From the mobile benchmark: Simple Calendar's widget providers, widget-configure screens and boot receiver
+    (APPWIDGET_UPDATE, APPWIDGET_CONFIGURE, BOOT_COMPLETED) and HerSheild's Firebase messaging service were reported
+    as doors other apps can open; nowinandroid's four library manifests each raised the backup finding."""
+    _write(tmp_path, {
+        "app/build.gradle": "apply plugin: 'com.android.application'\nandroid { defaultConfig { applicationId 'a.b' } }\n",
+        "app/src/main/AndroidManifest.xml": (
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="a.b"><application android:allowBackup="true">'
+            '<receiver android:name=".Widget" android:exported="true"><intent-filter>'
+            '<action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter></receiver>'
+            '<activity android:name=".WidgetConfig" android:exported="true"><intent-filter>'
+            '<action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/></intent-filter></activity>'
+            '<receiver android:name=".Boot" android:exported="true"><intent-filter>'
+            '<action android:name="android.intent.action.BOOT_COMPLETED"/><action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>'
+            '</intent-filter></receiver>'
+            '<service android:name=".Push" android:exported="true"><intent-filter>'
+            '<action android:name="com.google.firebase.MESSAGING_EVENT"/></intent-filter></service>'
+            '<activity android:name=".Open" android:exported="true"><intent-filter>'
+            '<action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/>'
+            '<data android:mimeType="text/calendar"/></intent-filter></activity>'
+            '<receiver android:name=".Custom" android:exported="true"><intent-filter>'
+            '<action android:name="com.other.app.PING"/></intent-filter></receiver>'
+            '</application></manifest>'),
+        "core/ui/build.gradle.kts": "plugins { alias(libs.plugins.nowinandroid.android.library) }\n",
+        "core/ui/src/main/AndroidManifest.xml": '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application/></manifest>',
+    })
+    sec = scan(build_graph(tmp_path))
+    exported = {f["title"].split(": ")[1].split(" ")[0]: (f["rank"], f["tool_confidence"]) for f in by_rule(sec, "LM-EXPORTED")}
+    assert exported["Widget"] == ("low", "LOW") and exported["WidgetConfig"] == ("low", "LOW")
+    assert exported["Boot"] == ("low", "LOW") and exported["Push"] == ("low", "LOW")
+    assert exported["Open"] == ("low", "HIGH") and exported["Custom"] == ("medium", "HIGH")
+    assert [f["file"] for f in by_rule(sec, "LM-BACKUP")] == ["app/src/main/AndroidManifest.xml"]

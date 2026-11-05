@@ -246,3 +246,17 @@ def test_marshal_from_params_and_chained_constantize(tmp_path):
                                   "model = params[:class].classify.constantize\n"})
     got = {(f["line"], f["rule"], f["tool_confidence"]) for f in ruby_rules(tmp_path)}
     assert got == {(1, "LB-DESERIALIZE", "HIGH"), (2, "LB-EVAL", "HIGH")}
+
+
+def test_a_developer_script_building_a_shell_line_is_a_heuristic_note(tmp_path):
+    """From the mobile benchmark: an iOS app's Scripts/update-translations.rb raised 22 command-injection findings for
+    `system "curl -o #{dir}/x"`; nobody but the developer runs it, so it is reported low and marked heuristic."""
+    _write(tmp_path, {
+        "Scripts/update.rb": "langs.each do |code|\n  dir = \"L/#{code}\"\n  system \"mkdir -p #{dir}\"\nend\n",
+        "lib/tasks/release.rake": "task :tag do\n  system \"git tag #{version}\"\nend\n",
+        "app/jobs/run.rb": "class Run\n  def go(params)\n    system \"convert #{params[:file]}\"\n  end\nend\n",
+    })
+    sec = scan(build_graph(tmp_path))
+    ex = {f["file"]: (f["rank"], f["tool_confidence"]) for f in by_rule(sec, "LB-EXEC")}
+    assert ex["Scripts/update.rb"] == ("low", "LOW") and ex["lib/tasks/release.rake"] == ("low", "LOW")
+    assert ex["app/jobs/run.rb"][1] == "HIGH" and ex["app/jobs/run.rb"][0] != "low"

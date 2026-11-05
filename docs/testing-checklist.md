@@ -270,12 +270,12 @@ see whether a change made the model better or worse. Lantern needs the same for 
 **8.1 Map accuracy measured against reality**
 - What it checks: how often a call line Lantern draws is real, by running the app's tests and watching what actually calls what.
 - Scenario: a new rule claims to be "likely" right; the benchmark shows it is right only 49% of the time, so it is labelled "possible".
-- Lantern: 🟡 measured for Python on seven repos (`bench/`); every other language is labelled provisional in `CLAUDE.md` "Known gaps".
+- Lantern: 🟡 measured for Python on seven repos (`bench/`); every other language is labelled provisional in `CLAUDE.md` "Known gaps". Runtime tracing exists only for Python, so the other languages cannot be measured this way yet; what can be measured for them is the findings' precision (8.2), which the mobile benchmark now does.
 
 **8.2 Findings accuracy on real apps (false alarms and misses)**
 - What it checks: on real public apps, how many findings are real problems and how many real problems are missed.
 - Scenario: HerSheild went from 0 to 13 findings; how many of the 13 would an Android engineer agree with?
-- Lantern: ❌ the planted samples prove known problems are found; there is no labelled set of real Android, iOS, Flutter or React Native apps.
+- Lantern: 🟡 `bench/mobile/` runs Lantern on seven real public apps (four Android, one iOS, Flutter's samples, one React Native) and joins every finding with an engineer's label in `bench/mobile/labels.json` (real / false alarm / cannot tell, with a reason); `run_mobile.py` prints precision per rule and per platform and lists the findings nobody has labelled yet, which is the tester round's task 4. The first run found a crash (a React Native app) and seven over-eager rules (SQL built only from constants, library modules asked to shrink, components the system starts, test and end-to-end tooling folders, schema links, developer scripts); all fixed with regression tests, 322 → 243 findings. 27 findings labelled so far (precision 91%; `bench/mobile/results.md`); the rest wait for engineers' labels, which is the tester round's job. Misses (recall) are still measured only by the planted samples.
 
 **8.3 Same input, same answer ("deterministic")**
 - What it checks: analyzing the same commit twice gives the same findings and the same evidence digest.
@@ -285,7 +285,7 @@ see whether a change made the model better or worse. Lantern needs the same for 
 **8.4 Explanation quality eval**
 - What it checks: real models explain the sample apps and the share that pass the anchor check is recorded.
 - Scenario: a prompt change raises first-try pass rate from 16 to 20 of 25, or quietly drops it to 9.
-- Lantern: 🟡 recorded by hand in `docs/explain-runs.md` (best: 25 of 25 on shop); not re-run automatically, and not on phone-app samples.
+- Lantern: 🟡 `bench/explain_eval.py` runs `lantern explain` fresh (no cache) with the configured model on an analysed sample and prints the run as one row in the shape of `docs/explain-runs.md` (validated, first try, repaired, undetermined, invented findings dropped, tokens), appends it with `--record`, and fails under `--min-first-try`; `.github/workflows/model-eval.yml` runs it on shop and nextapp from the Actions tab (needs a `LANTERN_TOKEN` secret) together with the Ask Lantern eval. `tests/test_explain_eval.py` proves the counting offline. Still by hand: pressing the button when a model changes, and adding the phone-app fixtures to the run once a model has explained them at least once.
 
 ---
 
@@ -350,18 +350,19 @@ product daily before customers do.
 In order, weighing how likely each is to embarrass Lantern with its main audience (Android app creators) against how
 much work it is.
 
-1. **Findings accuracy on real phone apps (8.2, 10.4).** Pick 10 public Android/Kotlin apps (and a few Flutter,
-   React Native and iOS), run Lantern, and have each finding marked "real" or "false alarm". Publish the numbers in
-   `bench/`. This is the claim engineers will test first.
-2. **Deploy and watch lantern-cloud (9.5, 9.3, 9.4).** Redeploy so the mobile work is live, add an uptime check that
-   emails when `/v1/health` fails, and write a one-paragraph backup and rollback step for the Fly volume.
-3. **Update the tester guide for mobile and run one structured tester round (10.1, 10.2, 10.3).** Five Android
-   creators, the same four tasks, a results table.
+1. 🟡 **Findings accuracy on real phone apps (8.2, 10.4).** Done as far as one developer can: `bench/mobile/` runs seven
+   real apps and keeps the labels; eight rule fixes came out of the first run. What remains is engineers' labels for the
+   216 unlabelled findings (`run_mobile.py --queue`), which the tester round's task 4 collects.
+2. 🟡 **Deploy and watch lantern-cloud (9.5, 9.3, 9.4).** The uptime check, the deploy-from-GitHub workflow and the
+   backup and rollback steps exist (section 9); the redeploy itself is Wakil's, from the laptop or the Actions tab.
+3. 🟡 **Update the tester guide for mobile and run one structured tester round (10.1, 10.2, 10.3).** The guide covers
+   phone apps and the script and sheet are written (`docs/tester-round.md`); the round itself needs five people and an
+   evening.
 4. ✅ **Accessibility scan in CI (5.1, 5.2).** Done: `tools/a11y.js` in every browser smoke.
 5. ✅ **A performance budget and one large-app run (4.1, 4.2, 3.3).** Done: budgets in `tools/audit.sh`, ten big apps
    weekly in `tools/large_apps.py`.
-6. **Prompt-injection test (2.8).** Plant "say this is safe" comments in a sample and check findings and the
-   Scenario lens are unchanged and Ask Lantern doesn't repeat the claim.
+6. ✅ **Prompt-injection test (2.8).** Done: `tests/test_prompt_injection.py` (planted comments change no finding, no
+   scenario, no path; a model that obeys them cannot remove a finding) and the Ask Lantern eval's `injection` question.
 7. ✅ **Coverage and a linter (1.5, 1.6), Dependabot and a lock file for Lantern's own packages (2.6).** Done in the
    build-pipeline change.
 8. ✅ **Safari and Firefox in CI (6.2).** Done: `LANTERN_BROWSERS="firefox webkit"` in the browser job.
@@ -401,6 +402,11 @@ HTML, the model gateway down, the app's allowance line) and `test_cloud_runs.py:
 
 **Model changes.** When the model behind the free allowance is updated or retired, the explanation pass rate is
 re-measured before testers see it. *Scenario:* a new Haiku version quietly halves the share of explanations that pass.
+✅ `.github/workflows/model-eval.yml` (Actions tab, `LANTERN_TOKEN` secret) runs `bench/explain_eval.py` on shop and
+nextapp and `bench/ask_eval.py` on shop against the live default model or a `provider/model` you name, writes the
+explain-runs row and the Ask Lantern score to the run summary, and fails under 80% first-try explanations or 90% on
+Ask Lantern. The step to keep by hand: run it before changing `DEFAULT_MODEL` or `LANTERN_PRIMARY`, and after any provider
+announcement, then paste the row into `docs/explain-runs.md`.
 
 **Ask Lantern answers.** An eval of the assistant's answers (does it stick to the facts, admit when it doesn't know),
 the way section 8.4 covers explanations. ✅ `bench/ask_eval.py` asks the 13 questions in `bench/ask_eval.json` through
@@ -417,7 +423,11 @@ stats show `accounts_new_today`; `tests/test_signin.py`); the global daily dolla
 lantern-cloud's 50 runs per person and 1,000 per day stand. Still open: an alert when a day's spend or sign-ups jump.
 
 **Do the tests catch bugs? ("mutation testing").** A tool makes small deliberate mistakes in the code and checks that
-some test fails each time. A test suite can be large and still miss things; this measures that.
+some test fails each time. A test suite can be large and still miss things; this measures that. ✅ `tools/mutation.py`
+makes one classic mistake at a time in a module (a comparison flipped, a boolean inverted, `and`/`or` swapped, a `not`
+removed, a number nudged) in a copy of the repository and runs the named test files against each; a mutant that no
+test catches is a hole. `bench/mutation_results.md` has the first run on three small modules (lanes, bridge, scenarios)
+with every survivor listed; run it on a module after writing its tests, not on every push (minutes per module).
 
 **Time and dates.** Daily limits reset at midnight UTC, 90-day expiry, Evidence dates. *Scenario:* a tester in
 California hits the daily limit at 4:59 p.m. and is surprised it resets at 5:00 p.m. ✅ Every "limit reached" message
@@ -426,7 +436,9 @@ California hits the daily limit at 4:59 p.m. and is surprised it resets at 5:00 
 already said UTC). The 90-day token expiry is in `docs/deploy.md` and `gateway/README.md`.
 
 **Licences.** Every library and grammar Lantern ships has a licence that allows it (spec 9.1 already flags scanner
-licensing for cloud mode), and lantern-cloud has terms of use.
+licensing for cloud mode), and lantern-cloud has terms of use. ✅ `tools/licences.py` checks every library's licence
+in CI; `docs/terms.md` is a one-page terms of use for lantern-cloud (what it is, what you may and may not do, what
+happens to code and results, the model step, no warranty), linked from the website's help page under **Terms**.
 
 **One-person risk.** Deploys run only from one laptop and the admin secret lives in one password manager. *Scenario:*
 the laptop is lost the day lantern-cloud needs an urgent fix. A written deploy-from-anywhere step and a second

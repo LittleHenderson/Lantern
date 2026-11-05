@@ -1,0 +1,16 @@
+[
+  {"name": "hersheild", "url": "https://github.com/devr22/HerSheild", "ref": null, "platform": "android",
+   "about": "Java, the first real Android app a tester ran on lantern-cloud (2026-11-04)"},
+  {"name": "nowinandroid", "url": "https://github.com/android/nowinandroid", "ref": "main", "platform": "android",
+   "about": "Kotlin, Jetpack Compose, Google's reference app"},
+  {"name": "simple-calendar", "url": "https://github.com/SimpleMobileTools/Simple-Calendar", "ref": null, "platform": "android",
+   "about": "Kotlin, a widely installed open-source app"},
+  {"name": "antennapod", "url": "https://github.com/AntennaPod/AntennaPod", "ref": null, "platform": "android",
+   "about": "Java, podcast player with many permissions and components"},
+  {"name": "simplenote-ios", "url": "https://github.com/Automattic/simplenote-ios", "ref": null, "platform": "ios",
+   "about": "Swift, UIKit"},
+  {"name": "ios-realworld", "url": "https://github.com/flutter/samples", "ref": "main", "platform": "flutter",
+   "about": "Dart, Flutter's own sample apps (one repo, many apps)"},
+  {"name": "rn-realworld", "url": "https://github.com/mattermost/mattermost-mobile", "ref": null, "platform": "react-native",
+   "about": "TypeScript, React Native, a large production app"}
+]

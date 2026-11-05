@@ -195,8 +195,16 @@ def js_rules(repo: Path) -> list[dict]:
                 src_line = text.splitlines()[ln - 1] if text else ""
                 if src_line.lstrip().startswith(("//", "*")):
                     continue
+                if rule == "LJ-EXEC" and JS_DEV_PATH.search(rel):
+                    # end-to-end tooling (Detox, Maestro, Cypress) or a build script: run by a developer with their
+                    # own values, never by a user of the app, so it is a heuristic note
+                    out.append(_finding(rule, title, "LOW", rel, ln, conf="LOW", cwe=cwe, snippet=src_line.strip(), fixed_rank="low"))
+                    continue
                 out.append(_finding(rule, title, sev, rel, ln, cwe=cwe, snippet=src_line.strip()))
     return out
+
+
+JS_DEV_PATH = re.compile(r"(^|/)(detox|maestro|e2e|cypress|__tests__|tests?|scripts?|tools|ci)/|\.(test|spec)\.[jt]sx?$", re.I)
 
 
 def go_rules(repo: Path) -> list[dict]:
@@ -207,10 +215,35 @@ def rust_rules(repo: Path) -> list[dict]:
     return _pattern_rules(repo, {".rs"}, RUST_RULES, skip=lambda rel: rel.startswith("tests/") or "/tests/" in rel)
 
 
+_KT_TEMPLATE = re.compile(r"\$\{?([A-Za-z_]\w*)\}?")
+_UPPER = re.compile(r"^[A-Z][A-Z0-9_]+$")
+
+
+def _sql_from_constants(line: str) -> bool:
+    """`@Query("SELECT * FROM events WHERE type = $TYPE_TASK")`, `query("DELETE FROM " + TABLE + " WHERE id = ?")`:
+    every name glued into the SQL is an UPPER_CASE constant, so there is nothing a user could inject."""
+    names = _KT_TEMPLATE.findall(line)
+    plain = re.sub(r"\"(?:[^\"\\\n]|\\.)*\"", "", line)
+    start = plain.find("(")
+    if start < 0:
+        return False
+    depth, end = 0, len(plain)
+    for i in range(start, len(plain)):                 # the first call's argument list, to its matching paren
+        depth += plain[i] == "("
+        depth -= plain[i] == ")"
+        if depth == 0:
+            end = i
+            break
+    first = plain[start + 1:end].split(",")[0]
+    names += [x.strip() for x in first.split("+") if x.strip()]
+    return bool(names) and all(_UPPER.match(n.rsplit(".", 1)[-1]) for n in names)
+
+
 def java_rules(repo: Path) -> list[dict]:
     # Kotlin servers (Spring, Ktor) call the same Java APIs, so the same patterns apply to .kt files
-    return _pattern_rules(repo, {".java", ".kt"}, JAVA_RULES,
-                          skip=lambda rel: "/src/test/" in rel or rel.startswith("src/test/"))
+    out = _pattern_rules(repo, {".java", ".kt"}, JAVA_RULES,
+                         skip=lambda rel: "/src/test/" in rel or rel.startswith("src/test/"))
+    return [f for f in out if not (f["rule"] == "LV-SQL-CONCAT" and _sql_from_constants(f.get("snippet") or ""))]
 
 
 _PHP_VAR = r"(?:\$\w|\{\$)"
@@ -346,6 +379,9 @@ RUBY_RULES = [   # (id, pattern, severity, title, cwe, tool confidence, rank); E
 ]
 
 
+DEV_SCRIPT = re.compile(r"(^|/)(scripts?|fastlane|tools|bin|ci)/|(^|/)(Fastfile|Rakefile|Dangerfile|Podfile)$|\.rake$", re.I)
+
+
 def ruby_rules(repo: Path) -> list[dict]:
     out = []
     for p in _files(repo, {".rb", ".erb", ".rake"}):
@@ -372,6 +408,11 @@ def ruby_rules(repo: Path) -> list[dict]:
                 if rule == "LB-CSRF-OFF" and "verify_authenticity_token" not in src and "null_session" not in src:
                     continue
                 seen.add((rule, ln))
+                if rule == "LB-EXEC" and DEV_SCRIPT.search(rel):
+                    # a build or release script run by a developer (fastlane, Scripts/, Rakefile): the command is built
+                    # from the developer's own values, not from anything a user sends, so it is a heuristic note
+                    out.append(_finding(rule, title, "LOW", rel, ln, conf="LOW", cwe=cwe, snippet=src.strip(), fixed_rank="low"))
+                    continue
                 out.append(_finding(rule, title, sev, rel, ln, conf=conf, cwe=cwe, snippet=src.strip(), fixed_rank=rank))
     return out
 
@@ -448,6 +489,11 @@ def cpp_rules(repo: Path) -> list[dict]:
                 if rule == "LX-BUFFER" and ("LX-SQL-BUILT", ln) in seen:
                     continue
                 seen.add((rule, ln))
+                if rule == "LB-EXEC" and DEV_SCRIPT.search(rel):
+                    # a build or release script run by a developer (fastlane, Scripts/, Rakefile): the command is built
+                    # from the developer's own values, not from anything a user sends, so it is a heuristic note
+                    out.append(_finding(rule, title, "LOW", rel, ln, conf="LOW", cwe=cwe, snippet=src.strip(), fixed_rank="low"))
+                    continue
                 out.append(_finding(rule, title, sev, rel, ln, conf=conf, cwe=cwe, snippet=src.strip(), fixed_rank=rank))
     return out
 
@@ -471,6 +517,11 @@ def php_rules(repo: Path) -> list[dict]:
                 if src.lstrip().startswith(("//", "#", "*", "/*")) or (rule, ln) in seen:
                     continue
                 seen.add((rule, ln))
+                if rule == "LB-EXEC" and DEV_SCRIPT.search(rel):
+                    # a build or release script run by a developer (fastlane, Scripts/, Rakefile): the command is built
+                    # from the developer's own values, not from anything a user sends, so it is a heuristic note
+                    out.append(_finding(rule, title, "LOW", rel, ln, conf="LOW", cwe=cwe, snippet=src.strip(), fixed_rank="low"))
+                    continue
                 out.append(_finding(rule, title, sev, rel, ln, conf=conf, cwe=cwe, snippet=src.strip(), fixed_rank=rank))
     return out
 

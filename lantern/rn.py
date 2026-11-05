@@ -208,7 +208,7 @@ CODE_RULES = [   # (id, pattern, severity, title, cwe, tool confidence, rank)
                "react-native-keychain", 312, "LOW", "medium"),
     ("LN-LOG-SENSITIVE", re.compile(r"\bconsole\.(?:log|info|warn|debug)\s*\((?=[^\n]*" + SENSITIVE_WORDS + ")"),
      "MEDIUM", "Writes a password or token to the device log", 532, "LOW", "medium"),
-    ("LN-SQL-CONCAT", re.compile(r"\b(?:executeSql|execAsync|runAsync|getAllAsync|getFirstAsync|exec)\s*\(\s*"
+    ("LN-SQL-CONCAT", re.compile(r"(?:\b(?:executeSql|execAsync|runAsync|getAllAsync|getFirstAsync)|\b(?:db|tx|database)\.exec)\s*\(\s*"
                                  r"(?:`[^`]*\$\{|['\"][^'\"\n]*['\"]\s*\+)", re.I), "HIGH",
      "Builds a database query from variables (SQL injection risk); pass values as ? parameters", 89, "HIGH", None),
     ("LN-WEBVIEW-ANY", re.compile(r"originWhitelist\s*=\s*\{\s*\[\s*['\"]\*['\"]\s*\]\s*\}"), "LOW",
@@ -219,7 +219,9 @@ CODE_RULES = [   # (id, pattern, severity, title, cwe, tool confidence, rank)
     ("LN-CLEARTEXT-URL", re.compile(r"['\"`]http://(?!localhost|127\.0\.0\.1|10\.0\.2\.2|0\.0\.0\.0)[^'\"`\s]+['\"`]"),
      "LOW", "Talks to a server over plain http", 319, "HIGH", "low"),
 ]
-TEST_PATH = re.compile(r"(^|/)(__tests__|tests?|e2e)/|\.(test|spec)\.[jt]sx?$")
+# test suites and end-to-end tooling (Detox, Maestro) are not what the phone runs
+TEST_PATH = re.compile(r"(^|/)(__tests__|__mocks__|tests?|e2e|detox|maestro|fixtures?)/|\.(test|spec)\.[jt]sx?$|(^|/)tests?\.[jt]sx?$|test_fixtures?[\w-]*\.[jt]sx?$", re.I)
+SCHEMA_URL = re.compile(r"\$schema|xmlns|/schemas?/|schemas?\.", re.I)   # an identifier, not a request
 
 
 def _f(rule, title, sev, file, line, cwe=None, conf="HIGH", category="config", snippet="", rank=None):
@@ -285,6 +287,8 @@ def code_findings(files: list[tuple[str, str]]) -> list[dict]:
                 ln = text.count("\n", 0, m.start()) + 1
                 src = lines[ln - 1] if ln <= len(lines) else ""
                 if src.lstrip().startswith(("//", "*", "/*")):
+                    continue
+                if rule == "LN-CLEARTEXT-URL" and SCHEMA_URL.search(src):
                     continue
                 out.append(_f(rule, title, sev, rel, ln, cwe=cwe, conf=conf, category="code", snippet=src.strip(),
                               rank=rank))
