@@ -33,7 +33,7 @@ CATEGORIES = [
     ("docs", "Documentation", 6),
 ]
 
-CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".php"}
 MOBILE_EXTS = {".java", ".kt", ".swift", ".dart", ".cs"}  # a phone app's code: counted for tests and the Android/iOS checks only
 MOBILE_TEST_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/|(^|/)[^/]*(Tests|UITests)/[^/]*\.swift$|(^|/)(test|integration_test)/.*_test\.dart$|(^|/)[^/]*\.Tests?/[^/]*\.cs$")
 # What Android Studio writes into every new project: a test that checks 2 + 2 and one that reads the package name.
@@ -89,7 +89,7 @@ SHUTDOWN = re.compile(r"signal\.signal\(\s*signal\.SIGTERM|SIGTERM|lifespan|@app
 HEALTH_PATH = re.compile(r"/(health|healthz|healthcheck|ready|readyz|livez|ping|status)\b", re.I)
 TEST_CMD = re.compile(r"\b(pytest|unittest|tox|nox|npm (run )?test|pnpm (run )?test|yarn test|vitest|jest|playwright test|go test|cargo test|make test|"
                       r"gradlew?(?:\.bat)?(?:\s+[-\w:]+)*?\s+[\w:]*(?:test\w*|check|connected\w*AndroidTest)|mvn\s+(?:-\S+\s+)*(?:test|verify)|"
-                      r"xcodebuild\s+(?:\S+\s+)*test|flutter test|swift test|dotnet test)\b")
+                      r"xcodebuild\s+(?:\S+\s+)*test|flutter test|swift test|dotnet test|phpunit|pest|artisan test|composer test)\b")
 SCAN_CMD = re.compile(r"\b(lantern|bandit|pip-audit|npm audit|pnpm audit|yarn audit|semgrep|opengrep|codeql|trivy|snyk|gitleaks|safety|osv-scanner|dependabot|mobsf|dependency-check)\b", re.I)
 
 
@@ -183,7 +183,7 @@ class Repo:
 def detect_stack(repo: Repo, g: Graph) -> dict:
     deps_text = " ".join(repo.text(f) for f in repo.project_files
                          if f.rsplit("/", 1)[-1] in ("pyproject.toml", "package.json", "Pipfile", "go.mod", "Cargo.toml",
-                                                     "pom.xml", "build.gradle", "build.gradle.kts")
+                                                     "pom.xml", "build.gradle", "build.gradle.kts", "composer.json")
                          or re.search(r"(^|/)requirements[^/]*\.txt$", f)).lower()
     fw = []
     for key, label in (("fastapi", "FastAPI"), ("flask", "Flask"), ("django", "Django"), ("starlette", "Starlette"),
@@ -194,7 +194,8 @@ def detect_stack(repo: Repo, g: Graph) -> dict:
                        ("github.com/go-chi/chi", "chi"), ("github.com/gofiber/fiber", "Fiber"),
                        ("github.com/gorilla/mux", "gorilla/mux"), ("axum", "axum"), ("actix-web", "Actix"),
                        ("rocket", "Rocket"), ("warp", "warp"), ("spring-boot", "Spring Boot"), ("quarkus", "Quarkus"),
-                       ("micronaut", "Micronaut"), ("javalin", "Javalin")):
+                       ("micronaut", "Micronaut"), ("javalin", "Javalin"), ("laravel/framework", "Laravel"),
+                       ("symfony/framework-bundle", "Symfony"), ("slim/slim", "Slim"), ("laravel/lumen", "Lumen")):
         if key in deps_text:
             fw.append(label)
     entries = Counter((n.entry or {}).get("kind") for n in g.entry_points())
@@ -389,6 +390,12 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
         want.append(ct)
         if any(lk in repo.files for lk in (ct[:-4] + "lock", "Cargo.lock")):
             have.append(ct)
+    for cj in (f for f in repo.project_files if f.rsplit("/", 1)[-1] == "composer.json"):
+        if not re.search(r'"require"\s*:\s*\{\s*"(?!php")', repo.text(cj)) and '"require-dev"' not in repo.text(cj):
+            continue                                        # only a PHP version: nothing to lock
+        want.append(cj)
+        if (cj[:-4] + "lock") in repo.files:
+            have.append(cj)
     for gm in (f for f in repo.project_files if f.rsplit("/", 1)[-1] == "go.mod"):
         if "require" not in repo.text(gm):
             continue                                        # no dependencies: go.sum is not written
@@ -401,7 +408,7 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
                           "pass" if not miss else "partial" if have else "fail",
                           "lockfile for every manifest" if not miss else f"no lockfile for {', '.join(miss[:3])}",
                           "" if not miss else "Commit the lockfile your package manager writes (package-lock.json, "
-                          "pnpm-lock.yaml, uv.lock, poetry.lock, go.sum, Cargo.lock, gradle.lockfile) so every install gets the same versions."))
+                          "pnpm-lock.yaml, uv.lock, poetry.lock, go.sum, Cargo.lock, gradle.lockfile, composer.lock) so every install gets the same versions."))
     else:
         out.append(_check("deps-lock", "Lockfile committed", 4, "skip",
                           f"not expected: a {shape} usually leaves exact versions to whoever installs it"
@@ -727,7 +734,7 @@ def check_docs(repo: Repo) -> list[dict]:
     readme = repo.has("README.md", "README.rst", "README.txt", "README")
     t = repo.text(readme) if readme else ""
     runs = bool(re.search(r"(pip install|npm (install|i|run)|pnpm|yarn|uv |poetry|docker|make |python -m|npx |gradlew|"
-                          r"Android Studio|flutter (run|build)|xcodebuild|pod install|cargo (run|build)|go (run|build)|dotnet (run|build|publish))", t))
+                          r"Android Studio|flutter (run|build)|xcodebuild|pod install|cargo (run|build)|go (run|build)|dotnet (run|build|publish)|composer install|php artisan|php -S)", t))
     lic = repo.has("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
     sec = repo.has("SECURITY.md", ".github/SECURITY.md")
     return [

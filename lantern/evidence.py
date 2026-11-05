@@ -128,7 +128,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
     for t in (sec or {}).get("tools", []):
         st = str(t.get("status") or "")
         if t.get("tool") in AUDIT_TOOLS and st != "ok" and st not in NOTHING_TO_CHECK:
-            lang = {"pip-audit": "Python", "npm-audit": "npm", "maven-audit": "Gradle/Maven"}[t["tool"]]
+            lang = {"pip-audit": "Python", "npm-audit": "npm", "maven-audit": "Gradle/Maven", "composer-audit": "PHP (Composer)"}[t["tool"]]
             out.append(f"{lang} dependencies were not fully checked for known vulnerabilities ({st}).")
         if t.get("tool") == "pip-audit" and t.get("unpinned"):
             out.append(f"{t['unpinned']} Python requirement(s) give a range, not an exact version, so they were not "

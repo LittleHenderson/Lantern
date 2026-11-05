@@ -125,7 +125,7 @@ def check(cond: dict, repo: Path, out: Path) -> tuple[str, str]:
         return ("todo", f"{len(left)} still open") if left else ("done", "fixed or accepted with a reason")
     if kind == "deps_clean":
         tools = _rows(sec.get("tools"))
-        ran = [t for t in tools if t.get("tool") in ("pip-audit", "npm-audit", "maven-audit") and str(t.get("status", "")).startswith("ok")]
+        ran = [t for t in tools if t.get("tool") in ("pip-audit", "npm-audit", "maven-audit", "composer-audit") and str(t.get("status", "")).startswith("ok")]
         left = [f for f in live if f.get("category") == "dependency" and f.get("status") != "accepted"]
         if left:
             return "todo", f"{len(left)} known vulnerabilities in dependencies"

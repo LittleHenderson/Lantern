@@ -79,6 +79,14 @@ sql = [f for f in s["findings"] if f["rule"] == "LC-SQL-CONCAT" and f["rank"] ==
 assert len(sql) == 2 and all(f["node"].startswith("cs:") for f in sql), sql
 assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == ".NET MAUI app"
 EOF
+check "phpapp (Laravel + React + a plain PHP page) analyzes" lantern analyze tests/fixtures/phpapp --out "$W/pa"
+check "phpapp: the React search reaching Laravel raw SQL is critical, the legacy page is checked" "$PY" - "$W/pa" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["rule"] == "LH-SQL-CONCAT" and f["rank"] == "critical"]
+assert {f["file"] for f in sql} == {"app/Http/Controllers/NoteController.php", "public/legacy/login.php"}, sql
+assert any(f["ui_path"] for f in sql), sql
+EOF
 check "nextapp (Next.js + Supabase) analyzes" lantern analyze tests/fixtures/nextapp --out "$W/nx"
 check "nextapp: auth, RLS, and service-role findings" "$PY" - "$W/nx" <<'EOF'
 import json, sys
@@ -152,6 +160,9 @@ EOF
   # a React Native app: the same card with app.json words, poisoned
   check "viewer: poisoned React Native data stays text (On the phone card, screens, links)" \
     bash -c "'$PY' tools/poison_report.py '$W/ra/report.html' '$W/poison-ra/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ra/report.html' '$W/rshot'"
+  # a PHP app: Laravel routes, a legacy page and Blade, poisoned
+  check "viewer: poisoned PHP data stays text (routes, pages, findings)" \
+    bash -c "'$PY' tools/poison_report.py '$W/pa/report.html' '$W/poison-pa/report.html' --only detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-pa/report.html' '$W/pshot2'"
   # a .NET MAUI app with its ASP.NET server: screens, links and the phone-to-server path, poisoned
   check "viewer: poisoned .NET MAUI data stays text (screens, links, phone-to-server path)" \
     bash -c "'$PY' tools/poison_report.py '$W/ca/report.html' '$W/poison-ca/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ca/report.html' '$W/cshot'"

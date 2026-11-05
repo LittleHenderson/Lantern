@@ -1,4 +1,4 @@
-"""Known-vulnerable dependency versions, for Python, JavaScript, and Java/Kotlin/Android (Gradle and Maven).
+"""Known-vulnerable dependency versions, for Python, JavaScript, Java/Kotlin/Android (Gradle and Maven) and PHP.
 
 Both checks ask a public vulnerability database (PyPI/OSV through pip-audit, the npm registry through `npm audit`),
 so they are the only network calls `lantern analyze` makes. `--offline` (or LANTERN_OFFLINE=1) skips them, and the
@@ -16,6 +16,9 @@ Nothing from the analyzed repo is executed or trusted as configuration:
     test configurations), asked of the OSV database (api.osv.dev, ecosystem Maven) as plain name/version pairs.
     Nothing runs Gradle or Maven. Versions with `+`, ranges or variables Lantern cannot resolve are counted as not
     checked. Only the libraries written in the build files are checked, not the ones they pull in.
+  * PHP: every library in composer.lock's shipped `packages` (not `packages-dev`), name and exact version, asked of
+    OSV (ecosystem Packagist). Nothing runs Composer. The finding points at the line in composer.json that asks for
+    the library, or at its entry in composer.lock when another library pulled it in.
 """
 
 from __future__ import annotations
@@ -34,8 +37,9 @@ from .python_frontend import SKIP_DIRS, inside_repo
 NPM_REGISTRY = "https://registry.npmjs.org/"
 TEST_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|fixtures|examples?)/")
 PIN_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._\-]*)(\[[^\]]*\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9.+!_\-]*)\s*(;.*)?$")
-NOTHING_TO_CHECK = ("skipped: no Python dependency files", "skipped: no package.json", "skipped: no Gradle or Maven files")
-AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit")
+NOTHING_TO_CHECK = ("skipped: no Python dependency files", "skipped: no package.json", "skipped: no Gradle or Maven files",
+                    "skipped: no composer.lock")
+AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit")
 OSV_API = "https://api.osv.dev/v1"
 NPM_SEVERITY = {"critical": "HIGH", "high": "HIGH", "moderate": "MEDIUM", "low": "LOW", "info": "LOW"}
 
@@ -67,7 +71,8 @@ def precomputed(tool: str) -> tuple[list[dict], dict] | None:
 def run_all(repo: Path) -> dict:
     """All audits with the network on, as {tool: {findings, info}} (what LANTERN_AUDITS_FROM reads)."""
     out = {}
-    for tool, fn in (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit), ("maven-audit", run_maven_audit)):
+    for tool, fn in (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit), ("maven-audit", run_maven_audit),
+                     ("composer-audit", run_composer_audit)):
         f, info = fn(repo, False)
         out[tool] = {"findings": f, "info": info}
     return out
@@ -420,7 +425,6 @@ def _osv_fixed(vuln: dict, coord: str) -> list[str]:
 
 
 def run_maven_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
-    from .security import _fid
     pre = precomputed("maven-audit")
     if pre is not None:
         return pre
@@ -432,44 +436,106 @@ def run_maven_audit(repo: Path, no_network: bool | None = None) -> tuple[list[di
         return [], info | {"status": "skipped: no exact versions to check", "files": files, "unpinned": len(loose)}
     if offline() if no_network is None else no_network:
         return [], info | {"status": "skipped: offline", "files": files}
-    coords = sorted(pins)
     try:
-        res = []
-        for i in range(0, len(coords), 500):
-            chunk = coords[i:i + 500]
-            data = _osv_post("querybatch", {"queries": [{"package": {"name": c, "ecosystem": "Maven"},
-                                                         "version": pins[c][0]} for c in chunk]})
-            res += list(zip(chunk, data.get("results") or []))
-        details: dict[str, dict] = {}
-        out = []
-        for coord, r in res:
-            for v in (r or {}).get("vulns") or []:
-                vid = str((v or {}).get("id") or "")[:60]
-                if not vid:
-                    continue
-                if vid not in details and len(details) < 300:
-                    details[vid] = _osv_get(f"vulns/{vid}")
-                d = details.get(vid) or {}
-                sev = OSV_SEVERITY.get(str((d.get("database_specific") or {}).get("severity") or "").upper(), "moderate")
-                fixed = _osv_fixed(d, coord)
-                aliases = [str(a)[:40] for a in (d.get("aliases") or [])][:5]
-                ver, rel, line = pins[coord]
-                out.append({
-                    "id": _fid("maven-audit", coord, vid),
-                    "tool": "maven-audit", "rule": vid,
-                    "title": f"{coord} {ver}: {str(d.get('summary') or 'known vulnerability')[:160]}",
-                    "tool_severity": NPM_SEVERITY.get(sev, "MEDIUM"), "dep_severity": sev,
-                    "tool_confidence": "HIGH", "file": rel, "line": line,
-                    "more_info": f"Fixed in: {', '.join(fixed) or 'no fix listed'}"
-                                 + (f". Also listed as {', '.join(aliases)}" if aliases else "")
-                                 + f". https://osv.dev/vulnerability/{vid}",
-                    "snippet": str(d.get("details") or d.get("summary") or "")[:400], "category": "dependency",
-                    "package": coord,
-                })
+        out = _osv_findings("maven-audit", "Maven", pins)
     except (OSError, ValueError) as exc:
         return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
     return out, info | {"status": "ok", "files": files, "checked": len(pins), "unpinned": len(loose),
                         "unpinned_examples": loose[:5]}
+
+
+def _osv_findings(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int]]) -> list[dict]:
+    """Ask OSV about exact `name → (version, file, line)` pins of one ecosystem; one finding per known vulnerability."""
+    from .security import _fid
+    coords = sorted(pins)
+    res = []
+    for i in range(0, len(coords), 500):
+        chunk = coords[i:i + 500]
+        data = _osv_post("querybatch", {"queries": [{"package": {"name": c, "ecosystem": ecosystem},
+                                                     "version": pins[c][0]} for c in chunk]})
+        res += list(zip(chunk, data.get("results") or []))
+    details: dict[str, dict] = {}
+    out = []
+    for coord, r in res:
+        for v in (r or {}).get("vulns") or []:
+            vid = str((v or {}).get("id") or "")[:60]
+            if not vid:
+                continue
+            if vid not in details and len(details) < 300:
+                details[vid] = _osv_get(f"vulns/{vid}")
+            d = details.get(vid) or {}
+            sev = OSV_SEVERITY.get(str((d.get("database_specific") or {}).get("severity") or "").upper(), "moderate")
+            fixed = _osv_fixed(d, coord)
+            aliases = [str(a)[:40] for a in (d.get("aliases") or [])][:5]
+            ver, rel, line = pins[coord]
+            out.append({
+                "id": _fid(tool, coord, vid),
+                "tool": tool, "rule": vid,
+                "title": f"{coord} {ver}: {str(d.get('summary') or 'known vulnerability')[:160]}",
+                "tool_severity": NPM_SEVERITY.get(sev, "MEDIUM"), "dep_severity": sev,
+                "tool_confidence": "HIGH", "file": rel, "line": line,
+                "more_info": f"Fixed in: {', '.join(fixed) or 'no fix listed'}"
+                             + (f". Also listed as {', '.join(aliases)}" if aliases else "")
+                             + f". https://osv.dev/vulnerability/{vid}",
+                "snippet": str(d.get("details") or d.get("summary") or "")[:400], "category": "dependency",
+                "package": coord,
+            })
+    return out
+
+
+# ---------------------------------------------------------------------------- PHP (Composer, OSV)
+
+def composer_pins(repo: Path) -> tuple[dict[str, tuple[str, str, int]], list[str]]:
+    """Exact versions from every composer.lock (shipped `packages`, not `packages-dev`): name → (version, file, line).
+    The line is where composer.json asks for the library when it does (a direct library), else its place in the lock."""
+    pins: dict[str, tuple[str, str, int]] = {}
+    files = []
+    for lock in _project_files(repo, names=("composer.lock",)):
+        rel = lock.relative_to(repo).as_posix()
+        try:
+            text = lock.read_text(encoding="utf-8", errors="replace")
+            data = json.loads(text)
+        except (OSError, ValueError):
+            continue
+        files.append(rel)
+        cj = lock.with_name("composer.json")
+        cj_rel = cj.relative_to(repo).as_posix()
+        try:
+            cj_text = cj.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            cj_text = ""
+        for pkg in data.get("packages") or []:
+            if not isinstance(pkg, dict):
+                continue
+            name, ver = str(pkg.get("name") or ""), str(pkg.get("version") or "")
+            if not re.fullmatch(r"[\w.-]+/[\w.-]+", name) or not re.fullmatch(r"v?\d+(\.\d+)*([-.+][\w.]+)?", ver):
+                continue
+            m = re.search(r'"' + re.escape(name) + r'"\s*:', cj_text)
+            if m:
+                where = (cj_rel, cj_text.count("\n", 0, m.start()) + 1)
+            else:
+                lm = re.search(r'"name"\s*:\s*"' + re.escape(name) + '"', text)
+                where = (rel, text.count("\n", 0, lm.start()) + 1 if lm else 1)
+            pins.setdefault(name, (ver.lstrip("v"), *where))
+    return pins, files
+
+
+def run_composer_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
+    pre = precomputed("composer-audit")
+    if pre is not None:
+        return pre
+    info = {"tool": "composer-audit", "role": "known-vulnerable PHP libraries (composer.lock, OSV database)",
+            "version": "osv-v1"}
+    pins, files = composer_pins(repo)
+    if not files:
+        return [], info | {"status": "skipped: no composer.lock"}
+    if offline() if no_network is None else no_network:
+        return [], info | {"status": "skipped: offline", "files": files}
+    try:
+        out = _osv_findings("composer-audit", "Packagist", pins)
+    except (OSError, ValueError) as exc:
+        return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
+    return out, info | {"status": "ok", "files": files, "checked": len(pins)}
 
 
 if __name__ == "__main__":   # python -m lantern.depaudit REPO OUT.json  (the cloud service's audit step)
