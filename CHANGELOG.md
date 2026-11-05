@@ -5,6 +5,22 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- C# is read, for ASP.NET servers and .NET MAUI / Xamarin phone apps. Namespaces (block and file-scoped), classes,
+  structs, records, interfaces, `partial` classes written across files, constructors and top-level statements are on
+  the map with their calls (own class, typed fields, properties and locals, `var x = new T()`, static calls, `this`,
+  interfaces and abstract classes fan out as `possible` edges, `button.Clicked += OnSave`, method groups). Routes come
+  from controllers (`[Route("api/[controller]")]` + `[HttpGet("{id}")]`) and minimal APIs (`app.MapGet`, `MapGroup`
+  prefixes, inline lambdas and `Class.Method` handlers); `HttpClient` calls (`GetStringAsync`, `PostAsJsonAsync`,
+  `new HttpRequestMessage(HttpMethod.Put, …)`, paths relative to `BaseAddress`, `const` URLs) link the phone app to the
+  server. A MAUI app's pages (`ContentPage`, `Shell`, …: constructor, `OnAppearing`, event handlers), its view models'
+  `[RelayCommand]`s and its link handlers (`OnAppLinkRequestReceived` and what it hands the link to) are entry points,
+  so a search box whose text reaches server SQL built with `$"…{q}…"` is critical, and so is a shared link whose id
+  reaches a local SQLite query. 11 new `LC-*` checks: SQL and shell commands built from variables, trusting any
+  certificate, MD5/SHA-1, `BinaryFormatter`/`TypeNameHandling`, CORS for any site, `Html.Raw`, plain `http://`,
+  passwords in connection strings (code and `appsettings.json`), and on the phone: tokens in `Preferences` or the log.
+  Readiness grades a `.NET MAUI app` (crash reporting, `Console.WriteLine` in release, `packages.lock.json`,
+  `HttpClient.Timeout`, Polly retries). The viewer no longer calls Kotlin, Swift, Dart or C# server code "library".
+  New sample: `tests/fixtures/csharpapp`.
 - Flutter and React Native apps are read as phone apps. Lantern now reads Dart: classes, mixins, extensions and
   functions are on the map with their calls (to their own class, typed fields and locals, `final db = NoteDb();`,
   static methods, interfaces, `onPressed: _load`), and a widget built inside another (`HomeScreen()`) leads to its

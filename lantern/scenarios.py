@@ -278,6 +278,9 @@ RULE_KIND = {
     "LN-WEBVIEW-ANY": "ios-webview", "LN-WEBVIEW-FILE": "ios-webview", "LN-CLEARTEXT-URL": "cleartext",
     "LN-ATS-OFF": "cleartext", "LN-URL-SCHEME": "ios-link", "LN-BACKUP": "android-backup",
     "LN-UNUSED-PERMISSION": "android-permission",
+    "LC-SQL-CONCAT": "sql", "LC-EXEC-CONCAT": "shell", "LC-TLS-OFF": "tls-off", "LC-WEAK-HASH": "weak-hash",
+    "LC-DESERIALIZE": "deserialize", "LC-CORS-ALL": "cors", "LC-HTML-RAW": "xss", "LC-LOG-SENSITIVE": "phone-log",
+    "LC-PREFS-SECRET": "phone-plain-secret", "LC-CLEARTEXT-URL": "cleartext", "LC-CONN-PASSWORD": "secret",
 }
 # Where each Android story starts (the manifest and build-file problems have no page or route to start from)
 ANDROID_START = {

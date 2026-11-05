@@ -89,7 +89,7 @@ def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> s
 
 def phone_roots(meta: dict) -> dict | None:
     """The folders of the phone apps in the repo (Android modules, iOS apps), shaped like `meta["android"]`."""
-    roots = [r for k in ("android", "ios", "flutter", "rn") for r in ((meta.get(k) or {}).get("roots") or [])]
+    roots = [r for k in ("android", "ios", "flutter", "rn", "maui") for r in ((meta.get(k) or {}).get("roots") or [])]
     return {"roots": roots} if roots else None
 
 

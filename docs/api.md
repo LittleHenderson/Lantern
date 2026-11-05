@@ -157,6 +157,14 @@ Expo app (`meta.rn.roots`, `meta.rn.apps` with `root`, `expo`, `router`, `config
 same two stops for their Dart or JavaScript code. `platform` is `"flutter"` or `"react-native"` unless an `android/` or
 `ios/` app in the same repository set it first.
 
+A .NET MAUI or Xamarin app (`meta.maui.roots`: each folder whose `.csproj` sets `UseMaui`, targets `net…-android`/
+`net…-ios`, or uses Xamarin.Forms) gets the same two stops for its C# code; `platform` is `"maui"` (also when its own
+`Platforms/Android` manifest was read, since that folder is part of the MAUI project). Entry details: `<Page> screen ·
+<method>` (a page's constructor, lifecycle method or event handler; a view model's `[RelayCommand]` uses its page's name),
+`LINK <Class> handles links (other apps and web pages can open it) · <method>` (route). ASP.NET routes: `GET /api/notes/{id}`
+(controller or minimal API; an inline minimal-API lambda is its own node, id `cs:<file>::GET /path`). C# findings (`LC-*`)
+inside a MAUI project carry `platform: "maui"`; Readiness `shape` is `".NET MAUI app"`.
+
 ### `security.json`
 
 `{"findings": [...], "tools": [{"tool", "status", "version"}], "counts": {critical, high, medium, low, in_tests, accepted},

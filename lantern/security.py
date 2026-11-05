@@ -144,7 +144,11 @@ REQUEST_DATA = re.compile(r"\b(request|req)\.(args|form|json|body|query|params|v
                           # Flutter: what a link or a route carries
                           r"|\.(?:queryParameters|pathParameters|queryParametersAll)\b|\bgetInitial(?:Link|Uri|AppLink)\s*\("
                           # React Native / Expo: what a link or a navigation carries
-                          r"|\broute\.params\b|\buse(?:Local|Global)SearchParams\s*\(|\bLinking\.parse\s*\(")
+                          r"|\broute\.params\b|\buse(?:Local|Global)SearchParams\s*\(|\bLinking\.parse\s*\("
+                          # C#: ASP.NET request data, what a link (`Uri`) or an Android intent carries (MAUI, Xamarin)
+                          r"|\bRequest\.(?:Query|Form|Headers|Cookies|RouteValues|Body|QueryString)\b"
+                          r"|\b(?:uri|url|link|appLink)\.(?:Query|AbsolutePath|AbsoluteUri|Segments|Fragment|Host|OriginalString)\b"
+                          r"|\bHttpUtility\.ParseQueryString\s*\(|\bIntent\.(?:Data|DataString|Extras)\b|\bIntent\.Get\w*Extra\s*\(")
 # `x = ...`, `const {a, b} = ...`, `x: T = ...`, `x += ...`, `self.x = ...`, `a, b = ...`
 ASSIGN = re.compile(r"^\s*(?:(?:const|let|var|val)\s+)?(?P<lhs>[A-Za-z_$][\w$.]*(?:\s*,\s*[A-Za-z_$][\w$.]*)*|"
                     r"\[[^\]=]*\]|\{[^}=]*\})\s*(?::\s*[^=]+?)?\s*(?P<op>[-+*/%&|^]|\*\*|//|\?\?|&&|\|\|)?=(?!=)\s*(?P<rhs>.+)$",
@@ -160,8 +164,11 @@ _TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)|\\\(\s*(
 
 def _blank_string(m: re.Match) -> str:
     """A string literal becomes `''`, keeping the names a template puts into it (`"id = $id"` in Kotlin, `\\(id)` in Swift,
-    `${id}` in a JS template literal) so a value spliced into SQL or a command is still seen as used."""
+    `${id}` in a JS template literal, `$"…{id}"` in C#) so a value spliced into SQL or a command is still seen as used."""
     refs = [a or b or c for a, b, c in _TEMPLATE_REF.findall(m.group(0))]
+    head = m.string[max(0, m.start() - 2):m.start()]
+    if "$" in head:   # C# `$"… {id}"`
+        refs += re.findall(r"(?<!\{)\{\s*([A-Za-z_]\w*)", m.group(0))
     return "''" + "".join(f" + {r}" for r in refs)
 
 

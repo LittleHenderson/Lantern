@@ -71,6 +71,14 @@ assert len(sql) == 1 and sql[0]["rank"] == "critical", sql
 assert s["mobile"]["platform"] == "react-native"
 assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "React Native app"
 EOF
+check "csharpapp (ASP.NET + .NET MAUI) analyzes" lantern analyze tests/fixtures/csharpapp --out "$W/ca"
+check "csharpapp: the phone's search reaching server SQL is critical, graded as a .NET MAUI app" "$PY" - "$W/ca" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["rule"] == "LC-SQL-CONCAT" and f["rank"] == "critical"]
+assert len(sql) == 2 and all(f["node"].startswith("cs:") for f in sql), sql
+assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == ".NET MAUI app"
+EOF
 check "nextapp (Next.js + Supabase) analyzes" lantern analyze tests/fixtures/nextapp --out "$W/nx"
 check "nextapp: auth, RLS, and service-role findings" "$PY" - "$W/nx" <<'EOF'
 import json, sys
@@ -144,6 +152,9 @@ EOF
   # a React Native app: the same card with app.json words, poisoned
   check "viewer: poisoned React Native data stays text (On the phone card, screens, links)" \
     bash -c "'$PY' tools/poison_report.py '$W/ra/report.html' '$W/poison-ra/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ra/report.html' '$W/rshot'"
+  # a .NET MAUI app with its ASP.NET server: screens, links and the phone-to-server path, poisoned
+  check "viewer: poisoned .NET MAUI data stays text (screens, links, phone-to-server path)" \
+    bash -c "'$PY' tools/poison_report.py '$W/ca/report.html' '$W/poison-ca/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ca/report.html' '$W/cshot'"
   # the live app: the test sheet (sandboxed run), the terminal drawer, a screenshot in Ask Lantern, a pack toggle
   A="$W/app"; mkdir -p "$A"; cp -r tests/fixtures/shop "$A/shop"
   "$PY" - "$A/shot.png" <<'PYEOF'
