@@ -119,7 +119,7 @@ tomli==2.5.0
     # via pip-audit
 tomli-w==1.2.0
     # via pip-audit
-tree-sitter==0.25.2
+tree-sitter==0.26.0
     # via lantern (pyproject.toml)
 tree-sitter-c==0.24.2
     # via lantern (pyproject.toml)
