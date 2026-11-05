@@ -51,7 +51,9 @@ async function keyboard(p, tag, errs, steps = 12) {
       const name = a.getAttribute('aria-label') || a.getAttribute('title') || (a.labels && a.labels[0] && a.labels[0].innerText) || a.innerText || a.getAttribute('placeholder') || '';
       return { tag: a.tagName.toLowerCase(), id: a.id, visible, name: name.trim().slice(0, 30), focusRing: cs.outlineStyle !== 'none' || cs.boxShadow !== 'none' };
     });
-    if (!f) { errs.push(`${tag}: keyboard: Tab ${i + 1} left focus on the page body (nothing focusable, or a focus trap)`); break; }
+    // after the last control the browser hands focus back to the page (or its own toolbar): the walk is over. Only a
+    // first Tab that lands nowhere means the page has no reachable control.
+    if (!f) { if (i === 0) errs.push(`${tag}: keyboard: Tab 1 left focus on the page body (nothing focusable, or a focus trap)`); break; }
     if (!f.visible) errs.push(`${tag}: keyboard: Tab ${i + 1} focused a hidden ${f.tag}#${f.id}`);
     if (!f.name && !['input', 'textarea'].includes(f.tag)) errs.push(`${tag}: keyboard: Tab ${i + 1} focused a ${f.tag}#${f.id} with no name a screen reader could say`);
     seen.push(`${f.tag}${f.id ? '#' + f.id : ''}${f.name ? '(' + f.name + ')' : ''}`);
