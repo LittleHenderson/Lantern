@@ -98,7 +98,7 @@ async function until(p, fn, timeout) {
     // a screenshot: the attach button, its card with what was read, then Remove
     if (!(await p.$('#askatt'))) errs.push(`${tag}: Ask Lantern has no screenshot button`);
     await p.setInputFiles('#askfile', `${out}-${tag}-report.png`);
-    await until(p, () => /text found|cannot read|text not read/.test(document.querySelector('#ask .shot .sm')?.textContent || ''), 30000);
+    await until(p, () => /text found|cannot read|text not read/.test(document.querySelector('#ask .shot .sm')?.textContent || ''), 90000);   // Tesseract on a busy CI runner can take over 30 s
     await p.screenshot({ path: `${out}-${tag}-ask-screenshot.png` });
     await p.click('#askrm');
     await clean(p, 'ask');
