@@ -56,7 +56,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/bridge.py` | Links `g.meta["http_calls"]` to route entry points by method + path segments; exact / suffix / unknown-prefix / ambiguous |
 | `lantern/tracehook.py`, `trace.py` | Python runtime tracing (`sys.monitoring`), wrapper-hop collapse, upgrade edges to `observed` |
 | `lantern/security.py` | Bandit, dependency audits, secrets → `websec.scan_web` → stable ids (line text, not number) → pin to nodes → reachability + `ui_path` → `input` on the flagged line → rank |
-| `lantern/depaudit.py` | pip-audit (lock files, `==` pins, pyproject) and `npm audit --package-lock-only`; the only network calls in `analyze`; `--offline` / `LANTERN_OFFLINE` skips them; tests run offline (`tests/conftest.py`) |
+| `lantern/depaudit.py` | pip-audit (lock files, `==` pins, pyproject), `npm audit --package-lock-only`, and `maven-audit` (Gradle `build.gradle(.kts)` incl. `$var`s, `gradle/libs.versions.toml`, `pom.xml` with `<properties>`; shipped configurations only; exact versions asked of OSV `api.osv.dev/v1/querybatch` + `vulns/<id>`, ecosystem Maven, stdlib urllib; finding `line` = where the library is written; direct libraries only); the only network calls in `analyze`; `--offline` / `LANTERN_OFFLINE` skips them; tests run offline (`tests/conftest.py`) |
 | `lantern/protections.py` | Spec 9.4 "protections to add": rate limiting, headers, SSRF allow-list, password hashing, route auth, uploads; heuristic, never changes findings or score |
 | `lantern/aiapp.py` | AI-app pack: `find_calls` pins model/embedding/image/speech/vector/payment/email/SMS calls to functions (`security["ai"]`: `calls`, `by_node`, `kinds`, `providers`, `notebooks`, `is_ai_app`; the viewer draws chips); `LA-WALLET-DRAIN` (route → paid call with no login and/or no rate limit; reuses `websec.login_check` and `protections.RATE_LIMIT_LIBS`), `LA-MODEL-OUTPUT-TO-TOOL` (model text → shell/SQL/eval/HTTP/file inside one function), `LA-PROMPT-FROM-INPUT` (informational), `LA-NOTEBOOK-SECRET` (keys in `.ipynb` cells and outputs). Sample: `tests/fixtures/aiapp`. Docs: `docs/ai-apps.md` |
 | `lantern/android.py` | Android apps (2026-11-04): modules from every `AndroidManifest.xml` (not under `tests/`/`fixtures/`, not `src/debug`), read with expat (entities refused) with line numbers; package, min/target SDK from Gradle or `uses-sdk`. `add_entries` (in `engine.build_graph` after the Java reader): `on…` and lifecycle methods of activities/fragments (`page`, detail `MainActivity screen (app start) · onCreate`), components other apps can start with no permission (`route`, detail `INTENT NotesProvider provider (other apps can start it) · query`), services/receivers/workers/`Application` (`main`); classes found from the manifest or `extends` chains (`class_families`); sets `meta["platform"] = "android"`, `meta["android"]` (`roots` → lanes Screen/App). `scan` (from `websec.scan_web`): `LM-*` rules over manifest, network security config, Gradle and `.java`/`.kt` lines, `security["mobile"]` (permissions with plain words and `used`, components). Manifest findings `pin` the component's class. Intent extras / `getQueryParameter` count as request data. Readiness shape `Android app` (`readiness._mobile_*`). Viewer: "On the phone" card on Findings, lane words Screen/App when `G.meta.platform === 'android'`. Stories per kind in `scenarios.py` (`android-*`). Sample: `tests/fixtures/androidapp`. Tests: `tests/test_android.py` |
@@ -171,7 +171,8 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   built through generic constructors, and associated types are unresolved; `impl Trait for X` matching is by trait
   name, not path. Confidence levels are not yet backed by a Rust benchmark.
 * Android: Kotlin code is checked by the `LM-*` line rules but not mapped (no Kotlin reader yet), so Kotlin findings
-  have no function or reachability; no Gradle/Maven dependency audit yet (versions are not checked against advisories);
+  have no function or reachability; the Gradle/Maven audit checks only the libraries written in the build files, not
+  the ones they pull in;
   only the main manifest is read (flavors and library manifests are not merged); `LM-LOG-SENSITIVE` and
   `LM-UNUSED-PERMISSION` read names, not meaning. iOS, Flutter and React Native native config are not read yet.
 * Java: no runtime tracing, no SpotBugs/dependency-check yet (only the `LV-*` patterns); generics are looked through
@@ -181,7 +182,8 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 * JS: hook results (`const m = useMutation(...)`, `m.mutate()`) and destructured hook returns are
   unresolved; React Query `mutationFn`/`queryFn` callbacks are linked, which covers most real paths.
 * Calls into libraries that call back into the repo (framework dispatch) only show when traced (Python).
-* Dependency audits need exact versions: Python ranges without a lock file, and pnpm/yarn/bun lock files, are reported as not checked.
+* Dependency audits need exact versions: Python ranges without a lock file, pnpm/yarn/bun lock files, and Gradle
+  versions with `+`, ranges or unresolved variables are reported as not checked.
 * "Uses input" follows assignments inside one function, in order (parameters, request data, and variables set
   from them), not across functions, branches, or loops. Parameters are read from the signature per language (Java/Kotlin/C#:
   the last identifier of each `Type name`; Go: without the receiver; Rust: the pattern before `:`, unwrapping

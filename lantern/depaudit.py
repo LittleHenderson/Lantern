@@ -1,4 +1,4 @@
-"""Known-vulnerable dependency versions, for Python and JavaScript.
+"""Known-vulnerable dependency versions, for Python, JavaScript, and Java/Kotlin/Android (Gradle and Maven).
 
 Both checks ask a public vulnerability database (PyPI/OSV through pip-audit, the npm registry through `npm audit`),
 so they are the only network calls `lantern analyze` makes. `--offline` (or LANTERN_OFFLINE=1) skips them, and the
@@ -11,6 +11,11 @@ Nothing from the analyzed repo is executed or trusted as configuration:
     installed version isn't known; they are counted and reported as not checked.
   * JavaScript: `npm audit --package-lock-only` reads package-lock.json (no install, no scripts). The registry is
     passed explicitly so a repo's .npmrc can't redirect the query.
+  * Gradle and Maven (Android apps, Java/Kotlin servers): `group:name:version` read from build.gradle(.kts), the
+    version catalog gradle/libs.versions.toml and pom.xml (with its own <properties>), shipped dependencies only (no
+    test configurations), asked of the OSV database (api.osv.dev, ecosystem Maven) as plain name/version pairs.
+    Nothing runs Gradle or Maven. Versions with `+`, ranges or variables Lantern cannot resolve are counted as not
+    checked. Only the libraries written in the build files are checked, not the ones they pull in.
 """
 
 from __future__ import annotations
@@ -29,7 +34,9 @@ from .python_frontend import SKIP_DIRS, inside_repo
 NPM_REGISTRY = "https://registry.npmjs.org/"
 TEST_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|fixtures|examples?)/")
 PIN_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._\-]*)(\[[^\]]*\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9.+!_\-]*)\s*(;.*)?$")
-NOTHING_TO_CHECK = ("skipped: no Python dependency files", "skipped: no package.json")
+NOTHING_TO_CHECK = ("skipped: no Python dependency files", "skipped: no package.json", "skipped: no Gradle or Maven files")
+AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit")
+OSV_API = "https://api.osv.dev/v1"
 NPM_SEVERITY = {"critical": "HIGH", "high": "HIGH", "moderate": "MEDIUM", "low": "LOW", "info": "LOW"}
 
 
@@ -58,9 +65,9 @@ def precomputed(tool: str) -> tuple[list[dict], dict] | None:
 
 
 def run_all(repo: Path) -> dict:
-    """Both audits with the network on, as {tool: {findings, info}} (what LANTERN_AUDITS_FROM reads)."""
+    """All audits with the network on, as {tool: {findings, info}} (what LANTERN_AUDITS_FROM reads)."""
     out = {}
-    for tool, fn in (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit)):
+    for tool, fn in (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit), ("maven-audit", run_maven_audit)):
         f, info = fn(repo, False)
         out[tool] = {"findings": f, "info": info}
     return out
@@ -284,6 +291,185 @@ def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     if other:
         res["not_checked"] = other[:10]
     return out, res
+
+
+
+# ---------------------------------------------------------------------------- Gradle / Maven (OSV)
+
+GRADLE_FILES = ("build.gradle", "build.gradle.kts")
+# Configurations that ship with the app (test and lint configurations are left out, like npm's --omit=dev)
+GRADLE_DEP = re.compile(r"^\s*(implementation|api|compile|runtimeOnly|compileOnly|releaseImplementation|kapt|ksp|"
+                        r"annotationProcessor|coreLibraryDesugaring|\w+Implementation)(?<!testImplementation)"
+                        r"(?<!androidTestImplementation)(?<!debugImplementation)\s*\(?\s*(?:platform\()?"
+                        r"[\"']([\w.\-]+):([\w.\-]+):([^\"'@\s]+)[\"']", re.M)
+GRADLE_VAR = re.compile(r"^\s*(?:ext\.)?(?:val\s+|def\s+)?(\w+)\s*=\s*[\"']([\w.\-]+)[\"']", re.M)
+EXACT = re.compile(r"^[0-9][\w.\-]*$")
+OSV_SEVERITY = {"CRITICAL": "critical", "HIGH": "high", "MODERATE": "moderate", "MEDIUM": "moderate", "LOW": "low"}
+
+
+def maven_coords(repo: Path) -> tuple[dict[str, tuple[str, str, int]], list[str], list[str]]:
+    """{"group:name": (version, file, line)}, versions not checked ("group:name:1.+"), files read."""
+    pins: dict[str, tuple[str, str, int]] = {}
+    loose: list[str] = []
+    files: list[str] = []
+
+    def add(coord: str, ver: str, rel: str, line: int):
+        if EXACT.match(ver) and "+" not in ver:
+            pins.setdefault(coord, (ver, rel, line))
+        else:
+            loose.append(f"{coord}:{ver}")
+
+    for p in _project_files(repo, names=GRADLE_FILES):
+        rel = p.relative_to(repo).as_posix()
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")[:2_000_000]
+        except OSError:
+            continue
+        found = False
+        vars_ = dict(GRADLE_VAR.findall(text))
+        for m in GRADLE_DEP.finditer(text):
+            found = True
+            ver = m.group(4)
+            vm = re.fullmatch(r"\$\{?(\w+)\}?", ver)
+            if vm:
+                ver = vars_.get(vm.group(1), ver)
+            add(f"{m.group(2)}:{m.group(3)}", ver, rel, text.count("\n", 0, m.start()) + 1)
+        if found:
+            files.append(rel)
+    for p in _project_files(repo, names=("libs.versions.toml",)):
+        rel = p.relative_to(repo).as_posix()
+        try:
+            cat = tomllib.loads(p.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        versions = {k: v for k, v in (cat.get("versions") or {}).items() if isinstance(v, str)}
+        text = p.read_text(encoding="utf-8", errors="replace")
+        for key, lib in (cat.get("libraries") or {}).items():
+            if isinstance(lib, str):
+                parts = lib.split(":")
+                if len(parts) == 3:
+                    coord, ver = f"{parts[0]}:{parts[1]}", parts[2]
+                else:
+                    continue
+            elif isinstance(lib, dict):
+                coord = lib.get("module") or (f"{lib.get('group')}:{lib.get('name')}" if lib.get("group") else None)
+                v = lib.get("version")
+                ver = versions.get(v.get("ref")) if isinstance(v, dict) else v
+                if not coord or not isinstance(ver, str):
+                    continue
+            else:
+                continue
+            if "test" in key.lower() or "junit" in coord or "espresso" in coord:
+                continue
+            pos = text.find(key)
+            add(coord, ver, rel, text.count("\n", 0, pos) + 1 if pos >= 0 else 1)
+        files.append(rel)
+    for p in _project_files(repo, names=("pom.xml",)):
+        rel = p.relative_to(repo).as_posix()
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")[:2_000_000]
+        except OSError:
+            continue
+        pm_ = re.search(r"<properties>(.*?)</properties>", text, re.S)
+        props = dict(re.findall(r"<([\w.\-]+)>\s*([\w.\-]+)\s*</\1>", pm_.group(1))) if pm_ else {}
+        found = False
+        for m in re.finditer(r"<dependency>(.*?)</dependency>", text, re.S):
+            body = m.group(1)
+            g = re.search(r"<groupId>\s*([^<\s]+)\s*</groupId>", body)
+            a = re.search(r"<artifactId>\s*([^<\s]+)\s*</artifactId>", body)
+            v = re.search(r"<version>\s*([^<\s]+)\s*</version>", body)
+            sc = re.search(r"<scope>\s*(test|provided)\s*</scope>", body)
+            if not (g and a and v) or sc:
+                continue
+            found = True
+            ver = v.group(1)
+            pm = re.fullmatch(r"\$\{([\w.\-]+)\}", ver)
+            if pm:
+                ver = props.get(pm.group(1), ver)
+            add(f"{g.group(1)}:{a.group(1)}", ver, rel, text.count("\n", 0, m.start()) + 1)
+        if found:
+            files.append(rel)
+    return pins, loose, files
+
+
+def _osv_post(path: str, body: dict, timeout: float = 60) -> dict:
+    import urllib.request
+    req = urllib.request.Request(f"{OSV_API}/{path}", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", "User-Agent": "lantern"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310: fixed https://api.osv.dev URL
+        return json.loads(r.read(20_000_000).decode("utf-8", "replace"))
+
+
+def _osv_get(path: str, timeout: float = 30) -> dict:
+    import urllib.request
+    req = urllib.request.Request(f"{OSV_API}/{path}", headers={"User-Agent": "lantern"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310: fixed https://api.osv.dev URL
+        return json.loads(r.read(5_000_000).decode("utf-8", "replace"))
+
+
+def _osv_fixed(vuln: dict, coord: str) -> list[str]:
+    out = []
+    for aff in vuln.get("affected") or []:
+        if not isinstance(aff, dict) or (aff.get("package") or {}).get("name") != coord:
+            continue
+        for rng in aff.get("ranges") or []:
+            for ev in (rng.get("events") or []) if isinstance(rng, dict) else []:
+                if isinstance(ev, dict) and ev.get("fixed"):
+                    out.append(str(ev["fixed"])[:40])
+    return sorted(set(out))
+
+
+def run_maven_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
+    from .security import _fid
+    pre = precomputed("maven-audit")
+    if pre is not None:
+        return pre
+    info = {"tool": "maven-audit", "role": "known-vulnerable Gradle/Maven libraries (OSV database)", "version": "osv-v1"}
+    pins, loose, files = maven_coords(repo)
+    if not files:
+        return [], info | {"status": "skipped: no Gradle or Maven files"}
+    if not pins:
+        return [], info | {"status": "skipped: no exact versions to check", "files": files, "unpinned": len(loose)}
+    if offline() if no_network is None else no_network:
+        return [], info | {"status": "skipped: offline", "files": files}
+    coords = sorted(pins)
+    try:
+        res = []
+        for i in range(0, len(coords), 500):
+            chunk = coords[i:i + 500]
+            data = _osv_post("querybatch", {"queries": [{"package": {"name": c, "ecosystem": "Maven"},
+                                                         "version": pins[c][0]} for c in chunk]})
+            res += list(zip(chunk, data.get("results") or []))
+        details: dict[str, dict] = {}
+        out = []
+        for coord, r in res:
+            for v in (r or {}).get("vulns") or []:
+                vid = str((v or {}).get("id") or "")[:60]
+                if not vid:
+                    continue
+                if vid not in details and len(details) < 300:
+                    details[vid] = _osv_get(f"vulns/{vid}")
+                d = details.get(vid) or {}
+                sev = OSV_SEVERITY.get(str((d.get("database_specific") or {}).get("severity") or "").upper(), "moderate")
+                fixed = _osv_fixed(d, coord)
+                aliases = [str(a)[:40] for a in (d.get("aliases") or [])][:5]
+                ver, rel, line = pins[coord]
+                out.append({
+                    "id": _fid("maven-audit", coord, vid),
+                    "tool": "maven-audit", "rule": vid,
+                    "title": f"{coord} {ver}: {str(d.get('summary') or 'known vulnerability')[:160]}",
+                    "tool_severity": NPM_SEVERITY.get(sev, "MEDIUM"), "dep_severity": sev,
+                    "tool_confidence": "HIGH", "file": rel, "line": line,
+                    "more_info": f"Fixed in: {', '.join(fixed) or 'no fix listed'}"
+                                 + (f". Also listed as {', '.join(aliases)}" if aliases else "")
+                                 + f". https://osv.dev/vulnerability/{vid}",
+                    "snippet": str(d.get("details") or d.get("summary") or "")[:400], "category": "dependency",
+                    "package": coord,
+                })
+    except (OSError, ValueError) as exc:
+        return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
+    return out, info | {"status": "ok", "files": files, "checked": len(pins), "unpinned": len(loose),
+                        "unpinned_examples": loose[:5]}
 
 
 if __name__ == "__main__":   # python -m lantern.depaudit REPO OUT.json  (the cloud service's audit step)

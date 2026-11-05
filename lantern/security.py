@@ -398,8 +398,9 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     (None: follow LANTERN_OFFLINE)."""
     repo = Path(g.repo_root)
     findings, tools = [], []
-    from .depaudit import run_npm_audit, run_pip_audit
-    for fn in (run_bandit, lambda r: run_pip_audit(r, offline), lambda r: run_npm_audit(r, offline), run_secrets):
+    from .depaudit import run_maven_audit, run_npm_audit, run_pip_audit
+    for fn in (run_bandit, lambda r: run_pip_audit(r, offline), lambda r: run_npm_audit(r, offline),
+               lambda r: run_maven_audit(r, offline), run_secrets):
         f, info = fn(repo)
         findings += f
         tools.append(info)

@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 from . import SCHEMA_VERSION, __version__
-from .depaudit import NOTHING_TO_CHECK
+from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
 from .security import ID_VERSION
@@ -127,14 +127,18 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
         out.append("Security scanners were not run for this report (--no-scan): no findings does not mean no problems.")
     for t in (sec or {}).get("tools", []):
         st = str(t.get("status") or "")
-        if t.get("tool") in ("pip-audit", "npm-audit") and st != "ok" and st not in NOTHING_TO_CHECK:
-            lang = "Python" if t["tool"] == "pip-audit" else "npm"
+        if t.get("tool") in AUDIT_TOOLS and st != "ok" and st not in NOTHING_TO_CHECK:
+            lang = {"pip-audit": "Python", "npm-audit": "npm", "maven-audit": "Gradle/Maven"}[t["tool"]]
             out.append(f"{lang} dependencies were not fully checked for known vulnerabilities ({st}).")
         if t.get("tool") == "pip-audit" and t.get("unpinned"):
             out.append(f"{t['unpinned']} Python requirement(s) give a range, not an exact version, so they were not "
                        "checked for known vulnerabilities. A lock file fixes this.")
+        if t.get("tool") == "maven-audit" and t.get("status") == "ok":
+            out.append("Gradle/Maven libraries were checked as written in the build files; the libraries they pull in "
+                       "were not" + (f", and {t['unpinned']} written without an exact version were not checked either"
+                                     if t.get("unpinned") else "") + ".")
     if any(f.get("category") == "dependency" for f in (sec or {}).get("findings", [])) or any(
-            t.get("tool") in ("pip-audit", "npm-audit") and t.get("status") == "ok" for t in (sec or {}).get("tools", [])):
+            t.get("tool") in AUDIT_TOOLS and t.get("status") == "ok" for t in (sec or {}).get("tools", [])):
         out.append("Dependency findings come from live vulnerability databases, so a re-check can find new ones "
                    "without any code change.")
     heur = sum(1 for f in (sec or {}).get("findings", []) if f.get("tool_confidence") == "LOW")

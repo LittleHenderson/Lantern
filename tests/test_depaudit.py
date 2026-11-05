@@ -106,3 +106,80 @@ def test_pip_audit_duplicate_and_aliased_advisories_merge(tmp_path, monkeypatch)
     assert [x["rule"] for x in f] == ["PYSEC-2024-38", "PYSEC-2026-1851"]
     assert "Also listed as CVE-2024-24762, GHSA-2jv5, PYSEC-2026-1850" in f[0]["more_info"]
     assert len({x["id"] for x in f}) == 2
+
+
+# ---------------------------------------------------------------- Gradle / Maven through OSV
+
+GRADLE = """plugins { id 'com.android.application' }
+ext.retrofitVersion = '2.6.1'
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:3.12.0'
+    implementation "com.squareup.retrofit2:retrofit:$retrofitVersion"
+    implementation 'com.example:dynamic:1.+'
+    testImplementation 'junit:junit:4.12'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.3.0'
+}
+"""
+
+
+def test_maven_coords_from_gradle_catalog_and_pom(tmp_path):
+    _write(tmp_path, {
+        "app/build.gradle": GRADLE,
+        "gradle/libs.versions.toml": '[versions]\ngson = "2.8.5"\n[libraries]\n'
+                                     'gson = { module = "com.google.code.gson:gson", version.ref = "gson" }\n'
+                                     'junit = { module = "junit:junit", version = "4.13" }\n',
+        "server/pom.xml": "<project><properties><jackson.version>2.9.8</jackson.version></properties><dependencies>"
+                          "<dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId>"
+                          "<version>${jackson.version}</version></dependency>"
+                          "<dependency><groupId>junit</groupId><artifactId>junit</artifactId><version>4.12</version>"
+                          "<scope>test</scope></dependency></dependencies></project>",
+    })
+    pins, loose, files = depaudit.maven_coords(tmp_path)
+    assert pins["com.squareup.okhttp3:okhttp"][:2] == ("3.12.0", "app/build.gradle")
+    assert pins["com.squareup.okhttp3:okhttp"][2] == 4                      # the line it is written on
+    assert pins["com.squareup.retrofit2:retrofit"][0] == "2.6.1"            # $variable resolved
+    assert pins["com.google.code.gson:gson"][0] == "2.8.5"                  # version catalog
+    assert pins["com.fasterxml.jackson.core:jackson-databind"][0] == "2.9.8"   # pom property
+    assert not any("junit" in k or "espresso" in k for k in pins)           # test libraries are not shipped
+    assert loose == ["com.example:dynamic:1.+"]
+    assert set(files) == {"app/build.gradle", "gradle/libs.versions.toml", "server/pom.xml"}
+
+
+def test_maven_audit_asks_osv_names_and_versions_only(tmp_path, monkeypatch):
+    _write(tmp_path, {"app/build.gradle": GRADLE})
+    asked = {}
+
+    def post(path, body, timeout=60):
+        asked["post"] = (path, body)
+        return {"results": [{"vulns": [{"id": "GHSA-aaaa"}]} if q["package"]["name"].endswith("okhttp") else {}
+                            for q in body["queries"]]}
+
+    def get(path, timeout=30):
+        asked.setdefault("get", []).append(path)
+        return {"id": "GHSA-aaaa", "summary": "Certificate pinning bypass", "aliases": ["CVE-2021-0341"],
+                "database_specific": {"severity": "HIGH"},
+                "affected": [{"package": {"name": "com.squareup.okhttp3:okhttp", "ecosystem": "Maven"},
+                              "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "3.12.13"}]}]}]}
+    monkeypatch.setattr(depaudit, "_osv_post", post)
+    monkeypatch.setattr(depaudit, "_osv_get", get)
+    f, info = depaudit.run_maven_audit(tmp_path, no_network=False)
+    assert asked["post"][0] == "querybatch"
+    assert {q["package"]["ecosystem"] for q in asked["post"][1]["queries"]} == {"Maven"}
+    assert set(asked["post"][1]["queries"][0]) == {"package", "version"}
+    assert asked["get"] == ["vulns/GHSA-aaaa"]
+    assert len(f) == 1
+    assert f[0]["package"] == "com.squareup.okhttp3:okhttp" and f[0]["line"] == 4 and f[0]["dep_severity"] == "high"
+    assert "3.12.13" in f[0]["more_info"] and "CVE-2021-0341" in f[0]["more_info"]
+    assert info["status"] == "ok" and info["checked"] == 2 and info["unpinned"] == 1
+
+
+def test_maven_audit_offline_and_errors(tmp_path, monkeypatch):
+    _write(tmp_path, {"app/build.gradle": GRADLE})
+    assert depaudit.run_maven_audit(tmp_path, no_network=True)[1]["status"] == "skipped: offline"
+    assert depaudit.run_maven_audit(tmp_path / "none", no_network=False)[1]["status"] == "skipped: no Gradle or Maven files"
+
+    def boom(*a, **k):
+        raise OSError("no route")
+    monkeypatch.setattr(depaudit, "_osv_post", boom)
+    f, info = depaudit.run_maven_audit(tmp_path, no_network=False)
+    assert f == [] and info["status"].startswith("error: OSError")
