@@ -5,6 +5,19 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Android apps are read as phone apps. Lantern finds the app's screens and the parts other apps can start from
+  `AndroidManifest.xml`, so findings get a real path ("a link opens NoteActivity and the id it carries reaches a
+  database query" is critical), and the map says Screen and App instead of Browser and Server. 26 new `LM-*` checks
+  cover the manifest (debuggable, backups, plain http, components open to other apps, permissions the code never
+  uses, Google keys), the network security config (plain http, user certificates), the Gradle build (release
+  debuggable or signed with the debug key, no R8, old target SDK, `+` versions, signing passwords) and Java/Kotlin code
+  (location or tokens in the log, WebView JavaScript, bridges and file access, ignored SSL errors, shared storage,
+  plain-text logins in SharedPreferences, SQLite queries built from text, trust-all certificates, `http://` links,
+  broadcasts any app can hear). Findings has an "On the phone" card listing what the app asks to use and what is open
+  to other apps. Readiness grades an Android app as one: crash reporting, logs stripped from release, R8, signing key,
+  target SDK, network timeouts and retries, and Android Studio's sample tests no longer count as real tests. Each
+  Android problem has its own story (another app on the phone, a USB cable, a café Wi-Fi). On devr22/HerSheild: 13
+  findings where there were none, readiness 55 instead of 28.
 - Cloud: 50 runs per person per day (was 10) and 1000 for everyone together (was 300), the owner's choices of 2026-11-04; `docs/deploy.md` says how to change it with one command.
 - Every function has its three lenses from the moment a check ends. Where no model has explained a function yet, the
   Technical, Everyday and Mapped lenses are built from the map alone (file, lines, signature, entry point, calls, HTTP

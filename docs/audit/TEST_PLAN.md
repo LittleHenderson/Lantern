@@ -39,6 +39,7 @@ with the source folder moved away, the live gateway's `/v1/health`, then a GitHu
 |---|---|
 | `tests/test_frontend.py` | Python resolution: imports, classes/MRO, `self`/`super`, type hints, properties, decorators, FastAPI `Depends`, pytest fixtures, entry points |
 | `tests/test_fullstack.py` | JS/TS walker and resolver, Next.js/React Router/TanStack/Express entries, HTTP call extraction, bridge matching, web security rules |
+| `tests/test_android.py` | Android: manifest entry points (screens, exported components, fragments by `extends`), lanes on the phone, every planted problem in `tests/fixtures/androidapp`, a deep link reaching `rawQuery` is critical and reported once, exported components ranked by kind, unused permissions, Android readiness checks, a clean app gives no `LM-*` finding, signing password + key file is a secret, Google key redacted, hostile manifests refused, fixtures under `tests/` never make a repo an Android app |
 | `tests/test_security.py` | Scanner orchestration, pinning, reachability, ranking, `.env` scanning, symlink containment |
 | `tests/test_trace.py` | Runtime tracing and merge into the graph |
 | `tests/test_explain.py` | Anchor validator: invented symbols, out-of-range lines, unknown terms, code identifiers in Lens 2, required finding explanations |

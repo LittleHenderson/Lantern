@@ -34,6 +34,20 @@ CATEGORIES = [
 ]
 
 CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+MOBILE_EXTS = {".java", ".kt"}            # an Android app's code: counted for tests and the Android checks only
+MOBILE_TEST_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/")
+# What Android Studio writes into every new project: a test that checks 2 + 2 and one that reads the package name.
+TEMPLATE_TEST_RE = re.compile(r"(^|/)Example(Unit|Instrumented)Test\.(java|kt)$")
+CRASH_REPORTING = re.compile(r"firebase[-:]crashlytics|io\.sentry|com\.bugsnag|com\.instabug|datadog|newrelic|"
+                             r"appcenter[-:]crashes|acra", re.I)
+LOGS_STRIPPED = re.compile(r"-assumenosideeffects\s+class\s+android\.util\.Log|\bTimber\.plant\b")
+ANDROID_HTTP = re.compile(r"\bnew\s+OkHttpClient\b|OkHttpClient\.Builder\(|\bOkHttpClient\(\)|Retrofit\.Builder\(|"
+                          r"Volley\.newRequestQueue|\.openConnection\(\)|HttpClient\s*\{|HttpClient\(")
+ANDROID_TIMEOUT = re.compile(r"\.(connectTimeout|readTimeout|writeTimeout|callTimeout)\s*\(|setRetryPolicy\s*\(|"
+                             r"setConnectTimeout\s*\(|setReadTimeout\s*\(|requestTimeoutMillis|HttpTimeout")
+ANDROID_RETRY = re.compile(r"DefaultRetryPolicy|setBackoffCriteria|BackoffPolicy|retryOnConnectionFailure\s*\(\s*true|"
+                           r"\bretryWhen\b|\bHttpRequestRetry\b|\bretry\s*\(")
+MOBILE_SHAPES = {"Android app"}
 JS_TEST_RE = re.compile(r"(\.(test|spec)\.[cm]?[jt]sx?$)|(^|/)(__tests__|tests?|e2e|cypress|playwright)/")
 PY_LOCKS = ("poetry.lock", "uv.lock", "Pipfile.lock", "pdm.lock")
 JS_LOCKS = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb")
@@ -56,8 +70,10 @@ VALIDATION = re.compile(r"\bpydantic\b|\bfrom fastapi\b|\bmarshmallow\b|\bwtform
 RETRY = re.compile(r"\btenacity\b|\bbackoff\b|urllib3\.util\.retry|\bRetry\(|['\"](p-retry|axios-retry|async-retry|ky)['\"]|\bretries\s*[:=]")
 SHUTDOWN = re.compile(r"signal\.signal\(\s*signal\.SIGTERM|SIGTERM|lifespan|@app\.on_event\(\s*['\"]shutdown|atexit\.register")
 HEALTH_PATH = re.compile(r"/(health|healthz|healthcheck|ready|readyz|livez|ping|status)\b", re.I)
-TEST_CMD = re.compile(r"\b(pytest|unittest|tox|nox|npm (run )?test|pnpm (run )?test|yarn test|vitest|jest|playwright test|go test|cargo test|make test)\b")
-SCAN_CMD = re.compile(r"\b(lantern|bandit|pip-audit|npm audit|pnpm audit|yarn audit|semgrep|opengrep|codeql|trivy|snyk|gitleaks|safety|osv-scanner|dependabot)\b", re.I)
+TEST_CMD = re.compile(r"\b(pytest|unittest|tox|nox|npm (run )?test|pnpm (run )?test|yarn test|vitest|jest|playwright test|go test|cargo test|make test|"
+                      r"gradlew?(?:\.bat)?(?:\s+[-\w:]+)*?\s+[\w:]*(?:test\w*|check|connected\w*AndroidTest)|mvn\s+(?:-\S+\s+)*(?:test|verify)|"
+                      r"xcodebuild\s+(?:\S+\s+)*test|flutter test|swift test)\b")
+SCAN_CMD = re.compile(r"\b(lantern|bandit|pip-audit|npm audit|pnpm audit|yarn audit|semgrep|opengrep|codeql|trivy|snyk|gitleaks|safety|osv-scanner|dependabot|mobsf|dependency-check)\b", re.I)
 
 
 # ---------------------------------------------------------------------------- repo facts
@@ -108,7 +124,23 @@ class Repo:
 
     @staticmethod
     def is_test(f: str) -> bool:
-        return bool(TEST_FILE_RE.search(f) or JS_TEST_RE.search(f) or f.rsplit("/", 1)[-1].startswith("conftest"))
+        return bool(TEST_FILE_RE.search(f) or JS_TEST_RE.search(f) or MOBILE_TEST_RE.search(f)
+                    or f.rsplit("/", 1)[-1].startswith("conftest"))
+
+    def mobile_code(self, tests: bool = False):
+        for f in self.files:
+            if Path(f).suffix in MOBILE_EXTS and self.is_test(f) == tests:
+                yield f, self.text(f)
+
+    def mobile_grep(self, rx: re.Pattern, limit: int = 20) -> list[tuple[str, int, str]]:
+        out = []
+        for f, t in self.mobile_code():
+            for m in rx.finditer(t):
+                line = t.count("\n", 0, m.start()) + 1
+                out.append((f, line, t.splitlines()[line - 1].strip()[:160]))
+                if len(out) >= limit:
+                    return out
+        return out
 
     def grep(self, rx: re.Pattern, tests: bool = False, limit: int = 20) -> list[tuple[str, int, str]]:
         out = []
@@ -151,10 +183,15 @@ def detect_stack(repo: Repo, g: Graph) -> dict:
     entries = Counter((n.entry or {}).get("kind") for n in g.entry_points())
     langs = list((g.meta.get("languages") or {}).keys())
     deploy = sorted({v for k, v in DEPLOY_FILES.items() if repo.has(k)})
-    return {"frameworks": fw, "entries": dict(entries), "languages": langs, "deploy_targets": deploy}
+    if g.meta.get("platform") == "android":
+        fw.insert(0, "Android")
+    return {"frameworks": fw, "entries": dict(entries), "languages": langs, "deploy_targets": deploy,
+            "platform": g.meta.get("platform")}
 
 
 def classify_shape(stack: dict) -> str:
+    if stack.get("platform") == "android":
+        return "Android app"
     e = stack["entries"]
     pages, routes = e.get("page", 0), e.get("route", 0)
     if pages and routes:
@@ -170,7 +207,8 @@ def classify_shape(stack: dict) -> str:
     return "library"
 
 
-SHAPES = frozenset({"full-stack web app", "web API", "frontend web app", "command-line tool", "script or worker", "library"})
+SHAPES = frozenset({"full-stack web app", "web API", "frontend web app", "command-line tool", "script or worker", "library",
+                    "Android app"})
 SERVICE_SHAPES = {"full-stack web app", "web API"}
 
 
@@ -236,6 +274,8 @@ def check_secrets(repo: Repo, sec: dict | None, env: dict[str, str]) -> list[dic
     else:
         out.append(_check("secrets-example", ".env.example documents every variable", 2, "skip",
                           "no environment variables read"))
+    if any(f.rsplit("/", 1)[-1] == "AndroidManifest.xml" for f in repo.files):
+        out += _mobile_secrets(repo, sec)
     envs = [f for f in repo.project_files if f.rsplit("/", 1)[-1] in (".env", ".env.local", ".env.production")]
     gi = repo.text(".gitignore") if repo.has(".gitignore") else ""
     if envs:
@@ -296,10 +336,15 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
         if any((d + lk) in repo.files for lk in JS_LOCKS) or any(lk in repo.files for lk in JS_LOCKS):
             have.append(pj)
     for bg in (f for f in repo.project_files if f.rsplit("/", 1)[-1] in ("build.gradle", "build.gradle.kts")):
+        if not re.search(r"^\s*dependencies\s*\{(?![^}]*classpath)", repo.text(bg), re.M):
+            continue                      # a root build file that only sets up plugins declares no libraries
         want.append(bg)
         d = bg.rsplit("/", 1)[0] + "/" if "/" in bg else ""
         if (d + "gradle.lockfile") in repo.files or "gradle.lockfile" in repo.files:
             have.append(bg)
+        elif re.search(r"(?:implementation|api|compile)\b", repo.text(bg)) and not re.search(
+                r"[\"'][\w.\-]+:[\w.\-]+:(?:[^\"'\s]*\+|latest\.\w+|\[[^\"']*)[\"']", repo.text(bg)):
+            have.append(bg)             # every library is written with an exact version (no 1.+, latest, ranges)
     for pm in (f for f in repo.project_files if f.rsplit("/", 1)[-1] == "pom.xml"):
         want.append(pm)
         have.append(pm)                 # Maven resolves to the exact versions written in the POM
@@ -433,10 +478,17 @@ def _strs(v) -> list[str]:
 
 def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
     out = []
-    tests = [f for f in repo.files if Path(f).suffix in CODE_EXTS and repo.is_test(f)]
-    out.append(_check("tests-exist", "Tests exist", 4, "pass" if tests else "fail",
-                      f"{len(tests)} test file{'s' if len(tests) != 1 else ''}" if tests else "no test files found",
-                      "" if tests else "Add tests for your most important flows first (sign-in, payments, data changes)."))
+    tests = [f for f in repo.files if Path(f).suffix in CODE_EXTS | MOBILE_EXTS and repo.is_test(f)]
+    real = [f for f in tests if not TEMPLATE_TEST_RE.search(f)]
+    if tests and not real:
+        out.append(_check("tests-exist", "Tests exist", 4, "partial",
+                          f"only the sample tests Android Studio writes into every new project ({', '.join(t.rsplit('/', 1)[-1] for t in tests[:2])})",
+                          "Write a test for your most important flow (for example: the alert is sent with the right "
+                          "location) and delete the sample tests.", earned=1))
+    else:
+        out.append(_check("tests-exist", "Tests exist", 4, "pass" if tests else "fail",
+                          f"{len(tests)} test file{'s' if len(tests) != 1 else ''}" if tests else "no test files found",
+                          "" if tests else "Add tests for your most important flows first (sign-in, payments, data changes)."))
     # Which non-test entry points do tests reach, directly or through the code they call? One pass over the edges
     # builds both directions; scanning the edge list per node made this take minutes on a 30,000-function repo.
     out_adj: dict[str, list[str]] = {}
@@ -477,6 +529,8 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
 
 
 def check_observability(repo: Repo, g: Graph, shape: str) -> list[dict]:
+    if shape in MOBILE_SHAPES:
+        return _mobile_observability(repo)
     out = []
     log = repo.grep(LOGGING, limit=1)
     if shape in ("library", "command-line tool"):
@@ -508,7 +562,9 @@ def check_observability(repo: Repo, g: Graph, shape: str) -> list[dict]:
     return out
 
 
-def check_packaging(repo: Repo, shape: str, stack: dict) -> list[dict]:
+def check_packaging(repo: Repo, shape: str, stack: dict, sec: dict | None = None) -> list[dict]:
+    if shape in MOBILE_SHAPES:
+        return _mobile_packaging(sec)
     out = []
     if shape not in SERVICE_SHAPES and shape != "frontend web app":
         manifest = repo.has("pyproject.toml", "setup.py", "package.json")
@@ -569,6 +625,8 @@ def check_ci(repo: Repo) -> list[dict]:
 
 
 def check_resilience(repo: Repo, shape: str, stack: dict) -> list[dict]:
+    if shape in MOBILE_SHAPES:
+        return _mobile_resilience(repo)
     out = []
     no_timeout = []
     for f, t in repo.code():
@@ -621,7 +679,8 @@ def check_resilience(repo: Repo, shape: str, stack: dict) -> list[dict]:
 def check_docs(repo: Repo) -> list[dict]:
     readme = repo.has("README.md", "README.rst", "README.txt", "README")
     t = repo.text(readme) if readme else ""
-    runs = bool(re.search(r"(pip install|npm (install|i|run)|pnpm|yarn|uv |poetry|docker|make |python -m|npx )", t))
+    runs = bool(re.search(r"(pip install|npm (install|i|run)|pnpm|yarn|uv |poetry|docker|make |python -m|npx |gradlew|"
+                          r"Android Studio|flutter (run|build)|xcodebuild|pod install|cargo (run|build)|go (run|build))", t))
     lic = repo.has("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
     sec = repo.has("SECURITY.md", ".github/SECURITY.md")
     return [
@@ -684,6 +743,14 @@ def advice(shape: str, stack: dict) -> list[str]:
         ],
         "library": [
             "Publish with a version number and a changelog; keep the public API small and tested.",
+        ],
+        "Android app": [
+            "Publish through Google Play with Play App Signing, so losing your laptop never means losing the app.",
+            "Keep private keys and paid-API calls on a small server (or Firebase Functions); the app calls it. "
+            "Anything inside the app can be read by whoever installs it.",
+            "Lock down your Firebase database and storage rules to signed-in users and their own records, and test "
+            "them in the Firebase emulator.",
+            "Release to a small group first (Play Console internal testing), with crash reporting on.",
         ],
     }[shape][:]
     if "Supabase" in fw:
@@ -829,7 +896,7 @@ def assess(g: Graph, sec: dict | None, run_meta: dict | None = None) -> dict:
         "deps": check_deps(repo, sec, shape),
         "tests": check_tests(repo, g, run_meta or {}),
         "observability": check_observability(repo, g, shape),
-        "packaging": check_packaging(repo, shape, stack),
+        "packaging": check_packaging(repo, shape, stack, sec),
         "ci": check_ci(repo),
         "resilience": check_resilience(repo, shape, stack),
         "docs": check_docs(repo),
@@ -859,3 +926,102 @@ def assess(g: Graph, sec: dict | None, run_meta: dict | None = None) -> dict:
         "env_vars": sorted(env), "next_steps": todo[:8],
         "starter": starter_files(repo, shape, stack, env),
     }
+
+
+# ---------------------------------------------------------------------------- Android apps
+
+def _android_rules(sec: dict | None) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for f in (sec or {}).get("findings", []):
+        if f.get("rule", "").startswith("LM-") and f.get("status") != "accepted":
+            out.setdefault(f["rule"], []).append(f)
+    return out
+
+
+def _mobile_secrets(repo: Repo, sec: dict | None) -> list[dict]:
+    keystores = [f for f in repo.files if f.endswith((".jks", ".keystore")) and "debug" not in f.rsplit("/", 1)[-1]]
+    lp = [f for f in repo.files if f.rsplit("/", 1)[-1] == "local.properties"]
+    rules = _android_rules(sec)
+    keys = rules.get("LM-KEY-IN-APP", []) + rules.get("LM-SIGNING-SECRET", [])
+    return [
+        _check("secrets-keystore", "The app's signing key is not in the repository", 3, "fail" if keystores else "pass",
+               ", ".join(keystores[:3]) if keystores else "no .jks or .keystore file committed",
+               "" if not keystores else "Remove the keystore from git (and its history), keep it in a password "
+               "manager, and turn on Play App Signing. Anyone with it can publish updates as you.", how="file check"),
+        _check("secrets-local-props", "local.properties is not committed", 1, "fail" if lp else "pass",
+               ", ".join(lp) if lp else "not committed",
+               "" if not lp else "Add local.properties to .gitignore: it holds paths and often keys from your computer.",
+               how="file check"),
+        _check("secrets-app-keys", "No private keys built into the app", 2, "fail" if keys else "pass",
+               _where([(f["file"], f["line"], "") for f in keys]) if keys else "none found",
+               "" if not keys else "Anything inside the app can be read by whoever installs it. Keep private keys on "
+               "a server and have the app call it.", how="LM-KEY-IN-APP, LM-SIGNING-SECRET"),
+    ]
+
+
+def _mobile_observability(repo: Repo) -> list[dict]:
+    builds = "\n".join(repo.text(f) for f in repo.files if f.rsplit("/", 1)[-1] in
+                       ("build.gradle", "build.gradle.kts", "libs.versions.toml"))
+    crash = CRASH_REPORTING.search(builds)
+    rules = "\n".join(repo.text(f) for f in repo.files if f.endswith(("proguard-rules.pro", ".pro")))
+    stripped = LOGS_STRIPPED.search(rules) or repo.mobile_grep(LOGS_STRIPPED, limit=1)
+    logs = repo.mobile_grep(re.compile(r"\bLog\.[vdiwe]\s*\("), limit=500)
+    return [
+        _check("obs-crash", "Crash reporting", 3, "pass" if crash else "fail",
+               f"uses {crash.group(0)}" if crash else "no crash reporter found",
+               "" if crash else "Add Firebase Crashlytics or Sentry, so you hear about crashes on people's phones "
+               "before the reviews do.", how="pattern in the build files"),
+        _check("obs-health", "Health-check endpoint", 3, "skip", "an app, not a service"),
+        _check("obs-print", "Log lines are removed from release builds", 2,
+               "pass" if stripped or not logs else "fail",
+               ("ProGuard/R8 rule or Timber found" if stripped else
+                f"{len(logs)} Log.* call{'s' if len(logs) != 1 else ''} ship in the release app ({_where(logs)})")
+               if logs or stripped else "no Log calls",
+               "" if stripped or not logs else "Add `-assumenosideeffects class android.util.Log { *; }` to "
+               "proguard-rules.pro (with minify on), or log through Timber with a tree only in debug builds.",
+               how="pattern"),
+    ]
+
+
+def _mobile_packaging(sec: dict | None) -> list[dict]:
+    rules = _android_rules(sec)
+
+    def st(rule_ids, pts, cid, title, ok, bad, fix):
+        hits = [f for r in rule_ids for f in rules.get(r, [])]
+        return _check(cid, title, pts, "fail" if hits else "pass",
+                      (bad + ": " + _where([(f["file"], f["line"], "") for f in hits])) if hits else ok,
+                      fix if hits else "", how=" / ".join(rule_ids))
+    return [
+        st(["LM-DEBUGGABLE", "LM-RELEASE-DEBUGGABLE"], 3, "pkg-debuggable", "Release app is not debuggable",
+           "not debuggable", "debuggable", "Remove android:debuggable and `debuggable true` from the release build."),
+        st(["LM-NO-SHRINK"], 2, "pkg-shrink", "Release build is shrunk and obfuscated (R8)", "minifyEnabled true",
+           "not shrunk", "Set minifyEnabled true (isMinifyEnabled = true) and shrinkResources true in the release build."),
+        st(["LM-RELEASE-DEBUG-KEY"], 1, "pkg-signing", "Release build signed with its own key", "not signed with the debug key",
+           "signed with the debug key", "Create an upload key in Android Studio (Build → Generate Signed Bundle) "
+           "and use Play App Signing."),
+        st(["LM-OLD-TARGET"], 2, "pkg-target", "Targets a recent Android version", "recent target",
+           "old target", "Raise targetSdk to the newest version Android Studio offers, then re-test permissions, "
+           "notifications and background work."),
+    ]
+
+
+def _mobile_resilience(repo: Repo) -> list[dict]:
+    http = repo.mobile_grep(ANDROID_HTTP, limit=50)
+    if not http:
+        return [_check("res-timeout", "Network calls have timeouts", 4, "skip", "no HTTP client set up in code"),
+                _check("res-retry", "Retries with backoff on network calls", 2, "skip", "no HTTP client set up in code"),
+                _check("res-shutdown", "Graceful shutdown", 2, "skip", "an app: Android manages its lifecycle")]
+    t = repo.mobile_grep(ANDROID_TIMEOUT, limit=1)
+    r = repo.mobile_grep(ANDROID_RETRY, limit=1)
+    return [
+        _check("res-timeout", "Network calls have timeouts", 4, "pass" if t else "fail",
+               f"{t[0][0]}:{t[0][1]}" if t else f"{len(http)} HTTP client{'s' if len(http) != 1 else ''} set up "
+               f"({_where(http)}), no timeout set",
+               "" if t else "Set connectTimeout/readTimeout on OkHttp (or setRetryPolicy on Volley requests), so a "
+               "bad connection fails quickly instead of freezing the screen.", how="pattern"),
+        _check("res-retry", "Retries with backoff on network calls", 2, "pass" if r else "fail",
+               f"{r[0][0]}:{r[0][1]}" if r else "no retry policy found",
+               "" if r else "Retry with backoff (Volley DefaultRetryPolicy, WorkManager setBackoffCriteria), "
+               "especially for anything that must not get lost, like an alert.", how="pattern"),
+        _check("res-shutdown", "Graceful shutdown", 2, "skip", "an app: Android manages its lifecycle"),
+    ]

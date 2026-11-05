@@ -40,6 +40,7 @@ lines and the server streams them to the browser.
 | `bridge.py` | Match `g.meta["http_calls"]` to route entries | `link`, `match` |
 | `trace.py`, `tracehook.py` | Runtime tracing (Python only), merge into graph | `run_trace`, `merge_trace` |
 | `security.py` | Scanner orchestration, node pinning, reachability, ranking, accepted risks | `scan`, `reachability`, `rank`, `load_accepted` |
+| `android.py` | Android apps: manifest/network-config/Gradle reading (expat, entities refused), manifest entry points, `LM-*` rules, the `security.mobile` summary (permissions, components) | `find_modules`, `add_entries`, `scan` |
 | `websec.py` | Full-stack rules (public env secrets, Supabase, Firebase, CORS, missing auth, JS patterns) | `scan_web` |
 | `readiness.py` | Readiness checks, shape classifier, advisor, hotspots, starter files | `assess`, `Repo`, `check_*` |
 | `evidence.py` | Evidence Report, digest, badge, git facts | `build`, `digest_payload`, `render_html`, `git_info` |

@@ -198,6 +198,9 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 
 /* Findings (design 4a): Simple audit memo grouped by severity; Advanced table + detail panel */
 .countrow{display:flex;gap:18px;margin:0 0 18px;font-size:13px;color:var(--muted)} .countrow b{font:600 15px var(--font);color:var(--ink);margin-right:5px}
+.phone{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0 0 18px;background:var(--surface)} .phone h3{margin:0 0 4px;font:600 15px var(--font)}
+.phone .lede{margin:0 0 10px} .phone .perms{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px} .phone .perm{font-size:12.5px;padding:3px 9px;border-radius:999px;background:var(--sunken);color:var(--ink)}
+.phone .perm.unused{background:transparent;border:1px dashed var(--line);color:var(--muted)} .phone .open{margin:0;padding-left:18px;font-size:13px} .phone .open li{margin:2px 0}
 /* Simple findings read as an audit memo (design 4a): serif headings, severity in the margin, entries split by rules. */
 .lanegoal{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 2px;font-size:14px;color:var(--ink-2)} .lanegoal b{color:var(--ink);font-weight:600}
 .memo .toolbar h2{font:400 34px/1.15 var(--serif);letter-spacing:-.01em}
@@ -1083,7 +1086,7 @@ function situation(n) {
   let page = null, ui = null;
   if (ids) { page = N[ids[0]]; for (let i = 1; i < ids.length; i++) { const e = (OUT[ids[i - 1]] || []).find(x => x.dst === ids[i]); if (e && e.detail && UI_WORDS[e.detail]) { ui = UI_WORDS[e.detail]; break; } } }
   else { for (const nid of Object.keys(N)) { const v = ((window._uiReach || {})[nid]); if (v) break; } }
-  const where = isJS(n.id) ? 'Runs in the visitor’s browser' : layer(n.id) === 'backend' ? 'Runs on your server' : 'A library call';
+  const where = onPhone(n) ? 'Runs on the person’s phone' : isJS(n.id) ? 'Runs in the visitor’s browser' : layer(n.id) === 'backend' ? 'Runs on your server' : 'A library call';
   if (page && page.entry) return `${where} when someone on <b>${esc(page.entry.detail || short(page.qualname))}</b> ${ui ? esc(ui).replace('on ', '') + 's' : 'uses the page'}.`;
   if (n.entry) return `${where}: ${esc({page: 'a page', route: 'a route', cli: 'a command', main: 'the program start', test: 'a test', script: 'a script'}[n.entry.kind] || n.entry.kind)}${n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}.`;
   const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
@@ -1106,12 +1109,17 @@ const sigParams = sig => {
   return out.map(p => p.trim().replace(/^(mut\s+|\.\.\.)/, '').replace(/[:=].*$/, '').replace(/^(?:[\w<>\[\],?.&*]+\s+)+(?=[\w$]+$)/, '').replace(/^[&*]+/, '').trim())
     .filter(p => p && !['self', 'cls', 'this', '*', '/', '&self', '&mut self'].includes(p) && /^[\w$]+$/.test(p));
 };
-const entryPhrase = e => !e ? '' : ({page: `the page ${e.detail || ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
+// Android entries (android.py): "MainActivity screen · onCreate" and "INTENT NotesProvider provider (…) · query"
+const isScreen = e => !!e && e.kind === 'page' && / screen\b/.test(String(e.detail || ''));
+const isIntent = e => !!e && e.kind === 'route' && String(e.detail || '').startsWith('INTENT ');
+const partName = e => String(e.detail || '').replace(/^INTENT /, '').split(' ')[0];
+const onPhone = n => !!n && ANDROID_APP && (n.lane === 'browser' || n.lane === 'frontend');
+const entryPhrase = e => !e ? '' : isScreen(e) ? `someone opens the ${String(e.detail).split(' · ')[0]} on their phone` : isIntent(e) ? `another app on the phone, or a link, starts ${partName(e)}` : ({page: `the page ${e.detail || ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
   main: 'the program starts', test: 'the tests run', script: `the script${e.detail ? ' ' + e.detail : ''} is run`})[e.kind] || `${e.kind}${e.detail ? ' ' + e.detail : ''}`;
 const extWords = id => { const n = String(id || '').replace(/^ext:/, ''); if (n.startsWith('HTTP ')) return n; const lib = n.split(/[./]/)[0]; return `the ${lib} library`; };
 function mapRecord(n) {
   if (!n || n.kind === 'class') return null;
-  const where = isJS(n.id) ? 'in the visitor’s browser' : layer(n.id) === 'backend' ? 'on your server' : 'in a library';
+  const where = onPhone(n) ? 'on the person’s phone, inside your app' : isJS(n.id) ? 'in the visitor’s browser' : layer(n.id) === 'backend' ? 'on your server' : 'in a library';
   const lines = n.start_line && n.end_line ? n.end_line - n.start_line + 1 : 0;
   const kindWord = n.kind === 'module' ? 'file' : n.kind === 'external' ? 'library call' : isJS(n.id) ? 'component or function' : 'function';
   const callers = (IN[n.id] || []).filter(e => N[e.src] && !e.src.startsWith('ext:') && !(e.via || '').startsWith('http-')).map(e => e.src);
@@ -1148,7 +1156,8 @@ function mapRecord(n) {
   };
   const lens2 = {
     text: `This is “${plainWords(n.qualname)}”, a ${kindWord} running ${where}. ${runs} ${uses} ${talks}${found}`.replace(/\s+/g, ' ').trim(),
-    example: n.entry && n.entry.kind === 'page' ? `Someone opens ${n.entry.detail || 'this page'} and this is what builds it.` : n.entry && n.entry.kind === 'route' ? `A request to ${n.entry.detail || 'this route'} lands here, and this code decides what to answer.`
+    example: isScreen(n.entry) ? `Someone opens the ${String(n.entry.detail).split(' · ')[0]} on their phone, and Android runs this code.` : isIntent(n.entry) ? `Another app on the same phone (or a link) starts ${partName(n.entry)}, and this code runs with whatever data it passed in.`
+      : n.entry && n.entry.kind === 'page' ? `Someone opens ${n.entry.detail || 'this page'} and this is what builds it.` : n.entry && n.entry.kind === 'route' ? `A request to ${n.entry.detail || 'this route'} lands here, and this code decides what to answer.`
       : served.length ? `Someone in the browser uses ${short(N[served[0].src].qualname)}, which sends a request this code answers.` : callers.length ? `${short(N[callers[0]].qualname)} needs “${plainWords(n.qualname)}” done and hands the job to this code.` : 'No example from the map: nothing in your code was seen calling it.',
     analogy: '',
   };
@@ -1264,11 +1273,11 @@ function renderFix() {
   const idx = queue.findIndex(x => x.id === f.id);
   const n = N[f.node], ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
   const entry = entryOf(f), pageN = f.ui_path ? N[f.ui_path[0]] : null;
-  const pageWord = pageN && pageN.entry && pageN.entry.kind === 'page' ? `${pageN.entry.detail} page` : f.reachable ? `${f.reachable.kind} ${entry}` : 'nothing a visitor can reach';
+  const pageWord = pageN && isScreen(pageN.entry) ? String(pageN.entry.detail).split(' · ')[0] : pageN && pageN.entry && pageN.entry.kind === 'page' ? `${pageN.entry.detail} page` : f.reachable ? `${f.reachable.kind} ${entry}` : 'nothing a visitor can reach';
   const seen = seenHops(f), hopsN = hops(f);
   const srcLine = (() => { const sr = n && SRC[n.id]; if (!sr || !f.line) return ''; const i = f.line - (+n.start_line || 0); const ls = sr.split('\n'); return ls[i] !== undefined ? ls[i].trim() : ''; })();
   const why = [
-    f.ui_path || f.reachable ? `<span><b>✓</b>A visitor can reach it from <code>${esc(entry)}</code></span>` : `<span><b>–</b>Not reached from any page or route (so it is ranked ${esc(f.rank)}, not critical)</span>`,
+    f.ui_path || f.reachable ? `<span><b>✓</b>${visitor(true)} can reach it from <code>${esc(entry)}</code></span>` : `<span><b>–</b>Not reached from any page or route (so it is ranked ${esc(f.rank)}, not critical)</span>`,
     f.input ? `<span><b>✓</b>It uses what they typed (<code>${esc(f.input.via.replace(/^parameter /, ''))}</code>)</span>` : f.input === false ? '<span><b>–</b>Nothing from the request reaches this line</span>' : '',
     seen ? `<span><b>✓</b>${esc(countWord(seen))} hop${seen === 1 ? '' : 's'} seen running in your tests</span>` : hopsN ? `<span><b>–</b>${esc(countWord(hopsN))} hop${hopsN === 1 ? '' : 's'}, none seen running yet</span>` : '',
     f.tool_confidence === 'LOW' ? '<span><b>?</b>Heuristic check: look before you act</span>' : '',
@@ -1281,7 +1290,7 @@ function renderFix() {
       ${lows.length ? `<div class="note" style="margin-top:10px">${lows.length} low-risk item${lows.length === 1 ? '' : 's'} hidden. <button class="linkbtn" data-q="${esc(lows[0].id)}">Show ${lows.length === 1 ? 'it' : 'them'}</button></div>` : ''}</aside>
     <div class="fixmain">${hotLane(f) ? laneStrip(hotLane(f), fLanes(f), {rank: f.rank}) + laneSentence(f) : ''}<div class="sevline ${cls(f.rank, RANKS)}"><i></i>${esc(RANK_WORD[f.rank] || f.rank)}${idx >= 0 ? ` · ${idx + 1} of ${queue.length}` : ''}</div>
       <h1>${esc(plainTitle(f))}</h1>
-      <p class="lede">${ex && ex.lens2 && ex.lens2 !== plainTitle(f) ? esc(ex.lens2) + ' ' : ''}${f.ui_path ? `A visitor reaches it from the <b>${esc(pageWord)}</b>${f.input ? ', and what they type reaches this line' : ''}.` : f.reachable ? `Reachable from ${esc(f.reachable.kind)} <b>${esc(entry)}</b>.` : 'Not reached from any page or route today; it becomes serious the day something calls it.'} <span class="note">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span></p>
+      <p class="lede">${ex && ex.lens2 && ex.lens2 !== plainTitle(f) ? esc(ex.lens2) + ' ' : ''}${f.ui_path ? `${visitor(true)} reaches it from the <b>${esc(pageWord)}</b>${f.input ? ', and what they type reaches this line' : ''}.` : f.reachable ? `Reachable from ${esc(f.reachable.kind)} <b>${esc(entry)}</b>.` : 'Not reached from any page or route today; it becomes serious the day something calls it.'} <span class="note">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span></p>
       ${hotLane(f) ? laneWalk(f) : ''}
       ${findingScenario(f, ex) ? `<div class="card" style="margin-top:16px"><div class="k2" style="margin-top:0">Scenario · see it happen</div>${findingScenario(f, ex)}</div>` : ''}
       <div class="fixtwo"><div class="card"><div class="k2" style="margin-top:0">Why it’s ${esc(f.rank)}</div><div class="why">${why}</div></div>
@@ -1357,7 +1366,7 @@ function pathsHtml(f) {
   const uiSame = f.ui_path && f.reachable && f.ui_path.join() === f.reachable.path.join();
   let path = f.ui_path ? chainHtml('From the app', f.ui_path) : '';
   if (f.reachable && !uiSame) path += chainHtml(`Reachable from ${esc(f.reachable.kind)}`, f.reachable.path);
-  return path || `<div class="note" style="margin-top:8px">${f.reachable_from_tests_only ? 'Only reached by tests.' : 'Not reachable from any detected entry point.'}</div>`;
+  return path || `<div class="note" style="margin-top:8px">${f.reachable_from_tests_only ? 'Only reached by tests.' : f.platform === 'android' && f.category !== 'code' ? 'A setting in the app’s manifest or build file: it applies to the whole app, wherever it is opened.' : 'Not reachable from any detected entry point.'}</div>`;
 }
 const hops = f => (f.ui_path || (f.reachable || {}).path || []).length;
 const seenHops = f => { const ids = f.ui_path || (f.reachable || {}).path || []; let n = 0; for (let i = 1; i < ids.length; i++) if (((OUT[ids[i - 1]] || []).find(x => x.dst === ids[i]) || {}).confidence === 'observed') n++; return n; };
@@ -1366,9 +1375,27 @@ const entryOf = f => { const ids = f.ui_path || (f.reachable || {}).path || []; 
 // Four fixed stops in a fixed order. The lane of every node comes from the engine (node.lane, lanes.py); the viewer
 // never guesses one. A finding carries hot_lane (where it lives) and lanes (every stop its path crosses).
 const LANES = ['browser', 'frontend', 'server', 'data'];
-const LANE_WORD = {browser: 'Browser', frontend: 'Frontend', server: 'Server', data: 'Data'};
-const LANE_DEF = {browser: 'Browser: what the visitor sees and clicks. Runs on their phone or laptop.', frontend: 'Frontend: your pages and screens, the code that builds what the browser shows.',
+// An Android app runs on the phone: its first two stops are the screens and the rest of the app (lanes.py)
+const ANDROID_APP = (G.meta || {}).platform === 'android';
+const visitor = cap => ANDROID_APP ? (cap ? 'Someone' : 'someone') : (cap ? 'A visitor' : 'a visitor');
+const LANE_WORD = ANDROID_APP ? {browser: 'Screen', frontend: 'App', server: 'Server', data: 'Data'} : {browser: 'Browser', frontend: 'Frontend', server: 'Server', data: 'Data'};
+const LANE_DEF = ANDROID_APP ? {browser: 'Screen: what the person sees and taps on their phone.', frontend: 'App: the rest of your app’s code, running on the person’s phone. Anyone who installs it can read it.',
+  server: 'Server: code that runs on a machine you pay for, not the person’s phone. This is where secrets live.', data: 'Data: where things are kept or sent — the database, files on the phone, text messages, outside services.'}
+  : {browser: 'Browser: what the visitor sees and clicks. Runs on their phone or laptop.', frontend: 'Frontend: your pages and screens, the code that builds what the browser shows.',
   server: 'Server: code that runs on a machine you pay for, not the visitor’s. This is where secrets live.', data: 'Data: where things are kept or sent — the database, files, shell commands, outside services.'};
+// "On the phone": what the app asks to use, and what other apps can start (security.mobile, android.py)
+function phoneCard() {
+  const mods = ANDROID_APP && SEC.mobile && Array.isArray(SEC.mobile.modules) ? SEC.mobile.modules : [];
+  return mods.map(m => {
+    const perms = (Array.isArray(m.permissions) ? m.permissions : []).filter(p => p && p.sensitive);
+    const open = (Array.isArray(m.components) ? m.components : []).filter(c => c && c.exported && !c.launcher && !c.permission);
+    const sdk = m.target_sdk ? ` Targets Android API ${esc(m.target_sdk)}${m.min_sdk ? `, runs on API ${esc(m.min_sdk)} and newer` : ''}.` : '';
+    return `<section class="phone"><h3>On the phone${mods.length > 1 ? `: ${esc(m.package || m.root)}` : ''}</h3>
+      <p class="lede">${perms.length ? `Your app asks to use ${esc(perms.length)} sensitive thing${perms.length === 1 ? '' : 's'} on the phone.` : 'Your app asks for no sensitive permissions.'}${sdk}</p>
+      ${perms.length ? `<div class="perms">${perms.map(p => `<span class="perm ${p.used === false ? 'unused' : ''}" title="${esc(p.name)}${p.used === false ? ': no code that uses it was found' : ''}">${esc(p.words)}${p.used === false ? ' · not used?' : ''}</span>`).join('')}</div>` : ''}
+      ${open.length ? `<p class="lede">Other apps (or links) can start ${esc(open.length)} part${open.length === 1 ? '' : 's'} of your app with nothing guarding ${open.length === 1 ? 'it' : 'them'}:</p><ul class="open">${open.map(c => `<li><code>${esc(c.name)}</code> (${esc(c.kind)})</li>`).join('')}</ul>` : '<p class="lede" style="margin:0">No part of your app is open to other apps, apart from its icon.</p>'}</section>`;
+  }).join('');
+}
 // values from the data are checked against the four known stops before they pick a lane (a planted lane is ignored)
 const laneOk = l => LANES.includes(l) ? l : null;
 const laneOf = id => laneOk((N[id] || {}).lane);
@@ -1512,8 +1539,8 @@ function renderFindings() {
   if (S.simple) {
     const sevs = RANKS.filter(by);
     el.innerHTML = `<div class="memo"><div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
-      <p class="lede">${countWord(open.length)} open in your app${tests.length ? ` (${esc(tests.length)} more in test code are listed at the end and not counted)` : ''}. Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.</p></div>${modeSeg()}</div>
-      <div class="countrow">${RANKS.map(r => `<span class="${cls(r, RANKS)}"><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>
+      <p class="lede">${countWord(open.length)} open in your app${tests.length ? ` (${esc(tests.length)} more in test code are listed at the end and not counted)` : ''}. ${ANDROID_APP ? 'Ranked by severity and by whether someone can reach them. A finding is critical only when a screen, a link or another app leads to it and it uses the data they send.' : 'Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.'}</p></div>${modeSeg()}</div>
+      <div class="countrow">${RANKS.map(r => `<span class="${cls(r, RANKS)}"><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>${phoneCard()}
       <p class="note" style="margin:-8px 0 10px">Each finding says which part of your app it lives on; the filled dot on its card marks that part. Hover a name below to learn what each part does.</p>${laneStrip(null, new Set(), {legend: true})}
       ${sevs.map(r => `<section class="memogrp"><div class="sevhead ${r}"><i></i>${r[0].toUpperCase() + r.slice(1)}</div><div>${open.filter(f => f.rank === r).map(findingCard).join('')}</div></section>`).join('')}
       ${acc ? `<section class="memogrp"><div class="sevhead"><i></i>Accepted with a reason</div><div>${app.filter(f => f.status === 'accepted').map(findingCard).join('')}</div></section>` : ''}
@@ -1531,7 +1558,7 @@ function renderFindings() {
   if (S.ftool) fs = fs.filter(f => f.tool === S.ftool);
   const tools = [...new Set(all.map(f => f.tool))];
   const fchip = (k, label, n) => `<button class="fchip ${k === 'all' ? '' : k} ${S.fsev === k ? 'on' : ''}" data-sev="${k}">${k === 'all' ? '' : '<i></i>'}${label} <b>${esc(n)}</b></button>`;
-  el.innerHTML = `<div class="toolbar"><h2>Security findings <span class="c">${esc(open.length)}</span></h2>${modeSeg()}<button class="btn" id="exportjson">Export JSON</button></div>
+  el.innerHTML = `<div class="toolbar"><h2>Security findings <span class="c">${esc(open.length)}</span></h2>${modeSeg()}<button class="btn" id="exportjson">Export JSON</button></div>${phoneCard()}
     <div class="filters">${fchip('all', 'All', app.length)}${RANKS.filter(r => app.some(f => f.rank === r)).map(r => fchip(r, r[0].toUpperCase() + r.slice(1), app.filter(f => f.rank === r).length)).join('')}${tests.length ? fchip('tests', 'In test code', tests.length) : ''}<span class="spacer"></span>
       <button class="fchip ${S.freach ? 'on' : ''}" id="freach">Reachable only</button><button class="fchip ${S.finput ? 'on' : ''}" id="finput">Uses input</button>
       <select id="ftool" class="fsel" aria-label="Tool"><option value="">Tool ▾</option>${tools.map(t => `<option value="${esc(t)}" ${S.ftool === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
@@ -1639,9 +1666,9 @@ function gauge(score, size = 112, grade = null) {
 const hardFailures = () => SEC.findings.filter(f => f.status !== 'accepted' && f.rank === 'critical' && f.input && (f.reachable || f.ui_path));
 function readyHeadline(R) {
   const hard = hardFailures().length, g = R.grade;
-  if (hard) return `Not yet. ${countWord(hard)} thing${hard > 1 ? 's' : ''} a visitor can reach would stop a senior engineer from shipping this.`;
+  if (hard) return `Not yet. ${countWord(hard)} thing${hard > 1 ? 's' : ''} ${visitor()} can reach would stop a senior engineer from shipping this.`;
   if (g === 'A') return 'Yes. A senior engineer would ship this; keep the list below green.';
-  if (g === 'B') return 'Close. Nothing a visitor can reach is critical; a few things below would make a reviewer comfortable.';
+  if (g === 'B') return `Close. Nothing ${visitor()} can reach is critical; a few things below would make a reviewer comfortable.`;
   if (g === 'C') return 'Not quite. No hard failures, but the gaps below are the ones a reviewer asks about first.';
   return 'Not yet. No single hard failure, but too many gaps for a reviewer to sign off.';
 }
@@ -1658,7 +1685,7 @@ function renderReady() {
   const moveTitle = k => { const f = firstFinding(k); if (f) { const n = SEC.findings.filter(x => x.rank === f.rank && x.status !== 'accepted' && !x.in_tests).length; const what = (f.headline || f.title).replace(/\.$/, ''); return n > 1 ? `Fix the ${n} ${f.rank} findings, starting with: ${what}` : `Fix: ${what}`; } const fx = (k.fix || '').split(/(?<=\.)\s/)[0].replace(/\.$/, ''); return fx && fx.length < 120 ? fx : k.title; };
   const stepMeta = k => {
     const f = firstFinding(k);
-    if (f) return `<b class="${esc(f.rank)}">${esc(f.rank)}</b> · <code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${lang(f.file)} · ${f.ui_path ? `a visitor on ${esc(entryOf(f))} can reach it` : f.reachable ? `reachable from ${esc(f.reachable.kind)} ${esc(entryOf(f))}` : 'not reached from an entry point'}`;
+    if (f) return `<b class="${esc(f.rank)}">${esc(f.rank)}</b> · <code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${lang(f.file)} · ${f.ui_path ? `${visitor()} on ${esc(entryOf(f))} can reach it` : f.reachable ? `reachable from ${esc(f.reachable.kind)} ${esc(entryOf(f))}` : 'not reached from an entry point'}`;
     const m = /(\S+\.\w+):(\d+)/.exec(k.evidence || '');
     const sev = /critical/.test(k.id) ? 'critical' : /high/.test(k.id) ? 'high' : /medium/.test(k.id) ? 'medium' : null;
     return `${sev ? `<b class="${sev}">${sev}</b> · ` : `${esc(k.category.toLowerCase())} · `}${m ? `<code>${esc(m[1])}:${esc(m[2])}</code>${lang(m[1])} · ` : ''}${esc(k.evidence || '')}`;
@@ -1826,7 +1853,7 @@ function renderRight() {
   const el = document.getElementById('right');
   const n = N[S.sel];
   const kindWord = n ? (n.entry ? ({page: 'page', route: 'route', cli: 'command', main: 'program start', test: 'test', script: 'script'}[n.entry.kind] || n.entry.kind) : layer(n.id) === 'external' ? 'library' : (isJS(n.id) ? 'component' : 'function')) : '';
-  const railLabel = n ? `${layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : 'Library'} · ${kindWord}` : 'Details';
+  const railLabel = n ? `${onPhone(n) ? 'App' : layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : 'Library'} · ${isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord}` : 'Details';
   const chrome = railChrome(railLabel, 'r');
   // The Simple findings memo and the Readiness/About pages use the full width unless a function is open.
   document.getElementById('main').classList.toggle('noright', !n && ((S.tab === 'map' && S.simple) || (S.tab === 'findings' && (S.simple || !S.fsel)) || S.tab === 'ready' || S.tab === 'prot' || S.tab === 'xp' || S.tab === 'fix' || S.tab === 'about'));
@@ -1853,9 +1880,9 @@ function renderRight() {
     ...protections.slice(0, 2).map(p => `<span class="badge neutral">${esc(p.title.toLowerCase().replace('login check on routes that change data', 'no login check'))}${p.heuristic ? ' · heuristic' : ''}</span>`),
   ].filter(Boolean).join('');
   const LANGW = {js: ['ts', 'TypeScript or JavaScript · runs in the visitor\'s browser'], py: ['py', 'Python · runs on your server, not in the browser'], go: ['go', 'Go · runs on your server'], rs: ['rs', 'Rust · runs on your server'], jv: ['java', 'Java · runs on your server']};
-  const lw = LANGW[(n.id.split(':')[0])];
+  const lw = onPhone(n) ? [n.file && n.file.endsWith('.kt') ? 'kt' : 'java', `${n.file && n.file.endsWith('.kt') ? 'Kotlin' : 'Java'} · runs on the person’s phone, inside your app`] : LANGW[(n.id.split(':')[0])];
   el.innerHTML = `<div class="detail">${chrome}<button class="closebtn" id="close" aria-label="Close">${icon('close')}</button>
-    <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(layer(n.id) === 'external' ? 'library' : layer(n.id))} · ${esc(kindWord)}${AI_BY_NODE[n.id] ? ' · ' + aiChips(n.id) : ''}</div>
+    <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(onPhone(n) ? 'app' : layer(n.id) === 'external' ? 'library' : layer(n.id))} · ${esc(isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord)}${AI_BY_NODE[n.id] ? ' · ' + aiChips(n.id) : ''}</div>
     <h3>${esc(n.qualname)}</h3>
     <div class="meta">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ` · ${esc(n.entry.detail)}` : ''}</div>
     ${status ? `<div class="statusrow">${status}</div>` : ''}

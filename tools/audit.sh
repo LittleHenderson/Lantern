@@ -30,6 +30,15 @@ assert s["counts"]["critical"] == 2, s["counts"]
 b602 = next(f for f in s["findings"] if f["rule"] == "B602")
 assert b602["ui_path"] and b602["ui_path"][0].endswith("Admin::Admin"), b602["ui_path"]
 EOF
+check "androidapp (Android) analyzes" lantern analyze tests/fixtures/androidapp --out "$W/aa"
+check "androidapp: a deep link reaching rawQuery is critical, screens are on the phone" "$PY" - "$W/aa" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["file"].endswith("NoteActivity.java") and f["rule"].endswith("SQL-CONCAT")]
+assert len(sql) == 1 and sql[0]["rank"] == "critical", sql
+assert s["mobile"]["platform"] == "android"
+assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "Android app"
+EOF
 check "nextapp (Next.js + Supabase) analyzes" lantern analyze tests/fixtures/nextapp --out "$W/nx"
 check "nextapp: auth, RLS, and service-role findings" "$PY" - "$W/nx" <<'EOF'
 import json, sys
@@ -94,6 +103,9 @@ EOF
   # the same for scenarios alone, with the rest intact so the finding cards and Fix page that show them are drawn
   check "viewer: poisoned scenarios and headings stay text (finding cards, Fix page, Scenario lens)" \
     bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-sc/report.html' --only scenario,dropped_scenarios,headline && node tools/viewer_smoke.js '$W/poison-sc/report.html' '$W/sshot'"
+  # an Android app: the "On the phone" card, phone stories and entry details, poisoned, with the platform kept
+  check "viewer: poisoned Android data stays text (On the phone card, screens, stories)" \
+    bash -c "'$PY' tools/poison_report.py '$W/aa/report.html' '$W/poison-aa/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-aa/report.html' '$W/ashot'"
   # the live app: the test sheet (sandboxed run), the terminal drawer, a screenshot in Ask Lantern, a pack toggle
   A="$W/app"; mkdir -p "$A"; cp -r tests/fixtures/shop "$A/shop"
   "$PY" - "$A/shot.png" <<'PYEOF'

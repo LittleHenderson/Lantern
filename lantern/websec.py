@@ -680,4 +680,12 @@ def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]
+    from . import android
+    af, mobile = android.scan(g)
+    seen = {(f["file"], f["line"]) for f in findings if f["rule"] in ("LV-SQL-CONCAT", "LJ-SQL-CONCAT")}
+    findings += [f for f in af if not (f["rule"] == "LM-SQL-CONCAT" and (f["file"], f["line"]) in seen)]
+    if mobile:
+        g.meta["mobile"] = mobile
+        n = len(mobile["modules"])
+        tools.append({"tool": "lantern-android", "status": f"ok ({n} app module{'s' if n != 1 else ''})", "version": "0.1"})
     return findings, tools
