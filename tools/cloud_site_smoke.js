@@ -32,7 +32,10 @@ async function until(p, fn, timeout) {
     const ctx = await b.newContext({ viewport, colorScheme: scheme });
     const watch = p => {
       p.on('pageerror', e => errs.push(`${tag}: ${e.message}`));
-      p.on('console', m => { if (m.type() === 'error' && !/status of 401/.test(m.text()) && !(allow503 && /status of 503/.test(m.text())) && !(allow409 && /status of 409/.test(m.text())) && !(allow404 && /status of 404/.test(m.text())) && !/status of 401/.test(m.text())) errs.push(`${tag} console: ${m.text()}`); });
+      // Firefox-only noise, not page code: its favicon loader reporting the page's own content policy
+      // (resource:///modules/FaviconLoader), and the live-progress stream being cut when the smoke leaves the page
+      const browserNoise = m => /resource:\/\/\//.test((m.location && m.location().url) || '') || /resource:\/\/\/modules/.test(m.text()) || /establish a connection to the server at .*\/stream/.test(m.text());
+      p.on('console', m => { if (m.type() === 'error' && !browserNoise(m) && !/status of 401/.test(m.text()) && !(allow503 && /status of 503/.test(m.text())) && !(allow409 && /status of 409/.test(m.text())) && !(allow404 && /status of 404/.test(m.text())) && !/status of 401/.test(m.text())) errs.push(`${tag} console: ${m.text()}`); });
       p.on('dialog', d => { errs.push(`${tag}: a dialog opened: ${d.message()}`); d.dismiss(); });
     };
     const clean = async (p, where) => {
