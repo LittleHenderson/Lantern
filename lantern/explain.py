@@ -186,7 +186,8 @@ def render_prompt(ctx: Context, g: Graph) -> str:
             else "Java" if (n.file or "").endswith(".java") else "Kotlin" if (n.file or "").endswith(".kt")
             else "Swift" if (n.file or "").endswith(".swift") else "Dart" if (n.file or "").endswith(".dart")
             else "C#" if (n.file or "").endswith(".cs") else "PHP" if (n.file or "").endswith(".php")
-            else "Ruby" if (n.file or "").endswith((".rb", "Rakefile")) else "Python")
+            else "Ruby" if (n.file or "").endswith((".rb", "Rakefile"))
+            else "C" if (n.file or "").endswith(".c") else "C++" if (n.id or "").startswith("cc:") else "Python")
     parts = [
         f"METAPHOR WORLD: {ctx.metaphor}",
         f"LANGUAGE: {lang}",

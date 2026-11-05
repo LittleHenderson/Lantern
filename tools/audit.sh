@@ -95,6 +95,15 @@ sql = [f for f in s["findings"] if f["rule"] == "LB-SQL-INTERP" and f["rank"] ==
 assert [f["node"] for f in sql] == ["rb:Api.NotesController.search"] and sql[0]["ui_path"], sql
 assert any(f["rule"] == "LW-AUTH-MISSING" and f["node"] == "rb:Api.NotesController.destroy" for f in s["findings"])
 EOF
+check "cppapp (C++ web server + C tool + React) analyzes" lantern analyze tests/fixtures/cppapp --out "$W/cx"
+check "cppapp: the React search reaching sprintf-built SQL is critical, the C tool's shell and format strings too" "$PY" - "$W/cx" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+crit = {(f["rule"], f["file"]) for f in s["findings"] if f["rank"] == "critical"}
+assert {("LX-SQL-BUILT", "server/note_store.cpp"), ("LX-EXEC", "server/main.cpp"), ("LX-EXEC", "tools/backup.c"),
+        ("LX-FORMAT", "tools/backup.c")} <= crit, crit
+assert any(f["rule"] == "LX-SQL-BUILT" and f["ui_path"] for f in s["findings"])
+EOF
 check "nextapp (Next.js + Supabase) analyzes" lantern analyze tests/fixtures/nextapp --out "$W/nx"
 check "nextapp: auth, RLS, and service-role findings" "$PY" - "$W/nx" <<'EOF'
 import json, sys
@@ -174,6 +183,9 @@ EOF
   # a Ruby app: Rails routes, a Sinatra block and ERB, poisoned
   check "viewer: poisoned Ruby data stays text (routes, findings)" \
     bash -c "'$PY' tools/poison_report.py '$W/ru/report.html' '$W/poison-ru/report.html' --only detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ru/report.html' '$W/rbshot'"
+  # a C++ server and a C tool, poisoned
+  check "viewer: poisoned C/C++ data stays text (routes, programs, findings)" \
+    bash -c "'$PY' tools/poison_report.py '$W/cx/report.html' '$W/poison-cx/report.html' --only detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-cx/report.html' '$W/cxshot'"
   # a .NET MAUI app with its ASP.NET server: screens, links and the phone-to-server path, poisoned
   check "viewer: poisoned .NET MAUI data stays text (screens, links, phone-to-server path)" \
     bash -c "'$PY' tools/poison_report.py '$W/ca/report.html' '$W/poison-ca/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ca/report.html' '$W/cshot'"

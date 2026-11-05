@@ -650,7 +650,7 @@ const short = q => {
   const p = q.split('.'); return p.length > 2 ? p.slice(-2).join('.') : q;
 };
 const isJS = id => (id || '').startsWith('js:');
-const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv|kt|sw|dt|cs|php|rb):/.test(id || '') ? 'backend' : 'external';
+const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv|kt|sw|dt|cs|php|rb|cc):/.test(id || '') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
 const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
 try { S.simple = localStorage.getItem('lantern.simple') !== '0'; } catch (e) {}
@@ -1027,7 +1027,7 @@ function renderGraph() {
     const inUi = n ? (IN[id] || []).map(e => e.detail && UI_WORDS[e.detail]).find(Boolean) : '';
     const inConf = n ? ((IN[id] || [])[0] || {}).confidence : '';
     const sub = isHttp ? '' : w && f0 ? `${w} · ${(f0.rule || '').toLowerCase().slice(0, 18)}` : n.entry && n.entry.kind === 'page' ? `page · ${paths} path${paths === 1 ? '' : 's'}` : inUi ? inUi : (IN[id] || []).some(e => e.confidence === 'observed') ? 'seen running' : fanin[id] > 1 ? `fan-in ${fanin[id]}` : inConf === 'inferred' ? 'likely' : inConf === 'possible' ? 'possible' : '';
-    const lang = isHttp || !n ? '' : id.startsWith('js:') ? 'ts' : id.startsWith('py:') ? 'py' : id.startsWith('go:') ? 'go' : id.startsWith('rs:') ? 'rs' : id.startsWith('jv:') ? 'java' : id.startsWith('kt:') ? 'kt' : id.startsWith('sw:') ? 'swift' : id.startsWith('dt:') ? 'dart' : id.startsWith('cs:') ? 'cs' : id.startsWith('php:') ? 'php' : id.startsWith('rb:') ? 'rb' : '';
+    const lang = isHttp || !n ? '' : id.startsWith('js:') ? 'ts' : id.startsWith('py:') ? 'py' : id.startsWith('go:') ? 'go' : id.startsWith('rs:') ? 'rs' : id.startsWith('jv:') ? 'java' : id.startsWith('kt:') ? 'kt' : id.startsWith('sw:') ? 'swift' : id.startsWith('dt:') ? 'dart' : id.startsWith('cs:') ? 'cs' : id.startsWith('php:') ? 'php' : id.startsWith('rb:') ? 'rb' : id.startsWith('cc:') ? 'cpp' : '';
     let fill = isHttp ? 'var(--surface-2)' : 'var(--surface)', stroke = 'var(--line-2)', sw = 1;
     if (S.mode === 'risk' && w) { fill = sevSoft(w); stroke = sevColor(w); sw = 1.5; }
     if (S.mode === 'confidence' && n) { stroke = confColor(inConf || 'resolved'); sw = 1.5; }
@@ -1203,7 +1203,7 @@ function renderExplanations() {
   list = list.sort((a, b) => weight(a) - weight(b) || a.qualname.localeCompare(b.qualname)).slice(0, 300);
   if (!S.xsel || !N[S.xsel]) S.xsel = (list.find(x => EXP[x.id]) || list[0] || {}).id || null;
   const n = N[S.xsel], r = n && expOf(n), byModel = n && EXP[n.id];
-  const lang = id => id.startsWith('js:') ? 'ts' : id.startsWith('py:') ? 'py' : id.startsWith('go:') ? 'go' : id.startsWith('rs:') ? 'rs' : id.startsWith('jv:') ? 'java' : id.startsWith('kt:') ? 'kt' : id.startsWith('sw:') ? 'swift' : id.startsWith('dt:') ? 'dart' : id.startsWith('cs:') ? 'cs' : id.startsWith('php:') ? 'php' : id.startsWith('rb:') ? 'rb' : '';
+  const lang = id => id.startsWith('js:') ? 'ts' : id.startsWith('py:') ? 'py' : id.startsWith('go:') ? 'go' : id.startsWith('rs:') ? 'rs' : id.startsWith('jv:') ? 'java' : id.startsWith('kt:') ? 'kt' : id.startsWith('sw:') ? 'swift' : id.startsWith('dt:') ? 'dart' : id.startsWith('cs:') ? 'cs' : id.startsWith('php:') ? 'php' : id.startsWith('rb:') ? 'rb' : id.startsWith('cc:') ? 'cpp' : '';
   const row = x => { const w = worstRank(x.id); return `<button class="xrow ${S.xsel === x.id ? 'on' : ''}" data-x="${esc(x.id)}"><span class="layer ${layer(x.id)}"></span><div><div class="t">${esc(short(x.qualname))}</div><div class="d">${esc(x.file)}${S.simple ? '' : ':' + esc(x.start_line)}${S.simple && w ? ' · ' + (w === 'critical' ? 'the risky one' : 'has a ' + esc(w) + ' finding') : ''}</div></div>${!S.simple && w ? sevChip(w) : ''}${EXP[x.id] ? '<i class="dotx" title="explained"></i>' : ''}</button>`; };
   const side = S.simple
     ? `<div class="xside"><input class="search" id="xq" placeholder="Find a function or a page" value="${esc(S.xq)}" spellcheck="false" autocomplete="off">
@@ -1884,7 +1884,7 @@ function renderRight() {
     inputs.length ? `<span class="badge neutral">uses outside input · ${esc(inputs[0])}</span>` : '',
     ...protections.slice(0, 2).map(p => `<span class="badge neutral">${esc(p.title.toLowerCase().replace('login check on routes that change data', 'no login check'))}${p.heuristic ? ' · heuristic' : ''}</span>`),
   ].filter(Boolean).join('');
-  const LANGW = {js: ['ts', 'TypeScript or JavaScript · runs in the visitor\'s browser'], py: ['py', 'Python · runs on your server, not in the browser'], go: ['go', 'Go · runs on your server'], rs: ['rs', 'Rust · runs on your server'], jv: ['java', 'Java · runs on your server'], kt: ['kt', 'Kotlin · runs on your server'], sw: ['swift', 'Swift · runs on your server'], dt: ['dart', 'Dart · runs on your server'], cs: ['cs', 'C# · runs on your server'], php: ['php', 'PHP · runs on your server'], rb: ['rb', 'Ruby · runs on your server']};
+  const LANGW = {js: ['ts', 'TypeScript or JavaScript · runs in the visitor\'s browser'], py: ['py', 'Python · runs on your server, not in the browser'], go: ['go', 'Go · runs on your server'], rs: ['rs', 'Rust · runs on your server'], jv: ['java', 'Java · runs on your server'], kt: ['kt', 'Kotlin · runs on your server'], sw: ['swift', 'Swift · runs on your server'], dt: ['dart', 'Dart · runs on your server'], cs: ['cs', 'C# · runs on your server'], php: ['php', 'PHP · runs on your server'], rb: ['rb', 'Ruby · runs on your server'], cc: ['cpp', 'C or C++ · runs on your server or device']};
   const phoneLang = f => /\.dart$/.test(f || '') ? ['dart', 'Dart'] : /\.[cm]?[jt]sx?$/.test(f || '') ? ['ts', 'TypeScript or JavaScript'] : /\.swift$/.test(f || '') ? ['swift', 'Swift'] : /\.kt$/.test(f || '') ? ['kt', 'Kotlin'] : /\.cs$/.test(f || '') ? ['cs', 'C#'] : ['java', 'Java'];
   const lw = onPhone(n) ? [phoneLang(n.file)[0], `${phoneLang(n.file)[1]} · runs on the person’s phone, inside your app`] : LANGW[(n.id.split(':')[0])];
   el.innerHTML = `<div class="detail">${chrome}<button class="closebtn" id="close" aria-label="Close">${icon('close')}</button>

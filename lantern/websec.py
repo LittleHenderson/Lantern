@@ -377,6 +377,82 @@ def ruby_rules(repo: Path) -> list[dict]:
     return out
 
 
+_CX_SQL_WORD = (r"(?i:\bSELECT\b[^\"\n]*\bFROM\b|\bINSERT\s+(?:OR\s+\w+\s+)?INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b|"
+                r"\bWHERE\s+\w+\s*(?:=|<|>|LIKE\b|IN\b))")
+_CX_VAR = r"[A-Za-z_][\w.\->\[\]()]*"
+CPP_RULES = [   # (id, pattern, severity, title, cwe, tool confidence, rank)
+    ("LX-SQL-BUILT", re.compile(r"\b(?:sn?printf|asprintf|std::format|fmt::format|absl::StrFormat)\s*\([^;\n]*\"(?=[^\"\n]*"
+                                + _CX_SQL_WORD + r")[^\"\n]*%(?:s|d|ld|u)[^\"\n]*\"|\"(?=[^\"\n]*" + _CX_SQL_WORD +
+                                r")[^\"\n]*\"\s*\+\s*" + _CX_VAR + r"|\b(?:sqlite3_exec|sqlite3_prepare(?:_v[23])?|mysql_query|"
+                                r"mysql_real_query|PQexec)\s*\(\s*\w+\s*,\s*(?!\")[^,;\n]*\+"),
+     "HIGH", "Builds a database query from variables (SQL injection risk); use sqlite3_bind_* / prepared statements",
+     89, "HIGH", None),
+    ("LX-EXEC", re.compile(r"\b(?:std::)?(?:system|popen|_popen|wsystem|execl|execlp|execle|WinExec|ShellExecuteA?W?)\s*\(\s*"
+                           r"(?!\")(?!NULL\b)(?!nullptr\b)(?!0\s*\))[^;\n]"), "HIGH",
+     "Runs a shell command that is not a fixed string (command injection risk); use execv with an argument list", 78,
+     "HIGH", None),
+    ("LX-GETS", re.compile(r"\bgets\s*\(\s*\w"), "HIGH",
+     "Reads a line with gets(), which cannot stop at the end of the buffer (buffer overflow); use fgets", 242, "HIGH",
+     None),
+    ("LX-BUFFER", re.compile(r"\b(?:strcpy|strcat|sprintf|vsprintf|wcscpy|wcscat|stpcpy|lstrcpy\w?|StrCpy\w?)\s*\("),
+     "MEDIUM", "Copies into a fixed-size buffer without a length (a long value overflows it); use snprintf, strlcpy or "
+               "std::string", 120, "LOW", None),
+    ("LX-SCANF", re.compile(r"\b(?:f|s)?scanf\s*\([^;\n]*\"[^\"\n]*%s"), "MEDIUM",
+     "Reads text with scanf(\"%s\"), which has no length limit (buffer overflow); give a width like %63s", 120, "HIGH",
+     None),
+    ("LX-FORMAT", re.compile(r"\b(?:printf|vprintf)\s*\(\s*(?!\")" + _CX_VAR + r"\s*\)|\b(?:fprintf|syslog|dprintf)\s*\(\s*"
+                             r"\w+\s*,\s*(?!\")" + _CX_VAR + r"\s*\)|\bsn?printf\s*\(\s*\w+\s*,\s*(?:\w+\s*,\s*)?(?!\")"
+                             r"(?!sizeof)" + _CX_VAR + r"\s*\)"), "HIGH",
+     "Uses a variable as the format string (a value containing %n or %s can read or write memory); write printf(\"%s\", x)",
+     134, "HIGH", None),
+    ("LX-TLS-OFF", re.compile(r"(?:SSL_CTX_set_verify|SSL_set_verify|mbedtls_ssl_conf_authmode|wolfSSL_CTX_set_verify)\s*\("
+                              r"[^;\n?]*VERIFY_NONE|CURLOPT_SSL_VERIFY(?:PEER|HOST)\s*,\s*0L?\b|"
+                              r"enable_server_certificate_verification\s*\(\s*false|verify_mode\s*\(\s*(?:boost::)?asio::ssl::"
+                              r"verify_none|set_verify_mode\s*\([^)]*verify_none"), "HIGH",
+     "Turns off HTTPS certificate checks (anyone on the network can read and change the traffic)", 295, "HIGH", "high"),
+    ("LX-WEAK-RANDOM", re.compile(r"^(?=[^\n]*(?i:token|secret|session|nonce|salt|password|otp|key))[^\n]*?\b(?:rand|random|"
+                                  r"srand)\s*\(", re.M), "MEDIUM",
+     "Makes a secret value with rand(), which is predictable; use getrandom/RAND_bytes or std::random_device", 338,
+     "LOW", None),
+    ("LX-WEAK-PASSWORD-HASH", re.compile(r"\b(?:MD5|SHA1|EVP_md5|EVP_sha1)\s*\([^;\n]*(?i:pass|pwd)"), "HIGH",
+     "Stores passwords with a fast hash (MD5/SHA-1); use a password hash such as Argon2 or bcrypt", 916, "HIGH", "high"),
+    ("LX-TEMP-FILE", re.compile(r"\b(?:tmpnam|tempnam|mktemp|_mktemp)\s*\("), "MEDIUM",
+     "Picks a temporary file name another program can guess and take first; use mkstemp", 377, "HIGH", None),
+    ("LX-PATH-INPUT", re.compile(r"(?:(?<![\w.>:])(?:fopen|open|ifstream|ofstream|remove|unlink)|std::(?:ifstream|ofstream|"
+                                 r"fstream|filesystem::remove\w*))\s*[({]"
+                                 r"[^;\n]*(?:argv\s*\[|req(?:uest)?(?:\.|->)(?:get_param_value|body|matches|getParameter|"
+                                 r"path_params|url_params))"), "HIGH",
+     "Opens a file named by the request or the command line (a caller can read or change other files)", 22, "HIGH",
+     None),
+    ("LX-CLEARTEXT-URL", re.compile(r"\"http://(?!localhost|127\.0\.0\.1|0\.0\.0\.0|www\.w3\.org|schemas\.)[^\"\s]+\""),
+     "LOW", "Talks to a server over plain http", 319, "HIGH", "low"),
+]
+
+
+def cpp_rules(repo: Path) -> list[dict]:
+    out = []
+    from .cpp_frontend import C_EXTS, CPP_EXTS, SKIP, VENDORED
+    for p in _files(repo, C_EXTS | CPP_EXTS | {".C", ".CPP"}):
+        rel = p.relative_to(repo).as_posix()
+        if SKIP.search(rel) or VENDORED.search(rel) or re.search(r"(^|/)(tests?|unittests?|spec|examples?|samples?|benchmarks?)/|_test\.|_unittest\.",
+                                         rel):
+            continue
+        text = _read(p)
+        lines = text.splitlines()
+        seen = set()
+        for rule, rx, sev, title, cwe, conf, rank in CPP_RULES:
+            for m in rx.finditer(text):
+                ln = _line_of(text, m.start() + (len(m.group(0)) - len(m.group(0).lstrip())))
+                src = lines[ln - 1] if ln <= len(lines) else ""
+                if src.lstrip().startswith(("//", "*", "/*", "#")) or (rule, ln) in seen:
+                    continue
+                if rule == "LX-BUFFER" and ("LX-SQL-BUILT", ln) in seen:
+                    continue
+                seen.add((rule, ln))
+                out.append(_finding(rule, title, sev, rel, ln, conf=conf, cwe=cwe, snippet=src.strip(), fixed_rank=rank))
+    return out
+
+
 def php_rules(repo: Path) -> list[dict]:
     out = []
     for p in _files(repo, {".php"}):
@@ -868,7 +944,7 @@ def missing_auth(g: Graph) -> list[dict]:
 
 def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
-    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
+    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]

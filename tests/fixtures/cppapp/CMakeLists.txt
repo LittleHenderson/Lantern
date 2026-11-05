@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(notes CXX C)
+find_package(httplib REQUIRED)
+find_package(SQLite3 REQUIRED)
+add_executable(notes-server server/main.cpp server/note_store.cpp)
+target_link_libraries(notes-server httplib::httplib SQLite::SQLite3)
+add_executable(backup tools/backup.c)
+enable_testing()
