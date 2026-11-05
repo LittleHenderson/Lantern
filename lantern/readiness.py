@@ -34,12 +34,12 @@ CATEGORIES = [
 ]
 
 CODE_EXTS = {".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
-MOBILE_EXTS = {".java", ".kt", ".swift"}  # a phone app's code: counted for tests and the Android/iOS checks only
-MOBILE_TEST_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/|(^|/)[^/]*(Tests|UITests)/[^/]*\.swift$")
+MOBILE_EXTS = {".java", ".kt", ".swift", ".dart"}  # a phone app's code: counted for tests and the Android/iOS checks only
+MOBILE_TEST_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest)\w*/|(^|/)[^/]*(Tests|UITests)/[^/]*\.swift$|(^|/)(test|integration_test)/.*_test\.dart$")
 # What Android Studio writes into every new project: a test that checks 2 + 2 and one that reads the package name.
-TEMPLATE_TEST_RE = re.compile(r"(^|/)Example(Unit|Instrumented)Test\.(java|kt)$")
+TEMPLATE_TEST_RE = re.compile(r"(^|/)Example(Unit|Instrumented)Test\.(java|kt)$|(^|/)test/widget_test\.dart$")
 CRASH_REPORTING = re.compile(r"firebase[-:]crashlytics|io\.sentry|com\.bugsnag|com\.instabug|datadog|newrelic|"
-                             r"appcenter[-:]crashes|acra", re.I)
+                             r"appcenter[-:]crashes|acra|firebase_crashlytics|sentry_flutter|bugsnag_flutter|datadog_flutter", re.I)
 LOGS_STRIPPED = re.compile(r"-assumenosideeffects\s+class\s+android\.util\.Log|\bTimber\.plant\b")
 ANDROID_HTTP = re.compile(r"\bnew\s+OkHttpClient\b|OkHttpClient\.Builder\(|\bOkHttpClient\(\)|Retrofit\.Builder\(|"
                           r"Volley\.newRequestQueue|\.openConnection\(\)|HttpClient\s*\{|HttpClient\(")
@@ -54,7 +54,16 @@ IOS_TIMEOUT = re.compile(r"timeoutIntervalForRequest|timeoutIntervalForResource|
                          r"requestModifier[^\n]*timeout")
 IOS_RETRY = re.compile(r"RequestRetrier|RetryPolicy|\bretry\s*\(|maxRetries|retryCount|for\s+attempt\s+in|"
                        r"waitsForConnectivity\s*=\s*true")
-MOBILE_SHAPES = {"Android app", "iOS app"}
+XP_SHAPES = {"Flutter app", "React Native app"}    # one codebase for both phones, no android/ or ios/ folder read
+MOBILE_SHAPES = {"Android app", "iOS app"} | XP_SHAPES
+XP_CRASH = re.compile(r"@sentry/react-native|sentry-expo|@react-native-firebase/crashlytics|@bugsnag/react-native|"
+                      r"@datadog/mobile-react-native|instabug-reactnative|embrace-io|" + CRASH_REPORTING.pattern, re.I)
+XP_HTTP = re.compile(r"\bfetch\s*\(|\baxios\b|\bky\.|\bDio\s*\(|\bhttp\.(?:get|post|put|delete|patch)\s*\(|"
+                     r"\bhttp\.Client\s*\(")
+XP_TIMEOUT = re.compile(r"\btimeout\s*:|AbortSignal\.timeout|\bAbortController\b|connectTimeout|receiveTimeout|"
+                        r"\.timeout\s*\(")
+XP_RETRY = re.compile(r"axios-retry|ky\.extend|\bretry\s*[:(]|dio_smart_retry|RetryInterceptor|retryCount|maxRetries|"
+                      r"\bp-retry\b")
 JS_TEST_RE = re.compile(r"(\.(test|spec)\.[cm]?[jt]sx?$)|(^|/)(__tests__|tests?|e2e|cypress|playwright)/")
 PY_LOCKS = ("poetry.lock", "uv.lock", "Pipfile.lock", "pdm.lock")
 JS_LOCKS = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lock", "bun.lockb")
@@ -194,6 +203,10 @@ def detect_stack(repo: Repo, g: Graph) -> dict:
         fw.insert(0, "Android")
     if g.meta.get("platform") == "ios" or g.meta.get("ios"):
         fw.insert(0, "iOS")
+    if g.meta.get("flutter"):
+        fw.insert(0, "Flutter")
+    if g.meta.get("rn"):
+        fw.insert(0, "Expo" if any(a.get("expo") for a in g.meta["rn"].get("apps", [])) else "React Native")
     return {"frameworks": fw, "entries": dict(entries), "languages": langs, "deploy_targets": deploy,
             "platform": g.meta.get("platform")}
 
@@ -203,6 +216,10 @@ def classify_shape(stack: dict) -> str:
         return "Android app"
     if stack.get("platform") == "ios":
         return "iOS app"
+    if stack.get("platform") == "flutter":
+        return "Flutter app"
+    if stack.get("platform") == "react-native":
+        return "React Native app"
     e = stack["entries"]
     pages, routes = e.get("page", 0), e.get("route", 0)
     if pages and routes:
@@ -219,7 +236,7 @@ def classify_shape(stack: dict) -> str:
 
 
 SHAPES = frozenset({"full-stack web app", "web API", "frontend web app", "command-line tool", "script or worker", "library",
-                    "Android app", "iOS app"})
+                    "Android app", "iOS app", "Flutter app", "React Native app"})
 SERVICE_SHAPES = {"full-stack web app", "web API"}
 
 
@@ -495,7 +512,7 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
     real = [f for f in tests if not TEMPLATE_TEST_RE.search(f)]
     if tests and not real:
         out.append(_check("tests-exist", "Tests exist", 4, "partial",
-                          f"only the sample tests Android Studio writes into every new project ({', '.join(t.rsplit('/', 1)[-1] for t in tests[:2])})",
+                          f"only the sample tests Android Studio or Flutter write into every new project ({', '.join(t.rsplit('/', 1)[-1] for t in tests[:2])})",
                           "Write a test for your most important flow (for example: the alert is sent with the right "
                           "location) and delete the sample tests.", earned=1))
     else:
@@ -542,6 +559,8 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
 
 
 def check_observability(repo: Repo, g: Graph, shape: str) -> list[dict]:
+    if shape in XP_SHAPES:
+        return _xp_observability(repo, shape)
     if shape == "iOS app":
         return _ios_observability(repo)
     if shape in MOBILE_SHAPES:
@@ -578,6 +597,8 @@ def check_observability(repo: Repo, g: Graph, shape: str) -> list[dict]:
 
 
 def check_packaging(repo: Repo, shape: str, stack: dict, sec: dict | None = None) -> list[dict]:
+    if shape in XP_SHAPES:
+        return _xp_packaging(repo, sec, shape)
     if shape == "iOS app":
         return _ios_packaging(sec)
     if shape in MOBILE_SHAPES:
@@ -642,6 +663,8 @@ def check_ci(repo: Repo) -> list[dict]:
 
 
 def check_resilience(repo: Repo, shape: str, stack: dict) -> list[dict]:
+    if shape in XP_SHAPES:
+        return _xp_resilience(repo, shape)
     if shape == "iOS app":
         return _ios_resilience(repo)
     if shape in MOBILE_SHAPES:
@@ -770,6 +793,24 @@ def advice(shape: str, stack: dict) -> list[str]:
             "Lock down your Firebase database and storage rules to signed-in users and their own records, and test "
             "them in the Firebase emulator.",
             "Release to a small group first (Play Console internal testing), with crash reporting on.",
+        ],
+        "Flutter app": [
+            "Build releases with `flutter build appbundle --obfuscate --split-debug-info` and `flutter build ipa`; "
+            "ship to a small group first (Play internal testing, TestFlight) with crash reporting on.",
+            "Keep private keys and paid-API calls on a small server (or Firebase Functions); the app calls it. "
+            "Anything inside the app can be read by whoever installs it.",
+            "Save logins and tokens with flutter_secure_storage, never SharedPreferences.",
+            "Use App Links / Universal Links on your own domain for links that carry data, and check every value "
+            "a link brings before using it.",
+        ],
+        "React Native app": [
+            "Build and sign with EAS Build (or Fastlane), and ship to a small group first (Play internal testing, "
+            "TestFlight) with crash reporting on.",
+            "Keep private keys and paid-API calls on a small server; anything in the JavaScript bundle can be read by "
+            "whoever installs the app, including EXPO_PUBLIC_ variables.",
+            "Save logins and tokens with expo-secure-store or react-native-keychain, never AsyncStorage.",
+            "Use App Links / Universal Links on your own domain for links that carry data, and check every value "
+            "a link brings before using it.",
         ],
         "iOS app": [
             "Ship through TestFlight to a small group first, with crash reporting on, before the App Store.",
@@ -987,7 +1028,7 @@ def _mobile_secrets(repo: Repo, sec: dict | None) -> list[dict]:
 
 def _mobile_observability(repo: Repo) -> list[dict]:
     builds = "\n".join(repo.text(f) for f in repo.files if f.rsplit("/", 1)[-1] in
-                       ("build.gradle", "build.gradle.kts", "libs.versions.toml"))
+                       ("build.gradle", "build.gradle.kts", "libs.versions.toml", "pubspec.yaml"))
     crash = CRASH_REPORTING.search(builds)
     rules = "\n".join(repo.text(f) for f in repo.files if f.endswith(("proguard-rules.pro", ".pro")))
     stripped = LOGS_STRIPPED.search(rules) or repo.mobile_grep(LOGS_STRIPPED, limit=1)
@@ -1050,6 +1091,113 @@ def _mobile_resilience(repo: Repo) -> list[dict]:
                "" if r else "Retry with backoff (Volley DefaultRetryPolicy, WorkManager setBackoffCriteria), "
                "especially for anything that must not get lost, like an alert.", how="pattern"),
         _check("res-shutdown", "Graceful shutdown", 2, "skip", "an app: Android manages its lifecycle"),
+    ]
+
+
+# ---------------------------------------------------------------------------- Flutter and React Native apps
+
+def _xp_rules(sec: dict | None) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for f in (sec or {}).get("findings", []):
+        if f.get("rule", "").startswith(("LN-", "LF-")) and f.get("status") != "accepted":
+            out.setdefault(f["rule"], []).append(f)
+    return out
+
+
+def _xp_code(repo: Repo, shape: str):
+    for f in repo.files:
+        if Path(f).suffix in ((".dart",) if shape == "Flutter app" else (".js", ".jsx", ".ts", ".tsx")) \
+                and not repo.is_test(f) and not f.endswith((".min.js", ".d.ts")):
+            yield f, repo.text(f)
+
+
+def _xp_grep(repo: Repo, shape: str, rx: re.Pattern, limit: int = 50) -> list[tuple[str, int, str]]:
+    out = []
+    for f, t in _xp_code(repo, shape):
+        for m in rx.finditer(t):
+            line = t.count("\n", 0, m.start()) + 1
+            out.append((f, line, t.splitlines()[line - 1].strip()[:160]))
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def _xp_observability(repo: Repo, shape: str) -> list[dict]:
+    names = ("pubspec.yaml",) if shape == "Flutter app" else ("package.json", "app.json", "app.config.js",
+                                                              "app.config.ts")
+    deps = "\n".join(repo.text(f) for f in repo.files if f.rsplit("/", 1)[-1] in names)
+    crash = XP_CRASH.search(deps)
+    if shape == "Flutter app":
+        logs = _xp_grep(repo, shape, re.compile(r"(?<![\w.])print\s*\("), limit=500)
+        stripped = None
+        fix = "Use debugPrint or the logging package, and turn on the avoid_print lint in analysis_options.yaml."
+    else:
+        logs = _xp_grep(repo, shape, re.compile(r"\bconsole\.(?:log|info|debug)\s*\("), limit=500)
+        babel = "\n".join(repo.text(f) for f in repo.files if f.rsplit("/", 1)[-1] in ("babel.config.js", ".babelrc",
+                                                                                       "babel.config.json"))
+        stripped = re.search(r"transform-remove-console", babel)
+        fix = "Add babel-plugin-transform-remove-console to the production env in babel.config.js."
+    return [
+        _check("obs-crash", "Crash reporting", 3, "pass" if crash else "fail",
+               f"uses {crash.group(0)}" if crash else "no crash reporter found",
+               "" if crash else "Add Sentry or Firebase Crashlytics, so you hear about crashes on people's phones "
+               "before the reviews do.", how="pattern in " + " / ".join(names[:2])),
+        _check("obs-health", "Health-check endpoint", 3, "skip", "an app, not a service"),
+        _check("obs-print", "Log lines are kept out of release builds", 2, "pass" if stripped or not logs else "fail",
+               "removed by babel-plugin-transform-remove-console" if stripped else
+               f"{len(logs)} log call{'s ship' if len(logs) != 1 else ' ships'} in the release app ({_where(logs)})"
+               if logs else "no log calls", "" if stripped or not logs else fix, how="pattern"),
+    ]
+
+
+def _xp_packaging(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
+    rules = _xp_rules(sec)
+    lock = repo.has("pubspec.lock")
+    ats = rules.get("LN-ATS-OFF", [])
+    backup = rules.get("LN-BACKUP", [])
+    out = [   # a JS lock file is already the Dependencies category's check
+        _check("pkg-lock", "Library versions are locked", 2, "pass" if lock else "fail", lock or "no pubspec.lock",
+               "" if lock else "Commit pubspec.lock: an app's builds should use the same library versions every time.",
+               how="file check")] if shape == "Flutter app" else []
+    out += [
+        _check("pkg-signing", "Signed for the stores", 1, "skip",
+               "flutter build / Xcode handle signing" if shape == "Flutter app" else "EAS Build or Xcode/Gradle handle "
+               "signing"),
+    ]
+    if shape == "React Native app":
+        out.append(_check("pkg-ats", "App Transport Security is on", 2, "fail" if ats else "pass",
+                          _where([(f["file"], f["line"], "") for f in ats]) if ats else "not turned off in app.json",
+                          "Remove NSAllowsArbitraryLoads from app.json and move every server to https." if ats else "",
+                          how="LN-ATS-OFF"))
+        out.append(_check("pkg-backup", "App data is kept out of phone backups", 1, "fail" if backup else "pass",
+                          _where([(f["file"], f["line"], "") for f in backup]) if backup else "allowBackup is false",
+                          'Set "allowBackup": false under "android" in app.json.' if backup else "", how="LN-BACKUP"))
+    return out
+
+
+def _xp_resilience(repo: Repo, shape: str) -> list[dict]:
+    http = _xp_grep(repo, shape, XP_HTTP)
+    end = _check("res-shutdown", "Graceful shutdown", 2, "skip", "an app: the phone manages its lifecycle")
+    if not http:
+        return [_check("res-timeout", "Network calls have timeouts", 4, "skip", "no network calls in code"),
+                _check("res-retry", "Retries with backoff on network calls", 2, "skip", "no network calls in code"), end]
+    t = _xp_grep(repo, shape, XP_TIMEOUT, limit=1)
+    r = _xp_grep(repo, shape, XP_RETRY, limit=1)
+    deps = "\n".join(repo.text(f) for f in repo.files if f.rsplit("/", 1)[-1] in ("package.json", "pubspec.yaml"))
+    r = r or ([("package.json", 1, m.group(0))] if (m := XP_RETRY.search(deps)) else [])
+    tip = ("Give Dio a connectTimeout and receiveTimeout (or call .timeout() on http requests)" if shape == "Flutter app"
+           else "Pass AbortSignal.timeout(15000) to fetch, or set timeout on your axios instance")
+    return [
+        _check("res-timeout", "Network calls have timeouts", 4, "pass" if t else "fail",
+               f"{t[0][0]}:{t[0][1]}" if t else f"{len(http)} network call{'s' if len(http) != 1 else ''} "
+               f"({_where(http)}), no timeout set", "" if t else tip + ", so a bad connection fails quickly instead "
+               "of freezing the screen.", how="pattern"),
+        _check("res-retry", "Retries with backoff on network calls", 2, "pass" if r else "fail",
+               f"{r[0][0]}:{r[0][1]}" if r else "no retry found",
+               "" if r else ("Retry with backoff (dio_smart_retry)" if shape == "Flutter app" else
+                             "Retry with backoff (axios-retry, or TanStack Query's retry)") +
+               " for anything that must not get lost.", how="pattern"),
+        end,
     ]
 
 

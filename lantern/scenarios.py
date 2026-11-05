@@ -170,9 +170,9 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                         "The key is restricted to your app in the provider's console, or kept on your server and never "
                         "shipped in the app."),
     "android-permission": (None,
-                           "People see the permission prompt and wonder why a safety app wants it; store reviewers "
+                           "People see the permission prompt and wonder why this app wants it; store reviewers "
                            "ask the same question, and an unused permission is one more thing that can be misused.",
-                           "The permission is removed from the manifest, so nobody is asked for it."),
+                           "The permission is removed from the manifest (or app.json), so nobody is asked for it."),
     "android-release": (None,
                         "This does not open a door by itself. It makes the app easier to read back, run old, unsafe "
                         "defaults, or change between builds, which makes every other problem easier to find and use.",
@@ -224,6 +224,19 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                     "they read every password and answer as it passes, and can change them.",
                     "The challenge handler only accepts the certificate after the system checks it "
                     "(SecTrustEvaluateWithError), or the handler is removed so iOS checks it for you."),
+    "phone-tls-off": (None,
+                      "Their laptop pretends to be your server. The app accepts its certificate without checking it, so "
+                      "they read every password and answer as it passes, and can change them.",
+                      "badCertificateCallback is removed (or only returns true for a test server in debug builds), so "
+                      "the certificate is checked."),
+    "phone-log": (None,
+                  "The log lines include a password or token. Logs end up in bug reports, crash tools and on any "
+                  "computer the phone is plugged into.",
+                  "Those lines are removed, or only run in debug builds (kDebugMode)."),
+    "phone-plain-secret": (None,
+                           "From a backup, or a phone that is not theirs for a minute, the saved login is a line of plain "
+                           "text in the app's settings. Whoever copies it is signed in as that person.",
+                           "The token is saved with flutter_secure_storage, which uses the phone's Keychain or Keystore."),
     "ios-clipboard": (None,
                       "Another app reads the clipboard while the person switches to it, and gets the password or token.",
                       "Secrets are never copied to the clipboard, or copied with an expiry and localOnly set."),
@@ -257,7 +270,14 @@ RULE_KIND = {
     "LI-KEYCHAIN-ALWAYS": "ios-plain-secret", "LI-PLIST-KEY": "ios-app-key", "LI-UNUSED-PERMISSION": "ios-permission",
     "LI-OLD-TARGET": "ios-release", "LI-UIWEBVIEW": "ios-release", "LI-FILE-SHARING": "ios-shared-file",
     "LI-WEBVIEW-FILE": "ios-webview", "LI-WEBVIEW-BRIDGE": "ios-webview", "LI-PASTEBOARD": "ios-clipboard",
-    "LI-TLS-OFF": "ios-tls-off", "LI-SQL-CONCAT": "sql", "LI-WEAK-HASH": "weak-hash",
+    "LI-TLS-OFF": "ios-tls-off",
+    "LF-LOG-SENSITIVE": "phone-log", "LF-PREFS-SECRET": "phone-plain-secret", "LF-TLS-OFF": "phone-tls-off",
+    "LF-SQL-CONCAT": "sql", "LF-WEBVIEW-JS": "ios-webview", "LF-WEBVIEW-BRIDGE": "ios-webview",
+    "LF-CLEARTEXT-URL": "cleartext", "LF-WEAK-HASH": "weak-hash", "LI-SQL-CONCAT": "sql", "LI-WEAK-HASH": "weak-hash",
+    "LN-ASYNC-SECRET": "phone-plain-secret", "LN-LOG-SENSITIVE": "phone-log", "LN-SQL-CONCAT": "sql",
+    "LN-WEBVIEW-ANY": "ios-webview", "LN-WEBVIEW-FILE": "ios-webview", "LN-CLEARTEXT-URL": "cleartext",
+    "LN-ATS-OFF": "cleartext", "LN-URL-SCHEME": "ios-link", "LN-BACKUP": "android-backup",
+    "LN-UNUSED-PERMISSION": "android-permission",
 }
 # Where each Android story starts (the manifest and build-file problems have no page or route to start from)
 ANDROID_START = {
@@ -283,6 +303,10 @@ ANDROID_START = {
     "ios-shared-file": "{who} has the phone in their hands for a minute, or plugs it into their Mac.",
     "ios-webview": "{who} gets a page of their own shown in your app's web view (a link, an ad, or a plain-http page they changed on the way).",
     "ios-clipboard": "{who} has another app installed on the same phone.",
+    "phone-tls-off": "{who} joins the same public Wi-Fi as someone using your app (the phone runs this check for "
+                     "every secure connection the app makes).",
+    "phone-log": "{who} plugs the phone into a computer and reads the app's log, or reads a bug report the person sent you.",
+    "phone-plain-secret": "{who} gets a copy of the app's files: a backup, a rooted phone, or a phone left unlocked.",
     "ios-tls-off": "{who} joins the same public Wi-Fi as someone using your app (iOS calls this check for every secure "
                    "connection the app makes).",
 }
@@ -527,6 +551,9 @@ FIXED_HEADLINES = {
     "ios-shared-file": "The app's files can be browsed from a computer",
     "ios-webview": "A web view inside the app has risky settings",
     "ios-clipboard": "A secret is copied to the clipboard",
+    "phone-log": "Private details are written to the phone's log",
+    "phone-tls-off": "A secure-connection check is switched off",
+    "phone-plain-secret": "A login is saved in plain text on the phone",
     "ios-tls-off": "A secure-connection check is switched off",
     "weak-hash": "A weak scrambling method (such as MD5) is used",
     "secret": "A password or key is written in the code",

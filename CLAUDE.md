@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Context for working on Lantern in Claude Code. The product spec is `docs/Lantern_Product_Spec_v0.4.pdf`.
-This repo is Phase 0 plus the full-stack layer: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin and Swift engines, the API bridge
+This repo is Phase 0 plus the full-stack layer: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, Swift and Dart engines, the API bridge
 between them, scanners, the Three-Lens explainer, and a static HTML report.
 
 **Audience:** AI-assisted ("vibe") coders whose apps are usually full stack, often TypeScript. The
@@ -44,7 +44,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 
 | File | Role |
 |---|---|
-| `lantern/engine.py` | **Entry point for analysis**: Python frontend → JS/TS frontend → Go frontend → Rust frontend → Java frontend → Kotlin frontend → Swift frontend → packs → Android entries → iOS entries → bridge. Use `engine.build_graph`, not the per-language builders. |
+| `lantern/engine.py` | **Entry point for analysis**: Python frontend → JS/TS frontend → Go frontend → Rust frontend → Java frontend → Kotlin frontend → Swift frontend → Dart frontend → packs → Android entries → iOS entries → Flutter entries → bridge → React Native entries. Use `engine.build_graph`, not the per-language builders. |
 | `lantern/graph.py` | Unified Code Graph: `Node`, `Edge` (`via`, `detail`), confidence ranks, JSON round-trip, `stats()` |
 | `lantern/python_frontend.py` | Python: discover → tree-sitter parse (`_visit_body`, `CallSite`s) → `Resolver` |
 | `lantern/js_frontend.py` | TS/JS: `Walker` (defs, imports/exports, refs, HTTP calls, route/page registrations) → `SpecResolver` (relative, tsconfig paths, `@/`) → `JSResolver` (barrels, classes, `this`) → entries |
@@ -54,6 +54,8 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots + JS 
 | `lantern/kotlin_frontend.py` | Kotlin (2026-11-05, tree-sitter-kotlin): packages, classes (nested `Outer.Inner`), interfaces, `object`s, companions (their functions belong to the class), top-level functions, overloads share one node; calls resolved by `name` (own class, `extends` chain, then package top level), `import`, `this`, `assoc` (`Obj.f()`, `Class.companionFn()`), `receiver-type` (params, constructor `val`s, properties, locals typed by `: T`, `T()` or a repo function's written return type), `interface` (one `possible` edge per implementing class), `constructor` (`init`), `callback` (`::f`); library calls `ext:<Type>.<fun>`; unknown receivers counted in `graph.unresolved`. Entries: `fun main`, `@Test`/test folders, Spring routes, Jetpack Compose screens (`@Composable fun …Screen` → `page`, detail `Home screen (Compose) · HomeScreen`); Android entries come from `android.add_entries` exactly as for Java. `LV-*` Java patterns also run on `.kt` (string templates `"…$x"` count as building SQL/commands), and `security._blank_string` keeps template names so input is followed into them. Sample: `tests/fixtures/kotlinapp` (deep link → `rawQuery` built with `+`, critical). Tests: `tests/test_kotlin.py` |
 | `lantern/swift_frontend.py` | Swift (2026-11-05, tree-sitter-swift): types (`class`/`struct`/`enum`/`actor`/`protocol`, nested `Outer.Inner`) by name (no packages), `extension`s add to their type (a library type gets an `extension String` node), `init` is `Type.init`, a computed property such as SwiftUI's `body` is a function; supertypes are kept in the type node's signature (`struct ContentView: View`). Calls by `name`, `self`, `assoc` (statics, `Type.shared`), `receiver-type` (params, properties, locals from `: T`, `T()` or a written return type), `interface` (protocol → one `possible` edge per adopter), `constructor` (`init`), `callback` (`action: f`, `#selector(f)`), `swiftui-body` (`EntryView()` inside a view → `EntryView.body`, `inferred`). Entries: `@main` App `body`, XCTest `test…`, `main.swift`, Vapor `app.get("p", use: h)` routes. Sample: `tests/fixtures/iosapp`. Tests: `tests/test_ios.py` |
 | `lantern/ios.py` | iOS apps (2026-11-05): apps from `project.pbxproj` built for iphoneos or an `Info.plist` with iPhone keys; plists read with `android.parse_xml` (entities refused) plus a text pass. `add_entries` (after Android): UIKit `UIViewController` lifecycle methods and `@IBAction`s → `page`; SwiftUI views drawn by the app's `WindowGroup` or opened by `NavigationLink`/`sheet`/`fullScreenCover`/`navigationDestination`/`TabView` (rows such as `…Cell` skipped), and `…Screen` views → `page` (`EntryView screen · body`); functions an `.onOpenURL`/`.onContinueUserActivity` closure calls and `application(_:open:)`/`scene(_:openURLContexts:)` → `route` `LINK DeepLink handles links (…) · handle` (scenarios and the viewer treat `LINK` like Android's `INTENT`); `meta["ios"]` roots → lanes Screen/App (`lanes.phone_roots`). `scan`: `LI-*` rules (ATS off, URL schemes, file sharing, keys in Info.plist, get-task-allow, old minimum iOS, usage descriptions with no code, and Swift lines: logs, UserDefaults secrets, Keychain always, trust-all certificates, SQL built with `\(x)`, weak hashes, web view file access/bridges, UIWebView, `http://`, clipboard), `security["mobile"]` with `platform: ios`. `url.queryItems`/`URLComponents`/Vapor `req.*` count as request data. Readiness shape `iOS app` (`readiness._ios_*`). Stories `ios-*` in `scenarios.py` |
+| `lantern/dart_frontend.py` + `lantern/flutter.py` | Dart and Flutter (2026-11-05, tree-sitter-dart): classes, mixins, extensions, enums, top-level functions (`dt:<Class>.<method>`, `dt:<fn>`; a private `_Name` carries its file: `dt:_HomeState@lib/home.dart`; constructors are `Class.new`), a State's signature names its widget (`state of HomeScreen`). Calls by `name`, `assoc` (statics), `receiver-type` (fields, params, `final x = T()`, `T().f()`), `interface` (`implements`/`extends` an abstract class → one `possible` edge per class), `constructor`, `callback` (`onPressed: _load`), `flutter-build` (`HomeScreen()` inside a widget → its (State's) `build`, `inferred`). Generated `.g.dart`/`.freezed.dart` and platform folders skipped. `flutter.find_projects`: a `pubspec.yaml` with `flutter: sdk: flutter` → `meta["flutter"]["roots"]` (lanes Screen/App). `add_entries`: widgets a route opens (`MaterialPageRoute`, `routes:`, `home:`, `GoRoute`, `Navigator.push…`, dialogs) and `…Screen`/`…Page` widgets → `page` `HomeScreen screen · build` (rows like `…Tile` skipped); callees inside `uriLinkStream`/`getInitialLink` listeners → `route` `LINK`. `scan`: `LF-*` Dart line rules. `queryParameters`/`pathParameters`/`getInitialLink()` count as request data. Readiness shape `Flutter app` when no `android/`/`ios/` app is read (`readiness._xp_*`). Sample `tests/fixtures/flutterapp`. Tests: `tests/test_flutter.py` |
+| `lantern/rn.py` | React Native and Expo (2026-11-05), on top of the JS/TS reader: projects from a `package.json` depending on `react-native` or `expo` (+ `app.json`, `expo` key) → `meta["rn"]` (`roots`, `apps`), lanes Screen/App, `meta["platform"] = "react-native"` unless Android/iOS set it. `add_entries` (after the bridge): React Navigation `component={X}` → `page` (`…Navigator`/`…Stack`/`…Tabs` skipped), or `route` `LINK X screen (…)` when the `linking` config's `screens` names it (`Note` → `NoteScreen`); Expo Router `app/**` default exports → `page`, `LINK` when `app.json` has a `scheme`; callees inside a `Linking.addEventListener("url", …)`/`getInitialURL()` call, or handed the URL it read, → `route` `LINK … handles links` (hooks and setters skipped). `scan`: `LN-*` code rules (AsyncStorage/MMKV secrets, log, expo-sqlite/`executeSql` built with `${}`/`+`, web view origin `*`/file access, `http://`) and `app.json` rules (URL scheme, backups on, ATS off, unused permissions with `PERMS` words), `security["mobile"]` `platform: react-native`. `route.params`/`useLocalSearchParams`/`Linking.parse` count as request data. Readiness shape `React Native app`. Sample `tests/fixtures/rnapp`. Tests: `tests/test_rn.py` |
 | `lantern/sandbox.py` + `lantern/_jail.py` | Test sandbox for "Watch my tests run": `detect` (pytest, Jest, Vitest, Mocha, npm/pnpm/yarn test, go test, cargo test, Maven, Gradle), `check_command` (test runners only), backends Docker (Linux + daemon; images pinned by digest in `IMAGES`, project ro at `/app`, `--network none`, 2 CPU/2 GB, uid 65534, host Python packages mounted ro) or restricted subprocess (read-only temp copy, env allow-list, `_jail`: rlimits, Landlock writes-only-in-temp + no TCP, uid 65534 if root; Python audit hook `SITECUSTOMIZE`; Windows Job Object), 10-min wall clock killing the tree; `blocked` reasons from `LANTERN-SANDBOX-BLOCKED:` markers. Python calls are traced and merged; other languages run untraced ("Tests run; your map upgrades for Python only for now"). `LANTERN_SANDBOX=subprocess\|docker` forces a backend. Tests: `tests/test_sandbox.py` |
 | `lantern/lanes.py` | Stack lanes for the stack strip (design turn 11): `browser` → `frontend` → `server` → `data`, assigned from node id, file path and entry kind only (`assign(g)` sets `node.lane`, `meta["lanes"]`; `security.scan` sets `hot_lane` and `lanes` on each finding; `lane_for_file` for findings with no node). The viewer draws the strip on Finding/Fix/function panels, the Lanes view (Simple default on Paths), the four-dot glyph on list rows, hover definitions; it validates every lane value against the four stops. Rules and words: `docs/api.md` “Stack lanes” |
 | `lantern/bridge.py` | Links `g.meta["http_calls"]` to route entry points by method + path segments; exact / suffix / unknown-prefix / ambiguous |
@@ -94,6 +96,7 @@ Rust `rs:<crate>::<mod path>::<fn>` / `rs:<crate>::<mod path>::<Type>::<method>`
 Java `jv:<package>.<Class>.<method>` (class: `jv:<package>.<Class>`, file module: `jv:<path>.java`);
 Kotlin `kt:<package>.<Class>.<fun>` / `kt:<package>.<fun>` (class: `kt:<package>.<Class>`, file module: `kt:<path>.kt`);
 Swift `sw:<Type>.<func>` / `sw:<func>` (type: `sw:<Type>`, file module: `sw:<path>.swift`);
+Dart `dt:<Class>.<method>` / `dt:<fn>` (private names `dt:_Name@<file>`, constructor `Class.new`, file module: `dt:<path>.dart`);
 external `ext:<pkg.member>` or `ext:HTTP <METHOD> <path-or-host>`.
 
 ## How Python resolution works
@@ -161,7 +164,7 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
    precision measurement Python has.
 5. **Cloud mode + local agent pairing** (spec sections 5 and 12): accounts, GitHub App, remote "analyze now",
    WebGL network view (Sigma.js) for very large graphs. The local app (`lantern serve`) is the base.
-6. **Dart, C#, PHP, Ruby, then C++** frontends (Kotlin and Swift added 2026-11-05) (spec 6.3), reusing the same graph, bridge, and viewer, the way
+6. **C#, PHP, Ruby, then C++** frontends (Kotlin, Swift and Dart added 2026-11-05) (spec 6.3), reusing the same graph, bridge, and viewer, the way
    `go_frontend.py`, `rust_frontend.py` and `java_frontend.py` do (all added 2026-11-01; their edge confidences are
    provisional until a benchmark per language exists).
 7. Scanner licensing for cloud mode: Opengrep with own or permissively licensed rules (spec 9.1).
@@ -178,6 +181,14 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 * Kotlin: no runtime tracing; extension functions, scope-function receivers (`with(x) { f() }`, `apply`), and calls
   on a lambda's `it` are unresolved; Ktor `routing { get("/p") { } }` routes are not entry points yet (Spring's are);
   types are matched by simple name. Confidence levels are not yet backed by a Kotlin benchmark.
+* Flutter/Dart: no runtime tracing; `dynamic`/`var` receivers from library calls, generics, extension methods on library
+  types, `Provider`/`Riverpod`/`Bloc` lookups (`context.read<T>()`) and callbacks passed as closures to library widgets
+  are unresolved; a screen opened only through a route name string built at run time is found only if it is called
+  `…Screen`/`…Page`; `pubspec` libraries are not audited yet.
+* React Native: rides on the JS/TS reader (its gaps apply); a screen registered through a helper or a config array
+  (not `component={X}` or an `app/` file) is missed; the `linking` config is matched by name (`Note` → `Note`,
+  `NoteScreen`, `NotePage`); only `app.json` is read (`app.config.js` is code and not run); `npm audit` needs a
+  `package-lock.json`.
 * Swift/iOS: no runtime tracing; types are matched by name across the whole repo (two targets with the same type name
   share a node); closures passed to library calls, `@EnvironmentObject`/`@Environment` values, property wrappers,
   `some`/generic receivers and key paths are unresolved; a root view chosen indirectly (`appDelegate.rootView`) is not
@@ -186,7 +197,8 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 * Android: the Gradle/Maven audit checks only the libraries written in the build files, not
   the ones they pull in;
   only the main manifest is read (flavors and library manifests are not merged); `LM-LOG-SENSITIVE` and
-  `LM-UNUSED-PERMISSION` read names, not meaning. Flutter and React Native native config are not read yet.
+  `LM-UNUSED-PERMISSION` read names, not meaning. Flutter and React Native apps' own `android/`
+  and `ios/` folders are read like any Android/iOS app.
 * Java: no runtime tracing, no SpotBugs/dependency-check yet (only the `LV-*` patterns); generics are looked through
   (a `List<Note>` receiver is `List`, external); overloads share a node so a call lands on the group, not the exact
   overload; Spring's `@Autowired` field injection is typed by the field's declared type (an interface → `possible`

@@ -5,6 +5,22 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Flutter and React Native apps are read as phone apps. Lantern now reads Dart: classes, mixins, extensions and
+  functions are on the map with their calls (to their own class, typed fields and locals, `final db = NoteDb();`,
+  static methods, interfaces, `onPressed: _load`), and a widget built inside another (`HomeScreen()`) leads to its
+  `build` (a StatefulWidget's State `build`). Screens are the widgets a route opens (`MaterialPageRoute`, `routes:`,
+  `home:`, `GoRoute`, `Navigator.push…`) and widgets named `…Screen`/`…Page`; the code a `uriLinkStream` /
+  `getInitialLink` listener calls is where links start. React Native and Expo apps get their screens from React
+  Navigation (`<Stack.Screen component={NoteScreen} />`, the `linking` config) and Expo Router files (`app/**`), and
+  their link handlers from `Linking.addEventListener("url", …)` / `getInitialURL()`. In both, a link whose id reaches a
+  database query built from text is critical. New checks: 8 `LF-*` for Dart (passwords in the log or in
+  SharedPreferences, trusting any certificate, SQL built from variables, web view JavaScript and bridges, plain
+  `http://`, weak hashes) and 10 `LN-*` for React Native (tokens in AsyncStorage or the log, SQL built from
+  variables, web views open to any site or to files, plain `http://`, and Expo's `app.json`: URL schemes, backups on,
+  App Transport Security off, permissions the code never uses). Readiness grades them as a Flutter app or a React
+  Native app when there is no `android/` or `ios/` folder to read (crash reporting, logs in release, timeouts and
+  retries, ATS and backups in `app.json`, `pubspec.lock`). New samples: `tests/fixtures/flutterapp`,
+  `tests/fixtures/rnapp`.
 - iOS apps are read as iPhone apps. Lantern now reads Swift: types, extensions, protocols and SwiftUI views are on the map
   with their calls, and the app's screens (UIKit view controllers, SwiftUI views the app or a navigation link opens) and
   the code that handles incoming links (`.onOpenURL`, the app and scene delegates) are where paths start. A link whose

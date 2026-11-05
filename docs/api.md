@@ -152,6 +152,11 @@ An iOS app (`graph.meta.platform == "ios"`, `meta.ios.roots` lists the folders o
 `root`, `plist`, `project`, `bundle_id`, `min_ios`) gets the same two stops: its Swift screens are `browser`, the rest of its
 code `frontend`. When a repository holds both, `platform` is `"android"` and both sets of roots count.
 
+A Flutter app (`meta.flutter.roots`: each folder whose `pubspec.yaml` depends on the Flutter SDK) and a React Native or
+Expo app (`meta.rn.roots`, `meta.rn.apps` with `root`, `expo`, `router`, `config` (the `app.json` path or null)) get the
+same two stops for their Dart or JavaScript code. `platform` is `"flutter"` or `"react-native"` unless an `android/` or
+`ios/` app in the same repository set it first.
+
 ### `security.json`
 
 `{"findings": [...], "tools": [{"tool", "status", "version"}], "counts": {critical, high, medium, low, in_tests, accepted},
@@ -173,6 +178,14 @@ both platforms in one repository the iOS modules are added to Android's list wit
 (`LI-*`) carry `platform: "ios"`. iOS entry details: `<Type> screen · <method>` (page, a UIKit view controller method or
 a SwiftUI `body`), `LINK <Type> handles links (other apps and web pages can open it) · <method>` (route),
 `app start (<Type>) · body` (main).
+
+Flutter and React Native findings (`LF-*`, `LN-*`) carry `platform: "flutter"` / `"react-native"`. For a React Native app
+with an `app.json`, `mobile` (when no Android/iOS module claimed it) is `{"platform": "react-native", "modules": [{"root",
+"manifest" (app.json), "package" (`android.package` or the slug), "permissions" (from `android.permissions`, words and
+`used` as for Android), "components" (one `link` per `scheme`)}]}`. Entry details: `<Widget> screen · build` (Flutter
+page), `<Component> screen · <Component>` or `· /<expo router path>` (React Native page), `LINK <Component> screen
+(other apps and web pages can open it) · …` and `LINK <name> handles links (other apps and web pages can open it) ·
+<fn>` (route). Readiness `shape` is `"Flutter app"` or `"React Native app"` for these.
 
 Finding: `id` (stable across moves: tool, rule, file and the flagged line's text), `tool` (`bandit`, `pip-audit`,
 `npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`

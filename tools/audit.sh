@@ -55,6 +55,22 @@ assert len(sql) == 1 and sql[0]["rank"] == "critical" and sql[0]["node"].startsw
 assert s["mobile"]["platform"] == "ios"
 assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "iOS app"
 EOF
+check "flutterapp (Flutter, Dart) analyzes" lantern analyze tests/fixtures/flutterapp --out "$W/fa"
+check "flutterapp: Dart is mapped and a link reaching a Dart query is critical" "$PY" - "$W/fa" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["rule"] == "LF-SQL-CONCAT"]
+assert len(sql) == 1 and sql[0]["rank"] == "critical" and sql[0]["node"].startswith("dt:"), sql
+EOF
+check "rnapp (React Native, Expo) analyzes" lantern analyze tests/fixtures/rnapp --out "$W/ra"
+check "rnapp: a link reaching an expo-sqlite query is critical, graded as a React Native app" "$PY" - "$W/ra" <<'EOF'
+import json, sys
+s = json.load(open(sys.argv[1] + "/security.json"))
+sql = [f for f in s["findings"] if f["rule"] == "LN-SQL-CONCAT"]
+assert len(sql) == 1 and sql[0]["rank"] == "critical", sql
+assert s["mobile"]["platform"] == "react-native"
+assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "React Native app"
+EOF
 check "nextapp (Next.js + Supabase) analyzes" lantern analyze tests/fixtures/nextapp --out "$W/nx"
 check "nextapp: auth, RLS, and service-role findings" "$PY" - "$W/nx" <<'EOF'
 import json, sys
@@ -125,6 +141,9 @@ EOF
   # an iOS app: the same card and stories with iPhone words, poisoned
   check "viewer: poisoned iOS data stays text (On the phone card, screens, links)" \
     bash -c "'$PY' tools/poison_report.py '$W/ia/report.html' '$W/poison-ia/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ia/report.html' '$W/ishot'"
+  # a React Native app: the same card with app.json words, poisoned
+  check "viewer: poisoned React Native data stays text (On the phone card, screens, links)" \
+    bash -c "'$PY' tools/poison_report.py '$W/ra/report.html' '$W/poison-ra/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ra/report.html' '$W/rshot'"
   # the live app: the test sheet (sandboxed run), the terminal drawer, a screenshot in Ask Lantern, a pack toggle
   A="$W/app"; mkdir -p "$A"; cp -r tests/fixtures/shop "$A/shop"
   "$PY" - "$A/shot.png" <<'PYEOF'

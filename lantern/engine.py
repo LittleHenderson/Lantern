@@ -1,10 +1,10 @@
-"""Build the full-stack graph: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, Swift, then the API bridge between them."""
+"""Build the full-stack graph: Python, TypeScript/JavaScript, Go, Rust, Java, Kotlin, Swift, Dart, then the API bridge between them."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, python_frontend, rust_frontend, swift_frontend
+from . import bridge, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, python_frontend, rust_frontend, swift_frontend
 from .graph import Graph
 
 
@@ -17,6 +17,7 @@ def build_graph(repo: str | Path) -> Graph:
     jv = java_frontend.add_java(g, repo)
     kt = kotlin_frontend.add_kotlin(g, repo)
     sw = swift_frontend.add_swift(g, repo)
+    dt = dart_frontend.add_dart(g, repo)
     langs = {}
     if py["files"]:
         langs["python"] = py
@@ -32,10 +33,12 @@ def build_graph(repo: str | Path) -> Graph:
         langs["kotlin"] = kt
     if sw.get("files"):
         langs["swift"] = sw
+    if dt.get("files"):
+        langs["dart"] = dt
     g.meta.update({
         "languages": langs,
-        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv, kt, sw)),
-        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv, kt, sw)),
+        "files": sum(x.get("files", 0) for x in (py, js, go, rs, jv, kt, sw, dt)),
+        "lines": sum(x.get("lines", 0) for x in (py, js, go, rs, jv, kt, sw, dt)),
         "language": " + ".join(langs) or "none",
     })
     # Analysis packs (pattern files) can add entry points for frameworks without built-in support, before the
@@ -49,6 +52,10 @@ def build_graph(repo: str | Path) -> Graph:
     android.add_entries(g, repo)   # Android starts apps through manifest components, not main()
     from . import ios
     ios.add_entries(g, repo)       # iPhone screens and links, from the Swift map and the Xcode project
+    from . import flutter
+    flutter.add_entries(g, repo)   # Flutter screens and links, from the Dart map
     bridge.link(g)
+    from . import rn
+    rn.add_entries(g, repo)        # React Native / Expo screens and links, from the JS map
     lanes.assign(g)
     return g
