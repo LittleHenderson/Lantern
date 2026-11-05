@@ -143,3 +143,28 @@ def test_cli_login_polls_and_saves(gw, monkeypatch, tmp_path):
     from lantern.cli import main
     assert main(["login", "--github", "--no-browser"]) == 0
     assert providers.load_token() == "lt_from_browser" and seen["n"] == 2
+
+
+def test_many_new_accounts_in_a_day_are_paused_but_existing_ones_sign_in(tmp_path):
+    """Abuse: one person making account after account to multiply the free allowance. New accounts past the day's cap
+    get a 429 page with a sentence; an account that already exists signs in again as usual."""
+    calls: list = []
+    s = Settings(primary="deepseek", deepseek_url="https://x.test", deepseek_key="k", admin_secret=ADMIN,
+                 db_path=str(tmp_path / "gw.db"), public_url="https://gw.test", github_client_id="gh-id",
+                 github_client_secret="gh-secret", google_client_id="go-id", google_client_secret="go-secret",
+                 signups_per_day=2)
+    gw = TestClient(create_app(s, transport=providers_transport(calls)), follow_redirects=False)
+    store = gw.app.state.store
+    store.sign_in("github:1", "github:one", 2)
+    store.sign_in("github:2", "github:two", 2)
+    assert store.signups_today() == 2
+    r = _signin(gw, "github")                       # a third, new account today (GitHub user 42)
+    assert r.status_code == 429 and "try again tomorrow" in r.text and r.headers["retry-after"] == "86400"
+    assert store.is_new_account("github:42") and store.signups_today() == 2
+    tok = store.sign_in("github:1", "github:one", 2)   # existing account: never counted, keeps working
+    assert tok.startswith("lt_")
+    stats = gw.get("/v1/admin/stats", headers={"authorization": f"Bearer {ADMIN}"}).json()["allowance"]
+    assert stats["accounts_new_today"] == 2 and stats["accounts"] == 2
+    s.signups_per_day = 0                           # 0 = no cap
+    r = _signin(gw, "github")
+    assert r.status_code == 200 and store.signups_today() == 3
