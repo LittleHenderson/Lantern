@@ -42,7 +42,8 @@ def env(tmp_path):
 def set_cookies(resp) -> dict:
     out = {}
     for h in resp.headers.get_list("set-cookie"):
-        c = SimpleCookie(); c.load(h)
+        c = SimpleCookie()
+        c.load(h)
         for k, m in c.items():
             out[k] = {"value": m.value, "httponly": "httponly" in h.lower(), "secure": "secure" in h.lower(),
                       "samesite": (re.search(r"samesite=(\w+)", h, re.I) or [None, None])[1], "path": m["path"],

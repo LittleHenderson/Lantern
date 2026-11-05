@@ -13,7 +13,6 @@ Unmatched calls become external "HTTP" nodes, so the map shows a call whose serv
 
 from __future__ import annotations
 
-import re
 
 from .graph import CALLS, INFERRED, POSSIBLE, RESOLVED, Graph
 

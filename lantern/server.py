@@ -21,7 +21,6 @@ import json
 import os
 import re
 import secrets
-import shlex
 import threading
 import time
 import traceback
@@ -1199,7 +1198,7 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
             privacy = store.settings().get("privacy", "full")
             repo = Path(p["path"])
             app.jobs.start(p["id"], "analyze",
-                           lambda log, repo=repo: pipeline.analyze(repo, pipeline.out_dir(repo), privacy, log=log))
+                           lambda log, repo=repo, privacy=privacy: pipeline.analyze(repo, pipeline.out_dir(repo), privacy, log=log))
     url = f"http://{'127.0.0.1' if _unspecified(host) else host}:{port}/?token={token}"
     if check:
         print(f"Lantern {__version__} is running. Open:\n\n  {url}\n", flush=True)

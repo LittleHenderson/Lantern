@@ -160,12 +160,10 @@ def _rate_limited(g: Graph, cache: dict[str, list[str]]) -> bool:
 
 
 def wallet_drain(g: Graph, calls: list[dict], cache: dict[str, list[str]]) -> list[dict]:
-    from .security import reachability
     from .websec import _finding, call_adjacency, login_check
     paid_nodes = {c["node"]: c for c in calls if c["node"] and c["kind"] in PAID_KINDS}
     if not paid_nodes:
         return []
-    reach = reachability(g)
     limited = _rate_limited(g, cache)
     adj = call_adjacency(g)
     out = []

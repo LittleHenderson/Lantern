@@ -534,17 +534,27 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
             continue
         reach.add(u)
         stack.extend(out_adj.get(u, ()))
-    entries = [n for n in g.entry_points() if (n.entry or {}).get("kind") in ("route", "cli", "script", "page")]
+    # sample apps under tests/ or fixtures/ carry routes of their own; they are not this project's entry points
+    entries = [n for n in g.entry_points() if (n.entry or {}).get("kind") in ("route", "cli", "script", "page")
+               and not repo.is_test(n.file or "")]
     if entries:
         hit_ids = {n.id for n in entries if n.id in reach or any(src in reach for src in in_adj.get(n.id, ()))}
+        # A route a test calls through a framework's test client (`client.get("/v1/health")`, `request(app).post(...)`)
+        # never shows in the call graph: the dispatch happens inside the framework. The route's path written as a
+        # string in a test file counts instead; `{id}`/`:id`/`<id>` segments match any one segment.
+        called = _routes_called_by_tests(repo, [n for n in entries if n.id not in hit_ids])
+        called |= _pages_opened_by_tests(repo, [n for n in entries if n.id not in hit_ids])
+        hit_ids |= called
         hit = [n for n in entries if n.id in hit_ids]
         frac = len(hit) / len(entries)
         miss = [n.entry.get("detail") or n.qualname for n in entries if n.id not in hit_ids]
         out.append(_check("tests-entries", "Tests touch every entry point", 4,
                           "pass" if frac >= 0.999 else "partial" if frac >= 0.5 else "fail",
-                          f"{len(hit)} of {len(entries)} reached from tests" + (f"; not reached: {', '.join(miss[:4])}" if miss else ""),
+                          f"{len(hit)} of {len(entries)} reached from tests"
+                          + (f" ({len(called)} by path through a test client)" if called else "")
+                          + (f"; not reached: {', '.join(miss[:4])}" if miss else ""),
                           "" if not miss else "Add a test that calls each untested route or command.",
-                          how="call graph from test functions (static; frameworks' test clients are not followed)",
+                          how="call graph from test functions (static), plus route paths written in test files",
                           earned=4 * frac))
     else:
         out.append(_check("tests-entries", "Tests touch every entry point", 4, "skip", "no routes, pages, or commands"))
@@ -556,6 +566,70 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
         out.append(_check("tests-pass", "Tests pass", 2, "skip",
                           "not run (Lantern never runs your code unless you pass --trace)"))
     return out
+
+
+ROUTE_DETAIL = re.compile(r"^(?:[A-Z]+|ANY)\s+(/\S*)$")
+
+
+def _routes_called_by_tests(repo: Repo, routes: list) -> set[str]:
+    """Ids of `routes` whose path is written, quoted, somewhere in a test file (a framework test client call)."""
+    if not routes:
+        return set()
+    texts = [t for _f, t in repo.code(tests=True)] + [t for _f, t in repo.mobile_code(tests=True)]
+    if not texts:
+        return set()
+    lines = [ln for t in texts for ln in t.splitlines() if "/" in ln]
+    out = set()
+    for n in routes:
+        m = ROUTE_DETAIL.match(str((n.entry or {}).get("detail") or ""))
+        if not m:
+            continue
+        method, path = m.group(0).split(None, 1)[0], m.group(1).rstrip("/") or "/"
+        segs = [r"[^/'\"?#\s]+" if re.fullmatch(r"\{[^}]*\}|:\w+|<[^>]*>|\*\w*|\[[^\]]*\]", s) else re.escape(s)
+                for s in path.split("/") if s]
+        rx = re.compile("['\"`]" + "/".join([""] + segs) + "/?['\"`?]") if segs else re.compile("['\"`]/['\"`?]")
+        # the method must be on the same line (`client.delete("/items/1")`, `method: "DELETE"`): a GET test of a path
+        # says nothing about its DELETE route
+        verb = re.compile(r"\b" + re.escape(method) + r"\b", re.I) if method != "ANY" else None
+        if any(rx.search(ln) and (verb is None or verb.search(ln)) for ln in lines):
+            out.add(n.id)
+    return out
+
+
+def _pages_opened_by_tests(repo: Repo, pages: list) -> set[str]:
+    """Ids of page entries that are HTML files whose file name a test writes (the page is opened or read by a test)."""
+    if not pages:
+        return set()
+    blob = "\n".join(t for _f, t in repo.code(tests=True))
+    out = set()
+    for n in pages:
+        name = (n.file or "").rsplit("/", 1)[-1]
+        if name.endswith((".html", ".htm")) and re.search(r"['\"/]" + re.escape(name) + r"['\"]", blob):
+            out.add(n.id)
+    return out
+
+
+def _is_program_output(repo: Repo, hit: tuple[str, int, str]) -> bool:
+    """A print that is the program talking to the person at the terminal, not a debugging leftover: it names its
+    stream (`file=`), or it sits in the program's entry function (`def main`, `def serve`, `def run`) or under
+    `if __name__ == "__main__":`."""
+    f, line, text = hit
+    if re.search(r"\bfile\s*=", text):
+        return True
+    lines = repo.text(f).splitlines()
+    indent = len(lines[line - 1]) - len(lines[line - 1].lstrip()) if line <= len(lines) else 0
+    for i in range(line - 2, -1, -1):
+        s = lines[i]
+        if not s.strip():
+            continue
+        ind = len(s) - len(s.lstrip())
+        if ind < indent:
+            if re.match(r"\s*(async\s+)?def\s+(main|_main|serve|run|cli)\b", s) or re.match(r"\s*if\s+__name__\s*==", s):
+                return True
+            if re.match(r"\s*(async\s+)?def\s", s) or re.match(r"\s*class\s", s):
+                return False
+            indent = ind
+    return False
 
 
 def check_observability(repo: Repo, g: Graph, shape: str) -> list[dict]:
@@ -585,7 +659,8 @@ def check_observability(repo: Repo, g: Graph, shape: str) -> list[dict]:
     else:
         out.append(_check("obs-health", "Health-check endpoint", 3, "skip", f"not a service ({shape})"))
     prints = [h for h in repo.grep(re.compile(r"^\s*print\(", re.M), limit=200)
-              if not re.search(r"(^|/)(cli|__main__|scripts?|bench|examples?|tools)(/|\.py$)", h[0])]
+              if not re.search(r"(^|/)(cli|__main__|scripts?|bench|examples?|tools)(/|\.py$)", h[0])
+              and not _is_program_output(repo, h)]
     if shape in SERVICE_SHAPES and any(f.endswith(".py") for f in repo.files):
         out.append(_check("obs-print", "No print debugging in server code", 2,
                           "pass" if not prints else "partial" if len(prints) <= 3 else "fail",

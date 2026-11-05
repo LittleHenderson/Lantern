@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from lantern.aiapp import find_calls, notebooks, scan_ai
 from lantern.engine import build_graph
 from lantern.security import scan
 

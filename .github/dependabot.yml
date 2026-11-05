@@ -1,0 +1,23 @@
+# Dependabot opens a pull request when a library Lantern depends on, or an action CI uses, has a newer version
+# (and at once when one has a known vulnerability). Merged only on Wakil's "merge #N", like every other PR.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-libraries:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /cloud
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /gateway
+    schedule:
+      interval: weekly

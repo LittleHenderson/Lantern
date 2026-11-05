@@ -44,7 +44,7 @@ GENERIC_METHODS = {
     "exists", "mkdir", "unlink", "is_file", "is_dir", "resolve", "info", "debug", "warning",
     "error", "exception", "critical", "log", "put", "run", "start", "stop", "wait", "set", "next",
     "__enter__", "__exit__", "__init__", "__call__", "__str__", "__repr__", "load", "loads", "dump",
-    "dumps", "parse", "copy", "items", "result", "cancel", "done", "isoformat", "splitlines",
+    "dumps", "parse", "result", "cancel", "done", "isoformat", "splitlines",
 }
 
 ROUTE_RE = re.compile(r"\.(route|get|post|put|delete|patch|head|options|websocket|api_route)\s*\(")
@@ -539,7 +539,7 @@ class Resolver:
         self._current: str | None = None
         self._ret_cache: dict[str, str | None] = {}
         self.fixtures: dict[str, str] = {}
-        for q, (m, d) in self.defs.items():
+        for q, (_m, d) in self.defs.items():
             if d.kind == "function" and any("fixture" in x for x in d.decorators):
                 self.fixtures.setdefault(d.name, q)
         # Module-name suffix index, so `from app import crud` finds `backend.app.crud` when the
@@ -550,7 +550,7 @@ class Resolver:
             for k in range(1, len(parts)):
                 self._suffix.setdefault(".".join(parts[k:]), []).append(name)
         for m in mods.values():
-            for key, b in m.imports.items():
+            for b in m.imports.values():
                 b.module = self.canon(b.module, m.name)
         self._subclasses: dict[str, list[str]] = {}
 
@@ -978,7 +978,7 @@ class Resolver:
             return []
         if cs.kind == "decorator-result":
             out = []
-            for tgt, conf, via in self.resolve_call(m, cs):
+            for tgt, conf, _via in self.resolve_call(m, cs):
                 q = tgt[3:] if tgt.startswith("py:") else None
                 if q and q in self.defs and not self.is_class(q):
                     inner = self.returned_closure(q)
@@ -1117,7 +1117,7 @@ def build_graph(repo: str | Path) -> Graph:
     r = Resolver(mods, g)
 
     # inheritance edges
-    for q, (m, d) in r.defs.items():
+    for q, (_m, d) in r.defs.items():
         if d.kind == "class":
             for b in r.bases(q):
                 g.add_edge(nid(q), nid(b), kind=IMPLEMENTS, confidence=RESOLVED)

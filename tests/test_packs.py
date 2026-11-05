@@ -1,7 +1,6 @@
 """Analysis packs: pattern files that add rules and framework entry points without running code."""
 
 import json
-from pathlib import Path
 
 from lantern import packs
 from lantern.engine import build_graph

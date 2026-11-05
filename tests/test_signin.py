@@ -1,6 +1,5 @@
 """Sign in with GitHub / Google: signed state, server-side exchange, one token per account, parked tokens."""
 
-import json
 import sys
 from pathlib import Path
 

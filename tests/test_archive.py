@@ -58,8 +58,10 @@ def test_the_size_cap_holds_even_when_the_archive_lies(tmp_path):
         info = z.infolist()[0]
     raw = bytearray(big.read_bytes())
     lie = (100).to_bytes(4, "little")
-    i = raw.find(b"PK\x03\x04"); raw[i + 22:i + 26] = lie            # local header uncompressed size
-    j = raw.find(b"PK\x01\x02"); raw[j + 24:j + 28] = lie            # central directory uncompressed size
+    i = raw.find(b"PK\x03\x04")
+    raw[i + 22:i + 26] = lie            # local header uncompressed size
+    j = raw.find(b"PK\x01\x02")
+    raw[j + 24:j + 28] = lie            # central directory uncompressed size
     (tmp_path / "lie.zip").write_bytes(bytes(raw))
     try:   # Python's zipfile stops at the declared size (or fails the checksum); either way no more than that is written
         archive.unpack(tmp_path / "lie.zip", tmp_path / "out2", 4000)
