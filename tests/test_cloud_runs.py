@@ -79,7 +79,7 @@ def workdir(tmp_path) -> str:
 def make(tmp_path, **kw):
     gw_app = create_gateway(GwSettings(admin_secret="a" * 24, db_path=str(tmp_path / "gw.db")))
     s = Settings(gateway_url="http://gateway.test/v1", db_path=str(tmp_path / "cloud.db"),
-                 results_dir=str(tmp_path / "results"), work_dir=workdir(tmp_path), audits=False, **kw)
+                 results_dir=str(tmp_path / "results"), work_dir=workdir(tmp_path), **{"audits": False, **kw})
     cloud = TestClient(create_app(s, transport=httpx.ASGITransport(app=gw_app)))
     store = gw_app.state.store
     return cloud, store, s
@@ -421,3 +421,30 @@ def test_a_restart_keeps_only_the_uploads_of_waiting_runs(tmp_path):
     w.pool.shutdown(wait=False, cancel_futures=True)   # only the start-up sweep is tested here
     assert {p.name for p in up.iterdir()} <= {f"{rid}.zip"}
     assert not (up / "gone.zip").exists() and not (up / ".part-abc").exists()
+
+
+def test_the_audit_step_failing_still_gives_a_finished_run(tmp_path, clone_from, monkeypatch):
+    """Outside services down (OSV, npm, pip-audit, or the audit process itself crashing): the run finishes, the log says
+    the dependency audit did not finish, and the report records that dependencies were not checked (offline)."""
+    real = worker_mod.Worker._jailed
+
+    def jailed(self, rid, root, cmd, **kw):
+        if "lantern.depaudit" in cmd:
+            kw["log"]("audit: Traceback (most recent call last): ConnectionRefusedError")
+            return 1, "ConnectionRefusedError", False      # exit 1, nothing written
+        return real(self, rid, root, cmd, **kw)
+    monkeypatch.setattr(worker_mod.Worker, "_jailed", jailed)
+    cloud, gw, s = make(tmp_path, audits=True)
+    tok = gw.sign_in("github:1", "github:octo")
+    d = cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()
+    done = wait(cloud, tok, d["id"])
+    assert done["status"] == "done", done
+    assert "the dependency audit did not finish" in done["log_tail"]
+    res = Path(s.results_dir) / d["id"]
+    ev = json.loads((res / "evidence.json").read_text(encoding="utf-8"))
+    assert ev["payload"]["run"]["offline"] is True, ev["payload"]["run"]     # `lantern verify` will skip the audits too
+    sec = json.loads((res / "security.json").read_text(encoding="utf-8"))
+    audits = {t["tool"]: t.get("status", "") for t in sec["tools"] if t["tool"].endswith("-audit")}
+    assert audits and all(st.startswith("skipped") for st in audits.values()), audits
+    assert done["summary"]["counts"]["critical"] >= 1      # the code's own findings are unaffected
+    assert list(Path(s.work_dir).iterdir()) == []

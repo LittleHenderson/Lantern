@@ -599,6 +599,8 @@ class Resolver:
         return None
 
     def _follow_import(self, b: ImportBinding, depth: int):
+        if depth > 12:   # re-exports that chase each other in a circle (Django's `from .a import x` / `from .b import x`)
+            return None
         if b.name is None:
             return ("module", b.module) if b.module in self.mods else ("ext", b.module)
         sub = f"{b.module}.{b.name}" if b.module else b.name

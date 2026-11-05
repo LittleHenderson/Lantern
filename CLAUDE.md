@@ -39,6 +39,10 @@ lantern analyze tests/fixtures/shop --out /tmp/shop   # React + FastAPI sample, 
 lantern analyze tests/fixtures/nextapp --out /tmp/nx  # Next.js + Supabase sample
 python examples/make_demo.py /tmp/demo                # report with hand-written explanations, no key
 python bench/run_bench.py /tmp/bench                  # clones 7 public repos; ~2 min with tracing
+python tools/large_apps.py /tmp/large [--only django]  # 10 big public apps within time/memory budgets (weekly job large-apps.yml; bench/large_apps_results.md)
+python bench/fuzz.py --seconds 120                    # mutate sample files at random; a crash or hang is saved under /tmp/lantern-fuzz/finds
+node tools/report_perf.js /tmp/shop/report.html       # does the report open and respond on a slowed phone (8 s / 2 s budgets)
+python tools/load_test.py http://127.0.0.1:8872 /tmp/tok   # 50 readers on the cloud website demo, no errors, p95 under 1.5 s
 node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots, JS errors, accessibility (axe-core + a keyboard
                                                       # walk, tools/a11y.js); PW_BROWSER=firefox|webkit for another engine
                                                       # (needs Playwright + Chromium; npm i axe-core for the a11y pass)
@@ -97,6 +101,8 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots, JS e
 | `tests/fixtures/shop` | Python backend (`shop/`) + React/Vite frontend (`web/`) with planted shell/SQL injection, MD5, XSS, public secret |
 | `tests/fixtures/nextapp` | Next.js + Supabase with an unprotected DELETE route, a table without RLS, a public service-role var |
 | `bench/` | Accuracy benchmark and write-up; `results.json` is the latest run |
+| `tools/audit.sh` | One-command audit (CI browser job): tests, self-audit, sample apps with a time budget each (`budget`, `LANTERN_BUDGET_SCALE`), evidence digest, CLI, offline model, browser smokes (Chromium + `LANTERN_BROWSERS`) |
+| `tools/large_apps.py`, `bench/fuzz.py`, `tools/report_perf.js`, `tools/load_test.py` | Reliability and speed checks (test checklist 3.3, 3.6, 4.1–4.4): big public apps weekly, random file mutation, report speed on a slowed phone, many readers on the website. `tests/test_robustness.py` (garbled files per reader) and `tests/test_outside_services.py` (OSV, pip-audit, npm, gateway, cloud audit step failing) run in CI |
 
 Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.name>` (module: `js:<path>`);
 Go `go:<import path>::<Func>` / `go:<import path>::<Type>.<Method>` (file module: `go:<path>.go`);
