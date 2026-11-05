@@ -11,6 +11,13 @@ step() { printf '\n== %s\n' "$1"; }
 ok()   { printf 'PASS  %s\n' "$1"; }
 bad()  { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS + 1)); }
 check() { local name="$1"; shift; if "$@" >"$W/log" 2>&1; then ok "$name"; else bad "$name"; tail -20 "$W/log"; fi; }
+# Like check, with a time budget in seconds (test checklist 3.3): a sample app that took 0.6 s and now takes a minute is a
+# regression even when its results are right. Budgets are ~30x the measured time so slow CI runners pass and a hang or a
+# quadratic loop fails. LANTERN_BUDGET_SCALE=2 doubles every budget on a slow machine.
+budget() { local name="$1" limit="$2"; shift 2; local t0 t1 el
+  limit=$(( limit * ${LANTERN_BUDGET_SCALE:-1} ))
+  t0=$(date +%s); if timeout "$limit" "$@" >"$W/log" 2>&1; then t1=$(date +%s); el=$((t1 - t0)); ok "$name (${el}s, budget ${limit}s)"
+  else t1=$(date +%s); el=$((t1 - t0)); if [ "$el" -ge "$limit" ]; then bad "$name: TOO SLOW, stopped after ${limit}s"; else bad "$name"; fi; tail -20 "$W/log"; fi; }
 
 step "environment"
 "$PY" --version; lantern --version || { echo "lantern not installed: pip install -e \".[scan,dev]\""; exit 2; }
@@ -19,10 +26,10 @@ step "unit and integration tests"
 check "pytest" "$PY" -m pytest -q
 
 step "Lantern audits itself"
-check "self-audit: no open critical/high/medium" lantern analyze . --out "$W/self" --fail-on medium
+budget "self-audit: no open critical/high/medium" 300 lantern analyze . --out "$W/self" --fail-on medium
 
 step "sample apps"
-check "shop (React + FastAPI) analyzes" lantern analyze tests/fixtures/shop --out "$W/shop"
+budget "shop (React + FastAPI) analyzes" 60 lantern analyze tests/fixtures/shop --out "$W/shop"
 check "shop: 2 critical findings, shell path from /admin" "$PY" - "$W/shop" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
@@ -30,7 +37,7 @@ assert s["counts"]["critical"] == 2, s["counts"]
 b602 = next(f for f in s["findings"] if f["rule"] == "B602")
 assert b602["ui_path"] and b602["ui_path"][0].endswith("Admin::Admin"), b602["ui_path"]
 EOF
-check "androidapp (Android) analyzes" lantern analyze tests/fixtures/androidapp --out "$W/aa"
+budget "androidapp (Android) analyzes" 60 lantern analyze tests/fixtures/androidapp --out "$W/aa"
 check "androidapp: a deep link reaching rawQuery is critical, screens are on the phone" "$PY" - "$W/aa" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
@@ -39,14 +46,14 @@ assert len(sql) == 1 and sql[0]["rank"] == "critical", sql
 assert s["mobile"]["platform"] == "android"
 assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "Android app"
 EOF
-check "kotlinapp (Android, Kotlin) analyzes" lantern analyze tests/fixtures/kotlinapp --out "$W/ka"
+budget "kotlinapp (Android, Kotlin) analyzes" 60 lantern analyze tests/fixtures/kotlinapp --out "$W/ka"
 check "kotlinapp: Kotlin is mapped and a deep link reaching rawQuery is critical" "$PY" - "$W/ka" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
 sql = [f for f in s["findings"] if f["rule"].endswith("SQL-CONCAT")]
 assert len(sql) == 1 and sql[0]["rank"] == "critical" and sql[0]["node"].startswith("kt:"), sql
 EOF
-check "iosapp (iOS, Swift) analyzes" lantern analyze tests/fixtures/iosapp --out "$W/ia"
+budget "iosapp (iOS, Swift) analyzes" 60 lantern analyze tests/fixtures/iosapp --out "$W/ia"
 check "iosapp: a link reaching a Swift query is critical, graded as an iOS app" "$PY" - "$W/ia" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
@@ -55,14 +62,14 @@ assert len(sql) == 1 and sql[0]["rank"] == "critical" and sql[0]["node"].startsw
 assert s["mobile"]["platform"] == "ios"
 assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "iOS app"
 EOF
-check "flutterapp (Flutter, Dart) analyzes" lantern analyze tests/fixtures/flutterapp --out "$W/fa"
+budget "flutterapp (Flutter, Dart) analyzes" 60 lantern analyze tests/fixtures/flutterapp --out "$W/fa"
 check "flutterapp: Dart is mapped and a link reaching a Dart query is critical" "$PY" - "$W/fa" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
 sql = [f for f in s["findings"] if f["rule"] == "LF-SQL-CONCAT"]
 assert len(sql) == 1 and sql[0]["rank"] == "critical" and sql[0]["node"].startswith("dt:"), sql
 EOF
-check "rnapp (React Native, Expo) analyzes" lantern analyze tests/fixtures/rnapp --out "$W/ra"
+budget "rnapp (React Native, Expo) analyzes" 60 lantern analyze tests/fixtures/rnapp --out "$W/ra"
 check "rnapp: a link reaching an expo-sqlite query is critical, graded as a React Native app" "$PY" - "$W/ra" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
@@ -71,7 +78,7 @@ assert len(sql) == 1 and sql[0]["rank"] == "critical", sql
 assert s["mobile"]["platform"] == "react-native"
 assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == "React Native app"
 EOF
-check "csharpapp (ASP.NET + .NET MAUI) analyzes" lantern analyze tests/fixtures/csharpapp --out "$W/ca"
+budget "csharpapp (ASP.NET + .NET MAUI) analyzes" 60 lantern analyze tests/fixtures/csharpapp --out "$W/ca"
 check "csharpapp: the phone's search reaching server SQL is critical, graded as a .NET MAUI app" "$PY" - "$W/ca" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
@@ -79,7 +86,7 @@ sql = [f for f in s["findings"] if f["rule"] == "LC-SQL-CONCAT" and f["rank"] ==
 assert len(sql) == 2 and all(f["node"].startswith("cs:") for f in sql), sql
 assert json.load(open(sys.argv[1] + "/readiness.json"))["shape"] == ".NET MAUI app"
 EOF
-check "phpapp (Laravel + React + a plain PHP page) analyzes" lantern analyze tests/fixtures/phpapp --out "$W/pa"
+budget "phpapp (Laravel + React + a plain PHP page) analyzes" 60 lantern analyze tests/fixtures/phpapp --out "$W/pa"
 check "phpapp: the React search reaching Laravel raw SQL is critical, the legacy page is checked" "$PY" - "$W/pa" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
@@ -87,7 +94,7 @@ sql = [f for f in s["findings"] if f["rule"] == "LH-SQL-CONCAT" and f["rank"] ==
 assert {f["file"] for f in sql} == {"app/Http/Controllers/NoteController.php", "public/legacy/login.php"}, sql
 assert any(f["ui_path"] for f in sql), sql
 EOF
-check "rubyapp (Rails + React + Sinatra) analyzes" lantern analyze tests/fixtures/rubyapp --out "$W/ru"
+budget "rubyapp (Rails + React + Sinatra) analyzes" 60 lantern analyze tests/fixtures/rubyapp --out "$W/ru"
 check "rubyapp: the React search reaching interpolated SQL is critical, the skipped login is reported" "$PY" - "$W/ru" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
@@ -95,7 +102,7 @@ sql = [f for f in s["findings"] if f["rule"] == "LB-SQL-INTERP" and f["rank"] ==
 assert [f["node"] for f in sql] == ["rb:Api.NotesController.search"] and sql[0]["ui_path"], sql
 assert any(f["rule"] == "LW-AUTH-MISSING" and f["node"] == "rb:Api.NotesController.destroy" for f in s["findings"])
 EOF
-check "cppapp (C++ web server + C tool + React) analyzes" lantern analyze tests/fixtures/cppapp --out "$W/cx"
+budget "cppapp (C++ web server + C tool + React) analyzes" 60 lantern analyze tests/fixtures/cppapp --out "$W/cx"
 check "cppapp: the React search reaching sprintf-built SQL is critical, the C tool's shell and format strings too" "$PY" - "$W/cx" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
@@ -104,7 +111,7 @@ assert {("LX-SQL-BUILT", "server/note_store.cpp"), ("LX-EXEC", "server/main.cpp"
         ("LX-FORMAT", "tools/backup.c")} <= crit, crit
 assert any(f["rule"] == "LX-SQL-BUILT" and f["ui_path"] for f in s["findings"])
 EOF
-check "nextapp (Next.js + Supabase) analyzes" lantern analyze tests/fixtures/nextapp --out "$W/nx"
+budget "nextapp (Next.js + Supabase) analyzes" 60 lantern analyze tests/fixtures/nextapp --out "$W/nx"
 check "nextapp: auth, RLS, and service-role findings" "$PY" - "$W/nx" <<'EOF'
 import json, sys
 rules = {f["rule"] for f in json.load(open(sys.argv[1] + "/security.json"))["findings"]}
