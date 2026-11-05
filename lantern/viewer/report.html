@@ -12,16 +12,16 @@
   color-scheme: light;
   --bg:#F5F5F2; --surface:#FFFFFF; --surface-2:#FAFAF8; --sunken:#EEEEEA; --hover:rgba(22,22,24,.045);
   --flame:#FFB547;
-  --ink:#161618; --ink-2:#46464C; --muted:#6E6E74; --faint:#A3A3A8;
+  --ink:#161618; --ink-2:#46464C; --muted:#62626A; --faint:#A3A3A8;
   --line:rgba(22,22,24,.09); --line-2:rgba(22,22,24,.16);
   --accent:#0F7B74; --accent-ink:#0B5F5A; --accent-soft:rgba(15,123,116,.10); --accent-line:rgba(15,123,116,.45);
   --primary:#161618; --on-primary:#FFFFFF;
   --good:#0CA30C; --warning:#FAB219; --serious:#EC835A; --critical:#D03B3B;
   --good-soft:rgba(12,163,12,.11); --warning-soft:rgba(250,178,25,.17); --serious-soft:rgba(236,131,90,.16); --critical-soft:rgba(208,59,59,.11);
   --good-ink:#0A7A0A; --warn-ink:#8A5A00; --crit-ink:#B02A2A;
-  --l1:#2F5BEA; --l1s:rgba(47,91,234,.08); --l2:#B8650A; --l2s:rgba(232,140,30,.10); --l3:#0B8466; --l3s:rgba(11,132,102,.09); --l4:#7A4FD6; --l4s:rgba(122,79,214,.08);
+  --l1:#2F5BEA; --l1s:rgba(47,91,234,.08); --l2:#B8650A; --l2-ink:#8A4B06; --l2s:rgba(232,140,30,.10); --l3:#0B8466; --l3-ink:#07705A; --l3s:rgba(11,132,102,.09); --l4:#7A4FD6; --l4-ink:#6E43CC; --l4s:rgba(122,79,214,.08);
   --fe:#2F5BEA; --be:#0B8466;
-  --code-bg:#151517; --code-ink:#E7E7E4; --code-dim:#6C6C72; --code-hl:rgba(255,181,71,.20); --code-flag:rgba(208,59,59,.32);
+  --code-bg:#151517; --code-ink:#E7E7E4; --code-dim:#8A8A91; --code-hl:rgba(255,181,71,.20); --code-flag:rgba(208,59,59,.32);
   --shadow-1:0 1px 2px rgba(16,16,20,.05);
   --shadow-2:0 1px 2px rgba(16,16,20,.04), 0 6px 20px -6px rgba(16,16,20,.10);
   --shadow-3:0 1px 3px rgba(16,16,20,.06), 0 24px 56px -16px rgba(16,16,20,.30);
@@ -34,13 +34,13 @@
 :root[data-theme=dark]{
   color-scheme: dark;
   --bg:#0E0E10; --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
-  --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
+  --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#9A9AA0; --faint:#5E5E64;
   --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
   --accent:#4FC3BA; --accent-ink:#7FDBD3; --accent-soft:rgba(79,195,186,.14); --accent-line:rgba(79,195,186,.55);
   --primary:#F3F3F1; --on-primary:#0E0E10;
   --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
   --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
-  --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3s:rgba(79,209,165,.11); --l4:#B79CFF; --l4s:rgba(183,156,255,.12);
+  --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2-ink:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3-ink:#4FD1A5; --l3s:rgba(79,209,165,.11); --l4:#B79CFF; --l4-ink:#B79CFF; --l4s:rgba(183,156,255,.12);
   --fe:#8EA8FF; --be:#4FD1A5;
   --code-bg:#0A0A0B;
   --shadow-1:0 1px 2px rgba(0,0,0,.4);
@@ -51,13 +51,13 @@
   :root:not([data-theme=light]){
     color-scheme: dark;
     --bg:#0E0E10; --surface:#161618; --surface-2:#1B1B1E; --sunken:#0A0A0B; --hover:rgba(255,255,255,.05);
-    --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#8C8C92; --faint:#5E5E64;
+    --ink:#F3F3F1; --ink-2:#BEBEC3; --muted:#9A9AA0; --faint:#5E5E64;
     --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
     --accent:#4FC3BA; --accent-ink:#7FDBD3; --accent-soft:rgba(79,195,186,.14); --accent-line:rgba(79,195,186,.55);
     --primary:#F3F3F1; --on-primary:#0E0E10;
     --good-soft:rgba(12,163,12,.20); --warning-soft:rgba(250,178,25,.18); --serious-soft:rgba(236,131,90,.20); --critical-soft:rgba(208,59,59,.22);
     --good-ink:#5BD15B; --warn-ink:#FAC55A; --crit-ink:#FF8A8A;
-    --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3s:rgba(79,209,165,.11); --l4:#B79CFF; --l4s:rgba(183,156,255,.12);
+    --l1:#8EA8FF; --l1s:rgba(124,155,255,.12); --l2:#F2A65A; --l2-ink:#F2A65A; --l2s:rgba(242,166,90,.12); --l3:#4FD1A5; --l3-ink:#4FD1A5; --l3s:rgba(79,209,165,.11); --l4:#B79CFF; --l4-ink:#B79CFF; --l4s:rgba(183,156,255,.12);
     --fe:#8EA8FF; --be:#4FD1A5;
     --code-bg:#0A0A0B;
     --shadow-1:0 1px 2px rgba(0,0,0,.4);
@@ -68,8 +68,8 @@
 @media (prefers-reduced-motion: reduce){ *{transition:none !important;animation:none !important} }
 
 *{box-sizing:border-box}
-html{background:var(--bg)} html.framed{background:transparent}   /* in a frame the host page's backdrop shows through */
-html,body{margin:0;background:transparent;color:var(--ink-2);font:14px/1.55 var(--font);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+html{margin:0;background:var(--bg)} html.framed{background:transparent}   /* in a frame the host page's backdrop shows through */
+body{margin:0;background:transparent;color:var(--ink-2);font:14px/1.55 var(--font);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 body{height:100vh;height:100dvh;display:flex;flex-direction:column}
 /* Backdrop (design directive): three full-size SVG layers of thin outlines drifting slowly behind everything. Each
    layer is animated as a whole <svg> (compositor only, never its paths). Not mounted inside a frame: the host app's own
@@ -152,7 +152,7 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 /* Stack strip (design 11): four fixed stops, Browser → Frontend → Server → Data, the same words everywhere */
 .strip{position:relative;display:inline-flex;align-items:center;flex-wrap:wrap;gap:10px;padding:8px 16px;border:1px solid var(--line);border-radius:99px;background:var(--surface);font-size:13px;color:var(--muted);max-width:100%;margin:0 0 12px}
 .strip .yah{font:600 10.5px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-right:4px;white-space:nowrap}
-.strip .stop{position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;cursor:help;color:var(--faint)}
+.strip .stop{position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;cursor:help;color:var(--muted)}   /* unlit lanes read lighter than lit ones, but stay readable (AA) */
 .strip .stop i{width:9px;height:9px;border-radius:99px;border:1.5px solid var(--line-2);background:transparent;flex:none}
 .strip .stop.lit{color:var(--ink-2)} .strip .stop.lit i{background:var(--ink-2);border-color:var(--ink-2)}
 .strip .stop.here{color:var(--ink);font-weight:600} .strip .stop.here i{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
@@ -293,7 +293,7 @@ code.cmd{font:11.5px var(--mono);color:var(--muted);background:var(--hover);padd
 .xgrid{display:grid;grid-template-columns:280px minmax(0,1fr);gap:22px;align-items:start} .xgrid.three{grid-template-columns:260px minmax(0,1fr) 260px}
 .xside{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:10px;max-height:calc(100vh - 220px);overflow:auto}
 .xside .k2{margin:12px 4px 4px}
-.xrow{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 8px;border-radius:9px;background:none;border:0;color:var(--ink)} .xrow:hover{background:var(--hover)} .xrow.on{background:var(--accent-soft)}
+.xrow{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 8px;border-radius:9px;background:none;border:0;color:var(--ink)} .xrow:hover{background:var(--hover)} .xrow.on{background:var(--accent-soft)} .xrow.on .d{color:var(--ink-2)}
 .xrow>div{flex:1;min-width:0} .xrow .t{font:500 13px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .xrow .d{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .xrow .dotx{width:7px;height:7px;border-radius:99px;background:var(--accent);flex:none}
 .xmain{min-width:0} .xhead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap} .xhead h1{font:650 24px/1.2 var(--mono);letter-spacing:-.01em;margin:0} .xhead h2{font:650 18px/1.2 var(--mono);margin:0}
@@ -317,7 +317,7 @@ code.cmd{font:11.5px var(--mono);color:var(--muted);background:var(--hover);padd
 .fixgrid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:28px;align-items:start}
 .fixq{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:12px}
 .qrow{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:9px 8px;border-radius:10px;background:none;border:0;color:var(--ink)} .qrow:hover{background:var(--hover)} .qrow.on{background:var(--accent-soft)}
-.qrow b{flex:none;width:22px;height:22px;border-radius:99px;display:grid;place-items:center;font:600 12px var(--font);background:var(--hover);color:var(--ink)} .qrow .t{font-weight:600;font-size:13.5px;line-height:1.3} .qrow .d{font-size:11.5px;color:var(--muted);margin-top:2px}
+.qrow b{flex:none;width:22px;height:22px;border-radius:99px;display:grid;place-items:center;font:600 12px var(--font);background:var(--hover);color:var(--ink)} .qrow .t{font-weight:600;font-size:13.5px;line-height:1.3} .qrow .d{font-size:11.5px;color:var(--muted);margin-top:2px} .qrow.on .d{color:var(--ink-2)}
 .fixmain{min-width:0} .sevline{display:flex;align-items:center;gap:8px;font:600 12px var(--font);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)} .sevline i{width:8px;height:8px;border-radius:99px;background:var(--faint)}
 .sevline.critical{color:var(--crit-ink)} .sevline.critical i{background:var(--critical)} .sevline.high{color:var(--warn-ink)} .sevline.high i{background:var(--serious)} .sevline.medium i{background:var(--warning)} .sevline.low i{background:var(--good)}
 .fixmain h1{font:650 26px/1.25 var(--display);letter-spacing:-.02em;margin:8px 0 8px;text-wrap:pretty} .fixmain .lede{font-size:15px}
@@ -374,8 +374,8 @@ input.search::placeholder{color:var(--faint)}
 .ep .t span.x{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12.5px}
 .ep .d{display:block;font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
 .m{flex:none;display:inline-block;min-width:38px;text-align:center;font:700 9.5px/1 var(--mono);letter-spacing:.03em;padding:4px 5px;border-radius:5px;background:var(--hover);color:var(--ink-2)}
-.m.GET{background:var(--l1s);color:var(--l1)} .m.POST{background:var(--l3s);color:var(--l3)}
-.m.PUT,.m.PATCH{background:var(--l2s);color:var(--l2)} .m.DELETE{background:var(--critical-soft);color:var(--crit-ink)}
+.m.GET{background:var(--l1s);color:var(--l1)} .m.POST{background:var(--l3s);color:var(--l3-ink)}
+.m.PUT,.m.PATCH{background:var(--l2s);color:var(--l2-ink)} .m.DELETE{background:var(--critical-soft);color:var(--crit-ink)}
 .m.pg{background:var(--hover);color:var(--ink-2);font-family:var(--font);text-transform:lowercase}
 
 /* ---------- center: toolbar, legend ---------- */
@@ -425,14 +425,15 @@ input.search::placeholder{color:var(--faint)}
 .badge.ai{background:var(--l3s);color:var(--l3);padding-left:7px;margin-left:4px}
 .badge.ai.payment,.badge.ai.email,.badge.ai.sms{background:var(--l2s);color:var(--l2)}
 .ext{display:block;font:11px var(--mono);color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
-.hop{display:inline-flex;align-items:center;gap:5px;font:600 10.5px var(--mono);color:var(--l2);background:var(--l2s);border-radius:99px;padding:2px 9px;margin:0 2px;white-space:nowrap}
+.hop{display:inline-flex;align-items:center;gap:5px;font:600 10.5px var(--mono);color:var(--l2-ink);background:var(--l2s);border-radius:99px;padding:2px 9px;margin:0 2px;white-space:nowrap}
 .hop.ui{color:var(--l1);background:var(--l1s);font-family:var(--font)}
 .hoprow{padding:0;margin:-1px 0}
 .again{font-size:11.5px;color:var(--muted);font-style:italic}
 .empty{color:var(--muted);padding:48px 16px;text-align:center;line-height:1.6}
 .empty b{display:block;color:var(--ink);font:600 16px var(--display);margin-bottom:4px}
 .empty .art{width:52px;height:52px;display:block;margin:0 auto 12px}
-#chart{width:100%;overflow:auto}   /* design: no box; the flowchart sits on the dotted page like the graph */
+#chart{width:100%;overflow:auto} #chart:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+#tabs button[hidden]{display:none}   /* design: no box; the flowchart sits on the dotted page like the graph */
 #chart svg text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
 #chart g[data-id]:hover rect.box{stroke:var(--accent-line)}
 
@@ -504,7 +505,7 @@ pre.src span.h{background:var(--code-hl);box-shadow:inset 3px 0 0 #FFB547}
 .path button:hover{border-color:var(--accent-line);color:var(--accent-ink)}
 .path .sep{color:var(--faint)}
 .plain{margin-top:12px;padding:12px 14px;border-radius:10px;background:var(--l2s);color:var(--ink);font-size:13px}
-.fid{font:10.5px var(--mono);color:var(--faint);user-select:all;margin-left:auto}
+.fid{font:10.5px var(--mono);color:var(--muted);user-select:all;margin-left:auto}
 
 /* ---------- readiness and about ---------- */
 .page{max-width:880px;margin:0 auto}
@@ -597,14 +598,14 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
   <div class="brand"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
   <div class="bar2">
     <nav class="tabs" id="tabs">
-      <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="xp">Explanations</button><button data-t="about">About</button><button data-t="fix" hidden></button>
+      <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="xp">Explanations</button><button data-t="about">About</button><button data-t="fix" hidden aria-label="Fix">Fix</button>
     </nav>
     <div class="chips" id="chips"></div>
   </div>
 </header>
 <main id="main">
   <aside class="left" id="left"></aside>
-  <section class="center" id="center"><div class="empty">If this stays empty, the report's script did not run: the file was changed after Lantern wrote it (its content policy allows only the original script), or the browser blocked it. Run <code>lantern report</code> to write it again.</div></section>
+  <section class="center" id="center" tabindex="0"><div class="empty">If this stays empty, the report's script did not run: the file was changed after Lantern wrote it (its content policy allows only the original script), or the browser blocked it. Run <code>lantern report</code> to write it again.</div></section>
   <aside class="right" id="right"><div class="empty">Select a function to see what it does.</div></aside>
 </main>
 <div id="ask"></div>
@@ -870,7 +871,7 @@ function renderChart() {
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use the tree view to go deeper.</div>` : '';
-  return `<div id="chart">${svg}</div>${more}`;
+  return `<div id="chart" tabindex="0" aria-label="Flowchart; scroll with the arrow keys">${svg}</div>${more}`;
 }
 
 
@@ -948,7 +949,7 @@ function renderLanes() {
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use Path to go deeper.</div>` : '';
-  return `<div id="chart" class="lanes">${svg}</div>${more}`;
+  return `<div id="chart" class="lanes" tabindex="0" aria-label="Stack lanes; scroll with the arrow keys">${svg}</div>${more}`;
 }
 
 // ---------- Graph view (design 3c): the whole app in five columns, risk as heat ----------
@@ -1043,7 +1044,7 @@ function renderGraph() {
     ? `<span><i style="background:var(--critical)"></i>critical</span><span><i style="background:var(--serious)"></i>high</span><span><i style="background:var(--warning)"></i>medium</span><span><i style="background:var(--accent)"></i>seen running</span><span>· ${hidden} hidden</span>`
     : S.mode === 'confidence' ? `<span><i style="background:var(--accent)"></i>seen running</span><span><i style="background:var(--ink)"></i>confirmed</span><span><i style="background:var(--muted)"></i>likely</span><span><i style="background:var(--faint)"></i>possible</span><span>· ${hidden} hidden</span>`
     : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`;
-  return `<div id="graph"><div class="vp">${svg}</div><div class="glegend">${legend}</div><div class="zoom"><button data-z="in" title="Zoom in">+</button><button data-z="out" title="Zoom out">−</button><button data-z="fit" title="Fit">fit</button></div></div>`;
+  return `<div id="graph"><div class="vp" tabindex="0" aria-label="Call graph; scroll with the arrow keys">${svg}</div><div class="glegend">${legend}</div><div class="zoom"><button data-z="in" title="Zoom in">+</button><button data-z="out" title="Zoom out">−</button><button data-z="fit" title="Fit">fit</button></div></div>`;
 }
 function wireGraph(el) {
   const g = el.querySelector('#graph'), vp = g.querySelector('.vp'), svg = g.querySelector('svg');
@@ -1417,7 +1418,7 @@ function laneStrip(here, lit, opts = {}) {
 // The four-dot glyph for list rows: crossed stops filled, the hot stop coloured by rank.
 function laneGlyph(lit, hot, rank) {
   const words = LANES.filter(l => lit.has(l)).map(l => LANE_WORD[l]).join(' → ');
-  return `<span class="glyph" title="${esc(words || 'not placed in the stack')}${hot ? ` · on the ${esc(LANE_WORD[hot])}` : ''}" aria-label="${esc(words)}">${LANES.map(l => `<i class="${l === hot ? 'hot ' + cls(rank || '', RANKS) : lit.has(l) ? 'lit' : ''}"></i>`).join('')}</span>`;
+  return `<span class="glyph" role="img" title="${esc(words || 'not placed in the stack')}${hot ? ` · on the ${esc(LANE_WORD[hot])}` : ''}" aria-label="${esc(words)}">${LANES.map(l => `<i class="${l === hot ? 'hot ' + cls(rank || '', RANKS) : lit.has(l) ? 'lit' : ''}"></i>`).join('')}</span>`;
 }
 const onLane = f => hotLane(f) ? `<span class="onlane">On the <b>${LANE_WORD[hotLane(f)]}</b></span>` : '';
 // One plain sentence: where it lives, where its path starts and ends.
@@ -1850,7 +1851,7 @@ function srcBlock(n) {
   let hi = null;
   const r = EXP[n.id];
   if (S.lens === 3 && S.pair !== null && r && r.lens3) { const a = (r.lens3.pairs[S.pair] || {}).anchor; if (a && a.type === 'lines') hi = [a.start, a.end]; }
-  return `<pre class="src">${s.split('\n').map((ln, i) => { const no = (+n.start_line || 0) + i; const c = fl.has(no) ? 'f' : (hi && no >= hi[0] && no <= hi[1]) ? 'h' : '';
+  return `<pre class="src" tabindex="0" aria-label="Source code; scroll with the arrow keys">${s.split('\n').map((ln, i) => { const no = (+n.start_line || 0) + i; const c = fl.has(no) ? 'f' : (hi && no >= hi[0] && no <= hi[1]) ? 'h' : '';
     return `<span class="${c}"><u>${String(no).padStart(4)}</u>  ${esc(ln)}</span>`; }).join('')}</pre>`;
 }
 

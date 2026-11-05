@@ -9,8 +9,8 @@ PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Lantern · owner dashboard</title>
 <style>
-:root{--bg:#F5F5F2;--surface:#fff;--ink:#161618;--ink2:#46464C;--muted:#6E6E74;--line:rgba(22,22,24,.09);--accent:#0F7B74;--accent-soft:rgba(15,123,116,.10);--warn:#8A5A00;--warn-soft:rgba(250,178,25,.17);--crit:#B02A2A;--crit-soft:rgba(208,59,59,.11);--mono:ui-monospace,Menlo,Consolas,monospace}
-@media(prefers-color-scheme:dark){:root{--bg:#0E0E10;--surface:#161618;--ink:#F3F3F1;--ink2:#BEBEC3;--muted:#8C8C92;--line:rgba(255,255,255,.08);--accent:#4FC3BA;--accent-soft:rgba(79,195,186,.14);--warn:#FAC55A;--crit:#FF8A8A}}
+:root{--bg:#F5F5F2;--surface:#fff;--ink:#161618;--ink2:#46464C;--muted:#62626A;--line:rgba(22,22,24,.09);--accent:#0F7B74;--accent-soft:rgba(15,123,116,.10);--warn:#8A5A00;--warn-soft:rgba(250,178,25,.17);--crit:#B02A2A;--crit-soft:rgba(208,59,59,.11);--mono:ui-monospace,Menlo,Consolas,monospace}
+@media(prefers-color-scheme:dark){:root{--bg:#0E0E10;--surface:#161618;--ink:#F3F3F1;--ink2:#BEBEC3;--muted:#9A9AA0;--line:rgba(255,255,255,.08);--accent:#4FC3BA;--accent-soft:rgba(79,195,186,.14);--warn:#FAC55A;--crit:#FF8A8A}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:1040px;margin:0 auto;padding:28px 20px 60px}
 h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:26px 0 10px;color:var(--ink2)}

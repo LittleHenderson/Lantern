@@ -4,8 +4,9 @@
 // the website promises is missing (sign-in buttons, the run cards, the progress page, the report in its frame), or
 // if sharing, stopping sharing, deleting a run or deleting the account does not do what it says.
 // Usage: node tools/cloud_site_smoke.js http://127.0.0.1:8872/ TOKEN_FILE OUT_PREFIX   (needs `npm i playwright`)
-const { chromium } = require('playwright');
+const chromium = require('playwright')[process.env.PW_BROWSER || 'chromium'];
 const fs = require('fs');
+const a11y = require('./a11y.js');
 
 async function until(p, fn, timeout) {
   const end = Date.now() + timeout;
@@ -46,8 +47,11 @@ async function until(p, fn, timeout) {
     await p.click('#end-start'); await p.waitForSelector('#intro.hidden', { state: 'attached' });
     await p.goto(site); await p.waitForSelector('#signin');
     await p.screenshot({ path: `${out}-${tag}-signed-out.png` });
+    await a11y.axe(p, `${tag} signed-out`, errs);
+    if (scheme === 'light') console.log(`${tag} keyboard: ${(await a11y.keyboard(p, `${tag} signed-out`, errs, 6)).join(' > ')}`);
     await p.click('#signin'); await p.waitForSelector('.signbtns [data-p="github"]');
     await p.screenshot({ path: `${out}-${tag}-sign-in.png` });
+    await a11y.axe(p, `${tag} sign-in`, errs);
     await clean(p, 'signed out'); await p.close();
     // signed in: My runs, a run in progress, a failed run, the report
     await ctx.addCookies([{ name: 'lt', value: token, url: base }]);
@@ -56,6 +60,7 @@ async function until(p, fn, timeout) {
     const cards = await p.$$eval('article.app', a => a.length);
     if (cards !== 3) errs.push(`${tag}: expected 3 run cards, saw ${cards}`);
     await p.screenshot({ path: `${out}-${tag}-runs.png`, fullPage: true });
+    await a11y.axe(p, `${tag} my runs`, errs);
     await clean(p, 'my runs');
     if (name === 'desk') {
       await p.click('#viewmode [data-m="advanced"]'); await p.waitForSelector('.ptable');
@@ -65,6 +70,7 @@ async function until(p, fn, timeout) {
     }
     await p.goto(site + '#/run/going1'); await p.waitForSelector('.progress .running-steps'); await p.waitForSelector('.progress .indeterminate');
     await p.screenshot({ path: `${out}-${tag}-progress.png` });
+    await a11y.axe(p, `${tag} progress`, errs);
     await clean(p, 'progress');
     await p.goto(site + '#/run/failed1'); await p.reload(); await p.waitForSelector('.progress [data-again]');
     await clean(p, 'failed run');
@@ -78,6 +84,7 @@ async function until(p, fn, timeout) {
     await until(p, () => { try { return !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('#tabs'); } catch (e) { return false; } }, 20000);
     await p.waitForTimeout(800);
     await p.screenshot({ path: `${out}-${tag}-report.png` });
+    await a11y.axe(p, `${tag} report`, errs, { frames: true });
     await clean(p, 'report');
     await p.click('.sub [data-t="evidence"]'); await p.waitForTimeout(1200);
     await clean(p, 'evidence');
@@ -103,6 +110,7 @@ async function until(p, fn, timeout) {
     await p.click('#askrm');
     await clean(p, 'ask');
     await p.screenshot({ path: `${out}-${tag}-ask.png` });
+    await a11y.axe(p, `${tag} ask`, errs);
     await p.click('#askclose');
     if (name === 'desk') {   // the report's own "Ask Lantern" button opens the same assistant, on that page
       await p.click('.sub [data-t="findings"]');
@@ -127,6 +135,7 @@ async function until(p, fn, timeout) {
     await p.click('.sheet [data-close]');
     await p.click('#who'); await p.waitForSelector('#signout');
     await p.screenshot({ path: `${out}-${tag}-account.png` });
+    await a11y.axe(p, `${tag} account`, errs);
     if (name === 'phone' && scheme === 'dark') {   // last pass: delete a run, then the whole account
       await p.click('.sheet [data-close]');
       await p.goto(site + '#/'); await p.waitForSelector('article.app');
