@@ -99,6 +99,7 @@ node tools/viewer_smoke.js /tmp/demo/report.html /tmp/shot   # screenshots, JS e
 | `lantern/exporters.py` | SARIF 2.1.0 export of findings (`lantern export --sarif`), with click paths in messages and accepted risks as suppressions |
 | `lantern/cli.py` | `analyze`, `trace`, `explain`, `report`, `verify`, `accept`, `mcp`, `packs`, `export`; results in `PATH/.lantern/` |
 | `tests/fixtures/shop` | Python backend (`shop/`) + React/Vite frontend (`web/`) with planted shell/SQL injection, MD5, XSS, public secret |
+| `tests/fixtures/old_results/<version>/` | Result files older Lantern versions wrote for the shop sample (JSON only); `tests/test_old_results.py` opens them with the current code (upgrades). Add a folder when a release changes a result file's shape |
 | `tests/fixtures/nextapp` | Next.js + Supabase with an unprotected DELETE route, a table without RLS, a public service-role var |
 | `bench/` | Accuracy benchmark and write-up; `results.json` is the latest run |
 | `.github/workflows/uptime.yml` + `tools/uptime.py`, `deploy-cloud.yml`, `docs/incidents/` | Live service: health of lantern-cloud and the gateway every 30 min (fail = email; also fails when the live engine is older than the latest release); deploy either app from the Actions tab with a `FLY_API_TOKEN` secret; one incident note per real problem (`docs/incidents/README.md` has the template). Backups/rollback: `docs/deploy.md` |

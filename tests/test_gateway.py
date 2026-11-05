@@ -272,3 +272,10 @@ def test_whoami_names_the_account_never_the_token(gw):
         "account": "google:abcdef123456", "label": "google:…123456"}
     store.sign_in("google:abcdef123456", "google:…123456")   # rotation disables the old token
     assert client.get("/v1/whoami", headers={"authorization": f"Bearer {t}"}).status_code == 401
+
+
+def test_daily_limit_message_says_how_long_until_the_reset():
+    import datetime as dt
+    from lantern_gateway.app import until_midnight_utc
+    assert until_midnight_utc(dt.datetime(2026, 11, 5, 18, 40, tzinfo=dt.UTC)) == "in 5 h 20 min (00:00 UTC)"
+    assert until_midnight_utc(dt.datetime(2026, 11, 5, 23, 30, tzinfo=dt.UTC)) == "in 30 min (00:00 UTC)"

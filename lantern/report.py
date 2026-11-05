@@ -38,7 +38,7 @@ def write_report(out_dir: Path, g: Graph, security: dict | None, explanations: d
                  privacy: str = "full", timings: dict | None = None, readiness: dict | None = None) -> Path:
     bundle = {
         "version": __version__,
-        "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "generated_at": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z").strip(),   # with the time zone: a report made on a server is read elsewhere
         "graph": g.to_dict(),
         "stats": g.stats(),
         "security": security or {"findings": [], "counts": {}, "tools": []},

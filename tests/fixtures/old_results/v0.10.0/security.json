@@ -1,0 +1,478 @@
+{
+ "findings": [
+  {
+   "id": "57fa455f7b3b",
+   "tool": "bandit",
+   "rule": "B602",
+   "title": "subprocess call with shell=True identified, security issue.",
+   "tool_severity": "HIGH",
+   "tool_confidence": "HIGH",
+   "file": "shop/app.py",
+   "line": 16,
+   "cwe": 78,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b602_subprocess_popen_with_shell_equals_true.html",
+   "snippet": "15 def backup(name: str):\n16     subprocess.call(\"tar czf \" + name + \".tgz data/\", shell=True)\n17     r = make_repo()",
+   "category": "code",
+   "in_tests": false,
+   "node": "py:shop.app.backup",
+   "reachable": {
+    "entry": "py:shop.app.backup",
+    "kind": "route",
+    "path": [
+     "py:shop.app.backup"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/Admin::Admin",
+    "js:web/src/pages/Admin::BackupButton",
+    "js:web/src/pages/Admin::BackupButton.start",
+    "js:web/src/api::runBackup",
+    "py:shop.app.backup"
+   ],
+   "hot_lane": "server",
+   "lanes": [
+    "browser",
+    "frontend",
+    "server",
+    "data"
+   ],
+   "input": {
+    "via": "parameter `name`"
+   },
+   "rank": "critical",
+   "status": "open",
+   "scenario": {
+    "kind": "shell",
+    "who": "Priya, a tester",
+    "steps": [
+     "Priya, who is testing your app, opens the /admin page.",
+     "They click the backup button.",
+     "In the box that fills in `name` they type: report; whoami"
+    ],
+    "harm": "The server pastes those words into a command and runs it, so the part after the semicolon runs too. Whoever types it can run any program your server can, with your server's permissions.",
+    "after_fix": "The value is passed as a separate argument (no shell), so the whole thing is just an odd file name and nothing extra runs.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B602); the page and clicks come from the map of your app; what they type reaching this line comes from Lantern's input check (parameter `name`). An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "The backup button can run shell commands on your server"
+  },
+  {
+   "id": "12771352490c",
+   "tool": "bandit",
+   "rule": "B324",
+   "title": "Use of weak MD5 hash for security. Consider usedforsecurity=False",
+   "tool_severity": "HIGH",
+   "tool_confidence": "HIGH",
+   "file": "shop/auth.py",
+   "line": 18,
+   "cwe": 327,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b324_hashlib.html",
+   "snippet": "17 def check_password(password, user):\n18     return hashlib.md5(password.encode()).hexdigest() == user\n19",
+   "category": "code",
+   "in_tests": false,
+   "node": "py:shop.auth.check_password",
+   "reachable": {
+    "entry": "py:shop.app.read_user",
+    "kind": "route",
+    "path": [
+     "py:shop.app.read_user",
+     "py:shop.auth.Session.login",
+     "py:shop.auth.check_password"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/UserPage::UserPage",
+    "js:web/src/api::getUser",
+    "py:shop.app.read_user",
+    "py:shop.auth.Session.login",
+    "py:shop.auth.check_password"
+   ],
+   "hot_lane": "server",
+   "lanes": [
+    "browser",
+    "frontend",
+    "server"
+   ],
+   "input": {
+    "via": "parameter `password`"
+   },
+   "rank": "critical",
+   "status": "open",
+   "scenario": {
+    "kind": "weak-hash",
+    "who": "Leo, a tester",
+    "steps": [
+     "Leo, who is testing your app, opens the /users/:id page.",
+     "They use that part of the app the normal way, which runs the flagged line (shop/auth.py, line 18)."
+    ],
+    "harm": "If the stored fingerprints ever leak (a backup left open, a bug somewhere else), MD5 and SHA-1 are fast and old enough that common passwords or tokens can be worked back out in minutes.",
+    "after_fix": "A slow password hash (bcrypt or argon2) is used, which makes the same work take years.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B324); the page and clicks come from the map of your app. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "A weak scrambling method (such as MD5) is used"
+  },
+  {
+   "id": "271ac69ef170",
+   "tool": "bandit",
+   "rule": "B608",
+   "title": "Possible SQL injection vector through string-based query construction.",
+   "tool_severity": "MEDIUM",
+   "tool_confidence": "MEDIUM",
+   "file": "shop/repo.py",
+   "line": 15,
+   "cwe": 89,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+   "snippet": "14         # deliberately unsafe: string-built SQL\n15         return self.execute(\"SELECT * FROM users WHERE id = '%s'\" % user_id)\n16",
+   "category": "code",
+   "in_tests": false,
+   "node": "py:shop.repo.UserRepo.get",
+   "reachable": {
+    "entry": "py:shop.app.read_user",
+    "kind": "route",
+    "path": [
+     "py:shop.app.read_user",
+     "py:shop.auth.Session.login",
+     "py:shop.repo.UserRepo.get"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/UserPage::UserPage",
+    "js:web/src/api::getUser",
+    "py:shop.app.read_user",
+    "py:shop.auth.Session.login",
+    "py:shop.repo.UserRepo.get"
+   ],
+   "hot_lane": "server",
+   "lanes": [
+    "browser",
+    "frontend",
+    "server"
+   ],
+   "input": {
+    "via": "parameter `user_id`"
+   },
+   "rank": "high",
+   "status": "open",
+   "scenario": {
+    "kind": "sql",
+    "who": "Maria, a tester",
+    "steps": [
+     "Maria, who is testing your app, opens the /users/:id page.",
+     "In the box that fills in `user_id` they type: ' OR '1'='1"
+    ],
+    "harm": "Those characters are pasted into the database question, which changes its meaning from \"this one record\" to \"every record\". The same trick can read, change or delete other people's data.",
+    "after_fix": "The value goes in as a parameter, so the database treats it as plain text to look for, and finds nothing.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B608); the page and clicks come from the map of your app; what they type reaching this line comes from Lantern's input check (parameter `user_id`). An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "The /users/:id page can change what your database is asked"
+  },
+  {
+   "id": "3009f20c07ea",
+   "tool": "lantern-web",
+   "rule": "LW-PUBLIC-SECRET",
+   "title": "Secret-looking setting VITE_ADMIN_SECRET is sent to every visitor's browser",
+   "tool_severity": "HIGH",
+   "tool_confidence": "HIGH",
+   "file": "web/src/pages/Admin.tsx",
+   "line": 4,
+   "cwe": 200,
+   "more_info": "Variables starting with NEXT_PUBLIC_, VITE_, REACT_APP_ and similar are copied into the JavaScript that browsers download. Keep secrets in server-only variables and call them from server code.",
+   "snippet": "VITE_ADMIN_SECRET",
+   "category": "exposure",
+   "fixed_rank": "high",
+   "in_tests": false,
+   "node": "js:web/src/pages/Admin",
+   "reachable": null,
+   "reachable_from_tests_only": false,
+   "ui_path": null,
+   "hot_lane": "frontend",
+   "lanes": [
+    "frontend"
+   ],
+   "input": null,
+   "rank": "high",
+   "status": "open",
+   "scenario": {
+    "kind": "secret",
+    "who": "Sam, a tester",
+    "steps": [
+     "Sam opens your site and looks at the files their browser downloaded (anyone can, with the browser's developer tools).",
+     "They search them for \u201ckey\u201d and find the value of this setting, sent to every visitor."
+    ],
+    "harm": "They copy the key and use it from their own computer. Whatever the key unlocks (your database, your paid AI account, your email service) now works for them, and the bill or the data is yours.",
+    "after_fix": "The key lives only on the server in an environment variable, and you replace (rotate) the old one, because anyone may already have a copy.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (LW-PUBLIC-SECRET); the setting has a prefix that ships it to the browser. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "A secret setting is sent to every visitor's browser"
+  },
+  {
+   "id": "27105c2e3afc",
+   "tool": "lantern-web",
+   "rule": "LW-AUTH-MISSING",
+   "title": "POST /backup changes data, is called by the app, and no login check was found",
+   "tool_severity": "MEDIUM",
+   "tool_confidence": "LOW",
+   "file": "shop/app.py",
+   "line": 14,
+   "cwe": 306,
+   "more_info": "Heuristic: Lantern looked three calls deep for anything named like an auth check (current_user, auth, login_required, token, permission...) and read the handler's own lines for the same words. If this route is meant to be public, ignore it.",
+   "snippet": "POST /backup",
+   "category": "code",
+   "fixed_rank": "medium",
+   "in_tests": false,
+   "node": "py:shop.app.backup",
+   "reachable": {
+    "entry": "py:shop.app.backup",
+    "kind": "route",
+    "path": [
+     "py:shop.app.backup"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/Admin::Admin",
+    "js:web/src/pages/Admin::BackupButton",
+    "js:web/src/pages/Admin::BackupButton.start",
+    "js:web/src/api::runBackup",
+    "py:shop.app.backup"
+   ],
+   "hot_lane": "server",
+   "lanes": [
+    "browser",
+    "frontend",
+    "server",
+    "data"
+   ],
+   "input": false,
+   "rank": "medium",
+   "status": "open",
+   "scenario": {
+    "kind": "auth",
+    "who": "Sam, a tester",
+    "steps": [
+     "Sam, who is testing your app, opens the /admin page.",
+     "They click the backup button.",
+     "They are not signed in when they send POST /backup."
+    ],
+    "harm": "The server does what they asked, because nothing checks who they are first. They do not need an account, a password, or your page at all. This check is a heuristic: look at the code before you act, Lantern may be wrong about this one.",
+    "after_fix": "The route first checks that the request comes from a signed-in user who is allowed to do this, and answers \"not allowed\" otherwise.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (LW-AUTH-MISSING); the page and clicks come from the map of your app. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "POST /backup works without checking who is signed in"
+  },
+  {
+   "id": "408d05131176",
+   "tool": "lantern-web",
+   "rule": "LJ-XSS-HTML",
+   "title": "Inserts raw HTML into the page (cross-site scripting risk)",
+   "tool_severity": "MEDIUM",
+   "tool_confidence": "HIGH",
+   "file": "web/src/components/Bio.tsx",
+   "line": 3,
+   "cwe": 79,
+   "more_info": null,
+   "snippet": "return <section dangerouslySetInnerHTML={{ __html: html }} />",
+   "category": "code",
+   "in_tests": false,
+   "node": "js:web/src/components/Bio::Bio",
+   "reachable": {
+    "entry": "js:web/src/pages/UserPage::UserPage",
+    "kind": "page",
+    "path": [
+     "js:web/src/pages/UserPage::UserPage",
+     "js:web/src/components/Bio::Bio"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/UserPage::UserPage",
+    "js:web/src/components/Bio::Bio"
+   ],
+   "hot_lane": "frontend",
+   "lanes": [
+    "browser",
+    "frontend"
+   ],
+   "input": null,
+   "rank": "medium",
+   "status": "open",
+   "scenario": {
+    "kind": "xss",
+    "who": "Tom, a tester",
+    "steps": [
+     "Tom, who is testing your app, opens the /users/:id page.",
+     "If what they type reaches this line, they type: <img src=x onerror=alert(document.cookie)>"
+    ],
+    "harm": "The page puts those characters into the screen as real HTML, so the browser runs the script inside. Everyone who later views that page runs it too, signed in as themselves.",
+    "after_fix": "The text is shown as text (escaped), so visitors see the odd characters and nothing runs.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (LJ-XSS-HTML); the page and clicks come from the map of your app. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "Text is put into the page as HTML"
+  },
+  {
+   "id": "6715dbeeddd8",
+   "tool": "bandit",
+   "rule": "B404",
+   "title": "Consider possible security implications associated with the subprocess module.",
+   "tool_severity": "LOW",
+   "tool_confidence": "HIGH",
+   "file": "shop/app.py",
+   "line": 1,
+   "cwe": 78,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess",
+   "snippet": "1 import subprocess\n2 from fastapi import FastAPI\n3 from .auth import Session, make_repo",
+   "category": "code",
+   "in_tests": false,
+   "node": "py:shop.app",
+   "reachable": null,
+   "reachable_from_tests_only": false,
+   "ui_path": null,
+   "hot_lane": "server",
+   "lanes": [
+    "server"
+   ],
+   "input": null,
+   "rank": "low",
+   "status": "open",
+   "scenario": {
+    "kind": "subprocess-note",
+    "who": "Leo, a tester",
+    "steps": [
+     "Nothing for Leo to do here: this is a note about what the code is able to do."
+    ],
+    "harm": "Nothing happens on its own. This note says the code can start other programs, which matters only where a value from outside reaches one of those calls.",
+    "after_fix": "Nothing to change here unless another finding points at the same call.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B404). An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "This file starts other programs (a note, not a problem)"
+  },
+  {
+   "id": "311ab0c79578",
+   "tool": "bandit",
+   "rule": "B105",
+   "title": "Possible hardcoded password: 'hunter2-super-secret'",
+   "tool_severity": "LOW",
+   "tool_confidence": "MEDIUM",
+   "file": "shop/auth.py",
+   "line": 5,
+   "cwe": 259,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html",
+   "snippet": "4 \n5 SECRET = \"hunter2-super-secret\"\n6",
+   "category": "code",
+   "in_tests": false,
+   "node": "py:shop.auth",
+   "reachable": null,
+   "reachable_from_tests_only": false,
+   "ui_path": null,
+   "hot_lane": "server",
+   "lanes": [
+    "server"
+   ],
+   "input": null,
+   "rank": "low",
+   "status": "open",
+   "scenario": {
+    "kind": "secret",
+    "who": "Priya, a tester",
+    "steps": [
+     "Your code is shared or pushed somewhere others can read (a public GitHub repository, a zip sent to a contractor). Priya opens shop/auth.py at line 5.",
+     "They find the password or key written there in plain text."
+    ],
+    "harm": "They copy the key and use it from their own computer. Whatever the key unlocks (your database, your paid AI account, your email service) now works for them, and the bill or the data is yours.",
+    "after_fix": "The key lives only on the server in an environment variable, and you replace (rotate) the old one, because anyone may already have a copy.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B105); the key is written in the file. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "A password or key is written in the code"
+  },
+  {
+   "id": "b4dd2b0afe1e",
+   "tool": "bandit",
+   "rule": "B101",
+   "title": "Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.",
+   "tool_severity": "LOW",
+   "tool_confidence": "HIGH",
+   "file": "tests/test_auth.py",
+   "line": 5,
+   "cwe": 703,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b101_assert_used.html",
+   "snippet": "4 def test_check_password():\n5     assert not check_password(\"x\", \"y\")",
+   "category": "code",
+   "in_tests": true,
+   "node": "py:tests.test_auth.test_check_password",
+   "reachable": null,
+   "reachable_from_tests_only": true,
+   "ui_path": null,
+   "hot_lane": "server",
+   "lanes": [
+    "server"
+   ],
+   "input": null,
+   "rank": "low",
+   "status": "open",
+   "scenario": {
+    "kind": "assert",
+    "who": "Priya, a tester",
+    "steps": [
+     "This line is in test code. Priya never gets to it: your users do not run your tests."
+    ],
+    "harm": "Python skips `assert` lines when it runs in optimised mode, so this check quietly disappears and nothing stops the bad case. In test code this is normal and fine.",
+    "after_fix": "A real `if` check that raises an error, which always runs.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B101); the file is test code. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "A safety check uses assert, which can be switched off"
+  }
+ ],
+ "tools": [
+  {
+   "tool": "bandit",
+   "status": "ok",
+   "version": "1.9.4"
+  },
+  {
+   "tool": "pip-audit",
+   "role": "known-vulnerable Python packages",
+   "version": "2.10.1",
+   "status": "skipped: no Python dependency files"
+  },
+  {
+   "tool": "npm-audit",
+   "role": "known-vulnerable npm packages (production dependencies)",
+   "status": "skipped: no package-lock.json, so exact versions are unknown (commit your lock file)"
+  },
+  {
+   "tool": "lantern-secrets",
+   "status": "ok (built-in patterns; install gitleaks for full coverage)"
+  },
+  {
+   "tool": "lantern-web",
+   "status": "ok",
+   "version": "0.1"
+  },
+  {
+   "tool": "lantern-ai",
+   "status": "ok (no model, vector or paid API calls found)",
+   "version": "0.1"
+  }
+ ],
+ "counts": {
+  "critical": 2,
+  "high": 2,
+  "medium": 2,
+  "low": 2,
+  "in_tests": 1,
+  "accepted": 0
+ },
+ "id_version": 2,
+ "reachable_nodes": 30,
+ "total_callables": 28,
+ "ai": {
+  "calls": [],
+  "by_node": {},
+  "kinds": [],
+  "providers": [],
+  "notebooks": [],
+  "is_ai_app": false
+ }
+}
