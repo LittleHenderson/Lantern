@@ -5,7 +5,8 @@ The rules that hold from the first line:
   * the analysed code is never executed: no builds, installs or test runs, no runtime tracing;
   * the clone is deleted when the job ends; only derived results are kept, at the privacy level chosen first;
   * no tokens, emails, request bodies or repository contents in the database or the logs;
-  * a run is readable by its owner only, until the owner clicks Share (off by default);
+  * a run is readable by its owner only, until the owner clicks Share (off by default) or puts it in a team
+    workspace, where the workspace's members can read it too (and only they: never changed, shared or deleted by them);
   * nothing goes to a model until the person has read where it goes and agreed (`/v1/ai/consent`), and then only
     with their own allowance token: facts from tools, words from models, and the model never changes a finding.
 
@@ -122,12 +123,12 @@ def _page_headers(extra: dict | None) -> dict:
 
 
 def run_view(r: dict, logs=None) -> dict:
-    """What the owner sees about a run. Never the account id."""
+    """What the owner (or a member of the run's workspace) sees about a run. Never the account id."""
     tail = (logs.tail(r["id"]) if logs and r["status"] not in FINISHED else None) or r.get("log_tail") or ""
     return {"id": r["id"], "link": r["link"], "host": r["host"], "privacy": r["privacy"], "status": r["status"],
             "stage": r["stage"], "error": r["error"], "created": r["created"], "started": r["started"],
             "finished": r["finished"], "commit": r["commit_sha"], "summary": r["summary"],
-            "shared": bool(r["share_slug"]), "log_tail": tail,
+            "shared": bool(r["share_slug"]), "log_tail": tail, "workspace": r.get("workspace"),
             "hint": HINTS.get(r["error"]),   # "upload" / "connect": what the website offers in place of the link
             "step": next((k for k, v in STAGES.items() if v == r["stage"]), None),
             "explain": {"status": r.get("explain_status"), "error": r.get("explain_error"),
@@ -231,6 +232,14 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(404, "No run with that id in your account.")   # same answer for someone else's run
         return r
 
+    def readable_run(rid: str, who: dict) -> dict:
+        """The owner's run, or one in a workspace this person is in: they may read it, never change it."""
+        r = store.run(rid) if isinstance(rid, str) and len(rid) <= 40 else None
+        if r and (hmac.compare_digest(r["account"], who["account"])
+                  or (r.get("workspace") and store.role(r["workspace"], who["account"]))):
+            return r
+        raise HTTPException(404, "No run with that id in your account.")
+
     @app.post("/v1/repos", status_code=202)
     async def start_run(payload: dict, request: Request):
         who = await signed_in(request)
@@ -311,14 +320,16 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     @app.get("/v1/runs/{rid}")
     async def get_run(rid: str, request: Request):
         who = await signed_in(request)
-        return run_view(own_run(rid, who), worker.logs if worker else None)
+        r = readable_run(rid, who)
+        v = run_view(r, worker.logs if worker else None)
+        return {**v, "mine": r["account"] == who["account"]}
 
     @app.get("/v1/runs/{rid}/stream")
     async def stream_run(rid: str, request: Request):
         """Server-sent events: `log` events (one line each), then one `end` event with the run, then the stream
         closes. A finished run sends its saved tail and `end` at once."""
         who = await signed_in(request)
-        own_run(rid, who)
+        readable_run(rid, who)
 
         async def events():
             n = 0
@@ -359,7 +370,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         """Links that open this run's report, evidence and files in a browser for the next `view_minutes`. Anyone
         holding a link can open it until then, so the website opens it at once and never stores it."""
         who = await signed_in(request)
-        r = own_run(rid, who)
+        r = readable_run(rid, who)
         if r["status"] != "done":
             raise HTTPException(409, "This run has no report yet.")
         exp = int(time.time()) + s.view_minutes * 60
@@ -510,7 +521,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(400, "Type a question.")
         out, name = None, None
         if payload.get("run") is not None:
-            r = done_run(str(payload["run"]), who)
+            r = readable_run(str(payload["run"]), who)
+            if r["status"] != "done":
+                raise HTTPException(409, "This run has no report yet.")
             out, name = Path(s.results_dir) / r["id"], r["link"].rstrip("/").rsplit("/", 1)[-1][:80]
         f = payload.get("focus") if isinstance(payload.get("focus"), dict) else {}
         focus = {k: f[k][:300] for k in ("node", "finding") if isinstance(f.get(k), str) and f[k]}
@@ -561,6 +574,148 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             res = {**res, "how": None, "reason": "this server cannot read text in images yet"
                    if res.get("reason") in ("tesseract not installed", "Pillow not installed") else res.get("reason")}
         return res
+
+    # ---- team workspaces (directive: user first, step 3) ----
+    # A workspace is a few people who can open each other's runs. Its owner invites people with one-time links
+    # (7 days; only a hash is kept; no email is ever asked for) and can take people out or close it. A run joins a
+    # workspace only when its own owner puts it there, and leaves when they take it out. Members read; they never
+    # change, share, explain or delete someone else's run. Each person keeps their own view (Simple or Advanced)
+    # and lens: those live in their own browser.
+    def member_id(wid: str, account: str) -> str:
+        return hmac.new(vsecret, f"member:{wid}:{account}".encode(), hashlib.sha256).hexdigest()[:16]
+
+    def team_name(payload: dict) -> str:
+        n = payload.get("name")
+        n = " ".join(n.split()) if isinstance(n, str) else ""
+        if not n or len(n) > 60 or any(ord(ch) < 32 for ch in n):
+            raise HTTPException(400, "Give the workspace a name, up to 60 characters.")
+        return n
+
+    def in_team(wid: str, who: dict, owner: bool = False) -> dict:
+        w = store.workspace(wid) if isinstance(wid, str) and len(wid) <= 40 else None
+        role = store.role(wid, who["account"]) if w else None
+        if not role:
+            raise HTTPException(404, "No workspace with that id that you are in.")
+        if owner and role != "owner":
+            raise HTTPException(403, "Only the workspace's owner can do that.")
+        return {**w, "role": role}
+
+    def team_view(w: dict, who: dict) -> dict:
+        acc = who["account"]
+        people = [{"id": member_id(w["id"], m["account"]), "name": m["label"].split(":", 1)[-1] or "Someone",
+                   "role": m["role"], "joined": m["joined"], "you": m["account"] == acc} for m in store.members(w["id"])]
+        labels = {m["account"]: m["label"].split(":", 1)[-1] for m in store.members(w["id"])}
+        runs = [r for r in store.runs(acc) if r.get("workspace") == w["id"]] + \
+               [r for r in store.team_runs(acc) if r.get("workspace") == w["id"]]
+        runs.sort(key=lambda r: r["created"], reverse=True)
+        return {"id": w["id"], "name": w["name"], "role": w["role"], "people": people,
+                "invites_open": store.open_invites(w["id"]) if w["role"] == "owner" else None,
+                "runs": [{**run_view(r), "mine": r["account"] == acc, "by": labels.get(r["account"]) or "Someone"}
+                         for r in runs],
+                "limits": {"people": s.workspace_people, "invite_days": 7}}
+
+    @app.get("/v1/workspaces")
+    async def list_workspaces(request: Request):
+        who = await signed_in(request)
+        return {"workspaces": store.workspaces(who["account"])}
+
+    @app.post("/v1/workspaces", status_code=201)
+    async def create_workspace(payload: dict, request: Request):
+        who = await signed_in(request)
+        try:
+            wid = store.create_workspace(who["account"], team_name(payload), most=s.workspaces_per_owner)
+        except LimitReached as e:
+            raise HTTPException(429, str(e)) from None
+        return team_view(in_team(wid, who), who)
+
+    @app.get("/v1/workspaces/{wid}")
+    async def get_workspace(wid: str, request: Request):
+        who = await signed_in(request)
+        return team_view(in_team(wid, who), who)
+
+    @app.patch("/v1/workspaces/{wid}")
+    async def rename_workspace(wid: str, payload: dict, request: Request):
+        who = await signed_in(request)
+        w = in_team(wid, who, owner=True)
+        store.rename_workspace(w["id"], team_name(payload))
+        return team_view(in_team(wid, who), who)
+
+    @app.delete("/v1/workspaces/{wid}")
+    async def close_workspace(wid: str, request: Request):
+        """Close a workspace: everyone leaves, open invites stop working, and every run in it goes back to being its
+        owner's alone. No run or result is deleted."""
+        who = await signed_in(request)
+        w = in_team(wid, who, owner=True)
+        store.close_workspace(w["id"])
+        return {"closed": w["id"]}
+
+    @app.post("/v1/workspaces/{wid}/invites", status_code=201)
+    async def invite(wid: str, request: Request):
+        """A one-time invite link. Whoever opens it first and signs in joins as a member; then it stops working. It
+        also stops after 7 days. Lantern keeps only a hash of it, so it is shown this once."""
+        who = await signed_in(request)
+        w = in_team(wid, who, owner=True)
+        try:
+            secret, exp = store.create_invite(w["id"], open_most=s.open_invites)
+        except LimitReached as e:
+            raise HTTPException(429, str(e)) from None
+        return JSONResponse({"url": f"{s.public_url}/#/join/{secret}", "expires": exp, "one_time": True},
+                            status_code=201, headers={"Cache-Control": "no-store"})
+
+    @app.delete("/v1/workspaces/{wid}/invites")
+    async def cancel_invites(wid: str, request: Request):
+        who = await signed_in(request)
+        w = in_team(wid, who, owner=True)
+        return {"cancelled": store.cancel_invites(w["id"])}
+
+    @app.post("/v1/invites/peek")
+    async def peek_invite(payload: dict):
+        """Which workspace an invite opens, so the page can say so before anyone signs in. Nothing else."""
+        i = store.invite(payload.get("code"))
+        if not i:
+            raise HTTPException(404, "This invite link has been used, has expired, or was cancelled. Ask for a new one.")
+        return {"name": i["name"], "expires": i["expires"]}
+
+    @app.post("/v1/invites/accept")
+    async def accept_invite(payload: dict, request: Request):
+        who = await signed_in(request)
+        try:
+            wid = store.join(payload.get("code"), who["account"], most=s.workspace_people)
+        except LimitReached as e:
+            raise HTTPException(429, str(e)) from None
+        if not wid:
+            raise HTTPException(404, "This invite link has been used, has expired, or was cancelled. Ask for a new one.")
+        return team_view(in_team(wid, who), who)
+
+    @app.delete("/v1/workspaces/{wid}/people/{mid}")
+    async def remove_person(wid: str, mid: str, request: Request):
+        """The owner takes someone out, or a member leaves. Their runs in the workspace go back to being theirs
+        alone. The owner cannot leave; they close the workspace instead."""
+        who = await signed_in(request)
+        w = in_team(wid, who)
+        target = next((m for m in store.members(w["id"]) if hmac.compare_digest(member_id(w["id"], m["account"]), mid)), None)
+        if not target:
+            raise HTTPException(404, "That person is not in this workspace.")
+        if target["role"] == "owner":
+            raise HTTPException(409, "The owner can't leave their own workspace. Close it instead.")
+        if target["account"] != who["account"] and w["role"] != "owner":
+            raise HTTPException(403, "Only the workspace's owner can take someone out.")
+        store.remove_member(w["id"], target["account"])
+        return {"removed": mid, "left": target["account"] == who["account"]}
+
+    @app.put("/v1/runs/{rid}/workspace")
+    async def put_in_workspace(rid: str, payload: dict, request: Request):
+        """Put one of your own finished runs in a workspace you are in (its members can then open it), or take it
+        out again with {"workspace": null}."""
+        who = await signed_in(request)
+        r = own_run(rid, who)
+        wid = payload.get("workspace")
+        if wid is not None:
+            in_team(wid, who)
+            if r["status"] not in FINISHED:
+                raise HTTPException(409, "This check is still going. Add it to the workspace once it has finished.")
+        store.set_run_workspace(r["id"], wid)
+        return run_view(store.run(r["id"]))
 
     # ---- the website (same origin as the API, so no CORS is offered or needed) ----
     secure = s.public_url.startswith("https://")

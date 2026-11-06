@@ -58,6 +58,11 @@ class Settings:
     # Comma-separated hosts allowed for clones. Empty = every host `lantern.remote` accepts.
     allowed_hosts: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_HOSTS", ""))
     default_privacy: str = "structure"
+    # Team workspaces (directive: user first, step 3): how many one person may own, how many people one holds,
+    # and how many unused invite links one may have at once.
+    workspaces_per_owner: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_WORKSPACES_PER_OWNER", 10))
+    workspace_people: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_WORKSPACE_PEOPLE", 25))
+    open_invites: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_OPEN_INVITES", 10))
     # Signs the short-lived links that open a run's report in a browser (a browser tab cannot send the sign-in
     # header). Empty: derived from the admin secret, or random for this process (links then end at a restart).
     view_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_VIEW_SECRET", ""))
