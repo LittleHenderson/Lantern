@@ -81,7 +81,8 @@ def test_an_invite_expires_after_seven_days_and_can_be_cancelled(team):
     db.commit()
     assert cloud.post("/v1/invites/accept", json={"code": code}, headers=bearer(ben)).status_code == 404
     code2 = code_of(invite(cloud, ana, w["id"])["url"])
-    assert cloud.delete(f"/v1/workspaces/{w['id']}/invites", headers=bearer(ana)).json() == {"cancelled": 1}
+    wid = w["id"]
+    assert cloud.delete(f"/v1/workspaces/{wid}/invites", headers=bearer(ana)).json() == {"cancelled": 1}
     assert cloud.post("/v1/invites/accept", json={"code": code2}, headers=bearer(ben)).status_code == 404
 
 
