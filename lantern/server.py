@@ -21,6 +21,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 import traceback
@@ -171,13 +172,15 @@ class Store:
     # settings and keys
     def settings(self) -> dict:
         return {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL_NAME, "base_url": "", "privacy": "full",
-                "share_usage": False, "view_mode": "simple", "backdrop": "subtle", **self._read("settings.json", {})}
+                "share_usage": False, "view_mode": "simple", "backdrop": "subtle", "agent": "", **self._read("settings.json", {})}
 
     def save_settings(self, s: dict) -> None:
         keep = {k: s.get(k) for k in ("provider", "model", "base_url", "privacy")}
         keep["share_usage"] = bool(s.get("share_usage"))
         keep["view_mode"] = "advanced" if s.get("view_mode") == "advanced" else "simple"
         keep["backdrop"] = s.get("backdrop") if s.get("backdrop") in ("off", "subtle", "bold") else "subtle"
+        from .agents import AGENTS
+        keep["agent"] = s.get("agent") if s.get("agent") in AGENTS else ""   # off unless the person picks one
         pk = s.get("packs") if isinstance(s.get("packs"), dict) else {}
         names = [n for n in pk.get("disabled") or [] if isinstance(n, str) and PACK_NAME.match(n)]
         if names or pk.get("changed_at"):
@@ -840,7 +843,8 @@ class Handler(BaseHTTPRequestHandler):
             live = {"api": f"/api/projects/{p['id']}", "token": self.app.token, "model": s.get("model") and
                     f"{s['provider']}/{s['model']}", "local": s.get("provider") in LOCAL_PROVIDERS,
                     "view_mode": "advanced" if s.get("view_mode") == "advanced" else "simple",
-                    "backdrop": s.get("backdrop") if s.get("backdrop") in ("off", "subtle", "bold") else "subtle"}
+                    "backdrop": s.get("backdrop") if s.get("backdrop") in ("off", "subtle", "bold") else "subtle",
+                    "agent": _agent_live(s.get("agent"))}
         return self._send(*result_page(self.app.out(p), name, live))
 
     # ------------------------------------------------------------------ GET routes
@@ -851,6 +855,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"version": __version__, "projects": [app.summary(p) for p in app.store.projects()],
                                "settings": s, "providers": app.provider_info(),
                                "default_model": {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL_NAME}})
+        if path == "/api/agents":
+            from . import agents
+            return self._json({"agents": agents.available(), "chosen": app.store.settings().get("agent") or ""})
         if path == "/api/usage":
             from .providers import gateway_url
             return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
@@ -1021,6 +1028,11 @@ class Handler(BaseHTTPRequestHandler):
             for k in ("view_mode", "backdrop"):
                 if k in b and b[k] is not None:
                     s[k] = str(b[k])
+            if "agent" in b:
+                from .agents import AGENTS
+                if b["agent"] not in ("", None, *AGENTS):
+                    raise ValueError("pick one of the listed coding agents, or none")
+                s["agent"] = b["agent"] or ""
             app.store.save_settings(s)
             usage.record("settings_save")
             if b.get("key"):
@@ -1131,10 +1143,48 @@ class Handler(BaseHTTPRequestHandler):
             privacy = app.store.settings().get("privacy", "full")
             job = app.jobs.start(p["id"], "analyze", lambda log: pipeline.analyze(repo, out, privacy, log=log))
             return self._json(job, 202)
+        if action in ("agentfix", "agentapply", "agentdiscard"):
+            return self._json(*agent_action(app, p, repo, out, action, b))
         if action == "starter":
             usage.record("starter")
             return self._json({"ok": True, "wrote": write_starter_file(repo, out, str(b.get("name") or ""))})
         return self._err(404, "not found")
+
+
+def _agent_live(chosen) -> dict | None:
+    """What the report needs to offer "Fix this for me": the chosen agent's name, when it is on this computer."""
+    from .agents import AGENTS
+    if chosen not in AGENTS:
+        return None
+    name, prog, _ = AGENTS[chosen]
+    return {"id": chosen, "name": name} if shutil.which(prog) else None
+
+
+def agent_action(app, p: dict, repo: Path, out: Path, action: str, b: dict) -> tuple[dict, int]:
+    """Fix this for me (lantern/agents.py). `agentfix` runs the chosen agent on a copy and checks it; `agentapply`
+    copies a checked fix into the project and analyzes it again; `agentdiscard` throws the copy away."""
+    from . import agents
+    work = app.store.root / "fixes"
+    if action == "agentdiscard":
+        agents.discard_fix(str(b.get("fix") or ""), work_root=work)
+        return {"ok": True}, 200
+    privacy = app.store.settings().get("privacy", "full")
+    if action == "agentapply":
+        fix = str(b.get("fix") or "")
+
+        def apply(log):
+            res = agents.apply_fix(repo, fix, work_root=work)
+            log(f"copied {len(res['applied'])} file(s) into your project; analyzing it again")
+            pipeline.analyze(repo, out, privacy, log=log)
+            return res
+        return app.jobs.start(p["id"], "agentapply", apply), 202
+    chosen = app.store.settings().get("agent") or ""
+    if not _agent_live(chosen):
+        raise ValueError("Pick a coding agent in Settings first (Advanced), and make sure it is installed.")
+    fid = str(b.get("finding") or "")
+    agents._finding(out, fid)                    # a closed or unknown finding answers 400 before anything runs
+    return app.jobs.start(p["id"], "agentfix",
+                          lambda log: agents.run_fix(repo, out, fid, chosen, privacy, log, work_root=work)), 202
 
 
 def _list_dir(raw: str) -> dict:
