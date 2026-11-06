@@ -187,6 +187,17 @@ async function until(p, fn, timeout) {
       if (await t.$('#share') || await t.$('.sub [data-del]')) errs.push(`${tag}: a teammate can share or delete someone else's report`);
       if (await t.$('.sub [data-t="evidence"]')) errs.push(`${tag}: a teammate who sees only some layers is offered the whole-app evidence report`);
       if (!await t.evaluate(() => !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('.scopenote'))) errs.push(`${tag}: the scoped report does not say which layers it shows`);
+      // notes on the map (step 5): the teammate opens a function and leaves a note; it shows as plain words
+      const fr = t.frameLocator('#pbody iframe');
+      await t.evaluate(() => { const d = document.querySelector('#pbody iframe').contentDocument; d.querySelector('#tabs [data-t="map"]')?.click(); });
+      await fr.locator('#center [data-id^="js:"]').first().click();
+      await fr.locator('#notesopen').click();
+      await fr.locator('#notein').fill('<img src=x onerror="window.__noted=1"> check this one');
+      await fr.locator('#noteadd').click();
+      await fr.locator('.notecard').first().waitFor({ timeout: 8000 });
+      const noteOk = await t.evaluate(() => { const d = document.querySelector('#pbody iframe').contentDocument; const c = d.querySelector('.notecard p'); return !!c && !c.querySelector('img') && /check this one/.test(c.textContent) && !d.defaultView.__noted; });
+      if (!noteOk) errs.push(`${tag}: a note on the map did not show as plain words`);
+      await a11y.axe(t, `${tag} notes`, errs);
       await ctxT.close();
       await p.click('#viewmode [data-m="simple"]');
       await p.click('#who'); await p.waitForSelector('#signout');
