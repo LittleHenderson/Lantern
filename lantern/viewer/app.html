@@ -534,6 +534,22 @@ iframe{border:0;width:100%;height:calc(100vh - var(--hh));height:calc(100dvh - v
 .switch[aria-checked="true"]{background:var(--accent)} .switch[aria-checked="true"]::after{transform:translateX(18px)}
 .switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px} .switch:disabled{opacity:.5;cursor:wait}
 .snip{font:12px var(--mono);background:var(--sunken);border:1px solid var(--line);border-radius:8px;padding:8px 10px;overflow:auto;white-space:pre;margin:6px 0 10px}
+/* Onboarding (directive: user first): one action per screen, no jargon, a Why? tap for the rest. */
+.onb .go{display:flex;justify-content:center;margin:6px 0 14px}
+.onb .btn.big{height:56px;padding:0 30px;font-size:17px;border-radius:16px}
+.onb .alt{text-align:center;margin:0 0 26px;font-size:14px;color:var(--muted)}
+.onb .backrow{max-width:720px;margin:0 auto 6px}
+.onb .picks{max-width:720px;margin:0 auto;display:grid;gap:12px}
+.onb .pick{display:flex;align-items:center;gap:16px;text-align:left;width:100%;padding:18px 20px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow-1);color:var(--ink);font:inherit;cursor:pointer}
+.onb .pick:hover,.onb .pick:focus-visible{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.onb .pick .ic,.onb .pick svg{width:22px;height:22px;flex:none;color:var(--muted)}
+.onb .pick b{display:block;font-size:16px} .onb .pick span{color:var(--muted);font-size:14px}
+.onb .one{max-width:720px;margin:0 auto}
+.onb .how{max-width:720px;margin:14px auto 0;padding-left:22px;line-height:1.6} .onb .how li{margin:6px 0}
+.why{max-width:720px;margin:12px auto 0} .why>summary{display:inline-flex;align-items:center;gap:6px;cursor:pointer;list-style:none;font-size:13px;font-weight:600;color:var(--muted);padding:4px 12px;border-radius:99px;border:1px solid var(--line)} .why>summary::-webkit-details-marker{display:none} .why>summary:hover{color:var(--ink)} .why[open]>summary{color:var(--ink);background:var(--hover)} .why>.whybody{margin-top:10px;font-size:14px;color:var(--ink-2);line-height:1.55}
+.runbar{height:8px;border-radius:99px;background:var(--accent-soft);overflow:hidden;margin:18px 0 6px} .runbar>i{display:block;height:100%;border-radius:99px;background:var(--accent);transition:width .6s var(--ease)}
+.runbar-now{font-size:14px;color:var(--ink-2);margin:0 0 4px}
+.linkbtn{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:3px;display:inline-flex;align-items:center;gap:4px} .linkbtn .ic,.linkbtn svg{width:15px;height:15px}
 </style>
 </head>
 <body>
@@ -563,7 +579,7 @@ const api = async (path, opts = {}) => {
   if (!r.ok) throw new Error(data.error || r.statusText);
   return data;
 };
-const S = {view: 'home', state: null, project: null, tab: 'atlas', reportTab: null, browse: null, jobs: {}, starters: null, open: {}};
+const S = {view: 'home', add: null, state: null, project: null, tab: 'atlas', reportTab: null, browse: null, jobs: {}, starters: null, open: {}};
 // Step text comes from Lantern's own starter files; escape it anyway, then allow **bold** and `code`.
 const fmt = s => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -627,7 +643,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyThe
 applyTheme();
 
 async function refresh() { S.state = await api('/api/state'); render(); }
-function go(view, extra = {}) { if (extra.project && extra.project !== S.project) S.guide = null; Object.assign(S, {view}, extra); ASK.page = null; for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
+function go(view, extra = {}) { if (extra.project && extra.project !== S.project) S.guide = null; if (!('add' in extra)) S.add = null; Object.assign(S, {view}, extra); ASK.page = null; for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (view === 'project' ? 'home' : view)); render(); scrollTo(0, 0); }
 document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); };
 document.getElementById('home').onclick = () => { go('home'); refresh().catch(() => {}); };
 
@@ -898,6 +914,7 @@ function watch(jobId, pid) {
       const el = document.getElementById('log-' + pid);
       if (el) { const t = el.querySelector('.t'); el.textContent = j.log.join('\n'); if (t) el.prepend(t); el.scrollTop = el.scrollHeight; }
       const line = document.querySelector(`[data-last="${pid}"]`); if (line && j.log.length) line.textContent = j.log[j.log.length - 1];
+      drawBar(pid);
       if (j.status === 'running') return setTimeout(tick, 700);
       S.frame = null;   // results changed: the embedded report is rebuilt on the next render
       await refresh();
@@ -933,18 +950,18 @@ function sentence(p) {
 }
 function addControls(el) {
   const input = el.querySelector('#addpath'), err = el.querySelector('#adderr');
-  input.onkeydown = e => { if (e.key === 'Enter') el.querySelector('#add').click(); };
-  el.querySelector('#add').onclick = async () => {
+  if (input) input.onkeydown = e => { if (e.key === 'Enter') el.querySelector('#add').click(); };
+  if (input) el.querySelector('#add').onclick = async () => {
     const path = input.value.trim(); if (!path) { input.focus(); return; }
     try {
       const r = await api('/api/projects', {method: 'POST', body: {path}});
-      if (r.job) { watch(r.job.id, r.project.id); await refresh(); return; }   // a link: cloned, then analyzed, in one job
-      const j = await api(`/api/projects/${r.id}/analyze`, {method: 'POST'}); watch(j.id, r.id); await refresh();
+      if (r.job) { watch(r.job.id, r.project.id); S.add = null; await refresh(); return; }   // a link: cloned, then analyzed, in one job
+      const j = await api(`/api/projects/${r.id}/analyze`, {method: 'POST'}); watch(j.id, r.id); S.add = null; await refresh();
     } catch (e) { err.innerHTML = note('err', esc(e.message)); }
   };
   const bb = el.querySelector('#browsebtn'); if (bb) bb.onclick = () => browse(input.value || '');
   const zone = el.querySelector('.dropzone');
-  if (zone) {
+  if (zone && input) {
     zone.ondragover = e => { e.preventDefault(); zone.classList.add('over'); };
     zone.ondragleave = () => zone.classList.remove('over');
     zone.ondrop = e => {
@@ -953,7 +970,7 @@ function addControls(el) {
       if (/^https?:\/\//.test(text) || /^[\/~]|^[A-Za-z]:\\/.test(text)) { input.value = text; return; }
       const f = e.dataTransfer.files && e.dataTransfer.files[0];
       const name = f ? (f.webkitRelativePath || f.name).split('/')[0] : '';
-      err.innerHTML = note('info', `The browser does not tell Lantern where ${name ? '<b>' + esc(name) + '</b>' : 'that folder'} lives on this computer. Press <b>Browse…</b> to pick it, or paste its path or GitHub link.`);
+      err.innerHTML = note('info', `The browser does not tell Lantern where ${name ? '<b>' + esc(name) + '</b>' : 'that folder'} lives on this computer. Press <b>${el.querySelector('#pickfolder') ? 'Choose the folder' : 'Browse…'}</b> to pick it, or paste its path or GitHub link.`);
     };
   }
   el.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => {
@@ -964,6 +981,21 @@ function addControls(el) {
   const tl = el.querySelector('#tolearn'); if (tl) tl.onclick = e => { e.preventDefault(); go('learn'); };
 }
 function isRunning(p) { const job = S.jobs[p.id]; if (p.job && !job) watch(p.job, p.id); return !!(p.job || (job && job.status === 'running')); }
+// A check's real steps, in plain words, for the live progress bar (directive: user first). Each step starts when the
+// pipeline logs the line that ends the one before it (lantern/pipeline.py: graph, scan, ready).
+const RUN_STEPS = [['', 'Reading your files'], ['graph', 'Looking for problems'], ['scan', 'Scoring how ready it is'], ['ready', 'Writing up your results']];
+function runStep(log) { let at = 0; for (const l of log || []) RUN_STEPS.forEach(([k], i) => { if (k && String(l).startsWith(k + ' ') && i > at) at = i; }); return at; }
+function runBar(pid) {
+  const job = S.jobs[pid], at = runStep(job && job.log), pct = Math.round(((at + 0.5) / RUN_STEPS.length) * 100), w = RUN_STEPS[at][1];
+  return `<div class="runbar" data-bar="${esc(pid)}" role="progressbar" aria-label="How far the check is" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-valuetext="${esc(w)}"><i style="width:${pct}%"></i></div><p class="runbar-now" data-barnow="${esc(pid)}">Step ${at + 1} of ${RUN_STEPS.length}: ${esc(w)}</p>`;
+}
+function drawBar(pid) {
+  const job = S.jobs[pid], at = runStep(job && job.log), pct = Math.round(((at + 0.5) / RUN_STEPS.length) * 100), w = RUN_STEPS[at][1];
+  for (const b of document.querySelectorAll(`[data-bar="${CSS.escape(pid)}"]`)) { b.setAttribute('aria-valuenow', pct); b.setAttribute('aria-valuetext', w); b.firstElementChild.style.width = pct + '%'; }
+  for (const t of document.querySelectorAll(`[data-barnow="${CSS.escape(pid)}"]`)) t.textContent = `Step ${at + 1} of ${RUN_STEPS.length}: ${w}`;
+}
+// A small Why? button (directive: user first): the detail behind a line opens in place, on demand.
+const why = (inner, label = 'Why?') => inner ? `<details class="why"><summary>${esc(label)}</summary><div class="whybody">${inner}</div></details>` : '';
 function lastLine(p) { const job = S.jobs[p.id]; const l = job && job.log && job.log.length ? job.log[job.log.length - 1] : ''; return l || 'Reading your files…'; }
 function renderHome(el) {
   const ps = S.state.projects;
@@ -972,7 +1004,7 @@ function renderHome(el) {
   const cards = ps.map(p => {
     const job = S.jobs[p.id], run = isRunning(p);
     return `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(p.name)}${p.starter ? ' <span class="tag">starter</span>' : ''}</div><div class="path">${esc(p.path)}</div></div>${ring(p.score, p.grade)}</div>
-      ${run ? `<div class="checking"><i></i>Checking… ${p.score != null ? 'usually under a minute' : 'about a minute'}</div><div class="indeterminate"></div><p class="lastline" data-last="${p.id}">${esc(lastLine(p))}</p>`
+      ${run ? `<div class="checking"><i></i>Checking… ${p.score != null ? 'usually under a minute' : 'about a minute'}</div>${runBar(p.id)}${why(`<p class="lastline" data-last="${p.id}" style="margin:0">${esc(lastLine(p))}</p>`, 'What is it doing right now?')}`
         : `<p class="sentence">${sentence(p)}</p>`}
       ${!p.exists ? note('warn', 'This folder no longer exists.') : ''}
       ${p.stale === 'packs' && !run ? note('info', 'Analysis packs changed since this check. <b>Re-check to apply.</b>') : ''}
@@ -981,16 +1013,47 @@ function renderHome(el) {
         ${run ? '' : `<button class="btn ${p.has_report ? '' : 'primary'}" data-run="${p.id}" ${!p.exists ? 'disabled' : ''}>${p.has_report ? 'Re-check' : 'Check my app'}</button>`}
         <span class="spacer"></span><button class="btn quiet sm" data-del="${p.id}" title="Remove from this list (files are not touched)" aria-label="Remove from this list">${icon('trash')}</button></div></article>`;
   }).join('');
-  el.innerHTML = `<main class="simplehome"><h1>${ps.length ? 'What would you like to check?' : 'Which app should we check first?'}</h1>
-    <p class="lede">Point Lantern at any app you built. It reads your code like a reviewer, and nothing leaves this computer.</p>
-    <div class="dropzone">${icon('folder')}<input type="text" id="addpath" placeholder="Drop a folder here, or paste a GitHub link" autocomplete="off" spellcheck="false" aria-label="Folder path or GitHub link"><button class="btn ghost" id="browsebtn">Browse…</button><button class="btn primary" id="add">Check my app</button></div>
-    <div id="browse" style="max-width:720px;margin:0 auto"></div><div id="adderr" style="max-width:720px;margin:0 auto"></div>
-    <div class="steps3"><span><b>1</b>Add your app</span><span><b>2</b>Lantern maps every path a visitor can take</span><span><b>3</b>Fix what it finds, with a guide and proof</span></div>
-    <p class="privline">${icon('lock')}Nothing is uploaded. Plain-word explanations and Ask Lantern are off until you turn them on in Settings.</p>
-    ${ps.length ? `<div class="apps-head"><h2>Your apps</h2><span>${checked} checked${running ? `, ${running} checking now` : ''}</span></div><div class="apps">${cards}</div>`
-      : `<div class="firstrun"><div class="card"><div class="k">No app handy?</div><h3>Try the practice app</h3><p>notes-api is a small Python app with real problems planted on purpose. Fix them with a guide; Lantern checks each one is really gone.</p><a href="#" id="tolearn" class="btn primary">Create notes-api · 35 min</a></div>
-         <div class="card"><div class="k">What happens next</div><div class="li">${icon('clock')}Reading usually takes under a minute</div><div class="li">${icon('check')}You get a map, a list of what to fix, and a grade</div><div class="li">${icon('layers')}Python, TypeScript, Go, Rust and Java apps work today</div></div></div>`}</main>`;
+  if (S.add) return renderAdd(el);
+  // Simple home (directive: user first): one button, then one plain question per screen (S.add: where, computer,
+  // github, unsure). The word repository never shows; Advanced keeps the full add bar on its Projects page.
+  el.innerHTML = `<main class="simplehome onb"><h1>${ps.length ? 'What would you like to check?' : 'Let’s look at your app'}</h1>
+    <p class="lede">Lantern reads your code the way a senior engineer would, then shows you step by step how to get it ready to ship.</p>
+    <div class="go"><button class="btn primary big" id="showus">Show us your project</button></div>
+    <p class="alt"><button class="linkbtn" id="tolearnalt">No project yet? Try the practice app</button></p>
+    ${why(`<p class="privline" style="margin:0">${icon('lock')}Nothing is uploaded: Lantern reads your app on this computer and never runs it. Plain-word explanations and Ask Lantern stay off until you turn them on in Settings.</p>`, 'Is my code safe?')}
+    ${ps.length ? `<div class="apps-head"><h2>Your apps</h2><span>${checked} checked${running ? `, ${running} checking now` : ''}</span></div><div class="apps">${cards}</div>` : ''}</main>`;
+  el.querySelector('#showus').onclick = () => { S.add = 'where'; render(); };
+  el.querySelector('#tolearnalt').onclick = () => go('learn');
   addControls(el);
+}
+function renderAdd(el) {
+  const back = to => `<div class="backrow"><button class="linkbtn" data-back="${to}">${icon('back')}Back</button></div>`;
+  const screens = {
+    where: () => `${back('')}<h1>Where is your project?</h1><p class="lede">Pick the one that sounds right. You can always come back.</p>
+      <div class="picks"><button class="pick" data-to="computer">${icon('folder')}<div><b>It’s on this computer</b><span>A folder with your app’s files in it</span></div></button>
+        <button class="pick" data-to="github">${icon('cloud')}<div><b>It’s on GitHub</b><span>You have a link that starts with github.com</span></div></button>
+        <button class="pick" data-to="unsure">${icon('info')}<div><b>I’m not sure</b><span>We’ll help you find it</span></div></button></div>`,
+    computer: () => `${back('where')}<h1>Choose your project’s folder</h1><p class="lede">The folder that holds your app’s files.</p>
+      <div class="one"><div class="go"><button class="btn primary big" id="pickfolder">${icon('folder')}Choose the folder</button></div>
+      <div id="browse"></div>
+      <div class="dropzone" style="margin-top:14px">${icon('folder')}<input type="text" id="addpath" placeholder="Or paste the folder’s location" autocomplete="off" spellcheck="false" aria-label="The folder's location"><button class="btn primary" id="add">Check my app</button></div>
+      <div id="adderr"></div></div>`,
+    github: () => `${back('where')}<h1>Paste your project’s link</h1><p class="lede">Copy it from the top of your browser while your project is open on GitHub.</p>
+      <div class="one"><div class="dropzone">${icon('cloud')}<input type="text" id="addpath" placeholder="https://github.com/you/your-app" autocomplete="off" spellcheck="false" inputmode="url" aria-label="Your project's GitHub link"><button class="btn primary" id="add">Check my app</button></div>
+      <div id="adderr"></div>
+      ${why(`<ol class="how" style="margin:0"><li>Open github.com and sign in.</li><li>Click your profile picture, then <b>Your repositories</b>. That is GitHub’s word for your projects.</li><li>Click your app’s name, then copy the address at the top of your browser.</li></ol>`, 'Where do I find the link?')}</div>`,
+    unsure: () => `${back('where')}<h1>Let’s find your project</h1><p class="lede">Most people have it in one of two places.</p>
+      <ol class="how"><li><b>An AI app builder made it.</b> Look in that tool for a <b>Download</b> or <b>GitHub</b> button. Download it, then come back and choose <button class="linkbtn" data-to="computer">It’s on this computer</button>.</li>
+        <li><b>You saved it on GitHub.</b> Choose <button class="linkbtn" data-to="github">It’s on GitHub</button> and paste its link.</li></ol>
+      <div class="go" style="margin-top:22px"><button class="btn primary" id="tolearnalt">No project yet? Try the practice app</button></div>`,
+  };
+  el.innerHTML = `<main class="simplehome onb">${(screens[S.add] || screens.where)()}<p class="privline" style="margin-top:22px">${icon('lock')}Nothing is uploaded. Lantern reads your app on this computer and never runs it.</p></main>`;
+  el.querySelectorAll('[data-back]').forEach(b => b.onclick = () => { S.add = b.dataset.back || null; render(); });
+  el.querySelectorAll('[data-to]').forEach(b => b.onclick = () => { S.add = b.dataset.to; render(); });
+  const pf = el.querySelector('#pickfolder'); if (pf) pf.onclick = () => browse(el.querySelector('#addpath').value || '');
+  const tl = el.querySelector('#tolearnalt'); if (tl) tl.onclick = () => go('learn');
+  addControls(el);
+  const first = el.querySelector('#addpath') || el.querySelector('.pick'); if (first && S.add !== 'computer') first.focus({preventScroll: true});
 }
 function renderHomePro(el, ps) {
   const sort = S.sort || 'risk';

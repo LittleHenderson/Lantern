@@ -146,6 +146,13 @@ const STEPS = [['clone', 'Copy the repository', 'Into a sealed box. Nothing in i
                ['audit', 'Check dependency versions', 'Against public security advisories.'],
                ['analyze', 'Map the code and run the checks', 'Every page, route and function a visitor can reach.'],
                ['save', 'Save your results', 'The copy of your code is deleted; only the results stay.']];
+const PLAIN_STEPS = {clone: ['Make a private copy', 'Into a sealed box. Nothing in it is run or installed.'],
+                     unpack: ['Open what you uploaded', 'Into a sealed box. Nothing in it is run or installed.'],
+                     audit: ['Check the parts your app borrows', 'Outside code your app uses, against known security problems.'],
+                     analyze: ['Map your app and look for problems', 'Every page and path a visitor can reach.'],
+                     save: ['Save your results', 'The copy is deleted; only the results stay.']};
+// A small Why? button (directive: user first): the detail behind a line opens in place, on demand.
+const why = (inner, label = 'Why?') => inner ? `<details class="why"><summary>${esc(label)}</summary><div class="whybody">${inner}</div></details>` : '';
 const GH = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>';
 const GO = '<svg viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72a5.41 5.41 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>';
 
@@ -358,7 +365,7 @@ async function startRun2(link, privacy, agreed) {
     const what = link.startsWith(SAMPLE) ? {sample: link.slice(SAMPLE.length)} : {link};
     const r = await api('/v1/repos', {method: 'POST', body: {...what, privacy, stored_snippets_ok: privacy === 'full' && agreed === true}});
     S.link = ''; S.addMsg = null; S.run = r; S.runs = [r, ...(S.runs || []).filter(x => x.id !== r.id)];
-    location.hash = '#/run/' + encodeURIComponent(r.id);
+    S.add = null; location.hash = '#/run/' + encodeURIComponent(r.id);
   } catch (e) {
     if (e.status === 401) { S.me = null; S.pending = {link, privacy, agreed}; drawAcct(); return signInSheet('Your sign-in has expired. Sign in again, and Lantern checks this link straight after.'); }
     upMsg(e.status === 429 ? 'warn' : 'err', esc(e.message));
@@ -432,7 +439,7 @@ async function sendUpload(blob, name) {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) { if (res.status === 401) { S.me = null; drawAcct(); return signInSheet('Your sign-in has expired. Sign in again, then upload your app again.'); } return upMsg(res.status === 429 || res.status === 413 ? 'warn' : 'err', esc((d.error && d.error.message) || 'The upload did not go through. Try again.')); }
     upMsg('', ''); S.run = d; S.runs = [d, ...(S.runs || []).filter(x => x.id !== d.id)];
-    location.hash = '#/run/' + encodeURIComponent(d.id);
+    S.add = null; location.hash = '#/run/' + encodeURIComponent(d.id);
   } catch (e) { upMsg('err', 'The upload did not go through. Check your connection and try again.'); }
 }
 function addBox() {
@@ -524,23 +531,71 @@ function runCard(r) {
       ${run ? '' : `<button class="btn ${r.status === 'done' ? '' : 'primary'}" data-again="${esc(r.id)}">${r.status === 'done' ? 'Re-check' : 'Try again'}</button>`}
       <span class="spacer"></span><span class="when">${esc(ago(r.finished || r.created))}</span>${run ? '' : `<button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>`}</div></article>`;
 }
+// Simple home (directive: user first). First-time builders may never have used GitHub or heard the word repository:
+// one button, "Show us your project", then one plain question per screen (S.add: where, github, computer, unsure).
+// Advanced keeps the full add box on its own page.
+const PRIVLINE = `${icon('lock')}Lantern copies your app into a sealed box, reads it without installing or running anything, and deletes the copy when the check ends. Only the results are kept, private to your account, until you delete them.`;
 function renderHome(el) {
   if (S.me && !simple()) return renderHomePro(el);
+  if (S.openUpload) S.add = 'computer';
+  if (S.add) return renderAdd(el);
   const runs = S.runs || [], done = runs.filter(r => r.status === 'done').length, going = runs.filter(r => ACTIVE.includes(r.status)).length;
-  el.innerHTML = `<main class="simplehome"><h1>${runs.length ? 'What would you like to check?' : 'Which app should we check first?'}</h1>
-    <p class="lede">Paste a link to any app you built, or upload it from this computer. Lantern reads the code like a reviewer, in a sealed box that never runs it.</p>
-    ${addBox()}
-    <div class="steps3"><span><b>1</b>Paste a link or upload</span><span><b>2</b>Lantern maps every path a visitor can take</span><span><b>3</b>Fix what it finds, with a guide and proof</span></div>
-    <p class="privline">${icon('lock')}Lantern copies your app (from its link or your upload) into a sealed box, reads it without installing or running anything, and deletes the copy when the check ends. Only the results are kept, private to your account, until you delete them.</p>
+  el.innerHTML = `<main class="simplehome onb"><h1>${runs.length ? 'What would you like to check?' : 'Let’s look at your app'}</h1>
+    <p class="lede">Lantern reads your code the way a senior engineer would, then shows you step by step how to get it ready to ship.</p>
+    <div class="go"><button class="btn primary big" id="showus">Show us your project</button></div>
+    <p class="alt"><button class="linkbtn" id="trysample">No project yet? Try a sample app</button></p>
+    ${why(`<p class="privline" style="margin:0">${PRIVLINE}</p>`, 'Is my code safe?')}
     ${S.me === undefined ? '<div class="empty">Loading…</div>'
-      : !S.me ? `<div class="firstrun"><div class="card"><div class="k">Free to try</div><h3>Sign in to start checking</h3><p>Use your GitHub or Google account. Lantern keeps your account name only, so your runs stay yours.</p><a href="#" class="btn primary" data-signin>Sign in</a></div>
-          <div class="card"><div class="k">What happens next</div><div class="li">${icon('clock')}A check usually takes about a minute</div><div class="li">${icon('check')}You get a map, a list of what to fix, and a grade</div><div class="li">${icon('layers')}Python, TypeScript, Go, Rust and Java apps work today</div></div></div>`
-      : runs.length ? `<div class="apps-head"><h2>Your runs</h2><span>${done} checked${going ? `, ${going} checking now` : ''}</span></div><div class="apps">${runs.map(runCard).join('')}</div>`
-      : `<div class="firstrun"><div class="card"><div class="k">No app handy?</div><h3>Try a public app, or a sample</h3><p>Paste any public repository you like, for example an open-source app you use (Explore GitHub, above, helps you find one). Or check one of the sample apps below. Lantern only reads them.</p></div>
-         <div class="card"><div class="k">What happens next</div><div class="li">${icon('clock')}A check usually takes about a minute</div><div class="li">${icon('check')}You get a map, a list of what to fix, and a grade</div><div class="li">${icon('layers')}Python, TypeScript, Go, Rust and Java apps work today</div></div></div>`}
-    ${S.me === undefined ? '' : samplesBlock()}
+      : runs.length ? `<div class="apps-head"><h2>Your runs</h2><span>${done} checked${going ? `, ${going} checking now` : ''}</span></div><div class="apps">${runs.map(runCard).join('')}</div>` : ''}
   </main>`;
+  el.querySelector('#showus').onclick = () => { S.add = 'where'; render(); };
+  el.querySelector('#trysample').onclick = () => { S.add = 'unsure'; render(); };
   addControls(el);
+}
+// What Lantern keeps: private by default, the other choice on demand.
+function keepBox() {
+  const full = S.privacy === 'full';
+  return `<p class="privline" style="margin-top:14px">${icon('lock')}${full ? 'Lantern keeps the map, the findings and short snippets of the lines it talks about.' : 'Private: Lantern keeps the map and the findings, never your code.'}</p>
+    ${why(`<div class="privacy" role="radiogroup" aria-label="What Lantern keeps" style="margin:0">
+      <label class="choice"><input type="radio" name="priv" value="structure" ${full ? '' : 'checked'}><span><b>Map and findings only <span class="tag priv">Private</span></b>No code is kept. The report names files and lines.</span></label>
+      <label class="choice"><input type="radio" name="priv" value="full" ${full ? 'checked' : ''}><span><b>Include code snippets</b>The report shows the lines it talks about. Those short snippets are kept with your results.</span></label></div>
+    ${full ? `<div class="agree"><label class="check"><input type="checkbox" id="agreed" ${S.agreed ? 'checked' : ''}><span>I agree that short snippets of this app's code are stored on Lantern's server with my results, until I delete them.</span></label></div>` : ''}`, 'Change what Lantern keeps')}`;
+}
+function renderAdd(el) {
+  const back = to => `<div class="backrow"><button class="linkbtn" data-back="${to}">${icon('back')}Back</button></div>`;
+  const screens = {
+    where: () => `${back('')}<h1>Where is your project?</h1><p class="lede">Pick the one that sounds right. You can always come back.</p>
+      <div class="picks"><button class="pick" data-to="github">${GH}<div><b>It’s on GitHub</b><span>You have a link that starts with github.com</span></div></button>
+        <button class="pick" data-to="computer">${icon('folder')}<div><b>It’s on this computer</b><span>A folder on this computer, or a .zip you downloaded</span></div></button>
+        <button class="pick" data-to="unsure">${icon('info')}<div><b>I’m not sure</b><span>We’ll help you find it</span></div></button></div>`,
+    github: () => `${back('where')}<h1>Paste your project’s link</h1><p class="lede">Copy it from the top of your browser while your project is open on GitHub.</p>
+      <div class="one"><div class="dropzone">${GH}<input type="text" id="link" placeholder="https://github.com/you/your-app" value="${esc(S.link)}" autocomplete="off" spellcheck="false" inputmode="url" aria-label="Your project's GitHub link"><button class="btn primary${startingAttr(S.starting && !S.starting.startsWith(SAMPLE))}" id="add">Check my app</button></div>
+      <div id="adderr">${addMsgHtml()}</div>
+      ${why(`<ol class="how" style="margin:0"><li>Open github.com and sign in.</li><li>Click your profile picture, then <b>Your repositories</b>. That is GitHub’s word for your projects.</li><li>Click your app’s name, then copy the address at the top of your browser.</li></ol>${ghRow()}`, 'Where do I find the link?')}
+      ${keepBox()}</div>`,
+    computer: () => `${back('where')}<h1>Choose your project’s folder</h1><p class="lede">The folder that holds your app’s files. You can also drop it here.</p>
+      <div class="one"><div class="dropzone" style="justify-content:center;padding:18px">${icon('folder')}<button class="btn primary${startingAttr(S.starting && !S.starting.startsWith(SAMPLE))}" id="upload">Choose the folder</button><button class="linkbtn" id="upzipalt">or a .zip file</button></div>
+      <input type="file" id="pickdir" webkitdirectory multiple hidden><input type="file" id="pickzip" accept=".zip,application/zip" hidden>
+      <div id="adderr">${addMsgHtml()}</div>
+      ${why(`<p style="margin:0">Up to ${esc(capMB())} MB. Big folders Lantern does not need, like node_modules, .git and build output, are left out for you.</p>`, 'What gets sent?')}
+      ${keepBox()}</div>`,
+    unsure: () => `${back('where')}<h1>Let’s find your project</h1><p class="lede">Most people have it in one of two places.</p>
+      <ol class="how"><li><b>An AI app builder made it.</b> Look in that tool for a <b>Download</b> or <b>GitHub</b> button. Download it, then come back and choose <button class="linkbtn" data-to="computer">It’s on this computer</button>.</li>
+        <li><b>You saved it on GitHub.</b> Choose <button class="linkbtn" data-to="github">It’s on GitHub</button> and paste its link.</li></ol>
+      ${samplesBlock() ? `<p class="lede" style="margin-top:22px">No project yet? Check a sample app to see what Lantern shows you.</p>${samplesBlock()}` : ''}`,
+  };
+  el.innerHTML = `<main class="simplehome onb">${(screens[S.add] || screens.where)()}<p class="privline" style="margin-top:22px">${icon('lock')}Your code is read in a sealed box and never run.</p></main>`;
+  el.querySelectorAll('[data-back]').forEach(b => b.onclick = () => { S.add = b.dataset.back || null; S.addMsg = null; render(); });
+  el.querySelectorAll('[data-to]').forEach(b => b.onclick = () => { S.add = b.dataset.to; S.addMsg = null; render(); });
+  addControls(el);
+  const up = el.querySelector('#upload');
+  if (up) {
+    // signing in comes first, so nobody picks a folder only to be asked to pick it again
+    const pick = id => () => S.me ? el.querySelector(id).click() : signInSheet('Sign in, then choose your folder.');
+    up.onclick = pick('#pickdir'); el.querySelector('#upzipalt').onclick = pick('#pickzip');
+  }
+  const first = el.querySelector('#link') || el.querySelector('.pick');
+  if (first && !S.addMsg) first.focus({preventScroll: true});
 }
 function renderHomePro(el) {
   const runs = S.runs || [], latest = {};
@@ -611,16 +666,22 @@ async function renderRun(el, id) {
 function renderProgress(el, r) {
   const ST = String(r.link || '').startsWith(UPLOAD) ? [['unpack', 'Unpack your upload', 'Into a sealed box. Nothing in it is run or installed.'], ...STEPS.slice(1)] : STEPS;
   const run = ACTIVE.includes(r.status), at = ST.findIndex(s => s[0] === r.step);
-  const steps = ST.map(([k, t, d], i) => {
+  const plain = simple();
+  // The bar moves with the run's real steps: each finished step fills its share, the one going fills half of it.
+  const pct = r.status === 'done' ? 100 : at < 0 ? 4 : Math.round(((at + 0.5) / ST.length) * 100);
+  const nowWords = at >= 0 ? (plain && PLAIN_STEPS[ST[at][0]] ? PLAIN_STEPS[ST[at][0]][0] : ST[at][1]) : 'Waiting for a free worker';
+  const bar = run && plain ? `<div class="runbar" role="progressbar" aria-label="How far the check is" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-valuetext="${esc(nowWords)}"><i style="width:${pct}%"></i></div><p class="runbar-now">Step ${at < 0 ? 0 : at + 1} of ${ST.length}: ${esc(nowWords)}</p>` : run ? '<div class="indeterminate"></div>' : '';
+  const steps = ST.map(([k, t0, d0], i) => {
+    const [t, d] = plain && PLAIN_STEPS[k] ? PLAIN_STEPS[k] : [t0, d0];
     const cls = !run ? (r.status === 'done' || i < at ? 'done' : '') : i < at ? 'done' : i === at ? 'now' : '';
     return `<div class="st ${cls}"><span class="dot">${cls === 'done' ? icon('check') : ''}</span><div><b>${esc(t)}</b>${esc(d)}</div></div>`;
   }).join('');
   dock(false); el.innerHTML = `${subBar(r, false)}<main class="progress"><div class="card">
     <div class="head"><div style="flex:1;min-width:0"><span class="eyebrow">${run ? (r.status === 'queued' ? 'Waiting for a free worker' : 'Checking now') : r.status === 'blocked' ? 'Stopped by a safety rule' : 'This check stopped'}${run ? ' ' + since(r.started || r.created, '· running for') : ''}</span>
       <h1>${esc(repoName(r.link))}</h1><p class="lede">${run ? 'This usually takes about a minute. You can leave this page; the check keeps going and appears in My runs.' : esc(r.error || 'The check did not finish.')}</p></div>${ring(null)}</div>
-    ${run ? '<div class="indeterminate"></div>' : ''}
+    ${bar}
     <div class="running-steps">${steps}</div>
-    <pre class="log" id="runlog">${esc(r.log_tail || '')}</pre>
+    ${plain ? why(`<pre class="log" id="runlog">${esc(r.log_tail || '')}</pre>`, 'What is it doing right now?') : `<pre class="log" id="runlog">${esc(r.log_tail || '')}</pre>`}
     <div class="runmeta"><span>${icon('lock')}${esc(PRIV[r.privacy] || r.privacy)}</span><span>${icon('cloud')}${esc(r.host)}</span><span>${icon('clock')}Started ${esc(ago(r.started || r.created))}</span></div>
     ${run ? '' : r.hint === 'connect' && connectUrl()
       ? `<div class="row" style="margin-top:18px"><a class="btn primary" id="connectgh" href="${esc(connectUrl())}" target="_blank" rel="noopener noreferrer">${GH}<span>Connect GitHub</span></a><button class="btn" id="upinstead">${icon('up')}<span>Upload instead</span></button><button class="btn" data-again="${esc(r.id)}">Try again</button></div>
