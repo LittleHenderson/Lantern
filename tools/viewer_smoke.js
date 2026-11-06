@@ -201,8 +201,11 @@ async function appSmoke(url, out, image, expectText) {
     await pwned('findings');
     await p.screenshot({ path: `${out}-${name}-findings.png` });
     await a11y.axe(p, `${name} findings`, errs);
+    // Simple keeps each finding's detail behind a Why? button: open the first one, so its paths and story are walked too
+    const why = await p.$('.fcard details.why > summary');
+    if (why) { await why.click(); await p.waitForTimeout(60); await pwned('why'); }
     // scenarios: open the first finding's story, then its Fix page (which shows the story as a card)
-    const scen = await p.$('details.scenbox summary');
+    const scen = await p.$('.fcard details.why[open] details.scenbox summary, .fcard > details.scenbox summary');
     if (scen) { await scen.click(); await p.waitForTimeout(60); await pwned('scenario'); }
     const fixb = await p.$('[data-fix]');
     if (fixb) {
