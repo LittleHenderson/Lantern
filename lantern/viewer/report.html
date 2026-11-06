@@ -467,6 +467,15 @@ mark.p.on{background:var(--l3);color:var(--surface);border-radius:4px}
 .warn{display:flex;gap:8px;background:var(--warning-soft);color:var(--ink);font-size:12.5px;padding:10px 12px;border-radius:10px;margin:10px 0}
 .warn .ic{color:var(--warn-ink);margin-top:1px}
 .note{font-size:12.5px;color:var(--muted)}
+.notesbtn{margin:14px 0 0}
+.notes{margin:16px 0 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;display:grid;gap:10px}
+.notes h5{margin:0}
+.noteacts{display:flex;justify-content:space-between;gap:8px}
+.notecard .by{display:flex;gap:8px;align-items:baseline;font-size:12.5px;color:var(--muted)}
+.notecard .by b{color:var(--ink);font-weight:600}
+.notecard .by .linkbtn{margin-left:auto}
+.notecard p{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}
+.notes textarea{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface);color:var(--ink);resize:vertical}
 .scopenote{padding:6px 18px;border-top:1px solid var(--line);background:var(--surface-2,var(--surface))}
 .byline{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:10px}
 .unexplained{border:1px dashed var(--line-2);border-radius:12px;padding:14px 16px;color:var(--muted);font-size:13px}
@@ -869,7 +878,7 @@ function renderChart() {
     svg += `<g data-id="${esc(id)}" style="cursor:pointer"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="10" fill="var(--surface)" stroke="${stroke}" stroke-width="${w || on ? 2 : 1}"/>
       ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="13" fill="none" stroke="var(--accent-soft)" stroke-width="4"/>` : ''}
       <rect x="${x + 10}" y="${y + 16}" width="8" height="8" rx="2.5" fill="${lc}"/>
-      <text x="${x + 26}" y="${y + 24}">${esc(t)}</text>${w ? `<circle cx="${x + W - 14}" cy="${y + 20}" r="4" fill="${w === 'critical' ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : w === 'medium' ? 'var(--warning)' : 'var(--good)'}"/>` : ''}<title>${esc(n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
+      <text x="${x + 26}" y="${y + 24}">${esc(t)}</text>${w ? `<circle cx="${x + W - 14}" cy="${y + 20}" r="4" fill="${w === 'critical' ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : w === 'medium' ? 'var(--warning)' : 'var(--good)'}"/>` : ''}${noteMark(id, x, y)}<title>${esc(n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use the tree view to go deeper.</div>` : '';
@@ -947,7 +956,7 @@ function renderLanes() {
     svg += `<g data-id="${esc(id)}" style="cursor:pointer"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="12" fill="var(--surface)" stroke="${stroke}" stroke-width="${w || on ? 2 : 1}"/>
       ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="15" fill="none" stroke="var(--accent-soft)" stroke-width="4"/><text class="sub" x="${x + W + 10}" y="${y + H / 2 + 4}" fill="var(--accent)" style="fill:var(--accent);font-weight:600">← you are here</text>` : ''}
       <text x="${x + 12}" y="${y + 21}">${esc(t)}</text>${lang ? `<text class="sub" x="${x + W - 12}" y="${y + 21}" text-anchor="end">${esc(lang)}</text>` : ''}
-      ${sub ? `<text class="sub" x="${x + 12}" y="${y + 40}">${esc(sub)}</text>` : ''}<title>${esc(ext ? id.slice(4) : n.qualname)}${w ? ` (${esc(w)} finding)` : ''} · ${esc(LANE_DEF[laneOf(id)])}</title></g>`;
+      ${sub ? `<text class="sub" x="${x + 12}" y="${y + 40}">${esc(sub)}</text>` : ''}${noteMark(id, x, y)}<title>${esc(ext ? id.slice(4) : n.qualname)}${w ? ` (${esc(w)} finding)` : ''} · ${esc(LANE_DEF[laneOf(id)])}</title></g>`;
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use Path to go deeper.</div>` : '';
@@ -1039,7 +1048,7 @@ function renderGraph() {
     svg += `<g data-id="${esc(id)}" data-http="${isHttp ? 1 : 0}"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="${isHttp ? 22 : 9}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>
       ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="13" fill="none" stroke="var(--accent-soft)" stroke-width="4"/>` : ''}
       <text x="${x + 12}" y="${y + (sub ? 19 : 27)}" ${isHttp ? 'font-weight="600"' : ''}>${esc(label)}</text>${sub ? `<text class="sub" x="${x + 12}" y="${y + 34}" fill="${w && S.mode === 'risk' ? sevColor(w) : 'var(--muted)'}">${esc(sub)}</text>` : ''}
-      ${lang ? `<text class="lb" x="${x + W - 10}" y="${y + 15}" text-anchor="end">${lang}</text>` : ''}<title>${esc(isHttp ? httpNodes[id].label : n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
+      ${lang ? `<text class="lb" x="${x + W - 10}" y="${y + 15}" text-anchor="end">${lang}</text>` : ''}${noteMark(id, x, y)}<title>${esc(isHttp ? httpNodes[id].label : n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
   }
   svg += '</svg>';
   const legend = S.mode === 'risk'
@@ -1121,6 +1130,49 @@ const onPhone = n => !!n && ANDROID_APP && (n.lane === 'browser' || n.lane === '
 const entryPhrase = e => !e ? '' : isScreen(e) ? `someone opens the ${String(e.detail).split(' · ')[0]} on their phone` : isIntent(e) ? `another app on the phone, or a link, starts ${partName(e)}` : ({page: `the page ${e.detail || ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
   main: 'the program starts', test: 'the tests run', script: `the script${e.detail ? ' ' + e.detail : ''} is run`})[e.kind] || `${e.kind}${e.detail ? ' ' + e.detail : ''}`;
 const extWords = id => { const n = String(id || '').replace(/^ext:/, ''); if (n.startsWith('HTTP ')) return n; const lib = n.split(/[./]/)[0]; return `the ${lib} library`; };
+// ---------- notes on the map (directive: user first, step 5) ----------
+// On Lantern Cloud the page around this report (same origin) offers window.lanternNotes: people who can open the
+// report leave short notes on a function, and see each other's. Words only: every note is text, escaped where it is
+// drawn, and never part of the analysis. Opened as a file or in the local app, there are no notes and none of this
+// shows. A function's notes sit behind one button in its panel; a small mark on the map shows where notes are.
+const NOTES = {by: {}, open: false, busy: false, err: ''};
+function notesApi() { try { const a = window.self !== window.top && window.parent.lanternNotes; return a && typeof a.list === 'function' ? a : null; } catch (e) { return null; } }
+function loadNotes() {
+  const a = notesApi(); if (!a) return;
+  Promise.resolve(a.list()).then(list => {
+    NOTES.by = {};
+    for (const c of Array.isArray(list) ? list : []) if (c && typeof c.node === 'string' && N[c.node]) (NOTES.by[c.node] ||= []).push(c);
+    if (S.tab === 'map') renderMap(); renderRight();
+  }).catch(() => {});
+}
+function noteMark(id, x, y) {
+  const k = (NOTES.by[id] || []).length;
+  return k ? `<g class="notemark" aria-hidden="true"><circle cx="${x + 4}" cy="${y + 4}" r="8" fill="var(--accent)"/><text x="${x + 4}" y="${y + 7.5}" text-anchor="middle" style="fill:var(--accent-ink,#fff);font:700 9.5px var(--font)">${k > 9 ? '9+' : k}</text><title>${k} note${k === 1 ? '' : 's'} from your team</title></g>` : '';
+}
+function notesBlock(n) {
+  if (!notesApi() || n.sealed) return '';
+  const list = NOTES.by[n.id] || [];
+  if (!NOTES.open) return `<div class="notesbtn"><button class="btn quietlink" id="notesopen" aria-expanded="false">${list.length ? `Notes · ${list.length}` : 'Add a note'}</button></div>`;
+  return `<section class="notes" aria-label="Notes on this function"><h5>Notes · ${list.length}</h5>
+    ${list.map(c => `<div class="notecard"><div class="by"><b>${esc(c.by || 'Someone')}</b>${c.mine ? ' (you)' : ''}<span>${esc(String(c.created || '').slice(0, 10))}</span>${c.can_delete ? `<button class="linkbtn" data-delnote="${esc(c.id)}" aria-label="Delete this note">Delete</button>` : ''}</div><p>${esc(c.body)}</p></div>`).join('') || '<p class="note">No notes yet. A note is only words for the people you work with; it doesn’t change what Lantern found.</p>'}
+    <textarea id="notein" maxlength="1000" rows="3" placeholder="Leave a note for your team" aria-label="New note"></textarea>
+    ${NOTES.err ? `<p class="note" role="alert">${esc(NOTES.err)}</p>` : ''}
+    <div class="noteacts"><button class="btn quietlink" id="notesclose">Hide notes</button><button class="btn primary" id="noteadd"${NOTES.busy ? ' disabled' : ''}>Add note</button></div></section>`;
+}
+function wireNotes(el, n) {
+  const a = notesApi(); if (!a) return;
+  const o = el.querySelector('#notesopen'); if (o) o.onclick = () => { NOTES.open = true; renderRight(); const t = document.getElementById('notein'); if (t) t.focus(); };
+  const c = el.querySelector('#notesclose'); if (c) c.onclick = () => { NOTES.open = false; NOTES.err = ''; renderRight(); };
+  const add = el.querySelector('#noteadd');
+  if (add) add.onclick = () => {
+    const body = (document.getElementById('notein').value || '').trim();
+    if (!body || NOTES.busy) return;
+    NOTES.busy = true; NOTES.err = '';
+    Promise.resolve(a.add(n.id, body)).then(() => { NOTES.busy = false; loadNotes(); })
+      .catch(e => { NOTES.busy = false; NOTES.err = (e && e.message) || 'That note was not saved.'; renderRight(); });
+  };
+  el.querySelectorAll('[data-delnote]').forEach(b => b.onclick = () => Promise.resolve(a.remove(b.dataset.delnote)).then(loadNotes).catch(() => {}));
+}
 function mapRecord(n) {
   if (!n || n.kind === 'class') return null;
   if (n.sealed) {
@@ -1909,6 +1961,7 @@ function renderRight() {
     ${lensBody(r, n)}
     ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard ${cls(f.rank, RANKS)}" style="margin-top:12px"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.rule)} · line ${esc(f.line ?? '–')}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : S.lens === 4 && ex.scenario ? ex.scenario : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
     ${srcBlock(n)}
+    ${notesBlock(n)}
     <div class="links"><div><h5>Called by · ${callers.length}</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
       <div><h5>Calls · ${callees.length}</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div>
     <div class="acts">${fs.length ? `<button class="btn primary" id="openfinding">Open finding</button>` : ''}${LIVE && LIVE.model && n.kind !== 'external' ? `<button class="btn" id="reexplain">${icon('sparkle')}${EXP[n.id] ? 'Re-explain' : `Explain with ${esc(LIVE.model)}`}</button>` : ''}</div></div>`;
@@ -1920,6 +1973,7 @@ function renderRight() {
   el.querySelectorAll('.links [data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
   const xb = document.getElementById('explainbtn'); if (xb) xb.onclick = () => explainLive(S.sel);
   const c = document.getElementById('close'); if (c) c.onclick = () => el.classList.remove('open');
+  wireNotes(el, n);
 }
 
 const TAB_WORDS = {simple: {map: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', xp: 'What does this do?', about: 'About'},
@@ -2023,6 +2077,7 @@ if (worstReached) {
 }
 recheckBanner();
 render();
+loadNotes();
 </script>
 </body>
 </html>

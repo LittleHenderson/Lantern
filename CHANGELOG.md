@@ -5,6 +5,12 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Notes on the map (Lantern Cloud): people who can open a report leave short notes on a function for each other
+  ("Is this still used?"). They sit behind one "Add a note" or "Notes · 2" button in the function's panel, and a
+  small mark on the map shows where notes are. Notes are words only: they never change what Lantern found and are
+  never sent to a model. The author or the report's owner deletes a note; a member who sees only some layers sees
+  notes only there. New `/v1/runs/{id}/notes` and `DELETE /v1/notes/{id}` (docs/api.md) (directive: user first,
+  step 5).
 - Per-layer permissions in team workspaces: the owner chooses, per person, which layers of the app (Browser,
   Frontend, Server, Data) they can see in the workspace's reports, from a "Sees everything" button on the Team
   page. That person's report is built on the server without the other layers, so nothing about them reaches their
