@@ -25,6 +25,11 @@ product's job is to make their code understandable and defensible to skeptical e
 6. **Everything in the viewer is escaped.** Every value from the data goes through `esc()` (class names through
    `cls()`), and `render()` adds a hash-based Content-Security-Policy so a report opened from disk cannot run
    script planted in its data. CI opens a poisoned report (`tools/poison_report.py`) in Chromium to prove it.
+7. **Simple stays simple (directive: user first, 2026-11-06).** The person comes first: Simple shows plain words,
+   no jargon and one action per screen. File:line, rule ids, signatures, source, graph modes and the terminal live in
+   Advanced or behind a small Why? button (`why()` in `report.html`, a `<details class="why">`), never deleted. A new
+   feature adds at most one button or line to Simple; risk words (severity, "heuristic", seen running / confirmed /
+   likely / possible) always stay visible. Phones get Simple only.
 
 ## Commands
 

@@ -5,6 +5,13 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Simple is simpler (directive: user first). A function's panel opens on the Everyday lens, uses Simple's lens names
+  (Where it sits, not Mapped), and keeps the code and the Called by / Calls lists behind one button; its signature and
+  line range are Advanced only. The map offers Lanes and Path (Flowchart and Graph are Advanced views), and the function
+  list leaves out tests. A finding card shows its severity, where a visitor can reach it, the plain words and Fix this;
+  the rule, file and line, the paths, the scenario and the other actions open with a small Why? button, in place. Each
+  readiness step keeps its evidence behind Why? too, and the Terminal button is Advanced only (the \` key still opens it).
+  Advanced is unchanged.
 - C and C++ are read: programs, libraries and C++ web servers (cpp-httplib, Crow, Drogon, Pistache). Namespaces,
   classes, methods (in the class or `Class::m`), free and `static` functions are on the map with their calls (typed
   locals and members through `const&`, pointers and `std::unique_ptr`, `auto p = std::make_unique<T>()`, `this->`,
