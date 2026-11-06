@@ -6,7 +6,7 @@
 // App mode: node tools/viewer_smoke.js --app 'http://127.0.0.1:8765/?token=…' OUT_PREFIX [--image shot.png --expect-text WORD]
 //   drives a live `lantern serve` with one analyzed project: "Watch my tests run" (confirm and run in the sandbox,
 //   wait for the result), the terminal drawer (a Lantern command runs; a shell command is refused), a screenshot
-//   dropped into Ask Lantern (read on this computer), and Settings → Analysis packs (one pack off, then on again).
+//   dropped into Ask Lantern (read on this computer), and Settings → Analysis packs (one pack off, then on again) and the coding agent (off by default).
 //   Fails on any JavaScript error or when one of those does not answer as it should. The phone pass loads the
 //   same screens.
 // PW_BROWSER=firefox|webkit runs the same smoke in another engine (CI runs all three on the report and the app's home).
@@ -120,6 +120,11 @@ async function appSmoke(url, out, image, expectText) {
         if (!st.projects.some(x => x.stale === 'packs')) errs.push('desk: turning a pack off did not mark the project "Re-check to apply"');
         await p.locator('#packs').screenshot({ path: `${out}-${name}-packs-off.png` });
         await p.click(sw); await p.waitForSelector(`${sw}[aria-checked="true"]`);
+        // the coding agent is off until picked: "None" is checked, and an agent not on this computer can't be picked
+        await p.waitForSelector('#agentlist input[name="agent"]');
+        const ag = await p.$$eval('#agentlist input[name="agent"]', xs => xs.map(x => ({v: x.value, on: x.checked})));
+        step(name, `coding agents → ${ag.map(x => (x.v || 'none') + (x.on ? '*' : '')).join(', ')}`);
+        if (!ag.length || !ag.find(x => x.v === '' && x.on)) errs.push('desk: Settings did not show the coding agent as off by default');
         await api('/api/settings', { view_mode: 'simple' });
       }
       await p.screenshot({ path: `${out}-${name}-settings.png`, fullPage: true });

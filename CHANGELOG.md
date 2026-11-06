@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Fix this for me (optional): pick a coding agent you already use (Claude Code, Codex or Aider) in Advanced
+  Settings, and a finding's Fix screen offers "Fix this for me with …". The agent works on a copy of your project;
+  Lantern then analyzes the copy and tells you, in one line, whether the problem is gone and whether anything new
+  and serious appeared. The changed files are one tap away, and nothing reaches your project until you press
+  Apply, which refuses if you changed those files meanwhile. Off by default (directive: user first, step 6).
 - Notes on the map (Lantern Cloud): people who can open a report leave short notes on a function for each other
   ("Is this still used?"). They sit behind one "Add a note" or "Notes · 2" button in the function's panel, and a
   small mark on the map shows where notes are. Notes are words only: they never change what Lantern found and are
