@@ -68,6 +68,15 @@ What can go wrong and what it looks like:
 | Dashboard says "That secret was not accepted" | Wrong admin secret | `fly ssh console -C "printenv LANTERN_ADMIN_SECRET"` |
 | Counters reset after a deploy | Volume not mounted | `fly volumes list` should show `lantern_data` attached |
 
+## Deploying from GitHub instead of your computer
+
+If `fly` cannot run on your machine (no install, blocked network), deploy from GitHub's servers: the workflow
+`.github/workflows/deploy-gateway.yml` does the same `fly deploy`. One-time setup: on the Fly website open the app
+→ **Tokens** → **Create deploy token**, copy it, then on GitHub open the repo → Settings → Secrets and variables →
+Actions → **New repository secret**, name `FLY_API_TOKEN`, paste the token. After that, every deploy is: GitHub →
+**Actions** tab → **Deploy gateway** → **Run workflow** → type `deploy` → Run. It deploys whatever is on `main` and
+prints the health and sign-in-providers checks at the end.
+
 ## Sign in with GitHub and Google (free allowance without minting tokens by hand)
 
 Once these are set, anyone can get their own allowance token by signing in at `https://lantern-gateway.fly.dev/v1/login`,
