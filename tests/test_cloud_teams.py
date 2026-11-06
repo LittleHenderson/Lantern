@@ -199,13 +199,13 @@ def test_a_member_can_be_shown_only_some_layers(team):
         cloud.post("/v1/invites/accept", json={"code": code_of(invite(cloud, ana, wid)["url"])}, headers=bearer(tok))
     cloud.put(f"/v1/runs/{rid}/workspace", json={"workspace": wid}, headers=bearer(ana))
     people = {p["name"]: p["id"] for p in cloud.get(f"/v1/workspaces/{wid}", headers=bearer(ana)).json()["people"]}
-    url = f"/v1/workspaces/{wid}/people/"
+    ben_id, cat_id, ana_id = people["ben"], people["cat"], people["ana"]
     # only the owner chooses, never for the owner, and only real layers
-    assert cloud.put(url + people["cat"], json={"lanes": ["frontend"]}, headers=bearer(ben)).status_code == 403
-    assert cloud.put(url + people["ana"], json={"lanes": ["frontend"]}, headers=bearer(ana)).status_code == 409
+    assert cloud.put(f"/v1/workspaces/{wid}/people/{cat_id}", json={"lanes": ["frontend"]}, headers=bearer(ben)).status_code == 403
+    assert cloud.put(f"/v1/workspaces/{wid}/people/{ana_id}", json={"lanes": ["frontend"]}, headers=bearer(ana)).status_code == 409
     for bad in ([], ["api"], "frontend", [3]):
-        assert cloud.put(url + people["ben"], json={"lanes": bad}, headers=bearer(ana)).status_code == 400
-    v = cloud.put(url + people["ben"], json={"lanes": ["frontend", "browser"]}, headers=bearer(ana))
+        assert cloud.put(f"/v1/workspaces/{wid}/people/{ben_id}", json={"lanes": bad}, headers=bearer(ana)).status_code == 400
+    v = cloud.put(f"/v1/workspaces/{wid}/people/{ben_id}", json={"lanes": ["frontend", "browser"]}, headers=bearer(ana))
     assert v.status_code == 200
     assert {p["name"]: p["lanes"] for p in v.json()["people"]} == {"ana": None, "ben": ["browser", "frontend"], "cat": None}
     # ben: the run without the whole-app parts, and a workspace page that says what he sees
@@ -237,7 +237,7 @@ def test_a_member_can_be_shown_only_some_layers(team):
     a = cloud.post("/v1/ask", json={"run": rid, "question": "What should I fix first?"}, headers=bearer(ben))
     assert a.status_code == 403 and "layers" in a.text
     # back to every layer
-    cloud.put(url + people["ben"], json={"lanes": None}, headers=bearer(ana))
+    cloud.put(f"/v1/workspaces/{wid}/people/{ben_id}", json={"lanes": None}, headers=bearer(ana))
     assert cloud.get(f"/v1/runs/{rid}", headers=bearer(ben)).json()["summary"]
-    cloud.put(url + people["ben"], json={"lanes": list(("browser", "frontend", "server", "data"))}, headers=bearer(ana))
+    cloud.put(f"/v1/workspaces/{wid}/people/{ben_id}", json={"lanes": list(("browser", "frontend", "server", "data"))}, headers=bearer(ana))
     assert {p["name"]: p["lanes"] for p in cloud.get(f"/v1/workspaces/{wid}", headers=bearer(ana)).json()["people"]}["ben"] is None
