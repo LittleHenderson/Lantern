@@ -664,20 +664,31 @@ def _load(p: Path):
         return None
 
 
-def result_page(out: Path, name: str, live: dict | None = None) -> tuple[int, str, str, dict]:
+def result_page(out: Path, name: str, live: dict | None = None, lanes=None) -> tuple[int, str, str, dict]:
     """(status, body, content type, headers) for a result file: `report.html`, `evidence.html`, `badge.svg`, or a
     JSON file. Result folders can be planted (a cloned repo's `.lantern/`, or anything the cloud worker copied out),
     so never send their bytes as a page: read only the data back and rebuild every page from our own templates, with
-    a per-response nonce so nothing but our scripts can run. Used by `lantern serve` and by the cloud service."""
+    a per-response nonce so nothing but our scripts can run. Used by `lantern serve` and by the cloud service.
+
+    `lanes` (a team workspace's per-layer permissions, see `scope.py`) limits the map to those layers: the report
+    is built from the scoped bundle, so a hidden layer never reaches the browser, and the files that describe the
+    whole app (the evidence report and the raw JSON) are refused."""
     from .evidence import badge_svg, render_html
     from .report import read_bundle, render
     f = out / name.replace("badge.svg", "readiness.json")
     if not f.exists():
         return 404, "<p>Not analyzed yet.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)}
+    if lanes is not None and name not in ("report.html", "badge.svg"):
+        return (403, "<p>This file covers every layer of the app, and you can see only some of them. "
+                "Ask the workspace owner if you need it.</p>", "text/html; charset=utf-8", {"Content-Security-Policy": _csp(None)})
     try:
         if name == "report.html":
             nonce = secrets.token_urlsafe(16)
-            return 200, render(read_bundle(f), live, nonce), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)}
+            data = read_bundle(f)
+            if lanes is not None:
+                from .scope import scope_bundle
+                data = scope_bundle(data, lanes)
+            return 200, render(data, live, nonce), "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)}
         if name == "evidence.html":
             ev = _load(f.with_suffix(".json"))
             nonce = secrets.token_urlsafe(16)   # the page's one script: Simple/Advanced, copy the verify command

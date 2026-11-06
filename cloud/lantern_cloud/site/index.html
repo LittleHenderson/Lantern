@@ -22,6 +22,11 @@
 .person{display:flex;align-items:center;gap:12px;padding:12px 16px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
 .person .av{width:30px;height:30px;border-radius:99px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent-ink);font:700 13px var(--font);text-transform:uppercase;flex:none}
 .person .nm{font:600 15px var(--font);color:var(--ink);overflow-wrap:anywhere}
+.layers{display:grid;gap:8px;margin-top:14px}
+.layer{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;border:1px solid var(--line);border-radius:12px;cursor:pointer}
+.layer input{margin-top:3px;width:18px;height:18px;accent-color:var(--accent);flex:none}
+.layer b{display:block;font:600 15px var(--font);color:var(--ink)}
+.layer span{font-size:13.5px;color:var(--muted)}
 .sheet .onb .picks{max-width:none}
 .privacy{max-width:720px;margin:12px auto 0;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .privacy .choice{margin:0;background:var(--surface);box-shadow:var(--shadow-1)}
@@ -658,7 +663,7 @@ function subBar(r, tabs) {
   const tab = t => `<button data-t="${t}" role="tab" aria-selected="${S.tab === t}" class="${S.tab === t ? 'on' : ''}">${W[t]}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${esc(nf)}</span>` : ''}</button>`;
   return `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="${r.mine === false ? 'Back to the team' : 'Back to my runs'}">${icon('back')}<span>${r.mine === false ? 'Team' : 'My runs'}</span></button>${sm ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(repoName(r.link))}</span>
     ${r.status === 'done' && s.grade ? `<span class="gchip ${tone(s.grade)}" title="Readiness ${esc(s.score)}/100">${esc(s.grade)}${sm ? '' : ' · ' + esc(s.score)}</span>` : ''}
-    ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].map(tab).join('')}</div>` : ''}
+    ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].filter(t => !(r.lanes && t === 'evidence')).map(tab).join('')}</div>` : ''}
     <span class="spacer"></span>${tabs && r.mine === false ? `<span class="tag" title="Checked by ${esc(r.by || 'a teammate')}">${esc(teamName(r.workspace) || 'Team')}</span>` : ''}${tabs && r.mine !== false ? `${explainBtn(r)}<button class="btn sm" id="share" aria-label="${r.shared ? 'Shared: manage the link' : 'Share this report'}">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button>` : ''}${tabs ? `<a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#" aria-label="Open the report in a new tab">${icon('open')}<span>Open in new tab</span></a>` : ''}${tabs && r.mine !== false ? `<button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}<span class="dock" data-dock="end"></span></div>`;
 }
 async function renderRun(el, id) {
@@ -849,7 +854,8 @@ const PAGE_CHIPS = {
 };
 // The report's own "Ask Lantern" button (same origin) opens the assistant with that page and its selection.
 window.askAbout = ctx => { ASK.page = ctx && typeof ctx === 'object' ? ctx : null; ASK.open = true; renderAsk(); };
-function askRun() { return S.view === 'run' && S.run && S.run.id === S.runId && S.run.status === 'done' ? S.run : null; }
+// A teammate's report that shows only some layers (r.lanes) has no Ask: the answers would read the whole app.
+function askRun() { return S.view === 'run' && S.run && S.run.id === S.runId && S.run.status === 'done' && !S.run.lanes ? S.run : null; }
 function renderAsk() {
   const el = document.getElementById('ask');
   if (!S.me) { el.innerHTML = ''; return; }
@@ -972,7 +978,7 @@ function teamPickWire(el, r, done) {
 function teamRunCard(r) {
   const run = ACTIVE.includes(r.status);
   return `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(repoName(r.link))}</div><div class="path">Checked by ${esc(r.mine ? 'you' : r.by)} · ${esc(ago(r.finished || r.created))}</div></div></div>
-    ${r.status === 'done' ? `<p class="sentence">${sentence(r.summary)}</p>` : run ? '<p class="sentence">Checking now.</p>' : note('err', esc(r.error || 'This check stopped before it finished.'))}
+    ${r.status === 'done' ? `<p class="sentence">${r.lanes ? `You can see its ${esc(layerWords(r.lanes))} ${r.lanes.length === 1 ? 'layer' : 'layers'}.` : sentence(r.summary)}</p>` : run ? '<p class="sentence">Checking now.</p>' : note('err', esc(r.error || 'This check stopped before it finished.'))}
     <div class="actions">${r.status === 'done' ? `<button class="btn primary" data-open="${esc(r.id)}" data-tab="findings">Open the report</button>` : ''}</div></article>`;
 }
 async function renderTeams(el) {
@@ -994,6 +1000,30 @@ async function renderTeams(el) {
     catch (e) { el.querySelector('#teammsg').innerHTML = note('err', esc(e.message)); }
   };
 }
+// Per-layer permissions (directive step 4): the owner chooses, per person, which layers of the app they can see in
+// this workspace's reports. The server builds their report without the rest (lantern/scope.py), so a hidden layer
+// never reaches their browser; calls into it show as sealed boxes. The choice sits behind one button per person.
+const LAYERS = [['browser', 'Browser', 'What runs in the visitor’s browser'], ['frontend', 'Frontend', 'The pages and screens'],
+  ['server', 'Server', 'The backend: the code that runs on your server'], ['data', 'Data', 'The database and stored data']];
+function layerWords(lanes) {
+  const w = LAYERS.filter(l => (lanes || []).includes(l[0])).map(l => l[1]);
+  return w.length <= 1 ? w.join('') : w.slice(0, -1).join(', ') + ' and ' + w[w.length - 1];
+}
+function layersSheet(w, p, done) {
+  const on = p.lanes || LAYERS.map(l => l[0]);
+  const el = sheet(`<div class="sh"><h2>What can ${esc(p.name)} see?</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>In ${esc(w.name)}’s reports. Where their part calls into a layer they can’t see, they see a sealed box and nothing inside it.</p>
+    <div class="layers">${LAYERS.map(([k, t, d]) => `<label class="layer"><input type="checkbox" value="${k}"${on.includes(k) ? ' checked' : ''}><span><b>${esc(t)}</b>${esc(d)}</span></label>`).join('')}</div>
+    ${why('<p class="small">Someone who can’t see every layer also doesn’t get the app’s overall score, its evidence report or Ask Lantern for these reports, because those describe the whole app.</p>', 'What else changes?')}
+    <div id="lmsg"></div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="savelayers">Save</button></div>`);
+  el.querySelector('#savelayers').onclick = async () => {
+    const lanes = [...el.querySelectorAll('.layer input:checked')].map(i => i.value);
+    if (!lanes.length) { el.querySelector('#lmsg').innerHTML = note('warn', 'Choose at least one layer, or take them out of the workspace.'); return; }
+    try { await api(`/v1/workspaces/${encodeURIComponent(w.id)}/people/${encodeURIComponent(p.id)}`, {method: 'PUT', body: {lanes: lanes.length === LAYERS.length ? null : lanes}}); closeSheet(); done(); }
+    catch (e) { el.querySelector('#lmsg').innerHTML = note('err', esc(e.message)); }
+  };
+}
 async function renderTeam(el, wid) {
   if (!S.me) return renderTeams(el);
   let w;
@@ -1006,11 +1036,11 @@ async function renderTeam(el, wid) {
     <div class="row" style="margin:0 0 22px;gap:8px;flex-wrap:wrap">${owner ? '<button class="btn primary" id="invite">Invite someone</button>' : ''}
       ${mine.length ? '<button class="btn" id="addrun">Add one of my reports</button>' : ''}<span class="spacer"></span>
       ${owner ? `<button class="btn quiet sm" id="rename">Rename</button><button class="btn quiet sm" id="closeteam">${icon('trash')}Close workspace</button>` : '<button class="btn quiet sm" id="leave">Leave</button>'}</div>
-    <div id="teammsg"></div>
+    <div id="teammsg">${w.lanes ? note('info', `In this workspace you can see the ${esc(layerWords(w.lanes))} ${w.lanes.length === 1 ? 'layer' : 'layers'} of other people’s reports. Your own reports always show everything.`) : ''}</div>
     <div class="apps-head"><h2>Reports</h2><span>${esc(w.runs.length)}</span></div>
     ${w.runs.length ? `<div class="apps">${w.runs.map(teamRunCard).join('')}</div>` : `<div class="empty"><b>No reports here yet</b>${mine.length ? 'Press Add one of my reports, or open a report and choose Share.' : 'Check an app first, then add its report here.'}</div>`}
     <div class="apps-head" style="margin-top:30px"><h2>People</h2></div>
-    <div class="people">${w.people.map(p => `<div class="person"><span class="av">${esc(String(p.name).slice(0, 1))}</span><span class="nm">${esc(p.name)}${p.you ? ' (you)' : ''}</span><span class="tag">${p.role === 'owner' ? 'Owner' : 'Member'}</span><span class="spacer"></span>${owner && !p.you ? `<button class="btn quiet sm" data-out="${esc(p.id)}" data-name="${esc(p.name)}">Take out</button>` : ''}</div>`).join('')}</div>
+    <div class="people">${w.people.map(p => `<div class="person"><span class="av">${esc(String(p.name).slice(0, 1))}</span><span class="nm">${esc(p.name)}${p.you ? ' (you)' : ''}</span><span class="tag">${p.role === 'owner' ? 'Owner' : 'Member'}</span><span class="spacer"></span>${owner && !p.you ? `<button class="btn quiet sm" data-layers="${esc(p.id)}" aria-label="What ${esc(p.name)} can see">${p.lanes ? esc(layerWords(p.lanes)) : 'Sees everything'}</button>` : !owner && p.you && p.lanes ? `<span class="muted small">Sees ${esc(layerWords(p.lanes))}</span>` : ''}${owner && !p.you ? `<button class="btn quiet sm" data-out="${esc(p.id)}" data-name="${esc(p.name)}">Take out</button>` : ''}</div>`).join('')}</div>
     ${owner && w.invites_open ? `<p class="muted small" style="margin-top:12px">${esc(w.invites_open)} invite link${w.invites_open === 1 ? '' : 's'} not used yet. <button class="linkbtn" id="cancelinv">Cancel ${w.invites_open === 1 ? 'it' : 'them'}</button></p>` : ''}</main>`;
   const msg = html => { el.querySelector('#teammsg').innerHTML = html; };
   addControls(el);
@@ -1023,6 +1053,7 @@ async function renderTeam(el, wid) {
   const me = w.people.find(p => p.you);
   if (q('#leave')) q('#leave').onclick = () => confirmSheet(`Leave ${w.name}?`, 'You won’t see its reports any more, and your reports in it go back to being yours alone. Nothing is deleted.', 'Leave', async () => {
     await api(`/v1/workspaces/${encodeURIComponent(w.id)}/people/${encodeURIComponent(me.id)}`, {method: 'DELETE'}); await loadTeams(); location.hash = '#/team'; });
+  el.querySelectorAll('[data-layers]').forEach(b => b.onclick = () => layersSheet(w, w.people.find(p => p.id === b.dataset.layers), () => renderTeam(el, wid)));
   el.querySelectorAll('[data-out]').forEach(b => b.onclick = () => confirmSheet(`Take ${b.dataset.name} out of ${w.name}?`, 'They won’t see its reports any more, and their reports in it go back to being theirs alone. Nothing is deleted.', 'Take out', async () => {
     await api(`/v1/workspaces/${encodeURIComponent(w.id)}/people/${encodeURIComponent(b.dataset.out)}`, {method: 'DELETE'}); renderTeam(el, wid); }));
 }

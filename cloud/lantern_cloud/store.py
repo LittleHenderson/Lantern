@@ -42,7 +42,9 @@ create table if not exists workspaces (
 create table if not exists members (
   workspace text not null, account text not null,
   role text not null,                -- owner | member
-  joined text not null, primary key (workspace, account));
+  joined text not null,
+  lanes text,                        -- null: every layer; else the layers this member may see (lantern.scope.code)
+  primary key (workspace, account));
 create index if not exists members_by_account on members (account);
 create table if not exists invites (
   hash text primary key,             -- sha256 of the link's secret; the secret itself is never stored
@@ -91,6 +93,8 @@ class Store:
                 self.db.execute(f"alter table runs add column {col} text")
         if "ai_consent" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
             self.db.execute("alter table users add column ai_consent text")
+        if "lanes" not in {r[1] for r in self.db.execute("pragma table_info(members)")}:
+            self.db.execute("alter table members add column lanes text")
         self.db.commit()
 
     def _all(self, sql: str, args=()) -> list:
@@ -318,10 +322,22 @@ class Store:
 
     def members(self, wid: str) -> list[dict]:
         """Who is in a workspace: account, label, role, when they joined. The caller decides what to show."""
-        rows = self._all("select m.account, coalesce(u.label, ''), m.role, m.joined from members m "
+        rows = self._all("select m.account, coalesce(u.label, ''), m.role, m.joined, m.lanes from members m "
                          "left join users u on u.account = m.account where m.workspace = ? "
                          "order by m.role = 'owner' desc, m.joined", (wid,))
-        return [dict(zip(("account", "label", "role", "joined"), r)) for r in rows]
+        return [dict(zip(("account", "label", "role", "joined", "lanes"), r)) for r in rows]
+
+    def member_lanes(self, wid: str, account: str) -> str | None:
+        """The layers this member may see in this workspace, as a `lantern.scope` code; None for every layer (and
+        for the owner, who always sees everything)."""
+        row = self._one("select lanes, role from members where workspace = ? and account = ?", (wid, account))
+        return row[0] if row and row[1] != "owner" else None
+
+    def set_member_lanes(self, wid: str, account: str, lanes: str | None) -> None:
+        with self.lock:
+            self.db.execute("update members set lanes = ? where workspace = ? and account = ? and role != 'owner'",
+                            (lanes, wid, account))
+            self.db.commit()
 
     def create_invite(self, wid: str, *, open_most: int) -> tuple[str, str]:
         """A one-time invite link's secret and when it expires. Only its hash is kept."""

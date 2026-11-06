@@ -5,6 +5,14 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Per-layer permissions in team workspaces: the owner chooses, per person, which layers of the app (Browser,
+  Frontend, Server, Data) they can see in the workspace's reports, from a "Sees everything" button on the Team
+  page. That person's report is built on the server without the other layers, so nothing about them reaches their
+  browser: where their part calls into a hidden layer the map shows one sealed box ("Something in the Server"),
+  and a line at the top says which layers they can see. The overall score, log, evidence report, raw files and Ask
+  Lantern describe the whole app, so they stay with people who see everything. The view link carries the layers
+  and can't be edited to open more. New `PUT /v1/workspaces/{id}/people/{person}` and `lantern/scope.py`
+  (directive: user first, step 4).
 - Team workspaces on Lantern Cloud: a few people who can open each other's reports. The owner names a workspace
   and invites people with one-time links (they work once, for 7 days; Lantern keeps only a hash and never asks for
   an email). A report joins only when its own owner puts it there (Share, then Your team, or Add one of my reports

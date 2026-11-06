@@ -187,3 +187,57 @@ def test_a_cookie_cannot_change_a_workspace_from_another_site(team):
     assert r.status_code == 403
     assert cloud.post(f"/v1/workspaces/{w['id']}/invites", headers={"x-lantern-site": "1"}).status_code == 201
     cloud.cookies.clear()
+
+
+def test_a_member_can_be_shown_only_some_layers(team):
+    """Per-layer permissions (directive step 4): the owner picks which layers a member sees. That member's report
+    is built without the rest, the link they get says which layers it opens (and can't be edited to open more),
+    and what describes the whole app (score, log, evidence, raw files, Ask Lantern) stays with full members."""
+    cloud, s, ana, ben, cat, rid, w = team
+    wid = w["id"]
+    for tok in (ben, cat):
+        cloud.post("/v1/invites/accept", json={"code": code_of(invite(cloud, ana, wid)["url"])}, headers=bearer(tok))
+    cloud.put(f"/v1/runs/{rid}/workspace", json={"workspace": wid}, headers=bearer(ana))
+    people = {p["name"]: p["id"] for p in cloud.get(f"/v1/workspaces/{wid}", headers=bearer(ana)).json()["people"]}
+    url = f"/v1/workspaces/{wid}/people/"
+    # only the owner chooses, never for the owner, and only real layers
+    assert cloud.put(url + people["cat"], json={"lanes": ["frontend"]}, headers=bearer(ben)).status_code == 403
+    assert cloud.put(url + people["ana"], json={"lanes": ["frontend"]}, headers=bearer(ana)).status_code == 409
+    for bad in ([], ["api"], "frontend", [3]):
+        assert cloud.put(url + people["ben"], json={"lanes": bad}, headers=bearer(ana)).status_code == 400
+    v = cloud.put(url + people["ben"], json={"lanes": ["frontend", "browser"]}, headers=bearer(ana))
+    assert v.status_code == 200
+    assert {p["name"]: p["lanes"] for p in v.json()["people"]} == {"ana": None, "ben": ["browser", "frontend"], "cat": None}
+    # ben: the run without the whole-app parts, and a workspace page that says what he sees
+    got = cloud.get(f"/v1/runs/{rid}", headers=bearer(ben)).json()
+    assert got["lanes"] == ["browser", "frontend"] and got["summary"] is None and got["log_tail"] == ""
+    tw = cloud.get(f"/v1/workspaces/{wid}", headers=bearer(ben)).json()
+    assert tw["lanes"] == ["browser", "frontend"] and tw["runs"][0]["summary"] is None
+    assert "event: log" not in cloud.get(f"/v1/runs/{rid}/stream", headers=bearer(ben)).text
+    # ana and cat still see everything
+    full = cloud.get(f"/v1/runs/{rid}", headers=bearer(cat)).json()
+    assert "lanes" not in full and full["summary"] and full["log_tail"]
+    assert "event: log" in cloud.get(f"/v1/runs/{rid}/stream", headers=bearer(cat)).text
+    # the report: ben's is built without the server's code; ana's has it
+    links = cloud.post(f"/v1/runs/{rid}/view", headers=bearer(ben)).json()
+    k = links["report"].split("?k=", 1)[1]
+    assert k.split(".")[1] == "bf"
+    page = cloud.get(links["report"].replace("http://testserver", ""))
+    assert page.status_code == 200 and "shop.app.backup" not in page.text and "shop/app.py" not in page.text
+    mine = cloud.post(f"/v1/runs/{rid}/view", headers=bearer(ana)).json()
+    assert "shop.app.backup" in cloud.get(mine["report"].replace("http://testserver", "")).text
+    assert cloud.get(links["evidence"].replace("http://testserver", "")).status_code == 403
+    # the link can't be edited to open more layers
+    exp, _, sig = k.split(".")
+    cloud.cookies.clear()          # ana's link above left her browser's cookie in this shared test client
+    for forged in (f"{exp}.{sig}", f"{exp}.bfsd.{sig}", f"{exp}.bfs.{sig}", f"{exp}.all.{sig}"):
+        assert cloud.get(f"/r/{rid}/report.html?k={forged}").status_code == 401
+    # Ask Lantern reads the whole app: refused for ben, with a sentence
+    cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(ben))
+    a = cloud.post("/v1/ask", json={"run": rid, "question": "What should I fix first?"}, headers=bearer(ben))
+    assert a.status_code == 403 and "layers" in a.text
+    # back to every layer
+    cloud.put(url + people["ben"], json={"lanes": None}, headers=bearer(ana))
+    assert cloud.get(f"/v1/runs/{rid}", headers=bearer(ben)).json()["summary"]
+    cloud.put(url + people["ben"], json={"lanes": list(("browser", "frontend", "server", "data"))}, headers=bearer(ana))
+    assert {p["name"]: p["lanes"] for p in cloud.get(f"/v1/workspaces/{wid}", headers=bearer(ana)).json()["people"]}["ben"] is None

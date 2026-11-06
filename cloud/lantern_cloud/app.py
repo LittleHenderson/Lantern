@@ -27,7 +27,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from lantern import learn
+from lantern import learn, scope
 
 from . import __version__
 from .identity import GatewayUnavailable, Identity
@@ -233,12 +233,22 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return r
 
     def readable_run(rid: str, who: dict) -> dict:
-        """The owner's run, or one in a workspace this person is in: they may read it, never change it."""
+        """The owner's run, or one in a workspace this person is in: they may read it, never change it. `lanes` on
+        the result is the scope code of the layers they may see ("all" for the run's owner and full members)."""
         r = store.run(rid) if isinstance(rid, str) and len(rid) <= 40 else None
-        if r and (hmac.compare_digest(r["account"], who["account"])
-                  or (r.get("workspace") and store.role(r["workspace"], who["account"]))):
-            return r
+        if r and hmac.compare_digest(r["account"], who["account"]):
+            return {**r, "lanes": "all"}
+        if r and r.get("workspace") and store.role(r["workspace"], who["account"]):
+            return {**r, "lanes": store.member_lanes(r["workspace"], who["account"]) or "all"}
         raise HTTPException(404, "No run with that id in your account.")
+
+    def seen(v: dict, lanes: str) -> dict:
+        """A run's view for someone who may see only some layers: the score and counts and the log describe the
+        whole app, so they are left out. The scoped report is the one place they read results."""
+        if lanes == "all":
+            return v
+        return {**v, "summary": None, "log_tail": "", "explain": {**v["explain"], "summary": None, "log": ""},
+                "lanes": list(scope.decode(lanes) or ())}
 
     @app.post("/v1/repos", status_code=202)
     async def start_run(payload: dict, request: Request):
@@ -321,7 +331,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     async def get_run(rid: str, request: Request):
         who = await signed_in(request)
         r = readable_run(rid, who)
-        v = run_view(r, worker.logs if worker else None)
+        v = seen(run_view(r, worker.logs if worker else None), r["lanes"])
         return {**v, "mine": r["account"] == who["account"]}
 
     @app.get("/v1/runs/{rid}/stream")
@@ -329,7 +339,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         """Server-sent events: `log` events (one line each), then one `end` event with the run, then the stream
         closes. A finished run sends its saved tail and `end` at once."""
         who = await signed_in(request)
-        readable_run(rid, who)
+        lanes = readable_run(rid, who)["lanes"]
+        quiet = lanes != "all"    # the log describes the whole app
 
         async def events():
             n = 0
@@ -340,12 +351,12 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 if r["status"] in FINISHED:
                     lines = (r.get("log_tail") or "").splitlines() if n == 0 else []
                     lines += worker.logs.since(rid, n)[0] if worker and n else []
-                    for ln in lines:
+                    for ln in [] if quiet else lines:
                         yield "event: log\ndata: " + json.dumps(ln) + "\n\n"
-                    yield "event: end\ndata: " + json.dumps(run_view(r)) + "\n\n"
+                    yield "event: end\ndata: " + json.dumps(seen(run_view(r), lanes)) + "\n\n"
                     return
                 lines, n = worker.logs.since(rid, n) if worker else ([], n)
-                for ln in lines:
+                for ln in [] if quiet else lines:
                     yield "event: log\ndata: " + json.dumps(ln) + "\n\n"
                 await asyncio.sleep(0.4)
         return StreamingResponse(events(), media_type="text/event-stream",
@@ -355,15 +366,25 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     vsecret = (s.view_secret or (hashlib.sha256(("view:" + s.admin_secret).encode()).hexdigest() if s.admin_secret
                                  else secrets.token_hex(32))).encode()
 
-    def view_key(rid: str, exp: int) -> str:
-        return f"{exp}.{hmac.new(vsecret, f'{rid}:{exp}'.encode(), hashlib.sha256).hexdigest()[:32]}"
+    def view_key(rid: str, exp: int, lanes: str = "all") -> str:
+        """`exp.sig` for the whole report; `exp.lanes.sig` for a member who may see only some layers, so the
+        link itself says which layers it opens and can't be edited to open more."""
+        if lanes == "all":
+            return f"{exp}.{hmac.new(vsecret, f'{rid}:{exp}'.encode(), hashlib.sha256).hexdigest()[:32]}"
+        return f"{exp}.{lanes}.{hmac.new(vsecret, f'{rid}:{exp}:{lanes}'.encode(), hashlib.sha256).hexdigest()[:32]}"
 
-    def key_ok(rid: str, k: str | None) -> bool:
+    def key_lanes(rid: str, k: str | None) -> str | None:
+        """The layers a view link opens ("all", or a scope code), or None when it is wrong or has expired."""
+        parts = (k or "").split(".")
         try:
-            exp = int((k or "").split(".", 1)[0])
+            exp, lanes = int(parts[0]), (parts[1] if len(parts) == 3 else "all")
+            if scope.code(scope.decode(lanes)) != lanes:    # one spelling per set of layers
+                return None
         except ValueError:
-            return False
-        return exp > time.time() and hmac.compare_digest(view_key(rid, exp), k or "")
+            return None
+        if len(parts) not in (2, 3) or exp <= time.time():
+            return None
+        return lanes if hmac.compare_digest(view_key(rid, exp, lanes), k or "") else None
 
     @app.post("/v1/runs/{rid}/view")
     async def view_link(rid: str, request: Request):
@@ -374,7 +395,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if r["status"] != "done":
             raise HTTPException(409, "This run has no report yet.")
         exp = int(time.time()) + s.view_minutes * 60
-        k = view_key(rid, exp)
+        k = view_key(rid, exp, r["lanes"])
         base = f"{s.public_url}/r/{rid}/"
         return {"expires_in": s.view_minutes * 60,
                 **{name.split(".")[0]: f"{base}{name}?k={k}" for name in VIEWABLE}}
@@ -384,16 +405,17 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if name not in VIEWABLE or len(rid) > 40:
             raise HTTPException(404, "Not found.")
         cookie = request.cookies.get("lv")
-        if not (key_ok(rid, k) or key_ok(rid, cookie)):
+        lanes = key_lanes(rid, k) or key_lanes(rid, cookie)
+        if lanes is None:
             return Response(EXPIRED_PAGE, 401,
                             media_type="text/html; charset=utf-8", headers=_page_headers(None))
         r = store.run(rid)
         if not r or r["status"] != "done":
             raise HTTPException(404, "No report here.")
         from lantern.server import result_page
-        code, body, ctype, headers = result_page(Path(s.results_dir) / rid, VIEWABLE[name], None)
+        code, body, ctype, headers = result_page(Path(s.results_dir) / rid, VIEWABLE[name], None, scope.decode(lanes))
         resp = Response(body, code, media_type=ctype, headers=_page_headers(headers))
-        if k and key_ok(rid, k):
+        if k and key_lanes(rid, k) is not None:
             # the report links to evidence.html and badge.svg by relative path; the cookie lets those open too
             resp.set_cookie("lv", k, max_age=max(1, int(k.split(".", 1)[0]) - int(time.time())), path=f"/r/{rid}/",
                             secure=s.public_url.startswith("https://"), httponly=True, samesite="lax")
@@ -522,6 +544,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         out, name = None, None
         if payload.get("run") is not None:
             r = readable_run(str(payload["run"]), who)
+            if r["lanes"] != "all":
+                raise HTTPException(403, "Ask Lantern reads the whole app, and you can see only some of its layers here. "
+                                         "Ask the workspace owner, or open the report.")
             if r["status"] != "done":
                 raise HTTPException(409, "This run has no report yet.")
             out, name = Path(s.results_dir) / r["id"], r["link"].rstrip("/").rsplit("/", 1)[-1][:80]
@@ -602,16 +627,20 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
     def team_view(w: dict, who: dict) -> dict:
         acc = who["account"]
+        mine = store.member_lanes(w["id"], acc) or "all"
         people = [{"id": member_id(w["id"], m["account"]), "name": m["label"].split(":", 1)[-1] or "Someone",
-                   "role": m["role"], "joined": m["joined"], "you": m["account"] == acc} for m in store.members(w["id"])]
+                   "role": m["role"], "joined": m["joined"], "you": m["account"] == acc,
+                   "lanes": list(scope.decode(m["lanes"]) or ()) if m["lanes"] and m["role"] != "owner" else None}
+                  for m in store.members(w["id"])]
         labels = {m["account"]: m["label"].split(":", 1)[-1] for m in store.members(w["id"])}
         runs = [r for r in store.runs(acc) if r.get("workspace") == w["id"]] + \
                [r for r in store.team_runs(acc) if r.get("workspace") == w["id"]]
         runs.sort(key=lambda r: r["created"], reverse=True)
         return {"id": w["id"], "name": w["name"], "role": w["role"], "people": people,
                 "invites_open": store.open_invites(w["id"]) if w["role"] == "owner" else None,
-                "runs": [{**run_view(r), "mine": r["account"] == acc, "by": labels.get(r["account"]) or "Someone"}
-                         for r in runs],
+                "runs": [{**seen(run_view(r), "all" if r["account"] == acc else mine), "mine": r["account"] == acc,
+                          "by": labels.get(r["account"]) or "Someone"} for r in runs],
+                "lanes": None if mine == "all" else list(scope.decode(mine) or ()),
                 "limits": {"people": s.workspace_people, "invite_days": 7}}
 
     @app.get("/v1/workspaces")
@@ -702,6 +731,25 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(403, "Only the workspace's owner can take someone out.")
         store.remove_member(w["id"], target["account"])
         return {"removed": mid, "left": target["account"] == who["account"]}
+
+    @app.put("/v1/workspaces/{wid}/people/{mid}")
+    async def set_layers(wid: str, mid: str, payload: dict, request: Request):
+        """The owner chooses which layers of the app a member can see in this workspace's runs:
+        {"lanes": ["frontend", "browser"]}, or {"lanes": null} for all of them. Hidden layers never reach that
+        member's browser: their report is built without them (`lantern.scope`)."""
+        who = await signed_in(request)
+        w = in_team(wid, who, owner=True)
+        target = next((m for m in store.members(w["id"]) if hmac.compare_digest(member_id(w["id"], m["account"]), mid)), None)
+        if not target:
+            raise HTTPException(404, "That person is not in this workspace.")
+        if target["role"] == "owner":
+            raise HTTPException(409, "The owner always sees every layer.")
+        try:
+            lanes = scope.parse(payload.get("lanes"))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        store.set_member_lanes(w["id"], target["account"], None if lanes is None else scope.code(lanes))
+        return team_view(in_team(wid, who), who)
 
     @app.put("/v1/runs/{rid}/workspace")
     async def put_in_workspace(rid: str, payload: dict, request: Request):
