@@ -179,25 +179,28 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 .strip .mini{display:none;align-items:center;gap:8px}
 @media (max-width:720px){.lanewalk{grid-template-columns:1fr 1fr}.strip:not(.legend2) .stop,.strip:not(.legend2) .ln2,.strip:not(.legend2) .yah{display:none}.strip:not(.legend2) .mini{display:inline-flex}.strip.legend2{gap:7px}.strip.legend2 .ln2{width:18px}.strip.legend2 .yah{display:none}}
 /* Graph view: the whole app in five columns, risk as heat */
-/* the graph takes every pixel of the panel under the toolbar: an endless canvas with a camera (wireGraph), no frame and no scrollbars */
+/* Graph and Flowchart take every pixel of the panel under the toolbar: an endless canvas with a camera (wireCanvas), no frame and no scrollbars */
 section.center.gfull{display:flex;flex-direction:column;overflow:hidden;padding-bottom:0;background-image:none}
 section.center.gfull>.toolbar{flex:none;margin-bottom:0;padding-bottom:12px;position:relative;z-index:1}
-#graph{position:relative;overflow:hidden;flex:1 1 auto;min-height:420px;margin:0 -24px}
-#graph .vp{position:absolute;inset:0;overflow:hidden;cursor:grab;touch-action:none;overscroll-behavior:contain;outline-offset:-2px;background-image:radial-gradient(color-mix(in srgb, var(--faint) 60%, transparent) 1.1px, transparent 1.4px)}
-#graph .vp.drag{cursor:grabbing}
-#graph svg{display:block;width:100%;height:100%;user-select:none;-webkit-user-select:none}
-#graph .zlevel{min-width:52px;align-self:center;text-align:center;font:500 11.5px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
-#graph .zoom button[data-z="max"]{display:grid;place-items:center}
+.canvas{position:relative;overflow:hidden;flex:1 1 auto;min-height:420px;margin:0 -24px}
+section.center.gfull>.note,section.center.gfull>.legend{flex:none} section.center.gfull>.note{padding:6px 0 10px}
+.canvas .vp{position:absolute;inset:0;overflow:hidden;cursor:grab;touch-action:none;overscroll-behavior:contain;outline-offset:-2px;background-image:radial-gradient(color-mix(in srgb, var(--faint) 60%, transparent) 1.1px, transparent 1.4px)}
+.canvas .vp.drag{cursor:grabbing}
+.canvas .vp>svg{display:block;width:100%;height:100%;user-select:none;-webkit-user-select:none}
+.canvas .zlevel{min-width:52px;align-self:center;text-align:center;font:500 11.5px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.canvas .zoom button[data-z="max"]{display:grid;place-items:center}
 /* full screen: only the map and its toolbar, whether or not the browser allowed real full screen */
 body.gmax header,body.gmax aside.left,body.gmax aside.right{display:none!important}
 body.gmax main{display:grid;grid-template-columns:minmax(0,1fr)!important}
+/* the zoom buttons stay clear of the Ask Lantern button when the map reaches the window's right edge */
+body.gmax:not(.embed) .canvas .zoom,body:not(.embed) main.rrail .canvas .zoom{bottom:80px}
 #graph svg text{font-family:var(--mono);font-size:11.5px;fill:var(--ink)} #graph svg text.col{font-family:var(--font);font-size:11px;font-weight:600;letter-spacing:.06em;fill:var(--muted)}
 #graph svg text.sub{font-family:var(--font);font-size:10.5px;fill:var(--muted)} #graph svg text.lb{font-size:9px;fill:var(--muted)}
 #graph g[data-id]{cursor:pointer} #graph g[data-id]:hover rect.box{stroke:var(--accent-line)}
 #graph .glegend{position:absolute;left:12px;bottom:12px;display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);background:color-mix(in srgb, var(--surface) 88%, transparent);padding:6px 10px;border-radius:9px;border:1px solid var(--line)}
 #graph .glegend span{display:inline-flex;align-items:center;gap:6px} #graph .glegend i{width:10px;height:10px;border-radius:3px;display:inline-block}
-#graph .zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:4px;padding:3px;border-radius:9px;background:var(--surface);border:1px solid var(--line)}
-#graph .zoom button{width:28px;height:26px;border-radius:6px;border:0;background:none;color:var(--ink-2);font:600 13px var(--font)} #graph .zoom button:hover{background:var(--hover);color:var(--ink)}
+.canvas .zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:4px;padding:3px;border-radius:9px;background:var(--surface);border:1px solid var(--line)}
+.canvas .zoom button{width:28px;height:26px;border-radius:6px;border:0;background:none;color:var(--ink-2);font:600 13px var(--font)} .canvas .zoom button:hover{background:var(--hover);color:var(--ink)}
 .toolbar .seg.mode button{font-size:12px}
 .statusrow{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
 .statusrow .badge{padding:3px 8px} .statusrow .badge.neutral{background:var(--hover);color:var(--ink-2)} .statusrow .badge.good{background:var(--good-soft);color:var(--good-ink)}
@@ -441,7 +444,7 @@ input.search::placeholder{color:var(--faint)}
 .empty{color:var(--muted);padding:48px 16px;text-align:center;line-height:1.6}
 .empty b{display:block;color:var(--ink);font:600 16px var(--display);margin-bottom:4px}
 .empty .art{width:52px;height:52px;display:block;margin:0 auto 12px}
-#chart{width:100%;overflow:auto} #chart:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+#chart{width:100%;overflow:auto} #chart.canvas{width:auto;overflow:hidden} #chart:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 #tabs button[hidden]{display:none}   /* design: no box; the flowchart sits on the dotted page like the graph */
 #chart svg text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
 #chart g[data-id]:hover rect.box{stroke:var(--accent-line)}
@@ -596,10 +599,12 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
   aside.left .groups{max-height:220px;overflow:auto}
   section.center{padding:16px}
   section.center.gfull{display:block;overflow:visible;padding-bottom:16px}
-  #graph{height:75vh;height:75dvh;margin:0 -16px}
+  .canvas{height:75vh;height:75dvh;margin:0 -16px}
   body.gmax{height:100vh;height:100dvh;display:flex}
   body.gmax section.center.gfull{display:flex;overflow:hidden;padding-bottom:0}
-  body.gmax #graph{height:auto}
+  body.gmax .canvas{height:auto}
+  .canvas .zoom,body.gmax:not(.embed) .canvas .zoom,body:not(.embed) main.rrail .canvas .zoom{top:10px;bottom:auto;right:10px}   /* on a phone the buttons sit at the top, clear of the legend and the Ask button */
+  body:not(.embed) #graph .glegend{right:84px}
   aside.right{width:100vw;top:auto;height:86vh;transform:translateY(105%);border-radius:20px 20px 0 0}
   aside.right.open{transform:none}
   .cat summary{grid-template-columns:16px 1fr 70px 52px}
@@ -667,7 +672,7 @@ const short = q => {
 const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv|kt|sw|dt|cs|php|rb|cc):/.test(id || '') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
-const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', gcam: null, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
+const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', cams: {}, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
 try { S.simple = localStorage.getItem('lantern.simple') !== '0'; } catch (e) {}
 // Opened from `lantern serve`: the saved setting (Settings → view_mode) wins over this browser's memory.
 try { const lv = window.LANTERN_LIVE; if (lv && (lv.view_mode === 'simple' || lv.view_mode === 'advanced')) S.simple = lv.view_mode === 'simple'; } catch (e) {}
@@ -885,7 +890,7 @@ function renderChart() {
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use the tree view to go deeper.</div>` : '';
-  return `<div id="chart" role="group" tabindex="0" aria-label="Flowchart; scroll with the arrow keys">${svg}</div>${more}`;
+  return `<div id="chart" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Flowchart. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows all of it, F goes full screen.">${svg}</div>${zoomBar()}</div>${more}`;
 }
 
 
@@ -1058,28 +1063,32 @@ function renderGraph() {
     ? `<span><i style="background:var(--critical)"></i>critical</span><span><i style="background:var(--serious)"></i>high</span><span><i style="background:var(--warning)"></i>medium</span><span><i style="background:var(--accent)"></i>seen running</span><span>· ${hidden} hidden</span>`
     : S.mode === 'confidence' ? `<span><i style="background:var(--accent)"></i>seen running</span><span><i style="background:var(--ink)"></i>confirmed</span><span><i style="background:var(--muted)"></i>likely</span><span><i style="background:var(--faint)"></i>possible</span><span>· ${hidden} hidden</span>`
     : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`;
-  return `<div id="graph"><div class="vp" tabindex="0" role="group" aria-label="Call graph. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows the whole app.">${svg}</div><div class="glegend">${legend}</div><div class="zoom"><span class="zlevel" aria-live="off"></span><button data-z="in" title="Zoom in" aria-label="Zoom in">+</button><button data-z="out" title="Zoom out" aria-label="Zoom out">−</button><button data-z="fit" title="Show the whole app" aria-label="Show the whole app">fit</button><button data-z="max" title="Full screen" aria-label="Full screen" aria-pressed="false"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button></div></div>`;
+  return `<div id="graph" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Call graph. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows the whole app, F goes full screen.">${svg}</div><div class="glegend">${legend}</div>${zoomBar()}</div>`;
 }
 /* The graph is a camera over an endless canvas: the svg always fills the frame and its viewBox is what moves, so the
    drawing stays sharp at any zoom. GRAPH_ZOOM is a guard for the numbers (past it, 32-bit drawing coordinates shake),
    not a limit anyone reaches on purpose: at the far end one box is wider than a building, or the whole app is a dot. */
 const GRAPH_ZOOM = [1e-4, 1e4];
+const zoomBar = () => `<div class="zoom"><span class="zlevel" aria-live="off"></span><button data-z="in" title="Zoom in" aria-label="Zoom in">+</button><button data-z="out" title="Zoom out" aria-label="Zoom out">−</button><button data-z="fit" title="Show all of it (0)" aria-label="Show all of it">fit</button><button data-z="max" title="Full screen (F)" aria-label="Full screen" aria-pressed="false"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button></div>`;
 function setGraphMax(on) {
   document.body.classList.toggle('gmax', on);
   const root = document.documentElement;
   if (on) { if (root.requestFullscreen && !document.fullscreenElement) root.requestFullscreen().catch(() => {}); }   // refused in a frame that does not allow it: the graph still fills the frame
   else if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
-  const b = document.querySelector('#graph [data-z="max"]');
-  if (b) { const t = on ? 'Leave full screen' : 'Full screen'; b.title = t; b.setAttribute('aria-label', t); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+  for (const b of document.querySelectorAll('.canvas [data-z="max"]')) { const t = on ? 'Leave full screen' : 'Full screen'; b.title = t; b.setAttribute('aria-label', t); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
 }
 document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('gmax')) setGraphMax(false); });
-function wireGraph(el) {
-  const g = el.querySelector('#graph'), vp = g && g.querySelector('.vp'), svg = g && g.querySelector('svg');
+/* Esc leaves full screen from anywhere (the browser's own full screen also leaves on Esc by itself) */
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('gmax')) setGraphMax(false); });
+/* one camera per view, kept across re-renders (selecting a function redraws the map); the Flowchart's is per starting point */
+function wireCanvas(g, key) {
+  const vp = g && g.querySelector('.vp'), svg = vp && vp.querySelector('svg');
   if (!svg) return;
-  const box = svg.viewBox.baseVal, w0 = box.width, h0 = box.height, size = w0 + 'x' + h0;
+  const box = svg.viewBox.baseVal, w0 = box.width, h0 = box.height, size = key + ':' + w0 + 'x' + h0;
+  S.cams = S.cams || {};
   svg.removeAttribute('width'); svg.removeAttribute('height');
   const label = g.querySelector('.zlevel');
-  let cam = S.gcam && S.gcam.size === size ? S.gcam : null, queued = false;
+  let cam = S.cams[key] && S.cams[key].size === size ? S.cams[key] : null, queued = false;
   const draw = () => {
     queued = false;
     const cw = vp.clientWidth, ch = vp.clientHeight;
@@ -1102,7 +1111,7 @@ function wireGraph(el) {
   if (!cam) {
     /* the first view fills the canvas (the map's shorter side reaches the edges) at a size the names can be read,
        on the selected function; "fit" shows the whole app at once */
-    cam = S.gcam = {size, x: 0, y: 0, z: 1};
+    cam = S.cams[key] = {size, x: 0, y: 0, z: 1};
     const z = Math.min(1.4, Math.max(vp.clientWidth / w0, vp.clientHeight / h0));
     const on = S.sel && [...g.querySelectorAll('g[data-id]')].find(x => x.dataset.id === S.sel);
     let wx = w0 / 2, wy = Math.min(h0 / 2, vp.clientHeight / 2 / z);
@@ -1122,7 +1131,10 @@ function wireGraph(el) {
   vp.addEventListener('wheel', e => {
     e.preventDefault();
     const r = vp.getBoundingClientRect(), unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? vp.clientHeight : 1;
-    zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * unit * (e.ctrlKey ? .01 : .0015)));   // ctrlKey is how a trackpad pinch arrives
+    const dx = e.deltaX * unit, dy = e.deltaY * unit;
+    /* a trackpad's sideways swipe, or shift with the wheel, moves the map; everything else zooms toward the pointer */
+    if (!e.ctrlKey && (e.shiftKey || Math.abs(dx) > Math.abs(dy))) { cam.x += (dx || dy) / cam.z; if (!e.shiftKey) cam.y += dy / cam.z; return paint(); }
+    zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-dy * (e.ctrlKey ? .01 : .0015)));   // ctrlKey is how a trackpad pinch arrives
   }, {passive: false});
   /* one finger or the mouse drags from anywhere, boxes included (a press that does not move is still a click); two fingers pinch */
   const held = new Map();
@@ -1156,10 +1168,15 @@ function wireGraph(el) {
     else if (e.key === '+' || e.key === '=') zoomAt(...centre(), 1.25);
     else if (e.key === '-' || e.key === '_') zoomAt(...centre(), 1 / 1.25);
     else if (e.key === '0') fit();
-    else if (e.key === 'Escape' && document.body.classList.contains('gmax')) setGraphMax(false);
+    else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) setGraphMax(!document.body.classList.contains('gmax'));
     else return;
     e.preventDefault();
   });
+}
+function wireGraph(el) {
+  const g = el.querySelector('#graph');
+  if (!g) return;
+  wireCanvas(g, 'graph');
   g.querySelectorAll('g[data-id]').forEach(b => b.onclick = () => { if (b.dataset.http === '1') return; const id = b.dataset.id; if (N[id] && N[id].entry) { S.entry = id; S.open = new Set([id]); } select(id); renderMap(); });
 }
 
@@ -1422,8 +1439,8 @@ const ART = '<svg class="art" viewBox="0 0 64 64" aria-hidden="true"><circle cx=
 function renderMap() {
   const el = document.getElementById('center');
   el.classList.toggle('dotted', S.view === 'graph' || S.view === 'chart');
-  el.classList.toggle('gfull', S.view === 'graph' && !!S.entry);
-  if (S.view !== 'graph' && document.body.classList.contains('gmax')) setGraphMax(false);
+  el.classList.toggle('gfull', (S.view === 'graph' || S.view === 'chart') && !!S.entry);
+  if (S.view !== 'graph' && S.view !== 'chart' && document.body.classList.contains('gmax')) setGraphMax(false);
   if (!S.entry) {
     const eps = G.nodes.filter(n => n.entry && n.entry.kind !== 'test');
     el.innerHTML = `<div class="toolbar" style="justify-content:flex-end">${helpBtns()}</div><div class="empty">${ART}<b>Pick a starting point</b>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
@@ -1442,6 +1459,7 @@ function renderMap() {
   el.querySelectorAll('.seg [data-v]').forEach(b => b.onclick = () => { S.view = b.dataset.v; try { localStorage.setItem('lantern.view', S.view); } catch (e) {} renderMap(); });
   el.querySelectorAll('.seg [data-m]').forEach(b => b.onclick = () => { S.mode = b.dataset.m; renderMap(); });
   if (S.view === 'graph') wireGraph(el);
+  if (S.view === 'chart') wireCanvas(el.querySelector('#chart.canvas'), 'chart:' + S.entry);
   wireHelp(el);
   const ex = document.getElementById('expand'); if (ex) ex.onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
   el.querySelectorAll('[data-tog]').forEach(b => b.onclick = ev => { ev.stopPropagation(); const id = b.dataset.tog; S.open.has(id) ? S.open.delete(id) : S.open.add(id); renderMap(); });
