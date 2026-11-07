@@ -341,7 +341,10 @@ A **run** = `{id, link, host, privacy, status, stage, error, created, started, f
 log_tail, step, explain, workspace}`. `workspace` is null, or the id of the team workspace its owner put it in. `status`: `queued` → `running` → `done` | `error` | `blocked` (the sandbox stopped the analysis from
 reaching the network or writing outside its folder). `stage` is a plain sentence for the current step. `error` is a
 plain sentence (never a traceback or a server path). `summary` (when done) = `{score, grade, shape, counts:
-{critical, high, medium, low}, files}`, read from the result files. `shared` is false until the person clicks Share
+{critical, high, medium, low}, files, lanes: {browser|frontend|server|data: {critical, high, medium, low}}, phone}`, read from the
+result files (`lanes`: open findings outside tests by `hot_lane`; a finding with no lane is left out; `phone`: the
+platform is a phone app, so the website says Screen and App; a run saved before `lanes` existed gets them on the next
+`GET /v1/runs`). `shared` is false until the person clicks Share
 (`POST /v1/runs/{id}/share`). `log_tail`: the last 40 log lines, server paths removed. `explain`: `{status: null|queued|running|done|error, error, summary: {functions, validated, failed, stopped}, log}` (`log`: the explain job's last lines while it runs). `step`: `clone` | `audit` | `analyze` |
 `save` while running (the key of `stage`), else null. `hint`: `"upload"` when the repository could not be opened (private, or no such repository; git asked for a password, or Connect GitHub refused: the person cannot read it, or signed in with Google), so the website offers "Upload your code instead"; `"connect"` when Connect GitHub is on and the app is not installed on that repository, so it offers "Connect GitHub" (`/v1/me` `connect_url`) and Upload; else null. `summary` values are checked when read (score and files whole
 numbers or null, grade A–F or null, counts whole numbers), since a stranger's repository wrote the files.

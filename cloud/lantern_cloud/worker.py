@@ -534,4 +534,37 @@ def _summary(out: Path) -> dict:
     return {"score": num(rd.get("score")), "grade": rd.get("grade") if rd.get("grade") in ("A", "B", "C", "D", "F") else None,
             "shape": shape[:80] if isinstance(shape, str) else None,
             "counts": {k: count(counts.get(k)) for k in ("critical", "high", "medium", "low")},
-            "files": num(meta.get("files"))}
+            "files": num(meta.get("files")), **lane_summary(sec, meta)}
+
+
+LANE_KEYS = ("browser", "frontend", "server", "data")
+PHONE_PLATFORMS = ("android", "ios", "flutter", "react-native", "maui")
+
+
+def lane_summary(sec: dict, meta: dict) -> dict:
+    """Which part of the stack the open findings sit in (security.scan's `hot_lane`), for the run list:
+    {"lanes": {lane: {"critical": n, ...}}, "phone": bool}. A finding with no lane is left out, never guessed."""
+    lanes = {k: {r: 0 for r in ("critical", "high", "medium", "low")} for k in LANE_KEYS}
+    for f in sec.get("findings") if isinstance(sec.get("findings"), list) else []:
+        if not isinstance(f, dict) or f.get("in_tests") or f.get("status") != "open":
+            continue
+        lane, rank = f.get("hot_lane"), f.get("rank")
+        if lane in lanes and rank in lanes[lane]:
+            lanes[lane][rank] += 1
+    return {"lanes": lanes, "phone": meta.get("platform") in PHONE_PLATFORMS}
+
+
+def backfill_lanes(results: Path, rid: str, summary: dict | None) -> dict | None:
+    """A run finished before the run list showed stack parts: read them from its stored results once."""
+    if not isinstance(summary, dict) or "lanes" in summary:
+        return None
+    def load(name):
+        try:
+            return json.loads((results / rid / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+    sec, g = load("security.json"), load("graph.json")
+    if not isinstance(sec, dict):
+        return None
+    meta = g.get("meta") if isinstance(g, dict) and isinstance(g.get("meta"), dict) else {}
+    return {**summary, **lane_summary(sec, meta)}

@@ -204,6 +204,41 @@ async function appSmoke(url, out, image, expectText) {
       await pwned('maplens');
       if (name === 'phone' && await p.$('#close')) { await p.click('#close'); await p.waitForTimeout(250); }
     }
+    // the Graph view is a camera on an endless canvas: it fills the panel, zooms far past the old 35%-250%, drags, and goes full screen
+    if (await p.$('.seg button[data-v="graph"]')) {
+      await p.click('.seg button[data-v="graph"]'); await p.waitForTimeout(200);
+      if (await p.$('#graph .vp')) {
+        const zoom = () => p.evaluate(() => +document.querySelector('#graph .vp').dataset.zoom);
+        const view = () => p.evaluate(() => document.querySelector('#graph svg').getAttribute('viewBox'));
+        const filled = await p.evaluate(() => { const v = document.querySelector('#graph .vp').getBoundingClientRect(), s = document.querySelector('#graph svg').getBoundingClientRect(), c = document.querySelector('#center').getBoundingClientRect(); return Math.abs(v.width - s.width) < 2 && Math.abs(v.height - s.height) < 2 && v.width >= c.width - 2 && (innerWidth < 720 || v.bottom >= c.bottom - 2); });
+        if (!filled) errs.push(`${name}: the graph does not fill its panel`);
+        await p.screenshot({ path: `${out}-${name}-graph.png` });
+        if (name === 'desk') {
+          const r = await (await p.$('#graph .vp')).boundingBox(), cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+          await p.click('#graph [data-z="fit"]'); await p.waitForTimeout(80);
+          await p.screenshot({ path: `${out}-${name}-graph-fit.png` });
+          await p.mouse.move(cx, cy);
+          for (let i = 0; i < 12; i++) await p.mouse.wheel(0, 900);
+          await p.waitForTimeout(300);
+          if (await zoom() >= .05) errs.push(`${name}: the graph stops zooming out at ${await zoom()}`);
+          for (let i = 0; i < 28; i++) await p.mouse.wheel(0, -900);
+          await p.waitForTimeout(300);
+          if (await zoom() <= 25) errs.push(`${name}: the graph stops zooming in at ${await zoom()}`);
+          await p.click('#graph [data-z="fit"]'); await p.waitForTimeout(80);
+          const before = await view();
+          await p.mouse.move(r.x + 12, r.y + 12); await p.mouse.down(); await p.mouse.move(r.x + 212, r.y + 112, { steps: 4 }); await p.mouse.up(); await p.waitForTimeout(80);
+          if (await view() === before) errs.push(`${name}: dragging the graph did not move it`);
+          const width = async () => p.evaluate(() => document.querySelector('#graph .vp').getBoundingClientRect().width);
+          const small = await width();
+          await p.click('#graph [data-z="max"]'); await p.waitForTimeout(250);
+          if (await width() <= small) errs.push(`${name}: full screen did not make the graph bigger`);
+          await p.screenshot({ path: `${out}-${name}-graph-full.png` });
+          await p.click('#graph [data-z="max"]'); await p.waitForTimeout(250);
+          if (await p.evaluate(() => document.body.classList.contains('gmax'))) errs.push(`${name}: could not leave full screen`);
+        }
+        await pwned('graph');
+      }
+    }
     if (name === 'desk' && await p.$('.seg button[data-v="chart"]')) {
       await p.click('.seg button[data-v="chart"]'); await p.waitForTimeout(150);
       await p.screenshot({ path: `${out}-${name}-chart.png` });

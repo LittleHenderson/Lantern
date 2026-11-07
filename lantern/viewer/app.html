@@ -1151,7 +1151,7 @@ function drawProject(el) {
       // Same project: keep the loaded report and switch its tab, so the Atlas state (selection, zoom) survives.
       body.innerHTML = bar; body.appendChild(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
     } else {
-      body.innerHTML = `${bar}<iframe src="/p/${p.id}/report.html" title="${esc(W[S.tab])}"></iframe>`;
+      body.innerHTML = `${bar}<iframe src="/p/${p.id}/report.html" title="${esc(W[S.tab])}" allow="fullscreen"></iframe>`;
       const fr = body.querySelector('iframe'); S.frame = {pid: p.id, el: fr};
       // The report is served from this app's origin, so the app can open it on a tab and keep the theme in step.
       fr.onload = e => { try { themeOn(e.target.contentDocument); e.target.contentDocument.body.classList.add('embed'); e.target.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {} };

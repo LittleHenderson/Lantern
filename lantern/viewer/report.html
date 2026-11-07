@@ -98,6 +98,8 @@ code{font:12px var(--mono);background:var(--sunken);color:var(--ink);padding:1px
 header{flex:none;background:var(--surface);border-bottom:1px solid var(--line);z-index:5}
 .brand{display:flex;align-items:center;gap:10px;height:52px;padding:0 16px;border-bottom:1px solid var(--line)}
 .brand .mark{width:26px;height:26px;flex:none}
+.brand .home{display:flex;align-items:center;gap:10px;flex:none;margin-left:-6px;padding:5px 6px;border-radius:10px;cursor:pointer}
+.brand .home:hover{background:var(--hover)}
 .brand b{font:650 15px/1 var(--display);letter-spacing:-.02em;color:var(--ink)}
 .brand .repo{font:12px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 .iconbtn{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;color:var(--muted)}
@@ -179,16 +181,29 @@ aside.rail .edge .ic{transform:rotate(180deg)}
 .strip .mini{display:none;align-items:center;gap:8px}
 @media (max-width:720px){.lanewalk{grid-template-columns:1fr 1fr}.strip:not(.legend2) .stop,.strip:not(.legend2) .ln2,.strip:not(.legend2) .yah{display:none}.strip:not(.legend2) .mini{display:inline-flex}.strip.legend2{gap:7px}.strip.legend2 .ln2{width:18px}.strip.legend2 .yah{display:none}}
 /* Graph view: the whole app in five columns, risk as heat */
-#graph{position:relative;overflow:hidden;min-height:420px}   /* design 6b: no box; the map sits on the dotted page (section.center.dotted) */
-#graph .vp{overflow:auto;height:calc(100vh - 260px);min-height:400px;cursor:grab} #graph .vp.drag{cursor:grabbing}
-#graph svg{display:block;transform-origin:0 0}
+/* Graph and Flowchart take every pixel of the panel under the toolbar: an endless canvas with a camera (wireCanvas), no frame and no scrollbars */
+section.center.gfull{display:flex;flex-direction:column;overflow:hidden;padding-bottom:0;background-image:none}
+section.center.gfull>.toolbar{flex:none;margin-bottom:0;padding-bottom:12px;position:relative;z-index:1}
+.canvas{position:relative;overflow:hidden;flex:1 1 auto;min-height:420px;margin:0 -24px}
+section.center.gfull>.note,section.center.gfull>.legend{flex:none} section.center.gfull>.note{padding:6px 0 10px}
+.canvas .vp{position:absolute;inset:0;overflow:hidden;cursor:grab;touch-action:none;overscroll-behavior:contain;outline-offset:-2px;background-image:radial-gradient(color-mix(in srgb, var(--faint) 60%, transparent) 1.1px, transparent 1.4px)}
+.canvas .vp.drag{cursor:grabbing}
+.canvas .vp>svg{display:block;width:100%;height:100%;user-select:none;-webkit-user-select:none}
+.canvas .zlevel{min-width:52px;align-self:center;text-align:center;font:500 11.5px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.canvas .zoom button[data-z="max"]{display:grid;place-items:center}
+/* full screen: only the map and its toolbar, whether or not the browser allowed real full screen */
+body.gmax header,body.gmax aside.left,body.gmax aside.right{display:none!important}
+body.gmax main{display:grid;grid-template-columns:minmax(0,1fr)!important}
+/* the zoom buttons stay clear of the Ask Lantern button when the map reaches the window's right edge */
+/* also inside the website's frame, whose own Ask Lantern button sits over the frame's bottom-right corner */
+body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{bottom:80px}
 #graph svg text{font-family:var(--mono);font-size:11.5px;fill:var(--ink)} #graph svg text.col{font-family:var(--font);font-size:11px;font-weight:600;letter-spacing:.06em;fill:var(--muted)}
 #graph svg text.sub{font-family:var(--font);font-size:10.5px;fill:var(--muted)} #graph svg text.lb{font-size:9px;fill:var(--muted)}
 #graph g[data-id]{cursor:pointer} #graph g[data-id]:hover rect.box{stroke:var(--accent-line)}
 #graph .glegend{position:absolute;left:12px;bottom:12px;display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);background:color-mix(in srgb, var(--surface) 88%, transparent);padding:6px 10px;border-radius:9px;border:1px solid var(--line)}
 #graph .glegend span{display:inline-flex;align-items:center;gap:6px} #graph .glegend i{width:10px;height:10px;border-radius:3px;display:inline-block}
-#graph .zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:4px;padding:3px;border-radius:9px;background:var(--surface);border:1px solid var(--line)}
-#graph .zoom button{width:28px;height:26px;border-radius:6px;border:0;background:none;color:var(--ink-2);font:600 13px var(--font)} #graph .zoom button:hover{background:var(--hover);color:var(--ink)}
+.canvas .zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:4px;padding:3px;border-radius:9px;background:var(--surface);border:1px solid var(--line)}
+.canvas .zoom button{width:28px;height:26px;border-radius:6px;border:0;background:none;color:var(--ink-2);font:600 13px var(--font)} .canvas .zoom button:hover{background:var(--hover);color:var(--ink)}
 .toolbar .seg.mode button{font-size:12px}
 .statusrow{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
 .statusrow .badge{padding:3px 8px} .statusrow .badge.neutral{background:var(--hover);color:var(--ink-2)} .statusrow .badge.good{background:var(--good-soft);color:var(--good-ink)}
@@ -434,7 +449,7 @@ input.search::placeholder{color:var(--faint)}
 .empty{color:var(--muted);padding:48px 16px;text-align:center;line-height:1.6}
 .empty b{display:block;color:var(--ink);font:600 16px var(--display);margin-bottom:4px}
 .empty .art{width:52px;height:52px;display:block;margin:0 auto 12px}
-#chart{width:100%;overflow:auto} #chart:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+#chart{width:100%;overflow:auto} #chart.canvas{width:auto;overflow:hidden} #chart:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 #tabs button[hidden]{display:none}   /* design: no box; the flowchart sits on the dotted page like the graph */
 #chart svg text{font-family:var(--mono);font-size:11px;fill:var(--ink)}
 #chart g[data-id]:hover rect.box{stroke:var(--accent-line)}
@@ -598,6 +613,13 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
   aside.left{border-right:0;border-bottom:1px solid var(--line);overflow:visible}
   aside.left .groups{max-height:220px;overflow:auto}
   section.center{padding:16px}
+  section.center.gfull{display:block;overflow:visible;padding-bottom:16px}
+  .canvas{height:75vh;height:75dvh;margin:0 -16px}
+  body.gmax{height:100vh;height:100dvh;display:flex}
+  body.gmax section.center.gfull{display:flex;overflow:hidden;padding-bottom:0}
+  body.gmax .canvas{height:auto}
+  .canvas .zoom,body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{top:10px;bottom:auto;right:10px}   /* on a phone the buttons sit at the top, clear of the legend and the Ask button */
+  body:not(.embed) #graph .glegend{right:84px}
   aside.right{width:100vw;top:auto;height:86vh;transform:translateY(105%);border-radius:20px 20px 0 0}
   aside.right.open{transform:none}
   .cat summary{grid-template-columns:16px 1fr 70px 52px}
@@ -607,7 +629,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
 </head>
 <body>
 <header>
-  <div class="brand"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
+  <div class="brand"><button class="home" id="brandhome" title="Back to the start of this report" aria-label="Lantern: back to the start of this report"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b></button><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
   <div class="bar2">
     <nav class="tabs" id="tabs">
       <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="xp">Explanations</button><button data-t="about">About</button><button data-t="fix" hidden aria-label="Fix">Fix</button>
@@ -666,7 +688,7 @@ const short = q => {
 const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv|kt|sw|dt|cs|php|rb|cc):/.test(id || '') ? 'backend' : 'external';
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
-const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', zoom: 1, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
+const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', cams: {}, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
 try { S.simple = localStorage.getItem('lantern.simple') !== '0'; } catch (e) {}
 // Opened from `lantern serve`: the saved setting (Settings → view_mode) wins over this browser's memory.
 try { const lv = window.LANTERN_LIVE; if (lv && (lv.view_mode === 'simple' || lv.view_mode === 'advanced')) S.simple = lv.view_mode === 'simple'; } catch (e) {}
@@ -742,6 +764,8 @@ if (DATA.readiness) chipHtml += `<span class="sev ${toneOf(DATA.readiness.score)
 document.getElementById('chips').innerHTML = chipHtml;
 const openCount = SEC.findings.filter(f => f.status !== 'accepted' && !f.in_tests).length;   // the app's own, as every other count
 if (openCount) document.querySelector('#tabs [data-t="findings"]').insertAdjacentHTML('beforeend', `<span class="n ${SEC.counts.critical ? 'crit' : ''}">${esc(openCount)}</span>`);
+// The mark and the word "Lantern": back to the report's first tab, at the top, like a home button.
+document.getElementById('brandhome').onclick = () => { const first = document.querySelector('#tabs button:not([hidden])'); if (first) first.click(); scrollTo(0, 0); };
 document.getElementById('tabs').onclick = ev => {
   const t = ev.target.closest('button'); if (!t) return;
   S.tab = t.dataset.t;
@@ -884,7 +908,7 @@ function renderChart() {
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use the tree view to go deeper.</div>` : '';
-  return `<div id="chart" role="group" tabindex="0" aria-label="Flowchart; scroll with the arrow keys">${svg}</div>${more}`;
+  return `<div id="chart" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Flowchart. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows all of it, F goes full screen.">${svg}</div>${zoomBar()}</div>${more}`;
 }
 
 
@@ -1057,31 +1081,120 @@ function renderGraph() {
     ? `<span><i style="background:var(--critical)"></i>critical</span><span><i style="background:var(--serious)"></i>high</span><span><i style="background:var(--warning)"></i>medium</span><span><i style="background:var(--accent)"></i>seen running</span><span>· ${hidden} hidden</span>`
     : S.mode === 'confidence' ? `<span><i style="background:var(--accent)"></i>seen running</span><span><i style="background:var(--ink)"></i>confirmed</span><span><i style="background:var(--muted)"></i>likely</span><span><i style="background:var(--faint)"></i>possible</span><span>· ${hidden} hidden</span>`
     : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`;
-  return `<div id="graph"><div class="vp" tabindex="0" aria-label="Call graph; scroll with the arrow keys">${svg}</div><div class="glegend">${legend}</div><div class="zoom"><button data-z="in" title="Zoom in">+</button><button data-z="out" title="Zoom out">−</button><button data-z="fit" title="Fit">fit</button></div></div>`;
+  return `<div id="graph" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Call graph. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows the whole app, F goes full screen.">${svg}</div><div class="glegend">${legend}</div>${zoomBar()}</div>`;
+}
+/* The graph is a camera over an endless canvas: the svg always fills the frame and its viewBox is what moves, so the
+   drawing stays sharp at any zoom. GRAPH_ZOOM is a guard for the numbers (past it, 32-bit drawing coordinates shake),
+   not a limit anyone reaches on purpose: at the far end one box is wider than a building, or the whole app is a dot. */
+const GRAPH_ZOOM = [1e-4, 1e4];
+const zoomBar = () => `<div class="zoom"><span class="zlevel" aria-live="off"></span><button data-z="in" title="Zoom in" aria-label="Zoom in">+</button><button data-z="out" title="Zoom out" aria-label="Zoom out">−</button><button data-z="fit" title="Show all of it (0)" aria-label="Show all of it">fit</button><button data-z="max" title="Full screen (F)" aria-label="Full screen" aria-pressed="false"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button></div>`;
+function setGraphMax(on) {
+  document.body.classList.toggle('gmax', on);
+  const root = document.documentElement;
+  if (on) { if (root.requestFullscreen && !document.fullscreenElement) root.requestFullscreen().catch(() => {}); }   // refused in a frame that does not allow it: the graph still fills the frame
+  else if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+  for (const b of document.querySelectorAll('.canvas [data-z="max"]')) { const t = on ? 'Leave full screen' : 'Full screen'; b.title = t; b.setAttribute('aria-label', t); b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+}
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('gmax')) setGraphMax(false); });
+/* Esc leaves full screen from anywhere (the browser's own full screen also leaves on Esc by itself) */
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('gmax')) setGraphMax(false); });
+/* one camera per view, kept across re-renders (selecting a function redraws the map); the Flowchart's is per starting point */
+function wireCanvas(g, key) {
+  const vp = g && g.querySelector('.vp'), svg = vp && vp.querySelector('svg');
+  if (!svg) return;
+  const box = svg.viewBox.baseVal, w0 = box.width, h0 = box.height, size = key + ':' + w0 + 'x' + h0;
+  S.cams = S.cams || {};
+  svg.removeAttribute('width'); svg.removeAttribute('height');
+  const label = g.querySelector('.zlevel');
+  let cam = S.cams[key] && S.cams[key].size === size ? S.cams[key] : null, queued = false;
+  const draw = () => {
+    queued = false;
+    const cw = vp.clientWidth, ch = vp.clientHeight;
+    if (!cw || !ch || !cam) return;
+    svg.setAttribute('viewBox', `${cam.x} ${cam.y} ${cw / cam.z} ${ch / cam.z}`);
+    /* the dots travel with the map and repeat at every power of two, so zooming never runs out of space */
+    const s = 20 * 2 ** (Math.log2(cam.z) - Math.floor(Math.log2(cam.z))), mod = v => ((v % s) + s) % s;
+    vp.style.backgroundSize = `${s}px ${s}px`;
+    vp.style.backgroundPosition = `${mod(-cam.x * cam.z)}px ${mod(-cam.y * cam.z)}px`;
+    const pct = cam.z * 100;
+    label.textContent = (pct >= 100 ? Math.round(pct).toLocaleString('en-US') : pct >= 1 ? String(Math.round(pct)) : pct.toPrecision(1)) + '%';
+    vp.dataset.zoom = cam.z;
+  };
+  const paint = () => { if (!queued) { queued = true; requestAnimationFrame(draw); } };
+  const clampZ = z => Math.max(GRAPH_ZOOM[0], Math.min(GRAPH_ZOOM[1], z));
+  const zoomAt = (px, py, f) => { const z = clampZ(cam.z * f); cam.x += px / cam.z - px / z; cam.y += py / cam.z - py / z; cam.z = z; paint(); };
+  const centre = () => [vp.clientWidth / 2, vp.clientHeight / 2];
+  const look = (z, wx, wy) => { cam.z = clampZ(z); cam.x = wx - vp.clientWidth / 2 / cam.z; cam.y = wy - vp.clientHeight / 2 / cam.z; paint(); };
+  const fit = () => look(Math.min((vp.clientWidth - 48) / w0, (vp.clientHeight - 48) / h0), w0 / 2, h0 / 2);
+  if (!cam) {
+    /* the first view fills the canvas (the map's shorter side reaches the edges) at a size the names can be read,
+       on the selected function; "fit" shows the whole app at once */
+    cam = S.cams[key] = {size, x: 0, y: 0, z: 1};
+    const z = Math.min(1.4, Math.max(vp.clientWidth / w0, vp.clientHeight / h0));
+    const on = S.sel && [...g.querySelectorAll('g[data-id]')].find(x => x.dataset.id === S.sel);
+    let wx = w0 / 2, wy = Math.min(h0 / 2, vp.clientHeight / 2 / z);
+    if (on) { try { const r = on.getBBox(); wx = r.x + r.width / 2; wy = r.y + r.height / 2; } catch (e) {} }
+    if (w0 * z <= vp.clientWidth) wx = w0 / 2;
+    look(z, wx, wy);
+  }
+  draw();
+  new ResizeObserver(paint).observe(vp);
+  g.querySelectorAll('[data-z]').forEach(b => b.onclick = () => {
+    const z = b.dataset.z;
+    if (z === 'max') return setGraphMax(!document.body.classList.contains('gmax'));
+    if (z === 'fit') return fit();
+    zoomAt(...centre(), z === 'in' ? 1.25 : 1 / 1.25);
+  });
+  if (document.body.classList.contains('gmax')) setGraphMax(true);   // a re-render built a new button: keep what it says right
+  vp.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = vp.getBoundingClientRect(), unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? vp.clientHeight : 1;
+    const dx = e.deltaX * unit, dy = e.deltaY * unit;
+    /* a trackpad's sideways swipe, or shift with the wheel, moves the map; everything else zooms toward the pointer */
+    if (!e.ctrlKey && (e.shiftKey || Math.abs(dx) > Math.abs(dy))) { cam.x += (dx || dy) / cam.z; if (!e.shiftKey) cam.y += dy / cam.z; return paint(); }
+    zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-dy * (e.ctrlKey ? .01 : .0015)));   // ctrlKey is how a trackpad pinch arrives
+  }, {passive: false});
+  /* one finger or the mouse drags from anywhere, boxes included (a press that does not move is still a click); two fingers pinch */
+  const held = new Map();
+  let moved = false, spread = 0;
+  const pinch = () => { const [a, b] = [...held.values()]; return [Math.hypot(a.x - b.x, a.y - b.y), (a.x + b.x) / 2, (a.y + b.y) / 2]; };
+  vp.addEventListener('pointerdown', e => {
+    if (e.button) return;
+    held.set(e.pointerId, {x: e.clientX, y: e.clientY}); moved = false;
+    if (held.size === 2) { spread = pinch()[0]; moved = true; }
+  });
+  vp.addEventListener('pointermove', e => {
+    const p = held.get(e.pointerId);
+    if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    if (!moved) { moved = true; vp.classList.add('drag'); try { vp.setPointerCapture(e.pointerId); } catch (err) {} }
+    p.x = e.clientX; p.y = e.clientY;
+    if (held.size === 1) { cam.x -= dx / cam.z; cam.y -= dy / cam.z; paint(); }
+    else if (held.size === 2) {
+      const [d, mx, my] = pinch(), r = vp.getBoundingClientRect();
+      if (spread) zoomAt(mx - r.left, my - r.top, d / spread);
+      spread = d;
+    }
+  });
+  const release = e => { held.delete(e.pointerId); if (!held.size) vp.classList.remove('drag'); };
+  vp.addEventListener('pointerup', release); vp.addEventListener('pointercancel', release);
+  vp.addEventListener('click', e => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
+  vp.addEventListener('keydown', e => {
+    const step = 80 / cam.z, go = {ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step]}[e.key];
+    if (go) { cam.x += go[0]; cam.y += go[1]; paint(); }
+    else if (e.key === '+' || e.key === '=') zoomAt(...centre(), 1.25);
+    else if (e.key === '-' || e.key === '_') zoomAt(...centre(), 1 / 1.25);
+    else if (e.key === '0') fit();
+    else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) setGraphMax(!document.body.classList.contains('gmax'));
+    else return;
+    e.preventDefault();
+  });
 }
 function wireGraph(el) {
-  const g = el.querySelector('#graph'), vp = g.querySelector('.vp'), svg = g.querySelector('svg');
-  const w0 = +svg.getAttribute('width'), h0 = +svg.getAttribute('height');
-  /* the svg has a viewBox, so it is zoomed by its own size: the frame (.vp) then scrolls and drags over it */
-  const apply = () => { svg.setAttribute('width', Math.round(w0 * S.zoom)); svg.setAttribute('height', Math.round(h0 * S.zoom)); vp.style.setProperty('--w', w0 * S.zoom + 'px'); };
-  const fit = () => { S.zoom = Math.max(.35, Math.min(1.4, Math.min((vp.clientWidth - 8) / w0, (vp.clientHeight - 8) / h0))); apply(); };
-  /* design 6b: the graph opens readable (never below 80%) and is dragged sideways, rather than shrunk until the names
-     cannot be read; the selected function is scrolled into view. "fit" still shows the whole app at once. */
-  if (S.zoom === 1 && w0 > vp.clientWidth) {
-    fit(); if (S.zoom < .8) { S.zoom = .8; apply(); }
-  } else apply();
-  /* a re-render keeps where the person had dragged to; the first time, the selected function is centred */
-  if (S.gscroll) { vp.scrollLeft = S.gscroll[0]; vp.scrollTop = S.gscroll[1]; }
-  else {
-    const on = S.sel && [...g.querySelectorAll('g[data-id]')].find(x => x.dataset.id === S.sel);
-    if (on) { try { const r = on.getBBox(); vp.scrollLeft = Math.max(0, (r.x + r.width / 2) * S.zoom - vp.clientWidth / 2); vp.scrollTop = Math.max(0, (r.y + r.height / 2) * S.zoom - vp.clientHeight / 2); } catch (e) {} }
-  }
-  vp.addEventListener('scroll', () => { S.gscroll = [vp.scrollLeft, vp.scrollTop]; }, {passive: true});
-  g.querySelectorAll('[data-z]').forEach(b => b.onclick = () => { if (b.dataset.z === 'fit') return fit(); S.zoom = Math.max(.35, Math.min(2.5, S.zoom * (b.dataset.z === 'in' ? 1.2 : 1 / 1.2))); apply(); });
-  let drag = null;
-  vp.onmousedown = e => { if (e.target.closest('g[data-id]')) return; drag = {x: e.clientX, y: e.clientY, l: vp.scrollLeft, t: vp.scrollTop}; vp.classList.add('drag'); };
-  window.addEventListener('mousemove', e => { if (!drag) return; vp.scrollLeft = drag.l - (e.clientX - drag.x); vp.scrollTop = drag.t - (e.clientY - drag.y); });
-  window.addEventListener('mouseup', () => { drag = null; vp.classList.remove('drag'); });
+  const g = el.querySelector('#graph');
+  if (!g) return;
+  wireCanvas(g, 'graph');
   g.querySelectorAll('g[data-id]').forEach(b => b.onclick = () => { if (b.dataset.http === '1') return; const id = b.dataset.id; if (N[id] && N[id].entry) { S.entry = id; S.open = new Set([id]); } select(id); renderMap(); });
 }
 
@@ -1431,6 +1544,8 @@ const ART = '<svg class="art" viewBox="0 0 64 64" aria-hidden="true"><circle cx=
 function renderMap() {
   const el = document.getElementById('center');
   el.classList.toggle('dotted', S.view === 'graph' || S.view === 'chart');
+  el.classList.toggle('gfull', (S.view === 'graph' || S.view === 'chart') && !!S.entry);
+  if (S.view !== 'graph' && S.view !== 'chart' && document.body.classList.contains('gmax')) setGraphMax(false);
   if (!S.entry) {
     const eps = G.nodes.filter(n => n.entry && n.entry.kind !== 'test');
     el.innerHTML = `<div class="toolbar" style="justify-content:flex-end">${helpBtns()}</div><div class="empty">${ART}<b>Pick a starting point</b>Every web route, command and program start is listed on the left${window.innerWidth < 720 ? ' above' : ''}.<br>${eps.length} found.</div>`;
@@ -1449,6 +1564,7 @@ function renderMap() {
   el.querySelectorAll('.seg [data-v]').forEach(b => b.onclick = () => { S.view = b.dataset.v; try { localStorage.setItem('lantern.view', S.view); } catch (e) {} renderMap(); });
   el.querySelectorAll('.seg [data-m]').forEach(b => b.onclick = () => { S.mode = b.dataset.m; renderMap(); });
   if (S.view === 'graph') wireGraph(el);
+  if (S.view === 'chart') wireCanvas(el.querySelector('#chart.canvas'), 'chart:' + S.entry);
   wireHelp(el);
   const ex = document.getElementById('expand'); if (ex) ex.onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
   el.querySelectorAll('[data-tog]').forEach(b => b.onclick = ev => { ev.stopPropagation(); const id = b.dataset.tog; S.open.has(id) ? S.open.delete(id) : S.open.add(id); renderMap(); });
