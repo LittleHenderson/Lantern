@@ -35,7 +35,7 @@ from .idle import IdleExit
 from .settings import Settings
 from . import site
 from .store import FINISHED, LimitReached, Store
-from .worker import ACTIVE_EXPLAIN, HINTS, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, is_upload
+from .worker import ACTIVE_EXPLAIN, HINTS, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, backfill_lanes, is_upload
 
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
@@ -315,7 +315,14 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     @app.get("/v1/runs")
     async def list_runs(request: Request):
         who = await signed_in(request)
-        return {"runs": [run_view(r) for r in store.runs(who["account"])]}
+        rows = store.runs(who["account"])
+        for r in rows:   # runs from before the list showed stack parts: read them from the stored results, once
+            if r["status"] == "done":
+                filled = backfill_lanes(Path(s.results_dir), r["id"], r["summary"])
+                if filled:
+                    store.update_run(r["id"], summary=filled)
+                    r["summary"] = filled
+        return {"runs": [run_view(r) for r in rows]}
 
     @app.get("/v1/runs/{rid}")
     async def get_run(rid: str, request: Request):
