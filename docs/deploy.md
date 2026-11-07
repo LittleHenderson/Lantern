@@ -192,7 +192,7 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 | `LANTERN_CLOUD_CONCURRENT_JOBS` | 2 | Runs analysed at the same time; the rest wait in the queue |
 | `LANTERN_CLOUD_ACTIVE_PER_USER` | 1 | Runs one person may have waiting or going at once |
 | `LANTERN_CLOUD_AUDITS` | 1 | Dependency audits (pip-audit, npm audit on lock files); `0` skips them and reports say so |
-| `LANTERN_CLONE_MAX_MB` | 200 | A repository larger than this is refused before its files are written |
+| `LANTERN_CLONE_MAX_MB` | 500 | A repository whose code is larger than this is refused before its files are written. Above it, the pictures, video, sound, fonts, archives, compiled programs, model weights and datasets Lantern never reads are left out first (`remote.BULK_EXT`, and files over 20 MB of a type Lantern does not read), and the Evidence report's Limits says so. Each run holds its download and its files on the volume, so keep the volume at least 6 × this (two runs at once): the deploy workflow extends it to 3 GB |
 | `LANTERN_CLOUD_JOB_SECONDS` | 600 | Wall clock per run; the analysis is stopped after it |
 | `LANTERN_CLOUD_IDLE_MINUTES` | 0 (10 in `cloud/fly.toml`) | Minutes with no visitor and no run before the service stops itself; 0 = never |
 | `LANTERN_CLOUD_RETENTION_DAYS` | 0 | 0 = results kept until the person deletes them (Delete on a run, or Delete my account); a number N deletes finished runs older than N days, checked every hour |

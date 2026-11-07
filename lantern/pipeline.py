@@ -52,6 +52,9 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     from .depaudit import offline as offline_env
     offline = offline_env() if offline is None else offline
     run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
+    left = remote.skipped(repo) if remote.is_clone(repo) else None
+    if left:   # the clone left out files Lantern does not read, to stay under the size cap (remote._checkout)
+        run_meta["skipped"] = {k: left.get(k) for k in ("files", "mb", "kept_mb", "cap_mb", "examples")}
     if os.environ.get("LANTERN_CLOUD_RUN") == "1":   # set only by Lantern's cloud worker (cloud/lantern_cloud/worker.py)
         run_meta["place"] = "cloud"
     if trace_cmd:

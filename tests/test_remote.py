@@ -1,5 +1,6 @@
 """Opening a repository from a link: parsing, cloning with git, the CLI, and the app."""
 import shutil
+import json
 import subprocess
 from pathlib import Path
 
@@ -97,18 +98,49 @@ def test_clone_then_update_with_git(tmp_path):
 def test_big_repositories_are_refused_before_checkout(tmp_path, monkeypatch):
     """The files are measured from the index after a no-checkout clone; above the cap nothing is written."""
     src = _git_repo(tmp_path / "src")
-    (src / "blob.bin").write_bytes(b"\0" * 2_500_000)
+    (src / "blob.json").write_bytes(b"0" * 2_500_000)   # text Lantern reads: counts
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."], cwd=src, check=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "big"], cwd=src, check=True)
     monkeypatch.setenv("LANTERN_CLONE_MAX_MB", "2")
     dest = tmp_path / "dest"
-    with pytest.raises(RuntimeError, match="add up to 2.5 MB, above Lantern's 2 MB limit"):
+    with pytest.raises(RuntimeError, match="add up to 2.5 MB, and still 2.5 MB without .* above Lantern's 2 MB limit"):
         remote.fetch(src.as_uri(), dest)
     assert not dest.exists()
     monkeypatch.setenv("LANTERN_CLONE_MAX_MB", "0")   # no cap
     remote.fetch(src.as_uri(), dest)
-    assert (dest / "blob.bin").stat().st_size == 2_500_000 and (dest / "app.py").exists()
+    assert (dest / "blob.json").stat().st_size == 2_500_000 and (dest / "app.py").exists()
     assert subprocess.run(["git", "status", "--porcelain"], cwd=dest, capture_output=True, text=True).stdout == ""
+
+
+def test_a_big_repository_is_checked_without_the_files_lantern_does_not_read(tmp_path, monkeypatch):
+    """Over the cap, pictures, video, archives and model files are left out (sparse checkout) when the code alone fits;
+    the clone still counts as complete, and the report's Limits says what was left out."""
+    src = _git_repo(tmp_path / "src")
+    (src / "media").mkdir()
+    (src / "media" / "hero.PNG").write_bytes(b"\0" * 1_500_000)
+    (src / "media" / "odd *[name].mp4").write_bytes(b"\0" * 1_000_000)   # wildcards in a name are matched literally
+    (src / "media" / "keep*.png.txt").write_text("not a picture\n", encoding="utf-8")
+    (src / "weights").mkdir()
+    (src / "weights" / "model").write_bytes(b"\0" * 21_000_000)   # any file over 20 MB is data
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."], cwd=src, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "big"], cwd=src, check=True)
+    monkeypatch.setenv("LANTERN_CLONE_MAX_MB", "1")
+    dest = tmp_path / "dest"
+    remote.fetch(src.as_uri(), dest)
+    files = sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file() and ".git" not in p.parts)
+    assert files == ["app.py", "media/keep*.png.txt"]
+    left = remote.skipped(dest)
+    assert left["files"] == 3 and left["mb"] == 23.5 and left["cap_mb"] == 1 and left["examples"][0] == "weights/model"
+    assert remote.missing_files(dest) == [] and remote.check_complete(dest) is None
+    assert subprocess.run(["git", "status", "--porcelain"], cwd=dest, capture_output=True, text=True).stdout == ""
+    # the analysis says so in the Evidence report's Limits
+    from lantern import pipeline
+    out = tmp_path / "out"
+    out.mkdir()
+    pipeline.analyze(dest, out, offline=True, log=lambda m: None)
+    assert json.loads((out / "run.json").read_text(encoding="utf-8"))["skipped"]["files"] == 3
+    page = (out / "evidence.html").read_text(encoding="utf-8")
+    assert "3 file(s) Lantern does not read" in page and "weights/model" in page
 
 
 def test_failed_clone_has_a_plain_message_and_no_credentials(tmp_path):
@@ -225,7 +257,7 @@ def test_an_earlier_clone_without_files_is_checked_out(tmp_path, monkeypatch):
     """A folder with only `.git` (left by an older Lantern after a failed checkout) is not an existing clone to
     analyze as an empty project: the next attempt checks the files out, under the size cap."""
     src = _git_repo(tmp_path / "src")
-    (src / "blob.bin").write_bytes(b"\0" * 1_500_000)
+    (src / "blob.json").write_bytes(b"0" * 1_500_000)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."], cwd=src, check=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "big"], cwd=src, check=True)
     dest, log = tmp_path / "dest", []
