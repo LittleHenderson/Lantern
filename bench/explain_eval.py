@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-first-try", type=float, default=0.0)
     a = ap.parse_args(argv)
     from lantern.providers import make_provider, resolve_default
-    provider = make_provider(a.model or resolve_default())
+    provider = make_provider(a.model or resolve_default()[0])
     res = run_eval(provider, Path(a.project), limit=a.limit)
     for r in res["rows"]:
         mark = "PASS" if r["validated"] else "FAIL"
