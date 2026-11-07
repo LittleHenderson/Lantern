@@ -12,6 +12,17 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   the rule, file and line, the paths, the scenario and the other actions open with a small Why? button, in place. Each
   readiness step keeps its evidence behind Why? too, and the Terminal button is Advanced only (the \` key still opens it).
   Advanced is unchanged.
+- The website has a Settings page (a button in the header, and in the account sheet): theme, Simple or Advanced, what a
+  new check keeps by default, plain-words explanations on or off, sign out, delete the account, play the welcome again.
+  The Lantern logo now always does something: from any screen it goes to My runs, and on My runs it plays the welcome.
+- My runs shows where each run's open findings are in the stack: Browser, Frontend, Server and Data (Screen and App
+  for phone apps), with the count and the worst one in each. Runs checked earlier get it from their stored results.
+- The Graph and Flowchart views fill the whole panel and are an endless canvas: drag anywhere, zoom with the wheel or
+  a pinch toward the pointer, far past the old 35% to 250% (0.01% to 1,000,000%), and they stay sharp because they are
+  still vector. The dots behind move and scale with the map. "fit" shows all of it however large, and a new button (or F)
+  takes the map full screen; Esc leaves. On the canvas the arrow keys move, plus and minus zoom and 0 fits; a sideways
+  trackpad swipe or shift with the wheel moves the map. On a phone the zoom buttons sit at the top, clear of the legend
+  and the Ask Lantern button. Reports made before this keep the old view until the project is analysed again.
 - C and C++ are read: programs, libraries and C++ web servers (cpp-httplib, Crow, Drogon, Pistache). Namespaces,
   classes, methods (in the class or `Class::m`), free and `static` functions are on the map with their calls (typed
   locals and members through `const&`, pointers and `std::unique_ptr`, `auto p = std::make_unique<T>()`, `this->`,
