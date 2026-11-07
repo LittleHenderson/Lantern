@@ -118,8 +118,8 @@ def test_a_big_repository_is_checked_without_the_files_lantern_does_not_read(tmp
     src = _git_repo(tmp_path / "src")
     (src / "media").mkdir()
     (src / "media" / "hero.PNG").write_bytes(b"\0" * 1_500_000)
-    (src / "media" / "odd *[name].mp4").write_bytes(b"\0" * 1_000_000)   # wildcards in a name are matched literally
-    (src / "media" / "keep*.png.txt").write_text("not a picture\n", encoding="utf-8")
+    (src / "media" / "odd [name].mp4").write_bytes(b"\0" * 1_000_000)   # [ ] in a name are matched literally (no * on Windows)
+    (src / "media" / "keep[1].png.txt").write_text("not a picture\n", encoding="utf-8")
     (src / "weights").mkdir()
     (src / "weights" / "model").write_bytes(b"\0" * 21_000_000)   # any file over 20 MB is data
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."], cwd=src, check=True)
@@ -128,7 +128,7 @@ def test_a_big_repository_is_checked_without_the_files_lantern_does_not_read(tmp
     dest = tmp_path / "dest"
     remote.fetch(src.as_uri(), dest)
     files = sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file() and ".git" not in p.parts)
-    assert files == ["app.py", "media/keep*.png.txt"]
+    assert files == ["app.py", "media/keep[1].png.txt"]
     left = remote.skipped(dest)
     assert left["files"] == 3 and left["mb"] == 23.5 and left["cap_mb"] == 1 and left["examples"][0] == "weights/model"
     assert remote.missing_files(dest) == [] and remote.check_complete(dest) is None
