@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- The website has a Settings page (a button in the header, and in the account sheet): theme, Simple or Advanced, what a
+  new check keeps by default, plain-words explanations on or off, sign out, delete the account, play the welcome again.
+  The Lantern logo now always does something: from any screen it goes to My runs, and on My runs it plays the welcome.
+- My runs shows where each run's open findings are in the stack: Browser, Frontend, Server and Data (Screen and App
+  for phone apps), with the count and the worst one in each. Runs checked earlier get it from their stored results.
 - The Graph and Flowchart views fill the whole panel and are an endless canvas: drag anywhere, zoom with the wheel or
   a pinch toward the pointer, far past the old 35% to 250% (0.01% to 1,000,000%), and they stay sharp because they are
   still vector. The dots behind move and scale with the map. "fit" shows all of it however large, and a new button (or F)

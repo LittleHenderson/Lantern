@@ -18,6 +18,21 @@
 </style>
 <style>
 /* Website additions: only what the app has no class for, made from the same tokens. */
+/* Where the findings are: the four stack stops (the report's stack strip), one cell each with its count and word.
+   The run table gets one more column for it; the columns the app hides on narrower screens shift by one. */
+.ptable .r{grid-template-columns:180px 140px 132px 40px 40px 40px 44px 244px 52px 84px minmax(150px,1fr)}
+@media (min-width:1181px){.ptable .r{min-width:1180px}}
+@media (max-width:1180px){.ptable .r{grid-template-columns:180px 132px 40px 40px 40px 44px 244px 112px minmax(150px,1fr)}.ptable .r > :nth-child(2),.ptable .r > :nth-child(9){display:none}.ptable .r > :nth-child(8){display:block}}
+@media (max-width:1000px){.ptable .r{grid-template-columns:minmax(140px,1fr) 120px 40px 40px 40px 44px 244px minmax(150px,auto)}.ptable .r > :nth-child(10){display:none}.ptable .r > :nth-child(9){display:none}}
+.where{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
+.where .lw{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3px 2px;border-radius:6px;background:var(--surface-2);color:var(--faint);font:500 10.5px/1.15 var(--font);white-space:nowrap;cursor:help}
+.where .lw b{font:600 13px/1.2 var(--font);font-variant-numeric:tabular-nums}
+.where .lw.has{color:var(--ink-2)} .where .lw.has b{color:var(--ink)}
+.where .lw.t-critical{background:var(--critical-soft);color:var(--crit-ink)} .where .lw.t-critical b{color:var(--crit-ink)}
+.where .lw.t-high{background:var(--serious-soft)} .where .lw.t-medium{background:var(--warning-soft)}
+.ptable .r.h .whead{display:flex;gap:6px;align-items:center} .ptable .r.h .whead i{font-style:normal;color:var(--faint)}
+.app .where{margin:2px 0 10px}
+.app .wherecap{font:600 11px var(--font);letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 4px}
 .privacy{max-width:720px;margin:12px auto 0;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .privacy .choice{margin:0;background:var(--surface);box-shadow:var(--shadow-1)}
 .privacy .choice:has(input:checked){background:color-mix(in srgb, var(--accent-soft) 60%, var(--surface))}
@@ -105,15 +120,16 @@
   </div>
 </div>
 <script>
-// A link to a run or to Help, or ?intro=0, goes straight to the page: hide the overlay before anything paints.
+// A link to a run, Help or Settings, or ?intro=0, goes straight to the page: hide the overlay before anything paints.
 { const h = location.hash.replace(/^#\/?/, ''); if (h || new URLSearchParams(location.search).get('intro') === '0') { const i = document.getElementById('intro'); i.style.transition = 'none'; i.className = 'hidden'; } }
 </script>
 <div id="bg" aria-hidden="true"></div>
 <header class="top">
-  <button class="brand" id="home" aria-label="Lantern home" title="My runs"><!--__APP_BRAND__--></button>
+  <button class="brand" id="home" aria-label="Lantern home" title="Lantern home"><!--__APP_BRAND__--></button>
   <nav id="nav" class="nav" aria-label="Main">
     <button data-v="home" class="on" aria-label="My runs"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>My runs</span></button>
     <button data-v="help" aria-label="Help"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M10 14h.01"/></svg><span>Help</span></button>
+    <button data-v="settings" aria-label="Settings"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg><span>Settings</span></button>
   </nav>
   <div class="seg" id="viewmode" title="Simple: plain sentences and one next action. Advanced: every table and panel."><button data-m="simple">Simple</button><button data-m="advanced">Advanced</button></div>
   <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
@@ -138,7 +154,9 @@ const api = async (path, opts = {}) => {
   if (!r.ok) { const e = new Error((d.error && d.error.message) || 'Lantern did not answer. Try again in a moment.'); e.status = r.status; e.type = d.error && d.error.type; throw e; }
   return d;
 };
-const S = {view: 'home', addMsg: null, starting: null, me: undefined, runs: null, run: null, tab: 'findings', links: {}, privacy: 'structure', agreed: false, link: '', pending: null, health: null, help: {open: null}, samples: []};
+const S = {view: 'home', addMsg: null, starting: null, me: undefined, runs: null, run: null, tab: 'findings', links: {}, privacy: savedPrivacy(), agreed: false, link: '', pending: null, health: null, help: {open: null}, samples: []};
+// What a new check keeps, chosen in Settings and kept in this browser (snippets still need the tick on each check).
+function savedPrivacy() { try { return localStorage.getItem('lantern.privacy') === 'full' ? 'full' : 'structure'; } catch (e) { return 'structure'; } }
 const SAMPLE = 'lantern:sample/';   // a run's link for one of Lantern's built-in sample apps
 const UPLOAD = 'lantern:upload/';   // a run's link for an app uploaded from the person's computer (a label, not a path)
 const ACTIVE = ['queued', 'running'];
@@ -149,7 +167,7 @@ const STEPS = [['clone', 'Copy the repository', 'Into a sealed box. Nothing in i
 const GH = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>';
 const GO = '<svg viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72a5.41 5.41 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>';
 
-document.getElementById('theme').onclick = () => setTheme(THEMES[(THEMES.indexOf(THEME) + 1) % 3]);
+document.getElementById('theme').onclick = () => { setTheme(THEMES[(THEMES.indexOf(THEME) + 1) % 3]); if (S.view === 'settings') render(); };
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 applyTheme();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -193,6 +211,24 @@ function elapsed(t) { const s = Math.max(0, Math.floor((Date.now() - Date.parse(
 const since = (t, label) => t ? `<span class="elapsed" data-since="${esc(t)}" data-label="${esc(label)}">${esc(label)} ${esc(elapsed(t))}</span>` : '';
 setInterval(() => document.querySelectorAll('[data-since]').forEach(e => { e.textContent = `${e.dataset.label} ${elapsed(e.dataset.since)}`; }), 1000);
 function lastLine(r) { const l = String(r.log_tail || '').trim().split('\n').pop(); return l || r.stage || 'Waiting for a free worker…'; }
+// The four parts of the stack, as the report names them (lanes.py; Screen and App for phone apps).
+const LANE_KEYS = ['browser', 'frontend', 'server', 'data'];
+function laneWords(phone) { return phone ? {browser: 'Screen', frontend: 'App', server: 'Server', data: 'Data'} : {browser: 'Browser', frontend: 'Frontend', server: 'Server', data: 'Data'}; }
+function laneMeaning(phone) {
+  return phone ? {browser: 'what the person sees and taps on their phone', frontend: 'the rest of the app, running on the phone', server: 'code on a machine you pay for, not the phone', data: 'the database, files, messages and outside services'}
+    : {browser: 'what the visitor sees and clicks', frontend: 'your pages and screens, the code that builds them', server: 'code on a machine you pay for, not the visitor’s', data: 'the database, files, shell commands and outside services'};
+}
+// One cell per part with the number of open findings there, tinted by the worst one (the word is always beside it).
+function whereStrip(sum) {
+  const L = sum && sum.lanes; if (!L || typeof L !== 'object') return '';
+  const W = laneWords(!!sum.phone), M = laneMeaning(!!sum.phone), n = v => Math.max(0, Math.floor(+v) || 0);
+  return `<div class="where">${LANE_KEYS.map(k => {
+    const c = L[k] || {}, tot = n(c.critical) + n(c.high) + n(c.medium) + n(c.low);
+    const worst = ['critical', 'high', 'medium', 'low'].find(r => n(c[r]));
+    const parts = ['critical', 'high', 'medium', 'low'].filter(r => n(c[r])).map(r => `${n(c[r])} ${r}`).join(', ');
+    return `<span class="lw ${tot ? 'has' : ''} ${worst ? 't-' + worst : ''}" title="${esc(W[k])}: ${esc(M[k])}. ${tot ? esc(parts) : 'No open findings here'}."><b>${tot}</b>${esc(W[k])}</span>`;
+  }).join('')}</div>`;
+}
 function sentence(sum) {
   // The app's one plain sentence per app, from the run's counts (design 3b).
   if (!sum || sum.score == null) return 'Checked.';
@@ -275,8 +311,9 @@ async function accountSheet() {
     <p>Signed in with ${esc(via)}. You have used <b>${esc(me.runs_today)}</b> of today's ${esc(me.limits.runs_per_day)} checks.</p>
     <p class="muted small">Your results are private to this account and stay until you delete them. Nothing is shared unless you click Share on a run.</p>
     <div id="ailine"></div>
-    <div class="row" style="margin-top:18px"><button class="btn quiet" id="delme">${icon('trash')}Delete my account</button><span class="spacer"></span><button class="btn" data-close>Close</button><button class="btn primary" id="signout">Sign out</button></div>`);
+    <div class="row" style="margin-top:18px"><button class="btn quiet" id="delme">${icon('trash')}Delete my account</button><span class="spacer"></span><button class="btn" id="tosettings">Settings</button><button class="btn primary" id="signout">Sign out</button></div>`);
   el.querySelector('#delme').onclick = deleteMeSheet;
+  el.querySelector('#tosettings').onclick = () => { closeSheet(); go('settings'); };
   aiState(true).then(st => {
     const box = el.querySelector('#ailine'); if (!box || !st) return;
     box.innerHTML = st.consent
@@ -285,8 +322,9 @@ async function accountSheet() {
     const off = box.querySelector('#aioff');
     if (off) off.onclick = async () => { try { AI.state = {...st, ...(await api('/v1/ai/consent', {method: 'POST', body: {agree: false}}))}; accountSheet(); } catch (e) { box.innerHTML = note('err', esc(e.message)); } };
   });
-  el.querySelector('#signout').onclick = async () => { try { await api('/v1/signout', {method: 'POST'}); } catch (e) {} S.me = null; S.runs = null; S.links = {}; closeSheet(); go('home'); };
+  el.querySelector('#signout').onclick = signOut;
 }
+async function signOut() { try { await api('/v1/signout', {method: 'POST'}); } catch (e) {} S.me = null; S.runs = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render(); }
 
 // ---- share, delete
 const SHARE_IC = '<svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.8-2.8a3 3 0 0 0-4.2-4.2l-1 1M11.5 8.5a3 3 0 0 0-4.2 0l-2.8 2.8a3 3 0 0 0 4.2 4.2l1-1"/></svg>';
@@ -518,7 +556,7 @@ function runCard(r) {
   const sum = r.summary || {}, run = ACTIVE.includes(r.status), name = repoName(r.link);
   return `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(name)}${r.shared ? ' <span class="tag shared">Shared</span>' : ''}</div><div class="path">${esc(r.host)} · ${esc(PRIV[r.privacy] || r.privacy)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</div></div>${ring(r.status === 'done' ? sum.score : null, sum.grade)}</div>
     ${run ? `<div class="checking"><i></i>${r.status === 'queued' ? 'Waiting for a free worker…' : 'Checking… about a minute'}<span style="flex:1"></span>${since(r.started || r.created, 'running')}</div><div class="indeterminate"></div><p class="lastline">${esc(lastLine(r))}</p>`
-      : r.status === 'done' ? `<p class="sentence">${sentence(sum)}</p>`
+      : r.status === 'done' ? `<p class="sentence">${sentence(sum)}</p>${sum.lanes ? `<p class="wherecap">Where in your app</p>${whereStrip(sum)}` : ''}`
       : note(r.status === 'blocked' ? 'warn' : 'err', esc(r.error || 'This check stopped before it finished.'))}
     <div class="actions">${r.status === 'done' ? `<button class="btn primary" data-open="${esc(r.id)}" data-tab="findings">Show me what to fix</button>` : run ? `<button class="btn" data-open="${esc(r.id)}">Watch it run</button>` : ''}
       ${run ? '' : `<button class="btn ${r.status === 'done' ? '' : 'primary'}" data-again="${esc(r.id)}">${r.status === 'done' ? 'Re-check' : 'Try again'}</button>`}
@@ -556,6 +594,7 @@ function renderHomePro(el) {
       <span class="p" style="font:12px var(--font);color:var(--ink-2)">${esc(r.host)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</span>
       ${r.status === 'done' && s.score != null ? `<div class="rd"><span style="font-weight:600;color:var(--ink);width:24px">${esc(s.score)}</span><div class="bar"><i class="bar-${t}" style="width:${Math.max(2, Math.min(100, +s.score || 0))}%"></i></div><span class="g tone-${t}">${esc(s.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'checking' : esc(r.status)}</span></div>`}
       ${num(c ? c.critical : null, true)}${num(c ? c.high : null)}${num(c ? c.medium : null)}${num(c ? c.low : null)}
+      ${c && s.lanes ? whereStrip(s) : '<span class="dash">–</span>'}
       <span class="num">${s.files != null && r.status === 'done' ? esc(s.files) : '<span class="dash">–</span>'}</span>
       <span style="color:var(--muted);white-space:nowrap">${run ? 'Checking…' : esc(ago(r.finished || r.created))}</span>
       <div class="acts">${r.status === 'done' ? `<button class="btn" data-open="${esc(r.id)}" data-tab="atlas">Open</button>` : run ? `<button class="btn" data-open="${esc(r.id)}">View log</button>` : ''}${run ? '' : `<button class="btn" data-again="${esc(r.id)}">Re-check</button><button class="btn quiet" data-del="${esc(r.id)}" aria-label="Delete this run">${icon('trash')}</button>`}</div></div>`;
@@ -571,7 +610,7 @@ function renderHomePro(el) {
       <div class="seg" id="privseg" title="What Lantern keeps"><button data-pv="structure" class="${S.privacy === 'structure' ? 'on' : ''}">Map only</button><button data-pv="full" class="${S.privacy === 'full' ? 'on' : ''}">Snippets</button></div></div>
     ${S.privacy === 'full' ? `<div style="margin:8px 16px 0"><label class="check"><input type="checkbox" id="agreed" ${S.agreed ? 'checked' : ''}><span>I agree that short snippets of the repository's code are stored with my results, until I delete them.</span></label></div>` : ''}
     <div id="adderr" style="margin:8px 16px 0">${addMsgHtml()}</div>
-    ${runs.length ? `<div class="ptable"><div class="r h"><span>Repository</span><span>Host</span><span>Readiness</span><span class="num">Crit</span><span class="num">High</span><span class="num">Med</span><span class="num">Low</span><span class="num">Files</span><span>Checked</span><span></span></div>${rows}</div>
+    ${runs.length ? `<div class="ptable"><div class="r h"><span>Repository</span><span>Host</span><span>Readiness</span><span class="num">Crit</span><span class="num">High</span><span class="num">Med</span><span class="num">Low</span><span class="whead" title="Which part of the app the open findings are in: Browser (what the visitor sees), Frontend (your pages), Server (your server code), Data (database, files, outside services). Phone apps say Screen and App for the first two.">Where in the stack <i>ⓘ</i></span><span class="num">Files</span><span>Checked</span><span></span></div>${rows}</div>
         ${going.map(r => `<div class="prolog"><div class="t">${esc(repoName(r.link))} · ${esc(r.stage || r.status)}</div>${esc(r.log_tail || '')}</div>`).join('')}`
       : `<div class="empty">${LANTERN_ART}<b>No runs yet</b>Paste a repository link above to check it.</div>`}</main>`;
   addControls(el);
@@ -711,7 +750,7 @@ function consentSheet(st, then) {
     <ul class="sendlist"><li><b>Explain in plain words</b> sends the code of up to 40 functions on your app's main paths. Lantern copies the repository again for a moment to read them, runs nothing, and deletes the copy.</li>
       <li><b>Ask Lantern</b> sends your question and this check's results (findings, routes, grade), not your code. If you add a screenshot, Lantern reads its text, never keeps the image, and sends only that text with your question.</li></ul>
     ${st && st.notice ? note('info', esc(st.notice)) : note('warn', 'Lantern could not reach the free allowance just now. Try again in a minute.')}
-    <p class="muted small">It is paid from your free allowance, so it costs you nothing. ${leftLine(st)} The model only explains: it cannot add, close or change a finding. You can turn this off again under your name, top right.</p>
+    <p class="muted small">It is paid from your free allowance, so it costs you nothing. ${leftLine(st)} The model only explains: it cannot add, close or change a finding. You can turn this off again in Settings.</p>
     <div id="agmsg"></div>
     <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Not now</button><button class="btn primary" id="agree" ${st && st.notice ? '' : 'disabled'}>I agree</button></div>`);
   el.querySelector('#agree').onclick = async () => {
@@ -861,12 +900,12 @@ const FAQ = [
   ['Privacy', 'Who can see my results?', 'Only you, while you are signed in. Each report opens through a link that works for an hour and only for your account. Nothing is shared unless you click <b>Share</b> on a run; that makes a link anyone holding it can open, and <b>Stop sharing</b> turns it off again.'],
   ['Privacy', 'What exactly is stored, and for how long?', 'Your account id from GitHub or Google and its public name (never your email), when you agreed to send code to a model (if you did), and for each check: the link, the privacy choice, the status, the times, the commit and the counts, plus the result files (the map, the findings, the grade, the evidence page; short code lines only if you chose <b>Include code snippets</b>). Results stay until you delete them. The sign-in token lives on your computer or in a browser cookie; the gateway keeps only a fingerprint of it and a count of requests per day, each deleted 90 days after its last use. Logs of a check show stages and errors, never file contents, and are kept with the run. There is no advertising, no tracking script, and nothing is sold or shared.'],
   ['Privacy', 'What are the limits, and when do they reset?', 'Each account can run 50 checks a day, one at a time, and everyone together 1,000 a day; explanations through the free allowance have their own daily and lifetime limits. Every limit resets at midnight UTC, and the message you see says how long that is from now (for example “in 5 h 20 min”). The number of checks left today is under your name, top right.'],
-  ['Privacy', 'How do I delete my results?', 'The bin icon on a run deletes that run, its report and its share link. To delete everything, press your name (top right), then <b>Delete my account</b>. Your GitHub or Google account is not touched.'],
+  ['Privacy', 'How do I delete my results?', 'The bin icon on a run deletes that run, its report and its share link. To delete everything, open <b>Settings</b> (or press your name, top right), then <b>Delete my account</b>. Your GitHub or Google account is not touched.'],
   ['Using it', 'Which links work?', 'The https link of a public repository on GitHub, GitLab, Bitbucket, Codeberg and other public code hosts, like <code>https://github.com/owner/name</code>. A link to a branch (<code>/tree/branch</code>) checks that branch.'],
   ['Using it', 'How long does a check take, and how many can I run?', 'Usually about a minute, up to a few minutes for a very large app. Each account can run 50 checks a day and one at a time; the number left today is under your name, top right.'],
   ['Using it', 'Does Lantern run my app or my tests?', 'No. In the cloud Lantern only reads the code. To watch your tests run, use the Lantern app on your own computer: <code>pip install lantern</code> then <code>lantern serve</code>.'],
   ['Results', 'What do the grade and the colours mean?', 'The grade (A to F) and the readiness number come from ten checks a senior engineer would make before launch. Red means a serious problem, orange and yellow smaller ones, green means it passed. Every colour sits next to a word, so you never have to guess.'],
-  ['Results', 'What does “Explain in plain words” do with my code?', 'It asks a language model to describe what each function on your app’s main paths does, in everyday words, with every phrase tied to a real line or name in your code (a phrase that is not is thrown away). For that, Lantern copies the repository again for a moment, sends the code of up to 40 functions to the model through your free allowance, and deletes the copy. It asks you first, says exactly where the code goes, and you can turn it off under your name. Ask Lantern sends your question and the check’s results, not your code. A screenshot you add is read by Lantern for its text and never kept; only that text goes with your question.'],
+  ['Results', 'What does “Explain in plain words” do with my code?', 'It asks a language model to describe what each function on your app’s main paths does, in everyday words, with every phrase tied to a real line or name in your code (a phrase that is not is thrown away). For that, Lantern copies the repository again for a moment, sends the code of up to 40 functions to the model through your free allowance, and deletes the copy. It asks you first, says exactly where the code goes, and you can turn it off in Settings. Ask Lantern sends your question and the check’s results, not your code. A screenshot you add is read by Lantern for its text and never kept; only that text goes with your question.'],
   ['Using it', 'Does it read phone apps?', 'Yes. Android (Java or Kotlin), iPhone (Swift), Flutter, React Native and .NET MAUI apps get an <b>On the phone</b> card with the screens, the links other apps can open, and every permission with a plain-words meaning and whether the code uses it, plus phone-specific checks (a link that reaches a database query, a secret in plain storage, cleartext traffic). An app with a server side gets both in one map.'],
   ['Terms', 'What are the terms of use?', 'One page in plain words: <a href="https://github.com/LittleHenderson/Lantern/blob/main/docs/terms.md" target="_blank" rel="noopener">docs/terms.md</a>. In short: check code you own or may read, do not multiply accounts, your code copy is deleted when the check ends, your results stay until you delete them, nothing goes to a model unless you ask and agree, and the service is a preview with no warranty. The Lantern software itself is MIT-licensed.'],
   ['Results', 'Can I trust what it says?', 'Every finding comes from a deterministic check, with the file, the line, and how a visitor reaches it. Lantern shows how sure it is about each connection, and never lets an AI create or dismiss a finding.'],
@@ -879,15 +918,71 @@ function renderHelp(el) {
   el.querySelectorAll('.qa').forEach(d => d.onclick = () => { const i = +d.dataset.i; H.open = H.open === i ? null : i; renderHelp(el); });
 }
 
+// ---- settings: the website's own choices (kept in this browser) and the account's (kept on the server)
+function renderSettings(el) {
+  const me = S.me, mode = viewMode(), phone = innerWidth <= 760;
+  const name = me ? String(me.label || '').split(':').pop() : '', via = me ? ({github: 'GitHub', google: 'Google', token: 'a Lantern token'}[me.account] || me.account) : '';
+  const themeBtn = (t, ic, label) => `<button data-theme="${t}" class="${THEME === t ? 'on' : ''}">${icon(ic)}${label}</button>`;
+  const priv = S.privacy;
+  el.innerHTML = `<main style="max-width:760px"><section class="hero"><h1>Settings</h1><p class="lede">How Lantern looks, what it keeps from your checks, and your account.</p></section>
+    <div class="card group"><h2>Appearance</h2>
+      <div class="row" style="justify-content:space-between"><div><b>Theme</b><div class="hint" style="margin-top:2px">System follows your device's light or dark setting.</div></div><div class="seg" id="themeseg">${themeBtn('light', 'sun', 'Light')}${themeBtn('dark', 'moon', 'Dark')}${themeBtn('auto', 'auto', 'System')}</div></div>
+      <div class="row" style="justify-content:space-between;margin-top:14px"><div><b>How much to show</b><div class="hint" style="margin-top:2px">${phone ? 'Phones always use Simple. Advanced is for bigger screens.' : 'Simple: plain sentences and one next step. Advanced: every table and panel.'}</div></div><div class="seg" id="modeseg">${['simple', 'advanced'].map(v => `<button data-m="${v}" class="${mode === v ? 'on' : ''}" ${phone && v === 'advanced' ? 'disabled' : ''}>${v === 'simple' ? 'Simple' : 'Advanced'}</button>`).join('')}</div></div></div>
+    <div class="card group"><h2>What a new check keeps</h2><div class="hint">Your copy of the code is always deleted when a check ends. This is what stays with the results.</div>
+      <label class="choice ${priv === 'structure' ? 'on' : ''}"><input type="radio" name="defpriv" value="structure" ${priv === 'structure' ? 'checked' : ''}><span><b>Map and findings only <span class="tag priv">Private</span></b>No code is kept. The report names files and lines.</span></label>
+      <label class="choice ${priv === 'full' ? 'on' : ''}"><input type="radio" name="defpriv" value="full" ${priv === 'full' ? 'checked' : ''}><span><b>With code snippets</b>The short lines the report talks about are kept too, so you can read them in the report. You still tick a box to agree on each check.</span></label>
+      <div id="privmsg" class="hint"></div></div>
+    <div class="card group"><h2>Plain-words explanations</h2><div id="aiset">${me ? '<div class="hint">Looking…</div>' : '<div class="hint">Sign in to use Explain in plain words and Ask Lantern.</div>'}</div></div>
+    <div class="card group"><h2>Account</h2>${me
+      ? `<div class="alsorow"><div><b>${esc(name)}</b><div class="hint">Signed in with ${esc(via)}. ${esc(me.runs_today)} of today's ${esc(me.limits.runs_per_day)} checks used; the count starts again at midnight UTC.</div></div><button class="btn" id="setsignout">Sign out</button></div>
+        <div class="alsorow"><div><b>Delete my account</b><div class="hint">Deletes every run, report and share link Lantern keeps for you. Your GitHub or Google account is not touched.</div></div><button class="btn danger" id="setdelme">${icon('trash')}Delete</button></div>`
+      : `<div class="alsorow"><div><b>Not signed in</b><div class="hint">Sign in with GitHub or Google to run checks and keep your results.</div></div><button class="btn primary" id="setsignin">Sign in</button></div>`}</div>
+    <div class="card group"><h2>Also</h2>
+      <div class="alsorow"><div><b>The welcome</b><div class="hint">The short film that plays when you open Lantern.</div></div><button class="btn" id="setintro">Play it</button></div>
+      <div class="alsorow"><div><b>Questions and privacy</b><div class="hint">What happens to your code, who can see results, limits.</div></div><button class="btn" id="sethelp">Help</button></div>
+      <div class="alsorow"><div><b>Terms of use</b><div class="hint">One page in plain words.</div></div><a class="btn" href="https://github.com/LittleHenderson/Lantern/blob/main/docs/terms.md" target="_blank" rel="noopener">Open</a></div></div>
+    <p class="foot">Lantern ${esc(VERSION)} · Appearance, view and the default above are kept in this browser; your account and results are kept on Lantern's server.</p></main>`;
+  el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
+  el.querySelectorAll('#modeseg button').forEach(b => b.onclick = () => { try { localStorage.setItem('lantern.simple', b.dataset.m === 'simple' ? '1' : '0'); } catch (e) {} drawViewMode(); render(); });
+  el.querySelectorAll('input[name=defpriv]').forEach(r => r.onchange = () => {
+    S.privacy = r.value; S.agreed = false;
+    try { localStorage.setItem('lantern.privacy', r.value); } catch (e) {}
+    el.querySelectorAll('.choice').forEach(c => c.classList.toggle('on', c.querySelector('input').checked));
+    el.querySelector('#privmsg').textContent = r.value === 'full' ? 'Saved. New checks start with code snippets selected.' : 'Saved. New checks keep no code.';
+  });
+  el.querySelector('#setintro').onclick = () => { if (window.replayIntro) window.replayIntro(); };
+  el.querySelector('#sethelp').onclick = () => go('help');
+  if (!me) { el.querySelector('#setsignin').onclick = () => signInSheet(); return; }
+  el.querySelector('#setsignout').onclick = signOut;
+  el.querySelector('#setdelme').onclick = deleteMeSheet;
+  aiState(true).then(st => {
+    const box = el.querySelector('#aiset'); if (!box || S.view !== 'settings') return;
+    if (!st) { box.innerHTML = note('warn', 'Lantern could not reach the free allowance just now. Try again in a minute.'); return; }
+    box.innerHTML = `<div class="alsorow"><div><b>${st.consent ? 'On' : 'Off'}</b><div class="hint">${st.consent
+      ? `Explain in plain words and Ask Lantern can send your work to a language model, paid from your free allowance. ${leftLine(st)}`
+      : 'Lantern has not sent anything to a model for you. Turning this on shows exactly what is sent and where, first.'}</div></div><button class="btn ${st.consent ? '' : 'primary'}" id="aitoggle">${st.consent ? 'Turn off' : 'Turn on'}</button></div><div id="aimsg"></div>`;
+    box.querySelector('#aitoggle').onclick = async () => {
+      if (!st.consent) return consentSheet(st, () => { if (S.view === 'settings') render(); });
+      try { AI.state = {...st, ...(await api('/v1/ai/consent', {method: 'POST', body: {agree: false}}))}; render(); }
+      catch (e) { box.querySelector('#aimsg').innerHTML = note('err', esc(e.message)); }
+    };
+  });
+}
+
 // ---- routing
-function go(view) { location.hash = view === 'help' ? '#/help' : '#/'; }
+function go(view) { location.hash = view === 'help' ? '#/help' : view === 'settings' ? '#/settings' : '#/'; }
 document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); };
-document.getElementById('home').onclick = () => go('home');
+// The logo is "Lantern home": from any other screen it goes to My runs; on My runs it plays the welcome again
+// (Skip, a click or Escape ends it), the same as opening the site fresh.
+document.getElementById('home').onclick = () => {
+  if (S.view !== 'home') return go('home');
+  if (window.replayIntro) window.replayIntro(); else { scrollTo(0, 0); if (S.me) loadRuns().then(render); }
+};
 function route() {
   const h = location.hash.replace(/^#\/?/, '');
   const m = /^run\/([A-Za-z0-9_-]{1,40})$/.exec(h);
   const prev = S.runId;
-  S.view = m ? 'run' : h === 'help' ? 'help' : 'home';
+  S.view = m ? 'run' : h === 'help' || h === 'settings' ? h : 'home';
   S.runId = m ? m[1] : null;
   if (S.runId !== prev) { S.frame = null; if (!S.runId || (S.run && S.run.id !== S.runId)) S.run = null; }
   if (S.view !== 'run') stopFollow();
@@ -911,6 +1006,7 @@ function render() {
   setBackdrop(); drawViewMode(); drawAcct(); renderAsk();
   if (S.view === 'run') return renderRun(el, S.runId);
   if (S.view === 'help') return renderHelp(el);
+  if (S.view === 'settings') return renderSettings(el);
   renderHome(el);
 }
 // While a run on the list is going, refresh the list every few seconds (the run page streams its own log).
