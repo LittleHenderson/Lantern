@@ -195,7 +195,8 @@ section.center.gfull>.note,section.center.gfull>.legend{flex:none} section.cente
 body.gmax header,body.gmax aside.left,body.gmax aside.right{display:none!important}
 body.gmax main{display:grid;grid-template-columns:minmax(0,1fr)!important}
 /* the zoom buttons stay clear of the Ask Lantern button when the map reaches the window's right edge */
-body.gmax:not(.embed) .canvas .zoom,body:not(.embed) main.rrail .canvas .zoom{bottom:80px}
+/* also inside the website's frame, whose own Ask Lantern button sits over the frame's bottom-right corner */
+body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{bottom:80px}
 #graph svg text{font-family:var(--mono);font-size:11.5px;fill:var(--ink)} #graph svg text.col{font-family:var(--font);font-size:11px;font-weight:600;letter-spacing:.06em;fill:var(--muted)}
 #graph svg text.sub{font-family:var(--font);font-size:10.5px;fill:var(--muted)} #graph svg text.lb{font-size:9px;fill:var(--muted)}
 #graph g[data-id]{cursor:pointer} #graph g[data-id]:hover rect.box{stroke:var(--accent-line)}
@@ -605,7 +606,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
   body.gmax{height:100vh;height:100dvh;display:flex}
   body.gmax section.center.gfull{display:flex;overflow:hidden;padding-bottom:0}
   body.gmax .canvas{height:auto}
-  .canvas .zoom,body.gmax:not(.embed) .canvas .zoom,body:not(.embed) main.rrail .canvas .zoom{top:10px;bottom:auto;right:10px}   /* on a phone the buttons sit at the top, clear of the legend and the Ask button */
+  .canvas .zoom,body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{top:10px;bottom:auto;right:10px}   /* on a phone the buttons sit at the top, clear of the legend and the Ask button */
   body:not(.embed) #graph .glegend{right:84px}
   aside.right{width:100vw;top:auto;height:86vh;transform:translateY(105%);border-radius:20px 20px 0 0}
   aside.right.open{transform:none}
