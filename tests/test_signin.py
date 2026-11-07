@@ -66,9 +66,9 @@ def test_providers_and_login_page(gw):
 
 def test_github_sign_in_issues_one_token_and_parks_it_for_the_cli(gw):
     r = _signin(gw, "github")
-    assert r.status_code == 200 and "lt_" in r.text and "octocat" in r.text and "secret@example.com" not in r.text
+    assert r.status_code == 200 and "octocat" in r.text and "secret@example.com" not in r.text
     tok = gw.get("/v1/auth/claim", params={"cli": CLI}).json()["token"]
-    assert tok.startswith("lt_") and tok in r.text
+    assert tok.startswith("lt_") and tok not in r.text      # the app collects it; the page never shows it
     assert gw.get("/v1/auth/claim", params={"cli": CLI}).status_code == 404      # one claim only
     a = gw.get("/v1/allowance", headers={"authorization": f"Bearer {tok}"}).json()
     assert a["used_requests"] == 0 and a["remaining_requests"] == 300
@@ -168,3 +168,23 @@ def test_many_new_accounts_in_a_day_are_paused_but_existing_ones_sign_in(tmp_pat
     s.signups_per_day = 0                           # 0 = no cap
     r = _signin(gw, "github")
     assert r.status_code == 200 and store.signups_today() == 3
+
+
+def test_the_mark_and_word_lantern_link_home(monkeypatch):
+    # Wakil clicked the logo on the "You're in" page and nothing happened: every gateway page's top bar is a link home.
+    monkeypatch.delenv("LANTERN_HOME_URL", raising=False)
+    for page in (auth.done_page("lt_x", "google:…abc", True), auth.login_page([], "", None), auth.error_page("x")):
+        assert '<header><a class="home" href="https://lantern-cloud.fly.dev/"' in page
+        assert "<span>Lantern</span></a></header>" in page
+    monkeypatch.setenv("LANTERN_HOME_URL", "https://example.org/lantern/")
+    assert 'href="https://example.org/lantern/"' in auth.error_page("x")
+    for bad in ("javascript:alert(1)", "http://example.org/", 'https://x.org/"><script>'):
+        monkeypatch.setenv("LANTERN_HOME_URL", bad)
+        assert 'href="https://lantern-cloud.fly.dev/"' in auth.error_page("x")
+
+
+def test_the_token_stays_off_screen_when_lantern_picks_it_up():
+    # A token shown on the page ends up in screenshots; the app/terminal that opened the tab collects it by itself.
+    parked = auth.done_page("lt_secretvalue123", "google:…abc", True)
+    assert "lt_secretvalue123" not in parked and "lt_se" not in parked and "<details" not in parked
+    assert "lt_secretvalue123" in auth.done_page("lt_secretvalue123", "google:…abc", False)

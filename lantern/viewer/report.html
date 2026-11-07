@@ -98,6 +98,8 @@ code{font:12px var(--mono);background:var(--sunken);color:var(--ink);padding:1px
 header{flex:none;background:var(--surface);border-bottom:1px solid var(--line);z-index:5}
 .brand{display:flex;align-items:center;gap:10px;height:52px;padding:0 16px;border-bottom:1px solid var(--line)}
 .brand .mark{width:26px;height:26px;flex:none}
+.brand .home{display:flex;align-items:center;gap:10px;flex:none;margin-left:-6px;padding:5px 6px;border-radius:10px;cursor:pointer}
+.brand .home:hover{background:var(--hover)}
 .brand b{font:650 15px/1 var(--display);letter-spacing:-.02em;color:var(--ink)}
 .brand .repo{font:12px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 .iconbtn{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;color:var(--muted)}
@@ -595,7 +597,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
 </head>
 <body>
 <header>
-  <div class="brand"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
+  <div class="brand"><button class="home" id="brandhome" title="Back to the start of this report" aria-label="Lantern: back to the start of this report"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b></button><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
   <div class="bar2">
     <nav class="tabs" id="tabs">
       <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="xp">Explanations</button><button data-t="about">About</button><button data-t="fix" hidden aria-label="Fix">Fix</button>
@@ -729,6 +731,8 @@ if (DATA.readiness) chipHtml += `<span class="sev ${toneOf(DATA.readiness.score)
 document.getElementById('chips').innerHTML = chipHtml;
 const openCount = SEC.findings.filter(f => f.status !== 'accepted' && !f.in_tests).length;   // the app's own, as every other count
 if (openCount) document.querySelector('#tabs [data-t="findings"]').insertAdjacentHTML('beforeend', `<span class="n ${SEC.counts.critical ? 'crit' : ''}">${esc(openCount)}</span>`);
+// The mark and the word "Lantern": back to the report's first tab, at the top, like a home button.
+document.getElementById('brandhome').onclick = () => { const first = document.querySelector('#tabs button:not([hidden])'); if (first) first.click(); scrollTo(0, 0); };
 document.getElementById('tabs').onclick = ev => {
   const t = ev.target.closest('button'); if (!t) return;
   S.tab = t.dataset.t;
