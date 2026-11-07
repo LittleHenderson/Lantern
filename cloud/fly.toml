@@ -14,7 +14,7 @@ primary_region = 'sjc'
   # Only code counts: a bigger repository is checked without the pictures, videos, archives and model files Lantern
   # never reads (lantern/remote.py). 500 MB needs the 3 GB volume below and 2 GB of memory (owner's question 2026-11-07).
   LANTERN_CLONE_MAX_MB = '500'
-  LANTERN_CLOUD_JOB_SECONDS = '600'
+  LANTERN_CLOUD_JOB_SECONDS = '1200'
   # 0 = results are kept until the person deletes them (owner's decision, 2026-11-03)
   LANTERN_CLOUD_RETENTION_DAYS = '0'
   # Sleep when unused: after 10 minutes with no visitor and no run, the service stops itself and Fly bills

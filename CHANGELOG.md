@@ -5,6 +5,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Checks on big projects are about three times faster: finding which functions call which now uses an index
+  instead of reading every link each time (a 1,300-file project went from 6 minutes to under 2, with identical
+  results). lantern-cloud also allows 20 minutes per run (was 10).
 - A repository over the size limit is checked without the pictures, video, sound, fonts, archives, compiled
   programs, model weights and datasets Lantern never reads, so only code counts toward the limit; the Evidence report
   says how many files were left out and names the biggest. lantern-cloud's limit is now 500 MB (was 200), with a 3 GB

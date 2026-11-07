@@ -92,11 +92,35 @@ class Graph:
     def call_edges(self) -> Iterable[Edge]:
         return (e for e in self._edges.values() if e.kind in (CALLS, MAY_CALL))
 
+    def _call_index(self) -> tuple[dict[str, list[Edge]], dict[str, list[Edge]]]:
+        # Edges are only ever added, so the index is rebuilt when the count changes. Without it every
+        # callees()/callers() walked all edges: 15k lookups x 50k edges took four minutes on a big repo.
+        idx = getattr(self, "_idx", None)
+        if idx is None or idx[0] != len(self._edges):
+            out: dict[str, list[Edge]] = {}
+            inc: dict[str, list[Edge]] = {}
+            for e in self.call_edges():
+                out.setdefault(e.src, []).append(e)
+                inc.setdefault(e.dst, []).append(e)
+            idx = self._idx = (len(self._edges), out, inc)
+        return idx[1], idx[2]
+
     def callees(self, nid: str) -> list[Edge]:
-        return [e for e in self.call_edges() if e.src == nid]
+        return list(self._call_index()[0].get(nid, ()))
 
     def callers(self, nid: str) -> list[Edge]:
-        return [e for e in self.call_edges() if e.dst == nid]
+        return list(self._call_index()[1].get(nid, ()))
+
+    def nodes_in(self, file: str) -> list[Node]:
+        """Nodes whose file is `file`, in insertion order (indexed; rebuilt when nodes are added)."""
+        idx = getattr(self, "_fidx", None)
+        if idx is None or idx[0] != len(self.nodes):
+            by: dict[str, list[Node]] = {}
+            for n in self.nodes.values():
+                if n.file:
+                    by.setdefault(n.file, []).append(n)
+            idx = self._fidx = (len(self.nodes), by)
+        return idx[1].get(file, [])
 
     def entry_points(self) -> list[Node]:
         return [n for n in self.nodes.values() if n.entry]
