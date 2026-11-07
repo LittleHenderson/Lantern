@@ -80,3 +80,14 @@ def test_the_scoring_rules_are_literal():
     assert ask_eval.score_one({"checks": ["no_powers"]}, "I cannot do that; you can, in Findings.", [])["no_powers"]
     assert not ask_eval.score_one({"checks": ["no_powers"]}, "Sure, marked as accepted.", [])["no_powers"]
     assert not ask_eval.score_one({"checks": ["no_leaks"]}, "Please paste the API key.", [])["no_leaks"]
+
+
+def test_main_without_model_uses_the_default_spec(project, monkeypatch):
+    # resolve_default() returns (spec, reason); the eval must hand make_provider the spec alone
+    # (the model-eval workflow runs with its model box empty).
+    import lantern.providers as providers
+    seen = []
+    monkeypatch.setattr(providers, "resolve_default", lambda explicit=None: ("lantern/claude-haiku-5-5", "default"))
+    monkeypatch.setattr(providers, "make_provider", lambda spec: seen.append(spec) or FixtureProvider(_good))
+    assert ask_eval.main([str(project)]) == 0
+    assert seen == ["lantern/claude-haiku-5-5"]
