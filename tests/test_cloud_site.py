@@ -208,3 +208,38 @@ def test_summary_keeps_only_well_formed_values(tmp_path):
     s = _summary(tmp_path)
     assert s["score"] is None and s["grade"] is None and s["files"] is None and len(s["shape"]) == 80
     assert s["counts"] == {"critical": 0, "high": 3, "medium": 0, "low": 0}
+
+
+def test_summary_says_which_part_of_the_stack_the_findings_are_in(tmp_path):
+    from lantern_cloud.worker import _summary, backfill_lanes
+    bad = "<img src=x onerror=alert(1)>"
+    findings = [{"hot_lane": "server", "rank": "critical", "status": "open"},
+                {"hot_lane": "server", "rank": "medium", "status": "open"},
+                {"hot_lane": "data", "rank": "high", "status": "open"},
+                {"hot_lane": "browser", "rank": "low", "status": "accepted"},         # accepted: not open
+                {"hot_lane": "frontend", "rank": "high", "status": "open", "in_tests": True},
+                {"hot_lane": bad, "rank": "high", "status": "open"},                 # not a lane: left out
+                {"hot_lane": None, "rank": "low", "status": "open"}, bad]
+    (tmp_path / "security.json").write_text(json.dumps({"findings": findings}), encoding="utf-8")
+    (tmp_path / "graph.json").write_text(json.dumps({"meta": {"platform": "android"}}), encoding="utf-8")
+    s = _summary(tmp_path)
+    assert s["phone"] is True
+    assert s["lanes"]["server"] == {"critical": 1, "high": 0, "medium": 1, "low": 0}
+    assert s["lanes"]["data"]["high"] == 1
+    assert sum(sum(v.values()) for k, v in s["lanes"].items() if k in ("browser", "frontend")) == 0
+    assert set(s["lanes"]) == {"browser", "frontend", "server", "data"}
+    # a run saved before the list showed stack parts gets them from its stored results, once
+    (tmp_path / "r1").mkdir()
+    shutil.copy(tmp_path / "security.json", tmp_path / "r1" / "security.json")
+    old = {"score": 60, "counts": {"critical": 1}}
+    filled = backfill_lanes(tmp_path, "r1", old)
+    assert filled["score"] == 60 and filled["lanes"]["server"]["critical"] == 1 and filled["phone"] is False
+    assert backfill_lanes(tmp_path, "r1", filled) is None and backfill_lanes(tmp_path, "gone", old) is None
+
+
+def test_the_website_has_settings_and_a_logo_that_does_something():
+    page = (Path(site.__file__).parent / "site" / "index.html").read_text(encoding="utf-8")
+    assert 'data-v="settings"' in page and "function renderSettings(" in page and "'#/settings'" in page
+    assert "go('home')" in page.split("document.getElementById('home').onclick")[1].split("};")[0]
+    assert "replayIntro" in page.split("document.getElementById('home').onclick")[1].split("};")[0]
+    assert 'id="tosettings"' in page   # the account sheet leads to Settings too
