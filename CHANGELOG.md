@@ -5,6 +5,12 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- The Graph and Flowchart views fill the whole panel and are an endless canvas: drag anywhere, zoom with the wheel or
+  a pinch toward the pointer, far past the old 35% to 250% (0.01% to 1,000,000%), and they stay sharp because they are
+  still vector. The dots behind move and scale with the map. "fit" shows all of it however large, and a new button (or F)
+  takes the map full screen; Esc leaves. On the canvas the arrow keys move, plus and minus zoom and 0 fits; a sideways
+  trackpad swipe or shift with the wheel moves the map. On a phone the zoom buttons sit at the top, clear of the legend
+  and the Ask Lantern button. Reports made before this keep the old view until the project is analysed again.
 - C and C++ are read: programs, libraries and C++ web servers (cpp-httplib, Crow, Drogon, Pistache). Namespaces,
   classes, methods (in the class or `Class::m`), free and `static` functions are on the map with their calls (typed
   locals and members through `const&`, pointers and `std::unique_ptr`, `auto p = std::make_unique<T>()`, `this->`,
