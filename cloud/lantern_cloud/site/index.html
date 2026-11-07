@@ -682,7 +682,7 @@ async function renderReport(el, r) {
     body.appendChild(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
     return;
   }
-  body.innerHTML = `<iframe title="Report"></iframe>`;
+  body.innerHTML = `<iframe title="Report" allow="fullscreen"></iframe>`;
   const fr = body.querySelector('iframe'); S.frame = {rid: r.id, el: fr};
   fr.onload = () => { try { const d = fr.contentDocument; themeOn(d); d.body.classList.add('embed'); d.querySelector(`#tabs [data-t="${RUN_TABS[S.tab] || 'findings'}"]`)?.click(); } catch (err) {} };
   fr.src = links.report;
