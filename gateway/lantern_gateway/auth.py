@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import html
 import json
+import os
 import re
 import time
 import urllib.parse
@@ -133,11 +134,12 @@ def done_page(token: str, label: str, parked: bool) -> str:
 <p class="small">Keep it like a password. To use it on a computer: <code>lantern login --token {html.escape(token[:5])}…</code>.
 Signing in again later gives a new token and keeps your usage count.</p>"""
     if parked:
-        # The website, app or terminal that opened this tab collects the token by itself: say so first, and keep the
-        # token out of sight unless the person asks for it.
+        # The website, app or terminal that opened this tab collects the token by itself, so the page never shows it:
+        # a token on screen ends up in screenshots. If the pick-up failed, signing in again gives a fresh one.
         return _page("Signed in", f"""<h1>You're in{who}</h1>
 <p>Go back to Lantern: it has picked up your sign-in. You can close this tab.</p>
-<details><summary>Show the token instead</summary>{tok}</details>""")
+<p class="small">Lantern still says you are signed out after a few minutes? Sign in again from Lantern; that gives you
+a fresh token and keeps your usage count.</p>""")
     return _page("Signed in", f"""<h1>You're in{who}</h1>
 <p>Your Lantern token, shown once:</p>
 {tok}""")
@@ -156,7 +158,18 @@ FONTS = ('<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght
          '&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">')
 
 
+# Where the mark and the word "Lantern" in the top bar go: the Lantern website. LANTERN_HOME_URL points them elsewhere
+# (an https address only; anything else falls back to the website).
+HOME_URL = "https://lantern-cloud.fly.dev/"
+
+
+def home_url() -> str:
+    u = os.environ.get("LANTERN_HOME_URL", "").strip()
+    return u if re.fullmatch(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?", u) else HOME_URL
+
+
 def _page(title: str, inner: str) -> str:
+    home = html.escape(home_url(), quote=True)
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)} · Lantern</title>
 {FONTS}
@@ -165,7 +178,9 @@ def _page(title: str, inner: str) -> str:
 @media(prefers-color-scheme:dark){{:root{{color-scheme:dark;--bg:#0E0E10;--glow:rgba(255,170,60,.09);--surface:#161618;--ink:#F3F3F1;--ink-2:#BEBEC3;--muted:#9A9AA0;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.15);--accent:#7FDBD3;--sunken:#0A0A0B;--primary:#F3F3F1;--on-primary:#0E0E10}}}}
 *{{box-sizing:border-box}}
 body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink-2);font:15px/1.6 "DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}}
-header{{display:flex;align-items:center;gap:10px;height:56px;padding:0 20px;border-bottom:1px solid var(--line);font:600 16px "DM Sans",-apple-system,sans-serif;color:var(--ink);letter-spacing:-.02em}}
+header{{display:flex;align-items:center;height:56px;padding:0 20px;border-bottom:1px solid var(--line)}}
+.home{{display:inline-flex;align-items:center;gap:10px;margin-left:-8px;padding:6px 8px;border-radius:12px;font:600 16px "DM Sans",-apple-system,sans-serif;color:var(--ink);letter-spacing:-.02em;text-decoration:none}}
+.home:hover{{background:var(--sunken)}}.home:focus-visible{{outline:2px solid var(--accent);outline-offset:2px}}
 .mark{{width:28px;height:28px;border-radius:9px;background:#141416;display:inline-block;box-shadow:0 0 0 1px var(--line),0 4px 14px -4px rgba(255,170,60,.5)}}.mark svg{{width:100%;height:100%;display:block}}
 main{{position:relative;max-width:520px;margin:9vh auto;padding:28px 28px 24px;background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:0 1px 2px rgba(16,16,20,.04),0 6px 20px -6px rgba(16,16,20,.10)}}
 main::before{{content:"";position:absolute;z-index:-1;left:-120px;top:-120px;width:420px;height:300px;background:radial-gradient(closest-side,var(--glow),transparent)}}
@@ -175,10 +190,14 @@ h1{{font:700 26px/1.2 "DM Sans",-apple-system,sans-serif;letter-spacing:-.028em;
 .btn{{display:flex;align-items:center;justify-content:center;height:46px;padding:0 16px;border-radius:13px;background:var(--primary);color:var(--on-primary);text-decoration:none;font-weight:600}}
 .btn+.btn{{background:var(--surface);color:var(--ink);border:1px solid var(--line-2)}}
 .tok{{font:13px/1.5 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;padding:12px 14px;background:var(--sunken);color:var(--ink);border:1px solid var(--line);border-radius:12px;user-select:all;overflow-wrap:anywhere;white-space:pre-wrap}}
-details{{margin-top:16px;font-size:14px}}summary{{cursor:pointer;color:var(--muted)}}
+details{{margin-top:16px;font-size:14px}}
+summary{{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted);list-style:none;padding:4px 8px;margin-left:-8px;border-radius:8px}}
+summary::-webkit-details-marker{{display:none}}summary::before{{content:"";width:6px;height:6px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(-45deg);transition:transform .15s}}
+details[open] summary::before{{transform:rotate(45deg)}}summary:hover{{color:var(--ink);background:var(--sunken)}}
+summary:focus{{outline:none}}summary:focus-visible{{outline:2px solid var(--accent);outline-offset:2px}}
 code{{font:12.5px "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;background:var(--sunken);padding:1px 6px;border-radius:6px;color:var(--ink)}}
 @media(max-width:560px){{main{{margin:16px;padding:22px 18px}}}}
-</style></head><body><header>{MARK}<span>Lantern</span></header><main>{inner}</main></body></html>"""
+</style></head><body><header><a class="home" href="{home}" title="Go to Lantern">{MARK}<span>Lantern</span></a></header><main>{inner}</main></body></html>"""
 
 
 def valid_cli(cli: str | None) -> str:

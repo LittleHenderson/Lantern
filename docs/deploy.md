@@ -155,9 +155,9 @@ that is not a written promise; to be sure, ask billing@fly.io. Free alternatives
 From the **repository root** (not `cloud/`: the image also packs the analysis engine):
 
 ```bash
-# 0. The gateway first, so it has /v1/whoami and the sign-in pages in the app's style (version 0.2.2).
+# 0. The gateway first, so it has /v1/whoami and the sign-in pages in the app's style (version 0.2.3).
 cd gateway && fly deploy --depot=false && cd ..
-curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.2"
+curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.3"
 
 # 1. Create the empty app (once). `fly orgs list` shows your organisation's short name.
 fly apps create lantern-cloud --org <your-org>
