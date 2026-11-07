@@ -63,7 +63,7 @@ def test_health_is_public_and_shows_no_counters(env):
     # Owner decisions: every known host, results kept until deleted, structure-only by default.
     assert d["hosts"] == "all"
     assert d["limits"]["retention_days"] is None and d["limits"]["default_privacy"] == "structure"
-    assert d["limits"]["clone_max_mb"] == 200
+    assert d["limits"]["clone_max_mb"] == 500
     assert "users" not in d and "runs" not in d
     assert transport.calls == 0          # health never asks the gateway
 

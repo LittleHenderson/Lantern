@@ -154,6 +154,13 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "which model wrote them.")
     if privacy != "full":
         out.append("Source code was left out of this report (structure-only privacy).")
+    left = run_meta.get("skipped") if isinstance(run_meta.get("skipped"), dict) else None
+    if left and isinstance(left.get("files"), int):
+        ex = [str(x)[:120] for x in (left.get("examples") or []) if isinstance(x, str)][:3]
+        out.append(f"The repository was larger than Lantern's size limit, so {left['files']} file(s) Lantern does not "
+                   "read (pictures, video, sound, fonts, archives, compiled programs, model weights, datasets) were "
+                   "left out of the copy" + (f", for example {', '.join(ex)}" if ex else "") + ". All code, "
+                   "configuration and text files were read.")
     if run_meta.get("place") == "cloud":
         out.append("Made by Lantern's cloud service: the repository was copied into a sandboxed container on Lantern's "
                    "server (no network during the analysis, writes only to its own temp folder), analysed without "

@@ -5,6 +5,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- A repository over the size limit is checked without the pictures, video, sound, fonts, archives, compiled
+  programs, model weights and datasets Lantern never reads, so only code counts toward the limit; the Evidence report
+  says how many files were left out and names the biggest. lantern-cloud's limit is now 500 MB (was 200), with a 3 GB
+  data volume and 2 GB of memory; a run that would not fit in the free space says so instead of failing part-way.
 - The website has a Settings page (a button in the header, and in the account sheet): theme, Simple or Advanced, what a
   new check keeps by default, plain-words explanations on or off, sign out, delete the account, play the welcome again.
   The Lantern logo now always does something: from any screen it goes to My runs, and on My runs it plays the welcome.
