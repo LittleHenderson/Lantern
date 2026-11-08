@@ -20,7 +20,7 @@ ENV LANTERN_CLOUD_DB=/home/app/data/lantern_cloud.db \
     LANTERN_CLOUD_RESULTS=/home/app/data/results \
     LANTERN_CLOUD_WORK=/home/app/data/work \
     LANTERN_HOME=/home/app/data/lantern \
-    LANTERN_CLONE_MAX_MB=200 \
+    LANTERN_CLONE_MAX_MB=500 \
     PYTHONUNBUFFERED=1
 RUN mkdir -p /home/app/data
 EXPOSE 8080

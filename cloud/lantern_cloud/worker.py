@@ -75,6 +75,10 @@ def clone_repo(link: str, dest: Path, log, token: str | None = None) -> Path:
     info = remote.parse(link)
     log(f"cloning {info['url']}" + (f" (branch {info['branch']})" if info["branch"] else ""))
     remote.fetch(info["url"], dest, info["branch"], auth=token)
+    left = remote.skipped(dest)
+    if left:
+        log(f"left out {left['files']} file(s) Lantern does not read (pictures, videos, archives, model files; "
+            f"{left['mb']:,.1f} MB) to stay under the {left['cap_mb']} MB limit; the code is {left['kept_mb']:,.1f} MB")
     return dest
 
 
@@ -256,6 +260,10 @@ class Worker:
         try:
             tmp = root / "tmp"
             tmp.mkdir()
+            free = shutil.disk_usage(root).free / 1_000_000
+            if free < 2.5 * self.s.clone_max_mb:   # the download and its files, with room to spare
+                raise RunFailed(f"Lantern's server is short of space right now ({free:,.0f} MB free). "
+                                "Try again in a few minutes.")
             if is_upload(r["link"]):
                 stage("unpack")
                 repo = self._unpack(rid, root, log, start)

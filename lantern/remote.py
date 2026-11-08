@@ -9,6 +9,7 @@ message instead of hanging a job; and the files are measured before checkout and
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -135,6 +136,10 @@ def clone(link: str, log=None, dest: Path | None = None, root: Path | None = Non
     dest.parent.mkdir(parents=True, exist_ok=True)
     log(f"cloning {info['url']}" + (f" (branch {info['branch']})" if info["branch"] else "") + f" into {dest}")
     fetch(info["url"], dest, info["branch"])
+    left = skipped(dest)
+    if left:
+        log(f"left out {left['files']} file(s) Lantern does not read (pictures, videos, archives, model files; "
+            f"{left['mb']:,.1f} MB) to stay under the {left['cap_mb']} MB limit; the code is {left['kept_mb']:,.1f} MB")
     return dest
 
 
@@ -146,15 +151,65 @@ def max_mb() -> int:
         return DEFAULT_MAX_MB
 
 
+def tree_files(dest: Path) -> list[tuple[str, int]]:
+    """(path, bytes) of every file at HEAD, read from git before anything is written to the working tree."""
+    r = _git(["ls-tree", "-r", "-l", "-z", "HEAD"], cwd=dest, timeout=120)
+    out = []
+    for entry in r.stdout.split("\0"):
+        meta, _, path = entry.partition("\t")
+        parts = meta.split()   # mode type sha size
+        if path and len(parts) == 4 and parts[3].isdigit():
+            out.append((path, int(parts[3])))
+    return out
+
+
 def tree_mb(dest: Path) -> float:
     """Size of the files at HEAD, from the index, before anything is written to the working tree."""
-    r = _git(["ls-tree", "-r", "-l", "HEAD"], cwd=dest, timeout=120)
-    total = 0
-    for line in r.stdout.splitlines():
-        parts = line.split(None, 4)   # mode type sha size path
-        if len(parts) >= 4 and parts[3].isdigit():
-            total += int(parts[3])
-    return total / 1_000_000
+    return sum(n for _, n in tree_files(dest)) / 1_000_000
+
+
+# Files Lantern never reads: pictures, sound, video, fonts, archives, compiled programs, model weights, datasets and
+# design files. A repository over the size cap is checked without them when that brings it under the cap; nothing
+# Lantern reads (source, config, manifests, lock files, notebooks, text) is ever left out.
+BULK_EXT = frozenset("""
+png jpg jpeg gif webp bmp ico icns tif tiff heic heif avif psd xcf raw cr2 nef svgz
+mp4 mov avi mkv webm m4v wmv flv mpg mpeg 3gp mp3 wav flac ogg oga m4a aac wma aiff opus mid midi
+ttf otf woff woff2 eot
+zip tar gz tgz bz2 xz 7z rar zst lz4 jar war aar apk aab ipa dmg iso pkg deb rpm msi cab
+exe dll so dylib a o obj lib class pyc pyo wasm node bin dat
+pt pth ckpt safetensors onnx h5 hdf5 pb tflite gguf ggml mlmodel caffemodel joblib keras
+npy npz parquet feather arrow orc avro pkl pickle mat sav rds rdata
+db sqlite sqlite3 mdb accdb
+pdf ai eps sketch fig xd blend fbx glb gltf stl 3ds max dae usdz unitypackage
+""".split())
+BULK_FILE_MB = 20      # any other single file larger than this is data, unless it has a type Lantern reads
+READ_EXT = frozenset("""
+py pyi js jsx ts tsx mjs cjs go rs java kt kts swift dart cs cshtml razor php rb rake erb c h cc cpp cxx hpp hh m mm
+html htm vue svelte astro json jsonc yaml yml toml xml plist gradle properties cfg ini conf env ipynb sql sh bash ps1
+tf lock txt md
+""".split())
+SKIPPED = "lantern-skipped.json"   # in .git: the files a clone left out, for the report's Limits
+
+
+def is_bulk(path: str, size: int) -> bool:
+    name = path.rsplit("/", 1)[-1].lower()
+    ext = name.rsplit(".", 1)[1] if "." in name else ""
+    return ext in BULK_EXT or (size > BULK_FILE_MB * 1_000_000 and ext not in READ_EXT and not name.startswith("."))
+
+
+def _pattern(path: str) -> str:
+    """A sparse-checkout line that matches exactly this one path (wildcards and a trailing space escaped)."""
+    p = re.sub(r"([\\*?\[])", r"\\\1", path)
+    return "!/" + (p[:-1] + "\\ " if p.endswith(" ") else p)
+
+
+def skipped(folder: Path) -> dict | None:
+    """What a Lantern clone left out to stay under the size cap: {files, mb, examples}, or None."""
+    try:
+        d = json.loads((Path(folder) / ".git" / SKIPPED).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) and isinstance(d.get("files"), int) else None
 
 
 def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900, auth: str | None = None) -> None:
@@ -237,11 +292,25 @@ def _checkout(dest: Path, timeout: int = 900) -> None:
     behind: a folder holding only `.git` would otherwise pass as a finished clone and analyze as an empty project
     (seen with a reserved Windows file name such as `aux.txt`, a path over MAX_PATH, or a full disk)."""
     cap = max_mb()
-    size = tree_mb(dest)
+    files = tree_files(dest)
+    size = sum(n for _, n in files) / 1_000_000
     if cap and size > cap:
-        remove_tree(dest)
-        raise RuntimeError(f"the repository's files add up to {size:,.1f} MB, above Lantern's {cap} MB limit "
-                           "(LANTERN_CLONE_MAX_MB). Clone it yourself and add the folder.")
+        # Over the cap: leave out what Lantern never reads (pictures, video, archives, model files, datasets).
+        bulk = [(p, n) for p, n in files if is_bulk(p, n) and "\n" not in p and "\r" not in p]
+        code = size - sum(n for _, n in bulk) / 1_000_000
+        if code > cap:
+            remove_tree(dest)
+            raise RuntimeError(f"the repository's files add up to {size:,.1f} MB, and still {code:,.1f} MB without "
+                               f"the pictures, videos, archives and other files Lantern does not read: above Lantern's "
+                               f"{cap} MB limit (LANTERN_CLONE_MAX_MB). Clone it yourself and add the folder.")
+        sparse = dest / ".git" / "info" / "sparse-checkout"
+        sparse.parent.mkdir(parents=True, exist_ok=True)
+        sparse.write_text("/*\n" + "".join(_pattern(p) + "\n" for p, _ in bulk), encoding="utf-8", newline="\n")
+        _git(["config", "core.sparseCheckout", "true"], cwd=dest)
+        biggest = sorted(bulk, key=lambda x: -x[1])[:5]
+        (dest / ".git" / SKIPPED).write_text(json.dumps({
+            "files": len(bulk), "mb": round(size - code, 1), "kept_mb": round(code, 1), "cap_mb": cap,
+            "examples": [p for p, _ in biggest]}), encoding="utf-8")
     r = _git(["reset", "--hard", "--quiet"], cwd=dest, timeout=timeout)
     if r.returncode != 0:
         remove_tree(dest)
