@@ -5,6 +5,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Zoomed in, every page stays usable: when a project's top bar does not fit, its tabs move to a second row that
+  scrolls sideways (website and app); Readiness and Protections scroll again after the map was opened (the map's
+  full-panel layout stayed on and cut them off); the Findings and Readiness tables scroll sideways instead of cutting
+  columns; the map fits a short window; the report no longer drifts 9px sideways on a phone.
 - Big projects' reports open again. Files a build tool wrote (a Vite/webpack bundle or minified script, whatever
   its name: a few very long lines) are no longer mapped as code, and the report cuts lines over 2,000 characters and
   caps how much source it carries. One 1.3 MB bundle had made a 360 MB report that took 2.3 GB to open and crashed

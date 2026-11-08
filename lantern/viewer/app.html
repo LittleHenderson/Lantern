@@ -432,8 +432,15 @@ body[data-mode=simple] .sub .tabs button.on::after{display:none}
 .tabs button:hover{color:var(--ink)}
 .tabs button.on{color:var(--ink)}
 .tabs button.on::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
-iframe{border:0;width:100%;height:calc(100vh - var(--hh));height:calc(100dvh - var(--hh));display:block;background:transparent}
-.withbar iframe{height:calc(100vh - var(--hh) - 56px);height:calc(100dvh - var(--hh) - 56px)}
+iframe{border:0;width:100%;height:calc(100vh - var(--subh, var(--hh)));height:calc(100dvh - var(--subh, var(--hh)));display:block;background:transparent}
+.withbar iframe{height:calc(100vh - var(--subh, var(--hh)) - 56px);height:calc(100dvh - var(--subh, var(--hh)) - 56px)}
+/* Zoomed in (or a narrow window): when the bar's pieces do not fit on one line, fitSub() adds .two and the tabs move to
+   a second row that scrolls sideways, so every tab and button stays reachable; --subh is the bar's real height. */
+.sub.two{flex-wrap:wrap;height:auto;row-gap:0}
+.sub.two>:not(.tabs){margin-top:8px;margin-bottom:8px}
+.sub.two .tabs{order:3;flex:1 0 100%;margin-left:0;border-top:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
+.sub.two .tabs button{height:44px;flex:none}
+body[data-mode=simple] .sub.two .tabs{border-radius:0;background:none;padding:4px 0}
 .xbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:56px;padding:8px 20px;background:var(--surface);border-bottom:1px solid var(--line);font-size:13px}
 .xbar>.ic{width:18px;height:18px;color:var(--accent);flex:none} .xbar .t{flex:1;min-width:240px} .xbar .t b{color:var(--ink)} .xbar .d{font-size:12px;color:var(--muted);margin-top:2px}
 .xbar .xlog{flex-basis:100%;max-height:140px;margin:0}
@@ -622,6 +629,20 @@ function applyTheme() {
   b.title = `Appearance: ${THEME === 'auto' ? 'match this computer' : THEME}. Click to change.`;
 }
 function setTheme(t) { THEME = t; try { localStorage.setItem('lantern.theme', t); } catch (e) {} applyTheme(); }
+// A project's bar (.sub) on one line when it fits, else its tabs on a second row (.two), so zooming in never pushes a
+// tab or button out of reach; --subh is its height, which the report frame below subtracts. Shared with the website.
+function fitSub() {
+  const s = document.querySelector('.sub');
+  if (!s) { document.body.style.removeProperty('--subh'); return; }
+  const t = s.querySelector('.tabs');
+  s.classList.remove('two');
+  s.classList.toggle('two', s.scrollWidth > s.clientWidth + 1 || !!(t && t.scrollWidth > t.clientWidth + 1));
+  document.body.style.setProperty('--subh', s.offsetHeight + 'px');
+}
+let fitQueued = 0;
+const fitSoon = () => { if (!fitQueued) fitQueued = requestAnimationFrame(() => { fitQueued = 0; fitSub(); }); };
+addEventListener('resize', fitSoon);
+new MutationObserver(fitSoon).observe(document.body, {childList: true, subtree: true});
 document.getElementById('theme').onclick = () => { setTheme(THEMES[(THEMES.indexOf(THEME) + 1) % 3]); if (S.view === 'settings') render(); };
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 applyTheme();
