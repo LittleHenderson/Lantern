@@ -766,9 +766,24 @@ def discover(repo: Path) -> list[Path]:
             elif p.suffix in LANGS and not fn.endswith((".d.ts", ".min.js", ".bundle.js")) \
                     and not fn.startswith(("vite.config", "next.config", "tailwind.config", "postcss.config",
                                            "eslint.config", "jest.config", "vitest.config", "playwright.config",
-                                           "webpack.config", "babel.config", "rollup.config")):
+                                           "webpack.config", "babel.config", "rollup.config")) \
+                    and not built_bundle(p):
                 out.append(p)
     return out
+
+
+def built_bundle(p: Path) -> bool:
+    """A file a build tool wrote (a Vite/webpack bundle or minified script, whatever its name): a few very long
+    lines. Its functions are the libraries' code squeezed together, so mapping it adds thousands of one-letter
+    nodes and copies whole lines of it into the report (one 1.3 MB bundle made a 360 MB report)."""
+    try:
+        if p.stat().st_size < 50_000:
+            return False
+        data = p.read_bytes()
+    except OSError:
+        return False
+    lines = data.count(b"\n") + 1
+    return len(data) / lines > 500 or max(map(len, data.split(b"\n"))) > 50_000
 
 
 def inline_script(src: bytes) -> bytes | None:
