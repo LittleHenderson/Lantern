@@ -15,12 +15,18 @@ from .graph import Graph
 TEMPLATE = Path(__file__).parent / "viewer" / "report.html"
 
 
+MAX_LINE_CHARS = 2000      # a longer line is cut (line numbers stay right): minified code or data, not for reading
+MAX_SOURCE_CHARS = 40_000  # per function, after cutting lines
+MAX_TOTAL_CHARS = 40_000_000  # all of it: past this, functions show no lines (the report must still open on a phone)
+
+
 def collect_sources(g: Graph, max_lines: int = 200) -> dict[str, str]:
     repo = Path(g.repo_root)
     cache: dict[str, list[str]] = {}
     out = {}
+    total = 0
     for n in g.nodes.values():
-        if n.kind != "callable" or not n.file or n.start_line is None:
+        if n.kind != "callable" or not n.file or n.start_line is None or total >= MAX_TOTAL_CHARS:
             continue
         lines = cache.get(n.file)
         if lines is None:
@@ -30,7 +36,9 @@ def collect_sources(g: Graph, max_lines: int = 200) -> dict[str, str]:
                 lines = []
             cache[n.file] = lines
         chunk = lines[n.start_line - 1:(n.end_line or n.start_line)][:max_lines]
-        out[n.id] = "\n".join(chunk)
+        text = "\n".join(ln if len(ln) <= MAX_LINE_CHARS else ln[:MAX_LINE_CHARS] + " …" for ln in chunk)
+        out[n.id] = text[:MAX_SOURCE_CHARS]
+        total += len(out[n.id])
     return out
 
 
