@@ -141,7 +141,9 @@ template literals (`${id}` → `{}`), `+` concatenation, and module-level string
 Script inside HTML pages (`.html`/`.htm`, `js_frontend.inline_script`): the JavaScript `<script>` bodies are laid over a
 buffer of spaces at their original offsets (line numbers are the page's own) and parsed with the JS grammar; the module
 keeps the `.html` in its name (`js:site/index.html::load`), the file node is a `page` entry (Browser lane; its functions
-Frontend). JSON/importmap/`text/babel` blocks, `src=` tags and `.min.html` are skipped. `LJ-*` pattern rules do not run on
+Frontend). JSON/importmap/`text/babel` blocks, `src=` tags and `.min.html` are skipped. Built bundles
+(`js_frontend.built_bundle`: over 50 KB with lines averaging 500+ characters or one over 50,000) are not read, whatever
+their name; `report.collect_sources` cuts lines at 2,000 characters, 40,000 per function, 40 M in all. `LJ-*` pattern rules do not run on
 pages (a page that builds itself with `innerHTML` from escaped values would light up on every line).
 
 Entries: Next.js (`app/**/page`, `app/**/route` exports, `pages/**`, `pages/api/**`, only when the
