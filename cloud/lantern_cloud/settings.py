@@ -39,8 +39,8 @@ class Settings:
     global_runs_per_day: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_GLOBAL_RUNS_PER_DAY", 300))
     concurrent_jobs: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_CONCURRENT_JOBS", 2))
     # The same variable `lantern.remote` reads for its size check (set in cloud/Dockerfile and cloud/fly.toml).
-    clone_max_mb: int = field(default_factory=lambda: _env_int("LANTERN_CLONE_MAX_MB", 200))
-    job_timeout: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_JOB_SECONDS", 600))
+    clone_max_mb: int = field(default_factory=lambda: _env_int("LANTERN_CLONE_MAX_MB", 500))
+    job_timeout: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_JOB_SECONDS", 1200))
     # Minutes with no request and no run before the service stops itself (Fly then keeps the machine stopped, and
     # bills nothing for it, until the next visitor). 0 = never.
     idle_minutes: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_IDLE_MINUTES", 0))

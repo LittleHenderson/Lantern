@@ -243,3 +243,14 @@ def test_the_website_has_settings_and_a_logo_that_does_something():
     assert "go('home')" in page.split("document.getElementById('home').onclick")[1].split("};")[0]
     assert "replayIntro" in page.split("document.getElementById('home').onclick")[1].split("};")[0]
     assert 'id="tosettings"' in page   # the account sheet leads to Settings too
+
+
+def test_zooming_in_keeps_every_tab_reachable_and_every_tab_scrollable():
+    """The bar's tabs move to a second row when they don't fit (the website gets fitSub from the app), and leaving the
+    map takes off its full-panel class, whose overflow:hidden stopped Readiness and Protections from scrolling."""
+    html, _ = site.page("t")
+    assert "function fitSub()" in html and ".sub.two" in html and "--subh" in html
+    report = (Path(__file__).resolve().parents[1] / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+    render = report[report.index("function render() {"):]
+    assert "classList.remove('dotted', 'gfull')" in render[:400]
+    assert ".ftable{" in report and "overflow-x:auto" in report.split(".ftable{", 1)[1].split("}", 1)[0]
