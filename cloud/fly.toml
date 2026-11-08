@@ -11,8 +11,10 @@ primary_region = 'sjc'
   LANTERN_CLOUD_RUNS_PER_DAY = '50'
   LANTERN_CLOUD_GLOBAL_RUNS_PER_DAY = '1000'
   LANTERN_CLOUD_CONCURRENT_JOBS = '2'
-  LANTERN_CLONE_MAX_MB = '200'
-  LANTERN_CLOUD_JOB_SECONDS = '600'
+  # Only code counts: a bigger repository is checked without the pictures, videos, archives and model files Lantern
+  # never reads (lantern/remote.py). 500 MB needs the 3 GB volume below and 2 GB of memory (owner's question 2026-11-07).
+  LANTERN_CLONE_MAX_MB = '500'
+  LANTERN_CLOUD_JOB_SECONDS = '1200'
   # 0 = results are kept until the person deletes them (owner's decision, 2026-11-03)
   LANTERN_CLOUD_RETENTION_DAYS = '0'
   # Sleep when unused: after 10 minutes with no visitor and no run, the service stops itself and Fly bills
@@ -22,7 +24,7 @@ primary_region = 'sjc'
 [[mounts]]
   source = 'lantern_cloud_data'
   destination = '/home/app/data'
-  initial_size = '1gb'
+  initial_size = '3gb'   # the deploy workflow extends an older, smaller volume to this
 
 [http_service]
   internal_port = 8080
@@ -51,6 +53,6 @@ primary_region = 'sjc'
   retries = 5
 
 [[vm]]
-  # 1 GB covers typical apps. A very large repository (Django-sized) may need 2 GB: `fly scale memory 2048`.
+  # 2 GB so a repository near the 500 MB limit can be mapped; billed only while the machine runs (it sleeps when idle).
   size = 'shared-cpu-1x'
-  memory = '1gb'
+  memory = '2gb'

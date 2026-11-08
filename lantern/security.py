@@ -382,7 +382,7 @@ def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
     if not file:
         return None
     best, best_span = None, None
-    for n in g.nodes.values():
+    for n in g.nodes_in(file):
         if n.file != file or n.start_line is None:
             continue
         if line is None:

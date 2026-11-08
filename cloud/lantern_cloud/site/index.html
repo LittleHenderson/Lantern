@@ -404,7 +404,7 @@ async function startRun2(link, privacy, agreed) {
 }
 // ---- upload from this computer: a folder (zipped here, in the browser) or a .zip, sent to /v1/uploads
 const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', 'venv', 'env', '__pycache__', '.next', '.nuxt', 'dist', 'build', 'target', '.lantern', '.cache', '.turbo', 'coverage', '.pytest_cache', '.mypy_cache', 'vendor']);
-const capMB = () => ((S.me && S.me.limits) || {}).clone_max_mb || 200;
+const capMB = () => ((S.me && S.me.limits) || {}).clone_max_mb || 500;
 // The message under the add box (a refused link, an upload's progress or error). Kept in S so a redraw (runs still
 // going redraw the page every few seconds) does not wipe it; `html` is built from esc()'d values only.
 function upMsg(kind, html) { S.addMsg = html ? {kind, html} : null; const e = document.getElementById('adderr'); if (e) e.innerHTML = addMsgHtml(); }
