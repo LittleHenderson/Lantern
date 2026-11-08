@@ -5,6 +5,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Big projects' reports open again. Files a build tool wrote (a Vite/webpack bundle or minified script, whatever
+  its name: a few very long lines) are no longer mapped as code, and the report cuts lines over 2,000 characters and
+  caps how much source it carries. One 1.3 MB bundle had made a 360 MB report that took 2.3 GB to open and crashed
+  lantern-cloud; the same project's report is now 72 MB and opens with about 500 MB.
 - Checks on big projects are about three times faster: finding which functions call which now uses an index
   instead of reading every link each time (a 1,300-file project went from 6 minutes to under 2, with identical
   results). lantern-cloud also allows 20 minutes per run (was 10).
