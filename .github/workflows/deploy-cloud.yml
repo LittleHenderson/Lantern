@@ -58,7 +58,9 @@ jobs:
           if [ "${{ github.event.inputs.app }}" = "lantern-cloud" ]; then
             flyctl deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --remote-only -a lantern-cloud
           else
-            flyctl deploy gateway --config gateway/fly.toml --dockerfile gateway/Dockerfile --remote-only -a lantern-gateway
+            # The same command as the laptop (docs/deploy.md): run from the gateway folder, so fly.toml and Dockerfile
+            # are read from there. Given a folder argument, flyctl reads --config relative to that folder, not the repo.
+            cd gateway && flyctl deploy --remote-only -a lantern-gateway
           fi
       - name: the new version answers
         run: |
