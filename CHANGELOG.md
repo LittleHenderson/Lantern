@@ -5,6 +5,17 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Lantern's report on its own code told four things wrong (2026-11-09, found by checking the Evidence Report of run
+  b51NcYcvaZzhuElb). Reports made on the website were titled "repo" for every project, because the code was read
+  from a folder called `repo`; it is now read from a folder named after the repository (`Lantern`, `shop`), so the
+  Evidence Report and "what keeps … safe" use the project's name. The "Protections" list marked rate limiting and
+  upload checks "in place" because it found the words in Lantern's own advice text and pattern lists; strings and
+  comments no longer count (the same line was also listed three times), and an item that is in place now says what
+  was found instead of repeating the warning. Routes in test code (Lantern's sample apps under `tests/fixtures`) are
+  no longer listed as "anyone on the internet can call them". A lock file no longer names frameworks the app does
+  not use (Starlette and Click came from `requirements-lock.txt`), and the "N findings are heuristic" line counts
+  only the findings the report lists.
+
 - Sign out everywhere (2026-11-09; gateway 0.2.5). The website's account box and Settings have a "Sign out everywhere" button: after
   one confirmation it signs the account out on every computer and phone, in the Lantern app and in the terminal
   (gateway `POST /v1/auth/signout` with `{"everywhere": true}`, which needs a working sign-in, so nobody can sign

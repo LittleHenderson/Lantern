@@ -303,3 +303,42 @@ def test_an_api_key_check_counts(tmp_path):
     p = _prot(tmp_path)["route-auth"]
     assert p["status"] == "in place", p
     assert p["found"] == ["POST /a: calls `verify_api_key`", "PUT /b: calls `check_api_key`", "PATCH /c: calls `require_api_key`"]
+
+
+def test_words_in_strings_and_pattern_lists_are_not_protections(tmp_path):
+    # Lantern read itself and marked rate limiting and upload checks "in place" from its own advice text and its own
+    # pattern lists (`UPLOAD = re.compile(r"...UploadFile...")`), with the same line listed three times.
+    files = dict(BARE)
+    files["svc/rules.py"] = (
+        "import re\n"
+        "UPLOAD = re.compile(r\"\\bUploadFile\\b|request\\.files|multer\\(\")\n"
+        "UPLOAD_LIMIT = re.compile(r\"MAX_CONTENT_LENGTH|max_size|content_type\")\n"
+        "ALLOW = re.compile(r\"allow_?list|ALLOWED_HOSTS\")\n"
+        "ADVICE = 'add a per-user and per-IP rate limit (slowapi, express-rate-limit)'\n")
+    _write(tmp_path, files)
+    p = _prot(tmp_path)
+    for k in ("rate-limit", "ssrf-allowlist", "upload-checks"):
+        assert p[k]["status"] == "add", (k, p[k])
+    assert p["upload-checks"]["evidence"] == ["svc/main.py:3", "svc/main.py:16"]   # the real upload, not the list
+    assert all("svc/rules.py" not in e for k in p for e in p[k]["evidence"] + p[k]["found"])
+
+
+def test_in_place_protections_say_what_was_found(tmp_path):
+    files = dict(BARE)
+    files["pyproject.toml"] = files["pyproject.toml"].replace('"requests"]', '"requests", "slowapi"]')
+    _write(tmp_path, files)
+    p = _prot(tmp_path)["rate-limit"]
+    assert p["status"] == "in place" and p["found"] == ["slowapi in the dependencies"]
+    assert "was found" in p["why"] and "can be called as fast" not in p["why"]
+
+
+def test_routes_in_test_code_are_not_the_apps_routes(tmp_path):
+    # Lantern's own sample apps under tests/fixtures were listed as "anyone on the internet can call them"
+    _write(tmp_path, {
+        "pyproject.toml": '[project]\nname = "svc"\nversion = "0.1"\ndependencies = ["fastapi"]\n',
+        "svc/main.py": "from fastapi import FastAPI\napp = FastAPI()\n\n@app.get('/health')\ndef health():\n    return 1\n",
+        "tests/fixtures/notes/api.py": ("from fastapi import FastAPI\napp = FastAPI()\n\n"
+                                        "@app.delete('/api/notes/{id}')\ndef drop(id: int):\n    return id\n"),
+    })
+    p = _prot(tmp_path)
+    assert "route-auth" not in p and "rate-limit" not in p

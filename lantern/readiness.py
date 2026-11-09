@@ -184,7 +184,8 @@ def detect_stack(repo: Repo, g: Graph) -> dict:
     deps_text = " ".join(repo.text(f) for f in repo.project_files
                          if f.rsplit("/", 1)[-1] in ("pyproject.toml", "package.json", "Pipfile", "go.mod", "Cargo.toml",
                                                      "pom.xml", "build.gradle", "build.gradle.kts", "composer.json", "Gemfile", "CMakeLists.txt", "conanfile.txt", "conanfile.py", "vcpkg.json", "meson.build")
-                         or re.search(r"(^|/)requirements[^/]*\.txt$", f)).lower()
+                         or re.search(r"(^|/)requirements[^/]*\.txt$", f) and "lock" not in f.rsplit("/", 1)[-1]).lower()
+    # (a lock file pins every library pulled in along the way: FastAPI brings Starlette, a tool brings Click)
     fw = []
     for key, label in (("fastapi", "FastAPI"), ("flask", "Flask"), ("django", "Django"), ("starlette", "Starlette"),
                        ('"next"', "Next.js"), ('"react"', "React"), ('"vite"', "Vite"), ('"express"', "Express"),

@@ -235,3 +235,13 @@ def test_program_output_is_not_print_debugging(tmp_path):
     c = _checks(assess(build_graph(tmp_path), EMPTY_SEC))
     assert c["obs-print"]["status"] == "partial" and "1 print() call" in c["obs-print"]["evidence"]
     assert "svc/main.py:19" in c["obs-print"]["evidence"]
+
+
+def test_a_lock_file_does_not_name_the_frameworks(tmp_path):
+    # requirements-lock.txt pins everything pulled in along the way: FastAPI brings Starlette, a tool brings Click
+    from lantern.engine import build_graph
+    from lantern.readiness import Repo, detect_stack
+    _write(tmp_path, {"pyproject.toml": '[project]\nname = "svc"\nversion = "0.1"\ndependencies = ["fastapi"]\n',
+                      "requirements-lock.txt": "fastapi==0.115.0\nstarlette==0.41.0\nclick==8.1.7\n",
+                      "svc/main.py": "def f():\n    return 1\n"})
+    assert detect_stack(Repo(tmp_path), build_graph(tmp_path))["frameworks"] == ["FastAPI"]

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -95,6 +96,25 @@ HINTS = {NOT_PUBLIC: "upload", NO_ACCESS: "upload", GITHUB_ONLY: "upload", CONNE
 UPLOAD_PREFIX = "lantern:upload/"   # a run's "link" for an app uploaded as a .zip; the name is only a label
 
 
+def source_name(link: str) -> str:
+    """The folder name the run's code is read from. Reports name the project after its folder (the Evidence Report's
+    title, "what keeps <name> safe"), so a run of github.com/owner/shop is read from a folder called `shop`, not a
+    fixed `repo`. Only letters, digits, `.`, `_` and `-` are kept; anything else becomes `app`."""
+    name = ""
+    if is_upload(link):
+        name = link[len(UPLOAD_PREFIX):]
+    elif isinstance(link, str) and link.startswith(SAMPLE_PREFIX):
+        name = link[len(SAMPLE_PREFIX):]
+    else:
+        try:
+            name = remote.parse(link)["name"]
+        except (ValueError, TypeError, KeyError, AttributeError):
+            name = ""
+    name = re.sub(r"[^\w.-]+", "-", name.rsplit("/", 1)[-1])
+    name = re.sub(r"\.(git|zip)$", "", name, flags=re.I).strip(".-")[:80]
+    return name or "app"
+
+
 def is_upload(link: str) -> bool:
     return isinstance(link, str) and link.startswith(UPLOAD_PREFIX)
 
@@ -111,6 +131,7 @@ def sample_id(link: str) -> str | None:
 def get_source(link: str, dest: Path, log, access=None) -> Path:
     """Step 1: the code to read. A sample app is written from the starter templates inside the package (no network,
     nothing cloned); anything else is cloned and checked for missing files."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
     sid = sample_id(link)
     if sid:
         log(f"sample app {sid}: written from Lantern's built-in starter apps (nothing downloaded)")
@@ -270,7 +291,7 @@ class Worker:
             else:
                 stage("clone")
                 try:
-                    repo = get_source(r["link"], root / "repo", log, self.access(r))
+                    repo = get_source(r["link"], root / "src" / source_name(r["link"]), log, self.access(r))
                 except (RuntimeError, ValueError) as e:
                     raise RunFailed(_scrub(str(e), scrub)) from None
             commit = _commit(repo)
@@ -345,7 +366,8 @@ class Worker:
         tmp = root / "tmp"
         zipped = tmp / "upload.zip"
         shutil.move(str(src), zipped)
-        repo = tmp / "app"
+        (tmp / "src").mkdir()
+        repo = tmp / "src" / source_name(self.store.run(rid)["link"])
         rc, output, timed_out = self._jailed(rid, root, [sys.executable, "-m", "lantern.archive", str(zipped), str(repo),
                                                          "--max-mb", str(self.s.clone_max_mb)],
                                              cwd=tmp, net=False, log=log, timeout=min(self._left(start), 180))
@@ -379,7 +401,7 @@ class Worker:
                 raise RunFailed(UPLOAD_EXPLAIN)
             log("· Copying the repository again to read the code (nothing is run or installed)")
             try:
-                repo = get_source(r["link"], root / "repo", log, self.access(r))
+                repo = get_source(r["link"], root / "src" / source_name(r["link"]), log, self.access(r))
             except (RuntimeError, ValueError) as e:
                 raise RunFailed(_scrub(str(e), scrub)) from None
             now_at = _commit(repo)

@@ -448,3 +448,15 @@ def test_the_audit_step_failing_still_gives_a_finished_run(tmp_path, clone_from,
     assert audits and all(st.startswith("skipped") for st in audits.values()), audits
     assert done["summary"]["counts"]["critical"] >= 1      # the code's own findings are unaffected
     assert list(Path(s.work_dir).iterdir()) == []
+
+
+def test_the_code_is_read_from_a_folder_named_after_the_repository():
+    # The Evidence Report is titled after the folder it read; a fixed `repo` folder titled every report "repo"
+    s = worker_mod.source_name
+    assert s("https://github.com/LittleHenderson/Lantern") == "Lantern"
+    assert s("https://github.com/octo/shop.git") == "shop"
+    assert s("https://gitlab.com/octo/shop/tree/main") == "shop"
+    assert s("lantern:sample/shop") == "shop"
+    assert s("lantern:upload/my app.zip") == "my-app"
+    for bad in ("lantern:upload/..", "lantern:upload/", "not a link", None):
+        assert s(bad) == "app"
