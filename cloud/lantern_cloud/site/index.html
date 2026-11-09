@@ -92,6 +92,7 @@
 #stage{position:absolute;inset:0}
 #skipzone{position:absolute;left:0;right:0;top:0;bottom:44px;z-index:2;cursor:pointer}
 #introbar{position:absolute;top:18px;right:20px;z-index:3;display:flex;gap:8px;align-items:center}
+#introbar[hidden]{display:none}
 .pillbtn{height:36px;padding:0 14px;border-radius:99px;border:1px solid rgba(255,255,255,.18);background:rgba(14,14,16,.6);color:#BEBEC3;cursor:pointer;display:inline-flex;align-items:center;gap:8px;font:500 13px var(--font);white-space:nowrap;backdrop-filter:blur(6px)}
 .pillbtn:hover{color:#F3F3F1;border-color:rgba(255,255,255,.35)}
 .pillbtn svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
@@ -1046,7 +1047,8 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
 // The intro: the landing page's 20 seconds, on every visit to the home page (Skip, a click or Escape jumps to its end
 // card). Nothing is remembered. If the scripts above did not load, the overlay hides and the page shows.
 (function () {
-  const intro = document.getElementById('intro'), end = document.getElementById('introend'), skipzone = document.getElementById('skipzone');
+  const intro = document.getElementById('intro'), end = document.getElementById('introend'), skipzone = document.getElementById('skipzone'),
+        bar = document.getElementById('introbar');
   let state = intro.classList.contains('hidden') ? 'hidden' : 'playing', sound = false, root = null;
   const control = { current: null };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1056,7 +1058,8 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
     root.render(React.createElement(window.LanternIntro, { sound, control, onDone: showEnd }));
     return true;
   }
-  function resetEnd() { end.classList.remove('on'); end.hidden = true; skipzone.hidden = false; }
+  // Sound and Skip belong to the film only: once it ends (or is skipped) they go, and come back on a replay.
+  function resetEnd() { end.classList.remove('on'); end.hidden = true; skipzone.hidden = false; bar.hidden = false; }
   function play() {
     resetEnd();
     if (!mount()) { state = 'hidden'; intro.className = 'hidden'; return; }
@@ -1065,7 +1068,7 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
   }
   function showEnd() {
     if (state !== 'playing') return;
-    state = 'ended'; skipzone.hidden = true; end.hidden = false;
+    state = 'ended'; skipzone.hidden = true; bar.hidden = true; end.hidden = false;
     requestAnimationFrame(() => { end.classList.add('on'); document.getElementById('end-start').focus({ preventScroll: true }); });
   }
   function skip() {
@@ -1074,7 +1077,7 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
   }
   function finish() {
     if (state !== 'playing' && state !== 'ended') return;
-    state = 'fading'; intro.className = 'fading';
+    state = 'fading'; intro.className = 'fading'; bar.hidden = true;
     setTimeout(() => { if (state === 'fading') { state = 'hidden'; intro.className = 'hidden'; resetEnd(); } }, 950);
   }
   // Land on the home page's link box (with a short accent ring) or on the sample apps.
@@ -1090,11 +1093,12 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
     }, 60);
   }
   skipzone.onclick = skip;
-  document.getElementById('skipbtn').onclick = () => { if (state === 'ended') finish(); else skip(); };
+  document.getElementById('skipbtn').onclick = skip;
   document.getElementById('end-start').onclick = () => { finish(); land('box'); };
   document.getElementById('end-sample').onclick = () => { finish(); land('samples'); };
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && state === 'playing') { e.preventDefault(); skip(); }
+    else if (e.key === 'Escape' && state === 'ended') { e.preventDefault(); finish(); }
     else if ((e.key === 'Enter' || e.key === ' ') && state === 'ended' && !(e.target.closest && e.target.closest('#introbar, #end-sample'))) {
       e.preventDefault(); finish(); land('box');
     }
