@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .context import code_mentions, handles_passwords, password_hash_uses
 from .graph import Graph
 from .websec import call_adjacency, code_only, is_public_route, login_check, mentions_auth, mutating_route
 
@@ -25,7 +26,10 @@ RATE_LIMIT_LIBS = re.compile(r"slowapi|fastapi[-_]limiter|flask[-_]limiter|djang
 HEADER_SIGNS = re.compile(r"helmet|Content-Security-Policy|Strict-Transport-Security|X-Frame-Options|"
                           r"SecurityMiddleware|secure\.Secure|talisman|frame-ancestors", re.I)
 FAST_HASH = re.compile(r"hashlib\.(md5|sha1|sha224|sha256|sha512)\s*\(|createHash\(\s*['\"](md5|sha1|sha256|sha512)['\"]")
-SLOW_HASH = re.compile(r"bcrypt|argon2|scrypt|passlib|pbkdf2|generate_password_hash|make_password|pwdlib", re.I)
+# Whole words: `\bcrypto` in a regex string reads as "bcrypt" without them. Searched in dependency files and in code
+# with strings and comments blanked (a word in a list of phrases is not a hashing library).
+SLOW_HASH = re.compile(r"(?<![\w-])(?:bcrypt(?:js)?|argon2(?:-cffi|id)?|scrypt|passlib|pbkdf2(?:_hmac)?|"
+                       r"generate_password_hash|make_password|pwdlib)(?![\w-])", re.I)
 MANAGED_AUTH = re.compile(r"@supabase/|supabase\.auth|next-auth|@auth/|@clerk/|firebase/auth|firebase-admin|"
                           r"auth0|lucia|better-auth|django\.contrib\.auth|fastapi[-_]users|flask[-_]login", re.I)
 SERVER_FETCH = re.compile(
@@ -118,24 +122,32 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
                  "user-supplied URL straight to requests/httpx/fetch.",
                  _where(allow))
 
-    # 4. Slow password hashing
-    pw = repo.grep(re.compile(r"password", re.I), limit=60)
-    pw_files = {f for f, _, _ in pw}
-    if pw_files and not managed:
-        fast = [h for h in repo.grep(FAST_HASH, limit=40) if h[0] in pw_files]
-        slow = SLOW_HASH.search(deps) or repo.grep(SLOW_HASH, limit=1)
-        if fast or not slow:
+    # 4. Slow password hashing. "Passwords are handled" means code names a password value (a word in a string, a
+    # comment or a regex list does not count); "a fast hash on a password" means the hashed value, where the result
+    # goes, or the function around it is password-named (context.py, names only). A fast hash used for an id, a seed
+    # or a checksum is not evidence about passwords.
+    pw = handles_passwords(repo.code())
+    if pw and not managed:
+        fast = password_hash_uses(g, repo.grep(FAST_HASH, limit=200), lambda f: repo.text(f).splitlines(), {})
+        slow = SLOW_HASH.search(deps) or code_mentions(repo.code(), SLOW_HASH)
+        if fast:
             item("password-hashing", "Slow password hashing", "add",
-                 "Passwords are handled in the code, and " + (
-                     "a fast hash (MD5/SHA) is used in the same files: a leaked database could be cracked in hours."
-                     if fast else "no password-hashing library (bcrypt, argon2, scrypt) was found."),
-                 _where(fast or pw),
+                 "A fast hash (MD5/SHA) is applied to a password-named value: a leaked database could be cracked in hours.",
+                 _where(fast),
                  "Store only argon2 or bcrypt hashes (passlib/pwdlib/bcrypt in Python, bcrypt or argon2 in Node), or "
                  "use a managed auth service so you never store passwords.")
-        else:
+        elif slow:
             item("password-hashing", "Slow password hashing", "in place",
                  "Passwords are handled in the code, and a slow hashing library is present.", [],
                  "Keep using it for every stored password.", ["bcrypt / argon2 / scrypt found"])
+        else:
+            item("password-hashing", "Slow password hashing", "check",
+                 "Code names a password value, but Lantern saw no code that hashes one, fast or slow, and no "
+                 "password-hashing library. If the app stores passwords anywhere, confirm they are hashed with "
+                 "argon2 or bcrypt; if it only passes them on (a database login, an outside service), nothing is needed.",
+                 _where(pw),
+                 "Store only argon2 or bcrypt hashes (passlib/pwdlib/bcrypt in Python, bcrypt or argon2 in Node), or "
+                 "use a managed auth service so you never store passwords.")
 
     # 5. Login check on every route that changes data. Each route is checked on its own (decorator, signature,
     # what it calls, what its body says with strings and comments blanked out); the LW-AUTH-MISSING findings
