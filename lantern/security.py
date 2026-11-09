@@ -473,6 +473,39 @@ def _rank(f: dict) -> str:
     return "low"
 
 
+def rank_reason(f: dict) -> str:
+    """Why `_rank` gave the rank it gave, in words (kept next to `_rank` so the two change together)."""
+    if f.get("in_tests") and f.get("category") == "code":
+        return "Test code: your users do not run it, so it is ranked low and counted apart."
+    if f.get("fixed_rank"):
+        return f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it."
+    sev = f.get("tool_severity")
+    reach = f.get("reachable")
+    untrusted = reach and reach["kind"] in UNTRUSTED_ENTRY_KINDS
+    if f.get("category") == "secret":
+        return "A key written in the code is always critical: anyone who can read the code can use it."
+    if f.get("category") == "dependency":
+        return "From the advisory's own severity (high when the audit gives none)."
+    base = f"{f.get('tool') or 'The tool'} rates the pattern {str(sev).lower()}"
+    if sev == "HIGH" and untrusted and f.get("input") is not False:
+        r = base + f", and {reach['kind']} code reaches it" + (", using request data." if f.get("input") else
+                                                               "; Lantern could not rule out request data.")
+    elif sev == "HIGH" and reach:
+        r = base + ", and something in the app reaches it" + (", but no request data reaches the line."
+                                                              if f.get("input") is False else ".")
+    elif sev == "MEDIUM" and untrusted:
+        r = base + f", and {reach['kind']} code reaches it."
+    elif sev == "MEDIUM" and reach:
+        r = base + f", reached from {reach['kind']} code (not a server route, command or script)."
+    elif sev == "HIGH":
+        r = base + ", but nothing in the map reaches it today."
+    else:
+        r = base + (", and nothing in the map reaches it." if not reach else ".")
+    if f.get("rank_note"):
+        r += " Then lowered by context: " + f["rank_note"]
+    return r
+
+
 RANK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 ACCEPTED_FILE = "lantern-accepted.json"
 
@@ -623,6 +656,9 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     # Scenarios (scenarios.py): a short story of one person meeting each finding, built from the facts above only.
     from .scenarios import attach as attach_scenarios
     attach_scenarios(findings, g)
+    # The case for each finding outside tests (case.py): claim, evidence, conditions, confidence, unknowns, status.
+    from .case import attach as attach_cases
+    attach_cases(findings, g)
     findings.sort(key=lambda f: (f["in_tests"], RANK_ORDER[f["rank"]], f["file"] or "", f["line"] or 0))
     live =[f for f in findings if not f["in_tests"] and f["status"] == "open"]
     counts = {k: sum(1 for f in live if f["rank"] == k) for k in RANK_ORDER}
