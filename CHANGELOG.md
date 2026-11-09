@@ -18,6 +18,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   free use, and switching an account off still signs it out everywhere. Accounts from before keep their current
   token. The website also picks up a sign-in finished in the GitHub or Google tab after the page was reloaded or its
   sign-in box closed, instead of asking again.
+- The intro's Sound and Skip intro buttons go away when the film ends (2026-11-09). They stayed in the corner of the
+  end card, where there was nothing left to skip or hear; now the end card shows only its two buttons, Escape leaves it,
+  and both come back when the intro plays again. Same on the website and the landing page; the intro still plays on
+  every visit.
 - Ask Lantern on the website says why it could not answer (2026-11-09). It used to say "The model did not
   answer" for every problem. Now it names the real one in plain words: your sign-in is no longer accepted (and the
   sign-in box opens), the model company refused Lantern's key or its account is out of
