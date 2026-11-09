@@ -24,6 +24,11 @@
 @media (min-width:1181px){.ptable .r{min-width:1180px}}
 @media (max-width:1180px){.ptable .r{grid-template-columns:180px 132px 40px 40px 40px 44px 244px 112px minmax(150px,1fr)}.ptable .r > :nth-child(2),.ptable .r > :nth-child(9){display:none}.ptable .r > :nth-child(8){display:block}}
 @media (max-width:1000px){.ptable .r{grid-template-columns:minmax(140px,1fr) 120px 40px 40px 40px 44px 244px minmax(150px,auto)}.ptable .r > :nth-child(10){display:none}.ptable .r > :nth-child(9){display:none}}
+/* The note shown over the report frame while a big report is still arriving (frameWait). */
+#pbody{position:relative}
+.framewait{position:absolute;top:28px;left:50%;transform:translateX(-50%);display:flex;gap:12px;align-items:flex-start;max-width:min(440px,calc(100% - 32px));padding:14px 18px;border-radius:14px;background:var(--surface);border:1px solid var(--line);box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:2}
+.framewait .btn.busy{padding:0;border:0;background:none;min-height:0;margin-top:3px}
+.framewait p{margin:4px 0 0}
 .where{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
 .where .lw{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3px 2px;border-radius:6px;background:var(--surface-2);color:var(--faint);font:500 10.5px/1.15 var(--font);white-space:nowrap;cursor:help}
 .where .lw b{font:600 13px/1.2 var(--font);font-variant-numeric:tabular-nums}
@@ -618,6 +623,15 @@ function renderHomePro(el) {
   el.querySelectorAll('[data-pv]').forEach(b => b.onclick = () => { S.privacy = b.dataset.pv; render(); });
 }
 
+// While the report is on its way: a big project's report is one large page, and the frame stays empty until it has
+// arrived, so say so with a clock that counts (it still changes with animations off). The frame's load removes it.
+function frameWait() {
+  const t = new Date().toISOString();
+  setTimeout(() => { const w = document.querySelector('.framewait .slow'); if (w) w.hidden = false; }, 12000);
+  return `<div class="framewait" role="status"><span class="btn quiet busy" aria-hidden="true"></span><div><b>Opening the report</b> ${since(t, '·')}
+    <p class="muted small slow" hidden>Big projects have big reports. This one is still arriving; it opens by itself when it has.</p></div></div>`;
+}
+
 // ---- one run: live progress, then the report
 const RUN_TABS = {atlas: 'map', findings: 'findings', prot: 'prot', ready: 'ready'};
 async function viewLinks(r) {
@@ -712,8 +726,8 @@ async function renderReport(el, r) {
   if (S.runId !== r.id) return;
   const nt = el.querySelector('#newtab'); if (nt) nt.href = S.tab === 'evidence' ? links.evidence : links.report;
   if (S.tab === 'evidence') {
-    body.innerHTML = `<iframe title="Evidence Report"></iframe>`;
-    const f = body.querySelector('iframe'); f.onload = () => { try { themeOn(f.contentDocument); } catch (err) {} }; f.src = links.evidence;
+    body.innerHTML = `${frameWait()}<iframe title="Evidence Report"></iframe>`;
+    const f = body.querySelector('iframe'); f.onload = () => { body.querySelector('.framewait')?.remove(); try { themeOn(f.contentDocument); } catch (err) {} }; f.src = links.evidence;
     return;
   }
   const want = RUN_TABS[S.tab];
@@ -722,9 +736,9 @@ async function renderReport(el, r) {
     body.appendChild(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
     return;
   }
-  body.innerHTML = `<iframe title="Report" allow="fullscreen"></iframe>`;
+  body.innerHTML = `${frameWait()}<iframe title="Report" allow="fullscreen"></iframe>`;
   const fr = body.querySelector('iframe'); S.frame = {rid: r.id, el: fr};
-  fr.onload = () => { try { const d = fr.contentDocument; themeOn(d); d.body.classList.add('embed'); d.querySelector(`#tabs [data-t="${RUN_TABS[S.tab] || 'findings'}"]`)?.click(); } catch (err) {} };
+  fr.onload = () => { body.querySelector('.framewait')?.remove(); try { const d = fr.contentDocument; themeOn(d); d.body.classList.add('embed'); d.querySelector(`#tabs [data-t="${RUN_TABS[S.tab] || 'findings'}"]`)?.click(); } catch (err) {} };
   fr.src = links.report;
 }
 

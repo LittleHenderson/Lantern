@@ -5,6 +5,12 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- A big project's report no longer leaves the website's run page empty (2026-11-09). Noetic Compass's report is one
+  54,909,481-byte page; the cloud sent it uncompressed, and the frame stayed blank while it arrived (28 s on a 20 Mbit/s
+  line in a test, longer on slower ones). Result pages and data files now go out gzip-compressed to browsers that ask
+  (3,247,600 bytes for that page; 7 s on the same line), each still rebuilt with its own nonce, and at most two are
+  built at once so reloading cannot pile up builds. The run page shows "Opening the report" with a counting clock
+  until the report has loaded, and says big projects take longer after 12 seconds.
 - Fixed two problems an independent review found (2026-11-09). (1) SQL built from text that was first fixed and then
   replaced with input through a `match` capture, `except … as`, or an inner function's `nonlocal`/`global` was called
   "only fixed text" and lowered from high to low; any of those bindings now means "not followed", so the finding keeps
