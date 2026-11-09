@@ -5,6 +5,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- The intro's Sound and Skip intro buttons go away when the film ends (2026-11-09). They stayed in the corner of the
+  end card, where there was nothing left to skip or hear; now the end card shows only its two buttons, Escape leaves it,
+  and both come back when the intro plays again. Same on the website and the landing page; the intro still plays on
+  every visit.
 - The Graph view says what its lines mean and lights up the chosen step's own lines (2026-11-09). A line with an arrow
   from A to B means A can call B, read from the code; only teal lines were seen running under tests. Clicking a box now
   makes its lines glow with a slow pulse, with dots moving the way the call goes: teal for what it calls, light for what
