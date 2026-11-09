@@ -289,7 +289,8 @@ analyse a repository from the website without installing anything. Plan and late
 
 Either way the cloud service asks the gateway `GET /v1/whoami` → `{account, label}` and remembers the answer for 5
 minutes, keyed by the token's SHA-256 in memory. Runs belong to the account (`github:<id>`, `google:<sub>`), so they
-survive a re-sign-in (which rotates the token). Nothing about the token is stored on disk.
+survive a new sign-in. Each sign-in gets its own token and earlier ones keep working (up to 8 places per
+account, sharing one allowance). Nothing about the token is stored on disk.
 
 **Errors** are `{"error": {"type", "message"}}`; `message` is a plain sentence the UI may show as is. Types:
 `signed_out` (401: no token, or an expired/replaced one: sign in again), `forbidden` (403), `not_found` (404),

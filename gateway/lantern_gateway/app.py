@@ -179,6 +179,9 @@ class Store:
               account text primary key, token_hash text, label text, created text, last_signin text, signins integer default 0);
             create table if not exists pending (
               cli_hash text primary key, token text, created real);
+            create table if not exists sessions (
+              token_hash text primary key, anchor_hash text, created text, last_used text);
+            create index if not exists sessions_anchor on sessions (anchor_hash);
         """)
         # last_used: the last request, sign-in, or rotation (for a disabled hash). Retention counts from it.
         if "last_used" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
@@ -205,39 +208,72 @@ class Store:
         with self.lock:
             return (self.db.execute("select count(*) from accounts where substr(created, 1, 10) = ?", (today,)).fetchone() or [0])[0]
 
+    # How many places one account can stay signed in at once (the app, the CLI, the website on a laptop and a
+    # phone, ...). A sign-in past this many signs out the place used least recently.
+    MAX_SESSIONS = 8
+
     def sign_in(self, account: str, label: str, max_new_per_day: int = 0) -> str:
-        """One token per account. A first sign-in mints it; a later one rotates it (the old token stops working)
-        and carries the lifetime and today's counters over, so signing in again is never a fresh allowance
-        (unless the account was idle past the retention window and `prune` deleted it). With `max_new_per_day`, a
-        first sign-in past that many new accounts today raises SignupsPaused (abuse: many accounts, one person)."""
+        """A new token for this sign-in; the account's other sign-ins keep working. Every token of an account
+        points at one counter row (the account's "anchor": a `users` row whose hash belongs to no token anyone
+        holds), so the allowance and today's count are shared, never multiplied by signing in again. At most
+        MAX_SESSIONS tokens live per account; the least recently used goes first. An account from before this
+        (its one token was itself the counter row) is moved over on its next sign-in, its old token kept as one
+        of the sessions. With `max_new_per_day`, a first sign-in past that many new accounts today raises
+        SignupsPaused (abuse: many accounts, one person)."""
         token = "lt_" + secrets.token_urlsafe(32)
+        th = _hash(token)
         now = dt.datetime.now(dt.UTC)
-        today = now.date().isoformat()
+        today, stamp = now.date().isoformat(), now.isoformat()
         with self.lock:
-            row = self.db.execute("select token_hash from accounts where account = ?", (account,)).fetchone()
+            q = self.db.execute
+            row = q("select token_hash from accounts where account = ?", (account,)).fetchone()
             if row is None and max_new_per_day > 0:
-                n = (self.db.execute("select count(*) from accounts where substr(created, 1, 10) = ?", (today,)).fetchone() or [0])[0]
+                n = (q("select count(*) from accounts where substr(created, 1, 10) = ?", (today,)).fetchone() or [0])[0]
                 if n >= max_new_per_day:
                     raise SignupsPaused(n)
             old = row[0] if row else None
-            used_req = used_tok = today_req = 0
-            if old:
-                u = self.db.execute("select used_requests, used_tokens, disabled from users where token_hash = ?", (old,)).fetchone()
-                if u:
-                    used_req, used_tok = u[0], u[1]
-                d = self.db.execute("select requests from daily where day = ? and token_hash = ?", (today, old)).fetchone()
-                today_req = d[0] if d else 0
-                self.db.execute("update users set disabled = 1, last_used = ? where token_hash = ?", (now.isoformat(), old))
-            self.db.execute("insert into users (token_hash, label, created, used_requests, used_tokens, last_used) "
-                            "values (?, ?, ?, ?, ?, ?)", (_hash(token), label[:100], now.isoformat(), used_req, used_tok, now.isoformat()))
-            if today_req:
-                self.db.execute("insert into daily (day, token_hash, requests) values (?, ?, ?)", (today, _hash(token), today_req))
-            self.db.execute("insert into accounts (account, token_hash, label, created, last_signin, signins) values (?, ?, ?, ?, ?, 1) "
-                            "on conflict(account) do update set token_hash = excluded.token_hash, label = excluded.label, "
-                            "last_signin = excluded.last_signin, signins = signins + 1",
-                            (account, _hash(token), label[:100], now.isoformat(), now.isoformat()))
+            u = q("select used_requests, used_tokens, disabled from users where token_hash = ?", (old,)).fetchone() if old else None
+            # A switched-off row (or one from before sessions) gets a fresh counter row that carries its counts.
+            anchor = old if (u and not u[2] and self._is_anchor(old)) else None
+            if anchor is None:
+                anchor = _hash("anchor:" + secrets.token_urlsafe(32))
+                used_req, used_tok = (u[0], u[1]) if u else (0, 0)
+                q("insert into users (token_hash, label, created, used_requests, used_tokens, last_used) values (?, ?, ?, ?, ?, ?)",
+                  (anchor, label[:100], stamp, used_req, used_tok, stamp))
+                if old:
+                    d = q("select requests from daily where day = ? and token_hash = ?", (today, old)).fetchone()
+                    if d and d[0]:
+                        q("insert into daily (day, token_hash, requests) values (?, ?, ?)", (today, anchor, d[0]))
+                    if u and not u[2]:
+                        # The account's one token from before: it stays signed in, now as one of its sessions.
+                        q("insert or replace into sessions (token_hash, anchor_hash, created, last_used) values (?, ?, ?, ?)",
+                          (old, anchor, stamp, stamp))
+                    q("update users set disabled = 1, last_used = ? where token_hash = ?", (stamp, old))
+                    q("update sessions set anchor_hash = ? where anchor_hash = ?", (anchor, old))
+            q("insert into sessions (token_hash, anchor_hash, created, last_used) values (?, ?, ?, ?)", (th, anchor, stamp, stamp))
+            extra = q("select token_hash from sessions where anchor_hash = ? order by last_used desc, created desc "
+                      "limit -1 offset ?", (anchor, self.MAX_SESSIONS)).fetchall()
+            for (h,) in extra:
+                q("delete from sessions where token_hash = ?", (h,))
+            q("update users set last_used = ?, label = ? where token_hash = ?", (stamp, label[:100], anchor))
+            q("insert into accounts (account, token_hash, label, created, last_signin, signins) values (?, ?, ?, ?, ?, 1) "
+              "on conflict(account) do update set token_hash = excluded.token_hash, label = excluded.label, "
+              "last_signin = excluded.last_signin, signins = signins + 1",
+              (account, anchor, label[:100], stamp, stamp))
             self.db.commit()
         return token
+
+    def _is_anchor(self, h: str) -> bool:
+        """A counter row made by `sign_in` (not a token anyone holds): it has sessions, or was made as one.
+        Every anchor gets its first session in the same transaction, so "has a session" is the test."""
+        return self.db.execute("select 1 from sessions where anchor_hash = ? limit 1", (h,)).fetchone() is not None
+
+    def sign_out(self, token: str) -> bool:
+        """This one sign-in stops working; the account's others keep going."""
+        with self.lock:
+            n = self.db.execute("delete from sessions where token_hash = ?", (_hash(token),)).rowcount
+            self.db.commit()
+        return bool(n)
 
     def park(self, cli: str, token: str) -> None:
         with self.lock:
@@ -256,8 +292,19 @@ class Store:
         return row[0] if time.time() - row[1] <= 600 else None
 
     def user(self, token: str) -> dict | None:
+        """The counter row behind a token: a sign-in's session leads to its account's anchor; a token minted by
+        hand is its own row. `hash` is the counter row's, which every count and lookup after this uses."""
+        h = _hash(token)
+        sess = self.db.execute("select anchor_hash, last_used from sessions where token_hash = ?", (h,)).fetchone()
+        if sess:
+            h = sess[0]
+            now = dt.datetime.now(dt.UTC).isoformat()
+            if (sess[1] or "")[:13] != now[:13]:          # the session's last use, kept to the hour
+                with self.lock:
+                    self.db.execute("update sessions set last_used = ? where token_hash = ?", (now, _hash(token)))
+                    self.db.commit()
         row = self.db.execute("select token_hash, used_requests, used_tokens, disabled from users where token_hash = ?",
-                              (_hash(token),)).fetchone()
+                              (h,)).fetchone()
         if not row:
             return None
         return {"hash": row[0], "used_requests": row[1], "used_tokens": row[2], "disabled": bool(row[3])}
@@ -313,7 +360,10 @@ class Store:
               "(select token_hash from users where coalesce(last_used, created) < ?)", (cut,))
             q("delete from daily where token_hash in "
               "(select token_hash from users where coalesce(last_used, created) < ?)", (cut,))
+            q("delete from sessions where anchor_hash in "
+              "(select token_hash from users where coalesce(last_used, created) < ?)", (cut,))
             q("delete from users where coalesce(last_used, created) < ?", (cut,))
+            out["sessions"] = q("delete from sessions where coalesce(last_used, created) < ?", (cut,)).rowcount
             out["daily"] = q("delete from daily where day < ?", (cut,)).rowcount
             out["spend"] = q("delete from spend where day < ?", (cut,)).rowcount
             out["models"] = q("delete from models where day < ?", (cut,)).rowcount

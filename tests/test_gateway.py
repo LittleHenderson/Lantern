@@ -215,12 +215,12 @@ def test_retention_deletes_idle_hashes_and_old_counters(tmp_path):
     old_tok, new_tok = st.mint("old"), st.mint("new")
     acct_tok = st.sign_in("github:1", "idle")
     rotated = st.sign_in("github:2", "busy")
-    st.sign_in("github:2", "busy")                       # rotates: the first hash is disabled now
+    busy = st.sign_in("github:2", "busy")                # a second place signed in; both share one counter row
     st.record(_hash(new_tok), "2026-11-03", 10, 0.01, "m")
     st.record_usage("a" * 32, "2026-11-03", "0.9", "linux", {"analyze": 1})
     long_ago = "2026-07-01T00:00:00+00:00"
-    st.db.execute("update users set last_used = ? where token_hash in (?, ?)", (long_ago, _hash(old_tok), _hash(acct_tok)))
-    st.db.execute("update users set last_used = ? where token_hash = ?", (long_ago, _hash(rotated)))
+    st.db.execute("update users set last_used = ? where token_hash in (?, ?)", (long_ago, _hash(old_tok), st.user(acct_tok)["hash"]))
+    st.db.execute("update sessions set last_used = ? where token_hash = ?", (long_ago, _hash(rotated)))   # that place went quiet
     for day in ("2026-07-01", "2026-08-05"):          # 125 and 90 days before 2026-11-03
         st.record(_hash(new_tok), day, 1, 0.001, "m")
     st.record_usage("b" * 32, "2026-07-01", "0.8", "mac", {"analyze": 2})
@@ -228,9 +228,11 @@ def test_retention_deletes_idle_hashes_and_old_counters(tmp_path):
     st.db.commit()
 
     out = st.prune("2026-11-03", 90)
-    assert out["token_hashes"] == 3                   # two idle tokens and the rotated-out hash
+    assert out["token_hashes"] == 2                   # two idle counter rows
+    assert out["sessions"] == 1                       # and the sign-in nobody used for 90 days
     assert out["spend"] == 1 and out["models"] == 1 and out["usage"] == 1 and out["installs"] == 1
     assert st.user(old_tok) is None and st.user(acct_tok) is None and st.user(rotated) is None
+    assert st.user(busy)["disabled"] is False          # the busy account's other sign-in carries on
     assert st.user(new_tok)["used_requests"] == 3      # lifetime counter kept while the token is in use
     days = [r[0] for r in st.db.execute("select day from daily order by day")]
     assert days == ["2026-08-05", "2026-11-03"]        # exactly 90 days old is kept
@@ -270,8 +272,9 @@ def test_whoami_names_the_account_never_the_token(gw):
     t = store.sign_in("google:abcdef123456", "google:…123456")
     assert client.get("/v1/whoami", headers={"authorization": f"Bearer {t}"}).json() == {
         "account": "google:abcdef123456", "label": "google:…123456"}
-    store.sign_in("google:abcdef123456", "google:…123456")   # rotation disables the old token
-    assert client.get("/v1/whoami", headers={"authorization": f"Bearer {t}"}).status_code == 401
+    t2 = store.sign_in("google:abcdef123456", "google:…123456")   # a second sign-in leaves the first one working
+    assert client.get("/v1/whoami", headers={"authorization": f"Bearer {t}"}).json() == client.get(
+        "/v1/whoami", headers={"authorization": f"Bearer {t2}"}).json()
 
 
 def test_daily_limit_message_says_how_long_until_the_reset():

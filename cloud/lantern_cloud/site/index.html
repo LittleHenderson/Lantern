@@ -252,6 +252,23 @@ async function loadMe() {
   try { S.me = await api('/v1/me'); }
   catch (e) { S.me = e.status === 401 ? null : S.me || null; if (e.status !== 401) S.meErr = e.message; }
 }
+// A sign-in finished in the GitHub/Google tab while this page was reloaded or its sheet closed: collect it quietly
+// (the one-time code waits in an HttpOnly cookie for 10 minutes), so nobody has to sign in a second time. Only asked
+// when this browser started a sign-in in the last 10 minutes (a note in local storage holds when it runs out).
+function signingMark(until) {
+  try { if (until) localStorage.setItem('lantern.signing', String(until)); else localStorage.removeItem('lantern.signing'); } catch (e) { /* storage off */ }
+}
+function signingSince() { try { return Number(localStorage.getItem('lantern.signing')) || 0; } catch (e) { return 0; } }
+async function pickUpSignIn() {
+  if (S.me) { signingMark(0); return false; }
+  if (S.signing || signingSince() < Date.now()) return false;
+  try {
+    const r = await api('/v1/signin/poll', {method: 'POST'});
+    if (r.signed_in) { signingMark(0); await afterSignIn(); return true; }
+  } catch (e) { signingMark(0); /* no sign-in waiting here */ }
+  return false;
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pickUpSignIn(); });
 async function loadSamples() { try { const d = await api('/v1/samples'); S.samples = Array.isArray(d.samples) ? d.samples : []; } catch (e) { S.samples = []; } }
 async function loadRuns() { if (!S.me) { S.runs = null; return; } try { S.runs = (await api('/v1/runs')).runs; } catch (e) { if (e.status === 401) { S.me = null; S.runs = null; } } }
 function drawAcct() {
@@ -293,6 +310,7 @@ async function startSignIn(provider, el) {
   const msg = el.querySelector('#signmsg');
   try {
     const r = await api('/v1/signin/start', {method: 'POST', body: {provider}});
+    signingMark(Date.now() + 10 * 60 * 1000);
     if (w) { w.opener = null; w.location.href = r.url; } else location.href = r.url;
   } catch (e) { if (w) w.close(); msg.innerHTML = note('err', esc(e.message)); return; }
   el.querySelector('#signbtns').innerHTML = `<div class="working"><span class="pulse"></span>Finish signing in on the ${provider === 'github' ? 'GitHub' : 'Google'} tab. This page notices by itself.</div><div class="indeterminate"></div>`;
@@ -302,7 +320,7 @@ async function startSignIn(provider, el) {
     if (Date.now() > until) { msg.innerHTML = note('warn', 'That took too long. Close this and sign in again.'); return; }
     try {
       const r = await api('/v1/signin/poll', {method: 'POST'});
-      if (r.signed_in) { S.signing = null; closeSheet(); await afterSignIn(); return; }
+      if (r.signed_in) { S.signing = null; signingMark(0); closeSheet(); await afterSignIn(); return; }
     } catch (e) { if (e.status !== 503) { msg.innerHTML = note('err', esc(e.message)); return; } }
     setTimeout(poll, 1500);
   };
@@ -1033,7 +1051,7 @@ setInterval(() => {
 }, 3000);
 addEventListener('hashchange', () => { S.addMsg = null; route(); });
 addEventListener('resize', () => { const m = document.body.dataset.mode; drawViewMode(); if (document.body.dataset.mode !== m) render(); });
-(async () => { await Promise.all([loadMe(), loadSamples()]); await loadRuns(); route(); })();
+(async () => { await Promise.all([loadMe(), loadSamples()]); await loadRuns(); route(); pickUpSignIn(); })();
 </script>
 <script src="/react.production.min.js"></script>
 <script src="/react-dom.production.min.js"></script>
