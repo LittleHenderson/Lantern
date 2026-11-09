@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- How to use Lantern: a guide page at `/guide` (website and `lantern serve`), in the main menu as "How to use Lantern".
+  A 60-second tour and 12 tasks, each with a short animated demo (one shared player, each demo is data: a simplified
+  copy of Lantern's screens, a moving cursor, gold-glowing instructions), numbered steps and a Good to know box, plus
+  keyboard shortcuts and a note on what is simulated. Demos play only while on screen, start paused with less motion,
+  and are labelled "Animated demo · not a screen recording".
 - Zoomed in, every page stays usable: when a project's top bar does not fit, its tabs move to a second row that
   scrolls sideways (website and app); Readiness and Protections scroll again after the map was opened (the map's
   full-panel layout stayed on and cut them off); the Findings and Readiness tables scroll sideways instead of cutting

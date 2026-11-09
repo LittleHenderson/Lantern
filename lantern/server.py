@@ -774,6 +774,10 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         if u.path in ("/manifest.webmanifest", "/sw.js", "/icon.svg"):
             return self._static(u.path[1:])
+        if u.path == "/guide":   # How to use Lantern: fixed content, no project data, so no sign-in needed
+            from .guide import page as guide_page
+            html, nonce = guide_page(__version__, "/")
+            return self._send(200, html, "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)})
         if u.path == "/":
             given = (q.get("token") or [""])[0]
             if given and _same(given, self.app.token):

@@ -1,0 +1,887 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" id="themecolor" content="#F5F5F2">
+<meta name="color-scheme" content="light dark">
+<title>How to use Lantern</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<!--__APP_FONTS__-->
+<style>/*__APP_STYLE__*/</style>
+<style>
+/* ------------------------------------------------------------------ the guide (on top of the app's own styles) */
+:root{
+  --do-ink:#7A3E00; --do-bg:#FFF1D6; --do-glow:rgba(242,150,40,.85);
+  --info-bg:#E9EDFB; --info-ink:#1A2A6B; --info-line:#B9C3EE;
+  --gold:#F29628;
+}
+:root[data-theme=dark]{
+  --do-ink:#FFC77D; --do-bg:#3A2A12; --do-glow:rgba(255,184,92,.75);
+  --info-bg:#17213F; --info-ink:#DCE4FF; --info-line:#34437A;
+  --gold:#FFB04A;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme=light]){
+    --do-ink:#FFC77D; --do-bg:#3A2A12; --do-glow:rgba(255,184,92,.75);
+    --info-bg:#17213F; --info-ink:#DCE4FF; --info-line:#34437A;
+    --gold:#FFB04A;
+  }
+}
+/* Instruction: glowing, slowly pulsing gold words around the action only */
+.do{color:var(--do-ink);background:var(--do-bg);font-weight:700;padding:1px 6px;border-radius:6px;white-space:nowrap;animation:glow 2.6s ease-in-out infinite}
+@keyframes glow{0%,100%{text-shadow:0 0 0 rgba(242,150,40,0);box-shadow:0 0 0 0 rgba(242,150,40,0)}50%{text-shadow:0 0 10px var(--do-glow);box-shadow:0 0 14px 2px var(--do-glow)}}
+/* Extra information */
+.info{background:var(--info-bg);color:var(--info-ink);border:1px solid var(--info-line);border-radius:10px;padding:12px 14px;margin:14px 0 0;line-height:1.55}
+.info b{color:var(--info-ink)}
+.info .k{display:block;font-weight:700;margin-bottom:2px}
+
+header.top .spacer{flex:1}
+header.top a.brand{text-decoration:none}
+.openbtn{height:44px}
+header.top a.brand{min-height:44px;min-width:44px}
+main.guide > *, .gsec > *{min-width:0;max-width:100%}
+.stage.modal .m-tab,.stage.modal .m-nav,.stage.modal .m-p,.stage.modal .m-h3{color:var(--ink-2)}
+.foot a{text-decoration:underline;display:inline-flex;align-items:center;min-height:44px}
+main.guide{max-width:880px;padding-top:32px;overflow-x:clip}
+.guide h1{font-size:34px}
+.guide .lede{margin-bottom:18px}
+.guide .heroacts{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.guide .heroacts .btn{min-height:44px;padding:0 18px;font-size:14.5px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:12px 14px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface);margin:22px 0 6px;font-size:14px;color:var(--ink-2)}
+.legend .sep{color:var(--muted)}
+.legend .bluekey{background:var(--info-bg);color:var(--info-ink);border:1px solid var(--info-line);border-radius:6px;padding:1px 6px;font-weight:600}
+.toc{margin:18px 0 0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:4px 16px}
+.toc a{display:flex;align-items:center;min-height:44px;color:var(--accent-ink);font-weight:600;text-decoration:none;border-radius:8px;padding:0 6px}
+.toc a:hover,.toc a:focus-visible{background:var(--hover);text-decoration:underline}
+.gsec{margin:52px 0 0;scroll-margin-top:72px}
+.gsec h2{font-size:22px;margin:0 0 6px}
+.gsec .num{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:9px;background:var(--accent-soft);color:var(--accent-ink);font:700 14px var(--font);margin-right:8px;vertical-align:2px}
+.gsec .why{color:var(--muted);margin:0 0 14px;font-size:15px}
+ol.steps{margin:16px 0 0;padding:0 0 0 24px;font-size:15px;line-height:1.75;color:var(--ink-2)}
+ol.steps li{margin:0 0 8px;padding-left:4px}
+ol.steps li::marker{font-weight:700;color:var(--ink)}
+.keys{width:100%;border-collapse:collapse;font-size:14.5px;margin-top:10px}
+.keys{table-layout:fixed}
+.keys th:nth-child(1){width:30%}.keys th:nth-child(2){width:40%}
+.keys th,.keys td{overflow-wrap:anywhere;text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.keys th{font-weight:650;color:var(--ink)}
+kbd{font:600 12.5px var(--mono);background:var(--sunken);border:1px solid var(--line-2);border-bottom-width:2px;border-radius:6px;padding:1px 6px;color:var(--ink);white-space:nowrap}
+.honest ul{margin:8px 0 0;padding-left:20px;line-height:1.7}
+.foot{margin:56px 0 0;color:var(--muted);font-size:13px}
+
+/* ------------------------------------------------------------------ the shared demo player */
+.player{margin:6px 0 0;border:1px solid var(--line-2);border-radius:16px;background:var(--surface);padding:12px;box-shadow:var(--shadow-1)}
+.player .vhead{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;justify-content:space-between;margin:0 2px 10px;font-size:12.5px;color:var(--muted)}
+.player .vlabel{font-weight:600}
+.stagewrap{overflow-x:auto;overflow-y:hidden;border-radius:12px;-webkit-overflow-scrolling:touch}
+.stagewrap:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.stage{position:relative;width:640px;height:360px;margin:0 auto;overflow:hidden;border-radius:12px;background:var(--bg);border:1px solid var(--line);flex:none}
+.world{position:absolute;left:0;top:0;width:640px;height:360px;transform-origin:0 0;transition:transform .9s ease}
+.m{position:absolute;box-sizing:border-box;display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;font:500 11px/1.3 var(--font);color:var(--ink-2);
+   transition:opacity .5s ease, background-color .5s ease, color .5s ease, box-shadow .5s ease, border-color .5s ease, transform .5s ease}
+.m.off{opacity:0}
+.m.hl{box-shadow:0 0 0 3px var(--gold), 0 0 18px 4px rgba(242,150,40,.55);z-index:5}
+.m-bar{background:var(--surface);border-bottom:1px solid var(--line)}
+.m-logo{font:650 13px var(--display);color:var(--ink)}
+.m-logo::before{content:"";width:16px;height:16px;border-radius:5px;background:#161618;box-shadow:inset 0 0 0 2px #FFB547}
+.m-nav{justify-content:center;border-radius:6px;color:var(--muted);font-weight:600}
+.m-nav.on{background:var(--hover);color:var(--ink)}
+.m-h{font:650 16px/1.25 var(--display);color:var(--ink);white-space:normal}
+.m-h3{font:650 12.5px var(--display);color:var(--ink)}
+.m-p{color:var(--muted);white-space:normal;align-items:flex-start;font-size:10.5px;line-height:1.4}
+.m-p.ink{color:var(--ink-2)}
+.m-input{border:1px solid var(--line-2);background:var(--surface);border-radius:8px;padding:0 10px;color:var(--muted)}
+.m-input.filled{color:var(--ink)}
+.m-btn{justify-content:center;border:1px solid var(--line-2);background:var(--surface);border-radius:8px;font-weight:600;color:var(--ink)}
+.m-pri{justify-content:center;background:var(--primary);color:var(--on-primary);border-radius:8px;font-weight:650}
+.m-opt{color:var(--ink-2);font-weight:550}
+.m-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-1);padding:9px 12px;align-items:flex-start;font:650 12px var(--display);color:var(--ink);white-space:normal}
+.m-sheet{background:var(--surface);border:1px solid var(--line-2);border-radius:14px;box-shadow:var(--shadow-3);padding:12px 14px;align-items:flex-start;font:650 13px var(--display);color:var(--ink);white-space:normal}
+.m-sheet{white-space:pre-line}
+.m-dim{background:rgba(10,10,12,.2)}
+:root[data-theme=dark] .m-dim{background:rgba(0,0,0,.45)}
+@media (prefers-color-scheme: dark){:root:not([data-theme=light]) .m-dim{background:rgba(0,0,0,.45)}}
+.m-chip{justify-content:center;border-radius:99px;font-weight:650;font-size:10px;background:var(--hover);color:var(--ink-2)}
+.m-chip.good{background:var(--good-soft);color:#065A06}
+:root[data-theme=dark] .m-chip.good{color:var(--good-ink)}
+@media (prefers-color-scheme: dark){:root:not([data-theme=light]) .m-chip.good{color:var(--good-ink)}}
+.m-chip.warn{background:var(--warning-soft);color:var(--warn-ink)}
+.m-chip.crit{background:var(--critical-soft);color:var(--crit-ink)}
+.m-chip.acc{background:var(--accent-soft);color:var(--accent-ink)}
+.m-tab{justify-content:center;color:var(--muted);font-weight:650;border-bottom:2px solid transparent}
+.m-tab.on{color:var(--ink);border-bottom-color:var(--accent)}
+.m-seg{justify-content:center;border-radius:6px;font-weight:650;color:var(--muted);background:var(--sunken)}
+.m-seg.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1)}
+.m-toast{justify-content:center;background:var(--ink);color:var(--bg);border-radius:9px;font-weight:650}
+.m-row{border-bottom:1px solid var(--line);color:var(--ink-2);font-weight:550}
+.m-lane{background:var(--sunken);border-radius:8px;padding:5px 8px;align-items:flex-start;color:var(--muted);font-weight:650;font-size:10px}
+.m-node{justify-content:center;background:var(--surface);border:1px solid var(--line-2);border-radius:7px;font:600 10px var(--mono);color:var(--ink)}
+.m-node.lit{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-ink)}
+.m-code{background:var(--sunken);border-radius:8px;padding:8px 10px;align-items:flex-start;font:500 10px/1.5 var(--mono);color:var(--ink);white-space:pre-wrap}
+.m-ring{justify-content:center;border-radius:50%;border:6px solid var(--warn-ink);font:700 24px var(--display);color:var(--ink)}
+.m-ask{justify-content:center;background:var(--primary);color:var(--on-primary);border-radius:99px;font-weight:650}
+.m-bubble{background:var(--accent-soft);color:var(--ink);border-radius:10px 10px 3px 10px;padding:6px 9px;white-space:normal;align-items:flex-start}
+.m-tabframe{background:var(--surface);border:1px solid var(--line-2);border-radius:12px;box-shadow:var(--shadow-3);padding:0 12px;align-items:flex-start;padding-top:8px;font-weight:650;color:var(--muted)}
+.cursor{position:absolute;left:0;top:0;width:1px;height:1px;z-index:20;pointer-events:none;transition:transform .9s cubic-bezier(.4,.1,.2,1)}
+.cursor svg{position:absolute;left:-2px;top:-1px;width:18px;height:24px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.35))}
+.cursor .ring{position:absolute;left:-15px;top:-15px;width:30px;height:30px;border-radius:50%;border:3px solid var(--gold);opacity:.9;animation:ring 1.6s ease-in-out infinite}
+@keyframes ring{0%,100%{transform:scale(.7);opacity:.95}50%{transform:scale(1.15);opacity:.35}}
+.cap{min-height:52px;margin:12px 2px 0;font-size:15.5px;line-height:1.6;color:var(--ink-2)}
+.ctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.ctl .btn{min-height:44px;min-width:44px;padding:0 14px;font-size:14px}
+.ctl .dots{display:flex;flex-wrap:wrap;gap:0}
+.ctl .dot{width:44px;height:44px;border:0;background:none;display:grid;place-items:center;cursor:pointer;border-radius:10px;padding:0}
+.ctl .dot i{display:block;width:12px;height:12px;border-radius:50%;background:var(--line-2);transition:background .3s, transform .3s}
+.ctl .dot[aria-current=step] i{background:var(--gold);transform:scale(1.25)}
+.ctl .dot:hover i{background:var(--muted)}
+.ctl .dot:focus-visible{outline:3px solid var(--gold);outline-offset:-3px}
+.ctl .where{margin-left:auto;font:600 13px var(--font);color:var(--muted);white-space:nowrap}
+
+@media (prefers-reduced-motion: reduce){
+  .do{animation:none;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px}
+  .cursor .ring{animation:none}
+  .m,.world,.cursor,.ctl .dot i{transition:none}
+}
+:root.reduce .do{animation:none;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px}
+:root.reduce .cursor .ring{animation:none}
+:root.reduce .m,:root.reduce .world,:root.reduce .cursor{transition:none}
+@media (max-width:760px){
+  main.guide{padding:24px 16px 64px}
+  .guide h1{font-size:28px}
+  .player{padding:8px;margin-left:-4px;margin-right:-4px}
+  .stage{margin:0}
+  .ctl .where{margin-left:0;width:100%}
+  header.top{padding:0 12px;gap:8px}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" id="home" href="__OPEN_HREF__" aria-label="Open Lantern" title="Open Lantern"><!--__APP_BRAND__--></a>
+  <span class="spacer"></span>
+  <a class="btn primary openbtn" href="__OPEN_HREF__">Open Lantern</a>
+  <button class="iconbtn" id="theme" aria-label="Switch appearance" style="width:44px;height:44px"></button>
+</header>
+
+<main class="guide" id="guide-main">
+  <section class="hero">
+    <h1>How to use Lantern</h1>
+    <p class="lede">Lantern reads your app's code, shows every path a visitor can take through it, and tells you in plain words what to fix before you ship. This page walks you through it, one task at a time.</p>
+    <div class="heroacts"><a class="btn primary" href="__OPEN_HREF__">Open Lantern</a><a class="btn" href="#how-tour">Watch the 60-second tour</a></div>
+  </section>
+
+  <p class="legend" aria-label="How to read this page"><span><span class="do">Glowing gold words</span> = do this</span><span class="sep" aria-hidden="true">·</span><span>Plain text = what you'll see</span><span class="sep" aria-hidden="true">·</span><span><span class="bluekey">Blue boxes</span> = good to know</span></p>
+
+  <nav aria-label="Sections"><ol class="toc" id="toc"></ol></nav>
+
+  <section class="gsec" id="how-tour" aria-labelledby="tour-h">
+    <h2 id="tour-h">The 60-second tour</h2>
+    <p class="why">From a link to a fix, the way most people use Lantern the first time.</p>
+    <div class="player" data-video="tour"></div>
+  </section>
+
+  <section class="gsec" id="how-sign-in" aria-labelledby="s1-h">
+    <h2 id="s1-h"><span class="num">1</span>Sign in</h2>
+    <p class="why">Your checks are tied to your account, so only you can open them.</p>
+    <div class="player" data-video="signin"></div>
+    <ol class="steps">
+      <li><span class="do">Open Lantern</span> and <span class="do">click Sign in</span> at the top right.</li>
+      <li><span class="do">Click Continue with GitHub</span> or <span class="do">Continue with Google</span>. A new tab opens on that site.</li>
+      <li><span class="do">Approve Lantern</span> there. The tab tells you when you're in; go back to the Lantern tab, which now shows your account name.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>Lantern keeps your account name and nothing else: no email and no password. You type your password on GitHub or Google, never on Lantern.</div>
+  </section>
+
+  <section class="gsec" id="how-first-check" aria-labelledby="s2-h">
+    <h2 id="s2-h"><span class="num">2</span>Check your first app</h2>
+    <p class="why">Paste a link to your app's code, or try one of the sample apps.</p>
+    <div class="player" data-video="first"></div>
+    <ol class="steps">
+      <li><span class="do">Paste your app's link</span> into the box that says "Paste a link, like https://github.com/you/app".</li>
+      <li><span class="do">Choose Map and findings only</span> to keep no code with your results, or <span class="do">choose Include code snippets</span> (and tick the box that appears) to keep short snippets in the report.</li>
+      <li><span class="do">Click Check my app</span>. Lantern starts the check straight away.</li>
+      <li>No app yet? Under "Try a sample app", <span class="do">click Check this sample</span> on any card. Each sample has problems planted on purpose.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>Lantern copies your app into a sealed box, reads it without installing or running anything, and deletes the copy when the check ends. Only the results stay.</div>
+  </section>
+
+  <section class="gsec" id="how-private" aria-labelledby="s3-h">
+    <h2 id="s3-h"><span class="num">3</span>Check a private app or files on your computer</h2>
+    <p class="why">No public link? Upload the folder instead.</p>
+    <div class="player" data-video="private"></div>
+    <ol class="steps">
+      <li><span class="do">Click Upload…</span> next to the link box.</li>
+      <li><span class="do">Click Choose a folder</span> and pick your app's folder, or <span class="do">click Choose a .zip file</span>.</li>
+      <li>Or skip the button: <span class="do">drop a folder or a .zip</span> straight onto the link box.</li>
+      <li><span class="do">Wait a moment</span>: the check starts by itself as soon as the upload finishes.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>Folders such as node_modules, .git, build output and virtual environments are left out of an upload. The screen shows the size limit. When the site has GitHub connection switched on, a <b>Connect private repositories</b> button also appears under the link box, so Lantern can read a private repository you choose; when it is not switched on, the button is not shown.</div>
+  </section>
+
+  <section class="gsec" id="how-follow" aria-labelledby="s4-h">
+    <h2 id="s4-h"><span class="num">4</span>Follow a check and find your runs</h2>
+    <p class="why">Watch each step as it happens, then come back to any check later.</p>
+    <div class="player" data-video="follow"></div>
+    <ol class="steps">
+      <li>While a check runs, <span class="do">watch the four steps</span>: "Copy the repository", "Check dependency versions", "Map the code and run the checks" and "Save your results", with a live log below.</li>
+      <li>Every check is listed under "Your runs" on the home screen. <span class="do">Click My runs</span> at the top to get back there from anywhere.</li>
+      <li>On a run's card, <span class="do">click Show me what to fix</span> to open it, or <span class="do">click Re-check</span> to check the latest code again.</li>
+      <li>If a check stopped, its card says so; <span class="do">click Try again</span>.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>The "Where in your app" boxes on a card (Browser, Frontend, Server, Data, or Screen and App for phone apps) light up where the problems are.</div>
+  </section>
+
+  <section class="gsec" id="how-what-to-fix" aria-labelledby="s5-h">
+    <h2 id="s5-h"><span class="num">5</span>Read what to fix</h2>
+    <p class="why">Every problem Lantern found, most serious first, in plain words.</p>
+    <div class="player" data-video="read"></div>
+    <ol class="steps">
+      <li>In an open run, <span class="do">click What to fix</span>.</li>
+      <li><span class="do">Read the top card first</span>. Each card says what is wrong, how serious it is, and which page or route a visitor would use to reach it.</li>
+      <li><span class="do">Click See it happen: a scenario</span> for a short story of one person running into the problem.</li>
+      <li><span class="do">Click Show the lines</span> to see where in the code it is, or <span class="do">click Open in Atlas</span> to see it on the map.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>Findings come from fixed checks, not from a model. Checks that can misfire are labelled "heuristic". A model only explains a finding; it never adds, hides or closes one.</div>
+  </section>
+
+  <section class="gsec" id="how-fix" aria-labelledby="s6-h">
+    <h2 id="s6-h"><span class="num">6</span>Fix a finding</h2>
+    <p class="why">Lantern writes the instructions; your AI assistant makes the change.</p>
+    <div class="player" data-video="fix"></div>
+    <ol class="steps">
+      <li>On a finding, <span class="do">click Fix this</span>.</li>
+      <li>Under "Paste this into your AI assistant", <span class="do">click Copy the prompt</span>, then <span class="do">paste it</span> into the assistant you build with. Or <span class="do">click Send to…</span> and pick Claude Code, Cursor or ChatGPT.</li>
+      <li>When the assistant has changed your code and you have saved it to your repository, go back to My runs and <span class="do">click Re-check</span>. A fixed finding drops off the list.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>In the app on your own computer you can also accept a risk on purpose, with a written reason; the report keeps that reason next to the finding.</div>
+  </section>
+
+  <section class="gsec" id="how-paths" aria-labelledby="s7-h">
+    <h2 id="s7-h"><span class="num">7</span>Follow a path through your app</h2>
+    <p class="why">See how a click in the browser travels to your server and your data.</p>
+    <div class="player" data-video="paths"></div>
+    <ol class="steps">
+      <li>In an open run, <span class="do">click Paths</span>.</li>
+      <li><span class="do">Pick a view</span>: Lanes (one row per part of the stack), Path, Flowchart or Graph.</li>
+      <li><span class="do">Type a name into Search functions</span> to find one part of your code.</li>
+      <li>On the Graph, <span class="do">drag to move</span> and <span class="do">scroll or pinch to zoom</span>; <span class="do">click Full screen</span> or <span class="do">press F</span> for more room.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>Every link on the map says how sure Lantern is about it. "Likely" links are good guesses backed by measured accuracy; calls Lantern could not work out are counted, not guessed.</div>
+  </section>
+
+  <section class="gsec" id="how-function" aria-labelledby="s8-h">
+    <h2 id="s8-h"><span class="num">8</span>Understand a function</h2>
+    <p class="why">Each part of your code, explained four ways.</p>
+    <div class="player" data-video="lens"></div>
+    <ol class="steps">
+      <li>On the map, <span class="do">click a function</span>.</li>
+      <li><span class="do">Switch between the tabs</span>: Technical (for an engineer), Everyday (for anyone), Where it sits (Mapped, in Advanced) and Scenario.</li>
+      <li>For words written by a model, <span class="do">click Explain in plain words</span> at the top of the run, read what will be sent, and <span class="do">click I agree</span>.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>Before you ask for explanations, each function still shows lenses Lantern builds from its own map, and says so. Explanations use your free allowance; Lantern asks once before any code is sent to a model.</div>
+  </section>
+
+  <section class="gsec" id="how-ready" aria-labelledby="s9-h">
+    <h2 id="s9-h"><span class="num">9</span>See if you're ready to ship</h2>
+    <p class="why">One score out of 100 and a letter grade, from ten groups of checks.</p>
+    <div class="player" data-video="ready"></div>
+    <ol class="steps">
+      <li>In an open run, <span class="do">click Ready to ship?</span>.</li>
+      <li><span class="do">Read the headline</span> under the grade: it names the next thing to do.</li>
+      <li><span class="do">Scroll through the groups</span> (Security findings, Secrets and config, Tests, and more) to see which checks passed and which did not.</li>
+      <li><span class="do">Click What protects you</span> to see protections your app has, should check, or should add.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>A check that does not apply to your app is skipped and does not count against you.</div>
+  </section>
+
+  <section class="gsec" id="how-share" aria-labelledby="s10-h">
+    <h2 id="s10-h"><span class="num">10</span>Share your proof</h2>
+    <p class="why">Give an engineer, a client or a teammate a read-only link.</p>
+    <div class="player" data-video="share"></div>
+    <ol class="steps">
+      <li>In an open run, <span class="do">click Share</span>, read the warning, then <span class="do">click Create link</span>.</li>
+      <li><span class="do">Click Copy</span> and send the link. Anyone with it can open the report, its evidence page and its badge.</li>
+      <li>To turn it off, open Share again and <span class="do">click Stop sharing</span>. The old link stops working.</li>
+      <li>For a file instead, <span class="do">click Report</span> and then <span class="do">click Save as PDF</span>.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>Sharing is off until you click Create link. Findings can include partly hidden keys and where your app is weakest, so share with people you trust or fix those first.</div>
+  </section>
+
+  <section class="gsec" id="how-ask" aria-labelledby="s11-h">
+    <h2 id="s11-h"><span class="num">11</span>Ask Lantern</h2>
+    <p class="why">A question about your check, or a word you don't know.</p>
+    <div class="player" data-video="ask"></div>
+    <ol class="steps">
+      <li><span class="do">Click the Ask Lantern button</span> at the bottom right of any screen.</li>
+      <li><span class="do">Type your question</span> and <span class="do">press Enter</span>.</li>
+      <li>Got an error on screen? <span class="do">Drop or paste a screenshot</span> into the box and ask what went wrong.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>Lantern answers from its own results for your check and does not guess; if it names a finding that does not exist, the answer says "[unknown finding]" instead. It uses your free allowance.</div>
+  </section>
+
+  <section class="gsec" id="how-settings" aria-labelledby="s12-h">
+    <h2 id="s12-h"><span class="num">12</span>Make Lantern yours</h2>
+    <p class="why">Light or dark, simple or detailed, and what a check keeps.</p>
+    <div class="player" data-video="settings"></div>
+    <ol class="steps">
+      <li><span class="do">Click Settings</span> at the top.</li>
+      <li>Under Appearance, <span class="do">pick a Theme</span> (match this computer, light or dark) and <span class="do">pick Simple or Advanced</span> under How much to show.</li>
+      <li>Under What a new check keeps, <span class="do">choose your default</span>: map and findings only, or with code snippets.</li>
+      <li>Under Account, <span class="do">click Sign out</span>, or <span class="do">click Delete my account</span> to remove your account and every run.</li>
+    </ol>
+    <div class="info"><span class="k">Good to know</span>Simple shows plain sentences and one next step; Advanced shows every table and panel. Phones always use Simple. The moon and sun button at the top switches light and dark in one click.</div>
+  </section>
+
+  <section class="gsec" id="how-keys" aria-labelledby="keys-h">
+    <h2 id="keys-h">Keyboard shortcuts</h2>
+    <table class="keys">
+      <thead><tr><th scope="col">Keys</th><th scope="col">What they do</th><th scope="col">Where</th></tr></thead>
+      <tbody>
+        <tr><td><kbd>Esc</kbd></td><td>Close a panel, or leave full screen</td><td>Everywhere</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>Move around the map</td><td>Paths, Graph and Flowchart</td></tr>
+        <tr><td><kbd>+</kbd> <kbd>−</kbd></td><td>Zoom in and out</td><td>Paths, Graph and Flowchart</td></tr>
+        <tr><td><kbd>0</kbd></td><td>Fit the whole map on screen</td><td>Paths, Graph and Flowchart</td></tr>
+        <tr><td><kbd>F</kbd></td><td>Full screen map</td><td>Paths, Graph and Flowchart</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>Send a question</td><td>Ask Lantern</td></tr>
+        <tr><td><kbd>/</kbd></td><td>Search</td><td>The app on your own computer</td></tr>
+        <tr><td><kbd>?</kbd></td><td>Help</td><td>The app on your own computer</td></tr>
+        <tr><td><kbd>Shift</kbd> + <kbd>D</kbd></td><td>Switch light and dark</td><td>The app on your own computer</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous and next step of a demo</td><td>This page, inside a demo</td></tr>
+      </tbody>
+    </table>
+    <div class="info"><span class="k">On your own computer</span>The Lantern app you install (<code>lantern serve</code>) has everything above, plus a Learn tab with step-by-step starter apps, a Terminal for Lantern commands (<kbd>`</kbd>), "Watch my tests run", and a place to use your own model key.</div>
+  </section>
+
+  <section class="gsec honest" id="how-honest" aria-labelledby="honest-h">
+    <h2 id="honest-h">What on this page is not real</h2>
+    <ul>
+      <li>Every demo is an animation drawn by this page, not a screen recording. The screens are simplified copies of Lantern's real ones; some buttons and details are left out to keep them readable.</li>
+      <li>The account "mira-sample", the app "notes-app", its link, findings, scores and answers are made up for the demos.</li>
+      <li>"Connect private repositories" appears only when the site has GitHub connection switched on.</li>
+      <li>Explanations and Ask Lantern need a model and use your free allowance; when the allowance is used up they stop until it resets.</li>
+    </ul>
+  </section>
+
+  <p class="foot">Lantern __VERSION__ · <a href="__OPEN_HREF__">Open Lantern</a></p>
+</main>
+
+<script>
+/*__APP_JS__*/
+document.getElementById('theme').onclick = () => setTheme(THEMES[(THEMES.indexOf(THEME) + 1) % 3]);
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
+applyTheme();
+
+// ---------------------------------------------------------------- the demos' screens
+// Every demo draws on one 640×360 stage. An element is defined once, with a stable id, a kind (its look), a place and
+// its text, and belongs to one group (a screen or a panel). A scene turns groups or elements on and off, changes text
+// or style, types into a box, moves the cursor and the "world" (zoom and pan), and has a caption made of parts:
+// ["do", "Click Save"] glows gold (an instruction), ["", "…"] is plain. Nothing here comes from a user or a project,
+// and the player places every text with textContent.
+const E = (id, k, x, y, w, h, t = '', g = '', c = '') => ({id, k, x, y, w, h, t, g, c});
+const LIB = [
+  // the top bar
+  E('top', 'bar', 0, 0, 640, 38, '', 'chrome'),
+  E('logo', 'logo', 14, 10, 92, 18, 'Lantern', 'chrome'),
+  E('nruns', 'nav', 318, 9, 66, 20, 'My runs', 'chrome'),
+  E('nhelp', 'nav', 388, 9, 44, 20, 'Help', 'chrome'),
+  E('nset', 'nav', 436, 9, 62, 20, 'Settings', 'chrome'),
+  E('signin', 'pri', 562, 8, 64, 22, 'Sign in', 'out'),
+  E('me', 'chip', 528, 9, 98, 20, 'mira-sample', 'in'),
+  // home: the link box
+  E('hh', 'h', 40, 58, 560, 24, 'What would you like to check?', 'home'),
+  E('link', 'input', 40, 94, 372, 34, 'Paste a link, like https://github.com/you/app', 'home'),
+  E('upl', 'btn', 420, 94, 84, 34, 'Upload…', 'home'),
+  E('chk', 'pri', 512, 94, 96, 34, 'Check my app', 'home'),
+  E('pv1', 'opt', 40, 136, 260, 24, '◉  Map and findings only · Private', 'home'),
+  E('pv2', 'opt', 310, 136, 200, 24, '○  Include code snippets', 'home'),
+  E('need', 'p', 40, 176, 76, 20, 'Need a link?', 'home'),
+  E('repos', 'btn', 116, 170, 116, 28, 'Your repositories', 'home'),
+  E('explore', 'btn', 238, 170, 104, 28, 'Explore GitHub', 'home'),
+  E('connect', 'btn', 348, 170, 178, 28, 'Connect private repositories', 'connect'),
+  // home, signed out
+  E('hocard', 'card', 40, 214, 560, 116, 'Sign in to start checking', 'homeout'),
+  E('hosub', 'p', 56, 240, 460, 30, 'Use your GitHub or Google account. Lantern keeps your account name only.', 'homeout'),
+  E('hobtn', 'pri', 56, 282, 76, 30, 'Sign in', 'homeout'),
+  // home: samples
+  E('samh', 'h3', 40, 212, 300, 20, 'Try a sample app', 'samples'),
+  E('s1', 'card', 40, 238, 176, 100, 'Link shortener with Express', 'samples'),
+  E('s1b', 'btn', 52, 300, 152, 28, 'Check this sample', 'samples'),
+  E('s2', 'card', 232, 238, 176, 100, 'Notes API', 'samples'),
+  E('s2b', 'btn', 244, 300, 152, 28, 'Check this sample', 'samples'),
+  E('s3', 'card', 424, 238, 176, 100, 'Todo list with Next.js and Supabase', 'samples'),
+  E('s3b', 'btn', 436, 300, 152, 28, 'Check this sample', 'samples'),
+  // home: your runs
+  E('yrh', 'h3', 40, 212, 300, 20, 'Your runs', 'yruns'),
+  E('rc', 'card', 40, 238, 560, 112, 'notes-app', 'yruns'),
+  E('rsent', 'p', 56, 260, 520, 18, '3 things to fix. The most serious: anyone can delete a note.', 'yruns', 'ink'),
+  E('rwhere', 'p', 56, 286, 100, 18, 'Where in your app', 'yruns'),
+  E('lb1', 'chip', 160, 284, 70, 20, 'Browser', 'yruns'),
+  E('lb2', 'chip', 236, 284, 70, 20, 'Frontend', 'yruns'),
+  E('lb3', 'chip', 312, 284, 70, 20, 'Server', 'yruns', 'warn'),
+  E('lb4', 'chip', 388, 284, 70, 20, 'Data', 'yruns'),
+  E('rfix', 'pri', 56, 314, 140, 28, 'Show me what to fix', 'yruns'),
+  E('rre', 'btn', 202, 314, 80, 28, 'Re-check', 'yruns'),
+  E('rdel', 'btn', 530, 314, 58, 28, 'Delete', 'yruns'),
+  // sheets
+  E('dim', 'dim', 0, 0, 640, 360, '', 'dim'),
+  E('ssheet', 'sheet', 150, 64, 340, 230, 'Sign in to check apps from a link', 'signsheet'),
+  E('ssp', 'p', 166, 96, 308, 30, 'Lantern keeps your account name and nothing else: no email, no password.', 'signsheet'),
+  E('sgh', 'pri', 166, 136, 308, 34, 'Continue with GitHub', 'signsheet'),
+  E('sgo', 'btn', 166, 178, 308, 34, 'Continue with Google', 'signsheet'),
+  E('sfoot', 'p', 166, 226, 308, 40, 'You sign in on GitHub or Google directly. Lantern never sees your password.', 'signsheet'),
+  E('ghtab', 'tabframe', 110, 52, 420, 250, 'New tab · GitHub sign-in (simplified)', 'ghtab'),
+  E('ghq', 'h', 134, 92, 372, 44, 'Let Lantern read your account name?', 'ghtab'),
+  E('ghp', 'p', 134, 142, 372, 30, 'Lantern asks for your name only. You can remove it any time in your GitHub settings.', 'ghtab'),
+  E('ghok', 'pri', 134, 190, 150, 34, 'Approve', 'ghtab'),
+  E('ghdone', 'p', 134, 236, 372, 40, 'You\'re in. Go back to the Lantern tab.', 'ghdone', 'ink'),
+  E('usheet', 'sheet', 150, 64, 340, 214, 'Upload from this computer', 'upsheet'),
+  E('usp', 'p', 166, 96, 308, 42, 'Choose your app\'s folder, or a .zip of it. Nothing is run or installed, and the upload is deleted when the check ends.', 'upsheet'),
+  E('ufold', 'btn', 166, 148, 150, 34, 'Choose a folder', 'upsheet'),
+  E('uzip', 'btn', 324, 148, 150, 34, 'Choose a .zip file', 'upsheet'),
+  E('ufoot', 'p', 166, 196, 308, 40, 'node_modules, .git and build output are left out. You can also drop a folder or a .zip on the link box.', 'upsheet'),
+  E('drop', 'chip', 60, 98, 200, 26, '📁 notes-app (dropped here)', 'drop', 'acc'),
+  // a check running
+  E('ph', 'h', 40, 54, 400, 24, 'Checking notes-app', 'prog'),
+  E('pr1', 'row', 40, 90, 560, 30, 'Copy the repository', 'prog'),
+  E('ps1', 'chip', 520, 95, 76, 20, 'Waiting', 'prog'),
+  E('pr2', 'row', 40, 122, 560, 30, 'Check dependency versions', 'prog'),
+  E('ps2', 'chip', 520, 127, 76, 20, 'Waiting', 'prog'),
+  E('pr3', 'row', 40, 154, 560, 30, 'Map the code and run the checks', 'prog'),
+  E('ps3', 'chip', 520, 159, 76, 20, 'Waiting', 'prog'),
+  E('pr4', 'row', 40, 186, 560, 30, 'Save your results', 'prog'),
+  E('ps4', 'chip', 520, 191, 76, 20, 'Waiting', 'prog'),
+  E('plog', 'code', 40, 228, 560, 110, 'Waiting for a free worker…', 'prog'),
+  // an open run: its bar
+  E('back', 'btn', 12, 46, 76, 24, '‹ My runs', 'bar'),
+  E('rname', 'h3', 96, 46, 80, 24, 'notes-app', 'bar'),
+  E('grade', 'chip', 176, 48, 30, 20, 'C', 'bar', 'warn'),
+  E('explain', 'btn', 420, 46, 140, 24, 'Explain in plain words', 'bar'),
+  E('share', 'btn', 566, 46, 62, 24, 'Share', 'bar'),
+  E('tpaths', 'tab', 12, 78, 52, 26, 'Paths', 'bar'),
+  E('tfix', 'tab', 68, 78, 80, 26, 'What to fix', 'bar'),
+  E('tprot', 'tab', 152, 78, 114, 26, 'What protects you', 'bar'),
+  E('tready', 'tab', 270, 78, 98, 26, 'Ready to ship?', 'bar'),
+  E('trep', 'tab', 372, 78, 58, 26, 'Report', 'bar'),
+  // what to fix
+  E('f1', 'card', 24, 114, 592, 104, 'Anyone can delete a note', 'fix'),
+  E('f1s', 'chip', 524, 122, 82, 20, 'Serious', 'fix', 'crit'),
+  E('f1p', 'p', 40, 138, 470, 30, 'The delete route does not check who is signed in, so a visitor could remove someone else\'s note. Reached from: Notes page → Delete.', 'fix'),
+  E('f1a', 'btn', 40, 180, 160, 26, 'See it happen: a scenario', 'fix'),
+  E('f1b', 'pri', 206, 180, 70, 26, 'Fix this', 'fix'),
+  E('f1c', 'btn', 282, 180, 100, 26, 'Show the lines', 'fix'),
+  E('f1d', 'btn', 388, 180, 100, 26, 'Open in Atlas', 'fix'),
+  E('f2', 'card', 24, 228, 592, 52, 'A password is written in the code', 'fix'),
+  E('f2s', 'chip', 524, 236, 82, 20, 'Serious', 'fix', 'crit'),
+  E('f3', 'card', 24, 290, 592, 52, 'Pages are missing safety headers', 'fix'),
+  E('f3s', 'chip', 524, 298, 82, 20, 'Low', 'fix', 'good'),
+  E('scen', 'sheet', 40, 120, 560, 150, 'See it happen', 'scen'),
+  E('scp', 'p', 56, 150, 528, 64, 'Sam opens the Notes page without signing in and sends a delete for note 12. Note 12 disappears, even though it was Ria\'s. Nothing asked Sam who they were.', 'scen', 'ink'),
+  E('scsrc', 'p', 56, 226, 528, 30, 'Built from Lantern\'s map: the clicks, the route and what it does with the input.', 'scen'),
+  E('lines', 'code', 40, 216, 560, 64, 'routes/notes.js  lines 41–44\napp.delete("/notes/:id", async (req, res) => {\n  await db.notes.delete(req.params.id)', 'lines'),
+  // the fix page
+  E('fph', 'h', 24, 114, 520, 24, 'Fix: Anyone can delete a note', 'fixp'),
+  E('fpp', 'p', 24, 142, 560, 18, 'Paste this into your AI assistant', 'fixp', 'ink'),
+  E('fcode', 'code', 24, 164, 592, 110, 'In routes/notes.js, the DELETE /notes/:id route deletes any note.\nBefore deleting, check that someone is signed in and that the\nnote belongs to them. Answer 401 or 403 otherwise.\nKeep the rest of the route as it is.', 'fixp'),
+  E('fcopy', 'pri', 24, 284, 130, 30, 'Copy the prompt', 'fixp'),
+  E('fsend', 'btn', 162, 284, 90, 30, 'Send to…', 'fixp'),
+  E('sendm', 'sheet', 162, 196, 160, 84, 'Claude Code\nCursor\nChatGPT', 'sendm'),
+  E('toast', 'toast', 230, 322, 180, 28, 'Copied', 'toast'),
+  // paths
+  E('vl', 'seg', 24, 114, 54, 24, 'Lanes', 'paths'),
+  E('vp', 'seg', 80, 114, 46, 24, 'Path', 'paths'),
+  E('vf', 'seg', 128, 114, 70, 24, 'Flowchart', 'paths'),
+  E('vg', 'seg', 200, 114, 52, 24, 'Graph', 'paths'),
+  E('srch', 'input', 400, 114, 216, 24, 'Search functions', 'paths'),
+  E('la1', 'lane', 24, 146, 592, 46, 'Browser', 'paths'),
+  E('la2', 'lane', 24, 196, 592, 46, 'Frontend', 'paths'),
+  E('la3', 'lane', 24, 246, 592, 46, 'Server', 'paths'),
+  E('la4', 'lane', 24, 296, 592, 46, 'Data', 'paths'),
+  E('n1', 'node', 100, 156, 120, 26, 'Notes page', 'paths'),
+  E('n2', 'node', 240, 206, 120, 26, 'deleteNote()', 'paths'),
+  E('n3', 'node', 380, 256, 130, 26, 'DELETE /notes/:id', 'paths'),
+  E('n4', 'node', 500, 306, 100, 26, 'notes table', 'paths'),
+  E('lens', 'sheet', 300, 112, 324, 236, 'deleteNote()', 'lens'),
+  E('lt1', 'tab', 314, 140, 70, 24, 'Technical', 'lens'),
+  E('lt2', 'tab', 386, 140, 66, 24, 'Everyday', 'lens'),
+  E('lt3', 'tab', 454, 140, 86, 24, 'Where it sits', 'lens'),
+  E('lt4', 'tab', 542, 140, 66, 24, 'Scenario', 'lens'),
+  E('ltx', 'p', 316, 176, 292, 110, '', 'lens', 'ink'),
+  E('lby', 'p', 316, 300, 292, 34, 'Built from Lantern\'s map of your code.', 'lens'),
+  E('consent', 'sheet', 150, 70, 340, 200, 'Before Lantern uses a model', 'consent'),
+  E('cnp', 'p', 166, 102, 308, 70, 'Lantern sends the code of up to 40 functions on your app\'s main paths to the model, reads it, and deletes its copy. Nothing is run.', 'consent'),
+  E('cno', 'btn', 300, 222, 80, 30, 'Not now', 'consent'),
+  E('cyes', 'pri', 386, 222, 88, 30, 'I agree', 'consent'),
+  // ready to ship?
+  E('ring', 'ring', 40, 120, 84, 84, 'C', 'ready'),
+  E('rk', 'p', 140, 124, 300, 18, 'Ready to ship? · 72 of 100', 'ready'),
+  E('rhl', 'h', 140, 144, 460, 50, 'Almost there. Fix the two serious findings first.', 'ready'),
+  E('c1', 'row', 40, 218, 576, 28, 'Security findings', 'ready'),
+  E('c1s', 'chip', 520, 222, 92, 20, '8 of 20', 'ready', 'crit'),
+  E('c2', 'row', 40, 248, 576, 28, 'Secrets and config', 'ready'),
+  E('c2s', 'chip', 520, 252, 92, 20, '6 of 12', 'ready', 'warn'),
+  E('c3', 'row', 40, 278, 576, 28, 'Tests', 'ready'),
+  E('c3s', 'chip', 520, 282, 92, 20, '10 of 10', 'ready', 'good'),
+  E('c4', 'row', 40, 308, 576, 28, 'Dependencies', 'ready'),
+  E('c4s', 'chip', 520, 312, 92, 20, '10 of 10', 'ready', 'good'),
+  E('prot', 'card', 24, 114, 592, 150, 'What protects you', 'prot'),
+  E('pt1', 'row', 40, 144, 560, 28, 'Login check on routes that change data', 'prot'),
+  E('pt1s', 'chip', 520, 148, 76, 20, 'Add', 'prot', 'crit'),
+  E('pt2', 'row', 40, 176, 560, 28, 'Rate limiting', 'prot'),
+  E('pt2s', 'chip', 520, 180, 76, 20, 'Check', 'prot', 'warn'),
+  E('pt3', 'row', 40, 208, 560, 28, 'Password hashing', 'prot'),
+  E('pt3s', 'chip', 520, 212, 76, 20, 'In place', 'prot', 'good'),
+  // share and report
+  E('shs', 'sheet', 150, 64, 340, 236, 'Share this report?', 'share'),
+  E('shp', 'p', 166, 96, 308, 44, 'Lantern makes a link that opens this report, its evidence page and its badge, for anyone who has it.', 'share'),
+  E('shw', 'chip', 166, 148, 308, 34, 'Share with people you trust, or fix those first.', 'share', 'warn'),
+  E('shc', 'btn', 316, 256, 64, 28, 'Cancel', 'share'),
+  E('shmk', 'pri', 386, 256, 90, 28, 'Create link', 'share'),
+  E('shurl', 'input', 166, 102, 236, 30, 'lantern-cloud.fly.dev/s/k3Tq…', 'shared', 'filled'),
+  E('shcp', 'btn', 408, 102, 66, 30, 'Copy', 'shared'),
+  E('shoff', 'btn', 166, 256, 104, 28, 'Stop sharing', 'shared'),
+  E('shok', 'btn', 410, 256, 64, 28, 'Done', 'shared'),
+  E('evh', 'h', 24, 114, 520, 24, 'Evidence report · notes-app · commit 1a2b3c', 'evid'),
+  E('evp', 'p', 24, 144, 560, 34, 'Pinned to one commit, with a digest an engineer can re-check with one command.', 'evid'),
+  E('evb', 'chip', 24, 186, 280, 22, 'Lantern · commit 1a2b3c · 0 critical · Nov 9', 'evid', 'acc'),
+  E('evv', 'btn', 24, 220, 150, 30, 'Copy verify command', 'evid'),
+  E('evpdf', 'pri', 182, 220, 100, 30, 'Save as PDF', 'evid'),
+  // ask lantern
+  E('pill', 'ask', 516, 320, 110, 30, 'Ask Lantern', 'pill'),
+  E('awin', 'sheet', 330, 60, 296, 252, 'Ask Lantern', 'askwin'),
+  E('actx', 'p', 346, 86, 264, 16, 'Looking at What to fix', 'askwin'),
+  E('aq', 'bubble', 420, 110, 190, 40, '', 'askq'),
+  E('aa', 'p', 346, 160, 264, 96, 'It means anyone can send a delete for any note, signed in or not. Finding "Anyone can delete a note" shows the route, and Fix this has a prompt for your assistant.', 'askans', 'ink'),
+  E('ain', 'input', 342, 270, 272, 30, 'Ask, or drop a screenshot…', 'askwin'),
+  // settings
+  E('seth', 'h', 40, 52, 300, 24, 'Settings', 'settings'),
+  E('sap', 'card', 40, 84, 560, 96, 'Appearance', 'settings'),
+  E('sthm', 'p', 56, 112, 160, 18, 'Theme', 'settings', 'ink'),
+  E('th1', 'seg', 420, 108, 54, 24, 'Auto', 'settings', 'on'),
+  E('th2', 'seg', 476, 108, 54, 24, 'Light', 'settings'),
+  E('th3', 'seg', 532, 108, 54, 24, 'Dark', 'settings'),
+  E('smode', 'p', 56, 148, 160, 18, 'How much to show', 'settings', 'ink'),
+  E('md1', 'seg', 420, 144, 70, 24, 'Simple', 'settings', 'on'),
+  E('md2', 'seg', 492, 144, 94, 24, 'Advanced', 'settings'),
+  E('skp', 'card', 40, 190, 560, 64, 'What a new check keeps', 'settings'),
+  E('skp1', 'opt', 56, 220, 260, 22, '◉  Map and findings only', 'settings'),
+  E('skp2', 'opt', 320, 220, 200, 22, '○  With code snippets', 'settings'),
+  E('sacc', 'card', 40, 264, 560, 82, 'Account', 'settings'),
+  E('sname', 'p', 56, 292, 200, 18, 'mira-sample', 'settings', 'ink'),
+  E('sout', 'btn', 56, 312, 80, 26, 'Sign out', 'settings'),
+  E('sdel', 'btn', 142, 312, 124, 26, 'Delete my account', 'settings'),
+];
+
+// shorthand for the screens most demos start on
+const HOME_OUT = ['@chrome', '@out', '@home', '@homeout'];
+const HOME_IN = ['@chrome', '@in', '@home', '@yruns'];
+const RUN = ['@chrome', '@in', '@bar'];
+const ALL = ['@*'];
+
+const VIDEOS = {
+  tour: {title: 'The 60-second tour', scenes: [
+    {off: ALL, on: ['@chrome', '@in', '@home', '@samples'], cur: 'link', hl: 'link', type: ['link', 'https://github.com/example-org/notes-app'],
+     cap: [['do', 'Paste your app\'s link'], ['', ' into the box on the home screen.']]},
+    {cur: 'chk', hl: 'chk', cap: [['do', 'Click Check my app'], ['', '. Lantern copies your app into a sealed box and reads it. Nothing is run.']]},
+    {off: ['@home', '@samples'], on: ['@prog'], set: {ps1: 'Done', ps2: 'Done', ps3: 'Running', plog: 'Copied example-org/notes-app\nChecked 41 libraries\nMapping 128 functions…'}, cls: {ps1: 'good', ps2: 'good', ps3: 'acc'},
+     cur: 'ps3', hl: 'pr3', cap: [['', 'You see each step as it runs. A check takes about a minute.']]},
+    {off: ['@prog'], on: ['@home', '@yruns'], set: {link: 'Paste a link, like https://github.com/you/app'}, cls: {link: ''}, cur: 'rfix', hl: 'rfix',
+     cap: [['', 'Your run appears under Your runs. '], ['do', 'Click Show me what to fix'], ['', '.']]},
+    {off: ['@home', '@yruns'], on: ['@bar', '@fix'], cls: {tfix: 'on'}, cur: 'f1', hl: 'f1',
+     cap: [['', 'The most serious problem is on top, in plain words. '], ['do', 'Read the top card'], ['', ' first.']]},
+    {on: ['@scen'], cur: 'f1a', hl: 'scen', cap: [['do', 'Click See it happen'], ['', ' for a short story of someone running into it.']]},
+    {off: ['@scen', '@fix'], on: ['@fixp'], cur: 'fcopy', hl: 'fcopy', cap: [['', 'Fix this writes a prompt for you. '], ['do', 'Click Copy the prompt'], ['', ' and paste it into your AI assistant.']]},
+    {off: ['@fixp'], on: ['@paths'], cls: {tfix: '', tpaths: 'on', vl: 'on', n1: 'lit', n2: 'lit', n3: 'lit', n4: 'lit'}, cur: 'tpaths', hl: 'n3',
+     cap: [['do', 'Open Paths'], ['', ' to follow a click from the browser to your server and your data.']]},
+    {off: ['@paths'], on: ['@ready'], cls: {tpaths: '', tready: 'on'}, cur: 'tready', hl: 'ring',
+     cap: [['do', 'Open Ready to ship?'], ['', ' for a score out of 100 and the next thing to do.']]},
+  ]},
+
+  signin: {title: 'Sign in', scenes: [
+    {off: ALL, on: HOME_OUT, cur: [320, 200], cap: [['', 'Before you sign in, the home screen asks you to sign in to start checking.']]},
+    {cur: 'signin', hl: 'signin', cap: [['do', 'Click Sign in'], ['', ' at the top right.']]},
+    {on: ['@dim', '@signsheet'], cur: 'sgh', hl: 'sgh', cap: [['do', 'Click Continue with GitHub'], ['', ' (or Continue with Google).']]},
+    {off: ['@signsheet'], on: ['@ghtab'], cur: 'ghok', hl: 'ghok', cap: [['', 'A new tab opens on GitHub. '], ['do', 'Approve Lantern'], ['', ' there.']]},
+    {on: ['@ghdone'], cur: 'ghdone', hl: 'ghdone', cap: [['', 'The tab says you\'re in. '], ['do', 'Go back to the Lantern tab'], ['', '.']]},
+    {off: ['@ghtab', '@ghdone', '@dim', '@out', '@homeout'], on: ['@in', '@samples'], cur: 'me', hl: 'me',
+     cap: [['', 'Your account name is at the top right. You can start checking.']]},
+  ]},
+
+  first: {title: 'Check your first app', scenes: [
+    {off: ALL, on: ['@chrome', '@in', '@home', '@samples'], cur: [300, 60], cap: [['', 'The home screen has a link box and sample apps.']]},
+    {cur: 'link', hl: 'link', type: ['link', 'https://github.com/example-org/notes-app'], cap: [['do', 'Paste your app\'s link'], ['', ' into the box.']]},
+    {cur: 'pv1', hl: 'pv1', cap: [['do', 'Choose Map and findings only'], ['', ' to keep no code with your results.']]},
+    {cur: 'chk', hl: 'chk', cap: [['do', 'Click Check my app'], ['', '. The check starts straight away.']]},
+    {off: ['@home', '@samples'], on: ['@prog'], set: {ps1: 'Running', plog: 'Copying example-org/notes-app…'}, cls: {ps1: 'acc'}, cur: 'pr1', hl: 'pr1',
+     cap: [['', 'Lantern copies your app into a sealed box. Nothing is installed or run.']]},
+    {off: ['@prog'], on: ['@home', '@samples'], set: {link: 'Paste a link, like https://github.com/you/app'}, cls: {link: ''}, cur: 's1b', hl: 's1',
+     cap: [['', 'No app yet? '], ['do', 'Click Check this sample'], ['', ' on any sample card.']]},
+  ]},
+
+  private: {title: 'Check a private app or files on your computer', scenes: [
+    {off: ALL, on: ['@chrome', '@in', '@home', '@samples'], cur: [300, 220], cap: [['', 'For code without a public link, upload it from your computer.']]},
+    {cur: 'upl', hl: 'upl', cap: [['do', 'Click Upload…'], ['', ' next to the link box.']]},
+    {on: ['@dim', '@upsheet'], cur: 'ufold', hl: 'ufold', cap: [['do', 'Click Choose a folder'], ['', ' and pick your app\'s folder.']]},
+    {cur: 'uzip', hl: 'uzip', cap: [['', 'Have a .zip instead? '], ['do', 'Click Choose a .zip file'], ['', '.']]},
+    {off: ['@dim', '@upsheet'], on: ['@drop'], cur: 'drop', hl: 'link', cap: [['', 'Or '], ['do', 'drop the folder onto the link box'], ['', '. No button needed.']]},
+    {off: ['@home', '@samples', '@drop'], on: ['@prog'], set: {ph: 'Checking notes-app (upload)', ps1: 'Running', plog: 'Reading the folder…'}, cls: {ps1: 'acc'}, cur: 'ph', hl: 'pr1',
+     cap: [['', 'The check starts by itself when the upload finishes.']]},
+  ]},
+
+  follow: {title: 'Follow a check and find your runs', scenes: [
+    {off: ALL, on: ['@chrome', '@in', '@prog'], set: {ps1: 'Running', plog: 'Copying example-org/notes-app…'}, cls: {ps1: 'acc'}, cur: 'pr1', hl: 'pr1',
+     cap: [['', 'A check runs in four steps. The one running now is marked.']]},
+    {set: {ps1: 'Done', ps2: 'Running', plog: 'Copied example-org/notes-app\nChecking 41 libraries…'}, cls: {ps1: 'good', ps2: 'acc'}, cur: 'pr2', hl: 'pr2',
+     cap: [['', 'The log below shows what Lantern is doing, line by line.']]},
+    {set: {ps2: 'Done', ps3: 'Done', ps4: 'Done', plog: 'Copied example-org/notes-app\nChecked 41 libraries\nMapped 128 functions, ran the checks\nSaved. The copy of your code is deleted.'}, cls: {ps2: 'good', ps3: 'good', ps4: 'good'}, cur: 'pr4', hl: 'plog',
+     cap: [['', 'When all four are done, your results are saved and your code is deleted.']]},
+    {cur: 'nruns', hl: 'nruns', cls: {nruns: 'on'}, cap: [['do', 'Click My runs'], ['', ' at the top, from anywhere.']]},
+    {off: ['@prog'], on: ['@home', '@yruns'], cur: 'lb3', hl: 'lb3', cap: [['', 'Each run has a card. "Where in your app" shows where the problems are.']]},
+    {cur: 'rre', hl: 'rre', cap: [['do', 'Click Re-check'], ['', ' to check your latest code again, or '], ['do', 'Show me what to fix'], ['', ' to open it.']]},
+  ]},
+
+  read: {title: 'Read what to fix', scenes: [
+    {off: ALL, on: RUN.concat(['@fix']), cls: {tfix: 'on'}, cur: 'tfix', hl: 'tfix', cap: [['do', 'Click What to fix'], ['', ' in an open run.']]},
+    {cur: 'f1', hl: 'f1', cap: [['do', 'Read the top card'], ['', ' first. The most serious problem is always on top.']]},
+    {cur: 'f1s', hl: 'f1s', cap: [['', 'Each card says how serious it is, in a word as well as a colour.']]},
+    {cur: 'f1p', hl: 'f1p', cap: [['', 'It also says which page and button a visitor would use to reach it.']]},
+    {on: ['@scen'], cur: 'f1a', hl: 'scen', cap: [['do', 'Click See it happen: a scenario'], ['', ' for a short story.']]},
+    {off: ['@scen'], on: ['@lines'], cur: 'f1c', hl: 'lines', cap: [['do', 'Click Show the lines'], ['', ' to see where in the code it is.']]},
+  ]},
+
+  fix: {title: 'Fix a finding', scenes: [
+    {off: ALL, on: RUN.concat(['@fix']), cls: {tfix: 'on'}, cur: 'f1b', hl: 'f1b', cap: [['', 'On a finding, '], ['do', 'click Fix this'], ['', '.']]},
+    {off: ['@fix'], on: ['@fixp'], cur: 'fcode', hl: 'fcode', cap: [['', 'Lantern writes the instructions for your AI assistant.']]},
+    {on: ['@toast'], cur: 'fcopy', hl: 'fcopy', cap: [['do', 'Click Copy the prompt'], ['', ', then '], ['do', 'paste it'], ['', ' into your assistant.']]},
+    {off: ['@toast'], on: ['@sendm'], cur: 'fsend', hl: 'sendm', cap: [['', 'Or '], ['do', 'click Send to…'], ['', ' and pick Claude Code, Cursor or ChatGPT.']]},
+    {off: ['@bar', '@fixp', '@sendm'], on: ['@home', '@yruns'], cur: 'rre', hl: 'rre', set: {rsent: '2 things to fix. The most serious: a password is written in the code.'},
+     cap: [['', 'After your assistant changes the code, '], ['do', 'click Re-check'], ['', '. The fixed finding drops off.']]},
+  ]},
+
+  paths: {title: 'Follow a path through your app', scenes: [
+    {off: ALL, on: RUN.concat(['@paths']), cls: {tpaths: 'on', vl: 'on'}, cur: 'tpaths', hl: 'tpaths', cap: [['do', 'Click Paths'], ['', ' in an open run.']]},
+    {cur: 'la1', hl: 'la1', cap: [['', 'Lanes shows one row per part of your app: Browser, Frontend, Server, Data.']]},
+    {cur: 'n1', hl: 'n1', cls: {n1: 'lit'}, cap: [['do', 'Click a page'], ['', ' to light up the path from it.']]},
+    {cls: {n1: 'lit', n2: 'lit', n3: 'lit', n4: 'lit'}, cur: 'n3', hl: 'n3', cap: [['', 'The path runs from the Notes page, through the server, to your data.']]},
+    {world: [1.7, -380, -280], cur: 'n3', hl: 'n3', cap: [['do', 'Scroll or pinch to zoom'], ['', ' and drag to move around.']]},
+    {world: [1, 0, 0], cur: 'srch', hl: 'srch', type: ['srch', 'deleteNote'], cap: [['do', 'Type a name into Search functions'], ['', ' to find one part of your code.']]},
+    {cls: {vl: '', vg: 'on'}, cur: 'vg', hl: 'vg', cap: [['', 'Other views: '], ['do', 'pick Path, Flowchart or Graph'], ['', '. Press F for full screen.']]},
+  ]},
+
+  lens: {title: 'Understand a function', scenes: [
+    {off: ALL, on: RUN.concat(['@paths']), cls: {tpaths: 'on', vl: 'on', n2: 'lit'}, cur: 'n2', hl: 'n2', cap: [['do', 'Click a function'], ['', ' on the map.']]},
+    {on: ['@lens'], cls: {lt1: 'on'}, set: {ltx: 'An async handler that sends DELETE /notes/:id with the note\'s id and refreshes the list. Called from the Notes page\'s Delete button.'}, cur: 'lt1', hl: 'lt1',
+     cap: [['', 'Technical is written for an engineer.']]},
+    {cls: {lt1: '', lt2: 'on'}, set: {ltx: 'Like a "throw away" button: when you press Delete on a note, this asks the server to remove that note, then shows the list again.'}, cur: 'lt2', hl: 'lt2',
+     cap: [['do', 'Click Everyday'], ['', ' for the same thing in everyday words.']]},
+    {cls: {lt2: '', lt3: 'on'}, set: {ltx: 'Frontend · called by Notes page · calls DELETE /notes/:id on the server.'}, cur: 'lt3', hl: 'lt3',
+     cap: [['do', 'Click Where it sits'], ['', ' to see what calls it and what it calls.']]},
+    {cls: {lt3: '', lt4: 'on'}, set: {ltx: 'Ria opens her notes and presses Delete on an old one. It disappears from her list.'}, cur: 'lt4', hl: 'lt4',
+     cap: [['do', 'Click Scenario'], ['', ' for a short story of someone using it.']]},
+    {off: ['@lens'], on: ['@dim', '@consent'], cur: 'cyes', hl: 'cyes', cap: [['', 'For words written by a model, '], ['do', 'click Explain in plain words'], ['', ', then '], ['do', 'I agree'], ['', '.']]},
+  ]},
+
+  ready: {title: 'See if you\'re ready to ship', scenes: [
+    {off: ALL, on: RUN.concat(['@ready']), cls: {tready: 'on'}, cur: 'tready', hl: 'tready', cap: [['do', 'Click Ready to ship?'], ['', ' in an open run.']]},
+    {cur: 'ring', hl: 'ring', cap: [['', 'Your grade and your score out of 100.']]},
+    {cur: 'rhl', hl: 'rhl', cap: [['do', 'Read the headline'], ['', '. It names the next thing to do.']]},
+    {cur: 'c1s', hl: 'c1', cap: [['', 'Each group of checks shows its points. '], ['do', 'Look for the lowest'], ['', '.']]},
+    {off: ['@ready'], on: ['@prot'], cls: {tready: '', tprot: 'on'}, cur: 'tprot', hl: 'tprot', cap: [['do', 'Click What protects you'], ['', ' to see your app\'s protections.']]},
+    {cur: 'pt1s', hl: 'pt1', cap: [['', 'Each protection says Add, Check or In place.']]},
+  ]},
+
+  share: {title: 'Share your proof', scenes: [
+    {off: ALL, on: RUN.concat(['@fix']), cls: {tfix: 'on'}, cur: 'share', hl: 'share', cap: [['', 'In an open run, '], ['do', 'click Share'], ['', '.']]},
+    {on: ['@dim', '@share'], cur: 'shw', hl: 'shw', cap: [['', 'Lantern tells you what the link opens. '], ['do', 'Read the warning'], ['', '.']]},
+    {cur: 'shmk', hl: 'shmk', cap: [['do', 'Click Create link'], ['', '.']]},
+    {off: ['@share'], on: ['@shs', '@shared'], set: {shs: 'Anyone with this link can open the report'}, cur: 'shcp', hl: 'shcp', cap: [['do', 'Click Copy'], ['', ' and send the link.']]},
+    {cur: 'shoff', hl: 'shoff', cap: [['', 'Changed your mind? '], ['do', 'Click Stop sharing'], ['', '. The old link stops working.']]},
+    {off: ['@dim', '@shs', '@shared', '@fix'], on: ['@evid'], cls: {tfix: '', trep: 'on'}, cur: 'evpdf', hl: 'evpdf', cap: [['', 'For a file, '], ['do', 'click Report'], ['', ', then '], ['do', 'Save as PDF'], ['', '.']]},
+  ]},
+
+  ask: {title: 'Ask Lantern', scenes: [
+    {off: ALL, on: RUN.concat(['@fix', '@pill']), cls: {tfix: 'on'}, cur: 'pill', hl: 'pill', cap: [['do', 'Click Ask Lantern'], ['', ' at the bottom right of any screen.']]},
+    {on: ['@askwin'], cur: 'ain', hl: 'ain', type: ['ain', 'What does the serious one mean?'], cap: [['do', 'Type your question'], ['', '.']]},
+    {on: ['@askq'], set: {aq: 'What does the serious one mean?', ain: 'Ask, or drop a screenshot…'}, cls: {ain: ''}, cur: 'ain', hl: 'aq', cap: [['do', 'Press Enter'], ['', ' to send it.']]},
+    {on: ['@askans'], cur: 'aa', hl: 'aa', cap: [['', 'Lantern answers from the results of your check only.']]},
+    {cur: 'ain', hl: 'ain', set: {ain: '🖼 error-screenshot.png'}, cls: {ain: 'filled'}, cap: [['', 'Stuck on an error? '], ['do', 'Drop a screenshot'], ['', ' into the box and ask.']]},
+  ]},
+
+  settings: {title: 'Make Lantern yours', scenes: [
+    {off: ALL, on: HOME_IN, cur: 'nset', hl: 'nset', cap: [['do', 'Click Settings'], ['', ' at the top.']]},
+    {off: ['@home', '@yruns'], on: ['@settings'], cls: {nset: 'on'}, cur: 'th3', hl: 'th3', cap: [['', 'Under Appearance, '], ['do', 'pick a Theme'], ['', ': Auto, Light or Dark.']]},
+    {cls: {th1: '', th3: 'on'}, cur: 'md2', hl: 'md2', cap: [['do', 'Pick Simple or Advanced'], ['', '. Advanced shows every table and panel.']]},
+    {cls: {md1: '', md2: 'on'}, cur: 'skp1', hl: 'skp', cap: [['do', 'Choose what a new check keeps'], ['', ': map and findings only, or with code snippets.']]},
+    {cur: 'sout', hl: 'sacc', cap: [['', 'Under Account, '], ['do', 'click Sign out'], ['', ' or delete your account and every run.']]},
+  ]},
+};
+
+// ---------------------------------------------------------------- the player
+const REDUCE = matchMedia('(prefers-reduced-motion: reduce)');
+const STEP_MS = 4600, TYPE_MS = 38;
+const CURSOR_SVG = '<svg viewBox="0 0 18 24" aria-hidden="true"><path d="M1 1v19l5-5 3.5 7.5 3-1.5L9 13.5h7z" fill="#161618" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+const textOf = cap => cap.map(p => p[1]).join('');
+
+class Player {
+  constructor(root, id) {
+    const v = VIDEOS[id];
+    this.root = root; this.v = v; this.scenes = v.scenes; this.i = 0; this.timer = 0; this.typer = 0;
+    this.playing = !REDUCE.matches; this.visible = false;
+    const ids = new Set();
+    for (const s of this.scenes) {
+      for (const k of ['on', 'off']) for (const x of s[k] || []) if (!x.startsWith('@')) ids.add(x);
+      for (const k of ['set', 'cls']) for (const x of Object.keys(s[k] || {})) ids.add(x);
+      if (s.type) ids.add(s.type[0]);
+      if (typeof s.cur === 'string') ids.add(s.cur);
+      if (s.hl) ids.add(s.hl);
+    }
+    const groups = new Set(this.scenes.flatMap(s => (s.on || []).filter(x => x.startsWith('@')).map(x => x.slice(1))));
+    this.els = LIB.filter(d => groups.has(d.g) || ids.has(d.id));
+    this.byId = Object.fromEntries(this.els.map(d => [d.id, d]));
+
+    const mk = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text) n.textContent = text; return n; };
+    root.textContent = '';
+    const head = mk('div', 'vhead');
+    head.append(mk('span', 'vlabel', 'Animated demo · not a screen recording'), mk('span', '', `${this.scenes.length} steps`));
+    const wrap = mk('div', 'stagewrap');
+    wrap.tabIndex = 0;
+    wrap.setAttribute('aria-label', `${v.title}: demo screen. Scroll sideways on a small screen.`);
+    this.stage = mk('div', 'stage');
+    this.stage.setAttribute('role', 'img');
+    this.world = mk('div', 'world');
+    this.world.setAttribute('aria-hidden', 'true');   // the stage's label says what it shows
+    this.nodes = {};
+    for (const d of this.els) {
+      const n = mk('div', `m m-${d.k}`);
+      n.dataset.id = d.id;
+      Object.assign(n.style, {left: d.x + 'px', top: d.y + 'px', width: d.w + 'px', height: d.h + 'px'});
+      this.nodes[d.id] = n; this.world.append(n);
+    }
+    this.cursor = mk('div', 'cursor');
+    this.cursor.setAttribute('aria-hidden', 'true');
+    this.cursor.innerHTML = '<span class="ring"></span>' + CURSOR_SVG;   // fixed markup, no data
+    this.stage.append(this.world, this.cursor);
+    wrap.append(this.stage);
+    this.cap = mk('p', 'cap');
+    this.cap.setAttribute('aria-live', 'polite');
+    const ctl = mk('div', 'ctl');
+    this.bBack = mk('button', 'btn', 'Back'); this.bPlay = mk('button', 'btn primary', ''); this.bNext = mk('button', 'btn', 'Next');
+    for (const b of [this.bBack, this.bPlay, this.bNext]) b.type = 'button';
+    this.bBack.setAttribute('aria-label', `Back one step: ${v.title}`);
+    this.bNext.setAttribute('aria-label', `Next step: ${v.title}`);
+    const dots = mk('div', 'dots');
+    this.dots = this.scenes.map((_, k) => {
+      const b = mk('button', 'dot'); b.type = 'button'; b.append(mk('i'));
+      b.setAttribute('aria-label', `${v.title}: go to step ${k + 1} of ${this.scenes.length}`);
+      b.onclick = () => { this.pause(); this.show(k); };
+      dots.append(b); return b;
+    });
+    this.where = mk('span', 'where');
+    ctl.append(this.bBack, this.bPlay, this.bNext, dots, this.where);
+    root.append(head, wrap, this.cap, ctl);
+    this.bBack.onclick = () => { this.pause(); this.show((this.i - 1 + this.scenes.length) % this.scenes.length); };
+    this.bNext.onclick = () => { this.pause(); this.show((this.i + 1) % this.scenes.length); };
+    this.bPlay.onclick = () => (this.playing ? this.pause() : this.play());
+    root.addEventListener('keydown', e => {
+      if (e.target.closest('input,textarea')) return;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); this.bBack.click(); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); this.bNext.click(); }
+    });
+    new IntersectionObserver(es => { this.visible = es.some(x => x.isIntersecting); this.schedule(); }, {threshold: 0.35}).observe(this.stage);
+    this.show(0, false);
+    this.syncPlay();
+  }
+  expand(list) {
+    const out = [];
+    for (const x of list || []) {
+      if (x === '@*') out.push(...this.els.map(d => d.id));
+      else if (x.startsWith('@')) out.push(...this.els.filter(d => d.g === x.slice(1)).map(d => d.id));
+      else out.push(x);
+    }
+    return out.filter(x => this.byId[x]);
+  }
+  // the state after scene i: every scene up to i applied in order, so any step can be shown on its own
+  state(i) {
+    const st = {}; let world = [1, 0, 0], cur = [320, 180];
+    for (const d of this.els) st[d.id] = {on: false, text: d.t, cls: d.c};
+    for (let j = 0; j <= i; j++) {
+      const s = this.scenes[j];
+      for (const x of this.expand(s.off)) st[x].on = false;
+      for (const x of this.expand(s.on)) st[x].on = true;
+      for (const [x, t] of Object.entries(s.set || {})) if (st[x]) st[x].text = t;
+      for (const [x, c] of Object.entries(s.cls || {})) if (st[x]) st[x].cls = c;
+      if (s.type) { st[s.type[0]].text = s.type[1]; st[s.type[0]].cls = 'filled'; }
+      if (s.world) world = s.world;
+      if (s.cur) cur = s.cur;
+    }
+    return {st, world, cur};
+  }
+  // where the cursor's tip goes: an element's centre in stage pixels (after the world's zoom), or a point
+  target(cur, world) {
+    const [s, tx, ty] = world;
+    if (Array.isArray(cur)) return cur;
+    const d = this.byId[cur];
+    return [(d.x + d.w / 2) * s + tx, (d.y + d.h / 2) * s + ty];
+  }
+  show(i, animate = true) {
+    clearInterval(this.typer);
+    this.i = i;
+    const reduce = REDUCE.matches || !animate;
+    const s = this.scenes[i], {st, world, cur} = this.state(i);
+    for (const d of this.els) {
+      const n = this.nodes[d.id], x = st[d.id];
+      n.className = `m m-${d.k}${x.cls ? ' ' + x.cls : ''}${x.on ? '' : ' off'}${s.hl === d.id ? ' hl' : ''}`;
+      n.textContent = x.text;
+    }
+    if (s.type && !reduce) {
+      const [id, full] = s.type, n = this.nodes[id];
+      let k = 0;
+      n.textContent = '|';
+      this.typer = setInterval(() => {
+        k += 1;
+        n.textContent = full.slice(0, k) + (k < full.length ? '|' : '');
+        if (k >= full.length) clearInterval(this.typer);
+      }, TYPE_MS);
+    }
+    this.stage.classList.toggle('modal', !!(st.dim && st.dim.on));
+    this.world.style.transform = `translate(${world[1]}px, ${world[2]}px) scale(${world[0]})`;
+    const [cx, cy] = this.target(cur, world);
+    this.cursor.style.transform = `translate(${cx}px, ${cy}px)`;
+    this.cursor.dataset.x = cx; this.cursor.dataset.y = cy;
+    this.cap.textContent = '';
+    for (const [kind, text] of s.cap) {
+      if (kind === 'do') { const b = document.createElement('span'); b.className = 'do'; b.textContent = text; this.cap.append(b); }
+      else this.cap.append(document.createTextNode(text));
+    }
+    this.stage.setAttribute('aria-label', `${this.v.title}, step ${i + 1} of ${this.scenes.length}: ${textOf(s.cap)}`);
+    this.dots.forEach((b, k) => (k === i ? b.setAttribute('aria-current', 'step') : b.removeAttribute('aria-current')));
+    this.where.textContent = `Step ${i + 1} / ${this.scenes.length}`;
+    this.root.dataset.step = i;
+    this.schedule();
+  }
+  schedule() {
+    clearTimeout(this.timer);
+    if (this.playing && this.visible) this.timer = setTimeout(() => this.show((this.i + 1) % this.scenes.length), this.scenes[this.i].ms || STEP_MS);
+  }
+  syncPlay() {
+    this.bPlay.textContent = this.playing ? 'Pause' : 'Play';
+    this.bPlay.setAttribute('aria-label', `${this.playing ? 'Pause' : 'Play'} the demo: ${this.v.title}`);
+    this.root.dataset.playing = this.playing ? '1' : '0';
+  }
+  play() { this.playing = true; this.syncPlay(); this.schedule(); }
+  pause() { this.playing = false; clearTimeout(this.timer); this.syncPlay(); }
+}
+
+// the contents list, from the page's own sections
+const toc = document.getElementById('toc');
+for (const sec of document.querySelectorAll('main section.gsec')) {
+  const h = sec.querySelector('h2'), li = document.createElement('li'), a = document.createElement('a');
+  a.href = '#' + sec.id; a.textContent = h.textContent.replace(/^(\d+)/, '$1. ');
+  li.append(a); toc.append(li);
+}
+window.PLAYERS = {};
+for (const root of document.querySelectorAll('.player[data-video]')) window.PLAYERS[root.dataset.video] = new Player(root, root.dataset.video);
+</script>
+</body>
+</html>
