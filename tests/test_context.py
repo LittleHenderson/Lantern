@@ -200,3 +200,130 @@ def test_a_cut_short_hash_inside_an_auth_class_is_not_called_an_identifier(tmp_p
                        "        s = nonce.encode() + os.urandom(8)\n        cnonce = hashlib.sha1(s).hexdigest()[:16]\n"
                        "        return cnonce\n\n@app.get('/x')\ndef x(n: str):\n    return HTTPDigestAuth().build_header(n)\n")
     assert f["context"]["hash"]["purpose"] == "security" and "rank_note" not in f
+
+
+# ---------------------------------------------------------------- a value the browser can see: does the server trust it?
+
+FRONT = ("web/package.json", '{"name":"web","dependencies":{"react":"18"}}')
+FRONT_CODE = ("export function mintHeaders() {\n  const s = import.meta.env.VITE_AUTH_MINT_SECRET ?? '';\n"
+              "  return s ? { 'X-Auth-Mint-Secret': s } : {};\n}\n")
+API_HEAD = ("from fastapi import FastAPI, Request, HTTPException, Depends\nfrom pydantic import BaseModel\n\n"
+            "app = FastAPI()\n\nclass TokenResponse(BaseModel):\n    token: str\n\n")
+
+
+def _trust(root, server: str | None, extra=None):
+    files = {FRONT[0]: FRONT[1], "web/src/config.ts": FRONT_CODE, **(extra or {})}
+    if server is not None:
+        files["pyproject.toml"] = '[project]\nname="api"\nversion="0"\ndependencies=["fastapi"]\n'
+        files["api/main.py"] = API_HEAD + server
+    _write(root, files)
+    g = build_graph(root)
+    fs = [f for f in scan(g, offline=True)["findings"] if f["rule"] == "LW-PUBLIC-SECRET" and not f["in_tests"]]
+    assert len(fs) == 1
+    return fs[0]
+
+
+def test_exposed_value_that_the_server_checks_names_route_controls_and_conditions(tmp_path):
+    f = _trust(tmp_path, (
+        "import os\nimport hmac\nMINT = os.environ.get('NC_AUTH_MINT_SECRET', '')\nACCOUNTS = False\n\n"
+        "class settings:\n    accounts_enabled = False\n\n"
+        "@app.post('/auth/token', response_model=TokenResponse)\ndef mint(request: Request):\n"
+        "    if settings.accounts_enabled:\n        raise HTTPException(401)\n"
+        "    presented = request.headers.get('X-Auth-Mint-Secret') or ''\n"
+        "    if not hmac.compare_digest(presented, MINT):\n        raise HTTPException(401)\n"
+        "    return TokenResponse(token='t')\n"))
+    t = f["trust"]
+    assert t["browser"]["sent_as"] == "X-Auth-Mint-Secret" and t["server_trusts"] == "server-checks-it"
+    assert t["routes"] == ["POST /auth/token"] and "accounts_enabled" in t["conditions"]
+    assert t["stranger_access"] == "not determined"     # visible + trusted is never called a confirmed bypass
+    assert f["rank"] == "high"                          # and it is never lowered
+
+
+def test_exposed_value_with_no_server_use_says_so_and_stays_high(tmp_path):
+    f = _trust(tmp_path, "@app.get('/health')\ndef health():\n    return {'ok': True}\n")
+    assert f["trust"]["server_trusts"] == "not-seen-on-server" and f["rank"] == "high"
+
+
+def test_exposed_value_with_no_server_in_the_repo_is_unknown(tmp_path):
+    f = _trust(tmp_path, None)
+    assert f["trust"]["server_trusts"] == "no-server-code"
+    assert any("not in this repository" in u for u in f["trust"]["unknown"])
+
+
+def test_a_docstring_about_the_header_is_not_server_code_checking_it(tmp_path):
+    f = _trust(tmp_path, ('"""Clients send X-Auth-Mint-Secret; the check lives elsewhere."""\n\n'
+                          "@app.get('/health')\ndef health():\n    return {'ok': True}\n"))
+    assert f["trust"]["server_trusts"] == "not-seen-on-server"
+
+
+def test_other_server_side_controls_are_reported_per_route(tmp_path):
+    f = _trust(tmp_path, (
+        "def require_role(*roles):\n    def dep(request: Request):\n        return request.state.user\n    return dep\n\n"
+        "@app.post('/accounts/invite')\ndef invite(request: Request, _role=Depends(require_role('admin'))):\n"
+        "    if request.headers.get('X-Auth-Mint-Secret'):\n        raise HTTPException(400)\n    return {}\n"))
+    ctl = {c["route"]: c for c in f["trust"]["other_controls"]}
+    assert ctl["POST /accounts/invite"]["login_check"] == "strong"
+
+
+# ---------------------------------------------------------------- route login checks: what a decorator says it returns
+
+def _auth_missing(root, deco):
+    _write(root, {"pyproject.toml": '[project]\nname="a"\nversion="0"\ndependencies=["fastapi"]\n',
+                  "a/main.py": API_HEAD + "def verify_token():\n    return True\n\n"
+                  + deco + "\ndef delete_item(item_id: int):\n    return {'deleted': item_id}\n"})
+    g = build_graph(root)
+    from lantern.websec import call_adjacency, login_check
+    n = next(x for x in g.nodes.values() if x.name == "delete_item")
+    return login_check(g, n, call_adjacency(g), (root / "a/main.py").read_text(encoding="utf-8"))
+
+
+def test_a_response_model_named_token_is_not_a_login_check(tmp_path):
+    assert _auth_missing(tmp_path, "@app.delete('/items/{item_id}', response_model=TokenResponse)") is None
+
+
+def test_a_dependency_in_the_decorator_still_is(tmp_path):
+    lc = _auth_missing(tmp_path, "@app.delete('/items/{item_id}', response_model=TokenResponse, "
+                                 "dependencies=[Depends(verify_token)])")
+    assert lc and lc[0] == "strong"
+
+
+def test_a_request_body_type_named_token_is_not_a_login_check(tmp_path):
+    from lantern.websec import signature_sign
+    assert signature_sign("def mint(body: TokenRequest, request: Request)") is None
+    assert signature_sign("def login(form: OAuth2PasswordRequestForm = Depends())") is None
+    # the caller's identity still counts
+    assert signature_sign("def me(user: CurrentUser)")
+    assert signature_sign("def me(user: Annotated[User, Depends(get_current_user)])")
+    assert signature_sign("def me(token: str = Depends(oauth2_scheme))")
+
+
+# ---------------------------------------------------------------- unresolved calls: one denominator, kinds, test code apart
+
+def test_call_sites_share_one_denominator_and_test_code_is_counted_apart(tmp_path):
+    _write(tmp_path, {
+        "pyproject.toml": '[project]\nname="a"\nversion="0"\n',
+        "a/core.py": "import json\n\ndef helper():\n    return 1\n\ndef run(x, rows):\n    helper()\n    helper()\n"
+                     "    json.dumps(x)\n    x.frobnicate()\n    rows[0]()\n    make()()\n    self_made()\n",
+        "tests/test_core.py": "def test_run(x):\n    x.assert_called()\n"})
+    g = build_graph(tmp_path)
+    c = g.call_sites()
+    assert c["resolved_internal"] == 2 and c["known_external"] == 1          # two lines call helper: two call sites
+    assert c["total"] == sum(c[k] for k in ("resolved_internal", "inferred_internal", "several_possible_targets",
+                                             "name_only_guess", "known_external", "unresolved"))
+    assert c["unresolved_in_tests"] == 1                                    # counted, and said apart
+    k = c["unresolved_kinds"]
+    assert k["method on a value of unknown type"] == 1 and k["name not found"] >= 1
+    # saved and loaded: the totals travel; nothing is recomputed from the 200 most common texts
+    g.save(tmp_path / "g.json")
+    from lantern.graph import Graph
+    c2 = Graph.load(tmp_path / "g.json").call_sites()
+    assert c2 == c
+
+
+def test_unresolved_kind_reads_the_shape_only():
+    from lantern.graph import unresolved_kind
+    assert unresolved_kind("self.client.get") == "member of self or this"
+    assert unresolved_kind("payload.get") == "method on a value of unknown type"
+    assert unresolved_kind("Path(__file__).resolve") == "on another call's result"
+    assert unresolved_kind("getattr(mod, name)") == "dynamic (subscript, getattr, computed)"
+    assert unresolved_kind("model") == "name not found"
