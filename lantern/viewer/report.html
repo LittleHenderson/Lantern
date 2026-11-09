@@ -1580,6 +1580,30 @@ function ctxNote(f) {
   if (!f.rank_note || !f.rank_before_context || !RANKS.includes(f.rank_before_context)) return '';
   return `<div class="note ctxnote" style="margin-top:8px"><span class="tag" title="Lantern read the names around this line">context</span> Ranked <b>${esc(f.rank)}</b>, not ${esc(f.rank_before_context)}: ${esc(f.rank_note)}</div>`;
 }
+// A setting the browser can see (LW-PUBLIC-SECRET): four facts kept apart (context.public_secret_trust)
+const TRUST_WORDS = {'server-checks-it': 'Yes: server code checks it', 'server-reads-it': 'Server code reads the same setting, but Lantern did not see it compare what a request sends',
+  'not-seen-on-server': 'Not seen: no server code in this repository reads it', 'no-server-code': 'Unknown: the server is not in this repository'};
+function trustBox(f) {
+  const t = f.trust;
+  if (!t || !t.browser) return '';
+  const list = a => (Array.isArray(a) ? a : []).map(x => `<code>${esc(x)}</code>`).join(', ');
+  const ctl = (Array.isArray(t.other_controls) ? t.other_controls : []).map(c => `${esc(c.route)}: ${c.login_check ? esc(c.login_check) + ' login sign (' + esc(c.why) + ')' : 'no other login sign seen'}`).join('; ');
+  return `<div class="note trustbox" style="margin-top:8px"><b>What Lantern knows about this value</b>
+    <div>1. Visible in the browser: <b>yes</b> (<code>${esc(t.browser.where)}</code>${t.browser.sent_as ? `, sent as the <code>${esc(t.browser.sent_as)}</code> header` : ''}).</div>
+    <div>2. The server trusts it: <b>${esc(TRUST_WORDS[t.server_trusts] || 'unknown')}</b>${(t.server_checks || []).length ? ` at ${list(t.server_checks)}` : ''}${(t.routes || []).length ? ` on ${list(t.routes)}` : ''}.</div>
+    <div>3. A stranger can get in with it: <b>not determined</b>. Lantern reads code; it does not run the app or see production's settings.</div>
+    <div>4. Other server-side controls: ${ctl || 'none seen'}${(t.conditions || []).length ? `; the checking code depends on ${list(t.conditions)}` : ''}.</div>
+    ${(t.unknown || []).length ? `<div>Still unknown: ${(t.unknown).map(esc).join('; ')}.</div>` : ''}</div>`;
+}
+// Every call site Lantern read, one denominator (graph.call_sites): what it knows about each target
+function callSiteRows(c) {
+  const pct = n => c.total ? ` (${(100 * (+n || 0) / c.total).toFixed(1)}%)` : '';
+  const rows = [['Linked to code in the repo, certain', c.resolved_internal], ['Linked to code in the repo, likely (types inferred)', c.inferred_internal],
+    ['One of several possible targets', c.several_possible_targets], ['Guessed by method name alone', c.name_only_guess],
+    ['Known library or outside call', c.known_external], ['Not traced', c.unresolved]];
+  const kinds = c.unresolved_kinds && typeof c.unresolved_kinds === 'object' ? Object.entries(c.unresolved_kinds).filter(([, v]) => +v > 0) : [];
+  return `<div>Every call site</div><div>${esc(c.total)} call sites, each counted once:<br>${rows.map(([k, v]) => `${esc(k)}: ${esc(v)}${pct(v)}`).join('<br>')}${+c.unresolved_in_tests ? `<br><span class="note">Of the not traced, ${esc(c.unresolved_in_tests)} are in test files.</span>` : ''}${kinds.length ? `<br><span class="note">Not traced in app code, by shape: ${kinds.map(([k, v]) => `${esc(k)} ${esc(v)}`).join(' · ')}. The shape does not say why: a builtin, a library, or code that is not in the repo.</span>` : ''}</div>`;
+}
 function findingCard(f) {
   const heur = f.tool_confidence === 'LOW' ? '<span class="tag" title="Pattern-based check; review before acting">heuristic</span>' : '';
   const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
@@ -1591,7 +1615,7 @@ function findingCard(f) {
     ${hotLane(f) ? `<div class="top" style="margin-top:8px;gap:10px">${laneGlyph(fLanes(f), hotLane(f), f.rank)}${onLane(f)}</div>` : ''}
     ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
     <h4>${esc(S.simple && f.headline ? f.headline : f.title)}</h4>${S.simple && f.headline ? `<div class="toolsays">${esc(f.tool)} says: “${esc(f.title)}”</div>` : ''}<p class="fdesc">${where}.${reach}${input}</p>
-    ${ctxNote(f)}
+    ${ctxNote(f)}${trustBox(f)}
     ${pathsHtml(f)}
     ${findingScenario(f, ex) ? `<details class="scenbox"><summary>See it happen: a scenario</summary>${findingScenario(f, ex)}</details>` : ''}
     ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
@@ -1712,7 +1736,7 @@ function findingPanel(f) {
     <div class="meta">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${n ? ` · in ${esc(short(n.qualname))}` : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div>
     <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'no entry point leads here'}</div></div>
       <div><div class="k">Uses input</div><div class="v">${f.input ? 'Yes' : f.input === false ? 'No' : 'Unknown'}</div><div class="d">${f.input ? esc(f.input.via) : f.input === false ? 'nothing from the request reaches this line' : 'not tracked for this rule'}</div></div></div>
-    ${ctxNote(f)}
+    ${ctxNote(f)}${trustBox(f)}
     ${f.ui_path || f.reachable ? `<div class="k2">Path from the app</div>${chainHtml('', f.ui_path || f.reachable.path)}` : ''}
     ${n ? srcBlock(n) : ''}
     ${f.status === 'accepted' ? `<div class="k2">Accepted</div><p>By ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</p>` : ''}
@@ -1907,6 +1931,7 @@ function renderAbout() {
       <div>Call edges</div><div>${esc(st.call_edges)} (${esc(st.internal_call_edges)} inside the repo)</div>
       <div>Confidence</div><div>${Object.entries(st.confidence || {}).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(' · ')}</div>
       <div>Unresolved call sites</div><div>${esc(st.unresolved_call_sites)} (calls Lantern could not trace to a target; left out rather than guessed)</div>
+      ${st.call_sites ? callSiteRows(st.call_sites) : ''}
       <div>Analysis time</div><div>${DATA.timings ? Object.entries(DATA.timings).map(([k, v]) => `${esc(k)} ${esc(v)}s`).join(' · ') : '–'}</div>
     </div>
     ${Object.keys(LANGS).length ? `<h3>Languages</h3><div class="kv">${Object.entries(LANGS).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v.files)} files · ${esc(v.lines)} lines${v.components ? ` · ${esc(v.components)} components` : ''}</div>`).join('')}</div>` : ''}

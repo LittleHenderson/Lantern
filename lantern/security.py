@@ -610,6 +610,11 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
                     f["input"] = False
             if ctx:
                 f["context"] = ctx
+        if f.get("rule") == "LW-PUBLIC-SECRET" and not f["in_tests"]:
+            # a value visible in the browser is one fact; whether the server trusts it is another (context.py)
+            tr = context.public_secret_trust(g, f, lines_for)
+            if tr:
+                f["trust"] = tr
         f["rank"] = "low" if f["in_tests"] and f["category"] == "code" else rank(f)
         acc = accepted.get(f["id"])
         f["status"] = "accepted" if acc else "open"

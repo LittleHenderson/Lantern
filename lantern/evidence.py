@@ -101,6 +101,18 @@ def digest(payload: dict) -> str:
     return "sha256:" + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _call_site_words(c: dict) -> str:
+    """One sentence on the denominator: every call site read, and what share each kind is."""
+    if not c.get("total"):
+        return ""
+    pct = lambda n: f"{100 * (n or 0) / c['total']:.1f}%"   # noqa: E731
+    return (f" Of {c['total']} call sites read: {pct(c.get('resolved_internal'))} linked to repo code for certain, "
+            f"{pct(c.get('inferred_internal'))} likely, {pct(c.get('several_possible_targets'))} to one of several "
+            f"targets, {pct(c.get('name_only_guess'))} guessed by method name, {pct(c.get('known_external'))} known "
+            f"library calls, {pct(c.get('unresolved'))} not traced"
+            + (f" ({c['unresolved_in_tests']} of those in test files)" if c.get("unresolved_in_tests") else "") + ".")
+
+
 def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy: str, exp: dict | None) -> list[str]:
     st = g.stats()
     out = [
@@ -108,7 +120,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
         "rules (who may see what, what a price should be) are right.",
         f"Calls Lantern could not trace. {st.get('unresolved_call_sites', 0)} call sites were left unresolved "
         "rather than guessed, mostly calls into libraries or very dynamic code (getattr, plugins, "
-        "hooks returning objects).",
+        "hooks returning objects)." + _call_site_words(st.get("call_sites") or {}),
     ]
     if st.get("guessed_by_method_name"):
         out.append(f"{st['guessed_by_method_name']} call edges were linked by method name alone because the object's "

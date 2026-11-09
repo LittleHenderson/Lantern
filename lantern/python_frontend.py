@@ -1144,6 +1144,8 @@ def build_graph(repo: str | Path) -> Graph:
             if not targets:
                 if cs.kind in ("call", "depends"):
                     g.unresolved[cs.text] = g.unresolved.get(cs.text, 0) + 1
+                    if TEST_FILE_RE.search(m.rel):   # counted, and said apart, so test code cannot hide in the total
+                        g.unresolved_tests[cs.text] = g.unresolved_tests.get(cs.text, 0) + 1
                 continue
             for tgt, conf, via in targets:
                 if tgt.startswith("ext:"):
