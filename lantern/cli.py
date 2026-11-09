@@ -65,6 +65,16 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
         if n:
             print(f"fail    {n} open finding(s) at {a.fail_on} or worse", file=sys.stderr)
             return 1
+    if a.fail_on:
+        # A gate cannot pass on findings a scanner never produced: a tool that failed, timed out, was not installed
+        # or covered only part of the project fails the run. A skip the user chose (--offline) is listed, not failed.
+        broke = [t for t in res.get("incomplete") or [] if t.get("state") != "skipped"]
+        if broke:
+            for t in broke:
+                print(f"fail    incomplete: {t['tool']} {t['status']}", file=sys.stderr)
+            print(f"fail    {len(broke)} scanner(s) did not finish or did not cover everything; no clean result "
+                  "without them", file=sys.stderr)
+            return 1
     return 0
 
 

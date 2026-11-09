@@ -182,8 +182,21 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 
 ### `security.json`
 
-`{"findings": [...], "tools": [{"tool", "status", "version"}], "counts": {critical, high, medium, low, in_tests, accepted},
-"id_version", "reachable_nodes", "total_callables", "ai", "mobile"}`
+`{"findings": [...], "tools": [scanner records], "incomplete": [the scanner records that apply and are not ok],
+"counts": {critical, high, medium, low, in_tests, accepted}, "id_version", "reachable_nodes", "total_callables", "ai",
+"mobile"}`
+
+A scanner record (`lantern/scanresult.py`, one per tool run: bandit, gitleaks, lantern-secrets, pip-audit, npm-audit,
+maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, packs): `tool`, `state` (`ok` | `partial` | `failed` |
+`timeout` | `unavailable` | `skipped`), `status` (the same as one sentence: `ok`, `ok (…)`, `partial: …`, `error: …`,
+`error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
+`applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
+patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`), `exclusions` (folders a tool was
+told to skip), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
+`fallback_for` (the built-in secret scan when gitleaks did not finish). `partial` keeps the findings the tool did
+produce. `incomplete` is read by readiness (`sec-scanners`), the Evidence Report, the badge (`scan incomplete`), the
+command line (`--fail-on` exits 1 for any state but `skipped`) and the app's project cards; a run with `--offline`
+lists its skipped audits there without failing the gate.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -241,8 +254,10 @@ shown, also show `title` as "<tool> says: …"), `scenario` (`{"kind", "who", "s
 `version`, `score`, `grade`, `shape`, `stack` (`{frameworks, …}`), `categories` (`[{key, title, weight, score, percent,
 checks: [{id, title, points, earned, status: pass|fail|partial|skip, evidence, fix, how}]}]`), `next_steps` (the
 highest-gain failed checks, with `gain` and `category`), `protections` (`[{id, title, status: add|check|in place, why,
-evidence, found, how}]`), `advice` (deployment advice strings for the shape), `hotspots`, `env_vars`,
-`starter` (`{filename: {content, snippet?}}`).
+evidence, found, how}]`), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
+`sec-scanners` check in Security findings fails when one `failed` or timed out, is partial for a gap the run knew
+about, and passes only when every applicable scanner finished), `advice` (deployment advice strings for the shape),
+`hotspots`, `env_vars`, `starter` (`{filename: {content, snippet?}}`).
 
 ### `explanations.json`
 
@@ -260,13 +275,16 @@ the scenario of the function's finding, else a one-line sketch from the map.
 
 `header` (`repo`, `name`, `commit`, `branch`, `dirty`, `remote`, `committed_at`, `generated_at`, `mode`, `privacy`),
 `scorecard` (`readiness`, `now` counts, `before` counts, `baseline_date`, `baseline_commit`), `architecture`,
-`security` (`open`, `accepted`, `fixed`, `changed`, `in_tests`, `protections`), `understanding`, `provenance`
-(`tools`, `models`, `rules`, including analysis packs), `limits` (strings: what the report does not prove),
-`digest` (`sha256:…`), `payload`.
+`security` (`open`, `accepted`, `fixed`, `changed`, `in_tests`, `protections`, `incomplete`: `[{tool, state, status,
+why, role, version}]`, the scanners that did not finish or did not cover everything; while it is not empty the memo, a
+notice under the tiles and the badge say `scan incomplete`, and the badge is never green), `understanding`,
+`provenance` (`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs), `limits`
+(strings: what the report does not prove; one line per incomplete scanner), `digest` (`sha256:…`), `payload`.
 
 ### Other files
 
-`run.json` (timings, privacy, offline, trace, finished_at), `baseline.json` (first-run findings for "fixed since"),
+`run.json` (timings, privacy, offline, trace, `incomplete` `[{tool, state, status, why, role}]`, finished_at),
+`baseline.json` (first-run findings for "fixed since"),
 `cache/` (explanation cache). In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed),
 `lantern-packs/*.json` (project analysis packs), `lantern-narratives.md` (the builder's own notes for the Evidence Report).
 
