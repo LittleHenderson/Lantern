@@ -12,6 +12,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   call instead of untraced. On one large app: untraced 33,318 → 28,519 call sites, and 23,025 built-in calls that were
   never counted now are; one wrong link (a list's `append` taken for a library call's result) is gone; no link to the
   app's own code changed on 15 other apps.
+- How to use Lantern: a guide page at `/guide` (website and `lantern serve`), in the main menu as "How to use Lantern".
+  A 60-second tour and 12 tasks, each with a short animated demo (one shared player, each demo is data: a simplified
+  copy of Lantern's screens, a moving cursor, gold-glowing instructions), numbered steps and a Good to know box, plus
+  keyboard shortcuts and a note on what is simulated. Demos play only while on screen, start paused with less motion,
+  and are labelled "Animated demo · not a screen recording".
 - Every finding outside test code now carries its case ("The case for this finding" on the finding card and panel, and
   `case` in `security.json`): where, at which revision; the claim in the tool's words; the evidence and where each fact
   came from; what has to be true for it to hurt, each marked yes / no / cannot check; the impact; why it has its rank;
