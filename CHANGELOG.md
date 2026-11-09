@@ -5,7 +5,7 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
-- Signing in somewhere new no longer signs you out everywhere else (2026-11-09; gateway 0.2.4). Each account had one
+- Signing in somewhere new no longer signs you out everywhere else (2026-11-09; gateway 0.2.5). Each account had one
   token, and every sign-in (the app, the CLI, the gateway's own page, the website on another computer) replaced it, so
   the website's sign-in stopped working and asked again. Each sign-in now gets its own token and the earlier ones keep
   working, up to 8 places per account (the one used least recently is signed out first, and a place unused for 90 days
@@ -13,6 +13,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   free use, and switching an account off still signs it out everywhere. Accounts from before keep their current
   token. The website also picks up a sign-in finished in the GitHub or Google tab after the page was reloaded or its
   sign-in box closed, instead of asking again.
+- The gateway's "You're in" page no longer prints your Lantern token (gateway 0.2.4, 2026-11-09). When nothing comes
+  to pick the token up by itself, the page shows one Lantern button, "Copy my Lantern token", that puts it on the
+  clipboard and then says "Copied. Now paste it into Lantern". A token on screen ends up in screenshots. The token is
+  printed only if copying fails or the browser runs no scripts. The page's one script is allowed by its hash in the
+  Content-Security-Policy, so nothing else can run.
 - The Graph view says what its lines mean and lights up the chosen step's own lines (2026-11-09). A line with an arrow
   from A to B means A can call B, read from the code; only teal lines were seen running under tests. Clicking a box now
   makes its lines glow with a slow pulse, with dots moving the way the call goes: teal for what it calls, light for what

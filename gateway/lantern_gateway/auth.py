@@ -6,7 +6,7 @@ Flow (the CLI and the app use the same one):
   2. The gateway redirects to the provider with a signed `state` (HMAC over the time and the cli code).
   3. The provider calls back with a `code`; the gateway exchanges it server-side (the client secret never leaves
      this server), reads the account id, and issues a token for that sign-in.
-  4. The callback page shows the token once and, when a cli code was given, parks it so the client can collect it
+  4. The callback page hands over the token once (a Copy button; the token is not drawn on screen) and, when a cli code was given, parks it so the client can collect it
      with `/v1/auth/claim?cli=<code>` (one time, within 10 minutes).
 
 Stored per account: the provider's stable id (`github:<id>`, `google:<sub>`), a label (the GitHub login, or
@@ -125,14 +125,23 @@ def login_page(configured: list[str], cli: str, provider: str | None) -> str:
 <p>Sign in once. Lantern gives each account one token for about 300 explanations with Claude Haiku. The gateway keeps a
 hash of the token and usage counts; no code, prompts or email addresses are stored.</p>
 <div class="row">{body}</div>
-<p class="small">{'Your terminal or app will pick the token up by itself after you sign in.' if cli else 'The token is shown once on the next page; paste it into <code>lantern login --token …</code>.'}</p>""")
+<p class="small">{'Your terminal or app will pick the token up by itself after you sign in.' if cli else 'The next page has a button that copies your token; paste it into <code>lantern login --token …</code>.'}</p>""")
+
+
+# The one script a gateway page runs: the Copy button on the "You're in" page. The page's Content-Security-Policy allows
+# exactly this text by its hash (COPY_JS_HASH), so nothing else planted in a page could run.
+COPY_JS = ("var b=document.getElementById('copy'),t=document.getElementById('tok'),f=document.getElementById('fb');"
+           "b.hidden=false;"
+           "b.addEventListener('click',function(){"
+           "function no(){f.hidden=false;b.textContent='Copy did not work: the token is below';}"
+           "if(!navigator.clipboard){no();return;}"
+           "navigator.clipboard.writeText(t.value).then(function(){"
+           "b.textContent='Copied. Now paste it into Lantern';b.classList.add('ok');},no);});")
+COPY_JS_HASH = "'sha256-" + base64.b64encode(hashlib.sha256(COPY_JS.encode()).digest()).decode() + "'"
 
 
 def done_page(token: str, label: str, parked: bool) -> str:
     who = html.escape(' as ' + label.split(':', 1)[1]) if label.startswith('github:') and ':' in label else ''
-    tok = f"""<pre class="tok">{html.escape(token)}</pre>
-<p class="small">Keep it like a password. To use it on a computer: <code>lantern login --token {html.escape(token[:5])}…</code>.
-Signing in again later gives a new token and keeps your usage count.</p>"""
     if parked:
         # The website, app or terminal that opened this tab collects the token by itself, so the page never shows it:
         # a token on screen ends up in screenshots. If the pick-up failed, signing in again gives a fresh one.
@@ -140,9 +149,21 @@ Signing in again later gives a new token and keeps your usage count.</p>"""
 <p>Go back to Lantern: it has picked up your sign-in. You can close this tab.</p>
 <p class="small">Lantern still says you are signed out after a few minutes? Sign in again from Lantern; that gives you
 a fresh token and keeps your usage count.</p>""")
+    # Nothing came to collect the token, so the person carries it over by hand. It is never drawn on screen (a token on
+    # screen ends up in screenshots): one Lantern button copies it. Only when copying fails, or scripts are off, does
+    # the page print it.
+    t = html.escape(token, quote=True)
+    pre = f'<pre class="tok">{t}</pre>'
     return _page("Signed in", f"""<h1>You're in{who}</h1>
-<p>Your Lantern token, shown once:</p>
-{tok}""")
+<p>Press the button to copy your Lantern token, then paste it into Lantern (Settings, or
+<code>lantern login --token</code> in a terminal).</p>
+<input type="hidden" id="tok" value="{t}">
+<div class="row"><button type="button" class="btn" id="copy" hidden>{MARK}<span>Copy my Lantern token</span></button></div>
+<div id="fb" hidden>{pre}</div>
+<noscript>{pre}</noscript>
+<p class="small">Keep it like a password: never paste it into a chat or a screenshot. Signing in again later gives a new
+token and keeps your usage count.</p>
+<script>{COPY_JS}</script>""")
 
 
 def error_page(msg: str) -> str:
@@ -176,7 +197,7 @@ def _page(title: str, inner: str) -> str:
 <style>
 :root{{color-scheme:light;--bg:#F5F5F2;--glow:rgba(255,181,71,.2);--surface:#fff;--ink:#161618;--ink-2:#46464C;--muted:#62626A;--line:rgba(22,22,24,.09);--line-2:rgba(22,22,24,.16);--accent:#0B5F5A;--sunken:#EEEEEA;--primary:#161618;--on-primary:#fff}}
 @media(prefers-color-scheme:dark){{:root{{color-scheme:dark;--bg:#0E0E10;--glow:rgba(255,170,60,.09);--surface:#161618;--ink:#F3F3F1;--ink-2:#BEBEC3;--muted:#9A9AA0;--line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.15);--accent:#7FDBD3;--sunken:#0A0A0B;--primary:#F3F3F1;--on-primary:#0E0E10}}}}
-*{{box-sizing:border-box}}
+*{{box-sizing:border-box}}[hidden]{{display:none!important}}
 body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink-2);font:15px/1.6 "DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}}
 header{{display:flex;align-items:center;height:56px;padding:0 20px;border-bottom:1px solid var(--line)}}
 .home{{display:inline-flex;align-items:center;gap:10px;margin-left:-8px;padding:6px 8px;border-radius:12px;font:600 16px "DM Sans",-apple-system,sans-serif;color:var(--ink);letter-spacing:-.02em;text-decoration:none}}
@@ -188,6 +209,8 @@ h1{{font:700 26px/1.2 "DM Sans",-apple-system,sans-serif;letter-spacing:-.028em;
 .small{{font-size:13px;color:var(--muted)}}a{{color:var(--accent)}}
 .row{{display:flex;flex-direction:column;gap:10px;margin:20px 0}}
 .btn{{display:flex;align-items:center;justify-content:center;height:46px;padding:0 16px;border-radius:13px;background:var(--primary);color:var(--on-primary);text-decoration:none;font-weight:600}}
+button.btn{{width:100%;border:0;gap:10px;font:600 15px "DM Sans",-apple-system,sans-serif;cursor:pointer}}button.btn:focus-visible{{outline:2px solid var(--accent);outline-offset:2px}}
+button.btn.ok{{background:var(--accent);color:var(--on-primary)}}.btn .mark{{width:24px;height:24px;border-radius:7px}}
 .btn+.btn{{background:var(--surface);color:var(--ink);border:1px solid var(--line-2)}}
 .tok{{font:13px/1.5 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;padding:12px 14px;background:var(--sunken);color:var(--ink);border:1px solid var(--line);border-radius:12px;user-select:all;overflow-wrap:anywhere;white-space:pre-wrap}}
 details{{margin-top:16px;font-size:14px}}
