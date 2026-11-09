@@ -580,6 +580,16 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             "Content-Security-Policy": _csp(nonce), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer", "Permissions-Policy": "camera=(), microphone=(), geolocation=()"})
 
+    @app.get("/guide")
+    def guide():
+        """How to use Lantern: the guide page with its animated demos (fixed content, no account needed)."""
+        from lantern.guide import page as guide_page
+        from lantern.server import _csp
+        html, nonce = guide_page(__version__, "/")
+        return Response(html, 200, media_type="text/html; charset=utf-8", headers={
+            "Content-Security-Policy": _csp(nonce), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer", "Permissions-Policy": "camera=(), microphone=(), geolocation=()"})
+
     @app.get("/{name}")
     def website_asset(name: str):
         a = site.asset(name)
