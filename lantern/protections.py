@@ -41,6 +41,8 @@ ALLOW_LIST = re.compile(r"allow_?list|allowed_?hosts|ALLOWED_HOSTS|allowedHosts|
 UPLOAD = re.compile(r"\bUploadFile\b|request\.files|multer\(|formData\(\)|\.formData\(|FileField|busboy|formidable")
 UPLOAD_LIMIT = re.compile(r"MAX_CONTENT_LENGTH|max_size|maxFileSize|fileSize|content_type|contentType|mimetype|"
                           r"fileFilter|DATA_UPLOAD_MAX|sizeLimit|bodyParser", re.I)
+# Framework settings written as a string key (`app.config["MAX_CONTENT_LENGTH"] = ...`), matched in the raw text
+UPLOAD_LIMIT_KEY = re.compile(r"[\"'](?:MAX_CONTENT_LENGTH|DATA_UPLOAD_MAX_MEMORY_SIZE|FILE_UPLOAD_MAX_MEMORY_SIZE)[\"']\s*\]?\s*[=:]")
 # App-wide mechanisms: middleware, router-level dependencies, auth libraries wired in once
 GLOBAL_AUTH = re.compile(
     r"add_middleware\(\s*\w*(?:auth|login|session|jwt)\w*|AuthenticationMiddleware|LoginRequiredMiddleware|"
@@ -51,7 +53,28 @@ GLOBAL_AUTH = re.compile(
 
 
 def _where(hits, n=4) -> list[str]:
-    return [f"{f}:{ln}" for f, ln, _ in hits[:n]]
+    out: list[str] = []
+    for f, ln, _ in hits:          # one place per line: a pattern that matches twice on a line is still one place
+        w = f"{f}:{ln}"
+        if w not in out:
+            out.append(w)
+    return out[:n]
+
+
+def _code_grep(repo, rx: re.Pattern, limit: int = 20) -> list[tuple[str, int, str]]:
+    """Matches in code with strings and comments blanked. A word inside advice text, a message or a pattern list
+    (Lantern's own `UPLOAD = re.compile(r"...UploadFile...")`) is not upload handling or a rate limiter."""
+    out = []
+    for f, t in repo.code():
+        if not rx.search(t):
+            continue
+        code = code_only(t, js=not f.endswith(".py"))
+        for m in rx.finditer(code):
+            line = code.count("\n", 0, m.start()) + 1
+            out.append((f, line, t.splitlines()[line - 1].strip()[:160]))
+            if len(out) >= limit:
+                return out
+    return out
 
 
 def _deps_text(repo) -> str:
@@ -75,7 +98,9 @@ def _config_hits(repo, rx: re.Pattern) -> list[tuple[str, int, str]]:
 
 def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     web = shape in ("full-stack web app", "web API", "frontend web app")
-    routes = [(n, (n.entry or {}).get("detail") or "") for n in g.entry_points() if (n.entry or {}).get("kind") == "route"]
+    # Routes in test code (a test's own server, the sample apps under tests/fixtures) are not the app's routes
+    routes = [(n, (n.entry or {}).get("detail") or "") for n in g.entry_points()
+              if (n.entry or {}).get("kind") == "route" and not (n.file and repo.is_test(n.file))]
     deps = _deps_text(repo)
     managed = MANAGED_AUTH.search(deps) or repo.grep(MANAGED_AUTH, limit=1)
     out: list[dict] = []
@@ -88,15 +113,20 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     sensitive = [(n, d) for n, d in routes if SENSITIVE_PATH.search(d.partition(" ")[2] or d)]
     writes = [(n, d) for n, d in routes if d.split(" ")[0].upper() in ("POST", "PUT", "PATCH", "DELETE")]
     if sensitive or writes:
-        rl = RATE_LIMIT_LIBS.search(deps) or repo.grep(RATE_LIMIT_LIBS, limit=1)
+        rl_dep = RATE_LIMIT_LIBS.search(deps)
+        rl_code = [] if rl_dep else _code_grep(repo, RATE_LIMIT_LIBS, limit=1)
+        rl = rl_dep or rl_code
         trig = sensitive or writes
+        what = f"{len(sensitive)} sign-in or account route(s)" if sensitive else f"{len(writes)} route(s) that change data"
         item("rate-limit", "Rate limiting", "in place" if rl else "add",
-             (f"{len(sensitive)} sign-in or account route(s)" if sensitive else f"{len(writes)} route(s) that change data")
-             + " can be called as fast as an attacker likes: password guessing, sign-up spam, or running up your bill.",
+             (f"{what} could be called as fast as an attacker likes, and a rate-limiting library or setting was "
+              "found; confirm it covers these routes." if rl else
+              f"{what} can be called as fast as an attacker likes: password guessing, sign-up spam, or running up "
+              "your bill."),
              [f"{d} ({n.file}:{n.start_line})" for n, d in trig[:4]],
              "Limit requests per user and per IP on these routes: slowapi (FastAPI), Flask-Limiter, express-rate-limit, "
              "or @upstash/ratelimit (Next.js / serverless).",
-             [] if not rl else ["a rate-limiting library or setting was found"])
+             [] if not rl else [f"{rl_dep.group(0)} in the dependencies" if rl_dep else _where(rl_code)[0]])
 
     # 2. Security headers
     if web:
@@ -113,10 +143,12 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     if routes:
         hits = [h for h in repo.grep(SERVER_FETCH, limit=40) if not _client_side(h[0])]
         if hits:
-            allow = repo.grep(ALLOW_LIST, limit=1)
+            allow = _code_grep(repo, ALLOW_LIST, limit=1)
             item("ssrf-allowlist", "Allow-list for outgoing requests", "in place" if allow else "add",
-                 "The server makes HTTP requests to an address held in a variable. If any part of it comes from a user, "
-                 "they can make your server call internal services or cloud metadata endpoints (SSRF).",
+                 "The server makes HTTP requests to an address held in a variable. "
+                 + ("An allow-list was found in the code; confirm it is checked before these requests." if allow else
+                    "If any part of it comes from a user, they can make your server call internal services or cloud "
+                    "metadata endpoints (SSRF)."),
                  _where(hits),
                  "Only call hosts from a fixed allow-list, reject private and link-local IP addresses, and never pass a "
                  "user-supplied URL straight to requests/httpx/fetch.",
@@ -152,7 +184,8 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     # 5. Login check on every route that changes data. Each route is checked on its own (decorator, signature,
     # what it calls, what its body says with strings and comments blanked out); the LW-AUTH-MISSING findings
     # (routes the frontend calls) count too. A user lookup by a request value is a weak sign: at most "check".
-    no_auth = [f for f in (sec or {}).get("findings", []) if f.get("rule") == "LW-AUTH-MISSING" and f.get("status") != "accepted"]
+    no_auth = [f for f in (sec or {}).get("findings", []) if f.get("rule") == "LW-AUTH-MISSING" and f.get("status") != "accepted"
+               and not f.get("in_tests")]
     need = [(n, d) for n, d in writes if not is_public_route(d) and mutating_route(d)]
     if need or no_auth:
         adj = call_adjacency(g)
@@ -203,12 +236,14 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
                  how, [f"{d}: {sign}" for _, d, sign in signed[:6]])
 
     # 6. File uploads
-    up = [h for h in repo.grep(UPLOAD, limit=10)]
+    up = _code_grep(repo, UPLOAD, limit=10)
     if up:
-        lim = repo.grep(UPLOAD_LIMIT, limit=1)
+        lim = _code_grep(repo, UPLOAD_LIMIT, limit=1) or repo.grep(UPLOAD_LIMIT_KEY, limit=1)
         item("upload-checks", "Upload size and type checks", "in place" if lim else "add",
-             "The app accepts file uploads. Without limits, one request can fill your disk or memory, and a file "
-             "named photo.jpg can be anything.", _where(up),
+             "The app accepts file uploads" + (", and the code sets a size or type limit; confirm it applies to every "
+                                               "upload." if lim else
+                                               ". Without limits, one request can fill your disk or memory, and a file "
+                                               "named photo.jpg can be anything."), _where(up),
              "Cap the size, check the real file type (not only the name), store uploads outside the web root or in "
              "object storage, and never run or serve them as code.", _where(lim))
     return out
@@ -217,7 +252,7 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
 def _global_auth_signs(repo) -> list[tuple[str, int, str]]:
     """Middleware, router-level dependencies, or auth libraries wired in once for the whole app."""
     out = []
-    for f, ln, text in repo.grep(GLOBAL_AUTH, limit=40):
+    for f, ln, text in _code_grep(repo, GLOBAL_AUTH, limit=40):
         if re.search(r"before_request|@app\.middleware|function\s+middleware|const\s+middleware", text):
             # generic hooks count only when what follows looks at who is calling
             window = "\n".join(repo.text(f).splitlines()[ln - 1:ln + 20])

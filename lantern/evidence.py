@@ -153,7 +153,8 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
             t.get("tool") in AUDIT_TOOLS and t.get("status") == "ok" for t in (sec or {}).get("tools", [])):
         out.append("Dependency findings come from live vulnerability databases, so a re-check can find new ones "
                    "without any code change.")
-    heur = sum(1 for f in (sec or {}).get("findings", []) if f.get("tool_confidence") == "LOW")
+    # Counted where the report lists findings (outside test code), so the number matches what the reader can see
+    heur = sum(1 for f in (sec or {}).get("findings", []) if f.get("tool_confidence") == "LOW" and not f.get("in_tests"))
     if heur:
         out.append(f"{heur} finding{'s are' if heur != 1 else ' is'} from heuristic checks that can misfire; they are "
                    "labeled as such.")
@@ -232,7 +233,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
             "open": [_f(f) for f in live if f.get("status") == "open"],
             "accepted": [_f(f) | {"accepted": f.get("accepted")} for f in findings if f.get("status") == "accepted"],
             "fixed": fixed, "changed": changed, "in_tests": sum(1 for f in findings if f.get("in_tests")),
-            "protections": [{k: x.get(k) for k in ("id", "title", "status", "why", "evidence", "how")}
+            "protections": [{k: x.get(k) for k in ("id", "title", "status", "why", "evidence", "how", "found")}
                             for x in (rd or {}).get("protections") or []],
         },
         "understanding": narratives,
@@ -560,6 +561,8 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
         f"<tr><td><span class='tag{' ok' if x.get('status') == 'in place' else ''}'>{prot_word.get(x.get('status'), 'check')}"
         f"</span></td><td><b>{E(x.get('title'))}</b><br><span class='muted'>{E(x.get('why'))}</span>"
         + (f"<br><span class='muted'>Evidence: {E(' · '.join(map(str, x.get('evidence') or [])))}</span>" if x.get("evidence") else "")
+        + (f"<br><span class='muted'>Found: {E(' · '.join(map(str, x.get('found') or [])))}</span>"
+           if x.get("status") == "in place" and isinstance(x.get("found"), list) and x.get("found") else "")
         + (f"<div class='reason'>{E(x.get('how'))}</div>" if x.get("status") != "in place" else "") + "</td></tr>" for x in prot)
     tools = "".join(f"<tr><td>{E(t['tool'] or '')}</td><td>{E(t.get('version') or '–')}</td><td class='muted'>"
                     f"{E(t.get('role') or '')}{(' · ' + E(t['status'])) if t.get('status') and t['status'] != 'ok' else ''}"
