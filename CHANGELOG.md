@@ -9,6 +9,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   end card, where there was nothing left to skip or hear; now the end card shows only its two buttons, Escape leaves it,
   and both come back when the intro plays again. Same on the website and the landing page; the intro still plays on
   every visit.
+- Ask Lantern on the website says why it could not answer (2026-11-09). It used to say "The model did not
+  answer" for every problem. Now it names the real one in plain words: your sign-in is no longer accepted (and the
+  sign-in box opens), the model company refused Lantern's key or its account is out of
+  credit, the model company is down or busy, the question is too big, or Lantern's model server cannot be reached.
+  The server log records which one.
 - The gateway's "You're in" page no longer prints your Lantern token (gateway 0.2.4, 2026-11-09). When nothing comes
   to pick the token up by itself, the page shows one Lantern button, "Copy my Lantern token", that puts it on the
   clipboard and then says "Copied. Now paste it into Lantern". A token on screen ends up in screenshots. The token is
