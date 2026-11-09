@@ -5,6 +5,13 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Python built-in calls (`len`, `print`, a list's `append`) are now counted in the call-site total as their own group
+  instead of being dropped without a count; they are still not drawn on the map. A method call on a local that is
+  always a built-in literal in its function (`out = []` … `out.append(x)`; every binding of the name must be a literal
+  of that one type, the name must not be a parameter, and the type must have the method) is counted as a built-in
+  call instead of untraced. On one large app: untraced 33,318 → 28,519 call sites, and 23,025 built-in calls that were
+  never counted now are; one wrong link (a list's `append` taken for a library call's result) is gone; no link to the
+  app's own code changed on 15 other apps.
 - How to use Lantern: a guide page at `/guide` (website and `lantern serve`), in the main menu as "How to use Lantern".
   A 60-second tour and 12 tasks, each with a short animated demo (one shared player, each demo is data: a simplified
   copy of Lantern's screens, a moving cursor, gold-glowing instructions), numbered steps and a Good to know box, plus

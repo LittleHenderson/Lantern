@@ -1619,7 +1619,7 @@ function callSiteRows(c) {
   const pct = n => c.total ? ` (${(100 * (+n || 0) / c.total).toFixed(1)}%)` : '';
   const rows = [['Linked to code in the repo, certain', c.resolved_internal], ['Linked to code in the repo, likely (types inferred)', c.inferred_internal],
     ['One of several possible targets', c.several_possible_targets], ['Guessed by method name alone', c.name_only_guess],
-    ['Known library or outside call', c.known_external], ['Not traced', c.unresolved]];
+    ['Known library or outside call', c.known_external], ['Python built-in (len, print, a list\'s append): counted, not drawn', c.builtin], ['Not traced', c.unresolved]].filter(([, v]) => v !== undefined);
   const kinds = c.unresolved_kinds && typeof c.unresolved_kinds === 'object' ? Object.entries(c.unresolved_kinds).filter(([, v]) => +v > 0) : [];
   return `<div>Every call site</div><div>${esc(c.total)} call sites, each counted once:<br>${rows.map(([k, v]) => `${esc(k)}: ${esc(v)}${pct(v)}`).join('<br>')}${+c.unresolved_in_tests ? `<br><span class="note">Of the not traced, ${esc(c.unresolved_in_tests)} are in test files.</span>` : ''}${kinds.length ? `<br><span class="note">Not traced in app code, by shape: ${kinds.map(([k, v]) => `${esc(k)} ${esc(v)}`).join(' · ')}. The shape does not say why: a builtin, a library, or code that is not in the repo.</span>` : ''}</div>`;
 }

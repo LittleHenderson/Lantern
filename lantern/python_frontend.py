@@ -141,6 +141,9 @@ class ModuleInfo:
     calls: list[CallSite] = field(default_factory=list)
     # var name -> constructor callee parts, per scope ("" = module)
     local_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    # var name -> built-in type ("list", "dict", "str"...) when EVERY binding of the name in that scope is a literal or
+    # a built-in constructor of that one type; "" when any binding is something else (then nothing is assumed)
+    literal_types: dict[str, dict[str, str]] = field(default_factory=dict)
     # class local qualname -> attr -> constructor parts (from `self.attr = Foo(...)`)
     attr_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     # module-level aliases: name -> {"type": chain | None, "depends": chain | None}
@@ -218,6 +221,44 @@ def _resolve_relative(modname: str, is_package: bool, rel: str) -> str:
     return ".".join([p for p in base + ([rest] if rest else []) if p])
 
 
+LITERAL_NODE_TYPE = {"list": "list", "list_comprehension": "list", "dictionary": "dict",
+                     "dictionary_comprehension": "dict", "set": "set", "set_comprehension": "set", "tuple": "tuple",
+                     "integer": "int", "float": "float"}
+BUILTIN_CTORS = {"list": "list", "dict": "dict", "set": "set", "tuple": "tuple", "str": "str", "bytes": "bytes",
+                 "frozenset": "frozenset", "bytearray": "bytearray", "sorted": "list", "repr": "str"}
+STR_TO_STR = {"join", "format", "strip", "lstrip", "rstrip", "lower", "upper", "replace", "title", "casefold"}
+
+
+def _literal_type(n: TSNode) -> str | None:
+    """The built-in type a right-hand side certainly has, read from its shape alone: `[]`, `{}`, `"..."`, f-strings,
+    comprehensions, `list(...)`, `", ".join(...)`. None when the shape does not say (a call to anything else)."""
+    while n.type == "parenthesized_expression" and n.named_child_count == 1:
+        n = n.named_children[0]
+    if n.type in LITERAL_NODE_TYPE:
+        return LITERAL_NODE_TYPE[n.type]
+    if n.type in ("string", "concatenated_string"):
+        first = n if n.type == "string" else n.named_children[0]
+        return "bytes" if re.match(r"^[rRfFuU]*[bB]", _text(first)) else "str"
+    if n.type == "call":
+        fn = n.child_by_field_name("function")
+        if fn is not None and fn.type == "identifier" and _text(fn) in BUILTIN_CTORS:
+            return BUILTIN_CTORS[_text(fn)]
+        if fn is not None and fn.type == "attribute":
+            obj = fn.child_by_field_name("object")
+            attr = _text(fn.child_by_field_name("attribute"))
+            if obj is not None and obj.type in ("string", "concatenated_string") and attr in STR_TO_STR:
+                return "str"
+    return None
+
+
+def _names_in(n: TSNode) -> list[str]:
+    if n.type == "identifier":
+        return [_text(n)]
+    return [x for c in n.named_children for x in _names_in(c)] if n.type in (
+        "pattern_list", "tuple_pattern", "list_pattern", "list_splat_pattern", "parenthesized_expression",
+        "tuple", "list", "as_pattern_target") else []
+
+
 class _Visitor:
     def __init__(self, info: ModuleInfo):
         self.m = info
@@ -226,8 +267,20 @@ class _Visitor:
         cond = _text(n.child_by_field_name("condition")).replace("'", '"').replace(" ", "")
         return cond in ('__name__=="__main__"', '"__main__"==__name__')
 
+    def bind_literal(self, scope: str, name: str, typ: str | None) -> None:
+        cur = self.m.literal_types.setdefault(scope, {})
+        if typ is None or cur.get(name, typ) != typ:
+            cur[name] = ""   # bound to something else, or to two types: assume nothing
+        else:
+            cur[name] = typ
+
     def _assignment(self, n: TSNode, scope: str, cls: str | None):
         left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
+        if left is not None and left.type == "identifier":
+            self.bind_literal(scope, _text(left), _literal_type(right) if right is not None else None)
+        elif left is not None:
+            for name in _names_in(left):
+                self.bind_literal(scope, name, None)
         if left is None or right is None:
             return
         if not scope and left.type == "identifier" and right.type != "call":
@@ -395,6 +448,38 @@ def _visit_body(v: _Visitor, root: TSNode):
                         v.m.calls.append(CallSite(scope, ch, _text(val)[:120], line, "with-obj"))
         if t == "assignment":
             v._assignment(n, scope, cls)
+        elif t in ("for_statement", "for_in_clause"):
+            left = n.child_by_field_name("left")
+            for name in (_names_in(left) if left is not None else []):
+                v.bind_literal(scope, name, None)
+        elif t == "augmented_assignment":
+            left = n.child_by_field_name("left")
+            if left is not None and left.type == "identifier" and \
+                    v.m.literal_types.get(scope, {}).get(_text(left)) in ("int", "float"):
+                v.bind_literal(scope, _text(left), None)   # 1 += 0.5 changes the type; [] += x and "" += s do not
+        elif t == "lambda_parameters":
+            for c in n.named_children:
+                for name in ([_text(c)] if c.type == "identifier" else [_text(x) for x in c.named_children
+                                                                         if x.type == "identifier"][:1]):
+                    v.bind_literal(scope, name, None)
+        elif t in ("global_statement", "nonlocal_statement"):
+            # the name is rebound in another scope: the module's (global) or an enclosing function's (nonlocal)
+            names = [_text(c) for c in n.named_children if c.type == "identifier"]
+            parts = scope.split(".") if scope else []
+            outer = [""] if t == "global_statement" else [".".join(parts[:i]) for i in range(len(parts) + 1)]
+            for sc in outer + [scope]:
+                for name in names:
+                    v.bind_literal(sc, name, None)
+        elif t == "case_pattern":
+            def idents(x):
+                return [_text(x)] if x.type == "identifier" else [i for c in x.named_children for i in idents(c)]
+            for name in idents(n):
+                v.bind_literal(scope, name, None)
+        elif t in ("as_pattern", "named_expression", "except_clause"):
+            for c in n.named_children:
+                if c.type in ("identifier", "as_pattern_target"):
+                    for name in _names_in(c):
+                        v.bind_literal(scope, name, None)
         for c in n.children:
             walk(c, scope, cls)
 
@@ -770,6 +855,14 @@ class Resolver:
             if ch:   # known type, deeper chain: don't guess
                 return []
             return self._duck(parts, cs)
+
+        # local variable that is always a built-in literal: x = []; x.append(1)  (counted as a built-in call)
+        if len(parts) == 2 and not head.endswith("()"):
+            typ = m.literal_types.get(cs.scope, {}).get(head)
+            d = m.defs.get(cs.scope)
+            if typ and head not in m.imports and not (d and re.search(rf"\b{re.escape(head)}\b", d.params or "")) \
+                    and hasattr(getattr(builtins, typ), parts[1]):
+                return [(f"ext:builtins.{typ}.{parts[1]}", RESOLVED, "literal-type")]
 
         # local variable with a known constructor: x = Foo(); x.bar()
         if len(parts) == 2 and not head.endswith("()"):
@@ -1150,7 +1243,8 @@ def build_graph(repo: str | Path) -> Graph:
             for tgt, conf, via in targets:
                 if tgt.startswith("ext:"):
                     if tgt.startswith("ext:builtins."):
-                        continue  # builtins are noise in a call map
+                        g.builtin_calls += 1   # noise in a call map, but a call site Lantern read: counted
+                        continue
                     g.external(tgt[4:])
                 elif tgt not in g.nodes:
                     continue
