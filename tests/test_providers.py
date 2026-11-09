@@ -93,3 +93,29 @@ def test_localhost_endpoints_never_ask_for_consent(tmp_path, monkeypatch):
     monkeypatch.delenv("LANTERN_ACCEPT_DATA_SHARING", raising=False)
     assert ensure_consent(make_provider("openai-compatible/demo", base_url="http://127.0.0.1:9/v1")) is True
     assert ensure_consent(make_provider("openai-compatible/demo", base_url="https://example.com/v1")) is False
+
+
+def test_why_failed_says_the_true_reason_in_plain_words():
+    import json as _json
+
+    from lantern.providers import ProviderError, why_failed
+
+    def gw(status, kind, message):
+        return ProviderError("x", status=status, body=_json.dumps({"error": {"type": kind, "message": message}}))
+
+    assert why_failed(ProviderError("cannot reach"))[0] == "busy"
+    kind, words = why_failed(ProviderError("token", status=401))
+    assert kind == "signed_out" and "Sign in again" in words
+    kind, words = why_failed(gw(502, "upstream_error", "The model provider returned HTTP 401."))
+    assert kind == "ours" and "key" in words and "HTTP 401" in words and "Lantern's side" in words
+    kind, words = why_failed(gw(502, "upstream_error", "The model provider returned HTTP 402."))
+    assert kind == "ours" and "credit" in words
+    assert why_failed(gw(502, "upstream_error", "The model provider returned HTTP 429."))[0] == "busy"
+    assert why_failed(gw(502, "upstream_error", "The model provider returned HTTP 529."))[0] == "busy"
+    assert why_failed(gw(502, "upstream_unreachable", "Could not reach"))[0] == "busy"
+    kind, words = why_failed(gw(503, "not_configured", "no key"))
+    assert kind == "ours" and "no model key" in words
+    assert why_failed(ProviderError("big", status=413))[0] == "too_big"
+    kind, words = why_failed(gw(400, "bad_request", "Only plain chat messages are accepted."))
+    assert kind == "error" and "Only plain chat messages" in words
+    assert "did not answer" not in " ".join(why_failed(gw(s, "", ""))[1] for s in (400, 500, 502, 503))

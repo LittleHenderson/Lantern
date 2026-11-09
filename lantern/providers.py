@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -231,6 +232,57 @@ class LanternHostedProvider(OpenAICompatProvider):
     def remaining(self) -> dict:
         h = {k.lower(): v for k, v in self.last_headers.items()}
         return {k: h.get(f"x-lantern-remaining-{k}") for k in ("requests", "tokens")}
+
+
+UPSTREAM_WORDS = {
+    401: "refused Lantern's key (the key may have expired or been switched off)",
+    403: "refused Lantern's key (the key may have expired or been switched off)",
+    402: "says Lantern's account has run out of credit",
+    404: "does not know the model Lantern asked for",
+    429: "is busy and asked Lantern to slow down",
+}
+
+
+def why_failed(e: ProviderError) -> tuple[str, str]:
+    """(kind, plain words) for a failed call to the Lantern gateway, so a person reads the true reason instead of
+    "the model did not answer". Kinds: `signed_out` (the person signs in again), `ours` (Lantern's own setup needs
+    fixing; nothing the person can do), `busy` (try again shortly), `too_big` (ask a smaller question), `error`.
+    Only the gateway's own messages are read; it never passes on the model company's words."""
+    status = getattr(e, "status", None)
+    try:
+        err = json.loads(getattr(e, "body", "") or "{}").get("error") or {}
+        if not isinstance(err, dict):
+            err = {}
+    except (ValueError, AttributeError):
+        err = {}
+    kind, msg = str(err.get("type") or ""), str(err.get("message") or "")[:300]
+    if status is None:
+        return "busy", ("Lantern could not reach its model server (lantern-gateway). It may be restarting; "
+                        "try again in a minute.")
+    if status == 401:
+        return "signed_out", ("Your sign-in is no longer accepted by Lantern's model server (it was signed out, "
+                              "or replaced by signing in somewhere else). Sign in again here.")
+    if status == 413:
+        return "too_big", "The question and this check's results are too big for the free model. Ask about one finding."
+    if status == 503 and kind == "not_configured":
+        return "ours", "Lantern's model server has no model key set up. This needs fixing on Lantern's side, not yours."
+    if status == 502 and kind == "upstream_unreachable":
+        return "busy", "Lantern's model server could not reach the model company. Try again in a few minutes."
+    if status == 502 and kind == "upstream_error":
+        m = re.search(r"HTTP (\d{3})", msg)
+        code = int(m.group(1)) if m else 0
+        if code in UPSTREAM_WORDS:
+            who = "ours" if code != 429 else "busy"
+            tail = " This needs fixing on Lantern's side, not yours." if who == "ours" else " Try again in a minute."
+            return who, f"The model company {UPSTREAM_WORDS[code]} (HTTP {code}).{tail}"
+        if code >= 500:
+            return "busy", f"The model company is having problems right now (HTTP {code}). Try again in a few minutes."
+        return "ours", f"The model company turned down Lantern's request (HTTP {code or 'unknown'})."
+    if status == 429:
+        return "busy", "Lantern's model server is busy. Try again in a minute."
+    if status >= 500:
+        return "busy", f"Lantern's model server hit a problem (HTTP {status}). Try again in a few minutes."
+    return "error", f"Lantern's model server turned the question down (HTTP {status}{': ' + msg if msg else ''})."
 
 
 class FixtureProvider(Provider):
