@@ -5,6 +5,17 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Fixed two problems an independent review found (2026-11-09). (1) SQL built from text that was first fixed and then
+  replaced with input through a `match` capture, `except … as`, or an inner function's `nonlocal`/`global` was called
+  "only fixed text" and lowered from high to low; any of those bindings now means "not followed", so the finding keeps
+  its rank. (2) `out = list()` was taken as Python's list even when the repo defines its own `list()`, takes a
+  parameter named `list`, imports or assigns one; that erased a real link (`out.append` → the repo's `Box.append`).
+  A rebound built-in name is now never counted as the built-in (an annotation such as `x: str` does not rebind it).
+  On Noetic Compass b574170: no finding changed rank, no link changed, 28 calls move from "built-in" back to "not
+  traced" (27,824 → 27,796; 28,519 → 28,547).
+- Tests can no longer reach a real model or the network: provider keys and tokens from the developer's shell are
+  removed, `LANTERN_HOME` is an empty folder per test, and connecting to any non-local address fails
+  (`tests/conftest.py`). The review's full run had called a real model through an inherited key.
 - Python built-in calls (`len`, `print`, a list's `append`) are now counted in the call-site total as their own group
   instead of being dropped without a count; they are still not drawn on the map. A method call on a local that is
   always a built-in literal in its function (`out = []` … `out.append(x)`; every binding of the name must be a literal

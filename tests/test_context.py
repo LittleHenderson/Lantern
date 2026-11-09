@@ -134,6 +134,27 @@ UNSAFE_SQL = {
     "format call": (
         "@app.get('/items')\ndef items(conn, name: str):\n"
         "    return conn.execute(\"SELECT * FROM items WHERE name = '{}'\".format(name))\n"),
+    # from the independent review (2026-11-09): fixed text first, then input through a binding Lantern did not follow
+    "match capture replaces the fixed text": (
+        "@app.get('/rows')\ndef rows(conn, payload: dict):\n    order = 'id'\n    match payload:\n"
+        "        case {'order': order}:\n            pass\n"
+        "    return conn.execute(f'SELECT * FROM items ORDER BY {order}')\n"),
+    "inner function rebinds it with nonlocal": (
+        "@app.get('/rows')\ndef rows(conn, text: str):\n    order = 'id'\n    def replace():\n"
+        "        nonlocal order\n        order = text\n    replace()\n"
+        "    return conn.execute(f'SELECT * FROM items ORDER BY {order}')\n"),
+    "inner function rebinds a module value with global": (
+        "ORDER = 'id'\n\n@app.get('/rows')\ndef rows(conn, text: str):\n    def replace():\n"
+        "        global ORDER\n        ORDER = text\n    replace()\n"
+        "    return conn.execute(f'SELECT * FROM items ORDER BY {ORDER}')\n"),
+    "another function rebinds a module value with global": (
+        "ORDER = 'id'\n\ndef set_order(text):\n    global ORDER\n    ORDER = text\n\n"
+        "@app.get('/rows')\ndef rows(conn, text: str):\n    set_order(text)\n"
+        "    return conn.execute(f'SELECT * FROM items ORDER BY {ORDER}')\n"),
+    "except as rebinds it": (
+        "@app.get('/rows')\ndef rows(conn, text: str):\n    order = 'id'\n    try:\n        int(text)\n"
+        "    except ValueError as order:\n        pass\n"
+        "    return conn.execute(f'SELECT * FROM items ORDER BY {order}')\n"),
 }
 
 

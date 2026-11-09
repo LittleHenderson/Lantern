@@ -130,3 +130,41 @@ def matcher(v):
     got.append(1)
 ''')
     assert "items.append" in g.unresolved and "got.append" in g.unresolved, g.unresolved
+
+
+# from the independent review (2026-11-09): `list()` is only the built-in when nothing rebinds the name `list`
+def test_a_repo_function_named_list_keeps_its_real_edge(tmp_path):
+    g = _graph(tmp_path, '''
+class Box:
+    def append(self, value):
+        return value
+
+
+def list() -> Box:
+    return Box()
+
+
+def run():
+    out = list()
+    out.append(1)
+''')
+    assert g.builtin_calls == 0
+    assert any(e.src == "py:m.run" and e.dst == "py:m.Box.append" for e in g.edges), [(e.src, e.dst) for e in g.edges]
+
+
+def test_a_parameter_named_list_is_not_the_builtin(tmp_path):
+    g = _graph(tmp_path, "def run(list):\n    out = list()\n    out.append(1)\n")
+    assert g.builtin_calls == 0
+    assert "out.append" in g.unresolved, g.unresolved
+
+
+def test_an_imported_or_assigned_name_list_is_not_the_builtin(tmp_path):
+    g = _graph(tmp_path, "from mylib import list\n\n\ndef run():\n    out = list()\n    out.append(1)\n\n\n"
+                         "dict = make()\n\n\ndef other():\n    seen = dict()\n    seen.get(1)\n")
+    assert g.builtin_calls == 0, g.unresolved
+
+
+def test_the_real_builtin_list_is_still_counted(tmp_path):
+    g = _graph(tmp_path, "def run(items, n: int, d: dict[str, list] = None):\n    out = list(items)\n"
+                         "    out.append(str(n))\n")
+    assert g.builtin_calls == 3, g.unresolved   # list(), str() and out.append: annotations do not rebind a name

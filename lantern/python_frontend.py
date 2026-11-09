@@ -144,6 +144,9 @@ class ModuleInfo:
     # var name -> built-in type ("list", "dict", "str"...) when EVERY binding of the name in that scope is a literal or
     # a built-in constructor of that one type; "" when any binding is something else (then nothing is assumed)
     literal_types: dict[str, dict[str, str]] = field(default_factory=dict)
+    # var name -> built-in constructor names (`list`, `dict`...) whose call gave it its literal type, per scope; the
+    # resolver trusts the type only when none of those names is rebound (a repo `def list()`, a parameter, an import)
+    literal_ctors: dict[str, dict[str, set[str]]] = field(default_factory=dict)
     # class local qualname -> attr -> constructor parts (from `self.attr = Foo(...)`)
     attr_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     # module-level aliases: name -> {"type": chain | None, "depends": chain | None}
@@ -229,11 +232,24 @@ BUILTIN_CTORS = {"list": "list", "dict": "dict", "set": "set", "tuple": "tuple",
 STR_TO_STR = {"join", "format", "strip", "lstrip", "rstrip", "lower", "upper", "replace", "title", "casefold"}
 
 
-def _literal_type(n: TSNode) -> str | None:
-    """The built-in type a right-hand side certainly has, read from its shape alone: `[]`, `{}`, `"..."`, f-strings,
-    comprehensions, `list(...)`, `", ".join(...)`. None when the shape does not say (a call to anything else)."""
+def _unparen(n: TSNode) -> TSNode:
     while n.type == "parenthesized_expression" and n.named_child_count == 1:
         n = n.named_children[0]
+    return n
+
+
+def _ctor_name(n: TSNode) -> str | None:
+    """`list` for `list(...)`: the built-in constructor name a right-hand side calls, if any."""
+    n = _unparen(n)
+    fn = n.child_by_field_name("function") if n.type == "call" else None
+    return _text(fn) if fn is not None and fn.type == "identifier" and _text(fn) in BUILTIN_CTORS else None
+
+
+def _literal_type(n: TSNode) -> str | None:
+    """The built-in type a right-hand side certainly has, read from its shape alone: `[]`, `{}`, `"..."`, f-strings,
+    comprehensions, `list(...)`, `", ".join(...)`. None when the shape does not say (a call to anything else).
+    `list(...)` is a built-in only if nothing rebinds `list`; the resolver checks that (`ModuleInfo.literal_ctors`)."""
+    n = _unparen(n)
     if n.type in LITERAL_NODE_TYPE:
         return LITERAL_NODE_TYPE[n.type]
     if n.type in ("string", "concatenated_string"):
@@ -278,6 +294,9 @@ class _Visitor:
         left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
         if left is not None and left.type == "identifier":
             self.bind_literal(scope, _text(left), _literal_type(right) if right is not None else None)
+            ctor = _ctor_name(right) if right is not None else None
+            if ctor:
+                self.m.literal_ctors.setdefault(scope, {}).setdefault(_text(left), set()).add(ctor)
         elif left is not None:
             for name in _names_in(left):
                 self.bind_literal(scope, name, None)
@@ -679,7 +698,7 @@ class Resolver:
         b = m.imports.get(name)
         if b is not None:
             return self._follow_import(b, depth)
-        if name in BUILTIN_NAMES:
+        if name in BUILTIN_NAMES and not self._shadowed(m, scope, name):   # `def f(list): list()` is not the built-in
             return ("ext", f"builtins.{name}")
         return None
 
@@ -861,7 +880,9 @@ class Resolver:
             typ = m.literal_types.get(cs.scope, {}).get(head)
             d = m.defs.get(cs.scope)
             if typ and head not in m.imports and not (d and re.search(rf"\b{re.escape(head)}\b", d.params or "")) \
-                    and hasattr(getattr(builtins, typ), parts[1]):
+                    and hasattr(getattr(builtins, typ), parts[1]) \
+                    and not any(self._shadowed(m, cs.scope, c)
+                                for c in m.literal_ctors.get(cs.scope, {}).get(head, ())):
                 return [(f"ext:builtins.{typ}.{parts[1]}", RESOLVED, "literal-type")]
 
         # local variable with a known constructor: x = Foo(); x.bar()
@@ -965,6 +986,24 @@ class Resolver:
             if t:
                 return t
         return None
+
+    @staticmethod
+    def _shadowed(m: ModuleInfo, scope: str, name: str) -> bool:
+        """True when `name` (say `list`) is rebound in `scope` or a scope around it: an import, a def or class of that
+        name, a parameter, or any assignment. Then `list()` is not certainly the built-in."""
+        if name in m.imports or name in m.literal_types.get(scope, {}):
+            return True
+        s = scope if scope != "<main>" else ""
+        while True:
+            if (f"{s}.{name}" if s else name) in m.defs or name in m.literal_types.get(s, {}):
+                return True
+            d = m.defs.get(s) if s else None
+            # a parameter's own name, not a word in an annotation (`x: str` does not rebind `str`)
+            if d is not None and re.search(rf"(?:^|[(,*])\s*{re.escape(name)}\s*(?:[:=,)]|$)", d.params or ""):
+                return True
+            if d is None:
+                return False
+            s = d.parent_local
 
     def _local_type(self, m: ModuleInfo, scope: str, var: str) -> list[str] | None:
         s = scope
