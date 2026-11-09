@@ -342,3 +342,29 @@ def test_routes_in_test_code_are_not_the_apps_routes(tmp_path):
     })
     p = _prot(tmp_path)
     assert "route-auth" not in p and "rate-limit" not in p
+
+
+def test_a_host_allow_list_is_not_an_allow_list_for_outgoing_requests(tmp_path):
+    # ALLOWED_HOSTS in a settings file names the hosts the server answers to, not the ones it calls
+    files = dict(BARE)
+    files["svc/settings.py"] = "import os\nALLOWED_HOSTS = os.environ.get('HOSTS', '').split(',')\n"
+    _write(tmp_path, files)
+    assert _prot(tmp_path)["ssrf-allowlist"]["status"] == "add"
+
+
+def test_a_hook_that_only_counts_requests_is_not_an_app_wide_login_check(tmp_path):
+    # the session check in the function after the hook used to be read as part of the hook
+    files = dict(BACKEND_ONLY)
+    files["svc/main.py"] += (
+        "\n@app.middleware('http')\nasync def seen(request, call_next):\n    touch()\n"
+        "    return await call_next(request)\n\n"
+        "def me(request):\n    return current_user(request.cookies.get('session'))\n")
+    _write(tmp_path, files)
+    assert _prot(tmp_path)["route-auth"]["status"] == "add"
+
+
+def test_signing_out_needs_no_login(tmp_path):
+    from lantern.websec import is_public_route
+    for d in ("POST /v1/signout", "POST /api/sign-out", "POST /log-out", "POST /logout"):
+        assert is_public_route(d), d
+    assert not is_public_route("POST /v1/notes")
