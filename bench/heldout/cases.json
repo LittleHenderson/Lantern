@@ -1,0 +1,998 @@
+{
+  "frozen_on": "2026-11-09",
+  "frozen_against_engine": "bc7cf10dce35e595bfc9aaf79e484bf1a577c0a4",
+  "rules": [
+    "An expectation is FOUND when a finding outside test code sits in its file within `window` lines (default 2) of the anchor's line, whatever the rule id. It is FOUND AT MEDIUM OR ABOVE when that finding's rank is critical, high or medium.",
+    "A `clean` expectation is a FALSE ALARM when any medium-or-above finding outside test code sits within its window.",
+    "An expected finding COVERS A SECURITY PATH when the found finding has a `reachable` entry (a route, page or command reaches the flagged line).",
+    "A vulnerable app is GIVEN A GREEN RELEASE when its release decision is Passed (readiness.json `release.decision` once it exists) or, before that, when it has no critical or high finding outside test code: that is what the badge and the evidence report show today.",
+    "Call-site counts are Graph.call_sites() as stored in graph.json: raw counts per group, one denominator per app. A change in counting is not an improvement; the runner records the definition version of call_sites() it read.",
+    "Nothing here is tuned to a fix: the public apps document their own problems (READMEs, solution guides, in-code 'Fix for' comments); the local apps were written from the directive's list of flows before any engine change, and the review examples are copied from the independent review of 2026-11-09.",
+    "An `authz` expectation counts only findings whose rule id matches LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM: a shell or SQL finding on the same lines is a different problem."
+  ],
+  "apps": [
+    {
+      "name": "dvra",
+      "kind": "vulnerable",
+      "stack": "Python / FastAPI",
+      "source": "https://github.com/theowni/Damn-Vulnerable-RESTaurant-API-Game",
+      "commit": "d32d09972aec7830f5f1d4a5d274cac7aae7eb82",
+      "documented_by": "the project's README and its API Security Champion series; the sinks are plain in the code",
+      "expect": [
+        {
+          "id": "dvra-shell",
+          "class": "shell",
+          "want": "finding",
+          "file": "app/apis/admin/utils.py",
+          "anchor": "subprocess\\.run\\(",
+          "note": "'df -h ' + parameters run through a shell (Chef only, but injectable)"
+        },
+        {
+          "id": "dvra-sql",
+          "class": "sql",
+          "want": "finding",
+          "file": "app/apis/orders/services/get_order_status.py",
+          "anchor": "raw_sql = f",
+          "window": 4,
+          "note": "UPDATE built with f-string from the delivery service's answer"
+        },
+        {
+          "id": "dvra-bola-order",
+          "class": "authz",
+          "want": "finding",
+          "file": "app/apis/orders/services/get_order_service.py",
+          "anchor": "filter\\(Order\\.id == order_id\\)",
+          "window": 3,
+          "note": "any customer reads any order (no owner filter)",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "dvra-mass-assign",
+          "class": "authz",
+          "want": "finding",
+          "file": "app/apis/auth/services/patch_profile_service.py",
+          "anchor": "setattr\\(db_user, var, value\\)",
+          "window": 3,
+          "note": "profile patch copies every field incl. role",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "dvra-bfla-role",
+          "class": "authz",
+          "want": "finding",
+          "file": "app/apis/users/services/update_user_role_service.py",
+          "anchor": "update_user\\(db, user\\.username, user\\)",
+          "window": 3,
+          "note": "any signed-in user changes another user's role",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "dvra-debug",
+          "class": "exposure",
+          "want": "finding",
+          "file": "app/apis/debug/services/get_debug_info_service.py",
+          "anchor": "@router\\.get\\(\"/debug\"",
+          "window": 3,
+          "note": "hidden debug route, no login"
+        },
+        {
+          "id": "dvra-pin",
+          "class": "auth",
+          "want": "finding",
+          "file": "app/apis/auth/utils/text_code_utils.py",
+          "anchor": "randbelow\\(10\\)\\) for _ in range\\(4\\)",
+          "window": 2,
+          "note": "4-digit reset PIN, brute-forceable"
+        }
+      ]
+    },
+    {
+      "name": "nodegoat",
+      "kind": "vulnerable",
+      "stack": "Node / Express + MongoDB",
+      "source": "https://github.com/OWASP/NodeGoat",
+      "commit": "c5cb68a7084e4ae7dcc60e6a98768720a81841e8",
+      "documented_by": "OWASP NodeGoat tutorial; each problem is marked in the code by a commented-out 'Fix for A#' block",
+      "expect": [
+        {
+          "id": "ng-eval",
+          "class": "eval",
+          "want": "finding",
+          "file": "app/routes/contributions.js",
+          "anchor": "eval\\(req\\.body\\.preTax\\)",
+          "note": "A1 server-side JS injection"
+        },
+        {
+          "id": "ng-nosql",
+          "class": "nosql",
+          "want": "finding",
+          "file": "app/data/allocations-dao.js",
+          "anchor": "this\\.stocks > '\\$\\{threshold\\}'",
+          "note": "A1 NoSQL injection through $where"
+        },
+        {
+          "id": "ng-idor",
+          "class": "authz",
+          "want": "finding",
+          "file": "app/routes/allocations.js",
+          "anchor": "\\} = req\\.params;",
+          "window": 3,
+          "note": "A4 insecure direct object reference: userId from the URL",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "ng-redirect",
+          "class": "redirect",
+          "want": "finding",
+          "file": "app/routes/index.js",
+          "anchor": "res\\.redirect\\(req\\.query\\.url\\)",
+          "note": "A10 unvalidated redirect"
+        },
+        {
+          "id": "ng-ssrf",
+          "class": "ssrf",
+          "want": "finding",
+          "file": "app/routes/research.js",
+          "anchor": "needle\\.get\\(url",
+          "window": 3,
+          "note": "A1 SSRF: req.query.url fetched by the server"
+        },
+        {
+          "id": "ng-bfla",
+          "class": "authz",
+          "want": "finding",
+          "file": "app/routes/index.js",
+          "anchor": "app\\.get\\(\"/benefits\", isLoggedIn, benefitsHandler",
+          "window": 1,
+          "note": "A7 admin page without the isAdmin check",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "ng-secret",
+          "class": "secret",
+          "want": "finding",
+          "file": "config/env/all.js",
+          "anchor": "cookieSecret: \"session_cookie_secret_key_here\"",
+          "note": "A6 secrets in the config file"
+        },
+        {
+          "id": "ng-cookie",
+          "class": "config",
+          "want": "finding",
+          "file": "server.js",
+          "anchor": "secret: cookieSecret,",
+          "window": 8,
+          "note": "A5 session cookie without httpOnly/secure"
+        },
+        {
+          "id": "ng-csrf",
+          "class": "csrf",
+          "want": "finding",
+          "file": "server.js",
+          "anchor": "app\\.use\\(csrf\\(\\)\\);",
+          "window": 4,
+          "note": "A8 CSRF protection commented out"
+        },
+        {
+          "id": "ng-xss",
+          "class": "xss",
+          "want": "finding",
+          "file": "app/routes/profile.js",
+          "anchor": "const firstNameSafeString = firstName;",
+          "window": 2,
+          "note": "A3 stored XSS: field named 'safe' but not escaped"
+        }
+      ]
+    },
+    {
+      "name": "dvna",
+      "kind": "vulnerable",
+      "stack": "Node / Express + Sequelize",
+      "source": "https://github.com/appsecco/dvna",
+      "commit": "9ba473add536f66ac9007966acb2a775dd31277a",
+      "documented_by": "docs/solution/*.md in the repository (one guide per OWASP category, each naming the file)",
+      "expect": [
+        {
+          "id": "dvna-sql",
+          "class": "sql",
+          "want": "finding",
+          "file": "core/appHandler.js",
+          "anchor": "WHERE login='\" \\+ req\\.body\\.login",
+          "note": "A1 SQL injection"
+        },
+        {
+          "id": "dvna-shell",
+          "class": "shell",
+          "want": "finding",
+          "file": "core/appHandler.js",
+          "anchor": "exec\\('ping -c 2 ' \\+ req\\.body\\.address",
+          "note": "A1 command injection"
+        },
+        {
+          "id": "dvna-eval",
+          "class": "eval",
+          "want": "finding",
+          "file": "core/appHandler.js",
+          "anchor": "mathjs\\.eval\\(req\\.body\\.eqn\\)",
+          "note": "A1 code injection"
+        },
+        {
+          "id": "dvna-deser",
+          "class": "deserialize",
+          "want": "finding",
+          "file": "core/appHandler.js",
+          "anchor": "serialize\\.unserialize\\(req\\.files",
+          "note": "A8 insecure deserialization"
+        },
+        {
+          "id": "dvna-xxe",
+          "class": "xxe",
+          "want": "finding",
+          "file": "core/appHandler.js",
+          "anchor": "parseXmlString\\(.*noent:true",
+          "note": "A4 XXE"
+        },
+        {
+          "id": "dvna-redirect",
+          "class": "redirect",
+          "want": "finding",
+          "file": "core/appHandler.js",
+          "anchor": "res\\.redirect\\(req\\.query\\.url\\)",
+          "note": "unvalidated redirect"
+        },
+        {
+          "id": "dvna-reset-token",
+          "class": "auth",
+          "want": "finding",
+          "file": "core/authHandler.js",
+          "anchor": "req\\.query\\.token == md5\\(req\\.query\\.login\\)",
+          "note": "A2 predictable reset token"
+        },
+        {
+          "id": "dvna-secret",
+          "class": "secret",
+          "want": "finding",
+          "file": "server.js",
+          "anchor": "secret: 'keyboard cat'",
+          "note": "A2 hard-coded session secret"
+        },
+        {
+          "id": "dvna-cookie",
+          "class": "config",
+          "want": "finding",
+          "file": "server.js",
+          "anchor": "cookie: \\{ secure: false \\}",
+          "note": "A2/A6 insecure cookie"
+        },
+        {
+          "id": "dvna-xss",
+          "class": "xss",
+          "want": "finding",
+          "file": "views/app/products.ejs",
+          "anchor": "<%- output\\.searchTerm %>",
+          "note": "A7 reflected XSS"
+        },
+        {
+          "id": "dvna-authz-admin",
+          "class": "authz",
+          "want": "finding",
+          "file": "routes/app.js",
+          "anchor": "router\\.get\\('/admin/usersapi', authHandler\\.isAuthenticated, appHandler\\.listUsersAPI\\)",
+          "window": 1,
+          "note": "A5 admin API without an admin check",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "dvna-idor",
+          "class": "authz",
+          "want": "finding",
+          "file": "core/appHandler.js",
+          "anchor": "'id': req\\.query\\.id",
+          "window": 2,
+          "note": "A5 user edit by any id",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "dvna-exposure",
+          "class": "exposure",
+          "want": "finding",
+          "file": "core/appHandler.js",
+          "anchor": "module\\.exports\\.listUsersAPI",
+          "window": 8,
+          "note": "A3 user records incl. password hashes returned"
+        },
+        {
+          "id": "dvna-deps",
+          "class": "dependency",
+          "want": "finding",
+          "file": "package.json",
+          "anchor": "\"dependencies\"",
+          "file_level": true,
+          "note": "A9 known-vulnerable libraries (no lock file); without a lock file Lantern reports the libraries as not checked, so this stays a documented miss until lock-less audits exist"
+        }
+      ]
+    },
+    {
+      "name": "goof",
+      "kind": "vulnerable",
+      "stack": "Node / Express + MongoDB (Snyk demo)",
+      "source": "https://github.com/snyk-labs/nodejs-goof",
+      "commit": "add14ba59e98240d9e00a235dd7d42cd61ae9912",
+      "documented_by": "README 'Vulnerabilities in code' and exploits/",
+      "expect": [
+        {
+          "id": "goof-nosql",
+          "class": "nosql",
+          "want": "finding",
+          "file": "routes/index.js",
+          "anchor": "User\\.find\\(\\{ username: req\\.body\\.username, password: req\\.body\\.password",
+          "note": "NoSQL injection in login"
+        },
+        {
+          "id": "goof-redirect",
+          "class": "redirect",
+          "want": "finding",
+          "file": "routes/index.js",
+          "anchor": "return res\\.redirect\\(redirectPage\\)",
+          "note": "open redirect (index.js:72 in the README)"
+        },
+        {
+          "id": "goof-shell",
+          "class": "shell",
+          "want": "finding",
+          "file": "routes/index.js",
+          "anchor": "exec\\('identify ' \\+ url",
+          "note": "command injection via image URL"
+        },
+        {
+          "id": "goof-zipslip",
+          "class": "path",
+          "want": "finding",
+          "file": "routes/index.js",
+          "anchor": "zip\\.extractAllTo\\(extracted_path, true\\)",
+          "note": "zip slip on import"
+        },
+        {
+          "id": "goof-pollution",
+          "class": "pollution",
+          "want": "finding",
+          "file": "routes/index.js",
+          "anchor": "_\\.merge\\(message, req\\.body\\.message",
+          "note": "prototype pollution"
+        },
+        {
+          "id": "goof-secret",
+          "class": "secret",
+          "want": "finding",
+          "file": "app.js",
+          "anchor": "secret: 'keyboard cat'",
+          "note": "hard-coded session secret"
+        },
+        {
+          "id": "goof-xss-admin",
+          "class": "xss",
+          "want": "finding",
+          "file": "views/admin.ejs",
+          "anchor": "<%- redirectPage %>",
+          "note": "reflected XSS"
+        },
+        {
+          "id": "goof-xss-marked",
+          "class": "xss",
+          "want": "finding",
+          "file": "views/index.ejs",
+          "anchor": "<%- marked\\(new String\\(todo\\.content\\)\\) %>",
+          "note": "stored XSS through marked"
+        },
+        {
+          "id": "goof-layout",
+          "class": "path",
+          "want": "finding",
+          "file": "routes/index.js",
+          "anchor": "return res\\.render\\('account\\.hbs', profile\\)",
+          "note": "request body passed whole to the view (layout -> local file inclusion)"
+        },
+        {
+          "id": "goof-deps",
+          "class": "dependency",
+          "want": "finding",
+          "file": "package-lock.json",
+          "anchor": "\"lockfileVersion\"",
+          "file_level": true,
+          "note": "known-vulnerable libraries (st, marked, ms, mongoose, lodash, adm-zip); package-lock.json present; Lantern pins library findings to the lock file"
+        }
+      ]
+    },
+    {
+      "name": "pygoat",
+      "kind": "vulnerable",
+      "stack": "Python / Django + Flask labs",
+      "source": "https://github.com/adeyosemanputra/pygoat",
+      "commit": "2aa4cc14f251e4a780e94e200aed6b36a5b15c21",
+      "documented_by": "the lab names and docstrings in dockerized_labs/*/app.py and challenge/labs",
+      "expect": [
+        {
+          "id": "pg-sql",
+          "class": "sql",
+          "want": "finding",
+          "file": "dockerized_labs/sql_injection_lab/app.py",
+          "anchor": "result = c\\.execute\\(sql_query\\)",
+          "window": 8
+        },
+        {
+          "id": "pg-shell",
+          "class": "shell",
+          "want": "finding",
+          "file": "dockerized_labs/command_injection_lab/app.py",
+          "anchor": "command, shell=True",
+          "window": 2
+        },
+        {
+          "id": "pg-eval",
+          "class": "eval",
+          "want": "finding",
+          "file": "dockerized_labs/command_injection_lab/app.py",
+          "anchor": "output = eval\\(expression\\)"
+        },
+        {
+          "id": "pg-pickle",
+          "class": "deserialize",
+          "want": "finding",
+          "file": "dockerized_labs/insec_des_lab/main.py",
+          "anchor": "user = pickle\\.loads\\(decoded_data\\)"
+        },
+        {
+          "id": "pg-xxe",
+          "class": "xxe",
+          "want": "finding",
+          "file": "dockerized_labs/xxe_lab/app.py",
+          "anchor": "parser\\.setFeature\\(feature_external_ges, True\\)",
+          "window": 5
+        },
+        {
+          "id": "pg-ssrf",
+          "class": "ssrf",
+          "want": "finding",
+          "file": "dockerized_labs/ssrf_lab/app.py",
+          "anchor": "response = requests\\.get\\(url\\)"
+        },
+        {
+          "id": "pg-lfi",
+          "class": "path",
+          "want": "finding",
+          "file": "dockerized_labs/ssrf_lab/app.py",
+          "anchor": "with open\\(file_path, \"r\"\\) as f",
+          "window": 3
+        },
+        {
+          "id": "pg-ssti",
+          "class": "eval",
+          "want": "finding",
+          "file": "dockerized_labs/template_injection_lab/app.py",
+          "anchor": "content = f\\.read\\(\\)",
+          "window": 6,
+          "note": "blog text written to a file and rendered as a template"
+        },
+        {
+          "id": "pg-xss",
+          "class": "xss",
+          "want": "finding",
+          "file": "dockerized_labs/xss_lab/app.py",
+          "anchor": "return render_template\\(\"lab1\\.html\", query=q\\)",
+          "window": 3,
+          "note": "query shown with |safe"
+        },
+        {
+          "id": "pg-auth-md5",
+          "class": "auth",
+          "want": "finding",
+          "file": "dockerized_labs/broken_auth_lab/app.py",
+          "anchor": "token = hashlib\\.md5\\("
+        },
+        {
+          "id": "pg-crypto-md5",
+          "class": "auth",
+          "want": "finding",
+          "file": "dockerized_labs/crypto_failure_lab/app.py",
+          "anchor": "password_hash = hashlib\\.md5\\(password"
+        },
+        {
+          "id": "pg-crypto-sha1",
+          "class": "auth",
+          "want": "finding",
+          "file": "dockerized_labs/crypto_failure_lab/app.py",
+          "anchor": "return hashlib\\.sha1\\(password"
+        },
+        {
+          "id": "pg-secret-aws",
+          "class": "secret",
+          "want": "finding",
+          "file": "dockerized_labs/sec_misconfig/app.py",
+          "anchor": "\"AWS_ACCESS_KEY\": \"AKIA",
+          "rules": "aws"
+        },
+        {
+          "id": "pg-secret-stripe",
+          "class": "secret",
+          "want": "finding",
+          "file": "dockerized_labs/sec_misconfig/app.py",
+          "anchor": "\"STRIPE_API_KEY\": \"sk_live_",
+          "rules": "stripe"
+        },
+        {
+          "id": "pg-yaml",
+          "class": "deserialize",
+          "want": "finding",
+          "file": "dockerized_labs/a9_uckv_lab/app.py",
+          "anchor": "yaml\\.load\\(file\\.stream, Loader=yaml\\.Loader\\)"
+        },
+        {
+          "id": "pg-pickle2",
+          "class": "deserialize",
+          "want": "finding",
+          "file": "dockerized_labs/software_integrity_lab/app.py",
+          "anchor": "admin = pickle\\.loads\\(",
+          "window": 3
+        },
+        {
+          "id": "pg-django-debug",
+          "class": "config",
+          "want": "finding",
+          "file": "pygoat/settings.py",
+          "anchor": "^DEBUG = True"
+        },
+        {
+          "id": "pg-django-secret",
+          "class": "secret",
+          "want": "finding",
+          "file": "pygoat/settings.py",
+          "anchor": "^SECRET_KEY = \"lr66"
+        },
+        {
+          "id": "pg-admin-cookie",
+          "class": "authz",
+          "want": "finding",
+          "file": "dockerized_labs/broken_access_lab/main.py",
+          "anchor": "response\\.set_cookie\\(\"admin\"",
+          "note": "admin flag kept in a client cookie",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "pg-csrf-exempt",
+          "class": "csrf",
+          "want": "finding",
+          "file": "introduction/views.py",
+          "anchor": "@csrf_exempt",
+          "occurrence": 1
+        }
+      ]
+    },
+    {
+      "name": "fastapi-template",
+      "kind": "clean",
+      "stack": "Python / FastAPI + React",
+      "source": "https://github.com/fastapi/full-stack-fastapi-template",
+      "commit": "aabb90126964a164e02aff39e7c385bb0598236d",
+      "documented_by": "the official FastAPI full-stack template; no known open security problem at this commit",
+      "expect": []
+    },
+    {
+      "name": "express-boilerplate",
+      "kind": "clean",
+      "stack": "Node / Express + Mongoose",
+      "source": "https://github.com/hagopj13/node-express-boilerplate",
+      "commit": "179ae84efec61b14206d0305d941daed6c6d07f9",
+      "documented_by": "a widely used production boilerplate (helmet, rate limiting, Joi validation, JWT auth)",
+      "expect": []
+    },
+    {
+      "name": "taxonomy",
+      "kind": "clean",
+      "stack": "TypeScript / Next.js 13 + Prisma + Stripe",
+      "source": "https://github.com/shadcn-ui/taxonomy",
+      "commit": "298a8857c7128a0d121e7f699dfd729f23b3966d",
+      "documented_by": "shadcn's reference Next.js app; no known open security problem at this commit",
+      "expect": []
+    }
+  ],
+  "local": [
+    {
+      "name": "review-unsafe",
+      "kind": "vulnerable",
+      "stack": "Python / FastAPI",
+      "path": "apps/review-unsafe",
+      "documented_by": "the five regression examples of the independent review (2026-11-09): fixed text first, then input through a binding; a repo function named list",
+      "expect": [
+        {
+          "id": "rv-match",
+          "class": "sql",
+          "want": "finding",
+          "min_rank": "high",
+          "file": "app/main.py",
+          "anchor": "ORDER BY \\{order\\}",
+          "occurrence": 1
+        },
+        {
+          "id": "rv-except",
+          "class": "sql",
+          "want": "finding",
+          "min_rank": "high",
+          "file": "app/main.py",
+          "anchor": "ORDER BY \\{order\\}",
+          "occurrence": 2
+        },
+        {
+          "id": "rv-nonlocal",
+          "class": "sql",
+          "want": "finding",
+          "min_rank": "high",
+          "file": "app/main.py",
+          "anchor": "ORDER BY \\{order\\}",
+          "occurrence": 3
+        },
+        {
+          "id": "rv-global",
+          "class": "sql",
+          "want": "finding",
+          "min_rank": "high",
+          "file": "app/main.py",
+          "anchor": "ORDER BY \\{ORDER\\}"
+        },
+        {
+          "id": "rv-list-edge",
+          "class": "resolution",
+          "want": "edge",
+          "src": "py:app.boxes.run",
+          "dst": "py:app.boxes.Box.append"
+        }
+      ]
+    },
+    {
+      "name": "review-safe",
+      "kind": "clean",
+      "stack": "Python / FastAPI",
+      "path": "apps/review-safe",
+      "documented_by": "safe twins of the review's examples: the same binding shapes replace fixed text with fixed text",
+      "expect": [
+        {
+          "id": "rv-match-safe",
+          "class": "sql",
+          "want": "clean",
+          "file": "app/main.py",
+          "anchor": "ORDER BY \\{order\\}",
+          "occurrence": 1
+        },
+        {
+          "id": "rv-except-safe",
+          "class": "sql",
+          "want": "clean",
+          "file": "app/main.py",
+          "anchor": "ORDER BY \\{order\\}",
+          "occurrence": 2
+        },
+        {
+          "id": "rv-nonlocal-safe",
+          "class": "sql",
+          "want": "clean",
+          "file": "app/main.py",
+          "anchor": "ORDER BY \\{order\\}",
+          "occurrence": 3
+        },
+        {
+          "id": "rv-global-safe",
+          "class": "sql",
+          "want": "clean",
+          "file": "app/main.py",
+          "anchor": "ORDER BY \\{ORDER\\}"
+        },
+        {
+          "id": "rv-list-no-edge",
+          "class": "resolution",
+          "want": "no-edge",
+          "src": "py:app.boxes.run",
+          "dst": "py:app.boxes.Box.append"
+        }
+      ]
+    },
+    {
+      "name": "flows-unsafe",
+      "kind": "vulnerable",
+      "stack": "Python / FastAPI + React",
+      "path": "apps/flows-unsafe",
+      "documented_by": "the directive's section 4 flows, written before any engine change",
+      "expect": [
+        {
+          "id": "fl-sql-chain",
+          "class": "sql",
+          "want": "finding",
+          "file": "app/service.py",
+          "anchor": "ORDER BY \\{sort\\}",
+          "note": "request -> route -> validate_sort (no check) -> service -> query"
+        },
+        {
+          "id": "fl-sql-htmlescape",
+          "class": "sql",
+          "want": "finding",
+          "file": "app/service.py",
+          "anchor": "WHERE name = '\\{name\\}'",
+          "note": "html.escape is not SQL protection"
+        },
+        {
+          "id": "fl-ssrf",
+          "class": "ssrf",
+          "want": "finding",
+          "file": "app/helpers.py",
+          "anchor": "return requests\\.get\\(url, timeout=5\\)\\.text",
+          "note": "caller's address -> helper -> outgoing request"
+        },
+        {
+          "id": "fl-zipslip",
+          "class": "path",
+          "want": "finding",
+          "file": "app/files.py",
+          "anchor": "target = os\\.path\\.join\\(dest, member\\.filename\\)",
+          "window": 4,
+          "note": "archive member name -> file write"
+        },
+        {
+          "id": "fl-idor",
+          "class": "authz",
+          "want": "finding",
+          "file": "app/service.py",
+          "anchor": "WHERE id = \\?\", \\(note_id,\\)\\)",
+          "window": 3,
+          "note": "signed-in user's id known and unused: anyone's note",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "fl-shell-late-guard",
+          "class": "shell",
+          "want": "finding",
+          "min_rank": "high",
+          "file": "app/main.py",
+          "anchor": "subprocess\\.run\\(cmd, shell=True",
+          "note": "command runs before the admin check"
+        },
+        {
+          "id": "fl-authz-late-guard",
+          "class": "authz",
+          "want": "finding",
+          "file": "app/main.py",
+          "anchor": "@app\\.post\\(\"/admin/run\"\\)",
+          "window": 3,
+          "note": "the check after the action must not count as protection",
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "fl-ratelimit-unused",
+          "class": "protection",
+          "want": "protection",
+          "protection": "rate-limit",
+          "not": "in place",
+          "note": "slowapi installed, never applied"
+        },
+        {
+          "id": "fl-sql-chain-path",
+          "class": "path-coverage",
+          "want": "reachable",
+          "file": "app/service.py",
+          "anchor": "ORDER BY \\{sort\\}",
+          "note": "the frontend's fetch -> /items/search -> ... -> query should be a mapped path"
+        }
+      ]
+    },
+    {
+      "name": "flows-safe",
+      "kind": "clean",
+      "stack": "Python / FastAPI + React",
+      "path": "apps/flows-safe",
+      "documented_by": "the same flows guarded: fixed SQL text, parameters, allow-list, path check, owner filter, limiter, check before action",
+      "expect": [
+        {
+          "id": "fl-sql-chain-safe",
+          "class": "sql",
+          "want": "clean",
+          "file": "app/service.py",
+          "anchor": "SELECT id, name FROM items \" \\+ order_clause"
+        },
+        {
+          "id": "fl-sql-param-safe",
+          "class": "sql",
+          "want": "clean",
+          "file": "app/service.py",
+          "anchor": "WHERE name = \\?\", \\(name,\\)"
+        },
+        {
+          "id": "fl-ssrf-safe",
+          "class": "ssrf",
+          "want": "clean",
+          "file": "app/helpers.py",
+          "anchor": "return requests\\.get\\(url, timeout=5\\)\\.text"
+        },
+        {
+          "id": "fl-zipslip-safe",
+          "class": "path",
+          "want": "clean",
+          "file": "app/files.py",
+          "anchor": "with open\\(target, \"wb\"\\) as out",
+          "window": 2
+        },
+        {
+          "id": "fl-idor-safe",
+          "class": "authz",
+          "want": "clean",
+          "file": "app/service.py",
+          "anchor": "AND owner_id = \\?",
+          "window": 2,
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "fl-shell-safe",
+          "class": "shell",
+          "want": "clean",
+          "file": "app/main.py",
+          "anchor": "subprocess\\.run\\(\\[\"ls\", \"-l\", \"--\", path\\]"
+        },
+        {
+          "id": "fl-authz-safe",
+          "class": "authz",
+          "want": "clean",
+          "file": "app/main.py",
+          "anchor": "@app\\.post\\(\"/admin/run\"\\)",
+          "window": 3,
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "fl-ratelimit-used",
+          "class": "protection",
+          "want": "protection",
+          "protection": "rate-limit",
+          "is": "in place"
+        },
+        {
+          "id": "fl-ssrf-allowlist",
+          "class": "protection",
+          "want": "protection",
+          "protection": "ssrf-allowlist",
+          "is": "in place"
+        }
+      ]
+    },
+    {
+      "name": "express-unsafe",
+      "kind": "vulnerable",
+      "stack": "Node / Express",
+      "path": "apps/express-unsafe",
+      "documented_by": "the directive's flows in Express form: handlers exported with module.exports and wired in a router",
+      "expect": [
+        {
+          "id": "ex-sql",
+          "class": "sql",
+          "want": "finding",
+          "file": "core/handlers.js",
+          "anchor": "WHERE name = '\" \\+ req\\.query\\.q \\+ \"'\""
+        },
+        {
+          "id": "ex-xss",
+          "class": "xss",
+          "want": "finding",
+          "file": "core/handlers.js",
+          "anchor": "res\\.send\\('<h1>Results for ' \\+ req\\.query\\.q"
+        },
+        {
+          "id": "ex-shell",
+          "class": "shell",
+          "want": "finding",
+          "min_rank": "high",
+          "file": "core/handlers.js",
+          "anchor": "exec\\('ping -c 1 ' \\+ req\\.body\\.host"
+        },
+        {
+          "id": "ex-redirect",
+          "class": "redirect",
+          "want": "finding",
+          "file": "core/handlers.js",
+          "anchor": "res\\.redirect\\(req\\.query\\.next\\)"
+        },
+        {
+          "id": "ex-secret",
+          "class": "secret",
+          "want": "finding",
+          "file": "server.js",
+          "anchor": "secret: 'keyboard cat'"
+        },
+        {
+          "id": "ex-cookie",
+          "class": "config",
+          "want": "finding",
+          "file": "server.js",
+          "anchor": "cookie: \\{ secure: false \\}"
+        },
+        {
+          "id": "ex-authz-delete",
+          "class": "authz",
+          "want": "finding",
+          "file": "routes/index.js",
+          "anchor": "router\\.delete\\('/items/:id', handlers\\.remove\\)",
+          "window": 1,
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "ex-link-search",
+          "class": "resolution",
+          "want": "linked",
+          "file": "core/handlers.js",
+          "name": "search",
+          "note": "the route must link to the exported handler"
+        },
+        {
+          "id": "ex-sql-path",
+          "class": "path-coverage",
+          "want": "reachable",
+          "file": "core/handlers.js",
+          "anchor": "WHERE name = '\" \\+ req\\.query\\.q \\+ \"'\""
+        }
+      ]
+    },
+    {
+      "name": "express-safe",
+      "kind": "clean",
+      "stack": "Node / Express",
+      "path": "apps/express-safe",
+      "documented_by": "the same Express app guarded: parameters, escaping, execFile, a redirect allow-list, env secret, sign-in on delete",
+      "expect": [
+        {
+          "id": "ex-sql-safe",
+          "class": "sql",
+          "want": "clean",
+          "file": "core/handlers.js",
+          "anchor": "WHERE name = \\?', \\[req\\.query\\.q\\]"
+        },
+        {
+          "id": "ex-xss-safe",
+          "class": "xss",
+          "want": "clean",
+          "file": "core/handlers.js",
+          "anchor": "escapeHtml\\(req\\.query\\.q\\)"
+        },
+        {
+          "id": "ex-shell-safe",
+          "class": "shell",
+          "want": "clean",
+          "file": "core/handlers.js",
+          "anchor": "execFile\\('ping', \\['-c', '1', '--'"
+        },
+        {
+          "id": "ex-redirect-safe",
+          "class": "redirect",
+          "want": "clean",
+          "file": "core/handlers.js",
+          "anchor": "res\\.redirect\\(target\\)"
+        },
+        {
+          "id": "ex-secret-safe",
+          "class": "secret",
+          "want": "clean",
+          "file": "server.js",
+          "anchor": "secret: process\\.env\\.SESSION_SECRET"
+        },
+        {
+          "id": "ex-authz-delete-safe",
+          "class": "authz",
+          "want": "clean",
+          "file": "routes/index.js",
+          "anchor": "router\\.delete\\('/items/:id', auth\\.required, handlers\\.remove\\)",
+          "window": 1,
+          "rules": "LW-AUTH|AUTH|authz|ACCESS|IDOR|BOLA|PERM"
+        },
+        {
+          "id": "ex-link-search-safe",
+          "class": "resolution",
+          "want": "linked",
+          "file": "core/handlers.js",
+          "name": "search"
+        }
+      ]
+    }
+  ]
+}

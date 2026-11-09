@@ -1,0 +1,15 @@
+import os
+import zipfile
+
+
+def extract_upload(data_path: str, dest: str) -> list[str]:
+    """Writes every member where its own name says, so '../../etc/cron.d/x' leaves the folder."""
+    written = []
+    with zipfile.ZipFile(data_path) as z:
+        for member in z.infolist():
+            target = os.path.join(dest, member.filename)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as out:
+                out.write(z.read(member))
+            written.append(target)
+    return written

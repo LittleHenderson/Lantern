@@ -1,0 +1,20 @@
+"""Helpers that really guard: the check happens, and the sensitive step uses the checked result."""
+from urllib.parse import urlparse
+
+import requests
+
+SORTS = {"id": "ORDER BY id", "name": "ORDER BY name"}
+ALLOWED_HOSTS = {"example.com", "www.example.com"}
+
+
+def validate_sort(sort: str) -> str:
+    """Returns one of two fixed ORDER BY clauses, never the caller's text."""
+    return SORTS.get(sort.strip(), SORTS["id"])
+
+
+def fetch_page(url: str) -> str:
+    """Only hosts on the allow-list are fetched."""
+    host = (urlparse(url).hostname or "").lower()
+    if host not in ALLOWED_HOSTS:
+        raise ValueError("host not allowed")
+    return requests.get(url, timeout=5).text
