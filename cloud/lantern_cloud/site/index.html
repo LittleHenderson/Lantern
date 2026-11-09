@@ -872,6 +872,7 @@ async function askSend(text) {
       ASK.log.pop(); ASK.log.pop();
       if (e.type === 'consent_needed') { ASK.busy = false; AI.state = null; renderAsk(); return withConsent(() => askSend(text)); }
       ASK.log.push({role: 'me', text}); ASK.log.push({role: 'bot', text: 'I could not answer: ' + e.message});
+      if (e.status === 401) { S.me = null; AI.state = null; drawAcct(); ASK.busy = false; renderAsk(); return signInSheet(e.message); }
     }
     ASK.busy = false; renderAsk();
   };
