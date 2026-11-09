@@ -49,6 +49,9 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     s = g.stats()
     log(f"graph   {g.meta['files']} files, {s['nodes'].get('callable', 0)} functions, "
         f"{s['internal_call_edges']} internal calls, {s['entry_points']} entry points ({timings['graph']}s)")
+    from .calls import line_words
+    if line_words(g.meta.get("calls")):
+        log(f"calls   {line_words(g.meta.get('calls'))}")
     from .depaudit import offline as offline_env
     offline = offline_env() if offline is None else offline
     run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
@@ -98,6 +101,8 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
                 f'For these too: pip install "lantern[scan]"')
         (out / "security.json").write_text(json.dumps(sec, indent=1), encoding="utf-8")
     g.save(out / "graph.json")
+    from . import calls
+    calls.write(out / "calls.json", g)
     rd = assess(g, sec, run_meta)
     (out / "readiness.json").write_text(json.dumps(rd, indent=1), encoding="utf-8")
     log(f"ready   {rd['score']}/100 (grade {rd['grade']}), {rd['shape']}")

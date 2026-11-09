@@ -26,6 +26,7 @@ import tree_sitter_javascript as tsj
 import tree_sitter_typescript as tst
 from tree_sitter import Language, Node as TSNode, Parser
 
+from . import calls
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, RESOLVED, Graph, Node
 from .python_frontend import SKIP_DIRS, inside_repo
 
@@ -58,6 +59,27 @@ JS_GLOBALS = {
     "atob", "btoa", "alert", "confirm", "prompt", "require", "process", "Buffer", "isNaN",
     "TextEncoder", "TextDecoder", "AbortController", "crypto", "performance", "fetch",
 }
+# More built-ins of the language, Node and the browser, for the call-site inventory (calls.py) only. The map keeps
+# JS_GLOBALS as it was (calls to those are not counted at all), so its edge-line count stays comparable across versions;
+# a call to one of these is still counted unresolved there, and named a built-in in the inventory.
+JS_BUILTINS = JS_GLOBALS | {
+    "setImmediate", "clearImmediate", "isFinite", "eval", "escape", "unescape", "Intl", "BigInt", "Proxy", "WeakSet",
+    "WeakRef", "FinalizationRegistry", "ArrayBuffer", "SharedArrayBuffer", "DataView", "Int8Array", "Uint8Array",
+    "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array", "Float32Array", "Float64Array",
+    "BigInt64Array", "BigUint64Array", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError",
+    "URIError", "AggregateError", "Function", "Atomics", "WebAssembly", "getComputedStyle", "matchMedia",
+    "IntersectionObserver", "ResizeObserver", "MutationObserver", "PerformanceObserver", "CustomEvent", "Event",
+    "EventTarget", "Image", "Audio", "Option", "XMLHttpRequest", "WebSocket", "EventSource", "Worker", "SharedWorker",
+    "BroadcastChannel", "MessageChannel", "caches", "indexedDB", "customElements", "screen", "scrollTo", "scrollBy",
+    "open", "close", "print", "postMessage", "addEventListener", "removeEventListener", "dispatchEvent",
+    "getSelection", "cancelAnimationFrame", "requestIdleCallback", "cancelIdleCallback", "DOMParser", "XMLSerializer",
+    "FileReader", "Notification", "ReadableStream", "WritableStream", "TransformStream", "AbortSignal",
+    "DOMException", "self", "global", "__dirname", "__filename",
+}
+JS_LANG = "typescript/javascript"   # the name engine.build_graph gives the language in g.meta["languages"]
+# An import of one of these is a file (relative, absolute, a path alias or a package.json "imports" entry), never a
+# library: when it does not resolve, the file is missing, and a call through it is not a library call.
+FILE_SPEC = (".", "/", "@/", "~/", "#")
 TEST_RE = re.compile(r"(\.(test|spec)\.[cm]?[jt]sx?$)|(^|/)(__tests__|__mocks__|tests?|e2e|cypress|playwright)/")
 GENERATED_RE = re.compile(r"\.gen\.[jt]sx?$|(^|/)generated/")
 
@@ -119,6 +141,91 @@ def _chain(n: TSNode | None) -> list[str] | None:
     return None
 
 
+def _pattern_names(n: TSNode | None) -> list[str]:
+    """The names a binding pattern introduces: x, {a, b: c}, [d, e], ...rest, f = 1."""
+    if n is None:
+        return []
+    t = n.type
+    if t in ("identifier", "shorthand_property_identifier_pattern"):
+        return [_text(n)]
+    if t in ("assignment_pattern", "object_assignment_pattern"):
+        return _pattern_names(n.child_by_field_name("left"))
+    if t == "pair_pattern":
+        return _pattern_names(n.child_by_field_name("value"))
+    if t in ("object_pattern", "array_pattern", "rest_pattern"):
+        return [x for c in n.named_children for x in _pattern_names(c)]
+    return []
+
+
+def _type_chain(tn: TSNode | None) -> list[str] | None:
+    """A written TypeScript type -> name chain: `Request` -> ["Request"], `express.Response` -> ["express",
+    "Response"], `Store<T>` -> ["Store"]. Unions, objects, functions and the like -> None."""
+    if tn is not None and tn.type == "type_annotation":
+        tn = tn.named_children[0] if tn.named_child_count else None
+    if tn is None:
+        return None
+    if tn.type == "type_identifier":
+        return [_text(tn)]
+    if tn.type == "nested_type_identifier":
+        return _text(tn).split(".")
+    if tn.type == "generic_type":
+        return _type_chain(tn.child_by_field_name("name"))
+    return None
+
+
+def _params(node: TSNode | None) -> list[tuple[str, list[str] | None]]:
+    """A function's own parameters, in order, as (name, written type or None); destructured names have no type."""
+    if node is None:
+        return []
+    if node.type == "identifier":          # x => ...
+        return [(_text(node), None)]
+    out: list[tuple[str, list[str] | None]] = []
+    for c in node.named_children:
+        if c.type in ("required_parameter", "optional_parameter"):
+            pat = c.child_by_field_name("pattern")
+            typ = _type_chain(next((x for x in c.named_children if x.type == "type_annotation"), None))
+            names = _pattern_names(pat)
+            if pat is not None and pat.type == "identifier":
+                out.append((names[0], typ))
+            else:
+                out.extend((x, None) for x in names)
+        else:
+            out.extend((x, None) for x in _pattern_names(c))
+    return out
+
+
+def _site_pos(n: TSNode) -> tuple[int, int]:
+    """(line, column from 1) that identifies a call site: its "(" (the template of a tagged template), or the
+    component name of a JSX element, or where the expression starts."""
+    if n.type in ("call_expression", "new_expression"):
+        a = n.child_by_field_name("arguments")
+        if a is not None:
+            return a.start_point[0] + 1, a.start_point[1] + 1
+    elif n.type in ("jsx_opening_element", "jsx_self_closing_element"):
+        nm = n.child_by_field_name("name")
+        if nm is not None:
+            return nm.start_point[0] + 1, nm.start_point[1] + 1
+    return n.start_point[0] + 1, n.start_point[1] + 1
+
+
+def _unparen(n: TSNode | None) -> TSNode | None:
+    while n is not None and n.type == "parenthesized_expression" and n.named_child_count:
+        n = n.named_children[0]
+    return n
+
+
+def _call_nodes(root: TSNode):
+    """Every call written in a file: calls, `new`, and JSX elements that name a component (a render)."""
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type in ("call_expression", "new_expression"):
+            yield n
+        elif n.type in ("jsx_opening_element", "jsx_self_closing_element") and _jsx_name(n):
+            yield n
+        stack.extend(n.children)
+
+
 def _jsx_name(n: TSNode) -> list[str] | None:
     name = n.child_by_field_name("name")
     if name is None:
@@ -153,8 +260,10 @@ class JSRef:
     scope: str
     parts: list[str]
     line: int
-    kind: str                  # call | new | jsx | callback
+    kind: str                  # call | new | jsx | callback | computed | registration | wrapper
     ui: str | None = None      # e.g. "onClick" when it happens inside an event handler
+    at: tuple[int, int] | None = None   # (line, column from 1) of the call's "(": the call site's identity
+    text: str = ""             # the callee as written
 
 
 @dataclass
@@ -189,6 +298,11 @@ class JSModule:
     http: list[HttpCall] = field(default_factory=list)
     route_regs: list[dict] = field(default_factory=list)        # express-style, {method, path, handler parts|local}
     page_regs: list[dict] = field(default_factory=list)         # router config, {path, component parts}
+    params: dict[str, list[str]] = field(default_factory=dict)  # def local -> its own parameter names, in order
+    param_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)  # def local -> name -> written type
+    anon_params: dict[str, set[str]] = field(default_factory=dict)  # scope -> parameters of inline functions in it
+    declared: dict[str, set[str]] = field(default_factory=dict)  # scope -> names declared there (const/let/var/for)
+    unread: list[tuple] = field(default_factory=list)   # (at, line, callee text, "inline"|"require"|"other")
     mounts_app: bool = False
     listens: bool = False
 
@@ -243,6 +357,11 @@ class Walker:
         local = f"{scope}.{name}" if scope else name
         body = node.child_by_field_name("body")
         params = node.child_by_field_name("parameters") or node.child_by_field_name("parameter")
+        ps = _params(params)
+        self.m.params[local] = [x for x, _ in ps]
+        typed = {x: t for x, t in ps if t}
+        if typed:
+            self.m.param_types[local] = typed
         o = outer or node
         self.m.defs[local] = JSDef(
             local=local, name=name, kind=kind, start=o.start_point[0] + 1, end=o.end_point[0] + 1,
@@ -252,6 +371,14 @@ class Walker:
 
     def walk(self, n: TSNode, scope: str, cls: str | None = None, ui: str | None = None):
         t = n.type
+        if t in FUNC_TYPES:   # an inline function, read as part of the function around it
+            ps = _params(n.child_by_field_name("parameters") or n.child_by_field_name("parameter"))
+            if ps:
+                self.m.anon_params.setdefault(scope, set()).update(x for x, _ in ps)
+        elif t == "for_in_statement":
+            self.m.declared.setdefault(scope, set()).update(_pattern_names(n.child_by_field_name("left")))
+        elif t == "catch_clause":
+            self.m.declared.setdefault(scope, set()).update(_pattern_names(n.child_by_field_name("parameter")))
         if t in ("import_statement",):
             self._import(n)
             return
@@ -273,9 +400,12 @@ class Walker:
             self._call(n, scope, cls, ui)
             return
         if t == "new_expression":
-            ch = _chain(n.child_by_field_name("constructor"))
+            ctor = n.child_by_field_name("constructor")
+            ch = _chain(ctor)
             if ch:
-                self.m.refs.append(JSRef(scope, ch, n.start_point[0] + 1, "new", ui))
+                self.m.refs.append(JSRef(scope, ch, n.start_point[0] + 1, "new", ui, _site_pos(n), _text(ctor)))
+            elif ctor is not None:   # new (pick())(): chosen at run time
+                self.m.refs.append(JSRef(scope, [], n.start_point[0] + 1, "computed", ui, _site_pos(n), _text(ctor)))
         if t in ("jsx_opening_element", "jsx_self_closing_element"):
             self._jsx(n, scope, cls, ui)
             return
@@ -286,7 +416,8 @@ class Walker:
             if val is not None and val.type in ("identifier", "member_expression"):
                 ch = _chain(val)
                 if ch:
-                    self.m.refs.append(JSRef(scope, ch, n.start_point[0] + 1, "callback", sub_ui))
+                    self.m.refs.append(JSRef(scope, ch, n.start_point[0] + 1, "callback", sub_ui, _site_pos(val),
+                                             _text(val)))
             if val is not None:
                 self.walk(val, scope, cls, sub_ui)
             return
@@ -333,13 +464,19 @@ class Walker:
         value = n.child_by_field_name("value")
         if name_node is None:
             return
+        self.m.declared.setdefault(scope, set()).update(_pattern_names(name_node))
         name = _text(name_node)
         fn = _unwrap_func(value)
         if fn is not None and name_node.type == "identifier":
             local = self.add_def(fn, name, scope, "function", cls, outer=n)
             self._walk_body(fn, local, None, ui)
             if value is not fn and value.type == "call_expression":  # memo(...)/forwardRef(...) wrapper call
-                self.walk(value.child_by_field_name("function"), scope, cls, ui)
+                wfn = value.child_by_field_name("function")
+                wch = _chain(wfn)
+                if wch:   # a call site for the inventory only: the edge-line count never had it
+                    self.m.refs.append(JSRef(scope, wch, value.start_point[0] + 1, "wrapper", ui, _site_pos(value),
+                                             _text(wfn)))
+                self.walk(wfn, scope, cls, ui)
             return   # `(fn) as T`, `(fn) satisfies T`: nothing besides the function to walk
         if value is not None and value.type in CLASS_DECLS:
             self._class(value, name, scope, ui)
@@ -453,6 +590,11 @@ class Walker:
         argv = [a for a in (args.named_children if args is not None else []) if a.type != "comment"]
         line = n.start_point[0] + 1
         ch = _chain(fn)
+        at, text = _site_pos(n), _text(fn)
+        if ch is None:   # a callee no name chain reads: an inline function, an index, a computed expression
+            inner = _unparen(fn)
+            self.m.refs.append(JSRef(scope, ["<inline>"] if inner is not None and inner.type in FUNC_TYPES else [],
+                                     line, "computed", ui, at, text))
 
         # createFileRoute("/path")({ component: X })  (TanStack Router)
         if fn is not None and fn.type == "call_expression":
@@ -473,6 +615,8 @@ class Walker:
                     last.type in FUNC_TYPES or last.type == "identifier" or last.type == "member_expression"):
                 method = ch[-1].upper() if ch[-1] != "all" else "ANY"
                 reg = {"method": method, "path": p, "line": line, "scope": scope}
+                # the registration call is a call site (inventory only; the edge-line count never had it)
+                self.m.refs.append(JSRef(scope, ch, line, "registration", ui, at, text))
                 if last.type in FUNC_TYPES:
                     self.anon += 1
                     local = self.add_def(last, f"{method.lower()}_{_slug(p)}", scope, "function", None)
@@ -501,11 +645,11 @@ class Walker:
         if http:
             self.m.http.append(http)
         if ch:
-            self.m.refs.append(JSRef(scope, ch, line, "call", ui))
+            self.m.refs.append(JSRef(scope, ch, line, "call", ui, at, text))
         # functions passed as arguments are likely to be called: useEffect(load), map(render)
         for a in argv:
             if a.type == "identifier":
-                self.m.refs.append(JSRef(scope, [_text(a)], line, "callback", ui))
+                self.m.refs.append(JSRef(scope, [_text(a)], line, "callback", ui, _site_pos(a), _text(a)))
         if fn is not None:
             self.walk(fn, scope, cls, ui)
         for a in argv:
@@ -543,7 +687,7 @@ class Walker:
         parts = _jsx_name(n)
         line = n.start_point[0] + 1
         if parts:
-            self.m.refs.append(JSRef(scope, parts, line, "jsx", ui))
+            self.m.refs.append(JSRef(scope, parts, line, "jsx", ui, _site_pos(n), ".".join(parts)))
         attrs = {}
         for a in n.named_children:
             if a.type != "jsx_attribute":
@@ -560,7 +704,7 @@ class Walker:
                 if inner.type in ("identifier", "member_expression"):
                     ch = _chain(inner)
                     if ch:
-                        self.m.refs.append(JSRef(scope, ch, line, "callback", sub_ui))
+                        self.m.refs.append(JSRef(scope, ch, line, "callback", sub_ui, _site_pos(inner), _text(inner)))
                 self.walk(inner, scope, cls, sub_ui)
             elif val is not None:
                 self.walk(val, scope, cls, sub_ui)
@@ -922,6 +1066,47 @@ class JSResolver:
                 r = ("ext", f"{r[1]}.{p}")
         return r
 
+    def name_kind(self, m: JSModule, scope: str, name: str) -> str | None:
+        """What `name` is where it is used: "param" (of the function or of an inline function in it), "local",
+        "module" (a variable at the top of the file), or None (not declared in this file)."""
+        s = scope
+        while True:
+            if name in m.params.get(s, ()) or name in m.anon_params.get(s, ()):
+                return "param"
+            if name in m.declared.get(s, ()):
+                return "local" if s else "module"
+            if not s:
+                return None
+            s = m.defs[s].parent_local if s in m.defs else ""
+
+    def why(self, m: JSModule, scope: str, parts: list[str]) -> str:
+        """The reason code (calls.REASONS) for a call resolve_parts could not follow."""
+        if not parts:
+            return "computed"
+        head = parts[0]
+        if head == "this":
+            d = m.defs.get(scope)
+            if not (d and d.in_class):
+                return "this-outside-class"
+            return "not-in-class" if len(parts) == 2 else "self-attribute"
+        if any(p.endswith("()") for p in parts):
+            return "call-result"
+        b = self.bind(m, scope, head)
+        if b is None:
+            if head in m.imports and self.name_kind(m, scope, head) is None:
+                return "missing-export"
+            k = self.name_kind(m, scope, head)
+            if k == "param":
+                return "callback-parameter" if len(parts) == 1 else "parameter"
+            if k == "local":
+                return "local-unknown"
+            if k == "module":
+                return "repo-variable"
+            return "not-defined"
+        if b[0] == "def" and self.mods[b[1]].defs[b[2]].kind != "class":
+            return "function-member"
+        return "missing-member"
+
     def _local_type(self, m: JSModule, scope: str, var: str):
         s = scope
         while True:
@@ -984,6 +1169,17 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         w = Walker(m, lambda s, _p=p: spec.resolve(s, _p))
         for c in tree.root_node.children:
             w.walk(c, "")
+        covered = {ref.at for ref in m.refs if ref.at}
+        for cn in _call_nodes(tree.root_node):
+            pos = _site_pos(cn)
+            if pos in covered:
+                continue
+            fnode = cn.child_by_field_name("function") or cn.child_by_field_name("constructor") or \
+                cn.child_by_field_name("name")
+            inner = _unparen(fnode)
+            kind = "inline" if inner is not None and inner.type in FUNC_TYPES else \
+                "require" if fnode is not None and _text(fnode) == "require" else "other"
+            m.unread.append((pos, cn.start_point[0] + 1, _text(fnode), kind))
         mods[m.name] = m
 
     r = JSResolver(mods, g)
@@ -1010,38 +1206,86 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             return nid(res[1], res[2])
         return None
 
+    def site(m: JSModule, ref: JSRef, src_id: str, targets=None, reason: str | None = None, group: str = "written"):
+        at = ref.at or (ref.line, 0)
+        calls.record(g.sites, file=m.rel, line=at[0], col=at[1], callee=ref.text or ".".join(ref.parts), caller=src_id,
+                     lang=JS_LANG, group=group, test=m.is_test, targets=targets, reason=reason)
+
     unresolved = 0
     for m in mods.values():
         for ref in m.refs:
             src_id = nid(m.name, ref.scope) if ref.scope and ref.scope in m.defs else nid(m.name)
+            if ref.kind == "computed":   # inventory only, as are "registration" and "wrapper" below
+                if ref.parts == ["<inline>"]:   # (function () {...})(): its body is read as part of this function
+                    site(m, ref, src_id, [(src_id, RESOLVED, "inline-function")])
+                else:
+                    site(m, ref, src_id, reason="computed")
+                continue
+            inv = ref.kind in ("registration", "wrapper")
             if ref.parts[0] in JS_GLOBALS and ref.kind != "jsx":
+                if ref.kind != "callback":
+                    site(m, ref, src_id, [("builtin:" + ".".join(ref.parts), RESOLVED,
+                                           "require" if ref.parts == ["require"] else "global")])
                 continue
             res = r.resolve_parts(m, ref.scope, ref.parts)
             if res is None:
-                if ref.kind == "call" and ref.parts[0] not in ("this",) and not m.is_test:
+                if ref.kind != "callback":
+                    head = ref.parts[0]
+                    if head in JS_BUILTINS and r.bind(m, ref.scope, head) is None and \
+                            r.name_kind(m, ref.scope, head) is None:
+                        site(m, ref, src_id, [("builtin:" + ".".join(ref.parts), RESOLVED, "global")])
+                    else:
+                        site(m, ref, src_id, reason=r.why(m, ref.scope, ref.parts))
+                if not inv and ref.kind == "call" and ref.parts[0] not in ("this",) and not m.is_test:
                     unresolved += 1
                     g.unresolved[".".join(ref.parts)[:120]] = g.unresolved.get(".".join(ref.parts)[:120], 0) + 1
                 continue
             if res[0] == "ext":
-                if ref.kind == "call" and not res[1].startswith(("react.", "react")):
-                    name = _ext_js(res[1])
+                if ref.kind == "callback":
+                    continue
+                name = _ext_js(res[1])
+                if res[1].startswith(FILE_SPEC):   # an import of a file that is not in the repo
+                    site(m, ref, src_id, reason="missing-module")
+                else:
+                    site(m, ref, src_id, [(f"ext:{name}", RESOLVED, "import")])
+                if not inv and ref.kind == "call" and not res[1].startswith(("react.", "react")):
                     g.external(name)
                     g.add_edge(src_id, f"ext:{name}", kind=CALLS, confidence=RESOLVED, line=ref.line,
                                via="import", detail=ref.ui)
                 continue
             tid = target_id(res)
-            if tid is None or tid == src_id or tid not in g.nodes:
+            if tid is None or tid not in g.nodes:
+                if ref.kind != "callback":
+                    site(m, ref, src_id, reason="missing-member")
                 continue
             if ref.kind == "callback":
                 if g.nodes[tid].kind != CALLABLE:
                     continue
                 conf, via = INFERRED, ("ui-event" if ref.ui and ref.ui.startswith("on") else "callback")
-            elif ref.kind == "jsx":
-                conf, via = RESOLVED, "jsx-render"
+                site(m, ref, src_id, [(tid, conf, via)], group="handed")
             else:
-                conf = INFERRED if len(res) > 3 else RESOLVED
-                via = res[3] if len(res) > 3 else ("constructor" if ref.kind == "new" else "name")
+                if ref.kind == "jsx":
+                    conf, via = RESOLVED, "jsx-render"
+                else:
+                    conf = INFERRED if len(res) > 3 else RESOLVED
+                    via = res[3] if len(res) > 3 else ("constructor" if ref.kind == "new" else "name")
+                site(m, ref, src_id, [(tid, conf, via)])
+            if inv or tid == src_id:
+                continue
             g.add_edge(src_id, tid, kind=CALLS, confidence=conf, line=ref.line, via=via, detail=ref.ui)
+        # calls the walker did not read (a gap in the reader): counted, so the inventory's total stays complete
+        if m.unread:
+            fns = sorted((d for d in m.defs.values() if d.kind != "class"), key=lambda d: d.end - d.start)
+        for at, line, text, kind in m.unread:
+            d = next((d for d in fns if d.start <= line <= d.end), None)
+            src_id = nid(m.name, d.local) if d else nid(m.name)
+            ref = JSRef(d.local if d else "", [], line, "unread", None, at, text)
+            if kind == "inline":
+                site(m, ref, src_id, [(src_id, RESOLVED, "inline-function")])
+            elif kind == "require":
+                site(m, ref, src_id, [("builtin:require", RESOLVED, "require")])
+            else:
+                site(m, ref, src_id, reason="not-read")
 
     # entries
     for m in mods.values():

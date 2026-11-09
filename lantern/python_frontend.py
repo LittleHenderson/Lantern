@@ -18,6 +18,7 @@ from pathlib import Path
 import tree_sitter_python as tsp
 from tree_sitter import Language, Node as TSNode, Parser
 
+from . import calls
 from .graph import (CALLABLE, CALLS, CLASS, CONTAINS, IMPLEMENTS, INFERRED, MAY_CALL, MODULE,
                     POSSIBLE, RESOLVED, Graph, Node)
 
@@ -112,6 +113,7 @@ class DefInfo:
     params: str
     docstring: str | None
     fingerprint: str
+    param_names: list[str] = field(default_factory=list)   # the parameters' own names, in order
 
 
 @dataclass
@@ -120,7 +122,8 @@ class CallSite:
     parts: list[str]           # callee chain, e.g. ["self", "repo", "get"]; "()" suffix = call result
     text: str
     line: int
-    kind: str = "call"         # call | depends | depends-alias | decorator-result | attr | with | with-obj
+    kind: str = "call"         # call | computed | depends | depends-alias | decorator-result | attr | with | with-obj
+    at: tuple[int, int] | None = None   # (line, column from 1) of the call's "(" (or of the callee): its identity
 
 
 @dataclass
@@ -153,6 +156,11 @@ class ModuleInfo:
     aliases: dict[str, dict] = field(default_factory=dict)
     # router variable -> URL prefix, e.g. router = APIRouter(prefix="/items")
     route_prefix: dict[str, str] = field(default_factory=dict)
+    # parent.include_router(child, prefix="/p") / register_blueprint(bp, url_prefix="/p"):
+    # {"recv": parent var, "target": child chain, "prefix": the written string, or None when it is not one}
+    includes: list[dict] = field(default_factory=list)
+    # class local qualname -> every attribute the class sets on self (`self.x = ...`), whatever the value
+    self_attrs: dict[str, set[str]] = field(default_factory=dict)
     # function local qualname -> what it returns: ("name", n) | ("ctor", chain) | ("ann", chain)
     returns: dict[str, list[tuple[str, object]]] = field(default_factory=dict)
     has_main_block: bool = False
@@ -267,6 +275,44 @@ def _literal_type(n: TSNode) -> str | None:
     return None
 
 
+def _at(n: TSNode) -> tuple[int, int]:
+    """(line, column from 1) where node `n` starts: a call site's identity is where its "(" is."""
+    return n.start_point[0] + 1, n.start_point[1] + 1
+
+
+def _call_at(call: TSNode) -> tuple[int, int]:
+    args = call.child_by_field_name("arguments")
+    return _at(args if args is not None else call)
+
+
+LITERAL_NODES = {"string": "str", "concatenated_string": "str", "list": "list", "dictionary": "dict", "set": "set",
+                 "tuple": "tuple", "integer": "int", "float": "float", "list_comprehension": "list",
+                 "dictionary_comprehension": "dict", "set_comprehension": "set"}
+
+
+def _computed_parts(fn: TSNode | None) -> list[str]:
+    """A callee `_chain` cannot read: a method on a literal (`", ".join`) -> ["<literal:str>", "join"], else []."""
+    if fn is not None and fn.type == "attribute":
+        obj = fn.child_by_field_name("object")
+        if obj is not None and obj.type in LITERAL_NODES:
+            return [f"<literal:{LITERAL_NODES[obj.type]}>", _text(fn.child_by_field_name("attribute"))]
+    return []
+
+
+def _param_names(params: TSNode | None) -> list[str]:
+    out = []
+    for c in (params.named_children if params is not None else []):
+        if c.type == "identifier":
+            out.append(_text(c))
+            continue
+        nm = c.child_by_field_name("name")
+        if nm is None:
+            nm = next((x for x in c.named_children if x.type == "identifier"), None)
+        if nm is not None and nm.type == "identifier":
+            out.append(_text(nm))
+    return out
+
+
 def _names_in(n: TSNode) -> list[str]:
     if n.type == "identifier":
         return [_text(n)]
@@ -292,6 +338,13 @@ class _Visitor:
 
     def _assignment(self, n: TSNode, scope: str, cls: str | None):
         left, right = n.child_by_field_name("left"), n.child_by_field_name("right")
+        for tgt in ([left] if left is not None and left.type == "attribute" else
+                    [c for c in left.named_children if c.type == "attribute"] if left is not None else []):
+            obj = tgt.child_by_field_name("object")
+            if obj is not None and _text(obj) == "self":
+                owner = self._enclosing_class(scope)
+                if owner:
+                    self.m.self_attrs.setdefault(owner, set()).add(_text(tgt.child_by_field_name("attribute")))
         if left is not None and left.type == "identifier":
             self.bind_literal(scope, _text(left), _literal_type(right) if right is not None else None)
             ctor = _ctor_name(right) if right is not None else None
@@ -372,11 +425,12 @@ def _visit_body(v: _Visitor, root: TSNode):
                         walk(expr, scope, cls)   # the factory call, e.g. click.command()
                         fch = _chain(expr.child_by_field_name("function"))
                         if fch:   # ...then the function the factory returned is applied
-                            v.m.calls.append(CallSite(scope, fch, _text(expr)[:120], line, "decorator-result"))
+                            v.m.calls.append(CallSite(scope, fch, _text(expr)[:120], line, "decorator-result",
+                                                      _at(expr)))
                     else:
                         ch = _chain(expr)
                         if ch:    # @decorator: applying it calls it
-                            v.m.calls.append(CallSite(scope, ch, _text(expr)[:120], line))
+                            v.m.calls.append(CallSite(scope, ch, _text(expr)[:120], line, at=_at(expr)))
             d = n.child_by_field_name("definition")
             if d is not None:
                 walk(d, scope, cls, decs)
@@ -426,7 +480,12 @@ def _visit_body(v: _Visitor, root: TSNode):
             fn = n.child_by_field_name("function")
             ch = _chain(fn) if fn is not None else None
             if ch:
-                v.m.calls.append(CallSite(scope, ch, _text(fn)[:120], n.start_point[0] + 1))
+                v.m.calls.append(CallSite(scope, ch, _text(fn)[:120], n.start_point[0] + 1, at=_call_at(n)))
+                if len(ch) == 2 and ch[-1] in ("include_router", "register_blueprint"):
+                    _include(v.m, n, ch[0])
+            else:   # a callee the chain cannot name: still a call site, counted by the inventory only
+                v.m.calls.append(CallSite(scope, _computed_parts(fn), _text(fn)[:120], n.start_point[0] + 1,
+                                          "computed", _call_at(n)))
         elif t == "attribute":
             par = n.parent
             is_callee = par is not None and par.type == "call" and par.child_by_field_name("function") == n
@@ -435,7 +494,7 @@ def _visit_body(v: _Visitor, root: TSNode):
             if not is_callee and not is_store:
                 ch = _chain(n)
                 if ch and len(ch) >= 2:   # possible property read; resolved only if it is one
-                    v.m.calls.append(CallSite(scope, ch, _text(n)[:120], n.start_point[0] + 1, "attr"))
+                    v.m.calls.append(CallSite(scope, ch, _text(n)[:120], n.start_point[0] + 1, "attr", _at(n)))
         elif t == "return_statement" and scope and scope != "<main>" and n.named_child_count:
             e = n.named_children[0]
             if e.type == "identifier":
@@ -458,13 +517,13 @@ def _visit_body(v: _Visitor, root: TSNode):
                 if val.type == "call":
                     ch = _chain(val.child_by_field_name("function"))
                     if ch:
-                        v.m.calls.append(CallSite(scope, ch, _text(val)[:120], line, "with"))
+                        v.m.calls.append(CallSite(scope, ch, _text(val)[:120], line, "with", _at(val)))
                         if alias:
                             v.m.local_types.setdefault(scope, {})[alias] = ch
                 else:
                     ch = _chain(val)
                     if ch:
-                        v.m.calls.append(CallSite(scope, ch, _text(val)[:120], line, "with-obj"))
+                        v.m.calls.append(CallSite(scope, ch, _text(val)[:120], line, "with-obj", _at(val)))
         if t == "assignment":
             v._assignment(n, scope, cls)
         elif t in ("for_statement", "for_in_clause"):
@@ -554,6 +613,22 @@ def _router_prefix(call: TSNode) -> str | None:
     return ""
 
 
+def _include(m: ModuleInfo, call: TSNode, recv: str) -> None:
+    """`parent.include_router(child, prefix="/p")` (FastAPI) or `app.register_blueprint(bp, url_prefix="/p")` (Flask):
+    the child's routes live under the parent's prefix plus "/p". A prefix that is not a written string is None."""
+    args = call.child_by_field_name("arguments")
+    pos = [a for a in (args.named_children if args is not None else []) if a.type not in ("keyword_argument", "comment")]
+    target = _chain(pos[0]) if pos else None
+    if not target:
+        return
+    prefix: str | None = ""
+    for a in (args.named_children if args is not None else []):
+        if a.type == "keyword_argument" and _text(a.child_by_field_name("name")) in ("prefix", "url_prefix"):
+            mm = re.match(r"^[rbu]?['\"]([^'\"{}]*)['\"]$", _text(a.child_by_field_name("value")))
+            prefix = mm.group(1) if mm else None
+    m.includes.append({"recv": recv, "target": target, "prefix": prefix})
+
+
 def _param_types(m: ModuleInfo, scope: str, params: TSNode) -> None:
     """Record `name: SomeClass` parameter hints as the variable's type for this scope, and
     FastAPI-style `Depends(fn)` defaults as calls the framework makes on the function's behalf."""
@@ -563,7 +638,7 @@ def _param_types(m: ModuleInfo, scope: str, params: TSNode) -> None:
         line = c.start_point[0] + 1
         dep = _depends_target(c.child_by_field_name("value"))
         if dep:
-            m.calls.append(CallSite(scope, dep, ".".join(dep), line, "depends"))
+            m.calls.append(CallSite(scope, dep, ".".join(dep), line, "depends", _at(c)))
         name_node = c.child_by_field_name("name")
         if name_node is None:
             name_node = next((x for x in c.named_children if x.type == "identifier"), None)
@@ -574,12 +649,12 @@ def _param_types(m: ModuleInfo, scope: str, params: TSNode) -> None:
         al = _annotated(expr)
         if al:
             if al["depends"]:
-                m.calls.append(CallSite(scope, al["depends"], ".".join(al["depends"]), line, "depends"))
+                m.calls.append(CallSite(scope, al["depends"], ".".join(al["depends"]), line, "depends", _at(c)))
             ch = al["type"]
         else:
             ch = _chain(expr)
             if ch:   # may be an alias defined elsewhere that carries a Depends()
-                m.calls.append(CallSite(scope, ch, ".".join(ch), line, "depends-alias"))
+                m.calls.append(CallSite(scope, ch, ".".join(ch), line, "depends-alias", _at(c)))
         if ch and _text(name_node) not in ("self", "cls"):
             m.local_types.setdefault(scope, {}).setdefault(_text(name_node), ch)
 
@@ -603,6 +678,7 @@ def _def_only(self: _Visitor, n: TSNode, scope: str, method_of: str | None, deco
         decorators=decorators, bases=bases,
         params=_text(n.child_by_field_name("parameters"))[:200],
         docstring=_docstring(body), fingerprint=_fingerprint(n),
+        param_names=[] if is_class else _param_names(n.child_by_field_name("parameters")),
     )
 
 
@@ -1092,6 +1168,67 @@ class Resolver:
         return any(x.split("(")[0].split(".")[-1] in ("property", "cached_property", "getter")
                    for x in d.decorators)
 
+    # ---- why a call stayed unresolved (calls.REASONS) ----
+    def _name_kind(self, m: ModuleInfo, scope: str, name: str) -> str | None:
+        """"param", "local" (bound in a function around the call), "module" (a module-level variable) or None."""
+        if scope == "<main>":
+            if name in m.literal_types.get("<main>", {}) or name in m.local_types.get("<main>", {}):
+                return "local"
+            scope = ""
+        s = scope
+        while s:
+            d = m.defs.get(s)
+            if d is None:
+                break
+            if name in d.param_names:
+                return "param"
+            if name in m.literal_types.get(s, {}) or name in m.local_types.get(s, {}):
+                return "local"
+            s = d.parent_local
+        if name in m.literal_types.get("", {}) or name in m.local_types.get("", {}) or name in m.aliases:
+            return "module"
+        return None
+
+    def why(self, m: ModuleInfo, cs: CallSite) -> str:
+        """The reason code (calls.REASONS) for a call resolve_call() found nothing for."""
+        parts = cs.parts
+        if cs.kind == "computed" or not parts:
+            return "computed"
+        head = parts[0]
+        enclosing = m.defs.get(cs.scope)
+        method_cls = f"{m.name}.{enclosing.in_class}" if enclosing and enclosing.in_class else None
+        if head == "super()":
+            return "not-in-class"
+        if head in ("self", "cls"):
+            if not method_cls:
+                return "this-outside-class"
+            return "not-in-class" if len(parts) == 2 else "self-attribute"
+        if head.endswith("()"):
+            return "call-result" if len(parts) > 1 else "computed"
+        if any(p.endswith("()") for p in parts[1:-1]):
+            return "call-result"
+        r = self.bind(m, cs.scope, head)
+        if r is None:
+            kind = self._name_kind(m, cs.scope, head)
+            if kind in ("param", "local") and len(parts) > 1:
+                ch = self._local_type(m, cs.scope, head)
+                if ch and self._type_of_ctor(m, cs.scope, ch):
+                    return "missing-member"   # the type is known; it has no such method in the repo
+            if kind == "param":
+                return "callback-parameter" if len(parts) == 1 else "parameter"
+            if kind == "local":
+                return "local-unknown"
+            if kind == "module":
+                return "repo-variable"
+            return "not-defined"
+        if r[0] == "var":
+            return "repo-variable"
+        if r[0] == "def" and not self.is_class(r[1]) and len(parts) > 1:
+            return "function-member"
+        if r[0] in ("module", "def"):
+            return "missing-member"
+        return "not-defined"
+
     def resolve_special(self, m: ModuleInfo, cs: CallSite) -> list[tuple[str, str, str]]:
         self._current = f"{m.name}.{cs.scope}" if cs.scope and cs.scope != "<main>" else None
         if cs.kind == "depends-alias":
@@ -1256,8 +1393,9 @@ def build_graph(repo: str | Path) -> Graph:
             for b in r.bases(q):
                 g.add_edge(nid(q), nid(b), kind=IMPLEMENTS, confidence=RESOLVED)
 
-    # calls
+    # calls, and the call-site inventory (calls.py): one record per call written, handed over, or made implicitly
     for m in mods.values():
+        in_tests = bool(TEST_FILE_RE.search(m.rel))
         for cs in m.calls:
             if cs.scope == "<main>":
                 src = nid(f"{m.name}.<main>")
@@ -1267,12 +1405,24 @@ def build_graph(repo: str | Path) -> Graph:
                     src = nid(m.name)
             else:
                 src = nid(m.name)
+            line, col = cs.at or (cs.line, 0)
+            if cs.kind == "computed":   # inventory only: graph.call_sites() has never counted these
+                lit = cs.parts[0][len("<literal:"):-1] if cs.parts and cs.parts[0].startswith("<literal:") else None
+                calls.record(g.sites, file=m.rel, line=line, col=col, callee=cs.text, caller=src, lang="python",
+                             group="written", test=in_tests, reason="computed",
+                             targets=[(f"ext:builtins.{lit}.{cs.parts[1]}", RESOLVED, "literal")] if lit else None)
+                continue
             if cs.kind in ("call", "depends"):
                 targets = r.resolve_call(m, cs)
                 if cs.kind == "depends":
                     targets = [(t, c, "fastapi-depends") for t, c, _ in targets]
             else:
                 targets = r.resolve_special(m, cs)
+            group = "written" if cs.kind == "call" else "handed" if cs.kind in ("depends", "depends-alias") else "implicit"
+            found = [t for t in targets if t[0].startswith("ext:") or t[0] in g.nodes]
+            if group == "written" or found or cs.kind == "depends":
+                calls.record(g.sites, file=m.rel, line=line, col=col, callee=cs.text, caller=src, lang="python",
+                             group=group, test=in_tests, targets=found, reason=None if found else r.why(m, cs))
             if not targets:
                 if cs.kind in ("call", "depends"):
                     g.unresolved[cs.text] = g.unresolved.get(cs.text, 0) + 1
