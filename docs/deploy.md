@@ -276,7 +276,9 @@ missing table at start-up and never delete columns, so an old version reads a ne
 version. It needs one repository secret, **`FLY_API_TOKEN`**: on any computer with `fly` signed in, run
 `fly tokens create deploy -a lantern-cloud` (a token that can deploy that one app and nothing else; make a second one
 for the gateway if you want both, or an org token), copy the output, and paste it under the repository's Settings →
-Secrets and variables → Actions → New repository secret. Without it the workflow stops at its first step and says so.
+Secrets and variables → Actions → New repository secret. The gateway is in another Fly organisation, so it reads its own secret,
+**`FLY_GATEWAY_TOKEN`** (`fly tokens create deploy -a lantern-gateway`, or the app's Tokens page on fly.io); the cloud
+keeps using `FLY_API_TOKEN`. Without it the workflow stops at its first step and says so.
 With it, the laptop is no longer the only place a fix can ship from, and the admin secret never leaves Fly's secret
 store (the workflow does not need it).
 
