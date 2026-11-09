@@ -5,6 +5,13 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Python built-in calls (`len`, `print`, a list's `append`) are now counted in the call-site total as their own group
+  instead of being dropped without a count; they are still not drawn on the map. A method call on a local that is
+  always a built-in literal in its function (`out = []` … `out.append(x)`; every binding of the name must be a literal
+  of that one type, the name must not be a parameter, and the type must have the method) is counted as a built-in
+  call instead of untraced. On one large app: untraced 33,318 → 28,519 call sites, and 23,025 built-in calls that were
+  never counted now are; one wrong link (a list's `append` taken for a library call's result) is gone; no link to the
+  app's own code changed on 15 other apps.
 - Every finding outside test code now carries its case ("The case for this finding" on the finding card and panel, and
   `case` in `security.json`): where, at which revision; the claim in the tool's words; the evidence and where each fact
   came from; what has to be true for it to hurt, each marked yes / no / cannot check; the impact; why it has its rank;

@@ -109,7 +109,7 @@ def _call_site_words(c: dict) -> str:
     return (f" Of {c['total']} call sites read: {pct(c.get('resolved_internal'))} linked to repo code for certain, "
             f"{pct(c.get('inferred_internal'))} likely, {pct(c.get('several_possible_targets'))} to one of several "
             f"targets, {pct(c.get('name_only_guess'))} guessed by method name, {pct(c.get('known_external'))} known "
-            f"library calls, {pct(c.get('unresolved'))} not traced"
+            f"library calls, {pct(c.get('builtin'))} Python built-in calls, {pct(c.get('unresolved'))} not traced"
             + (f" ({c['unresolved_in_tests']} of those in test files)" if c.get("unresolved_in_tests") else "") + ".")
 
 

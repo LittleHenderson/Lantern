@@ -57,6 +57,7 @@ class Graph:
         self._edges: dict[tuple[str, str, str], Edge] = {}
         self.unresolved: dict[str, int] = {}   # callee text -> count, for honesty metrics
         self.unresolved_tests: dict[str, int] = {}   # the part of `unresolved` that sits in test files (Python)
+        self.builtin_calls = 0   # Python built-in calls (len, print, x.append on a list): counted, not drawn
         self.meta: dict = {}
 
     # ---- nodes ----
@@ -138,6 +139,7 @@ class Graph:
             # Only the 200 most common texts are kept, but the totals are the true counts.
             "unresolved": dict(sorted(self.unresolved.items(), key=lambda kv: -kv[1])[:200]),
             "unresolved_totals": {"call_sites": sum(self.unresolved.values()), "distinct": len(self.unresolved),
+                                  "builtin": self.builtin_calls,
                                   "in_tests": sum(self.unresolved_tests.values()),
                                   "kinds": unresolved_kinds({k: v - self.unresolved_tests.get(k, 0)
                                                              for k, v in self.unresolved.items()})},
@@ -164,7 +166,7 @@ class Graph:
         """Every call site Lantern read, sorted by what it knows about the target. The same denominator for all:
         a call site is one line in a caller that calls something (an edge with three call lines counts three)."""
         out = {"resolved_internal": 0, "inferred_internal": 0, "several_possible_targets": 0, "name_only_guess": 0,
-               "known_external": 0}
+               "known_external": 0, "builtin": self.builtin_calls}
         for e in self.call_edges():
             n = max(1, len(e.lines))
             if e.dst.startswith("ext:"):
@@ -179,6 +181,7 @@ class Graph:
                 out["resolved_internal"] += n
         tot = getattr(self, "_unresolved_totals", None)
         if tot is not None:   # a loaded graph keeps only the 200 most common texts: use the totals it saved, or none
+            out["builtin"] = tot.get("builtin", 0)
             out["unresolved"] = tot.get("call_sites", sum(self.unresolved.values()))
             out["unresolved_in_tests"] = tot.get("in_tests")
             out["unresolved_kinds"] = tot.get("kinds")
