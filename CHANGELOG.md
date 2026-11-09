@@ -10,6 +10,16 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   copy of Lantern's screens, a moving cursor, gold-glowing instructions), numbered steps and a Good to know box, plus
   keyboard shortcuts and a note on what is simulated. Demos play only while on screen, start paused with less motion,
   and are labelled "Animated demo · not a screen recording".
+- A setting the browser can see (`VITE_…SECRET`, `NEXT_PUBLIC_…`) now says four things apart on its finding: that it is
+  visible (and the header it travels in), whether server code checks it (where, and on which routes), that whether a
+  stranger can get in is not determined from code alone, and what else guards those routes (other login checks, the
+  settings the checking code branches on). It is never called a confirmed bypass, and its rank does not change.
+- Two login-check mistakes fixed: a route decorator's `response_model=TokenResponse` and a request body typed
+  `TokenRequest` (or `OAuth2PasswordRequestForm`) no longer count as checking who is calling.
+- Every call site Lantern read is now sorted on one denominator (About page and Evidence report): linked for certain,
+  likely, one of several targets, guessed by method name, known library call, not traced. Untraced calls in test files
+  are counted and said apart, and untraced app calls are grouped by shape. The "guessed by method name" figure the map
+  showed before counts links between functions (2,100 on one app), not call sites (2,739), and is now labelled as such.
 - Fewer false alarms, nothing hidden. A weak hash (MD5/SHA-1) is ranked by what it is for, read from the names around
   it (the value hashed, where the result goes, the function and class, and the callers of a small wrapper): an id,
   a seed, a cache key or S3's `ContentMD5` checksum is `low`; a password, token or signature keeps its rank; when

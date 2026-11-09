@@ -219,6 +219,10 @@ page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`), `rank
 for weak-hash rules, `{"sql": {"fixed_only", "spliced": [{"expr", "fixed", "why"}], "driver_params", "reads"}}` for Python SQL), `rank_note` and
 `rank_before_context` (only when `context` lowered the rank: why, and the rank it would have had; the viewer shows both; a
 non-security hash or SQL splicing only fixed text → `low`, a hash of unknown purpose → at most `medium`),
+`trust` (LW-PUBLIC-SECRET only, `context.public_secret_trust`: `browser` `{exposed, where, sent_as}`, `server_trusts`
+(`server-checks-it`|`server-reads-it`|`not-seen-on-server`|`no-server-code`), `server_checks`, `server_reads`, `routes`,
+`other_controls` `[{route, login_check, why}]`, `conditions` (settings the checking code branches on), `stranger_access`
+(always `not determined`), `unknown` [plain sentences]; never changes the rank),
 `status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted), `hot_lane` (the lane the problem
 lives on: the pinned node's `lane`, or from the file for a finding with no node, e.g. a secret in `settings.py` →
 `server`), `lanes` (every lane the finding's path crosses, in strip order, de-duplicated: the `ui_path` (or `reachable`

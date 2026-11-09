@@ -429,3 +429,134 @@ def handles_passwords(code_texts) -> list[tuple[str, int, str]]:
         if len(out) >= 40:
             break
     return out
+
+
+# ---------------------------------------------------------------------------- a browser-visible value: does the server trust it?
+
+SERVER_EXTS = (".py", ".go", ".rs", ".java", ".kt", ".cs", ".php", ".rb")
+_HEADER_KEY = re.compile(r"""['"`]((?:X-[A-Za-z0-9-]+)|Authorization)['"`]\s*:""")
+_CONDITION = re.compile(r"^\s*(?:if|elif|else\s+if|unless)\b[^\n]*?\b((?:settings|config|conf|cfg|app\.config|"
+                        r"process\.env|os\.environ)\s*(?:\.|\[\s*['\"])\s*([A-Za-z_]\w*))")
+
+
+def _server_files(g) -> list[str]:
+    from .js_frontend import TEST_RE as JS_TEST_RE
+    from .python_frontend import TEST_FILE_RE
+    files = {n.file for n in g.nodes.values() if n.file and (n.lane in ("server", "data") or n.file.endswith(SERVER_EXTS))}
+    return sorted(f for f in files if not (TEST_FILE_RE.search(f) or JS_TEST_RE.search(f)))
+
+
+def _routes_above(g, node_id: str, depth: int = 6) -> list[str]:
+    """Route entry points from which `node_id` is called (the node itself included), nearest first."""
+    out, seen, frontier = [], {node_id}, [node_id]
+    for _ in range(depth + 1):
+        nxt = []
+        for nid in frontier:
+            n = g.nodes.get(nid)
+            if n is not None and (n.entry or {}).get("kind") == "route":
+                out.append(nid)
+            for e in g.callers(nid):
+                if e.src not in seen:
+                    seen.add(e.src)
+                    nxt.append(e.src)
+        frontier = nxt
+    return out
+
+
+def public_secret_trust(g, f: dict, lines_for) -> dict | None:
+    """For a setting the build ships to every browser (LW-PUBLIC-SECRET): the four facts kept apart.
+    1. browser: where the frontend reads it and the header it is sent in (if any);
+    2. server_trusts: server code that reads the same setting, or reads that header, with the routes that reach it;
+    3. stranger_access: never decided here (Lantern does not run the app or know production's settings);
+    4. other_controls: other login checks on those routes, and the settings the checking code branches on.
+    No finding is called a confirmed bypass from this: a value being visible is one fact, trust is another."""
+    if f.get("rule") != "LW-PUBLIC-SECRET" or not f.get("snippet"):
+        return None
+    from .websec import PUBLIC_PREFIX, call_adjacency, login_check
+    name = f["snippet"]
+    base = re.sub("^" + PUBLIC_PREFIX, "", name)
+    if not base or base == name:
+        return None
+    key = base.lower()
+    # 1. the browser side: the header the value travels in, read from the function that reads it
+    text = lines_for(f["file"])
+    sent_as = None
+    lo, hi = max(1, (f.get("line") or 1) - 15), (f.get("line") or 1) + 15
+    nid = _node_id_at(g, f["file"], f.get("line") or 0)
+    n = g.nodes.get(nid or "")
+    if n is not None and n.start_line:
+        lo, hi = n.start_line, n.end_line or n.start_line
+    for ln in range(lo, min(hi, len(text)) + 1):
+        m = _HEADER_KEY.search(text[ln - 1])
+        if m:
+            sent_as = m.group(1)
+            break
+    # 2. the server side
+    env_rx = re.compile(r"\b[A-Z0-9_]*" + re.escape(base) + r"\b")
+    attr_rx = re.compile(r"\b" + re.escape(key) + r"\b")
+    hdr_rx = re.compile(r"""['"`]""" + re.escape(sent_as) + r"""['"`]""", re.I) if sent_as else None
+    reads, checks = [], []
+    servers = [s for s in _server_files(g) if s != f["file"]]
+    for file in servers:
+        raw = "\n".join(lines_for(file))
+        if not (attr_rx.search(raw) or env_rx.search(raw) or (hdr_rx is not None and hdr_rx.search(raw))) or _bundle(raw):
+            continue
+        # comments and docstrings blanked; string literals kept apart so a header name in a string still counts
+        js = not file.endswith((".py", ".rb"))
+        doc_free = re.sub(r"(\"\"\"|\'\'\')[\s\S]*?\1", lambda m: re.sub(r"[^\n]", " ", m.group(0)), raw) if not js else raw
+        doc_free = re.sub(r"#[^\n]*" if not js else r"//[^\n]*", "", doc_free)
+        for i, code in enumerate(doc_free.split("\n"), 1):
+            if hdr_rx is not None and hdr_rx.search(code):
+                checks.append((file, i))
+            elif env_rx.search(code) or attr_rx.search(code):
+                reads.append((file, i))
+    routes, controls, conditions = [], [], []
+    adj = None
+    for file, ln in checks[:5]:
+        fn = _node_id_at(g, file, ln)
+        if not fn:
+            continue
+        for rid in _routes_above(g, fn):
+            r = g.nodes[rid]
+            detail = (r.entry or {}).get("detail") or r.name
+            if detail not in routes:
+                routes.append(detail)
+                adj = adj if adj is not None else call_adjacency(g)
+                lc = login_check(g, r, adj, "\n".join(lines_for(r.file)) if r.file else None)
+                controls.append({"route": detail, "login_check": lc[0] if lc else None, "why": lc[1] if lc else None})
+        for nid2 in [fn] + _routes_above(g, fn):
+            nn = g.nodes.get(nid2)
+            if nn is None or not nn.file or not nn.start_line:
+                continue
+            body = lines_for(nn.file)[nn.start_line - 1:(nn.end_line or nn.start_line)]
+            for line in body:
+                m = _CONDITION.search(line)
+                if m and m.group(2) not in conditions:
+                    conditions.append(m.group(2))
+    if checks:
+        verdict = "server-checks-it"
+    elif reads:
+        verdict = "server-reads-it"
+    elif servers:
+        verdict = "not-seen-on-server"
+    else:
+        verdict = "no-server-code"
+    unknown = ["whether a request carrying this value can reach anything protected: Lantern does not run the app"]
+    if checks or reads:
+        unknown.insert(0, f"whether production sets {', '.join(sorted({m.group(0) for fl, ln in reads[:20] for m in env_rx.finditer(lines_for(fl)[ln - 1])}) or [base])}")
+    if conditions:
+        unknown.append("which way production sets " + ", ".join(conditions[:6]) + " (the checking code depends on them)")
+    if verdict == "no-server-code":
+        unknown.append("the server is not in this repository, so whether it trusts the value cannot be read here")
+    return {
+        "browser": {"exposed": True, "where": f"{f['file']}:{f.get('line')}", "sent_as": sent_as},
+        "server_trusts": verdict,
+        "server_checks": [f"{a}:{b}" for a, b in checks[:5]],
+        "server_reads": [f"{a}:{b}" for a, b in reads[:5]],
+        "routes": routes[:6],
+        "other_controls": controls[:6],
+        "conditions": conditions[:6],
+        "stranger_access": "not determined",
+        "unknown": unknown,
+        "reads": "names and strings in this repository",
+    }
