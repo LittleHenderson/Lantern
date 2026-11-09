@@ -14,7 +14,7 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from . import lanes
+from . import context, lanes
 from .graph import Graph
 from .python_frontend import SKIP_DIRS, inside_repo
 
@@ -428,6 +428,33 @@ def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None =
 
 
 def rank(f: dict) -> str:
+    """The rank from the tool's severity, reachability and input, then capped by what the code around the line shows
+    (context.py: a weak hash used as an identifier, SQL that splices only fixed text). A cap is written on the finding
+    as `rank_note`, with the rank it would have had as `rank_before_context`, so nothing changes silently."""
+    r = _rank(f)
+    cap, why = None, None
+    ctx = f.get("context") or {}
+    h, sql = ctx.get("hash"), ctx.get("sql")
+    if h and h["purpose"] == "non-security":
+        cap, why = "low", (f"The hash looks like an identifier, seed or checksum ({h['why']}), not protection for a "
+                           "password, token or signature. MD5/SHA-1 are fine for that. Lantern read names, not meaning.")
+    elif h and h["purpose"] == "unknown":
+        cap, why = "medium", ("Lantern could not tell what this hash is for (" + h["why"] + "). It is not ranked "
+                              "critical or high without evidence that it protects a password, token or signature.")
+    elif sql and sql["fixed_only"]:
+        cap, why = "low", ("Only fixed text is put into the SQL string (" + "; ".join(
+            f"{s['expr']}: {s['why']}" for s in sql["spliced"]) + ")" + (
+            ", and the values are passed to the database driver separately." if sql["driver_params"] else "."))
+    if cap and RANK_ORDER[r] < RANK_ORDER[cap]:
+        f["rank_before_context"] = r
+        f["rank_note"] = why
+        return cap
+    f.pop("rank_before_context", None)
+    f.pop("rank_note", None)
+    return r
+
+
+def _rank(f: dict) -> str:
     if f.get("fixed_rank"):
         return f["fixed_rank"]
     sev = f["tool_severity"]
@@ -542,6 +569,15 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     from .js_frontend import TEST_RE as JS_TEST_RE
     from .python_frontend import TEST_FILE_RE
     lines_cache: dict[str, list[str]] = {}
+    py_cache: dict = {}
+
+    def lines_for(file: str) -> list[str]:
+        if file not in lines_cache:
+            try:
+                lines_cache[file] = (repo / file).read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                lines_cache[file] = []
+        return lines_cache[file]
     for f in findings:
         f["in_tests"] = bool(f["file"] and (TEST_FILE_RE.search(f["file"]) or JS_TEST_RE.search(f["file"])))
         pin = f.pop("pin", None)          # a manifest finding names the class it is about (android.py)
@@ -560,6 +596,20 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
                                           f["hot_lane"], data_hops)
         f["input"] = _input_on_line(g, f, lines_cache) if f["category"] == "code" and r and \
             r["kind"] in UNTRUSTED_ENTRY_KINDS else None
+        if f["category"] == "code":
+            # what the flagged code is for (context.py); it can lower the rank, never remove the finding
+            ctx = {}
+            hp = context.hash_purpose(g, f, lines_for, py_cache)
+            if hp:
+                ctx["hash"] = hp
+            sq = context.sql_splice(g, f, py_cache)
+            if sq:
+                ctx["sql"] = sq
+                if sq["fixed_only"] and f["input"]:
+                    # the input check reads the whole statement; for SQL only what is spliced into the text counts
+                    f["input"] = False
+            if ctx:
+                f["context"] = ctx
         f["rank"] = "low" if f["in_tests"] and f["category"] == "code" else rank(f)
         acc = accepted.get(f["id"])
         f["status"] = "accepted" if acc else "open"
