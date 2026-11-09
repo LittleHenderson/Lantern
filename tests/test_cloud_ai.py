@@ -306,21 +306,22 @@ def test_ask_says_why_the_model_did_not_answer(tmp_path, upstream, words):
         th.join(timeout=5)
 
 
-def test_ask_after_signing_in_somewhere_else_asks_to_sign_in_again(tmp_path):
+def test_ask_with_a_sign_in_the_gateway_dropped_asks_to_sign_in_again(tmp_path):
     gw, url, sent, server, th = live_gateway(tmp_path)
     try:
         s = Settings(gateway_url=url, db_path=str(tmp_path / "c.db"), results_dir=str(tmp_path / "r"),
                      work_dir=str(tmp_path / "w"), audits=False)
         cloud = TestClient(create_app(s, start_worker=False))
-        old = gw.state.store.sign_in("github:1", "github:octo")
-        cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(old))
-        assert cloud.get("/v1/me", headers=bearer(old)).status_code == 200    # "signed in" is now remembered
-        new = gw.state.store.sign_in("github:1", "github:octo")   # the laptop app or command line signs in again
-        r = cloud.post("/v1/ask", json={"question": "hi"}, headers=bearer(old))
+        store = gw.state.store
+        tok = store.sign_in("github:1", "github:octo")
+        cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(tok))
+        assert cloud.get("/v1/me", headers=bearer(tok)).status_code == 200    # "signed in" is now remembered
+        store.db.execute("update users set disabled = 1 where token_hash = ?", (store.user(tok)["hash"],))
+        store.db.commit()                                     # the gateway stops accepting it
+        r = cloud.post("/v1/ask", json={"question": "hi"}, headers=bearer(tok))
         assert r.status_code == 401 and r.json()["error"]["type"] == "signed_out"
         assert "Sign in again" in r.json()["error"]["message"]
-        assert cloud.get("/v1/me", headers=bearer(old)).status_code == 401    # the remembered answer is dropped
-        assert cloud.post("/v1/ask", json={"question": "hi"}, headers=bearer(new)).status_code == 200
+        assert cloud.get("/v1/me", headers=bearer(tok)).status_code == 401    # the remembered answer is dropped
     finally:
         server.should_exit = True
         th.join(timeout=5)

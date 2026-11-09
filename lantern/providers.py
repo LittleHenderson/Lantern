@@ -260,9 +260,8 @@ def why_failed(e: ProviderError) -> tuple[str, str]:
         return "busy", ("Lantern could not reach its model server (lantern-gateway). It may be restarting; "
                         "try again in a minute.")
     if status == 401:
-        return "signed_out", ("Your sign-in for the free model is no longer valid. This happens when you sign in to "
-                              "Lantern somewhere else (the app, the website or the command line), because each "
-                              "sign-in replaces the one before. Sign in again here.")
+        return "signed_out", ("Your sign-in is no longer accepted by Lantern's model server (it was signed out, "
+                              "or replaced by signing in somewhere else). Sign in again here.")
     if status == 413:
         return "too_big", "The question and this check's results are too big for the free model. Ask about one finding."
     if status == 503 and kind == "not_configured":

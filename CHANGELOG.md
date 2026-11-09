@@ -6,8 +6,8 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 ## Unreleased
 
 - Ask Lantern on the website says why it could not answer (2026-11-09). It used to say "The model did not
-  answer" for every problem. Now it names the real one in plain words: your sign-in was replaced by signing in
-  somewhere else (and the sign-in box opens), the model company refused Lantern's key or its account is out of
+  answer" for every problem. Now it names the real one in plain words: your sign-in is no longer accepted (and the
+  sign-in box opens), the model company refused Lantern's key or its account is out of
   credit, the model company is down or busy, the question is too big, or Lantern's model server cannot be reached.
   The server log records which one.
 - The Graph view says what its lines mean and lights up the chosen step's own lines (2026-11-09). A line with an arrow
