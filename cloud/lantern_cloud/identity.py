@@ -5,7 +5,8 @@ the app and CLI use) and sends that token here as `Authorization: Bearer lt_...`
 secret or a password; it asks the gateway `GET /v1/whoami` which account the token belongs to, and keeps the answer
 in memory for a few minutes keyed by the token's SHA-256 (the token itself is never stored or logged).
 
-Signing in again rotates the token at the gateway; runs are keyed by the account id, so they follow the person.
+Each sign-in gets its own token at the gateway and earlier ones keep working; runs are keyed by the account id, so
+they follow the person.
 """
 
 from __future__ import annotations

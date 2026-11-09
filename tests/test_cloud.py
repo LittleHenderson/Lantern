@@ -97,18 +97,23 @@ def test_gateway_token_signs_in_and_only_the_account_is_stored(env):
     assert hashlib.sha256(tok.encode()).hexdigest().encode() not in raw
 
 
-def test_signed_in_account_follows_the_person_across_token_rotation(env):
+def test_signing_in_somewhere_else_keeps_the_website_signed_in(env):
     _, gw_app, cloud, _, s, _ = env
     store = gw_app.state.store
     t1 = store.sign_in("github:4242", "github:octo")
     assert cloud.get("/v1/me", headers=bearer(t1)).json()["label"] == "github:octo"
-    t2 = store.sign_in("github:4242", "github:octo")      # signing in again rotates the token
+    t2 = store.sign_in("github:4242", "github:octo")      # the same person signs in on the app or the gateway page
     assert cloud.get("/v1/me", headers=bearer(t2)).status_code == 200
     accounts = [r[0] for r in sqlite3.connect(s.db_path).execute("select account from users")]
     assert accounts == ["github:4242"]
-    # The old token is disabled at the gateway; once the cached answer expires it is refused here too.
+    # The website's earlier sign-in still works once the cached answer is gone: nobody signs in twice.
     cloud.app.state.identity.cache.clear()
-    assert cloud.get("/v1/me", headers=bearer(t1)).status_code == 401
+    assert cloud.get("/v1/me", headers=bearer(t1)).json()["label"] == "github:octo"
+    # Switching the account off at the gateway still signs out every place.
+    store.db.execute("update users set disabled = 1 where token_hash = ?", (store.user(t1)["hash"],))
+    store.db.commit()
+    cloud.app.state.identity.cache.clear()
+    assert cloud.get("/v1/me", headers=bearer(t1)).status_code == 401 and cloud.get("/v1/me", headers=bearer(t2)).status_code == 401
 
 
 def test_gateway_down_is_unavailable_not_signed_out(tmp_path):

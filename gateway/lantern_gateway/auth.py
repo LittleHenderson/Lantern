@@ -5,14 +5,14 @@ Flow (the CLI and the app use the same one):
      `/v1/login?provider=github&cli=<code>` in a browser (or `/v1/auth/github/start?cli=…` directly).
   2. The gateway redirects to the provider with a signed `state` (HMAC over the time and the cli code).
   3. The provider calls back with a `code`; the gateway exchanges it server-side (the client secret never leaves
-     this server), reads the account id, and issues or rotates that account's token.
+     this server), reads the account id, and issues a token for that sign-in.
   4. The callback page shows the token once and, when a cli code was given, parks it so the client can collect it
      with `/v1/auth/claim?cli=<code>` (one time, within 10 minutes).
 
 Stored per account: the provider's stable id (`github:<id>`, `google:<sub>`), a label (the GitHub login, or
-`google:` plus the last 6 characters of the subject id — never the email), the token hash and counters. Signing
-in again rotates the token (the old one stops working) and carries the counters over, so a new sign-in is never
-a fresh allowance.
+`google:` plus the last 6 characters of the subject id — never the email), the token hashes and counters. Each
+sign-in gets its own token and the account's other sign-ins keep working (`Store.sign_in`, up to `MAX_SESSIONS`);
+every token counts against the account's one counter row, so a new sign-in is never a fresh allowance.
 """
 
 from __future__ import annotations

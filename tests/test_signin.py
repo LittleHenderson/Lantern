@@ -77,7 +77,9 @@ def test_github_sign_in_issues_one_token_and_parks_it_for_the_cli(gw):
     assert stats["top_users"][0]["label"] == "github:octocat"
 
 
-def test_signing_in_again_rotates_the_token_and_keeps_the_counters(gw):
+def test_signing_in_again_keeps_the_other_sign_ins_and_shares_one_allowance(gw):
+    """Signing in on a second place (the website after the app, a phone after a laptop) must not sign the first
+    one out, and must not give a second allowance: both tokens count against one row."""
     _signin(gw, "github")
     tok1 = gw.get("/v1/auth/claim", params={"cli": CLI}).json()["token"]
     store = gw.app.state.store
@@ -86,11 +88,56 @@ def test_signing_in_again_rotates_the_token_and_keeps_the_counters(gw):
     _signin(gw, "github", cli=cli2)
     tok2 = gw.get("/v1/auth/claim", params={"cli": cli2}).json()["token"]
     assert tok2 != tok1
-    assert gw.get("/v1/allowance", headers={"authorization": f"Bearer {tok1}"}).status_code == 401    # old one stops
-    a = gw.get("/v1/allowance", headers={"authorization": f"Bearer {tok2}"}).json()
-    assert a["used_requests"] == 1 and a["used_tokens"] == 1000                                         # carried over
+    h = lambda t: {"authorization": f"Bearer {t}"}   # noqa: E731
+    a1, a2 = gw.get("/v1/allowance", headers=h(tok1)).json(), gw.get("/v1/allowance", headers=h(tok2)).json()
+    assert a1["used_requests"] == a2["used_requests"] == 1 and a2["used_tokens"] == 1000     # one shared count
+    store.record(store.user(tok2)["hash"], "2026-11-02", 5, 0.01, "m")
+    assert gw.get("/v1/allowance", headers=h(tok1)).json()["used_requests"] == 2
+    assert gw.get("/v1/whoami", headers=h(tok1)).json() == gw.get("/v1/whoami", headers=h(tok2)).json()
     stats = gw.get("/v1/admin/stats", headers={"authorization": f"Bearer {ADMIN}"}).json()["allowance"]
     assert stats["accounts"] == 1                                                                       # still one account
+
+
+def test_sign_ins_are_capped_and_the_least_recently_used_goes_first(tmp_path):
+    from lantern_gateway.app import Store
+    st = Store(str(tmp_path / "cap.db"))
+    toks = [st.sign_in("github:7", "seven") for _ in range(st.MAX_SESSIONS)]
+    st.db.execute("update sessions set last_used = '2026-01-01T00:00:00+00:00'")
+    st.db.execute("update sessions set last_used = '2026-02-01T00:00:00+00:00' where token_hash != ?",
+                  (__import__("lantern_gateway.app", fromlist=["_hash"])._hash(toks[3]),))
+    st.db.commit()
+    newest = st.sign_in("github:7", "seven")
+    assert st.user(toks[3]) is None                               # the one not used for longest is signed out
+    assert all(st.user(t) for i, t in enumerate(toks) if i != 3) and st.user(newest)
+    assert st.sign_out(newest) and st.user(newest) is None and st.user(toks[0])
+
+
+def test_an_account_from_before_sessions_keeps_its_old_token(tmp_path):
+    """Accounts signed in before this change have one token that is itself the counter row. Their next sign-in
+    moves them over without signing that token out or resetting the count."""
+    from lantern_gateway.app import Store, _hash
+    st = Store(str(tmp_path / "old.db"))
+    old = "lt_" + "o" * 43
+    st.db.execute("insert into users (token_hash, label, created, used_requests, used_tokens, last_used) "
+                  "values (?, 'octo', '2026-11-01', 12, 3400, '2026-11-01')", (_hash(old),))
+    st.db.execute("insert into accounts (account, token_hash, label, created, last_signin, signins) "
+                  "values ('github:1', ?, 'octo', '2026-11-01', '2026-11-01', 1)", (_hash(old),))
+    st.db.commit()
+    new = st.sign_in("github:1", "octo")
+    assert st.user(old) and st.user(new) and st.user(old)["hash"] == st.user(new)["hash"] != _hash(old)
+    assert st.user(new)["used_requests"] == 12 and st.user(new)["used_tokens"] == 3400
+    assert st.identity(st.user(old)["hash"])["account"] == "github:1"
+    third = st.sign_in("github:1", "octo")                       # a later sign-in reuses the same counter row
+    assert st.user(third)["hash"] == st.user(old)["hash"]
+
+
+def test_switching_off_an_account_signs_out_every_place(tmp_path):
+    from lantern_gateway.app import Store
+    st = Store(str(tmp_path / "off.db"))
+    a, b = st.sign_in("github:9", "nine"), st.sign_in("github:9", "nine")
+    st.db.execute("update users set disabled = 1 where token_hash = ?", (st.user(a)["hash"],))
+    st.db.commit()
+    assert st.user(a)["disabled"] and st.user(b)["disabled"]
 
 
 def test_google_sign_in_never_stores_the_email(gw):
