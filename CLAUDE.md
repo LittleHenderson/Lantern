@@ -129,7 +129,7 @@ The walker emits `CallSite`s with a `kind`: `call`, `depends` (FastAPI `Depends(
 (`Annotated` alias defined elsewhere), `decorator-result` (closure a decorator factory returns), `attr`
 (kept only if it hits a `@property`), `with` / `with-obj`. Typing sources: `self`/`cls`; `self.x = Foo()`;
 `x = Foo()` / `x = make()` (return type) / param hints / `with Foo() as x`; pytest fixtures by name.
-Built-in literal locals (`literal_types`: every binding of the name in that scope is a literal or built-in constructor of one type, not a parameter; loops, `except as`, `nonlocal`/`global`, `match` captures and lambdas spoil it) make `x.append()` a built-in call (`via: literal-type`). Built-in calls are counted in `g.builtin_calls` (`call_sites()['builtin']`), never drawn.
+Built-in literal locals (`literal_types`: every binding of the name in that scope is a literal or built-in constructor of one type, not a parameter; loops, `except as`, `nonlocal`/`global`, `match` captures and lambdas spoil it; `x = list()` counts only while nothing rebinds `list`: a repo def, import, parameter or assignment, `Resolver._shadowed`) make `x.append()` a built-in call (`via: literal-type`). Built-in calls are counted in `g.builtin_calls` (`call_sites()['builtin']`), never drawn.
 Imports go through a suffix index (`from app import crud` → `backend.app.crud`); stdlib names never remap.
 
 ## How JS/TS resolution works

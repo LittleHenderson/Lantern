@@ -285,7 +285,18 @@ def _const_value(node: ast.AST) -> bool:
 
 def _assignments(scope: ast.AST, name: str) -> list[ast.AST] | None:
     """Every value `name` is given in `scope` (not descending into nested functions), or None when it is bound some
-    other way (a parameter, a loop, `with … as`, `+=`, unpacking, a walrus, an import)."""
+    other way (a parameter, a loop, `with … as`, `+=`, unpacking, a walrus, an import, a `match` capture, an
+    `except … as`), or when a function inside `scope` (or, for a module, any function) may rebind it through
+    `nonlocal`/`global`: what that function sets is not followed, so nothing can be called fixed."""
+    for n in ast.walk(scope):
+        if isinstance(n, (ast.Nonlocal, ast.Global)) and name in n.names:
+            return None
+        if isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name == name:
+            return None
+        if isinstance(n, ast.MatchMapping) and n.rest == name:
+            return None
+        if isinstance(n, ast.ExceptHandler) and n.name == name:
+            return None
     out: list[ast.AST] = []
     stack = list(ast.iter_child_nodes(scope))
     while stack:
