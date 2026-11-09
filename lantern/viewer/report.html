@@ -203,6 +203,17 @@ body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{bott
 #graph g[data-id]{cursor:pointer} #graph g[data-id]:hover rect.box{stroke:var(--accent-line)}
 #graph .glegend{position:absolute;left:12px;bottom:12px;display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);background:color-mix(in srgb, var(--surface) 88%, transparent);padding:6px 10px;border-radius:9px;border:1px solid var(--line)}
 #graph .glegend span{display:inline-flex;align-items:center;gap:6px} #graph .glegend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+#graph .glegend{max-width:calc(100% - 270px)} @media (max-width:700px){#graph .glegend{max-width:calc(100% - 24px)}}
+#graph .glegend b.ln{width:18px;height:2px;border-radius:2px;background:var(--faint);display:inline-block;position:relative}
+#graph .glegend b.ln::after{content:"";position:absolute;right:-1px;top:-3px;border:4px solid transparent;border-left:5px solid var(--faint);border-right:0}
+#graph .glegend b.ln.out{background:var(--accent);box-shadow:0 0 6px var(--accent)} #graph .glegend b.ln.out::after{border-left-color:var(--accent)}
+#graph .glegend b.ln.in{background:var(--ink);box-shadow:0 0 6px var(--ink)} #graph .glegend b.ln.in::after{border-left-color:var(--ink)}
+#graph .glegend .hint{font-style:italic}
+#graph .gglow{animation:gpulse 3.2s ease-in-out infinite} #graph .gglow.g2{animation-delay:-.4s}
+#graph .gflow{animation:gflow 2.6s linear infinite}
+@keyframes gpulse{0%,100%{opacity:.08}50%{opacity:.55}}
+@keyframes gflow{to{stroke-dashoffset:-24}}
+@media (prefers-reduced-motion: reduce){ #graph .gflow{display:none} #graph .gglow{opacity:.3} }
 .canvas .zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:4px;padding:3px;border-radius:9px;background:var(--surface);border:1px solid var(--line)}
 .canvas .zoom button{width:28px;height:26px;border-radius:6px;border:0;background:none;color:var(--ink-2);font:600 13px var(--font)} .canvas .zoom button:hover{background:var(--hover);color:var(--ink)}
 .toolbar .seg.mode button{font-size:12px}
@@ -873,6 +884,12 @@ function renderChart() {
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker>
     <marker id="aho" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>`;
+  /* the chosen function's own lines are drawn last, on top, with a slow glow and dots that travel the way the call goes;
+     every other line steps back so they stand out. With reduced motion the glow stays lit and nothing moves. */
+  const touches = e => S.sel && (e.src === S.sel || e.dst === S.sel) && e.src in xy && e.dst in xy;
+  const lit = edges.some(touches);
+  const name = id => httpNodes[id] ? httpNodes[id].label : N[id] ? short(id.startsWith('ext:') ? id.slice(4) : N[id].qualname) : id;
+  let top = '';
   for (const e of edges) {
     if (!(e.src in xy) || !(e.dst in xy)) continue;
     const [x1, y1] = xy[e.src], [x2, y2] = xy[e.dst];
@@ -981,6 +998,8 @@ function renderLanes() {
 // Columns: Pages · Components · HTTP · Routes · Data/system. Every reachable function from every entry point is
 // placed by what it is, not by depth, so the picture reads left to right like a request does. Functions that
 // nothing reaches are counted as "hidden", never guessed into a column.
+/* what each kind of line means, in plain words (the line's hover text and the legend) */
+const EDGE_WORDS = {observed: 'seen running under your tests', resolved: 'read from the code', inferred: 'likely: Lantern’s best guess', possible: 'possible: one of several things it could call'};
 function graphModel() {
   const cols = {pages: [], comps: [], http: [], routes: [], server: [], data: []};
   const seen = new Set(), httpNodes = {}, edges = [];
@@ -1030,8 +1049,15 @@ function renderGraph() {
   const maxFan = Math.max(1, ...Object.values(fanin));
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <defs><marker id="ga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--faint)"/></marker>
-    <marker id="gao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>`;
+    <marker id="gao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+    <marker id="gai" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--ink)"/></marker></defs>`;
   present.forEach((k, ci) => { svg += `<text class="col" x="${24 + ci * (W + GX)}" y="22">${titles[k]}</text>`; });
+  /* the chosen function's own lines are drawn last, on top, with a slow glow and dots that travel the way the call goes;
+     every other line steps back so they stand out. With reduced motion the glow stays lit and nothing moves. */
+  const touches = e => S.sel && (e.src === S.sel || e.dst === S.sel) && e.src in xy && e.dst in xy;
+  const lit = edges.some(touches);
+  const name = id => httpNodes[id] ? httpNodes[id].label : N[id] ? short(id.startsWith('ext:') ? id.slice(4) : N[id].qualname) : id;
+  let top = '';
   for (const e of edges) {
     if (!(e.src in xy) || !(e.dst in xy)) continue;
     const [x1, y1] = xy[e.src], [x2, y2] = xy[e.dst];
@@ -1041,8 +1067,17 @@ function renderGraph() {
     const obs = e.confidence === 'observed';
     const dash = e.confidence === 'inferred' ? '5 4' : e.confidence === 'possible' ? '1.5 3.5' : '';
     const stroke = S.mode === 'confidence' ? confColor(e.confidence) : obs ? 'var(--accent)' : 'var(--faint)';
-    svg += `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${obs ? 2.2 : 1.3}" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#${obs ? 'gao' : 'ga'})" opacity="${S.mode === 'fanin' ? .5 : .9}"><title>${esc(e.confidence)}${e.via ? ' · ' + esc(e.via) : ''}</title></path>`;
+    const tip = `${esc(name(e.src))} can call ${esc(name(e.dst))} · ${esc(EDGE_WORDS[e.confidence] || e.confidence)}${e.via ? ` (${esc(e.via)})` : ''}`;
+    if (touches(e)) {
+      const way = e.src === S.sel ? 'out' : 'in', c = way === 'out' ? 'var(--accent)' : 'var(--ink)';
+      top += `<g class="glit ${way}" data-edge="${way}"><path class="gglow" d="${d}" fill="none" stroke="${c}" stroke-width="10" stroke-linecap="round" opacity=".18"/><path class="gglow g2" d="${d}" fill="none" stroke="${c}" stroke-width="5" stroke-linecap="round" opacity=".35"/>
+        <path d="${d}" fill="none" stroke="${c}" stroke-width="2.4" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#${way === 'out' ? 'gao' : 'gai'})"/><path class="gflow" d="${d}" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="1 23" opacity=".9"/><title>${tip}</title></g>`;
+      continue;
+    }
+    svg += `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${obs ? 2.2 : 1.3}" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#${obs ? 'gao' : 'ga'})" opacity="${lit ? .22 : S.mode === 'fanin' ? .5 : .9}"><title>${tip}</title></path>`;
   }
+  svg += top;
+  const near = new Set(); if (lit) for (const e of edges) if (touches(e)) near.add(e.src === S.sel ? e.dst : e.src);
   for (const id in xy) {
     const [x, y] = xy[id], k = colOf[id], n = N[id] || null, w = n ? worstRank(id) : null, on = S.sel === id;
     const isHttp = k === 'http';
@@ -1058,6 +1093,7 @@ function renderGraph() {
     if (S.mode === 'risk' && w) { fill = sevSoft(w); stroke = sevColor(w); sw = 1.5; }
     if (S.mode === 'confidence' && n) { stroke = confColor(inConf || 'resolved'); sw = 1.5; }
     if (S.mode === 'fanin' && fanin[id]) { const t = fanin[id] / maxFan; fill = `color-mix(in srgb, var(--accent) ${Math.round(8 + 42 * t)}%, var(--surface))`; }
+    if (near.has(id) && sw === 1) stroke = 'var(--accent-line)';
     if (on) { stroke = 'var(--accent)'; sw = 2; }
     svg += `<g data-id="${esc(id)}" data-http="${isHttp ? 1 : 0}"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="${isHttp ? 22 : 9}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>
       ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="13" fill="none" stroke="var(--accent-soft)" stroke-width="4"/>` : ''}
@@ -1065,10 +1101,12 @@ function renderGraph() {
       ${lang ? `<text class="lb" x="${x + W - 10}" y="${y + 15}" text-anchor="end">${lang}</text>` : ''}<title>${esc(isHttp ? httpNodes[id].label : n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
   }
   svg += '</svg>';
-  const legend = S.mode === 'risk'
+  const lines = `<span><b class="ln"></b>A → B: A can call B (read from the code)</span>` +
+    (lit ? `<span><b class="ln out"></b>what the chosen step calls</span><span><b class="ln in"></b>what calls it</span>` : `<span class="hint">click a box to light up its lines</span>`);
+  const legend = lines + (S.mode === 'risk'
     ? `<span><i style="background:var(--critical)"></i>critical</span><span><i style="background:var(--serious)"></i>high</span><span><i style="background:var(--warning)"></i>medium</span><span><i style="background:var(--accent)"></i>seen running</span><span>· ${hidden} hidden</span>`
     : S.mode === 'confidence' ? `<span><i style="background:var(--accent)"></i>seen running</span><span><i style="background:var(--ink)"></i>confirmed</span><span><i style="background:var(--muted)"></i>likely</span><span><i style="background:var(--faint)"></i>possible</span><span>· ${hidden} hidden</span>`
-    : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`;
+    : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`);
   return `<div id="graph" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Call graph. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows the whole app, F goes full screen.">${svg}</div><div class="glegend">${legend}</div>${zoomBar()}</div>`;
 }
 /* The graph is a camera over an endless canvas: the svg always fills the frame and its viewBox is what moves, so the
@@ -1655,7 +1693,8 @@ function wireFindings(el) {
 const PAGE_HELP = {
   map: {t: 'What am I looking at?', p: ['This is a map of your app. On the left are the places a visitor (or a command) can start: pages, API routes, program starts.',
     'Pick one and the middle shows every step the code takes from there, like following a phone call through an office: who picks up, who they call next. Path lists the steps, Flowchart draws them, Graph shows the whole app at once.',
-    'Click any step to see what it does on the right. Colours mean: red or orange is a security finding inside that function; teal lines were seen running under your tests; dashed lines are Lantern’s best guess (“likely” or “possible”), never a certainty.']},
+    'Click any step to see what it does on the right. Colours mean: red or orange is a security finding inside that function; teal lines were seen running under your tests; dashed lines are Lantern’s best guess (“likely” or “possible”), never a certainty.',
+    'A line with an arrow from A to B means A can call B: Lantern read it from the code, so it is a road that exists, not proof that it was used. Only teal lines were actually seen running (under your tests). Click a box and its own lines glow: teal for what it calls, light for what calls it, with dots moving the way the call goes.']},
   findings: {t: 'What is a finding?', p: ['A finding is a specific line of your code that a scanner flagged as a security problem, with the file and line number.',
     'Lantern ranks each one by two questions: can a visitor reach it (is there a path from a page or route to that line)? and does it use something the visitor typed? Both yes = critical. That is what “reachable” and “uses input” mean.',
     'Start at the top. Each one shows the path a visitor would take to reach it, a plain-words explanation when a model has written one, and how to fix it. “Accept risk with a reason” is for when you have decided it is fine and want that written down.']},

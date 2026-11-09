@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- The Graph view says what its lines mean and lights up the chosen step's own lines (2026-11-09). A line with an arrow
+  from A to B means A can call B, read from the code; only teal lines were seen running under tests. Clicking a box now
+  makes its lines glow with a slow pulse, with dots moving the way the call goes: teal for what it calls, light for what
+  calls it, while every other line fades back. The legend and "What am I looking at" say this in plain words, and each
+  line's hover text reads "X can call Y · read from the code". With reduced motion the glow stays lit and nothing moves.
 - A big project's report no longer leaves the website's run page empty (2026-11-09). Noetic Compass's report is one
   54,909,481-byte page; the cloud sent it uncompressed, and the frame stayed blank while it arrived (28 s on a 20 Mbit/s
   line in a test, longer on slower ones). Result pages and data files now go out gzip-compressed to browsers that ask
