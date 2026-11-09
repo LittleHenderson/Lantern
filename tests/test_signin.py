@@ -262,3 +262,27 @@ def test_sign_out_everywhere_for_an_account_from_before_sessions(tmp_path):
     assert st.sign_out(old, everywhere=True) == 1 and st.user(old)["disabled"]
     new = st.sign_in("github:3", "x")
     assert st.user(new)["used_requests"] == 4 and st.user(old)["disabled"]
+
+
+def test_a_token_nobody_collects_sits_behind_a_copy_button():
+    # Wakil (2026-11-09): the page printed the whole token; show only a Lantern button that says to press it.
+    page = auth.done_page("lt_secretvalue123", "github:wakil", False)
+    assert 'id="copy"' in page and "Copy my Lantern token" in page and auth.MARK in page
+    assert '<input type="hidden" id="tok" value="lt_secretvalue123">' in page
+    # printed only inside the copy-failed box (hidden until then) and for browsers with scripts off
+    assert page.count('<pre class="tok">') == 2
+    assert '<div id="fb" hidden><pre class="tok">' in page and '<noscript><pre class="tok">' in page
+    assert "shown once" not in page
+    assert f"<script>{auth.COPY_JS}</script>" in page
+    # a planted token value cannot break out of the attribute
+    assert '"><script>' not in auth.done_page('lt_"><script>x', "github:a", False)
+
+
+def test_the_copy_script_is_allowed_by_hash_only(gw):
+    import base64
+    import hashlib
+    want = base64.b64encode(hashlib.sha256(auth.COPY_JS.encode()).digest()).decode()
+    assert auth.COPY_JS_HASH == f"'sha256-{want}'"
+    csp = gw.get("/v1/login").headers["content-security-policy"]
+    assert f"script-src {auth.COPY_JS_HASH};" in csp and "unsafe-inline' https://fonts" in csp
+    assert "script-src 'unsafe-inline'" not in csp
