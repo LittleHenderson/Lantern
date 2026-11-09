@@ -19,6 +19,7 @@ import gzip
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import threading
 import time
@@ -37,6 +38,7 @@ from . import site
 from .store import FINISHED, LimitReached, Store
 from .worker import ACTIVE_EXPLAIN, HINTS, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, backfill_lanes, is_upload
 
+log = logging.getLogger("lantern_cloud")
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
 SIGNIN_COOKIE = "lsi"          # the one-time code a sign-in in progress is parked under, for this browser only
@@ -542,15 +544,24 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         focus = {k: f[k][:300] for k in ("node", "finding") if isinstance(f.get(k), str) and f[k]}
         from fastapi.concurrency import run_in_threadpool
         from lantern import ask as _ask
-        from lantern.providers import AllowanceExhausted, ProviderError
+        from lantern.providers import AllowanceExhausted, ProviderError, why_failed
         try:
             res = await run_in_threadpool(_ask.ask, provider_for(request.state.token), q[:2000], None, focus or None,
                                           out, name)
         except AllowanceExhausted:
             raise HTTPException(402, "Your free allowance is used up for now. Everything else on Lantern still works; "
                                      "the local app can use your own key.") from None
-        except ProviderError:
-            raise HTTPException(503, "The model did not answer. Try again in a minute.") from None
+        except ProviderError as e:
+            kind, words = why_failed(e)
+            if kind == "signed_out":     # the gateway no longer knows this token: forget the cached "signed in"
+                ident.forget(request.state.token)
+                raise HTTPException(401, words) from None
+            log.warning("ask: gateway failed: %s (HTTP %s)", kind, getattr(e, "status", None))
+            raise HTTPException(413 if kind == "too_big" else 503, words) from None
+        except (KeyError, IndexError, TypeError) as e:   # an answer in a shape the client cannot read
+            log.warning("ask: unreadable model answer: %s", type(e).__name__)
+            raise HTTPException(502, "The model answered, but in a shape Lantern could not read. "
+                                     "Try again; if it keeps happening, this needs fixing on Lantern's side.") from None
         return {"answer": res["answer"], "cited": res["cited"], "invented": len(res["invented"])}
 
     shot_slots = threading.BoundedSemaphore(2)    # screenshots read at once on this machine (Tesseract is CPU-heavy)

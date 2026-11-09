@@ -64,6 +64,10 @@ class Identity:
         self.cache[key] = (time.monotonic() + (self.ttl if who else min(self.ttl, 30)), who)
         return who
 
+    def forget(self, token: str) -> None:
+        """Drop the remembered answer for a token the gateway has since refused (signed in somewhere else)."""
+        self.cache.pop(hashlib.sha256((token or "").encode()).hexdigest(), None)
+
     async def _get(self, path: str) -> httpx.Response:
         try:
             async with httpx.AsyncClient(transport=self.transport, timeout=10) as client:
