@@ -215,6 +215,10 @@ Finding: `id` (stable across moves: tool, rule, file and the flagged line's text
 (`LOW` = show "heuristic"), `file`, `line`, `cwe`, `more_info`, `snippet`, `category`, `in_tests`, `node`,
 `reachable` (null or `{"entry", "kind", "path": [node ids]}`), `reachable_from_tests_only`, `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`), `rank` (`critical`|`high`|`medium`|`low`),
+`context` (optional, `context.py`, read from names around the line: `{"hash": {"purpose": "security"|"non-security"|"unknown", "why", "password", "reads"}}`
+for weak-hash rules, `{"sql": {"fixed_only", "spliced": [{"expr", "fixed", "why"}], "driver_params", "reads"}}` for Python SQL), `rank_note` and
+`rank_before_context` (only when `context` lowered the rank: why, and the rank it would have had; the viewer shows both; a
+non-security hash or SQL splicing only fixed text → `low`, a hash of unknown purpose → at most `medium`),
 `status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted), `hot_lane` (the lane the problem
 lives on: the pinned node's `lane`, or from the file for a finding with no node, e.g. a secret in `settings.py` →
 `server`), `lanes` (every lane the finding's path crosses, in strip order, de-duplicated: the `ui_path` (or `reachable`

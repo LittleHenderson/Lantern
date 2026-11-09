@@ -10,6 +10,15 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   copy of Lantern's screens, a moving cursor, gold-glowing instructions), numbered steps and a Good to know box, plus
   keyboard shortcuts and a note on what is simulated. Demos play only while on screen, start paused with less motion,
   and are labelled "Animated demo · not a screen recording".
+- Fewer false alarms, nothing hidden. A weak hash (MD5/SHA-1) is ranked by what it is for, read from the names around
+  it (the value hashed, where the result goes, the function and class, and the callers of a small wrapper): an id,
+  a seed, a cache key or S3's `ContentMD5` checksum is `low`; a password, token or signature keeps its rank; when
+  Lantern cannot tell, it is at most `medium`. Python SQL that splices only fixed text (a literal, a choice between
+  literals, a module constant) while the values go to the driver as parameters is `low`. Every lowered finding keeps
+  its id and shows the rank it would have had and why. "Slow password hashing" now needs a password-named value to be
+  hashed (a word in a string or a regex list no longer counts, and `\bcrypto` in a regex is no longer read as
+  bcrypt); a password value with no hashing in sight is `check`, not `add`. Found on a real app: 3 critical → 0, with
+  paired safe/unsafe tests (`tests/test_context.py`).
 - Zoomed in, every page stays usable: when a project's top bar does not fit, its tabs move to a second row that
   scrolls sideways (website and app); Readiness and Protections scroll again after the map was opened (the map's
   full-panel layout stayed on and cut them off); the Findings and Readiness tables scroll sideways instead of cutting
