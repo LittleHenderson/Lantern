@@ -255,3 +255,22 @@ def test_limit_messages_say_how_long_until_the_reset():
     assert until_midnight_utc(at) == "in 5 h 20 min (00:00 UTC)"
     assert until_midnight_utc(dt.datetime(2026, 11, 5, 23, 59, 30, tzinfo=dt.UTC)) == "in 1 min (00:00 UTC)"
     assert until_midnight_utc(dt.datetime(2026, 11, 5, 0, 0, 0, tzinfo=dt.UTC)) == "in 24 h 0 min (00:00 UTC)"
+
+
+def test_sign_out_everywhere_from_the_website(env):
+    _, gw_app, cloud, _, _, _ = env
+    store = gw_app.state.store
+    web, app_tok = store.sign_in("github:77", "github:seven"), store.sign_in("github:77", "github:seven")
+    cloud.cookies.set("lt", web)
+    site = {"x-lantern-site": "1"}
+    assert cloud.get("/v1/me").status_code == 200 and cloud.get("/v1/me", headers=bearer(app_tok)).status_code == 200
+    assert cloud.post("/v1/signout", json={"everywhere": True}).status_code == 403          # only from Lantern's page
+    r = cloud.post("/v1/signout", json={"everywhere": True}, headers=site)
+    assert r.status_code == 200 and r.json()["ended"] == 2
+    cloud.cookies.clear()
+    assert cloud.get("/v1/me", headers=bearer(app_tok)).status_code == 401                # the app is signed out too
+    # A plain sign-out ends only this browser's sign-in.
+    web, app_tok = store.sign_in("github:77", "github:seven"), store.sign_in("github:77", "github:seven")
+    cloud.cookies.set("lt", web)
+    assert cloud.post("/v1/signout", headers=site).json()["ended"] == 1
+    assert store.user(web) is None and cloud.get("/v1/me", headers=bearer(app_tok)).status_code == 200
