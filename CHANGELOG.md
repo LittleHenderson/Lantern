@@ -5,6 +5,12 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Every finding outside test code now carries its case ("The case for this finding" on the finding card and panel, and
+  `case` in `security.json`): where, at which revision; the claim in the tool's words; the evidence and where each fact
+  came from; what has to be true for it to hurt, each marked yes / no / cannot check; the impact; why it has its rank;
+  how sure Lantern is (lower when the path depends on a likely link); what is not known; and the status words reported,
+  reproduced (same id as the previous run), fixed, tested and independently reviewed. Lantern never marks the last two
+  itself. Ids are unchanged.
 - A setting the browser can see (`VITE_…SECRET`, `NEXT_PUBLIC_…`) now says four things apart on its finding: that it is
   visible (and the header it travels in), whether server code checks it (where, and on which routes), that whether a
   stranger can get in is not determined from code alone, and what else guards those routes (other login checks, the

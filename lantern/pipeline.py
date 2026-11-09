@@ -78,6 +78,16 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     if not no_scan:
         t = time.perf_counter()
         sec = scan(g, offline)
+        from . import case
+        from .evidence import git_info
+        earlier = load(out, "security.json")    # the previous run of this folder, before it is replaced
+        base = load(out, "baseline.json")
+        ids = None
+        if earlier and earlier.get("id_version") == sec.get("id_version"):
+            ids = {f.get("id") for f in earlier.get("findings", [])}
+        if base and base.get("id_version") == sec.get("id_version"):
+            ids = (ids or set()) | set(base.get("findings") or {})
+        case.stamp(sec, git_info(repo), ids)
         timings["scan"] = round(time.perf_counter() - t, 2)
         c = sec["counts"]
         log(f"scan    {c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low "
