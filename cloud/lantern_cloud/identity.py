@@ -104,6 +104,25 @@ class Identity:
         from urllib.parse import quote
         return f"{self.base}/auth/{quote(provider)}/start?cli={quote(cli)}"
 
+    async def sign_out(self, token: str, everywhere: bool = False) -> int:
+        """End this sign-in at the gateway (or every sign-in of the account) and forget cached answers."""
+        try:
+            async with httpx.AsyncClient(transport=self.transport, timeout=10) as client:
+                r = await client.post(self.base + "/auth/signout", json={"everywhere": everywhere},
+                                      headers={"authorization": f"Bearer {token}", "user-agent": "lantern-cloud"})
+        except httpx.HTTPError as e:
+            raise GatewayUnavailable(type(e).__name__) from None
+        # Every cached answer goes: the account's other tokens are not known here by hash.
+        self.cache.clear()
+        if r.status_code == 401:
+            return 0
+        if r.status_code != 200:
+            raise GatewayUnavailable(f"HTTP {r.status_code}")
+        try:
+            return int(r.json().get("signed_out") or 0)
+        except (ValueError, AttributeError, TypeError):
+            return 0
+
     async def claim(self, cli: str) -> str | None:
         """The token parked for `cli` once the person has signed in (once, within ten minutes), else None."""
         from urllib.parse import quote

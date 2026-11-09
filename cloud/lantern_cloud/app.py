@@ -669,9 +669,21 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return resp
 
     @app.post("/v1/signout")
-    def signout(request: Request):
+    async def signout(request: Request, payload: dict | None = None):
+        """Sign this browser out (its sign-in ends at the gateway too), or with `{"everywhere": true}` every place
+        the account is signed in: the website on other devices, the app and the CLI."""
         site_only(request)
-        resp = JSONResponse({"signed_in": False})
+        everywhere = bool((payload or {}).get("everywhere"))
+        token = request.cookies.get(SESSION_COOKIE) or ""
+        ended = 0
+        if token:
+            try:
+                ended = await ident.sign_out(token, everywhere)
+            except GatewayUnavailable:
+                if everywhere:
+                    raise HTTPException(503, "Lantern can't reach sign-in right now, so nothing was signed out. "
+                                             "Try again in a minute.") from None
+        resp = JSONResponse({"signed_in": False, "ended": ended})
         resp.delete_cookie(SESSION_COOKIE, path="/")
         return resp
 

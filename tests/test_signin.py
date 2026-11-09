@@ -235,3 +235,30 @@ def test_the_token_stays_off_screen_when_lantern_picks_it_up():
     parked = auth.done_page("lt_secretvalue123", "google:…abc", True)
     assert "lt_secretvalue123" not in parked and "lt_se" not in parked and "<details" not in parked
     assert "lt_secretvalue123" in auth.done_page("lt_secretvalue123", "google:…abc", False)
+
+
+def test_sign_out_one_place_or_everywhere(gw):
+    store = gw.app.state.store
+    a, b, c = (store.sign_in("github:11", "eleven") for _ in range(3))
+    store.record(store.user(a)["hash"], "2026-11-02", 7, 0.01, "m")
+    h = lambda t: {"authorization": f"Bearer {t}"}   # noqa: E731
+    assert gw.post("/v1/auth/signout", headers=h(a)).json() == {"signed_out": 1}          # just this place
+    assert store.user(a) is None and store.user(b) and store.user(c)
+    assert gw.post("/v1/auth/signout", headers=h(a), json={"everywhere": True}).status_code == 401   # needs a live token
+    assert gw.post("/v1/auth/signout", headers=h(b), json={"everywhere": True}).json() == {"signed_out": 2}
+    assert store.user(b) is None and store.user(c) is None
+    d = store.sign_in("github:11", "eleven")                       # signing in again carries on from the counts
+    assert store.user(d)["used_requests"] == 1 and not store.user(d)["disabled"]
+    assert store.db.execute("select count(*) from sessions").fetchone()[0] == 1   # no leftover rows
+
+
+def test_sign_out_everywhere_for_an_account_from_before_sessions(tmp_path):
+    from lantern_gateway.app import Store, _hash
+    st = Store(str(tmp_path / "o.db"))
+    old = "lt_" + "p" * 43
+    st.db.execute("insert into users (token_hash, label, created, used_requests, last_used) values (?, 'x', '2026-11-01', 4, '2026-11-01')", (_hash(old),))
+    st.db.execute("insert into accounts (account, token_hash, label, created, last_signin, signins) values ('github:3', ?, 'x', '2026-11-01', '2026-11-01', 1)", (_hash(old),))
+    st.db.commit()
+    assert st.sign_out(old, everywhere=True) == 1 and st.user(old)["disabled"]
+    new = st.sign_in("github:3", "x")
+    assert st.user(new)["used_requests"] == 4 and st.user(old)["disabled"]

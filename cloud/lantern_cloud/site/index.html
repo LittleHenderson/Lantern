@@ -325,7 +325,8 @@ async function accountSheet() {
     <p>Signed in with ${esc(via)}. You have used <b>${esc(me.runs_today)}</b> of today's ${esc(me.limits.runs_per_day)} checks.</p>
     <p class="muted small">Your results are private to this account and stay until you delete them. Nothing is shared unless you click Share on a run.</p>
     <div id="ailine"></div>
-    <div class="row" style="margin-top:18px"><button class="btn quiet" id="delme">${icon('trash')}Delete my account</button><span class="spacer"></span><button class="btn" id="tosettings">Settings</button><button class="btn primary" id="signout">Sign out</button></div>`);
+    <div class="row" style="margin-top:18px"><button class="btn quiet" id="delme">${icon('trash')}Delete my account</button><span class="spacer"></span><button class="btn" id="tosettings">Settings</button><button class="btn primary" id="signout">Sign out</button></div>
+    <div class="row" style="margin-top:10px"><span class="spacer"></span><button class="btn quiet sm" id="signoutall">Sign out everywhere</button></div>`);
   el.querySelector('#delme').onclick = deleteMeSheet;
   el.querySelector('#tosettings').onclick = () => { closeSheet(); go('settings'); };
   aiState(true).then(st => {
@@ -337,8 +338,24 @@ async function accountSheet() {
     if (off) off.onclick = async () => { try { AI.state = {...st, ...(await api('/v1/ai/consent', {method: 'POST', body: {agree: false}}))}; accountSheet(); } catch (e) { box.innerHTML = note('err', esc(e.message)); } };
   });
   el.querySelector('#signout').onclick = signOut;
+  el.querySelector('#signoutall').onclick = signOutAllSheet;
 }
 async function signOut() { try { await api('/v1/signout', {method: 'POST'}); } catch (e) {} S.me = null; S.runs = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render(); }
+// Every place this account is signed in (other computers and phones, the Lantern app, the terminal) is signed out.
+// Results and the allowance stay; each place signs in again when it is next used.
+function signOutAllSheet() {
+  const el = sheet(`<div class="sh"><h2>Sign out everywhere?</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>This signs your account out on every computer and phone, in the Lantern app and in the terminal, including here. Use it if you lost a device or a sign-in key was shown somewhere.</p>
+    <p class="muted small">Your results and your free allowance stay. Each place asks you to sign in again the next time.</p>
+    <div id="soamsg"></div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="soago">Sign out everywhere</button></div>`);
+  el.querySelector('#soago').onclick = async () => {
+    const b = el.querySelector('#soago'); b.disabled = true; b.textContent = 'Signing out…';
+    try { await api('/v1/signout', {method: 'POST', body: {everywhere: true}}); }
+    catch (e) { b.disabled = false; b.textContent = 'Sign out everywhere'; el.querySelector('#soamsg').innerHTML = note('err', esc(e.message)); return; }
+    S.me = null; S.runs = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render();
+  };
+}
 
 // ---- share, delete
 const SHARE_IC = '<svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.8-2.8a3 3 0 0 0-4.2-4.2l-1 1M11.5 8.5a3 3 0 0 0-4.2 0l-2.8 2.8a3 3 0 0 0 4.2 4.2l1-1"/></svg>';
@@ -957,7 +974,7 @@ function renderSettings(el) {
       <div id="privmsg" class="hint"></div></div>
     <div class="card group"><h2>Plain-words explanations</h2><div id="aiset">${me ? '<div class="hint">Looking…</div>' : '<div class="hint">Sign in to use Explain in plain words and Ask Lantern.</div>'}</div></div>
     <div class="card group"><h2>Account</h2>${me
-      ? `<div class="alsorow"><div><b>${esc(name)}</b><div class="hint">Signed in with ${esc(via)}. ${esc(me.runs_today)} of today's ${esc(me.limits.runs_per_day)} checks used; the count starts again at midnight UTC.</div></div><button class="btn" id="setsignout">Sign out</button></div>
+      ? `<div class="alsorow"><div><b>${esc(name)}</b><div class="hint">Signed in with ${esc(via)}. ${esc(me.runs_today)} of today's ${esc(me.limits.runs_per_day)} checks used; the count starts again at midnight UTC.</div></div><div class="row"><button class="btn quiet" id="setsignoutall">Sign out everywhere</button><button class="btn" id="setsignout">Sign out</button></div></div>
         <div class="alsorow"><div><b>Delete my account</b><div class="hint">Deletes every run, report and share link Lantern keeps for you. Your GitHub or Google account is not touched.</div></div><button class="btn danger" id="setdelme">${icon('trash')}Delete</button></div>`
       : `<div class="alsorow"><div><b>Not signed in</b><div class="hint">Sign in with GitHub or Google to run checks and keep your results.</div></div><button class="btn primary" id="setsignin">Sign in</button></div>`}</div>
     <div class="card group"><h2>Also</h2>
@@ -977,6 +994,7 @@ function renderSettings(el) {
   el.querySelector('#sethelp').onclick = () => go('help');
   if (!me) { el.querySelector('#setsignin').onclick = () => signInSheet(); return; }
   el.querySelector('#setsignout').onclick = signOut;
+  el.querySelector('#setsignoutall').onclick = signOutAllSheet;
   el.querySelector('#setdelme').onclick = deleteMeSheet;
   aiState(true).then(st => {
     const box = el.querySelector('#aiset'); if (!box || S.view !== 'settings') return;

@@ -184,8 +184,12 @@ class Store:
             create index if not exists sessions_anchor on sessions (anchor_hash);
         """)
         # last_used: the last request, sign-in, or rotation (for a disabled hash). Retention counts from it.
-        if "last_used" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
+        cols = {r[1] for r in self.db.execute("pragma table_info(users)")}
+        if "last_used" not in cols:
             self.db.execute("alter table users add column last_used text")
+        # anchor = 1: a counter row made by `sign_in` that no token is (its sessions point at it).
+        if "anchor" not in cols:
+            self.db.execute("alter table users add column anchor integer default 0")
         self.db.commit()
         self.pruned_day = ""
 
@@ -238,8 +242,8 @@ class Store:
             if anchor is None:
                 anchor = _hash("anchor:" + secrets.token_urlsafe(32))
                 used_req, used_tok = (u[0], u[1]) if u else (0, 0)
-                q("insert into users (token_hash, label, created, used_requests, used_tokens, last_used) values (?, ?, ?, ?, ?, ?)",
-                  (anchor, label[:100], stamp, used_req, used_tok, stamp))
+                q("insert into users (token_hash, label, created, used_requests, used_tokens, last_used, anchor) "
+                  "values (?, ?, ?, ?, ?, ?, 1)", (anchor, label[:100], stamp, used_req, used_tok, stamp))
                 if old:
                     d = q("select requests from daily where day = ? and token_hash = ?", (today, old)).fetchone()
                     if d and d[0]:
@@ -264,16 +268,29 @@ class Store:
         return token
 
     def _is_anchor(self, h: str) -> bool:
-        """A counter row made by `sign_in` (not a token anyone holds): it has sessions, or was made as one.
-        Every anchor gets its first session in the same transaction, so "has a session" is the test."""
+        """A counter row made by `sign_in` (not a token anyone holds). Rows made before the `anchor` column are
+        recognised by having sessions (each anchor got its first one in the same transaction)."""
+        row = self.db.execute("select anchor from users where token_hash = ?", (h,)).fetchone()
+        if row and row[0]:
+            return True
         return self.db.execute("select 1 from sessions where anchor_hash = ? limit 1", (h,)).fetchone() is not None
 
-    def sign_out(self, token: str) -> bool:
-        """This one sign-in stops working; the account's others keep going."""
+    def sign_out(self, token: str, everywhere: bool = False) -> int:
+        """End this sign-in, or with `everywhere` every sign-in of its account (a lost laptop, a token shown in a
+        screenshot). The counts stay: the next sign-in carries on from them. Returns how many sign-ins ended.
+        A token minted by hand, or an account's one token from before sessions, is switched off instead."""
+        h = _hash(token)
         with self.lock:
-            n = self.db.execute("delete from sessions where token_hash = ?", (_hash(token),)).rowcount
+            q = self.db.execute
+            sess = q("select anchor_hash from sessions where token_hash = ?", (h,)).fetchone()
+            if sess:
+                n = (q("delete from sessions where anchor_hash = ?", (sess[0],)) if everywhere
+                     else q("delete from sessions where token_hash = ?", (h,))).rowcount
+            else:
+                n = q("update users set disabled = 1 where token_hash = ? and disabled = 0 and coalesce(anchor, 0) = 0",
+                      (h,)).rowcount
             self.db.commit()
-        return bool(n)
+        return n
 
     def park(self, cli: str, token: str) -> None:
         with self.lock:
@@ -689,6 +706,14 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 "used_tokens": u["used_tokens"], "limit_tokens": s.free_tokens,
                 "remaining_requests": r["requests"], "remaining_tokens": r["tokens"],
                 "remaining_today": r["today"], "model": s.model}
+
+    @app.post("/v1/auth/signout")
+    def auth_signout(payload: dict | None = None, authorization: str | None = Header(default=None)):
+        """Sign out with the token itself: this place, or `{"everywhere": true}` every place the account is signed
+        in (the website, the app, the CLI). Needs a working token, so nobody can sign someone else out."""
+        auth(authorization)
+        n = store.sign_out(authorization[7:].strip(), bool((payload or {}).get("everywhere")))
+        return JSONResponse({"signed_out": n}, headers={"Cache-Control": "no-store"})
 
     @app.get("/v1/whoami")
     def whoami(authorization: str | None = Header(default=None)):

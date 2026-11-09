@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Sign out everywhere (2026-11-09). The website's account box and Settings have a "Sign out everywhere" button: after
+  one confirmation it signs the account out on every computer and phone, in the Lantern app and in the terminal
+  (gateway `POST /v1/auth/signout` with `{"everywhere": true}`, which needs a working sign-in, so nobody can sign
+  someone else out). Results and the free allowance stay. A plain Sign out now also ends that browser's sign-in at the
+  gateway instead of only forgetting it.
 - Signing in somewhere new no longer signs you out everywhere else (2026-11-09; gateway 0.2.4). Each account had one
   token, and every sign-in (the app, the CLI, the gateway's own page, the website on another computer) replaced it, so
   the website's sign-in stopped working and asked again. Each sign-in now gets its own token and the earlier ones keep
