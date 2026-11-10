@@ -388,6 +388,74 @@ def test_an_uploaded_zip_is_checked_and_then_deleted(tmp_path, monkeypatch):
     assert r.status_code == 409 and "uploaded app" in r.json()["error"]["message"]
 
 
+def _app_with_git_settings(tmp_path, planted: str) -> tuple[Path, str]:
+    """A small app with its `.git` folder, `planted` at the end of that folder's git settings, and the mark Lantern
+    gives its own clones (anyone can write it). (the folder, its commit)"""
+    app = tmp_path / "app-with-git"
+    app.mkdir()
+    (app / "app.py").write_text("import subprocess\n\n\ndef run(name):\n    return subprocess.call('ls ' + name, "
+                                "shell=True)\n", encoding="utf-8")
+    git("init", "-q", "-b", "main", cwd=app)
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", "-A", cwd=app)
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "x", cwd=app)
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=app, capture_output=True, text=True, check=True,
+                            encoding="utf-8").stdout.strip()
+    with open(app / ".git" / "config", "a", encoding="utf-8", newline="\n") as f:
+        f.write(planted)
+    (app / ".git" / remote.MARK).write_text("cloned by Lantern\n", encoding="utf-8")
+    return app, commit
+
+
+# What git would run by itself for every question about the files: it only writes a marker into the step's own
+# temp folder, the one place a step may write.
+PLANTED_IN_GIT = '[core]\n\tfsmonitor = "echo ran >> \\"$TMPDIR/git-ran\\"; false"\n'
+
+
+def test_an_upload_that_brings_git_settings_has_none_of_them_run(tmp_path, monkeypatch):
+    """An uploaded folder brings its `.git` as it is. Until 2026-11-10 the analysis asked git about the files inside
+    that folder (`git status`, and `git ls-files` where the folder carried the clone mark), git obeyed the folder's
+    own settings, and a command named there (`core.fsmonitor`) ran in the step, as the user the service runs as."""
+    ran, envs = [], []
+    real, real_stream = worker_mod.Worker._jailed, worker_mod.sandbox._stream
+
+    def and_look(self, rid, root, cmd, **kw):
+        got = real(self, rid, root, cmd, **kw)
+        if (root / "tmp" / "git-ran").exists():
+            ran.append(next((w for w in cmd if w in ("analyze", "lantern.archive", "lantern.depaudit")), "a step"))
+        return got
+
+    def stream(cmd, cwd, env, timeout, log, **kw):
+        envs.append(dict(env))
+        return real_stream(cmd, cwd, env, timeout, log, **kw)
+    monkeypatch.setattr(worker_mod.Worker, "_jailed", and_look)
+    monkeypatch.setattr(worker_mod.sandbox, "_stream", stream)
+    cloud, gw, s = make(tmp_path)
+    tok = gw.sign_in("github:1", "github:octo")
+    app, commit = _app_with_git_settings(tmp_path, PLANTED_IN_GIT)
+    r = cloud.post("/v1/uploads?name=app", content=_zip_of(app, top="app"), headers=bearer(tok))
+    assert r.status_code == 202, r.text
+    done = wait(cloud, tok, r.json()["id"])
+    assert ran == [], f"a command from the uploaded folder's git settings was run in the step: {ran}"
+    assert done["status"] == "done", done
+    assert sum(done["summary"]["counts"].values()) >= 1, done["summary"]    # the app's own problem is still found
+    head = json.loads((Path(s.results_dir) / done["id"] / "evidence.json").read_text(encoding="utf-8"))["header"]
+    assert done["commit"] == commit and (head["commit"], head["dirty"]) == (commit, False) and "note" not in head
+    # and no step is told to trust every folder's git settings any more (`safe.directory=*`, needed until then)
+    assert len(envs) >= 2 and not [k for env in envs for k in env if k.startswith("GIT_CONFIG")]
+    assert list(Path(s.work_dir).iterdir()) == []
+
+
+def test_the_service_itself_starts_no_program_to_read_a_commit(tmp_path, monkeypatch):
+    """`_commit` runs in the service, outside the restricted step, on a folder somebody uploaded."""
+    app, commit = _app_with_git_settings(tmp_path, PLANTED_IN_GIT)
+
+    def none(*a, **k):
+        raise AssertionError("a program was started")
+    monkeypatch.setattr(subprocess, "Popen", none)
+    assert worker_mod._commit(app) == commit
+    assert worker_mod._commit(tmp_path / "nothing-here") is None
+
+
 def test_bad_uploads_are_refused(tmp_path):
     cloud, gw, s = make(tmp_path, clone_max_mb=1)
     tok = gw.sign_in("github:1", "github:octo")

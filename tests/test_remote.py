@@ -335,9 +335,9 @@ def test_missing_files_is_fail_closed(tmp_path, monkeypatch):
     dest = tmp_path / "dest"
     remote.fetch(_git_repo(tmp_path / "src").as_uri(), dest)
     assert remote.missing_files(dest) == []
-    real = remote._git
-    monkeypatch.setattr(remote, "_git", lambda args, cwd, timeout=900: subprocess.CompletedProcess(args, 128, "", "fatal: index file corrupt")
-                        if args[0] == "ls-files" else real(args, cwd, timeout))
+    # Until 2026-11-10 a stand-in for `remote._git` answered "index file corrupt" here. The question now goes
+    # through `gitfacts.deleted`, so the index is made unreadable for real and git itself says so.
+    (dest / ".git" / "index").write_bytes(b"not an index at all")
     assert remote.missing_files(dest) is None
     with pytest.raises(RuntimeError, match="git could not list the files"):
         pipeline.analyze(dest, tmp_path / "out", log=lambda m: None)

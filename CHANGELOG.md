@@ -5,6 +5,51 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Security: the git settings of a folder Lantern reads are no longer obeyed (2026-11-10; found during stage 7 of
+  the 2026-11-09 directive). `lantern analyze` asked git about the folder it was given: `git status` for
+  uncommitted changes (`evidence.git_info`) and, for a folder that carries the mark of a Lantern clone,
+  `git ls-files --deleted` (`remote.missing_files`). git obeys the folder's own settings file, `.git/config`, and
+  that file can name commands: `core.fsmonitor` is run whenever git reads the index, a clean filter when a file's
+  content has to be compared, and `git status` starts itself inside every submodule under that submodule's
+  settings. `git clone` never copies such settings, but a folder that arrives another way brings its `.git` as it
+  is: an unpacked archive, a download, an upload to the cloud service.
+  Measured on the code before, with commands that only write a marker: a planted `core.fsmonitor` was run by
+  `lantern analyze` (through `git status`, and through `git ls-files` once the folder carried the clone mark,
+  which anyone can write); a planted filter was run; a command in a submodule's settings was run. In the cloud
+  service the command of an uploaded zip ran inside the analysis step, where the service runs as root (the step
+  is then the user `nobody`) and where it runs as an ordinary user. The step has no network and may write only in
+  its temp folder, but it may read what its user may read, and the cloud image runs the service and its steps as
+  one ordinary user: in a local set-up of that kind, with a stand-in file, text from another person's stored
+  result ended up in the uploader's own stored result, in a run that ended "done". The same code also followed a
+  `.git` file, a `commondir` file or a link to another repository of the computer and reported that repository's
+  commit and `origin` address as the folder's; obeyed `GIT_DIR` and its like when they were set in the shell (as
+  inside a git hook); said "no uncommitted changes" when git could not compare the files at all; and let git
+  rewrite the folder's index.
+  Now (`lantern/gitfacts.py`) the folder's `.git` is read like any other file of the project: where the
+  repository is, the commit, the branch and the address of `origin` are read by hand, never through a link and
+  never through a `.git` file that names a place which does not name the folder back. git itself is started only
+  on a git folder Lantern makes for the occasion, whose settings file holds nothing but a short list of yes/no and
+  fixed-word settings copied from the project (how line ends and file modes were written to this disk); it reads
+  the project's index, objects and files from there and none of the project's settings. Submodules are looked into
+  one by one in the same way, never by git, and only where they are real folders inside the project. The cloud
+  service reads an upload's commit without starting any program, and its steps are no longer told to trust every
+  folder's git settings (`safe.directory=*`). When the files cannot be compared, they count as changed and the
+  Evidence Report and each finding's case say why (`header.note`, `where.revision_note`); a git folder that is not
+  read is named on the report too.
+  What changes for a repository of your own: nothing, unless its `.git` is a link or was made with
+  `git init --separate-git-dir` (no commit is reported, with the reason), it keeps its refs in the reftable form
+  (the same), or it relies on a filter or a submodule-ignore rule that only its own settings define (a file can
+  then count as changed). The person's own git settings, in the home folder or the computer's, still apply.
+  Tests: `tests/test_gitfacts.py`, 44 tests kept apart by kind: planted settings, pointers and variables that
+  must not be obeyed (24); what cannot be told, which must be said (3); repositories as people have them, which
+  must get the answers git itself gives (13: plain, packed refs, detached, linked worktree, shallow, sha256,
+  sparse checkout, submodules, line endings); the settings reader against git's own (1); and the limits (3). On
+  the code before, 28 of them fail (17 show a defect, 11 test the new reading, its words and its limits), 14 pass
+  and 2 need Windows; with the fix 42 pass and 2 need Windows. `tests/test_cloud_runs.py` has
+  2 more (an upload with planted git settings; the service starts no program to read a commit): both failed
+  before. One existing test of `tests/test_remote.py` now makes git fail for real instead of through a stand-in.
+  Until this change is deployed, the live cloud service runs the code before it.
+
 - CI runs every test, and its log names each test it skips (2026-11-10). CI's test jobs installed neither PyJWT nor
   cryptography, so `tests/test_cloud_github.py` was skipped while it was imported: its 14 tests (a private
   repository is opened only for a person GitHub says may read it) counted as one skipped test, `pytest -q` named no
