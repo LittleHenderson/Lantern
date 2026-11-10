@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-from . import __version__
+from . import __version__, results
 from .graph import Graph
 
 TEMPLATE = Path(__file__).parent / "viewer" / "report.html"
@@ -61,7 +61,7 @@ def write_report(out_dir: Path, g: Graph, security: dict | None, explanations: d
             f["snippet"] = "[omitted: structure-only privacy level]"
     path = out_dir / "report.html"
     # newline="\n": the content policy hashes the script bytes, so a CRLF rewrite on Windows would block it
-    path.write_text(render(bundle), encoding="utf-8", newline="\n")
+    results.write(path, render(bundle), newline="\n")
     return path
 
 

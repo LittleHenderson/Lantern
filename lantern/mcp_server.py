@@ -26,7 +26,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import __version__, pipeline, usage
+from . import __version__, pipeline, results, usage
 from .graph import Graph
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -625,7 +625,7 @@ class Server:
                 r = TOOL_INDEX[name][0](self.P, args if isinstance(args, dict) else {})
                 return self._ok(mid, {"content": [{"type": "text", "text": r["text"]}],
                                       "structuredContent": _jsonable(r["data"]), "isError": False})
-            except ValueError as e:
+            except (ValueError, results.Refused) as e:   # a wrong argument, a place Lantern will not write to
                 return self._ok(mid, {"content": [{"type": "text", "text": str(e)}], "isError": True})
             except Exception as e:  # noqa: BLE001: the assistant gets a message, the server stays up
                 return self._ok(mid, {"content": [{"type": "text", "text": f"Lantern error: {type(e).__name__}: {e}\n"

@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, learn, pipeline, remote, usage
+from . import __version__, learn, pipeline, remote, results, usage
 from .packs import PACK_NAME
 from .providers import DEFAULT_MODEL_NAME, DEFAULT_PROVIDER, PRESETS
 from .readiness import SHAPES
@@ -297,10 +297,11 @@ class App:
 
     def summary(self, p: dict) -> dict:
         out = Path(p["path"]) / ".lantern"
-        rd = _load(out / "readiness.json") or {}
-        sec = _load(out / "security.json") or {}
-        run = _load(out / "run.json") or {}
-        ex = _load(out / "explanations.json") or {}
+        # A results folder that is a link which came with the project is not Lantern's: nothing is read through it,
+        # the card shows the project as not checked yet, and a check says why it will not write there (`self.out`).
+        linked = results.link_in_project(p["path"], out)
+        rd, sec, run, ex = ({} if linked else _load(out / name) or {}
+                            for name in ("readiness.json", "security.json", "run.json", "explanations.json"))
         busy = self.jobs.busy(p["id"])
         # These files sit in the analyzed folder, which may come from anyone: keep only the expected types.
         counts = sec.get("counts") if isinstance(sec.get("counts"), dict) else None
@@ -320,7 +321,7 @@ class App:
         # scanners that did not finish or did not cover everything (scanresult.py): the card says so
         incomplete = [_str(t.get("tool")) for t in (sec.get("incomplete") or []) if isinstance(t, dict) and _str(t.get("tool"))
                       ] if isinstance(sec.get("incomplete"), list) else []
-        return {**p, "exists": Path(p["path"]).is_dir(), "has_report": (out / "report.html").exists(),
+        return {**p, "exists": Path(p["path"]).is_dir(), "has_report": not linked and (out / "report.html").exists(),
                 "incomplete": incomplete[:12],
                 "stack": " + ".join(frameworks) or " + ".join(languages) or None,
                 "languages": languages, "reachable_critical": reach_crit, "top_page": top_page,
@@ -330,7 +331,7 @@ class App:
                 "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
                 "finished_at": _str(run.get("finished_at")),
                 "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"],
-                "starter": learn.starter_of(Path(p["path"])), "stale": self._stale(out)}
+                "starter": learn.starter_of(Path(p["path"])), "stale": None if linked else self._stale(out)}
 
     def _stale(self, out: Path) -> str | None:
         """'packs' when analysis packs were turned on or off after this report was made (the card says
@@ -550,7 +551,7 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
             if a.privacy:
                 run = _load(out / "run.json") or {}
                 run["privacy"] = a.privacy
-                (out / "run.json").write_text(json.dumps(run, indent=1), encoding="utf-8")
+                results.write(out / "run.json", json.dumps(run, indent=1))
             path = pipeline.rebuild_outputs(out)
             log(f"report  {path}")
             return {"report": str(path)}

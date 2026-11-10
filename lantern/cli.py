@@ -34,9 +34,10 @@ from .graph import Graph
 
 
 def _out(repo: Path, out: str | None) -> Path:
-    d = Path(out) if out else repo / ".lantern"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """The results folder, made when it is not there. `results.Refused` when it is a link that came with the
+    project, or is reached through one: `main` says so and ends with 2."""
+    from . import results
+    return results.folder(repo, out)
 
 
 def _load(out: Path, name: str) -> dict | None:
@@ -155,9 +156,20 @@ def cmd_export(a) -> int:
     if a.sarif == "-":
         print(text)
     else:
-        Path(a.sarif).write_text(text, encoding="utf-8")
+        _write_named(repo, Path(a.sarif), text)
         print(f"wrote   {a.sarif}  ({len(sec.get('findings', []))} findings)")
     return 0
+
+
+def _write_named(repo: Path, dest: Path, text: str) -> None:
+    """Write a file the person named on the command line. The name is theirs, so it is written as they wrote it
+    (a link of their own is followed, `/dev/stdout` works), with one exception: a link that lies inside the project
+    came with the project, and Lantern puts its own file in that link's place (`results.write`)."""
+    from . import results
+    if results.link_in_project(repo, dest):
+        results.write(dest, text, where="the project folder")
+    else:
+        dest.write_text(text, encoding="utf-8")
 
 
 def cmd_trace(a, trace_cmd: list[str]) -> int:
@@ -388,7 +400,23 @@ def cmd_login(a) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run one command. A place Lantern will not write to (`results.Refused`: a results folder that is a link which
+    came with the project, a folder under a result file's name) ends the command with 2 and the reason in plain
+    words; what a write met and replaced (a link, a pipe) and no run's log has said yet goes to stderr."""
+    from . import results
     argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return _main(argv)
+    except results.Refused as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    finally:
+        if argv[:1] not in (["mcp"], ["serve"]):
+            for line in results.said():
+                print(f"note    {line}", file=sys.stderr)
+
+
+def _main(argv: list[str]) -> int:
     if os.environ.get("LANTERN_SANDBOX_GUARD") == "expected":   # a step of the cloud service: is its guard here?
         from ._jail import say_if_guard_missing
         say_if_guard_missing()

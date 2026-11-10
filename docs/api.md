@@ -391,7 +391,21 @@ words (never text from the file); the run then finishes without what that file w
 that cannot be used is neither compared with nor replaced, and the Evidence Report's Limits say so;
 `lantern evidence PATH --reset-baseline` starts a new one. The commands about a finished run (`report`, `evidence`,
 `explain`, `verify`, `export`, the connector's tools) read its files strictly: one that cannot be read is an error
-there, never "no findings". In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed),
+there, never "no findings".
+
+How result files are written (`lantern/results.py`, `write` and `folder`): each file goes into a new file beside its
+place and is moved there in one step, so a reader sees the file of the run before or the new one, never a part. A link
+or a pipe under a result file's name is replaced by Lantern's own file (what a link pointed at is left alone) and the
+run's log says `note    <name> in the results folder was a link; …`; a folder there, or a file this user may not
+change (marked read-only), ends the run before it starts, with the reason. A results folder that is a link inside the
+project, or is reached through one, is refused: the command line prints `error: <path> is a link, and Lantern does not
+write its results through a link that came with the project. Remove the link, or name a results folder of your own
+with --out.` and ends with 2; in `lantern serve` a check's job ends with the error `Refused: <that sentence>`, a route
+that needs the folder at once answers 409 (a change) or 500 (a page) with the sentence, and `/api/projects` shows the
+project as not checked (`has_report` false, no score). A results folder named with `--out` outside the project may be
+a link.
+
+In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed; written the same way),
 `lantern-packs/*.json` (project analysis packs), `lantern-narratives.md` (the builder's own notes for the Evidence Report).
 
 ## Cloud service (`cloud/`, cloud mode)

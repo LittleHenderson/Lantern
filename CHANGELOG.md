@@ -5,6 +5,41 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Security: Lantern's results are written into the results folder and nowhere else (2026-11-10; stage 7 of the
+  2026-11-09 directive, part 3). The results folder lies inside the analysed project by default
+  (`PATH/.lantern`), and a project comes from anywhere: a link somebody sent, a zip, a clone. Every result file
+  was written with a plain write, which follows a link and waits on a pipe. Measured on the code before: a
+  project that brought `.lantern/security.json` as a link to a file of the person's own had that file overwritten
+  with Lantern's results (the same for each of the nine files `lantern analyze` writes, for a record in the cache
+  of explanations and for `lantern-accepted.json`); one that brought `.lantern` itself as a link to a folder had
+  Lantern's files made in that folder, by the command line, the app and the connector alike; a pipe under a
+  result file's name held the run up for good; a folder there ended it with a Python error, after the whole
+  analysis. Now a result file is written into a new file beside its place and moved there in one step
+  (`results.write`, the one way every result file is written): a link at that place is replaced by Lantern's own
+  file and what it pointed at is left alone, a pipe is replaced the same way, and the run says what it met
+  (`note    security.json in the results folder was a link; Lantern put its own file in its place and left what
+  the link pointed at alone`). A results folder that is a link inside the project, or is reached through one
+  (`--out PROJECT/build/out` where `build` is a link), is refused in plain words before anything is analysed
+  (`results.folder`; the command ends with 2, the connector answers with the sentence, the app gives it as the
+  reason the check did not run and shows the project as not checked yet instead of reading results through the
+  link). A link outside the project is the person's own (results kept on another disk) and is followed as
+  before. A folder under a result file's name is said before the run starts. Two things that come with writing
+  this way: a result file is now whole or as it was (a write that stops half-way leaves the file of the run
+  before; before, the file was emptied first and filled afterwards), and a result file the person closed to
+  other users stays closed. A result file this user may not change (marked read-only) is not replaced: the run
+  says so before it starts (the older way stopped at such a file as well, with a Python error after the whole
+  analysis). The cache of explanations is not kept through a link, and reads only plain files.
+  `lantern export --sarif FILE` still writes a name outside the project as the person wrote it (a link of their
+  own, `/dev/stdout`); a link inside the project is replaced by the file. Changed for a person who made
+  `.lantern` a link themselves: that is refused too, and `--out FOLDER` names the other place instead.
+  `tests/test_results_folder.py` (49 tests, each refusal beside a safe twin; 3 of the 49 need Windows: a junction
+  as the results folder, a junction and a symbolic link under a result file's name; 1 needs a user who is not
+  root). On the code before, with the new names answering the older way, 38 of them fail (2 of the 38 only meet
+  a name that did not exist yet) and 7 pass: the six safe twins and the file that stays closed, which the older
+  way of writing did rightly. Not covered: a link put in place between Lantern's look at the folder and its
+  write (that takes another program of the same computer writing in the project at that moment); a run that is
+  killed in the middle of a write leaves a file named `.<name>.<16 letters and digits>.part` beside the result
+  file, which nothing reads.
 - Security: what a project's dependency files say is checked before it is used (2026-11-10; stage 7 of the
   2026-11-09 directive, part 3). A lock file comes with the project, so it is as untrusted as the code. Until now
   the names and versions in uv.lock, poetry.lock, pdm.lock and Pipfile.lock went unchecked into the file Lantern

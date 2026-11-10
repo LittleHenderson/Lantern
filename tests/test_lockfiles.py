@@ -562,6 +562,10 @@ def test_how_much_of_an_odd_value_is_shown(tmp_path):
     assert info["files"] == [rel] and info["errors"] == [("..." + rel[-97:] + ": " + "n" * 100)[:200]]
     _write(tmp_path / "near", {rel[-100:]: "package = 5\n"})                 # the twin: a path that fits is shown whole
     assert depaudit.run_pip_audit(tmp_path / "near", True)[1]["errors"] == [rel[-100:] + ": its packages are a number, not a list"]
+    edge = depaudit.Odd()                                                   # 100 characters are shown whole, 101 are not
+    edge.add("p" * 100, "x")
+    edge.add("q" * 101, "x")
+    assert edge.lines == ["p" * 100 + ": x", "..." + "q" * 97 + ": x"]
     # a requirement that is no exact version is kept as an example, 60 characters of it
     long = "requests>=2.31 ; python_version >= '3.8' and platform_system != 'Windows' and extra == 'all'"
     _write(tmp_path / "loose", {"requirements.txt": long + "\n", "pyproject.toml": f"[project]\ndependencies = [{json.dumps(long)}]\n"})

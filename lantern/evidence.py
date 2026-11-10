@@ -17,7 +17,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, gitfacts, scanresult
+from . import SCHEMA_VERSION, __version__, gitfacts, results, scanresult
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
@@ -885,10 +885,10 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
 
 def write(out_dir: Path, ev: dict) -> dict[str, Path]:
     paths = {"html": out_dir / "evidence.html", "json": out_dir / "evidence.json"}
-    paths["html"].write_text(render_html(ev), encoding="utf-8")
-    paths["json"].write_text(json.dumps(ev, indent=1), encoding="utf-8")
+    results.write(paths["html"], render_html(ev))
+    results.write(paths["json"], json.dumps(ev, indent=1))
     rd = ev["scorecard"]["readiness"]
     if rd:
         paths["badge"] = out_dir / "badge.svg"
-        paths["badge"].write_text(badge_svg(rd["score"], rd["grade"], ev), encoding="utf-8")
+        results.write(paths["badge"], badge_svg(rd["score"], rd["grade"], ev))
     return paths

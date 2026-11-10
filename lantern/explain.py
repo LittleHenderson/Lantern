@@ -22,6 +22,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import results
 from .graph import Graph, Node
 from .providers import AllowanceExhausted, Provider, ProviderError
 
@@ -513,8 +514,9 @@ def estimate(g: Graph, nids: list[str], findings: list[dict]) -> dict:
 
 class Cache:
     def __init__(self, root: Path):
-        self.root = root
-        root.mkdir(parents=True, exist_ok=True)
+        """`results.Refused` when `root` is a link: the cache lies in the results folder, which may have come with
+        the project, and its files would be made wherever such a link points."""
+        self.root = results.inner(root, "its cache of explanations")
 
     def key(self, ctx: Context, model: str) -> str:
         raw = f"{ctx.node.fingerprint}|{ctx.hash()}|{model}|{PROMPT_VERSION}"
@@ -523,15 +525,19 @@ class Cache:
     def get(self, k: str) -> dict | None:
         """The record kept under `k`, or None when there is none, or when what is there is not a record: a file that
         was cut short while it was written (the program was stopped, the disk was full) is asked for again and
-        written anew. Until 2026-11-10 one such file stopped every later explain of the project."""
+        written anew. Until 2026-11-10 one such file stopped every later explain of the project. Only a plain file
+        is read (`results.plain`): not a link, and not a pipe, which would hold the run up."""
+        text, _why = results.plain(self.root / f"{k}.json")
+        if text is None:
+            return None
         try:
-            rec = json.loads((self.root / f"{k}.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError, RecursionError):
+            rec = json.loads(text)
+        except (ValueError, RecursionError):
             return None
         return rec if isinstance(rec, dict) else None
 
     def put(self, k: str, rec: dict) -> None:
-        (self.root / f"{k}.json").write_text(json.dumps(rec, indent=1), encoding="utf-8")
+        results.write(self.root / f"{k}.json", json.dumps(rec, indent=1), where="the cache of explanations")
 
 
 # --------------------------------------------------------------------------------------------

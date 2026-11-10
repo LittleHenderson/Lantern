@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from . import SCHEMA_VERSION
+from . import SCHEMA_VERSION, results
 
 # Node kinds
 MODULE, CLASS, CALLABLE, EXTERNAL = "module", "class", "callable", "external"
@@ -147,7 +147,7 @@ class Graph:
         }
 
     def save(self, path: str | Path) -> None:
-        Path(path).write_text(json.dumps(self.to_dict(), indent=1), encoding="utf-8")
+        results.write(path, json.dumps(self.to_dict(), indent=1))
 
     @classmethod
     def load(cls, path: str | Path) -> "Graph":

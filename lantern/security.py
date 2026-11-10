@@ -14,7 +14,7 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from . import context, lanes, manifest
+from . import context, lanes, manifest, results
 from .graph import Graph
 from .python_frontend import SKIP_DIRS, inside_repo
 
@@ -657,8 +657,9 @@ def reason_ok(reason) -> bool:
 def save_accepted(repo: Path, accepted: dict[str, dict]) -> Path:
     p = repo / ACCEPTED_FILE
     rows = sorted(accepted.values(), key=lambda r: r["id"])
-    p.write_text(json.dumps({"about": "Security findings the builder reviewed and accepted, with reasons. "
-                                      "Managed by `lantern accept`.", "accepted": rows}, indent=1) + "\n", encoding="utf-8")
+    results.write(p, json.dumps({"about": "Security findings the builder reviewed and accepted, with reasons. "
+                                          "Managed by `lantern accept`.", "accepted": rows}, indent=1) + "\n",
+                  where="the project folder")
     return p
 
 

@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from . import results
 from .graph import Graph
 
 Log = Callable[[str], None]
@@ -27,7 +28,6 @@ def earlier(out: Path, name: str, log: Log | None = None, then: str = "") -> dic
     """A file an earlier run left in `out` that this run can do without (`results.earlier`): its table, or None when
     there is none. When one is there and cannot be used, nothing stops: one line in the log says why and what that
     costs (`then`), and the file is left as it is."""
-    from . import results
     data, why = results.earlier(out, name)
     if why and log:
         log(f"earlier {name} from an earlier run was not used: {why}. {then}".rstrip())
@@ -35,9 +35,14 @@ def earlier(out: Path, name: str, log: Log | None = None, then: str = "") -> dic
 
 
 def out_dir(repo: Path, out: str | Path | None = None) -> Path:
-    d = Path(out) if out else repo / ".lantern"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """The results folder of `repo` (`out` when the person named one), made when it is not there. `results.Refused`
+    when it is a link inside the project or is reached through one (`results.folder`)."""
+    return results.folder(repo, out)
+
+
+# the files every `analyze` writes anew (`security.json` only when the scan runs)
+WRITTEN = ("graph.json", "calls.json", "readiness.json", "run.json", "report.html", "evidence.html", "evidence.json",
+           "badge.svg")
 
 
 class Stopped(Exception):
@@ -58,8 +63,12 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     When the sandbox cannot be set up the tests are not run, `run.json` says why (`trace.ran` false,
     `trace.unavailable`), and the rest, which only reads the code, is done all the same. `cancel`: a
     threading.Event; set while the tests run, it ends them and everything they started, and `Stopped` is raised
-    before any result file is written."""
+    before any result file is written. `results.Refused` (a RuntimeError) before anything is analysed when the
+    results folder is a link that came with the project, or a folder lies under a result file's name; every file is
+    written through `results.write`, and what that met (a link, a pipe) is said in the log at the end."""
     from . import remote
+    results.folder(repo, out)   # also for the callers that name `out` themselves (the connector's recheck)
+    results.ready(out, WRITTEN if no_scan else ("security.json", *WRITTEN))
     if remote.is_clone(repo):   # a clone whose checkout could not be completed would report on part of a repository
         remote.check_complete(repo)
     from .engine import build_graph
@@ -142,20 +151,22 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
                                   for t in sec.get("incomplete") or []]
         for t in run_meta["incomplete"]:
             log(f"incomplete {t['tool']}: {t['status']}")
-        (out / "security.json").write_text(json.dumps(sec, indent=1), encoding="utf-8")
+        results.write(out / "security.json", json.dumps(sec, indent=1))
     g.save(out / "graph.json")
     from . import calls
     calls.write(out / "calls.json", g)
     rd = assess(g, sec, run_meta)
-    (out / "readiness.json").write_text(json.dumps(rd, indent=1), encoding="utf-8")
+    results.write(out / "readiness.json", json.dumps(rd, indent=1))
     log(f"ready   {rd['score']}/100 (grade {rd['grade']}), {rd['shape']}")
     run_meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M")
-    (out / "run.json").write_text(json.dumps(run_meta, indent=1), encoding="utf-8")
+    results.write(out / "run.json", json.dumps(run_meta, indent=1))
     words = earlier(out, "explanations.json", log, "The report is written without a model's explanations; "
                     "`lantern explain` writes them again.")
     path = write_report(out, g, sec, words, privacy, timings, rd)
     log(f"report  {path}")
     log(f"proof   {evidence(out, g, sec, rd, run_meta, privacy, log)}")
+    for line in results.said(out):
+        log(f"note    {line}")
     return {"score": rd["score"], "grade": rd["grade"], "shape": rd["shape"],
             "counts": (sec or {}).get("counts"), "incomplete": run_meta.get("incomplete") or [], "report": str(path)}
 
@@ -166,7 +177,6 @@ def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str, log: Lo
     may be the only record of the first analysis (a file a merge left with conflict marks), so the report says in its
     Limits that it does not know what was fixed, and `lantern evidence PATH --reset-baseline` starts a new one."""
     from . import evidence as ev
-    from . import results
     base, unread = results.earlier(out, "baseline.json")
     from .security import ID_VERSION
     if unread:
@@ -176,7 +186,7 @@ def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str, log: Lo
                 "new one).")
     elif sec is not None and (base is None or base.get("id_version") != ID_VERSION):   # first run, or ids changed
         base = ev.baseline_from(sec, ev.git_info(Path(g.repo_root)).get("commit"), rd)
-        (out / "baseline.json").write_text(json.dumps(base, indent=1), encoding="utf-8")
+        results.write(out / "baseline.json", json.dumps(base, indent=1))
     rec = ev.build(g, sec, rd, results.earlier(out, "explanations.json")[0], run_meta, base, privacy,
                    baseline_unread=unread)
     return ev.write(out, rec)["html"]
@@ -217,6 +227,6 @@ def explain(out: Path, provider, nids: list[str], metaphor: str | None = None,
         res["explanations"] = prev["explanations"]
         if prev.get("metaphor", {}).get("world") == res["metaphor"]["world"] and prev["metaphor"].get("roles"):
             res["metaphor"] = prev["metaphor"]
-    (out / "explanations.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
+    results.write(out / "explanations.json", json.dumps(res, indent=1))
     rebuild_outputs(out, g)
     return res
