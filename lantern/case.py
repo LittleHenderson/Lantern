@@ -246,6 +246,8 @@ def stamp(sec: dict | None, git: dict | None, earlier: set | None) -> None:
         if not c:
             continue
         c["where"]["revision"] = rev
-        if rev and (git or {}).get("dirty"):
-            c["where"]["revision_note"] = "the folder has changes that are not committed"
+        if rev and (git or {}).get("dirty"):     # `note`: the files could not be compared, so they count as changed
+            note = (git or {}).get("note")
+            c["where"]["revision_note"] = (note[:300] if isinstance(note, str) and note
+                                           else "the folder has changes that are not committed")
         c["status"] = _status(f, earlier)
