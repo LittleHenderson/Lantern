@@ -19,7 +19,11 @@ FAILS=0
 step() { printf '\n== %s\n' "$1"; }
 ok()   { printf 'PASS  %s\n' "$1"; }
 bad()  { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS + 1)); }
-check() { local name="$1"; shift; if "$@" >"$W/log" 2>&1; then ok "$name"; else bad "$name"; tail -20 "$W/log"; fi; }
+check() { local name="$1"; shift; if "$@" >"$W/log" 2>&1; then ok "$name"; PASSED=1; else bad "$name"; tail -20 "$W/log"; PASSED=0; fi; }
+# After a check that passed: the lines of its output that say what was measured (a failed check has shown its last
+# lines already). The browser checks say what their pages and their browser asked of the outside (tools/outside.js);
+# Firefox and WebKit run only in CI, so CI's log is the one place where their counts can be read.
+said() { if [ "${PASSED:-0}" = 1 ]; then grep -E "$1" "$W/log" || true; fi; }
 # Like check, with a time budget in seconds (test checklist 3.3): a sample app that took 0.6 s and now takes a minute is a
 # regression even when its results are right. Budgets are ~30x the measured time so slow CI runners pass and a hang or a
 # quadratic loop fails. LANTERN_BUDGET_SCALE=2 doubles every budget on a slow machine.
@@ -165,14 +169,18 @@ if [ "${1:-}" = "--browser" ]; then
   # no page under test reaches the internet (tools/outside.js): the app's font request is answered inside the browser,
   # anything else a page asks of the outside fails its check. First the helper itself, in every engine.
   check "pages under test stay off the internet: fonts answered in the browser, anything else refused and reported" node tools/outside.js
+  said '^outside\.js in '
   for eng in ${LANTERN_BROWSERS:-}; do
     PW_BROWSER=$eng check "pages under test stay off the internet in $eng" node tools/outside.js
+    said '^outside\.js in '
   done
   check "viewer: no JS errors, accessible (axe + keyboard), desktop light + phone dark" node tools/viewer_smoke.js "$W/shop/report.html" "$W/shot"
+  said '^outside: '
   # the same report in the other browser engines Playwright ships (CI: LANTERN_BROWSERS="firefox webkit"; needs
   # `npx playwright install firefox webkit`). Safari is WebKit; a CSS feature Chromium has and Safari lacks shows here.
   for eng in ${LANTERN_BROWSERS:-}; do
     PW_BROWSER=$eng check "viewer in $eng: no JS errors, accessible" node tools/viewer_smoke.js "$W/shop/report.html" "$W/shot-$eng"
+    said '^outside: '
   done
   H="$W/hostile"; mkdir -p "$H"
   cat > "$H/main.py" <<'EOF'
@@ -252,6 +260,7 @@ PYEOF
       for _ in $(seq 150); do grep -q '"ready"' "$C/demo.log" && break; sleep 0.2; done
       PW_BROWSER=$eng check "cloud website in $eng: no JS errors, accessible, poisoned run data stays text (desktop + phone, light + dark)" \
         node tools/cloud_site_smoke.js "http://127.0.0.1:$port/" "$C/token" "$C/shot"
+      said '^outside: '
       kill $CPID 2>/dev/null; wait $CPID 2>/dev/null; }
     cloud_smoke chromium 8872
     port=8873; for eng in ${LANTERN_BROWSERS:-}; do cloud_smoke "$eng" $port; port=$((port + 1)); done

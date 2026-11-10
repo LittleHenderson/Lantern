@@ -54,7 +54,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   tries for the font host that the first layer never saw, WebKit told the page about 17 refusals in its console, and
   Firefox asked its maker for a newer Firefox twice. All of these were stopped at this computer; they are now counted
   and shown instead of failing the check, and any other address, any other console line and anything at all in a
-  report still fail.
+  report still fail. The one-command audit prints, for each browser, what the helper's own check found and what the
+  first report and the website asked and tried, also when the check passed: Firefox and WebKit run only in CI, so
+  CI's log is where their counts can be read.
 - Every call is counted once, and Lantern follows far more of them (2026-11-09, directive stage 3). A new call-site
   inventory (`calls.json`, `graph.json` `meta.calls`) gives each call written in Python or JavaScript/TypeScript one
   record, by file, line and column, with one outcome (into the repo, likely, one of several, guessed by name only,

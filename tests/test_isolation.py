@@ -514,6 +514,17 @@ def test_every_browser_a_check_starts_has_no_way_out_but_a_proxy_here_that_refus
     assert "socket.end('HTTP/1.1 403 Forbidden" in helper and "net.connect(" not in helper.split("if (require.main === module)")[0]
 
 
+def test_the_audit_shows_what_each_browser_tried_also_when_its_check_passed():
+    """Firefox and WebKit run only in CI, so CI's log is the one place their counts can be read. The audit prints the
+    helper's own line and the `outside:` count for every engine when the check passed (a failed check shows its last
+    lines anyway), and each browser check ends by printing that count."""
+    audit = (ROOT / "tools" / "audit.sh").read_text(encoding="utf-8")
+    assert audit.count("said '^outside\\.js in '") == 2           # the helper's own check: Chromium, then each other engine
+    assert audit.count("said '^outside: '") == 3                  # the first report (Chromium, each other engine), the website
+    for program in ("viewer_smoke.js", "cloud_site_smoke.js"):
+        assert "console.log(await outside.close(b, errs));" in (ROOT / "tools" / program).read_text(encoding="utf-8")
+
+
 def _console_handlers(text: str) -> list[str]:
     """The lines of a browser check that decide what a line in a page's console means."""
     return [line.strip() for line in text.splitlines() if re.search(r"\.on\('console',", line)]
