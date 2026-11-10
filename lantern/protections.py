@@ -102,7 +102,9 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     routes = [(n, (n.entry or {}).get("detail") or "") for n in g.entry_points()
               if (n.entry or {}).get("kind") == "route" and not (n.file and repo.is_test(n.file))]
     deps = _deps_text(repo)
-    managed = MANAGED_AUTH.search(deps) or repo.grep(MANAGED_AUTH, limit=1)
+    # In code, or on an import line (a JS import names its package in a string); not a word in a pattern list
+    managed = MANAGED_AUTH.search(deps) or _code_grep(repo, MANAGED_AUTH, limit=1) or [
+        h for h in repo.grep(MANAGED_AUTH, limit=50) if re.match(r"\s*(import|from|export)\b|.*\brequire\(", h[2])][:1]
     out: list[dict] = []
 
     def item(id_, title, status, why, evidence, how, found=None):
@@ -143,7 +145,10 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     if routes:
         hits = [h for h in repo.grep(SERVER_FETCH, limit=40) if not _client_side(h[0])]
         if hits:
-            allow = _code_grep(repo, ALLOW_LIST, limit=1)
+            # Only an allow-list in a file that makes these requests: `ALLOWED_HOSTS` for the Host header a server
+            # answers to (Django, lantern-cloud's settings) says nothing about where it sends requests
+            fetching = {f for f, _, _ in hits}
+            allow = [h for h in _code_grep(repo, ALLOW_LIST, limit=200) if h[0] in fetching][:1]
             item("ssrf-allowlist", "Allow-list for outgoing requests", "in place" if allow else "add",
                  "The server makes HTTP requests to an address held in a variable. "
                  + ("An allow-list was found in the code; confirm it is checked before these requests." if allow else
@@ -255,7 +260,7 @@ def _global_auth_signs(repo) -> list[tuple[str, int, str]]:
     for f, ln, text in _code_grep(repo, GLOBAL_AUTH, limit=40):
         if re.search(r"before_request|@app\.middleware|function\s+middleware|const\s+middleware", text):
             # generic hooks count only when what follows looks at who is calling
-            window = "\n".join(repo.text(f).splitlines()[ln - 1:ln + 20])
+            window = _body(repo.text(f).splitlines(), ln - 1)
             if not mentions_auth(code_only(window, js=not f.endswith(".py")), js=not f.endswith(".py")):
                 continue
         out.append((f, ln, text))
@@ -263,6 +268,25 @@ def _global_auth_signs(repo) -> list[tuple[str, int, str]]:
         if re.fullmatch(r"(?:src/)?middleware\.[tj]sx?", f) and mentions_auth(code_only(repo.text(f), js=True), js=True):
             out.append((f, 1, "middleware file"))
     return out
+
+
+def _body(lines: list[str], i: int, cap: int = 20) -> str:
+    """The hook at line `i` (0-based) up to where it ends: the next line back at its indent or less, after its own
+    `def`/`function` line, at most `cap` lines. A hook that only counts requests is not a login check because the
+    function after it checks a session."""
+    if i >= len(lines):
+        return ""
+    indent = len(lines[i]) - len(lines[i].lstrip())
+    out, started = [lines[i]], False
+    for line in lines[i + 1:i + 1 + cap]:
+        if line.strip():
+            ind = len(line) - len(line.lstrip())
+            if started and ind <= indent and not line.lstrip().startswith((")", "}", "]")):
+                break
+            if ind > indent or re.match(r"\s*(async\s+)?(def|function)\b", line):
+                started = True
+        out.append(line)
+    return "\n".join(out)
 
 
 def _client_side(f: str) -> bool:
