@@ -33,7 +33,15 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   outside for one thing, their font stylesheet, which the one-command audit fetched from Google 26 times in one run
   with one browser (measured: 26 refused connections to fonts.googleapis.com). It is now answered inside the
   browser, so nothing is sent; anything else a page asks of the outside fails the check with the address, and a
-  report may ask for nothing at all.
+  report may ask for nothing at all. A browser has more ways out than the requests its pages make (a connection it
+  opens ahead of time because a page hinted at an address, a page nobody watched, its own housekeeping), so every
+  browser a check starts, the report speed check included, now has a proxy on this computer as its only way out; the
+  proxy forwards nothing, and a try for anything but the font host fails the check with the address.
+  Found by the new tests in their first CI run: the step that fetches the code left that run's own GitHub sign-in in
+  the checkout's git settings, where every test and every program a test starts there could read it (all 13 checkout
+  steps in the 7 workflows). No workflow leaves it now (`persist-credentials: false`); one test reads every workflow
+  for it and another looks in the checkout the tests run in. A test about git's settings now names only the kind of
+  setting it met, never the setting's name or value.
 - The rest of what Lantern's report on itself got wrong (2026-11-09). "Allow-list for outgoing requests" counted a
   list of the host names a server answers to (`ALLOWED_HOSTS`, lantern-cloud's settings) as a list of the places it
   may call; only an allow-list in a file that makes the requests counts now. An app-wide login check was read into a

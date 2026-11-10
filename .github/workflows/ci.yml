@@ -10,6 +10,8 @@ jobs:
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ matrix.python }}
@@ -50,6 +52,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
@@ -85,6 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - run: docker build -f cloud/Dockerfile -t lantern-cloud .
       - name: start it and read /v1/health
         run: |
@@ -115,6 +121,8 @@ jobs:
       PYTHONUTF8: "0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
@@ -141,6 +149,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.13"
@@ -168,6 +178,8 @@ jobs:
       SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4   # only for tests/fixtures/shop; Lantern itself comes from pip below
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"

@@ -23,7 +23,7 @@ async function until(p, fn, timeout) {
   const [base, tokenFile, out] = process.argv.slice(2);
   const site = base.replace(/\/?$/, '/') + '?intro=0';   // the site itself, without the landing intro (checked once below)
   const token = fs.readFileSync(tokenFile, 'utf8').trim();
-  const b = await chromium.launch();
+  const b = await outside.launch(chromium);   // its only way out is a proxy on this computer that refuses
   const errs = [];
   let allow503 = false, allow409 = false, allow404 = false;
   const token2 = fs.readFileSync(tokenFile + '.2', 'utf8').trim();
@@ -178,8 +178,7 @@ async function until(p, fn, timeout) {
     }
     await p.close(); await ctx.close();
   }
-  await b.close();
-  console.log(outside.summary());
+  console.log(await outside.close(b, errs));   // closes the browser, then says what was asked of the outside
   if (errs.length) { console.error(errs.join('\n')); process.exit(1); }
   console.log('cloud website: no JS errors, no dialogs, run data stayed text (desktop + phone, light + dark)');
 })().catch(e => { console.error(e); process.exit(1); });

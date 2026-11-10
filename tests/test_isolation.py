@@ -322,9 +322,50 @@ def test_the_audit_script_and_ci_run_isolated_and_name_the_same_addresses():
     assert "set -o pipefail" in tests              # the step pipes into tee: without this a failing run would pass
 
 
+def _checkouts(workflow: str) -> list[str]:
+    """The steps of a workflow that fetch the code (actions/checkout), each as its own text."""
+    steps = re.split(r"(?m)^(?=[ \t]*-[ \t])", workflow)           # one piece per list item: in a workflow, a step
+    return [step for step in steps if re.search(r"(?m)^[ \t]*(?:-[ \t]+)?uses:[ \t]*actions/checkout@", step)]
+
+
+def _keeps_the_sign_in(workflow: str) -> list[str]:
+    """The first line of every step that fetches the code and leaves the run's own GitHub sign-in in the checkout's
+    git settings, which is what actions/checkout does unless it is told `persist-credentials: false`."""
+    return [step.strip().splitlines()[0] for step in _checkouts(workflow)
+            if not re.search(r"(?m)^[ \t]*persist-credentials:[ \t]*false[ \t]*(?:#.*)?$", step)]
+
+
+def test_no_workflow_leaves_its_github_sign_in_in_the_checkout():
+    """Found in CI on 2026-11-10: a test listed git's settings in the checkout and met the run's own sign-in there
+    (tests/test_netguard.py looks in the checkout the tests run in; this reads every workflow, also the ones that
+    run on a tag, weekly or by hand)."""
+    # the shapes that leave it are caught: nothing said, said the other way, said in a comment only
+    assert _keeps_the_sign_in("steps:\n  - uses: actions/checkout@abc  # v4\n  - run: pytest\n") == ["- uses: actions/checkout@abc  # v4"]
+    assert _keeps_the_sign_in("steps:\n  - name: code\n    uses: actions/checkout@abc\n    with:\n      ref: main\n") == ["- name: code"]
+    assert _keeps_the_sign_in("  - uses: actions/checkout@abc\n    with:\n      persist-credentials: true\n") == ["- uses: actions/checkout@abc"]
+    assert _keeps_the_sign_in("  - uses: actions/checkout@abc\n    # persist-credentials: false\n  - run: x\n") == ["- uses: actions/checkout@abc"]
+    # one step's setting does not cover the next step's checkout
+    assert _keeps_the_sign_in("  - uses: actions/checkout@abc\n    with:\n      persist-credentials: false\n"
+                              "  - uses: actions/checkout@abc\n    with:\n      path: other\n") == ["- uses: actions/checkout@abc"]
+    # the safe shapes are not: the setting is there (with or without a note), or the step fetches no code
+    assert _keeps_the_sign_in("  - uses: actions/checkout@abc  # v4\n    with:\n      persist-credentials: false   # why\n      ref: x\n") == []
+    assert _keeps_the_sign_in("  - name: code\n    uses: actions/checkout@abc\n    with:\n      persist-credentials: false\n") == []
+    assert _keeps_the_sign_in("  - uses: actions/setup-python@abc\n    with:\n      python-version: '3.12'\n  - run: pytest\n") == []
+    workflows = sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+    fetched = 0
+    for workflow in workflows:
+        text = workflow.read_text(encoding="utf-8")
+        mentions = [line for line in text.splitlines() if "actions/checkout@" in line and not line.lstrip().startswith("#")]
+        assert len(_checkouts(text)) == len(mentions), f"{workflow.name}: a checkout is written in a shape this test does not read"
+        assert _keeps_the_sign_in(text) == [], workflow.name
+        fetched += len(mentions)
+    assert workflows and fetched                                 # the pattern still finds the steps it is about
+
+
 # ---- browser checks: a page under test never reaches the internet (tools/outside.js)
 
 SMOKES = ("tools/viewer_smoke.js", "tools/cloud_site_smoke.js")
+BROWSER_CHECKS = (*SMOKES, "tools/report_perf.js")
 
 
 def _unwatched(text: str) -> list[str]:
@@ -334,6 +375,12 @@ def _unwatched(text: str) -> list[str]:
             if re.search(r"\bb\.new(?:Page|Context)\(", line) and "outside.watch(" not in line + lines[i + 1]]
 
 
+def _own_way_out(text: str) -> list[str]:
+    """The lines of a browser check that start a browser any other way than outside.launch, which gives it a proxy on
+    this computer that refuses as its only way out."""
+    return [line.strip() for line in text.splitlines() if re.search(r"(?<!outside)\.launch\w*\(", line)]
+
+
 def test_every_page_a_browser_check_opens_is_kept_off_the_internet():
     # the shape that lets a page out is caught; the two safe shapes are not
     assert _unwatched("const p = await b.newPage({ viewport });\nawait p.goto(url);\n") == ["const p = await b.newPage({ viewport });"]
@@ -341,11 +388,11 @@ def test_every_page_a_browser_check_opens_is_kept_off_the_internet():
     assert _unwatched("const c = await b.newContext(); await outside.watch(c, errs, outside.FONTS);\n") == []
     for name in SMOKES:
         text = (ROOT / name).read_text(encoding="utf-8")
-        assert "require('./outside.js')" in text and "outside.summary()" in text, name
+        assert "require('./outside.js')" in text, name
         assert _unwatched(text) == [], name
     # nothing else in tools/ drives a browser, except the helper's own check and the speed check: report_perf.js times
     # a report on a slowed phone, answering its requests would change what it measures, and viewer_smoke.js already
-    # checks that the same report asks the outside for nothing
+    # checks that the same report asks the outside for nothing (its browser has no way out either: next test)
     drivers = sorted(p.name for p in (ROOT / "tools").glob("*.js") if ".launch(" in p.read_text(encoding="utf-8"))
     assert drivers == ["cloud_site_smoke.js", "outside.js", "report_perf.js", "viewer_smoke.js"], drivers
     helper = (ROOT / "tools" / "outside.js").read_text(encoding="utf-8")
@@ -354,3 +401,19 @@ def test_every_page_a_browser_check_opens_is_kept_off_the_internet():
     audit = (ROOT / "tools" / "audit.sh").read_text(encoding="utf-8")
     assert audit.count("node tools/outside.js") == 2   # the helper is checked in a real browser, in every engine
 
+
+def test_every_browser_a_check_starts_has_no_way_out_but_a_proxy_here_that_refuses():
+    """A page's requests are not a browser's only way out (a connection hint, a page nobody watched, the browser's own
+    housekeeping): each check starts its browser through outside.launch and closes it through outside.close, which
+    turns anything that reached the proxy, other than a try for the pages' font host, into a failure."""
+    assert _own_way_out("const b = await chromium.launch();") == ["const b = await chromium.launch();"]
+    assert _own_way_out("const b = await pw[engine].launchPersistentContext(dir);") != []
+    assert _own_way_out("const b = await outside.launch(chromium);   // its only way out") == []
+    for name in BROWSER_CHECKS:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert _own_way_out(text) == [], name
+        assert text.count("outside.launch(") == text.count("outside.close(") >= 1, name
+        assert "b.close()" not in text, name                   # closing any other way would skip the count
+    helper = (ROOT / "tools" / "outside.js").read_text(encoding="utf-8")
+    assert "proxy: { server: await proxy(), bypass: 'localhost,127.0.0.1' }" in helper
+    assert "socket.end('HTTP/1.1 403 Forbidden" in helper and "net.connect(" not in helper.split("if (require.main === module)")[0]

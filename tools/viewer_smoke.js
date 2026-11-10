@@ -27,7 +27,7 @@ async function until(p, fn, timeout) {
 }
 
 async function appSmoke(url, out, image, expectText) {
-  const b = await chromium.launch();
+  const b = await outside.launch(chromium);   // its only way out is a proxy on this computer that refuses
   const errs = [];
   let allow400 = false;   // the terminal's refusal answers 400 on purpose; Chromium logs that as a console error
   const step = (name, what) => console.log(`${name}: ${what}`);
@@ -123,10 +123,9 @@ async function appSmoke(url, out, image, expectText) {
     } catch (e) { errs.push(`${name}: the smoke test could not drive the app: ${e.message.split('\n')[0]}`); }
     await p.close();
   }
-  console.log(outside.summary());
+  console.log(await outside.close(b, errs));   // closes the browser, then says what was asked of the outside
   console.log(errs.length ? errs.join('\n') : 'no JS errors');
   if (errs.length) process.exitCode = 1;
-  await b.close();
 }
 
 (async () => {
@@ -137,7 +136,7 @@ async function appSmoke(url, out, image, expectText) {
   }
   const [file, out] = process.argv.slice(2);
   if (!file || !out) { console.error('usage: node tools/viewer_smoke.js REPORT.html OUT_PREFIX'); process.exit(2); }
-  const b = await chromium.launch();
+  const b = await outside.launch(chromium);   // its only way out is a proxy on this computer that refuses
   const errs = [];
   for (const [name, vp] of [['desk', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
     // the phone pass runs in dark mode, so both appearances get the accessibility checks
@@ -277,8 +276,7 @@ async function appSmoke(url, out, image, expectText) {
     } catch (e) { errs.push(`${name}: the smoke test could not drive the page: ${e.message.split('\n')[0]}`); }
     await p.close();
   }
-  console.log(outside.summary());
+  console.log(await outside.close(b, errs));   // closes the browser, then says what was asked of the outside
   console.log(errs.length ? errs.join('\n') : 'no JS errors');
   if (errs.length) process.exitCode = 1;
-  await b.close();
 })();

@@ -42,6 +42,12 @@ def _json(r):
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
+def _kept_as(name: str) -> str:
+    """A variable's name the way this system keeps it. Windows has one variable whatever the case it is written in
+    (`https_proxy` and `HTTPS_PROXY` are the same one) and Python shows it in capitals; elsewhere they are two."""
+    return name.upper() if os.name == "nt" else name
+
+
 # ----------------------------------------------------------------------------- a forwarding proxy on this computer
 FORWARDER = """
     seen = []
@@ -81,8 +87,8 @@ def test_a_forwarding_proxy_on_this_computer_is_a_way_out_and_is_refused():
     ours = f"http://127.0.0.1:{out['ours']}"
     v = out["vars"]
     for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "YARN_HTTPS_PROXY", "GLOBAL_AGENT_HTTPS_PROXY", "ALL_PROXY"):
-        assert v[name] == ours, (name, v[name])                   # every tool's proxy setting now ends at the guard
-    assert "npm_config_https_proxy" not in v                      # npm's own settings are taken out with the keys
+        assert v[_kept_as(name)] == ours, name                    # every tool's proxy setting now ends at the guard
+    assert _kept_as("npm_config_https_proxy") not in v            # npm's own settings are taken out with the keys
     assert v["ELECTRON_GET_USE_PROXY"] == "1"                     # a switch is not an address: untouched
     assert v["NO_PROXY"] == ng.NO_PROXY
     assert ng.MARK in out["direct"]                               # the address itself is refused, though it is local
@@ -213,12 +219,18 @@ def test_a_refusal_is_an_ordinary_connection_error_with_a_plain_reason(network_a
 
 
 def test_this_computer_stays_reachable():
+    """By address and by name. The listener takes each caller in before the next one calls: a caller left waiting
+    fills a short queue, and Windows refuses the next one where Linux lets it wait (found in CI on 2026-11-10, where
+    the second call was refused by the listener's full queue, not by the guard)."""
     server = socket.socket()
     server.bind(("127.0.0.1", 0))
-    server.listen(1)
+    server.listen(8)
+    server.settimeout(5)
     try:
         for host in ("127.0.0.1", "localhost"):
             c = socket.create_connection((host, server.getsockname()[1]), timeout=5)
+            taken, _ = server.accept()
+            taken.close()
             c.close()
         assert socket.getaddrinfo("localhost", 80) and socket.getaddrinfo(None, 80)
         socket.getfqdn()                                       # looks this computer's own name up; must not count
@@ -295,13 +307,86 @@ def test_git_settings_in_variables_go_together_or_git_stops_working():
     assert subprocess.run([git, "config", "--list"], env=base, capture_output=True).returncode == 0
 
 
-def test_a_git_setting_from_the_developers_shell_does_not_reach_a_test():
-    assert [k for k in os.environ if k.startswith("GIT_CONFIG") and k != "GIT_CONFIG_NOSYSTEM"] == []
+# What a git setting can carry. A test's message names the kind and nothing else: a setting's value can be a sign-in
+# (`http.<address>.extraheader`), and so can its name (`url.https://me:TOKEN@host/.insteadof`).
+HEADER = "a sign-in sent with every request (extraheader)"
+PASSWORD = "an address with a password in it"
+REWRITE = "an address rewritten to another (insteadof)"
+IDENTITY = "the developer's own name on commits (user.email, signingkey)"
+
+
+def _git_carries(folder, *scope):
+    """What the settings carry that git reads when it is started in `folder`: every setting, or with `--local` the
+    checkout's own. None when git is not installed or cannot say (`--local` outside a checkout). Looking for a
+    checkout stops at `folder`, so a temporary folder that happens to sit inside one shows only what the shell and
+    the home folder hand to git. The settings themselves stay in here: a test that fails shows its own variables
+    when pytest is asked to (`-l`), and only the kinds are among them."""
     git = shutil.which("git")
-    if git:
-        r = subprocess.run([git, "config", "--list", "--show-origin"], capture_output=True, text=True, encoding="utf-8")
-        assert r.returncode == 0 and "insteadof" not in r.stdout.lower() and "extraheader" not in r.stdout.lower()
-        assert "user.email" not in r.stdout and "signingkey" not in r.stdout.lower()     # nor the developer's identity
+    if not git:
+        return None
+    env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(Path(folder).parent)}
+    r = subprocess.run([git, "config", *scope, "--list", "-z"], cwd=folder, env=env, capture_output=True,
+                       text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        return None
+    return _carried(tuple(item.partition("\n")[::2]) for item in r.stdout.split("\0") if item)
+
+
+def _carried(settings) -> list:
+    """The kinds of thing these git settings, (name, value) pairs, carry that a test must not be handed."""
+    kinds = set()
+    for name, value in settings:
+        section, _, key = name.lower().rpartition(".")
+        if key == "extraheader":
+            kinds.add(HEADER)
+        if key in ("insteadof", "pushinsteadof"):
+            kinds.add(REWRITE)
+        if ng._URL_PASSWORD.search(name) or ng._URL_PASSWORD.search(value):
+            kinds.add(PASSWORD)
+        if (section, key) == ("user", "email") or key == "signingkey":
+            kinds.add(IDENTITY)
+    return sorted(kinds)
+
+
+def test_what_a_git_setting_can_carry():
+    """Made-up settings: the ones that carry a sign-in, send git somewhere else or name the developer, each next to
+    the ordinary setting that must stay clean."""
+    header = "AUTHORIZATION: basic " + base64.b64encode(b"x-access-token:made-up").decode("ascii")
+    assert _carried([("http.https://github.com/.extraheader", header)]) == [HEADER]
+    assert _carried([("http.extraHeader", header)]) == [HEADER]
+    assert _carried([("remote.origin.url", "https://me:made-up@git.example/app.git")]) == [PASSWORD]
+    assert _carried([("url.https://me:made-up@git.example/.insteadOf", "https://git.example/")]) == sorted([PASSWORD, REWRITE])
+    assert _carried([("url.git@git.example:.pushInsteadOf", "https://git.example/")]) == [REWRITE]
+    assert _carried([("user.email", "me@example.com")]) == [IDENTITY]
+    assert _carried([("user.signingkey", "ABCD1234")]) == [IDENTITY]
+    assert _carried([
+        ("remote.origin.url", "https://github.com/LittleHenderson/Lantern.git"),      # no password: an address
+        ("remote.origin.url", "http://someone@127.0.0.1:8080/git/app"),               # a name before the @, no password
+        ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
+        ("branch.main.remote", "origin"), ("core.bare", "false"), ("core.autocrlf", "true"), ("gc.auto", "0"),
+        ("user.name", "Someone"), ("alias.email", "log --format=%ae"), ("http.sslverify", "true"),
+        ("safe.directory", "/home/someone/app"),
+    ]) == []
+
+
+def test_a_git_setting_from_the_developers_shell_does_not_reach_a_test(tmp_path):
+    """Asked in a folder that is no checkout, git shows what the shell and the home folder hand it: nothing of the
+    developer's. (Asked in the checkout it also shows the checkout's own settings: the next test.)"""
+    assert [k for k in os.environ if k.upper().startswith("GIT_CONFIG") and k.upper() != "GIT_CONFIG_NOSYSTEM"] == []
+    carried = _git_carries(tmp_path)
+    assert carried in (None, [])                 # None: git is not installed here
+
+
+def test_the_checkout_the_tests_run_in_holds_no_sign_in():
+    """Found in CI on 2026-11-10: the step that fetches the code had left that run's own GitHub sign-in in the
+    checkout's git settings, where every test, and every program a test starts there, could read it. The workflows
+    no longer leave it (`persist-credentials: false`, tests/test_isolation.py); this looks where the tests run.
+    A developer whose own checkout fails here has a password or token saved in it (`git config --local --list`
+    shows where): a credential helper keeps it out of the folder."""
+    carried = _git_carries(ROOT, "--local")
+    if carried is None:
+        pytest.skip("git cannot list this folder's own settings: no git here, or not a checkout it accepts")
+    assert [kind for kind in carried if kind in (HEADER, PASSWORD)] == []
 
 
 # ----------------------------------------------------------------------------- what the guard refuses, and what it does not
