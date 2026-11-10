@@ -17,8 +17,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__
-from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
+from . import SCHEMA_VERSION, __version__, scanresult
+from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
 from .security import ID_VERSION
@@ -84,7 +84,10 @@ def tool_versions(sec: dict | None) -> list[dict]:
     except ImportError:
         pass
     for t in (sec or {}).get("tools", []):
-        rows.append({"tool": t.get("tool"), "version": t.get("version"), "role": "scanner", "status": t.get("status")})
+        if not isinstance(t, dict):
+            continue
+        rows.append({"tool": t.get("tool"), "version": t.get("version"), "role": "scanner", "status": t.get("status"),
+                     "state": scanresult.state_of(t)})
     return rows
 
 
@@ -133,6 +136,47 @@ def _call_site_words(c: dict) -> str:
             + (f" ({c['unresolved_in_tests']} of those in test files)" if c.get("unresolved_in_tests") else "") + ".")
 
 
+AUDIT_LANG = {"pip-audit": "Python", "npm-audit": "npm", "maven-audit": "Gradle/Maven", "composer-audit": "PHP (Composer)",
+              "gem-audit": "Ruby (Bundler)"}
+
+
+def _reason(t: dict) -> str:
+    """The reason in a record, without the "error:"/"skipped:" prefix the status sentence carries."""
+    why = str(t.get("why") or "").strip()
+    if why:
+        return why
+    status = str(t.get("status") or "").strip()
+    return status.split(":", 1)[1].strip() if ":" in status else status
+
+
+def incomplete_lines(tools: list[dict]) -> list[str]:
+    """One Limits line per scanner that applied to the project and did not finish, did not cover everything, or was
+    skipped: what it was for, what happened, and that whatever it would have found is missing."""
+    out = []
+    for t in scanresult.incomplete(tools):
+        name, st = str(t.get("tool") or "?"), scanresult.state_of(t)
+        role = f" ({t['role']})" if t.get("role") else ""
+        reason = _reason(t)
+        if st == "timeout":
+            out.append(f"The {name} scan{role} did not finish: it timed out {reason}. Anything it would have found is "
+                       "missing from this report.".replace("timed out .", "timed out."))
+        elif st == "failed":
+            out.append(f"The {name} scan{role} did not finish: {reason}. Anything it would have found is missing from "
+                       "this report.")
+        elif st == "partial":
+            errs = [str(e) for e in (t.get("errors") or []) if isinstance(e, (str, int, float))][:3]
+            out.append(f"The {name} scan{role} covered only part of the project: {reason}"
+                       + (f" ({'; '.join(errs)})" if errs else "") + ". The findings it did produce are included.")
+        elif st == "unavailable":
+            out.append(f"The {name} scan{role} did not run: it is not installed ({reason}). Anything it would have "
+                       "found is missing from this report.")
+        elif name in AUDIT_LANG:
+            out.append(f"{AUDIT_LANG[name]} dependencies were not checked for known vulnerabilities ({t.get('status')}).")
+        else:
+            out.append(f"The {name} scan{role} was skipped: {reason}.")
+    return out
+
+
 def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy: str, exp: dict | None) -> list[str]:
     st = g.stats()
     out = [
@@ -157,11 +201,9 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
         out.append("Frontend call edges are static only (no JavaScript runtime tracing yet).")
     if sec is None:
         out.append("Security scanners were not run for this report (--no-scan): no findings does not mean no problems.")
-    for t in (sec or {}).get("tools", []):
-        st = str(t.get("status") or "")
-        if t.get("tool") in AUDIT_TOOLS and st != "ok" and st not in NOTHING_TO_CHECK:
-            lang = {"pip-audit": "Python", "npm-audit": "npm", "maven-audit": "Gradle/Maven", "composer-audit": "PHP (Composer)", "gem-audit": "Ruby (Bundler)"}[t["tool"]]
-            out.append(f"{lang} dependencies were not fully checked for known vulnerabilities ({st}).")
+    tools = [t for t in (sec or {}).get("tools", []) if isinstance(t, dict)]
+    out += incomplete_lines(tools)
+    for t in tools:
         if t.get("tool") == "pip-audit" and t.get("unpinned"):
             out.append(f"{t['unpinned']} Python requirement(s) give a range, not an exact version, so they were not "
                        "checked for known vulnerabilities. A lock file fixes this.")
@@ -255,6 +297,10 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
             "fixed": fixed, "changed": changed, "in_tests": sum(1 for f in findings if f.get("in_tests")),
             "protections": [{k: x.get(k) for k in ("id", "title", "status", "why", "evidence", "how", "found")}
                             for x in (rd or {}).get("protections") or []],
+            # scanners that applied and did not finish or did not cover everything (scanresult.py); the badge says
+            # "scan incomplete" while this list is not empty
+            "incomplete": [{k: t.get(k) for k in ("tool", "state", "status", "why", "role", "version")}
+                           for t in scanresult.incomplete((sec or {}).get("tools")) if isinstance(t, dict)],
         },
         "understanding": narratives,
         "provenance": {"tools": tool_versions(sec), "models": models,
@@ -402,6 +448,11 @@ def _memo(ev: dict) -> dict:
                      + (", " + ", ".join(tail) if tail else "") + ".")
     else:
         parts.append("No findings are open.")
+    inc = [x for x in (se.get("incomplete") or []) if isinstance(x, dict) and x.get("tool")]
+    if inc:
+        names = ", ".join(E(x["tool"]) for x in inc[:4]) + (f" and {len(inc) - 4} more" if len(inc) > 4 else "")
+        parts.append(f"<b>The scan is incomplete:</b> {names} did not finish or did not cover everything, so anything "
+                     f"{'it' if len(inc) == 1 else 'they'} would have found is missing from these numbers.")
     parts.append("Facts in this report come from Lantern's parsers and scanners on the commit above; a model wrote none of them.")
     # the "still open" paragraph: the critical ones with where they start
     crits = [f for f in se["open"] if f["rank"] == "critical"]
@@ -444,6 +495,8 @@ def badge_text(ev: dict | None) -> str:
     crit = now.get("critical")
     if isinstance(crit, int) and not isinstance(crit, bool):
         parts.append(f"{crit} critical")
+    if _incomplete(ev):
+        parts.append("scan incomplete")
     when = str(h.get("generated_at") or "")[:10]
     if when:
         try:
@@ -453,13 +506,19 @@ def badge_text(ev: dict | None) -> str:
     return " · ".join(parts) or "no analysis yet"
 
 
+def _incomplete(ev: dict | None) -> bool:
+    inc = ((ev or {}).get("security") or {}).get("incomplete") if isinstance((ev or {}).get("security"), dict) else None
+    return isinstance(inc, list) and any(isinstance(x, dict) for x in inc)
+
+
 def badge_svg(score: int | None = None, grade: str | None = None, ev: dict | None = None) -> str:
     """`Lantern · commit 1a2b3c · 0 critical · Oct 31`. Color follows the open findings (none critical or high:
-    good), not the readiness score, which stays in the tooltip."""
+    good), not the readiness score, which stays in the tooltip. A scan that did not finish is never green: it says
+    "scan incomplete" in grey, because "0 critical" from a scanner that did not run is not a result."""
     now = ((ev or {}).get("scorecard") or {}).get("now") or {}
     crit = now.get("critical") if isinstance(now.get("critical"), int) else 0
     high = now.get("high") if isinstance(now.get("high"), int) else 0
-    color = "#B42318" if crit else "#B54708" if high else "#0D9488" if now else "#64748B"
+    color = "#B42318" if crit else "#B54708" if high else "#64748B" if _incomplete(ev) else "#0D9488" if now else "#64748B"
     right = badge_text(ev)
     title = f"Lantern: {right}" + (f"; readiness {score}/100 {grade}" if score is not None and grade else "")
     w1, w2 = 58, 12 + round(6.3 * len(right))
@@ -585,8 +644,27 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
            if x.get("status") == "in place" and isinstance(x.get("found"), list) and x.get("found") else "")
         + (f"<div class='reason'>{E(x.get('how'))}</div>" if x.get("status") != "in place" else "") + "</td></tr>" for x in prot)
     tools = "".join(f"<tr><td>{E(t['tool'] or '')}</td><td>{E(t.get('version') or '–')}</td><td class='muted'>"
-                    f"{E(t.get('role') or '')}{(' · ' + E(t['status'])) if t.get('status') and t['status'] != 'ok' else ''}"
+                    f"{E(t.get('role') or '')}"
+                    f"{(' · <b class=warn>' + E(t.get('state')) + '</b>') if t.get('state') not in (None, 'ok', 'skipped') else ''}"
+                    f"{(' · ' + E(t['status'])) if t.get('status') and t['status'] != 'ok' else ''}"
                     f"</td></tr>" for t in ev["provenance"]["tools"])
+    inc = [x for x in se.get("incomplete") or [] if isinstance(x, dict) and x.get("tool")]
+    inc_html = ""
+    if inc:
+        def sentence(x):
+            st = scanresult.state_of(x)
+            who = E(x["tool"]) + (f" ({E(x['role'])})" if x.get("role") else "")
+            reason = E(_reason(x))
+            if st in scanresult.BROKEN:
+                return f"{who} did not finish: {('timed out ' + reason).strip() if st == 'timeout' else reason}."
+            if st == "partial":
+                return f"{who} covered only part of the project: {reason}."
+            if st == "unavailable":
+                return f"{who} did not run: not installed ({reason})."
+            return f"{who} was skipped: {reason}."
+        inc_html = ("<div class='incomplete'><b>Scan incomplete.</b> " + " ".join(sentence(x) for x in inc)
+                    + " Anything those scanners would have found is missing from this report; the numbers above are "
+                    "not a clean result.</div>")
     models = "".join(f"<tr><td>{E(m['model'] or '')}</td><td>{E(m['task'])}</td><td class='muted'>{E(m.get('validated'))} "
                      f"validated, {E(m.get('failed'))} rejected · prompt {E(m.get('prompt_version') or '-')}</td></tr>"
                      for m in ev["provenance"]["models"]) or "<tr><td colspan=3 class='muted'>No model was used.</td></tr>"
@@ -657,6 +735,7 @@ h1{{color:var(--ink);font:700 30px/1.15 var(--display);letter-spacing:-.028em;ma
 h2 small{{color:var(--muted);font:400 13px var(--font);letter-spacing:0}} h4{{color:var(--ink);font:650 14.5px var(--display);margin:20px 0 8px}}
 code{{font:12.5px var(--mono);background:var(--soft);color:var(--ink);padding:1px 6px;border-radius:6px;overflow-wrap:anywhere}}
 .muted{{color:var(--muted)}} .warn{{color:var(--warn-ink)}}
+.incomplete{{margin:14px 0 0;padding:10px 14px;border-radius:10px;background:var(--warning-soft);color:var(--ink);font-size:14px;line-height:1.5}} .incomplete b{{color:var(--warn-ink)}}
 .kv{{display:grid;grid-template-columns:160px 1fr;gap:8px 16px}} .kv div:nth-child(odd){{color:var(--muted)}} .kv div:nth-child(even){{color:var(--ink)}}
 .score{{display:flex;gap:20px;align-items:center;flex-wrap:wrap}} .big{{font:700 52px/1 var(--display);letter-spacing:-.035em;color:var(--ink);font-variant-numeric:tabular-nums}}
 .grade{{font:700 20px/1 var(--display);width:46px;height:46px;border-radius:13px;display:grid;place-items:center;background:var(--hover);color:var(--ink)}}
@@ -720,7 +799,7 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
 <section><div class="eyebrow"><span>Evidence Report · Lantern {E(__version__)}</span><span>{E(h['name'])}{(' · commit ' + E(commit[:7])) if commit else ''} · {E(h['generated_at'][:10])}</span></div>
 <h1 class="memo">{memo['title']}</h1>
 <p class="lead">{memo['lead']}</p>
-{tiles}
+{tiles}{inc_html}
 <div class="simp"><h4>1 · Fixed since the baseline</h4>{fixed_list}
 <h4>2 · Still open</h4><p>{memo['still']}</p>
 <div class="contents">Continues: 3 · Scorecard · 4 · Architecture · 5 · Security · 6 · Understanding · 7 · Provenance · 8 · Limits · 9 · Digest</div></div>
