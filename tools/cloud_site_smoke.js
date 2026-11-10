@@ -7,6 +7,7 @@
 const chromium = require('playwright')[process.env.PW_BROWSER || 'chromium'];
 const fs = require('fs');
 const a11y = require('./a11y.js');
+const outside = require('./outside.js');   // no page under test reaches the internet
 
 async function fresh(p, url) { await p.goto('about:blank'); await p.goto(url); await p.waitForLoadState('load'); }
 async function until(p, fn, timeout) {
@@ -30,6 +31,7 @@ async function until(p, fn, timeout) {
   for (const [name, viewport] of sizes) for (const scheme of ['light', 'dark']) {
     const tag = `${name}-${scheme}`;
     const ctx = await b.newContext({ viewport, colorScheme: scheme });
+    await outside.watch(ctx, errs, outside.FONTS);
     const watch = p => {
       p.on('pageerror', e => errs.push(`${tag}: ${e.message}`));
       // Firefox-only noise, not page code: its favicon loader reporting the page's own content policy
@@ -132,7 +134,8 @@ async function until(p, fn, timeout) {
     await p.click('#doshare'); await p.waitForSelector('#shareurl');
     const shareUrl = await p.$eval('#shareurl', i => i.value);
     await p.screenshot({ path: `${out}-${tag}-shared.png` });
-    const anon = await b.newContext({ viewport, colorScheme: scheme }); const q = await anon.newPage(); watch(q);
+    const anon = await b.newContext({ viewport, colorScheme: scheme }); await outside.watch(anon, errs, outside.FONTS);
+    const q = await anon.newPage(); watch(q);
     const got = await q.goto(shareUrl);
     if (!got || got.status() !== 200) errs.push(`${tag}: the share link did not open (${got && got.status()})`);
     await q.waitForSelector('#tabs'); await clean(q, 'shared report');
@@ -161,6 +164,7 @@ async function until(p, fn, timeout) {
       allow409 = false;
       // the second demo account has nothing running: deleting it signs the browser out and the account is gone
       const ctx2 = await b.newContext({ viewport, colorScheme: scheme });
+      await outside.watch(ctx2, errs, outside.FONTS);
       await ctx2.addCookies([{ name: 'lt', value: token2, url: base }]);
       const r = await ctx2.newPage(); watch(r);
       await r.goto(site); await r.waitForSelector('article.app');
@@ -175,6 +179,7 @@ async function until(p, fn, timeout) {
     await p.close(); await ctx.close();
   }
   await b.close();
+  console.log(outside.summary());
   if (errs.length) { console.error(errs.join('\n')); process.exit(1); }
   console.log('cloud website: no JS errors, no dialogs, run data stayed text (desktop + phone, light + dark)');
 })().catch(e => { console.error(e); process.exit(1); });

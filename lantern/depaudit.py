@@ -44,6 +44,10 @@ NOTHING_TO_CHECK = ("skipped: no Python dependency files", "skipped: no package.
                     "skipped: no composer.lock", "skipped: no Gemfile.lock")
 AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit")
 OSV_API = "https://api.osv.dev/v1"
+# Every host the audits ask: pip-audit's vulnerability service (it runs with --no-deps --disable-pip, so it downloads
+# no package), the npm registry, OSV. `lantern analyze` reaches nothing else, so a run that may reach only these
+# (python tools/netguard/lantern_netguard.py --allow <these> -- lantern analyze ...) loses nothing.
+AUDIT_HOSTS = ("pypi.org", "registry.npmjs.org", "api.osv.dev")
 NPM_SEVERITY = {"critical": "HIGH", "high": "HIGH", "moderate": "MEDIUM", "low": "LOW", "info": "LOW"}
 
 

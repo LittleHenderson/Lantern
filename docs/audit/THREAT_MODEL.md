@@ -80,13 +80,23 @@ script in the app's origin can act as the user. That makes XSS in the viewers (T
   errors include the HTTP body from the provider, which could echo request details (**review**).
 * On Windows, mode 0600 has no effect; the file relies on the user profile's ACLs (**open**, documented here).
 
+* Tests and benchmarks never use a key: every run takes the key, token and sign-in variables out of its environment
+  and moves the home folder (where `lantern login` and `keys.json` live) to an empty temporary one before anything
+  else happens (`tools/netguard/lantern_netguard.py` `scrub`, `temp_home`; `tests/test_isolation.py` plants 19 keys
+  and a saved sign-in and shows no test can read them). The only place a real provider is used on purpose is the
+  live suite (`bench/live.py`), which needs the model, the one destination and a request cap on the command line and
+  never falls back to a key it finds.
+
 ### T5. Code leaving the machine
 
 * Only `explain` sends code, only to the configured provider, and the UI says so in plain words when the provider is
   not local (spec 5.3). `openai-compatible` counts as local only when its base URL is localhost/127.0.0.1.
 * `analyze`, `verify`, scanners, and the server make no network calls except the dependency audits: pip-audit
   (PyPI/OSV) and `npm audit` (registry.npmjs.org). They send package names and versions, never code. `--offline` or
-  `LANTERN_OFFLINE=1` turns them off. Only `name==version` pairs reach pip-audit (index options in the repo are
+  `LANTERN_OFFLINE=1` turns them off. The three hosts they ask are `depaudit.AUDIT_HOSTS` (pypi.org,
+  registry.npmjs.org, api.osv.dev); CI's self-audit runs with every other address refused and passes.
+  `LANTERN_NO_REAL_PROVIDERS=1` refuses every model and gateway address that is not on this computer
+  (`providers.check_destination`); every test and benchmark run sets it. Only `name==version` pairs reach pip-audit (index options in the repo are
   ignored), and `npm audit` gets `--registry` explicitly so a repo's `.npmrc` can't redirect it. Earlier note: `pip-audit` queries a
   vulnerability database when `requirements*.txt` exists (**document in UI**: currently only in Provenance).
 

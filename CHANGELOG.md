@@ -5,6 +5,34 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Tests and benchmarks can no longer reach a real AI provider or the internet, and never see the keys of the person
+  running them (2026-11-09). Before, a full test run made 11 connections to the outside (6 by a `pip-audit` program one
+  test started, 5 to the OSV vulnerability database from the set-up of five test files), a test could read 13 of 19
+  keys planted in the shell and the saved sign-in, and code that hid a connection error let the attempt pass unseen.
+  Now every run starts in an empty temporary home folder with every key, token and saved sign-in taken out of the
+  environment, real model providers switched off (`LANTERN_NO_REAL_PROVIDERS`: only a model on this computer may
+  answer, anything else is refused with a plain error), and every connection or name lookup that is not for this
+  computer refused and written down, in the tests and in the programs they start (`tools/netguard/`). A test that
+  tries the network fails, also when the code under test swallowed the error, when the attempt was made by a program
+  it started, or in a set-up step; so does the run when something tries outside any test. On Linux, CI also runs the
+  tests in a network that holds nothing but the computer's own address and has the operating system write down every
+  address any program tries (`tools/netless.py --watch`); the measured count after the change is 0. The benchmarks
+  (`bench/run_bench.py`, `bench/mobile/run_mobile.py`, `bench/fuzz.py`, `tools/large_apps.py`, `tools/mutation.py`,
+  `tools/load_test.py`) and `tools/audit.sh` start the same way and may only reach the hosts they name (the
+  repositories they clone, the three addresses the dependency audit asks); the load test refuses any website that is
+  not on this computer. The two scripts that measure a real model (`bench/explain_eval.py`, `bench/ask_eval.py`,
+  the `model-eval` workflow) are now a separate live suite that starts only with `--live --model PROVIDER/MODEL
+  --destination HOST --max-requests N` (and `--send-this-code` for code that is not a Lantern sample): there is no
+  default model and no falling back to whatever key the shell holds, the model must be served from the approved host,
+  and the run stops at the request cap and keeps what it has. Also fixed on the way: the CI step that runs the tests
+  piped its output into `tee` without `pipefail`, so on Python 3.11 and 3.12 a failing test run could not fail the
+  step (the same in the weekly large-apps job's phone and load checks).
+  The browser checks keep their pages off the internet too (`tools/outside.js`): the app and the website ask the
+  outside for one thing, their font stylesheet, which the one-command audit fetched from Google 26 times in one run
+  with one browser (measured: 26 refused connections to fonts.googleapis.com). It is now answered inside the
+  browser, so nothing is sent; anything else a page asks of the outside fails the check with the address, and a
+  report may ask for nothing at all.
+
 - Lantern's report on its own code told four things wrong (2026-11-09, found by checking the Evidence Report of run
   b51NcYcvaZzhuElb). Reports made on the website were titled "repo" for every project, because the code was read
   from a folder called `repo`; it is now read from a folder named after the repository (`Lantern`, `shop`), so the

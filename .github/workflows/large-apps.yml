@@ -43,13 +43,15 @@ jobs:
       - name: the biggest report opens on a slowed phone (tools/report_perf.js)
         if: always()
         run: |
+          set -o pipefail   # the checks below are piped into tee: without this the step would pass whatever they said
           npm i --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
-          BIG=$(ls -S /tmp/large/*.out/report.html 2>/dev/null | head -1)
+          BIG=$(ls -S /tmp/large/*.out/report.html 2>/dev/null | head -1 || true)
           if [ -n "$BIG" ]; then node tools/report_perf.js "$BIG" --budget-ms=8000 | tee perf.json; else echo "no report to open"; fi
           { echo "## Report on a phone"; echo; echo '```'; cat perf.json 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: many readers on the website at once (tools/load_test.py)
         if: always()
         run: |
+          set -o pipefail   # the load test is piped into tee: without this the step would pass whatever it said
           pip install -e ".[scan,dev]"
           python tools/cloud_site_demo.py --port 8872 --token-file /tmp/tok > /tmp/demo.log 2>&1 &
           for _ in $(seq 150); do grep -q '"ready"' /tmp/demo.log && break; sleep 0.2; done

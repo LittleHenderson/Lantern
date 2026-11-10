@@ -4,15 +4,28 @@
 # made for this purpose; it spends that account's allowance) and scores the Ask Lantern eval. The step summary shows the
 # explain-runs row to paste into docs/explain-runs.md and the Ask Lantern score. Fails when the first-try rate is under
 # 80% or the Ask Lantern score under 90%, so a quiet model regression is a red run, not a tester's surprise.
+#
+# This is the live suite (bench/live.py): the only place a real model provider is used on purpose. It never starts by
+# itself (no push, pull-request or schedule trigger). Its inputs are the approval: the model written out in full, the
+# one host the samples' code may be sent to, and a cap on the number of requests. The scripts refuse to start when
+# any of them is missing or when the model is not served from that host.
 name: model-eval
 
 on:
   workflow_dispatch:
     inputs:
       model:
-        description: "provider/model (default: the free allowance's default model)"
-        required: false
-        default: ""
+        description: "provider/model, written out in full (the free allowance's model is lantern/claude-haiku-5-5)"
+        required: true
+        default: "lantern/claude-haiku-5-5"
+      destination:
+        description: "the one host the samples' code may be sent to (lantern-gateway.fly.dev for lantern/..., api.anthropic.com for anthropic/...)"
+        required: true
+        default: "lantern-gateway.fly.dev"
+      max_requests:
+        description: "spending cap: each of the three runs stops after this many questions to the model"
+        required: true
+        default: "120"
       min_first_try:
         description: "fail when fewer than this share of explanations pass first try"
         required: false
@@ -45,24 +58,30 @@ jobs:
         env:
           LANTERN_TOKEN: ${{ secrets.LANTERN_TOKEN }}
           LANTERN_ACCEPT_DATA_SHARING: "1"   # the samples are Lantern's own files; consent is given here, not at a prompt
+          MODEL: ${{ inputs.model }}
+          DESTINATION: ${{ inputs.destination }}
+          MAX_REQUESTS: ${{ inputs.max_requests }}
+          MIN_FIRST_TRY: ${{ inputs.min_first_try }}
         run: |
-          M="${{ github.event.inputs.model }}"
-          ARGS=""; [ -n "$M" ] && ARGS="--model $M"
           echo "## Explanation eval" >> "$GITHUB_STEP_SUMMARY"
+          echo "Live run: model \`$MODEL\`, destination \`$DESTINATION\`, at most $MAX_REQUESTS requests per run." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Date | Model (via) | Validated | First try | Repaired | Undetermined | Invented dropped | Tokens in / out | What changed before this run |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|---:|---:|---:|---:|---:|---:|---|" >> "$GITHUB_STEP_SUMMARY"
-          python bench/explain_eval.py tests/fixtures/shop $ARGS --limit 25 --min-first-try "${{ github.event.inputs.min_first_try }}" --note "model-eval run ${{ github.run_number }}" --record "$GITHUB_STEP_SUMMARY" --out /tmp/shop_eval.json
-          python bench/explain_eval.py tests/fixtures/nextapp $ARGS --limit 12 --min-first-try "${{ github.event.inputs.min_first_try }}" --note "model-eval run ${{ github.run_number }}" --record "$GITHUB_STEP_SUMMARY" --out /tmp/nextapp_eval.json
+          python bench/explain_eval.py tests/fixtures/shop --live --model "$MODEL" --destination "$DESTINATION" --max-requests "$MAX_REQUESTS" --limit 25 --min-first-try "$MIN_FIRST_TRY" --note "model-eval run ${{ github.run_number }}" --record "$GITHUB_STEP_SUMMARY" --out /tmp/shop_eval.json
+          python bench/explain_eval.py tests/fixtures/nextapp --live --model "$MODEL" --destination "$DESTINATION" --max-requests "$MAX_REQUESTS" --limit 12 --min-first-try "$MIN_FIRST_TRY" --note "model-eval run ${{ github.run_number }}" --record "$GITHUB_STEP_SUMMARY" --out /tmp/nextapp_eval.json
       - name: Ask Lantern eval (shop)
         if: always()
         env:
           LANTERN_TOKEN: ${{ secrets.LANTERN_TOKEN }}
           LANTERN_ACCEPT_DATA_SHARING: "1"   # the samples are Lantern's own files; consent is given here, not at a prompt
+          MODEL: ${{ inputs.model }}
+          DESTINATION: ${{ inputs.destination }}
+          MAX_REQUESTS: ${{ inputs.max_requests }}
         run: |
-          M="${{ github.event.inputs.model }}"
-          ARGS=""; [ -n "$M" ] && ARGS="--model $M"
+          set -o pipefail   # the step's result is the eval's, not tee's
           echo "## Ask Lantern eval" >> "$GITHUB_STEP_SUMMARY"
-          python bench/ask_eval.py tests/fixtures/shop $ARGS --out /tmp/ask_eval.json | tee -a "$GITHUB_STEP_SUMMARY"
+          python bench/ask_eval.py tests/fixtures/shop --live --model "$MODEL" --destination "$DESTINATION" --max-requests "$MAX_REQUESTS" --out /tmp/ask_eval.json | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with:

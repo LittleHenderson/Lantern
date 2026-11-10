@@ -3,10 +3,19 @@
 #   bash tools/audit.sh            # tests, self-audit, samples, determinism, CLI, offline model
 #   bash tools/audit.sh --browser  # also drive the viewer in Chromium (needs Node + Playwright)
 set -u
+SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$0")/.."
+PY="${PYTHON:-python}"
+# The whole audit runs isolated (tools/netguard): a temporary home folder, without the keys and saved sign-ins of this
+# shell, with real model providers switched off, and with the network refused except for the three addresses the
+# dependency audit asks (lantern/depaudit.py AUDIT_HOSTS). Anything else that is tried is refused and listed at the
+# end, and the audit then fails (result 4) even when every step passed.
+if [ -z "${LANTERN_AUDIT_ISOLATED:-}" ]; then
+  export LANTERN_AUDIT_ISOLATED=1
+  exec "$PY" tools/netguard/lantern_netguard.py --allow pypi.org,registry.npmjs.org,api.osv.dev -- bash "$SELF" "$@"
+fi
 W="$(mktemp -d)"
 FAILS=0
-PY="${PYTHON:-python}"
 step() { printf '\n== %s\n' "$1"; }
 ok()   { printf 'PASS  %s\n' "$1"; }
 bad()  { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS + 1)); }
@@ -153,6 +162,12 @@ EOF
 
 if [ "${1:-}" = "--browser" ]; then
   step "browser"
+  # no page under test reaches the internet (tools/outside.js): the app's font request is answered inside the browser,
+  # anything else a page asks of the outside fails its check. First the helper itself, in every engine.
+  check "pages under test stay off the internet: fonts answered in the browser, anything else refused and reported" node tools/outside.js
+  for eng in ${LANTERN_BROWSERS:-}; do
+    PW_BROWSER=$eng check "pages under test stay off the internet in $eng" node tools/outside.js
+  done
   check "viewer: no JS errors, accessible (axe + keyboard), desktop light + phone dark" node tools/viewer_smoke.js "$W/shop/report.html" "$W/shot"
   # the same report in the other browser engines Playwright ships (CI: LANTERN_BROWSERS="firefox webkit"; needs
   # `npx playwright install firefox webkit`). Safari is WebKit; a CSS feature Chromium has and Safari lacks shows here.

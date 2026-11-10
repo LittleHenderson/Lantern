@@ -81,6 +81,7 @@ is where an auditor is most likely to find the claim false. Mark each as **held*
 | L2 | Only this computer can use it, and other websites can't drive it | 127.0.0.1 bind, token link + SameSite=Strict cookie, `X-Lantern-Token` on writes, Host check | See THREAT_MODEL T2. |
 | L3 | Keys stay in memory unless "remember" is ticked, then 0600; the API never returns them | `Store.set_key`, `test_keys_stay_private` | Logs, job errors, tracebacks, or reports that echo a key. |
 | L4 | Works offline for recently opened reports (PWA) | `viewer/sw.js` | Stop the server and reload an opened report. |
+| L5 | Running the tests or a benchmark never reaches a real model provider or the internet, and never uses the keys of the person running them | `tests/conftest.py`, `tools/netguard/`, `tools/netless.py`; CI's Linux test job records every address tried (0); `tests/test_isolation.py`, `tests/test_netguard.py`, `tests/test_live.py` | Export a real-looking key and `LANTERN_MODEL`, sign in with `lantern login`, then run `python -m pytest -q` and `python bench/explain_eval.py tests/fixtures/shop`: nothing may leave. Add a test that connects to an outside address inside `try/except: pass`: it must fail. Known limits: on Windows and macOS only the Python-level guard and the refusing proxy apply (a non-Python program that ignores proxy settings is not stopped there); the Docker service pulls its pinned images by itself |
 
 ## Cloud service
 

@@ -13,6 +13,7 @@
 const BROWSER = process.env.PW_BROWSER || 'chromium';
 const chromium = require('playwright')[BROWSER];
 const a11y = require('./a11y.js');
+const outside = require('./outside.js');   // no page under test reaches the internet
 
 // page.waitForFunction polls through eval in older Playwright, which the app's script-src policy (rightly) refuses;
 // poll with page.evaluate instead, which the policy allows.
@@ -32,6 +33,7 @@ async function appSmoke(url, out, image, expectText) {
   const step = (name, what) => console.log(`${name}: ${what}`);
   for (const [name, vp] of [['desk', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
     const p = await b.newPage({ viewport: vp });
+    await outside.watch(p, errs, outside.FONTS);
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
     p.on('console', m => { if (m.type() === 'error' && !(allow400 && /status of 400/.test(m.text()))) errs.push(`${name} console: ${m.text()}`); });
     p.on('dialog', d => { errs.push(`${name}: a dialog opened: ${d.message()}`); d.dismiss(); });
@@ -121,6 +123,7 @@ async function appSmoke(url, out, image, expectText) {
     } catch (e) { errs.push(`${name}: the smoke test could not drive the app: ${e.message.split('\n')[0]}`); }
     await p.close();
   }
+  console.log(outside.summary());
   console.log(errs.length ? errs.join('\n') : 'no JS errors');
   if (errs.length) process.exitCode = 1;
   await b.close();
@@ -139,6 +142,7 @@ async function appSmoke(url, out, image, expectText) {
   for (const [name, vp] of [['desk', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
     // the phone pass runs in dark mode, so both appearances get the accessibility checks
     const p = await b.newPage({ viewport: vp, colorScheme: name === 'phone' ? 'dark' : 'light' });
+    await outside.watch(p, errs);   // a report is one self-contained file: it asks the outside for nothing
     try {
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
     p.on('dialog', d => { errs.push(`${name}: a dialog opened (script from the data ran): ${d.message()}`); d.dismiss(); });
@@ -273,6 +277,7 @@ async function appSmoke(url, out, image, expectText) {
     } catch (e) { errs.push(`${name}: the smoke test could not drive the page: ${e.message.split('\n')[0]}`); }
     await p.close();
   }
+  console.log(outside.summary());
   console.log(errs.length ? errs.join('\n') : 'no JS errors');
   if (errs.length) process.exitCode = 1;
   await b.close();

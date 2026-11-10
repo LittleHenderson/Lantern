@@ -19,6 +19,7 @@ provider key) is stored in ~/.config/lantern/ by `lantern login`.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -111,6 +112,34 @@ class Provider:
         raise NotImplementedError
 
 
+NO_REAL_ENV = "LANTERN_NO_REAL_PROVIDERS"
+
+
+def real_providers_off() -> bool:
+    """LANTERN_NO_REAL_PROVIDERS=1: models on this computer only. The test suite and the benchmarks set it; anyone
+    can, to be sure no code leaves the machine whatever else is configured."""
+    return os.environ.get(NO_REAL_ENV, "").strip().lower() not in ("", "0", "false", "no")
+
+
+def on_this_computer(url: str) -> bool:
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def check_destination(url: str) -> None:
+    """Called before anything is sent to a model provider, the gateway or the allowance service, and before its name
+    is looked up: with real providers switched off, only an address on this computer is let through."""
+    if real_providers_off() and not on_this_computer(url):
+        host = urllib.parse.urlsplit(url).hostname or url
+        raise ProviderError(f"real model providers are switched off in this run ({NO_REAL_ENV} is set): "
+                            f"nothing was sent to {host}")
+
+
 def _post(url: str, headers: dict, body: dict, timeout: int = 120, retries: int = 3) -> dict:
     """POST JSON; returns the parsed body."""
     return _post_full(url, headers, body, timeout=timeout, retries=retries)[0]
@@ -121,6 +150,7 @@ def _post_full(url: str, headers: dict, body: dict, timeout: int = 120, retries:
     """POST JSON; returns (parsed body, response headers)."""
     if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
         raise ProviderError(f"refusing non-HTTP URL: {url}")
+    check_destination(url)
     data = json.dumps(body).encode()
     for attempt in range(retries):
         req = urllib.request.Request(url, data=data, headers={"content-type": "application/json", **headers})
@@ -345,6 +375,7 @@ def sign_in_claim(cli: str, url: str | None = None) -> str | None:
     req = urllib.request.Request(f"{url}/auth/claim?cli={urllib.parse.quote(cli)}")
     if urllib.parse.urlsplit(req.full_url).scheme not in ("http", "https"):
         raise ProviderError("refusing non-HTTP URL")
+    check_destination(req.full_url)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310: scheme checked above
             return str(json.loads(resp.read()).get("token") or "") or None
@@ -358,6 +389,8 @@ def sign_in_claim(cli: str, url: str | None = None) -> str | None:
 
 def sign_in_providers(url: str | None = None) -> list[str]:
     url = url or gateway_url()
+    if real_providers_off() and not on_this_computer(url or ""):
+        return []
     try:
         with urllib.request.urlopen(f"{url}/auth/providers", timeout=10) as resp:  # nosec B310: https gateway
             return [p for p in json.loads(resp.read()).get("providers", []) if p in ("github", "google")]
@@ -372,6 +405,7 @@ def allowance_status(token: str | None = None, url: str | None = None) -> dict:
     req = urllib.request.Request(f"{url}/allowance", headers={"authorization": f"Bearer {token}"})
     if urllib.parse.urlsplit(req.full_url).scheme not in ("http", "https"):
         raise ProviderError("refusing non-HTTP URL")
+    check_destination(req.full_url)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310: scheme checked above
             return json.loads(resp.read())
