@@ -49,18 +49,26 @@ REASONS = {
     "local-unknown": "`{head}` holds a value whose type Lantern does not know",
     "call-result": "called on the result of another call whose type Lantern does not know",
     "self-attribute": "`{base}` holds a value whose type Lantern does not know",
-    "not-in-class": "the class defines no `{member}` in the repo and has no library base class it could come from",
+    "not-in-class": "neither the class nor a repo class it inherits from defines `{member}`, and it has no other base "
+                    "class that could",
+    "unknown-base": "the class has a base class Lantern cannot look into (a library class, a library's star import, "
+                    "a computed base, or a file it cannot find), so `{member}` may be defined there",
     "this-outside-class": "`this` outside a class method",
     "repo-variable": "`{head}` is a variable in the repo whose value Lantern does not know",
     "missing-member": "`{base}` has no `{member}` that Lantern can find in the repo",
     "missing-module": "`{head}` comes from a file the code imports or requires that Lantern cannot find in the "
                       "repository",
     "missing-export": "`{head}` is imported from a file in the repo that does not export it in a way Lantern can read",
-    "not-defined": "`{head}` is not defined in this file or its imports (a global of the environment, a star import, "
-                   "or code outside the repo)",
+    "not-defined": "`{head}` is not defined in this file or its imports (a global of the environment, a star import "
+                   "Lantern cannot read, or code outside the repo)",
     "computed": "the function is chosen at run time (an index, getattr or another computed expression)",
     "dynamic-require": "`{head}` is loaded by require() or import() of a path built at run time",
     "function-member": "`{member}` is a property of a function, not a function Lantern can follow",
+    "global-property": "`{member}` is reached through the global object (`{head}`), which any script can add to, "
+                       "and Lantern does not know it as one of the browser's or Node's own names",
+    "library-or-repo": "`{base}` holds a value from a library or the language itself, but the project has its own "
+                       "`{member}` (a method of one of its classes, or a function it puts on an object), so Lantern "
+                       "cannot tell which one this call reaches",
     "not-read": "Lantern's reader skipped this call (a gap in the reader, counted so the total stays complete)",
 }
 
@@ -78,7 +86,10 @@ def why(reason: str | None, site: dict) -> str | None:
     """The sentence for a reason code, about this record's callee."""
     if not reason:
         return None
-    return REASONS.get(reason, reason).format(**_names(site.get("callee", "")))
+    names = _names(site.get("callee", ""))
+    if reason == "self-attribute" and names["base"] in ("self", "this", "cls"):   # self.cb(): the attribute itself
+        names["base"] = f"{names['base']}.{names['member']}"
+    return REASONS.get(reason, reason).format(**names)
 
 
 def classify(targets: list[tuple[str, str, str | None]]) -> tuple[str, list[str], str | None, str | None]:

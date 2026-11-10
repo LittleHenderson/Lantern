@@ -5,6 +5,38 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Every call is counted once, and Lantern follows far more of them (2026-11-09, directive stage 3). A new call-site
+  inventory (`calls.json`, `graph.json` `meta.calls`) gives each call written in Python or JavaScript/TypeScript one
+  record, by file, line and column, with one outcome (into the repo, likely, one of several, guessed by name only,
+  library, built-in, or not followed) and, when Lantern cannot follow it, a reason in plain words ("`svc` is a
+  parameter whose type Lantern cannot follow"). Functions handed to a framework (FastAPI `Depends`, Express route
+  handlers and middleware) and test code are counted apart. The older edge-line count is kept unchanged beside it.
+  The JavaScript reader now understands `require()`, `module.exports`/`exports.x`, constructor functions
+  (`this.x = function`, `X.prototype.y`), handlers wrapped by a helper (`catchAsync(async (req, res) => ...)`),
+  Express routers mounted with `app.use('/api', router)` (routes get their full paths, also when the router comes from
+  a factory that ends `return router`), routes written `router.route('/x').get(h).post(h)`, route middleware (listed
+  on the route, and the login check reads it), `req`/`res`/`next`, TypeScript parameter types, values a library call
+  returned (`const app = express()`), chains on library results, and DOM lists, events and fetch responses. A route
+  line whose handler is made by a call (`router.post('/login', passport.authenticate('local'))`) is no longer taken
+  for an outgoing web request. Python follows methods a class inherits from a library (`self.assertEqual`,
+  `Note.objects.filter`, `n.save()` on a model), calls on a library call's result (`pandas.read_csv(p).head()`),
+  names that arrive through `from x import *` of a project file (a package `__init__` that re-exports its modules
+  included), and router prefixes from `include_router` (FastAPI) and `register_blueprint` (Flask). Lantern does not
+  call something a library when it cannot know: a class with a parent class it cannot look into, and a name imported
+  from a project file that is not there, stay "not followed" and say so. Nor does it when the function may be the
+  project's own: a function the project puts on a library's object (`schema.statics.paginate = function`,
+  `res.fail = function`), a method of a project class the library hands back (`getRepository(User).findOne()`,
+  Django's `get_user_model().objects.create_member()`, `req.user.can()`), a method a mixin gives a subclass, and
+  `window.App.init()` are "not followed" with the reason, or keep the older name-only guess, instead of being
+  counted as library or built-in calls. Each rule has a test that failed before it and a twin that must stay
+  unresolved. On the frozen held-out benchmark (14 apps, 9,532 calls written outside
+  tests), calls not followed fell from 3,051 to 1,240: from 244 of 288 to 74 on dvna, 276 of 441 to 140 on NodeGoat,
+  183 of 271 to 42 on goof, 441 of 653 to 82 on express-boilerplate, 946 of 3,614 to 299 on pygoat and 121 of 791 to
+  103 on dvra. The command and code injections of NodeGoat, dvna, goof and the local Express app are now reached from
+  their routes and ranked critical, so none of the vulnerable apps gets a green release, while the safe twins' false
+  alarms stay at 3 of 17. The rules were written after reading these same apps' untraced calls, so a fresh set of
+  apps would show a smaller gain.
+
 - Lantern's report on its own code told four things wrong (2026-11-09, found by checking the Evidence Report of run
   b51NcYcvaZzhuElb). Reports made on the website were titled "repo" for every project, because the code was read
   from a folder called `repo`; it is now read from a folder named after the repository (`Lantern`, `shop`), so the

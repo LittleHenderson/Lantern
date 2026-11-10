@@ -48,6 +48,12 @@ GENERIC_METHODS = {
     "dumps", "parse", "result", "cancel", "done", "isoformat", "splitlines",
 }
 
+STAR_UNKNOWN = ("unknown", "")   # Resolver._star_find: a star import Lantern cannot read may bring the name
+
+# Marker bases that give a subclass no members of their own to call (Enum and NamedTuple do: `_replace`, `name`).
+MEMBERLESS_BASES = {"abc.ABC", "typing.Generic", "typing.Protocol", "typing_extensions.Generic",
+                    "typing_extensions.Protocol", "builtins.object"}
+
 ROUTE_RE = re.compile(r"\.(route|get|post|put|delete|patch|head|options|websocket|api_route)\s*\(")
 CLI_RE = re.compile(r"(^|[.\s])(command|group|callback)\b")
 TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$|(^|/)tests?/")
@@ -130,6 +136,7 @@ class CallSite:
 class ImportBinding:
     module: str                # absolute dotted module
     name: str | None           # imported attribute, None for "import x"
+    relative: bool = False     # written with leading dots: it names a file of the project, never a library
 
 
 @dataclass
@@ -163,6 +170,12 @@ class ModuleInfo:
     self_attrs: dict[str, set[str]] = field(default_factory=dict)
     # function local qualname -> what it returns: ("name", n) | ("ctor", chain) | ("ann", chain)
     returns: dict[str, list[tuple[str, object]]] = field(default_factory=dict)
+    # `from x import *` lines, in order (name is None)
+    stars: list[ImportBinding] = field(default_factory=list)
+    # `__all__` when it is written once as a list or tuple of plain strings; `exports_unknown` when it is built any
+    # other way (then a star import of this file is not followed: Lantern cannot say which names it brings)
+    exports: set[str] | None = None
+    exports_unknown: bool = False
     has_main_block: bool = False
     main_range: tuple[int, int] | None = None
 
@@ -251,6 +264,22 @@ def _ctor_name(n: TSNode) -> str | None:
     n = _unparen(n)
     fn = n.child_by_field_name("function") if n.type == "call" else None
     return _text(fn) if fn is not None and fn.type == "identifier" and _text(fn) in BUILTIN_CTORS else None
+
+
+def _string_list(n: TSNode) -> list[str] | None:
+    """`['a', "b"]` or `('a', 'b')` -> the strings; None when it is anything else (a sum, a call, an f-string)."""
+    n = _unparen(n)
+    if n.type not in ("list", "tuple"):
+        return None
+    out = []
+    for c in n.named_children:
+        if c.type == "comment":
+            continue
+        m = re.fullmatch(r"""(?s)[rRuU]?(?:'([^'\\]*)'|"([^"\\]*)")""", _text(c)) if c.type == "string" else None
+        if m is None:
+            return None
+        out.append(m.group(1) if m.group(1) is not None else m.group(2))
+    return out
 
 
 def _literal_type(n: TSNode) -> str | None:
@@ -355,6 +384,11 @@ class _Visitor:
                 self.bind_literal(scope, name, None)
         if left is None or right is None:
             return
+        if not scope and left.type == "identifier" and _text(left) == "__all__":
+            names = _string_list(right)
+            if names is None or self.m.exports is not None:
+                self.m.exports_unknown = True
+            self.m.exports = set(names or ())
         if not scope and left.type == "identifier" and right.type != "call":
             al = _annotated(right)
             if al is None and right.type in ("identifier", "attribute"):
@@ -400,14 +434,17 @@ class _Visitor:
             return
         modnode = n.child_by_field_name("module_name")
         raw = _text(modnode)
-        mod = _resolve_relative(self.m.name, self.m.is_package, raw) if raw.startswith(".") else raw
+        rel = raw.startswith(".")
+        mod = _resolve_relative(self.m.name, self.m.is_package, raw) if rel else raw
+        if any(c.type == "wildcard_import" for c in n.children):
+            self.m.stars.append(ImportBinding(mod, None, rel))
         for c in n.children_by_field_name("name"):
             if c.type == "dotted_name":
                 nm = _text(c)
-                self.m.imports[nm.split(".")[-1]] = ImportBinding(mod, nm)
+                self.m.imports[nm.split(".")[-1]] = ImportBinding(mod, nm, rel)
             elif c.type == "aliased_import":
                 self.m.imports[_text(c.child_by_field_name("alias"))] = \
-                    ImportBinding(mod, _text(c.child_by_field_name("name")))
+                    ImportBinding(mod, _text(c.child_by_field_name("name")), rel)
 
 
 def _visit_body(v: _Visitor, root: TSNode):
@@ -482,7 +519,7 @@ def _visit_body(v: _Visitor, root: TSNode):
             if ch:
                 v.m.calls.append(CallSite(scope, ch, _text(fn)[:120], n.start_point[0] + 1, at=_call_at(n)))
                 if len(ch) == 2 and ch[-1] in ("include_router", "register_blueprint"):
-                    _include(v.m, n, ch[0])
+                    _include(v.m, n, ch[0], flask=ch[-1] == "register_blueprint")
             else:   # a callee the chain cannot name: still a call site, counted by the inventory only
                 v.m.calls.append(CallSite(scope, _computed_parts(fn), _text(fn)[:120], n.start_point[0] + 1,
                                           "computed", _call_at(n)))
@@ -613,7 +650,7 @@ def _router_prefix(call: TSNode) -> str | None:
     return ""
 
 
-def _include(m: ModuleInfo, call: TSNode, recv: str) -> None:
+def _include(m: ModuleInfo, call: TSNode, recv: str, flask: bool = False) -> None:
     """`parent.include_router(child, prefix="/p")` (FastAPI) or `app.register_blueprint(bp, url_prefix="/p")` (Flask):
     the child's routes live under the parent's prefix plus "/p". A prefix that is not a written string is None."""
     args = call.child_by_field_name("arguments")
@@ -626,7 +663,7 @@ def _include(m: ModuleInfo, call: TSNode, recv: str) -> None:
         if a.type == "keyword_argument" and _text(a.child_by_field_name("name")) in ("prefix", "url_prefix"):
             mm = re.match(r"^[rbu]?['\"]([^'\"{}]*)['\"]$", _text(a.child_by_field_name("value")))
             prefix = mm.group(1) if mm else None
-    m.includes.append({"recv": recv, "target": target, "prefix": prefix})
+    m.includes.append({"recv": recv, "target": target, "prefix": prefix, "flask": flask})
 
 
 def _param_types(m: ModuleInfo, scope: str, params: TSNode) -> None:
@@ -691,6 +728,8 @@ def parse_module(path: Path, modname: str, repo: Path, parser: Parser) -> Module
     info = ModuleInfo(name=modname, path=path, rel=path.relative_to(repo).as_posix(),
                       is_package=path.name == "__init__.py", lines=src.count(b"\n") + 1)
     _visit_body(_Visitor(info), tree.root_node)
+    if src.count(b"__all__") != (1 if info.exports is not None else 0):   # `__all__ += …`, `.extend(…)`, a second one
+        info.exports_unknown = True
     return info
 
 
@@ -729,10 +768,24 @@ class Resolver:
             parts = name.split(".")
             for k in range(1, len(parts)):
                 self._suffix.setdefault(".".join(parts[k:]), []).append(name)
+        # A relative import that finds no file names a file of the project that Lantern did not read (generated,
+        # compiled, not committed): what comes from it is not a library's (`gone`). `_gone_ext` holds the library-style
+        # names the older rules still give such calls, so the inventory can say what they are (`unread`).
+        self._gone: set[str] = set()
+        self._gone_ext: set[str] = set()
+        folders = {".".join(n.split(".")[:k]) for n in mods for k in range(1, len(n.split(".")))}
         for m in mods.values():
             for b in m.imports.values():
                 b.module = self.canon(b.module, m.name)
+                sub = f"{b.module}.{b.name}" if b.module and b.name else b.module or b.name
+                if b.relative and sub and sub not in mods and b.module not in mods:
+                    self._gone.add(sub if not b.module or b.module in folders else b.module)
+            for b in m.stars:
+                b.module = self.canon(b.module, m.name)
+        self._star_hits: dict[tuple[str, str], tuple | None] = {}
         self._subclasses: dict[str, list[str]] = {}
+        self._lib_base: dict[str, tuple[str | None, bool]] = {}
+        self._open: set[str] = set()   # classes with a base Lantern cannot look into (`open_base`)
 
     def canon(self, name: str, importer: str) -> str:
         if not name or name in self.mods:
@@ -751,9 +804,25 @@ class Resolver:
                 return best + ("." + rest if rest else "")
         return name
 
+    def gone(self, dotted: str) -> bool:
+        """True when `dotted` (a name bind() calls "ext") comes from a project file Lantern did not read."""
+        if not self._gone:
+            return False
+        parts = dotted.split(".")
+        return any(".".join(parts[:k]) in self._gone for k in range(1, len(parts) + 1))
+
+    def unread(self, target: str) -> bool:
+        """True for a target id (`ext:app.missing.helper`) that names something in a project file Lantern did not
+        read: the map keeps the older link, the call-site inventory says `missing-module`."""
+        if not self._gone_ext or not target.startswith("ext:"):
+            return False
+        name = target[4:]
+        return any(name == x or name.startswith((x + ".", x + "(")) for x in self._gone_ext)
+
     # ---- name binding ----
     def bind(self, m: ModuleInfo, scope: str, name: str, depth: int = 0):
-        """Resolve a bare name in a scope. Returns ("def", qual) | ("module", mod) | ("ext", dotted) | None."""
+        """Resolve a bare name in a scope. Returns ("def", qual) | ("module", mod) | ("ext", dotted) | ("var", dotted)
+        (a variable of a repo file) | ("lost", dotted) (imported from a repo file that does not bind it) | None."""
         if depth > 6:
             return None
         # enclosing function scopes (class bodies are not enclosing scopes for their methods)
@@ -774,9 +843,52 @@ class Resolver:
         b = m.imports.get(name)
         if b is not None:
             return self._follow_import(b, depth)
+        if m.stars and self._name_kind(m, scope, name) is None:   # not a parameter, a local or a variable of the file
+            hit = self._star(m, name, depth)
+            if hit is not None:
+                return hit
         if name in BUILTIN_NAMES and not self._shadowed(m, scope, name):   # `def f(list): list()` is not the built-in
             return ("ext", f"builtins.{name}")
         return None
+
+    def _star(self, m: ModuleInfo, name: str, depth: int):
+        """`from x import *` in `m`: what `name` is when a repo file it star-imports brings it. Python's rules: the
+        names in `__all__`, or without one every name that does not start with an underscore; the last star import
+        wins. None when no star import brings it, and also when one Lantern cannot read may bring it (a library's,
+        a project file that is not there, an `__all__` built in a way Lantern does not read): then Lantern does not
+        say which one runs."""
+        hit = self._star_find(m, name, depth)
+        return None if hit is STAR_UNKNOWN else hit
+
+    def _star_find(self, m: ModuleInfo, name: str, depth: int):
+        key = (m.name, name)
+        if key in self._star_hits:
+            return self._star_hits[key]
+        self._star_hits[key] = out = STAR_UNKNOWN   # while it is being worked out: star imports that go in a circle
+        if depth <= 6:
+            out = None
+            for b in reversed(m.stars):
+                tm = self.mods.get(b.module)
+                if tm is None or tm.exports_unknown:
+                    out = STAR_UNKNOWN
+                    break
+                if name not in tm.exports if tm.exports is not None else name.startswith("_"):
+                    continue
+                if name in tm.defs:
+                    out = ("def", f"{tm.name}.{name}")
+                elif name in tm.imports:
+                    out = self._follow_import(tm.imports[name], depth + 1) or STAR_UNKNOWN
+                elif name in tm.aliases:
+                    out = self.bind(tm, "", name, depth + 1) or STAR_UNKNOWN
+                elif name in tm.literal_types.get("", {}) or name in tm.local_types.get("", {}):
+                    out = ("var", f"{tm.name}.{name}")
+                else:
+                    out = self._star_find(tm, name, depth + 1)
+                    if out is None:
+                        continue
+                break
+        self._star_hits[key] = out
+        return out
 
     def _follow_import(self, b: ImportBinding, depth: int):
         if depth > 12:   # re-exports that chase each other in a circle (Django's `from .a import x` / `from .b import x`)
@@ -795,7 +907,13 @@ class Resolver:
             return self._follow_import(tm.imports[b.name], depth + 1)
         if b.name in tm.aliases:
             return self.bind(tm, "", b.name, depth + 1)
-        return ("var", sub)   # a module-level variable inside the repo: not an external library
+        if tm.stars and b.name not in tm.literal_types.get("", {}) and b.name not in tm.local_types.get("", {}):
+            hit = self._star(tm, b.name, depth + 1)   # a package __init__ that says `from .users import *`
+            if hit is not None:
+                return hit
+        if b.name in tm.literal_types.get("", {}) or b.name in tm.local_types.get("", {}):
+            return ("var", sub)   # a module-level variable inside the repo: not an external library
+        return ("lost", sub)      # the file is there, but nothing Lantern reads in it binds the name
 
     def resolve_chain(self, m: ModuleInfo, scope: str, ch: list[str], depth: int = 0):
         if depth > 6 or not ch or any(p.endswith("()") for p in ch):
@@ -837,6 +955,8 @@ class Resolver:
                 return ("def", f"{target}.{attr}")
             if attr in m.imports:
                 return self._follow_import(m.imports[attr], 0)
+            if m.stars and attr not in m.literal_types.get("", {}) and attr not in m.local_types.get("", {}):
+                return self._star(m, attr, 1)
             return None
         if kind == "def":
             hit = self.lookup_method(target, attr)
@@ -902,6 +1022,169 @@ class Resolver:
     def is_class(self, q: str) -> bool:
         return q in self.defs and self.defs[q][1].kind == "class"
 
+    # ---- stage 3: routers included under a prefix (FastAPI include_router, Flask register_blueprint) ----
+    def router_of(self, m: ModuleInfo, chain: list[str], depth: int = 0) -> tuple[str, str] | None:
+        """The router object `chain` names where it is used, as (module, variable), when it is a router the repo
+        creates at module level (`router = APIRouter(...)`): by name, through an import, or as `module.router`."""
+        if depth > 6 or not chain:
+            return None
+        if len(chain) == 1:
+            name = chain[0]
+            if name in m.route_prefix:
+                return (m.name, name)
+            b = m.imports.get(name)
+            if b is not None and b.name and b.module in self.mods:
+                tm = self.mods[b.module]
+                if b.name in tm.route_prefix:
+                    return (tm.name, b.name)
+                if b.name in tm.imports:
+                    return self.router_of(tm, [b.name], depth + 1)
+            return None
+        if len(chain) == 2:
+            r = self.bind(m, "", chain[0])
+            if r and r[0] == "module" and chain[1] in self.mods[r[1]].route_prefix:
+                return (r[1], chain[1])
+        return None
+
+    def mount_prefixes(self) -> dict[tuple[str, str], tuple[str, bool] | None]:
+        """(module, router variable) -> (the path it is mounted under, whether that replaces its own prefix) for
+        every router included somewhere; None when it is included in more than one place, or under a prefix that is
+        not a written string (its routes keep the paths written on them)."""
+        parents: dict[tuple[str, str], set] = {}
+        for m in self.mods.values():
+            for inc in m.includes:
+                pk, ck = self.router_of(m, [inc["recv"]]), self.router_of(m, inc["target"])
+                if pk is not None and ck is not None and pk != ck:
+                    parents.setdefault(ck, set()).add((pk, inc["prefix"], bool(inc.get("flask"))))
+
+        def mount(key, seen):
+            ps = parents.get(key)
+            if not ps:
+                return ("", False)
+            if len(ps) > 1 or key in seen or len(seen) > 8:
+                return None
+            (pk, pre, flask), = ps
+            if pre is None:
+                return None
+            up = full(pk, (*seen, key))
+            return None if up is None else (up.rstrip("/") + pre, flask and pre != "")
+
+        def full(key, seen):
+            mt = mount(key, seen)
+            if mt is None:
+                return None
+            return mt[0] + ("" if mt[1] else self.mods[key[0]].route_prefix.get(key[1], ""))
+
+        return {key: mount(key, ()) for key in parents}
+
+    # ---- stage 3: what a class inherits from outside the repo ----
+    def library_base(self, cls_q: str) -> str | None:
+        """The first class outside the repo that `cls_q` inherits from (through its repo bases), named
+        "<package>.<Class>": `django.Model`, `unittest.TestCase`, `builtins.dict`. Marker bases (abc, typing,
+        enum, dataclasses, object) are skipped: their subclasses' methods are the repo's own. None when the class
+        also has a base Lantern cannot identify: a member the repo does not define may be that base's, not the
+        library's."""
+        lib, unknown = self._outside(cls_q)
+        return None if unknown else lib
+
+    def open_base(self, cls_q: str) -> bool:
+        """True when `cls_q` has a base class Lantern cannot look into: a library class (a marker with members of
+        its own, such as Enum or NamedTuple, included), or one it cannot identify (a library's star import, a computed
+        base, a class in a project file it did not read). A member the repo does not define may be defined there."""
+        self._outside(cls_q)
+        return cls_q in self._open
+
+    def _outside(self, cls_q: str) -> tuple[str | None, bool]:
+        """(the first library base along the MRO, whether any base along it is one Lantern cannot identify)."""
+        if cls_q in self._lib_base:
+            return self._lib_base[cls_q]
+        self._lib_base[cls_q] = (None, False)
+        lib, unknown, marker = None, False, False
+        for c in self.mro(cls_q):
+            cm, cd = self.defs[c]
+            for b in cd.bases:
+                text = b.strip()
+                head = text.split("[", 1)[0].strip() if text.endswith("]") else text   # Generic[T], Repo[Note]
+                parts = head.split(".")
+                if not all(x.isidentifier() for x in parts):   # a call or another computed base
+                    unknown = True
+                    continue
+                r = self.bind(cm, cd.parent_local, parts[0])
+                for x in parts[1:]:
+                    if r is None:
+                        break
+                    r = ("ext", f"{r[1]}.{x}") if r[0] == "ext" else \
+                        self.attr_of(r[0], r[1], x) if r[0] in ("module", "def") else None
+                if r is not None and r[0] == "def" and head == text and r[1] in self.defs and \
+                        self.defs[r[1]][1].kind == "class":
+                    continue   # a repo class: the MRO reads its bases in turn
+                if r is None or r[0] != "ext" or self.gone(r[1]):
+                    unknown = True   # a name Lantern cannot bind, a variable, `Repo[Note]`, a file it did not read
+                    continue
+                dotted = r[1].split(".")
+                if dotted[0] in ("abc", "typing", "typing_extensions", "enum", "dataclasses") or \
+                        r[1] in ("builtins.object", "builtins.type"):
+                    marker = marker or r[1] not in MEMBERLESS_BASES
+                    continue
+                lib = lib or f"{dotted[0]}.{dotted[-1]}"
+        if lib or unknown or marker:
+            self._open.add(cls_q)
+        self._lib_base[cls_q] = (lib, unknown)
+        return lib, unknown
+
+    def _repo_attr(self, cls_q: str, name: str) -> bool:
+        """True when the repo itself gives instances of `cls_q` an attribute `name`: set on self anywhere in the
+        class or its repo bases, or assigned in a class body. Then a call through it is not the library's."""
+        for c in self.mro(cls_q):
+            cm, cd = self.defs[c]
+            if name in cm.self_attrs.get(cd.local, ()) or name in cm.literal_types.get(cd.local, {}) or \
+                    name in cm.local_types.get(cd.local, {}):
+                return True
+        return False
+
+    def library_member(self, cls_q: str, members: list[str]) -> list[tuple[str, str, str]]:
+        """`members` used on an instance (or the class) `cls_q` that the repo does not define: the library base's,
+        as "ext:<package>.<Class>.<at most two members>" (`ext:django.Model.objects.filter`)."""
+        lib = self.library_base(cls_q)
+        if not lib or not members or self._repo_attr(cls_q, members[0]) or members[0].startswith("__") and \
+                members[0] not in ("__init__",):
+            return []
+        if len(members) == 1 and self._sibling_gives(cls_q, members[0]):
+            return []   # a mixin beside the class gives a subclass this method: it may be the repo's own
+        via = "inherited-builtin" if lib.startswith("builtins.") else "inherited-library"
+        return [(f"ext:{lib}.{'.'.join(x.rstrip('()') for x in members[:2])}", INFERRED, via)]
+
+    def _sibling_gives(self, cls_q: str, name: str) -> bool:
+        """True when a repo subclass of `cls_q` gets a method `name` from another of its bases, a class that is
+        neither above nor below `cls_q` (`class Page(Base, Tools)`: `Tools.helper` answers `self.helper()` in Base)."""
+        subs = self.subclasses(cls_q)
+        if not subs or name not in self.methods_by_name:
+            return False
+        skip = set(self.mro(cls_q)) | set(subs)
+        return any(f"{k}.{name}" in self.defs for s in subs for k in self.mro(s) if k not in skip)
+
+    def library_result(self, m: ModuleInfo, scope: str, parts: list[str],
+                       guard: bool = True) -> list[tuple[str, str, str]]:
+        """`pandas.read_csv(p).head()`: a call on what a library call returned is a library call, named up to the
+        first call's result and the member used on it (`ext:pandas.read_csv().head`). Built-ins stay built-ins.
+        Not (`guard`) when a class of the repo has a method of that name: the library may have handed back the
+        repo's own object (`get_user_model().objects.create_member()`), so the older reading stands. Everyday names
+        (GENERIC_METHODS: `get`, `items`, `read`) say nothing and do not count, and neither does a method called
+        straight on what a built-in constructor made (`str(x).title()`)."""
+        head = parts[0][:-2] if parts[0].endswith("()") else parts[0]
+        r = self.bind(m, scope, head)
+        if r is None or r[0] != "ext" or len(parts) < 2 or self.gone(r[1]):
+            return []
+        if guard and parts[-1] in self.methods_by_name and parts[-1] not in GENERIC_METHODS and not (
+                len(parts) == 2 and r[1].startswith("builtins.") and r[1][len("builtins."):] in BUILTIN_CTORS):
+            return []
+        chain = [r[1] + ("()" if parts[0].endswith("()") else "")] + parts[1:]
+        for i, x in enumerate(chain):
+            if x.endswith("()"):
+                tail = [t.rstrip("()") for t in chain[i + 1:i + 2]]
+                return [("ext:" + ".".join(chain[:i + 1] + tail), INFERRED, "library-result")]
+        return []
+
     # ---- call resolution ----
     def resolve_call(self, m: ModuleInfo, cs: CallSite) -> list[tuple[str, str, str]]:
         """Return [(target_node_id, confidence, via)]."""
@@ -914,7 +1197,7 @@ class Resolver:
         # super().method()
         if head == "super()" and len(parts) == 2 and method_cls:
             hit = self.lookup_method(method_cls, parts[1], skip_self=True)
-            return [(nid(hit), RESOLVED, "super")] if hit else []
+            return [(nid(hit), RESOLVED, "super")] if hit else self.library_member(method_cls, parts[1:])
 
         # self.method() / cls.method()
         if head in ("self", "cls") and method_cls:
@@ -933,7 +1216,7 @@ class Resolver:
                     q = f"{sub}.{parts[1]}"
                     if q in self.defs and q != hit:
                         out.append((nid(q), POSSIBLE, "override"))
-                return out
+                return out or self.library_member(method_cls, parts[1:])
             # self.attr.method(): use the type assigned to self.attr, if any
             cm, cd = self.defs[method_cls]
             ch = self._attr_type(method_cls, parts[1])
@@ -949,6 +1232,13 @@ class Resolver:
                 return []
             if ch:   # known type, deeper chain: don't guess
                 return []
+            # self.client.login(): the library base's client. Only one step deep, and only when no class in the repo
+            # has a method of that name: the attribute may hold the repo's own object (Django's `self.object`), and
+            # then the older reading stays (a name-only guess, or nothing).
+            if len(parts) == 3 and not parts[1].endswith("()") and parts[2] not in self.methods_by_name:
+                lib = self.library_member(method_cls, parts[1:])
+                if lib:
+                    return lib
             return self._duck(parts, cs)
 
         # local variable that is always a built-in literal: x = []; x.append(1)  (counted as a built-in call)
@@ -970,6 +1260,9 @@ class Resolver:
                     hit = self.lookup_method(t, parts[1])
                     if hit:
                         return [(nid(hit), INFERRED, "local-type")]
+                    lib = self.library_member(t, parts[1:])   # n: Note; n.save() -> the model's save
+                    if lib:
+                        return lib
                 ext = self._ext_ctor(m, cs.scope, ch)
                 if ext:
                     return [("ext:" + f"{ext}().{parts[1]}", INFERRED, "local-ext-type")]
@@ -994,13 +1287,16 @@ class Resolver:
                 hit = self.lookup_method(fx, parts[1])
                 if hit:
                     return [(nid(hit), INFERRED, "fixture-type")]
+                lib = self.library_member(fx, parts[1:])
+                if lib:
+                    return lib
 
         # plain name or dotted path through modules / classes
         if any(p.endswith("()") for p in parts):
-            return self._duck(parts, cs)
+            return self.library_result(m, cs.scope, parts) or self._duck(parts, cs)
         r = self.bind(m, cs.scope, head)
         walked = [head]
-        for p in parts[1:]:
+        for i, p in enumerate(parts[1:], 1):
             if r is None:
                 break
             if r[0] == "ext":
@@ -1010,6 +1306,10 @@ class Resolver:
             elif r[0] == "def":
                 if self.is_class(r[1]):
                     hit = self.lookup_method(r[1], p)
+                    if hit is None:   # Note.objects.filter(): the library base's manager
+                        lib = self.library_member(r[1], parts[i:])
+                        if lib:
+                            return lib
                     r = ("def", hit) if hit else None
                 else:
                     r = None
@@ -1029,6 +1329,8 @@ class Resolver:
         if kind == "ext":
             if target.startswith("builtins."):
                 return [("ext:" + target, RESOLVED, "builtin")]
+            if self.gone(target):
+                self._gone_ext.add(_ext_name(target))
             return [("ext:" + _ext_name(target), RESOLVED, "import")]
         if kind == "ext_unknown":
             return []
@@ -1053,7 +1355,10 @@ class Resolver:
         r = self.bind(m, scope, ch[0])
         if r is None or r[0] != "ext" or r[1].startswith("builtins."):
             return None
-        return _ext_name(".".join([r[1]] + ch[1:]))
+        name = _ext_name(".".join([r[1]] + ch[1:]))
+        if self.gone(r[1]):
+            self._gone_ext.add(name)
+        return name
 
     def _attr_type(self, cls_q: str, attr: str) -> list[str] | None:
         for c in self.mro(cls_q):
@@ -1198,11 +1503,25 @@ class Resolver:
         enclosing = m.defs.get(cs.scope)
         method_cls = f"{m.name}.{enclosing.in_class}" if enclosing and enclosing.in_class else None
         if head == "super()":
-            return "not-in-class"
+            return "unknown-base" if method_cls and self.open_base(method_cls) else "not-in-class"
         if head in ("self", "cls"):
             if not method_cls:
                 return "this-outside-class"
-            return "not-in-class" if len(parts) == 2 else "self-attribute"
+            if len(parts) == 2:   # self.cb(): a value the repo stored on the object, or a method it lacks
+                if self._repo_attr(method_cls, parts[1]):
+                    return "self-attribute"
+                return "unknown-base" if self.open_base(method_cls) else "not-in-class"
+            if len(parts) == 3 and not parts[1].endswith("()") and parts[2] in self.methods_by_name and \
+                    not self._attr_type(method_cls, parts[1]) and self.library_member(method_cls, parts[1:]):
+                return "library-or-repo"   # the library base's attribute, and a method name the repo has too
+            return "self-attribute"
+        name = head[:-2] if head.endswith("()") else head
+        if name.isidentifier():
+            r0 = self.bind(m, cs.scope, name)
+            if r0 is not None and r0[0] == "ext" and self.gone(r0[1]):
+                return "missing-module"
+        if any(p.endswith("()") for p in parts) and self.library_result(m, cs.scope, parts, guard=False):
+            return "library-or-repo"   # what a library call returned, and a method name the repo has too
         if head.endswith("()"):
             return "call-result" if len(parts) > 1 else "computed"
         if any(p.endswith("()") for p in parts[1:-1]):
@@ -1223,6 +1542,8 @@ class Resolver:
             return "not-defined"
         if r[0] == "var":
             return "repo-variable"
+        if r[0] == "lost":
+            return "missing-export"
         if r[0] == "def" and not self.is_class(r[1]) and len(parts) > 1:
             return "function-member"
         if r[0] in ("module", "def"):
@@ -1316,7 +1637,8 @@ def _scripts_from_config(repo: Path) -> dict[str, str]:
     return out
 
 
-def _entry_for(d: DefInfo, rel: str, mod: ModuleInfo | None = None) -> dict | None:
+def _entry_for(d: DefInfo, rel: str, mod: ModuleInfo | None = None, mounts: dict | None = None,
+               resolver: Resolver | None = None) -> dict | None:
     if TEST_FILE_RE.search(rel):
         # routes and commands defined inside tests are fixtures, not the app's real entry points
         if d.kind == "function" and d.name.startswith("test") and not d.in_class or \
@@ -1333,6 +1655,10 @@ def _entry_for(d: DefInfo, rel: str, mod: ModuleInfo | None = None) -> dict | No
                 verb = "/".join(re.findall(r"['\"](\w+)['\"]", methods.group(1))).upper() if methods else "GET"
             var = dec.split(".")[0].strip()
             prefix = (mod.route_prefix.get(var, "") if mod else "")
+            key = resolver.router_of(mod, [var]) if resolver and mod else None
+            mt = (mounts or {}).get(key) if key else None
+            if mt is not None:   # included under a prefix: that path, then the router's own prefix
+                prefix = mt[0].rstrip("/") + ("" if mt[1] else prefix)
             return {"kind": "route", "detail": f"{verb} {prefix}{path.group(1) if path else ''}".strip()}
         if CLI_RE.search(dec) and ("click" in dec or "app." in dec or "cli." in dec or "typer" in dec
                                    or dec.split("(")[0].endswith((".command", ".group"))):
@@ -1359,6 +1685,8 @@ def build_graph(repo: str | Path) -> Graph:
         mods[modname] = info
 
     g = Graph(str(repo))
+    r = Resolver(mods, g)
+    mounts = r.mount_prefixes()
     total_lines = 0
     for m in mods.values():
         total_lines += m.lines
@@ -1373,7 +1701,7 @@ def build_graph(repo: str | Path) -> Graph:
                 fingerprint=d.fingerprint,
                 signature=(f"class {d.name}({', '.join(d.bases)})" if d.kind == "class"
                            else f"def {d.name}{d.params}"),
-                docstring=d.docstring, decorators=d.decorators, entry=_entry_for(d, m.rel, m),
+                docstring=d.docstring, decorators=d.decorators, entry=_entry_for(d, m.rel, m, mounts, r),
             ))
             g.add_edge(parent, nid(q), kind=CONTAINS, confidence=RESOLVED)
         if m.has_main_block:
@@ -1384,8 +1712,6 @@ def build_graph(repo: str | Path) -> Graph:
                             entry={"kind": "main", "detail": f"python {m.rel}"}))
         if m.path.name == "__main__.py":
             g.nodes[nid(m.name)].entry = {"kind": "main", "detail": f"python -m {m.name.rsplit('.', 1)[0]}"}
-
-    r = Resolver(mods, g)
 
     # inheritance edges
     for q, (_m, d) in r.defs.items():
@@ -1419,7 +1745,7 @@ def build_graph(repo: str | Path) -> Graph:
             else:
                 targets = r.resolve_special(m, cs)
             group = "written" if cs.kind == "call" else "handed" if cs.kind in ("depends", "depends-alias") else "implicit"
-            found = [t for t in targets if t[0].startswith("ext:") or t[0] in g.nodes]
+            found = [t for t in targets if (not r.unread(t[0]) if t[0].startswith("ext:") else t[0] in g.nodes)]
             if group == "written" or found or cs.kind == "depends":
                 calls.record(g.sites, file=m.rel, line=line, col=col, callee=cs.text, caller=src, lang="python",
                              group=group, test=in_tests, targets=found, reason=None if found else r.why(m, cs))
