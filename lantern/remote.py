@@ -12,11 +12,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import stat
 import subprocess
 import sys
 from pathlib import Path
+
+from . import removal
 
 HTTPS = re.compile(r"^https://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::(?P<port>\d{1,5}))?"
                    r"/(?P<owner>[\w.-]+)/(?P<name>[\w.-]+?)(?:\.git)?/?"
@@ -220,21 +220,27 @@ def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900, a
     comes first.
     `auth`: a read-only GitHub token (Lantern cloud's "Connect GitHub"), handed to git as an HTTP header through
     environment variables only (never in the link, `.git/config` or the log)."""
+    dest = Path(dest)
+    # Whatever fails below, what the copy left is removed, so the folder must hold nothing of anyone's when it
+    # begins. Until 2026-11-10 this was only written above, not checked: a copy into a folder that held files was
+    # refused by git, and the folder was then deleted with everything in it.
+    if os.path.lexists(dest) and (dest.is_symlink() or not dest.is_dir() or any(dest.iterdir())):
+        raise RuntimeError(f"{dest} already exists and is not empty. Lantern copies a repository only into a new "
+                           "or empty folder.")
     args = (["clone", "--depth", "1", "--single-branch", "--no-checkout"] + (["--branch", branch] if branch else [])
             + ["--", url, str(dest)])
     try:
         r = _git(args, cwd=None, timeout=timeout, **({"env": _auth_env(url, auth)} if auth else {}))
-    except RuntimeError:
-        if dest.is_dir():   # a clone stopped by the timeout can leave a partial folder behind
-            remove_tree(dest)
+    except RuntimeError as e:
+        left = _left_behind(dest)   # a clone stopped by the timeout can leave a partial folder behind
+        if left:
+            raise RuntimeError(str(e) + left) from None
         raise
     if r.returncode != 0:
-        if dest.is_dir():
-            remove_tree(dest)
         raise RuntimeError("could not clone it: " + _tail(r.stderr) +
-                           ". If the repository is private, clone it yourself and add the folder.")
+                           ". If the repository is private, clone it yourself and add the folder." + _left_behind(dest))
     _mark(dest)
-    _checkout(dest, timeout)
+    _checkout(dest, timeout, made=True)
 
 
 def has_files(dest: Path) -> bool:
@@ -287,10 +293,13 @@ def check_complete(dest: Path, what: str = "this clone has") -> None:
                            f"Remove {dest} and try again, or clone it yourself and add the folder.")
 
 
-def _checkout(dest: Path, timeout: int = 900) -> None:
+def _checkout(dest: Path, timeout: int = 900, made: bool = False) -> None:
     """Measure the files from the index, refuse above the cap, then check them out. Whatever fails, nothing is left
     behind: a folder holding only `.git` would otherwise pass as a finished clone and analyze as an empty project
-    (seen with a reserved Windows file name such as `aux.txt`, a path over MAX_PATH, or a full disk)."""
+    (seen with a reserved Windows file name such as `aux.txt`, a path over MAX_PATH, or a full disk).
+    Only a folder Lantern cloned is removed (`made`: by the call that is running; or `is_clone`). A repository
+    folder of the person's own that happens to have no files checked out stays as it is, and the error says why
+    the files could not be written."""
     cap = max_mb()
     files = tree_files(dest)
     size = sum(n for _, n in files) / 1_000_000
@@ -299,10 +308,10 @@ def _checkout(dest: Path, timeout: int = 900) -> None:
         bulk = [(p, n) for p, n in files if is_bulk(p, n) and "\n" not in p and "\r" not in p]
         code = size - sum(n for _, n in bulk) / 1_000_000
         if code > cap:
-            remove_tree(dest)
+            left = _left_behind(dest) if made or is_clone(dest) else ""
             raise RuntimeError(f"the repository's files add up to {size:,.1f} MB, and still {code:,.1f} MB without "
                                f"the pictures, videos, archives and other files Lantern does not read: above Lantern's "
-                               f"{cap} MB limit (LANTERN_CLONE_MAX_MB). Clone it yourself and add the folder.")
+                               f"{cap} MB limit (LANTERN_CLONE_MAX_MB). Clone it yourself and add the folder." + left)
         sparse = dest / ".git" / "info" / "sparse-checkout"
         sparse.parent.mkdir(parents=True, exist_ok=True)
         sparse.write_text("/*\n" + "".join(_pattern(p) + "\n" for p, _ in bulk), encoding="utf-8", newline="\n")
@@ -313,25 +322,27 @@ def _checkout(dest: Path, timeout: int = 900) -> None:
             "examples": [p for p, _ in biggest]}), encoding="utf-8")
     r = _git(["reset", "--hard", "--quiet"], cwd=dest, timeout=timeout)
     if r.returncode != 0:
-        remove_tree(dest)
+        left = _left_behind(dest) if made or is_clone(dest) else ""
         raise RuntimeError("could not check out the files: " + _tail(r.stderr) +
-                           ". Clone it yourself and add the folder.")
+                           ". Clone it yourself and add the folder." + left)
 
 
-def remove_tree(path: Path) -> None:
-    """Remove a clone. Git marks its object files read-only, which on Windows makes a plain rmtree fail halfway and
-    leave the folder behind; clearing the bit (on the file and its folder) and retrying is the standard recipe."""
-    def unlock(func, p, _exc):
-        for q in (p, os.path.dirname(p)):
-            try:
-                os.chmod(q, stat.S_IRWXU)
-            except OSError:
-                pass
-        func(p)
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=unlock)
-    else:
-        shutil.rmtree(path, onerror=unlock)
+def remove_tree(path: Path) -> str | None:
+    """Remove a clone with everything in it. None when nothing is left; otherwise why not, in one sentence
+    (`lantern.removal.remove`: read-only files and folders are no obstacle, which matters on Windows, where git's
+    object files are read-only; nothing is raised for what the system refused).
+
+    Only what is inside `path` is changed. Until 2026-11-10 a refused delete had the mode of the thing and of the
+    folder it is in set to owner-only, by name: for a `path` that was a link, the folder it pointed at and the
+    folder it lay in (a folder all users share, in the test), and the link stayed, without a word."""
+    return removal.remove(path)
+
+
+def _left_behind(dest: Path) -> str:
+    """Remove what a copy that failed left in `dest`. Empty when nothing is left; otherwise a sentence for the end
+    of the error, so that a folder that stayed is never passed over in silence."""
+    why = remove_tree(dest)
+    return f" What the failed copy left in {dest} could not be removed ({why}); remove that folder yourself." if why else ""
 
 
 def _auth_env(url: str, token: str) -> dict:

@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from lantern import remote  # noqa: E402
 from lantern_cloud import worker as worker_mod  # noqa: E402
 from lantern_cloud.app import create_app  # noqa: E402
+from lantern_cloud.cleanup import MARK  # noqa: E402
 from lantern_cloud.settings import Settings  # noqa: E402
 from lantern_cloud.store import Store  # noqa: E402
 from lantern_gateway.app import Settings as GwSettings  # noqa: E402
@@ -87,6 +88,40 @@ def make(tmp_path, **kw):
 
 def bearer(t):
     return {"authorization": f"Bearer {t}"}
+
+
+def left_by_a_step(monkeypatch, word: str, where: str, target: Path, how: str = "link"):
+    """What a step that was taken over could leave for the service to pick up. After the restricted step whose
+    command holds `word` has ended (the step itself runs as it always does), `where` in its temp folder
+    ("out/graph.json", "out/cache", "out") is a link to `target`, or, with how="second name", a second name of the
+    file `target` (a hard link). Returns the real `_jailed`, for a safe twin."""
+    real = worker_mod.Worker._jailed
+
+    def and_then(self, rid, root, cmd, **kw):
+        got = real(self, rid, root, cmd, **kw)
+        if word in cmd:
+            at = root / "tmp" / where
+            if at.is_dir() and not at.is_symlink():
+                shutil.rmtree(at)
+            elif os.path.lexists(at):
+                os.unlink(at)
+            at.parent.mkdir(parents=True, exist_ok=True)
+            (os.link if how == "second name" else os.symlink)(target, at)
+        return got
+    monkeypatch.setattr(worker_mod.Worker, "_jailed", and_then)
+    return real
+
+
+def holds(folder: Path, text: str) -> list[str]:
+    """The files under `folder` that hold `text`, and every link under it (a link has no place in a results
+    folder), each as a path from `folder`."""
+    found = []
+    for dirpath, dirs, files in os.walk(folder):
+        for f in dirs + files:
+            q = Path(dirpath) / f
+            if q.is_symlink() or (q.is_file() and text.encode() in q.read_bytes()):
+                found.append(q.relative_to(folder).as_posix())
+    return sorted(found)
 
 
 def wait(cloud, tok, rid, timeout=120):
@@ -298,9 +333,10 @@ def test_restart_requeues_waiting_runs_and_reports_cut_off_ones(tmp_path, clone_
     a = st.create_run("github:1", LINK, "github.com", "structure", per_day=9, global_per_day=9, per_user_active=9)
     b = st.create_run("github:1", LINK, "github.com", "structure", per_day=9, global_per_day=9, per_user_active=9)
     st.update_run(a, status="running")
-    leftover = Path(s.work_dir) / "run-crashed"
+    leftover = Path(s.work_dir) / "run-crashed0"       # as the worker makes it: its mark is inside
     leftover.mkdir(parents=True)
     (leftover / "file").write_text("x", encoding="utf-8")
+    (leftover / MARK).write_text("made by lantern-cloud for one run\n", encoding="utf-8")
     w = worker_mod.Worker(s, st)
     assert not leftover.exists()                       # a crashed run's temp folder is removed at start-up
     assert st.run(a)["status"] == "error" and "restarted" in st.run(a)["error"]
@@ -411,16 +447,19 @@ def test_a_restart_keeps_only_the_uploads_of_waiting_runs(tmp_path):
                  results_dir=str(tmp_path / "results"), work_dir=workdir(tmp_path), audits=False)
     store = Store(s.db_path)
     rid = store.create_run("github:1", "lantern:upload/shop", "upload", "structure", per_day=10, global_per_day=10,
-                           per_user_active=1)
+                           per_user_active=2)
+    over = store.create_run("github:1", "lantern:upload/shop", "upload", "structure", per_day=10, global_per_day=10,
+                            per_user_active=2)
+    store.update_run(over, status="error")
     up = Path(s.uploads())
     up.mkdir(parents=True, exist_ok=True)
     (up / f"{rid}.zip").write_bytes(b"PK")             # its run is still queued: kept for it
-    (up / "gone.zip").write_bytes(b"PK")               # its run was deleted
-    (up / ".part-abc").write_bytes(b"PK")              # cut off while it was being received
+    (up / f"{over}.zip").write_bytes(b"PK")            # its run is over
+    (up / ".part-0123456789abcdef").write_bytes(b"PK")   # cut off while it was being received
     w = worker_mod.Worker(s, store)
     w.pool.shutdown(wait=False, cancel_futures=True)   # only the start-up sweep is tested here
-    assert {p.name for p in up.iterdir()} <= {f"{rid}.zip"}
-    assert not (up / "gone.zip").exists() and not (up / ".part-abc").exists()
+    assert {p.name for p in up.iterdir()} <= {f"{rid}.zip"}      # (the waiting run may have taken its upload by now)
+    # (what is in that folder and is not Lantern's own is left alone: tests/test_cloud_cleanup.py)
 
 
 def test_the_audit_step_failing_still_gives_a_finished_run(tmp_path, clone_from, monkeypatch):

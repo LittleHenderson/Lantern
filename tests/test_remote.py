@@ -255,12 +255,16 @@ def test_a_failed_checkout_leaves_nothing_behind(tmp_path, monkeypatch):
 
 def test_an_earlier_clone_without_files_is_checked_out(tmp_path, monkeypatch):
     """A folder with only `.git` (left by an older Lantern after a failed checkout) is not an existing clone to
-    analyze as an empty project: the next attempt checks the files out, under the size cap."""
+    analyze as an empty project: the next attempt checks the files out, under the size cap.
+    It is where Lantern keeps its clones (LANTERN_HOME/repos), which is how Lantern knows a clone from before the
+    mark for its own. The same folder anywhere else is the person's, and stays when its files cannot be written
+    (`test_a_checkout_that_fails_removes_a_lantern_clone_but_not_a_folder_of_the_persons`, tests/test_removal.py)."""
     src = _git_repo(tmp_path / "src")
     (src / "blob.json").write_bytes(b"0" * 1_500_000)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."], cwd=src, check=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "big"], cwd=src, check=True)
-    dest, log = tmp_path / "dest", []
+    dest, log = remote.destination(remote.parse("https://github.com/o/r")), []
+    dest.parent.mkdir(parents=True)
     r = remote._git(["clone", "--depth", "1", "--no-checkout", "--", src.as_uri(), str(dest)], cwd=None)
     assert r.returncode == 0 and (dest / ".git").is_dir() and not (dest / "app.py").exists()
     assert not remote.has_files(dest)

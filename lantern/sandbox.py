@@ -55,6 +55,8 @@ import time
 import uuid
 from pathlib import Path
 
+from . import removal
+
 WALL_CLOCK = 600          # seconds; the directive's 10 minutes
 MARK = "LANTERN-SANDBOX-BLOCKED:"
 JS_NOTE = "Tests run; your map upgrades for Python only for now."
@@ -316,52 +318,28 @@ def _make_read_only(root: Path) -> None:
         os.chmod(dirpath, os.stat(dirpath).st_mode & ~_WRITE_BITS)
 
 
-def _unlock(path) -> None:
-    """Give the owner its rights back on every real folder at and beneath `path`, so that the copy (made read-only)
-    and whatever the tests left (a folder with every right taken off) can be deleted. A link is never followed and
-    never changed: what it points at is not the sandbox's."""
-    todo = [os.fspath(path)]
-    while todo:
-        d = todo.pop()
-        try:
-            st = os.lstat(d)
-            if not stat.S_ISDIR(st.st_mode):
-                continue
-            if stat.S_IMODE(st.st_mode) & stat.S_IRWXU != stat.S_IRWXU:
-                os.chmod(d, stat.S_IMODE(st.st_mode) | stat.S_IRWXU)
-            with os.scandir(d) as entries:
-                todo.extend(e.path for e in entries if e.is_dir(follow_symlinks=False))
-        except OSError:
-            continue
-
-
 def _rm(path: Path) -> bool:
     """Delete a folder the sandbox made, with all that is in it. True when nothing is left of it.
 
-    Only what is inside `path` is changed. Until 2026-11-10 a link in the copy that pointed at a folder outside had
-    that folder's mode changed, and when the folder could not be deleted the mode of the folder it is in was set to
-    owner-only: the system's temp folder, for all its users, when Lantern ran as root. Both without a word, and
-    with the folder still there."""
-    path = Path(path)
-    if not os.path.lexists(path):
-        return True
-    if os.path.islink(path) or not path.is_dir():
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-        return not os.path.lexists(path)
-    _unlock(path)
+    Only what is inside `path` is changed (`lantern.removal`). Until 2026-11-10 a link in the copy that pointed at a
+    folder outside had that folder's mode changed, and when the folder could not be deleted the mode of the folder
+    it is in was set to owner-only: the system's temp folder, for all its users, when Lantern ran as root. Both
+    without a word, and with the folder still there. A copy nested deeper than about a thousand folders was not
+    deleted at all: the standard library's delete stopped with RecursionError (Python 3.11 and 3.12)."""
+    return removal.remove(path) is None
 
-    def again(fn, p, exc):   # Windows refuses to delete a read-only file: give it its write bit, try once more
-        try:
-            if fn in (os.unlink, os.remove, os.rmdir) and not os.path.islink(p):
-                os.chmod(p, stat.S_IMODE(os.lstat(p).st_mode) | stat.S_IWRITE | stat.S_IREAD)
-                fn(p)
-        except OSError:
-            pass
-    shutil.rmtree(path, onerror=again) if sys.version_info < (3, 12) else shutil.rmtree(path, onexc=again)
-    return not os.path.lexists(path)
+
+def _retry_left(log) -> None:
+    """Delete the temp folders an earlier run had to leave (`removal.note`), and say what became of them."""
+    try:
+        r = removal.retry_noted()
+    except Exception:  # noqa: BLE001 - a tidy-up of old folders never keeps the tests from running
+        return
+    if r["removed"]:
+        log(f"sandbox: {r['removed']} temp folder{'s' if r['removed'] != 1 else ''} an earlier run could not delete "
+            f"{'are' if r['removed'] != 1 else 'is'} deleted now")
+    for p in r["waiting"]:
+        log(f"sandbox: a temp folder an earlier run could not delete is still there: {p}")
 
 
 def _env_base(tmp: Path) -> dict:
@@ -737,6 +715,7 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
     with _LIVE_LOCK:
         _GOING.add(me)
     try:
+        _retry_left(log)         # what an earlier run could not delete, tried again before this one makes its own
         root = Path(tempfile.mkdtemp(prefix="lantern-sandbox-"))
         try:
             if backend == "docker":
@@ -746,6 +725,7 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
         finally:
             if not _rm(root):
                 log(f"sandbox: its temp folder could not be deleted and is still there: {root}")
+                removal.note(root)   # written down: the next run deletes it, if it is still the folder made here
     finally:
         with _LIVE_LOCK:
             _GOING.discard(me)
@@ -785,6 +765,9 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
                     os.chown(os.path.join(dirpath, f), 65534, 65534)
             os.chown(root, 65534, 65534)   # mode stays 0700; the copy inside keeps root as owner and no write bits
             _others_may_read(hook)
+    except RecursionError as e:   # the standard library copies by calling itself once per folder level
+        raise Unavailable("the project could not be copied into the sandbox's temp folder "
+                          "(its folders are nested too deep)") from e
     except OSError as e:
         first = e.args[0][0] if isinstance(e, shutil.Error) and e.args and e.args[0] else None
         what = f"{first[0]}: {first[2]}" if isinstance(first, (tuple, list)) and len(first) >= 3 else (e.strerror or type(e).__name__)

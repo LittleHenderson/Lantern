@@ -358,8 +358,9 @@ class App:
             except Exception:
                 if not remote.has_files(dest):   # nothing was cloned (a failed clone removes itself): forget the project
                     self.store.remove_project(p["id"])
-                    if dest.is_dir():
-                        remote.remove_tree(dest)
+                    left = remote.remove_tree(dest)
+                    if left:
+                        log(f"the folder the failed clone left could not be removed: {dest} ({left})")
                 raise
             return pipeline.analyze(dest, self.out(p), privacy, log=log)
 

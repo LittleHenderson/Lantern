@@ -9,7 +9,9 @@ One run, step by step (docs/cloud-mode-brief.md §3):
   3. The analysis (`python -m lantern.cli analyze --offline`) inside the restricted process with **no network**
      (Landlock TCP off where the kernel has it, plus the sandbox's audit hook) and writes only in its temp folder;
      the audit results from step 2 come in through LANTERN_AUDITS_FROM.
-  4. The result files are copied to the run's folder; the temp folder (clone included) is removed in `finally`.
+  4. The result files are copied to the run's folder; the temp folder (clone included) is removed in `finally`,
+     through `cleanup.Cleanup`: when that cannot be done it is written down, said in the run's log and tried again,
+     and the run is recorded as ended either way.
 
 Plain-words explanations (`explain`, when the owner asks and has agreed to send code to the model): the clone is
 gone by then, so the repository is copied again at the run's commit (a different commit is refused, so the words
@@ -23,12 +25,15 @@ can analyse a stranger's repository; the sandbox is a second wall in case the an
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import json
+import logging
 import os
 import re
 import shutil
+import stat
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -36,12 +41,14 @@ from pathlib import Path
 
 import httpx
 
-from lantern import _jail, learn, remote, sandbox
+from lantern import _jail, learn, remote, removal, sandbox
 
+from .cleanup import Cleanup
 from .ghapp import NoAccess
 from .settings import Settings
 from .store import Store
 
+_log = logging.getLogger("lantern_cloud")
 RESULT_FILES = ("report.html", "evidence.html", "evidence.json", "graph.json", "security.json", "readiness.json",
                 "run.json", "badge.svg")
 EXPLAINED_FILES = ("explanations.json", "report.html", "evidence.html", "evidence.json")   # what `explain` rewrites
@@ -52,6 +59,13 @@ STAGES = {"clone": "Copying the repository (nothing is run or installed)",
           "audit": "Checking dependency versions against public advisories",
           "analyze": "Mapping the code and running the checks",
           "save": "Saving your results"}
+# What a person is told when a step left something other than a plain file where a result belongs (a link, a
+# folder, a device). Lantern's own steps never do; nothing of such a step is kept.
+NOT_PLAIN = ("Lantern's own step left something that is not a plain file where a result belongs, so nothing of it "
+             "was kept. This is a problem on Lantern's side, not in your code.")
+# The line a run's log gets when its work folder could not be removed at its end. It never says where the folder is.
+NOT_REMOVED = ("Lantern could not remove its copy of the code from its server yet. It has written that down and "
+               "tries again by itself; the owner is told when that takes more than a day.")
 PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy",
               "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS")
 
@@ -221,7 +235,7 @@ class Worker:
                                    "Try again in a minute, or upload your app's folder instead.") from None
         return get
 
-    def __init__(self, settings: Settings, store: Store):
+    def __init__(self, settings: Settings, store: Store, cleanup: Cleanup | None = None):
         self.s, self.store, self.logs = settings, store, Logs()
         self.results = Path(settings.results_dir)
         self.work = Path(settings.work_dir)
@@ -233,13 +247,15 @@ class Worker:
         self.stopping = threading.Event()   # shutdown(): the steps that are running end, with all they started
         self.tokens: dict[str, str] = {}    # run id -> allowance token, only while its explanations wait
         self.github = settings.github_app()   # Connect GitHub, or None
-        self._sweep_work()
+        # Everything this service deletes goes through here (`cleanup.py`): only what it made, written down first.
+        self.cleanup = cleanup or Cleanup(store, self.results, self.work, self.uploads, days=settings.retention_days)
+        self._sweep(self.cleanup.sweep_work)
         with store.lock:   # tokens were in memory only: explanations cut off by a restart are reported, not retried
             store.db.execute("update runs set explain_status = 'error', explain_error = ? where explain_status in "
                              "('queued', 'running')", ("Lantern restarted while writing these. Click Explain again.",))
             store.db.commit()
         unfinished = store.unfinished()
-        self._sweep_uploads({r["id"] for r in unfinished if r["status"] != "running"})
+        self._sweep(self.cleanup.sweep_uploads, {r["id"] for r in unfinished if r["status"] != "running"})
         for r in unfinished:   # the service restarted: queued runs go again, a half-done one is reported
             if r["status"] == "running":
                 store.update_run(r["id"], status="error", stage="stopped", finished=_now(),
@@ -247,17 +263,16 @@ class Worker:
             else:
                 self.submit(r["id"])
 
-    def _sweep_work(self) -> None:
-        """Anything left in the work folder belongs to a run that was cut off (a crash): remove it."""
-        for p in self.work.iterdir():
-            sandbox._rm(p) if p.is_dir() else p.unlink(missing_ok=True)
-
-    def _sweep_uploads(self, waiting: set[str]) -> None:
-        """Keep only the uploads of runs still waiting to start; a half-received upload (`.part-*`) or one whose run
-        is gone was cut off by a restart: remove it."""
-        for p in self.uploads.iterdir():
-            if not (p.is_file() and p.suffix == ".zip" and p.stem in waiting):
-                sandbox._rm(p) if p.is_dir() else p.unlink(missing_ok=True)
+    @staticmethod
+    def _sweep(sweep, *args) -> None:
+        """A start-up sweep: what the runs a restart cut off left behind (`Cleanup.sweep_work`, `sweep_uploads`:
+        only what the service itself made; until 2026-11-10 everything in both folders was deleted, whatever it
+        was). A sweep that breaks is logged and never keeps the service from starting: until then a work folder
+        nested 1,100 deep did, on Python 3.11 and 3.12."""
+        try:
+            sweep(*args)
+        except Exception as e:  # noqa: BLE001
+            _log.warning("clean-up at start-up failed (%s); the next pass tries again", type(e).__name__)
 
     def submit(self, rid: str):
         return self.pool.submit(self.run, rid)
@@ -276,9 +291,8 @@ class Worker:
     def run(self, rid: str) -> None:
         if not self.store.claim(rid):   # already taken by another thread, finished, or deleted
             return
-        r = self.store.run(rid)
-        root = Path(tempfile.mkdtemp(prefix="run-", dir=self.work))
-        scrub = [str(root), os.path.realpath(root)]
+        root: Path | None = None
+        scrub: list[str] = []           # the run's folder, once it is made: never shown in the log
 
         def log(line: str) -> None:
             for p in scrub:
@@ -291,7 +305,10 @@ class Worker:
 
         start = time.monotonic()
         status, error, summary, commit = "error", None, None, None
-        try:
+        try:    # from the claim to the record at the end, everything is in here: a run that began is recorded as ended
+            r = self.store.run(rid)
+            root = self.cleanup.fresh("run-")
+            scrub += [str(root), os.path.realpath(root)]
             tmp = root / "tmp"
             tmp.mkdir()
             free = shutil.disk_usage(root).free / 1_000_000
@@ -334,21 +351,24 @@ class Worker:
             if blocked:
                 raise RunFailed("The analysis tried something the sandbox does not allow ("
                                 + "; ".join(b["what"] for b in blocked[:3]) + ") and was stopped.", "blocked")
-            if rc != 0 or not (out / "report.html").is_file():
-                last = [ln for ln in output.splitlines() if ln.strip() and not ln.startswith("sandbox:")][-1:]
-                if last:
-                    raise RunFailed("The analysis stopped with an error: " + _scrub(last[0], scrub)[:300] + ".")
-                if rc is not None and rc < 0:    # killed by a signal before it could say anything: Lantern's own fault
-                    raise RunFailed(f"Lantern's analysis crashed (signal {-rc}) before it could write anything. "
-                                    "This is a bug on Lantern's side, not in your code.")
-                raise RunFailed(f"The analysis stopped with an error (exit code {rc}) and wrote nothing.")
-            stage("save")
-            dest = self.results / rid
-            dest.mkdir(parents=True, exist_ok=True)
-            for name in RESULT_FILES:
-                if (out / name).is_file():
-                    shutil.copyfile(out / name, dest / name)
-            summary = _summary(out)
+            # From here on the step's folder is read by the service itself, which has more rights than the step had:
+            # nothing in it is followed (`_there`, `_take`).
+            try:
+                if rc != 0 or not _there(out, "report.html"):
+                    last = [ln for ln in output.splitlines() if ln.strip() and not ln.startswith("sandbox:")][-1:]
+                    if last:
+                        raise RunFailed("The analysis stopped with an error: " + _scrub(last[0], scrub)[:300] + ".")
+                    if rc is not None and rc < 0:    # killed by a signal before it could say anything: Lantern's fault
+                        raise RunFailed(f"Lantern's analysis crashed (signal {-rc}) before it could write anything. "
+                                        "This is a bug on Lantern's side, not in your code.")
+                    raise RunFailed(f"The analysis stopped with an error (exit code {rc}) and wrote nothing.")
+                stage("save")
+                dest = self.results / rid
+                dest.mkdir(parents=True, exist_ok=True)
+                _take(out, RESULT_FILES, dest)
+            except NotPlain:
+                raise RunFailed(NOT_PLAIN) from None
+            summary = _summary(dest)       # read from the copies: plain files in the service's own folder
             status = "done"
             log(f"done: {summary.get('score')}/100, {summary.get('counts')}")
         except RunFailed as e:
@@ -358,12 +378,32 @@ class Worker:
             error = "Something went wrong on Lantern's side. The run was stopped and nothing was kept."
             log(f"internal error ({type(e).__name__})")
         finally:
-            sandbox._rm(root)    # the clone and every temp file, whatever happened
-            self.upload_path(rid).unlink(missing_ok=True)   # an upload never outlives its run's start
-            if status != "done":
-                shutil.rmtree(self.results / rid, ignore_errors=True)
-            self.store.update_run(rid, status=status, error=error, summary=summary, commit_sha=commit,
-                                  finished=_now(), stage="finished", log_tail=self.logs.tail(rid))
+            # The clone and every temp file, whatever happened; the upload, which never outlives its run's start;
+            # and, when the run did not finish, the results it had begun to write. Then the record, always: until
+            # 2026-11-10 a folder that could not be deleted raised here, before the record. The run then stayed
+            # "running" for good and its owner could not start another.
+            try:
+                self._tidy(root, [("upload", f"{rid}.zip")] + ([] if status == "done" else [("results", rid)]), log)
+            finally:
+                self.store.update_run(rid, status=status, error=error, summary=summary, commit_sha=commit,
+                                      finished=_now(), stage="finished", log_tail=self.logs.tail(rid))
+
+    def _tidy(self, root: Path | None, also: list[tuple[str, str]], log) -> None:
+        """What a run or an explanation leaves when it ends: its work folder, and whatever else it owes. Never
+        raises. What could not be removed is written down (`Cleanup.discard`) and tried again by the next pass; the
+        log says so when it is the copy of the code, and never says where that is."""
+        for kind, name in ([("work", root.name)] if root is not None else []) + also:
+            try:
+                gone = self.cleanup.discard(kind, name)
+            except Exception as e:  # noqa: BLE001 - the run still has to be recorded as ended
+                gone = False
+                _log.warning("clean-up after a run failed (%s); written down for the next pass", type(e).__name__)
+                with contextlib.suppress(Exception):
+                    if kind == "work":
+                        self.cleanup.release(name)
+                    self.store.note_leftover(kind, name)
+            if not gone and kind == "work":
+                log(NOT_REMOVED)
 
     def upload_path(self, rid: str) -> Path:
         return self.uploads / f"{rid}.zip"
@@ -397,9 +437,8 @@ class Worker:
         token = self.tokens.pop(rid, None)
         if not self.store.claim_explain(rid):
             return
-        r = self.store.run(rid)
-        root = Path(tempfile.mkdtemp(prefix="explain-", dir=self.work))
-        scrub = [str(root), os.path.realpath(root)]
+        root: Path | None = None
+        scrub: list[str] = []
         key = "x:" + rid    # its own log, so the run's saved log stays as it was
 
         def log(line: str) -> None:
@@ -408,6 +447,9 @@ class Worker:
         start = time.monotonic()
         status, error, summary = "error", None, None
         try:
+            r = self.store.run(rid)
+            root = self.cleanup.fresh("explain-")
+            scrub += [str(root), os.path.realpath(root)]
             if not r or not token:
                 raise RunFailed("Lantern restarted while these were waiting. Click Explain again.")
             if is_upload(r["link"]):
@@ -440,20 +482,39 @@ class Worker:
                                                  extra={"LANTERN_TOKEN": token,
                                                         "LANTERN_GATEWAY_URL": self.s.gateway_url.rstrip("/")})
             if timed_out:
+                # Each explanation is saved in the cache folder as it is written, and it has been paid for from the
+                # person's allowance: those files are kept with the run, so the next click goes on from there. (Until
+                # 2026-11-10 the sentence below was said and they were thrown away with the work folder.)
+                try:
+                    kept = _take_tree(out, "cache", dest / "cache") > 0
+                except (NotPlain, OSError):
+                    kept = False
                 raise RunFailed(f"Writing the explanations took longer than {self.s.job_timeout // 60} minutes and "
-                                "was stopped. The ones already written are kept; click Explain again to go on.")
-            ex = _read_json(out / "explanations.json")
-            st = (ex or {}).get("stats") if isinstance(ex, dict) else None
-            if rc != 0 or not isinstance(st, dict):
-                last = [ln for ln in output.splitlines() if ln.strip() and not ln.startswith("sandbox:")][-1:]
-                raise RunFailed("The explanations could not be written"
-                                + (": " + _scrub(last[0], scrub)[:300] if last else "") + ".")
-            for name in EXPLAINED_FILES:
-                if (out / name).is_file():
-                    shutil.copyfile(out / name, dest / name)
-            if (out / "cache").is_dir():
-                shutil.rmtree(dest / "cache", ignore_errors=True)
-                shutil.copytree(out / "cache", dest / "cache")
+                                "was stopped. " + ("The ones already written are kept; click Explain again to go on."
+                                                   if kept else "Click Explain again."))
+            # Saved so that "nothing was changed" below is true when a step fails. What the step wrote is taken
+            # without following a link (`_take`; a link among it, and nothing of the step is kept). Every rewritten
+            # file is first written beside its old one and the stats are read from that copy; then the cache, into
+            # the folder that is there (until 2026-11-10 the old one was deleted to make room, any failure of that
+            # unsaid, after the new pages were already in place); and only then is each page put in its old one's
+            # place.
+            try:
+                try:
+                    staged = _take(out, EXPLAINED_FILES, dest, as_name=".{}.new")
+                    ex = _read_json(dest / ".explanations.json.new") if "explanations.json" in staged else None
+                    st = (ex or {}).get("stats") if isinstance(ex, dict) else None
+                    if rc != 0 or not isinstance(st, dict):
+                        last = [ln for ln in output.splitlines() if ln.strip() and not ln.startswith("sandbox:")][-1:]
+                        raise RunFailed("The explanations could not be written"
+                                        + (": " + _scrub(last[0], scrub)[:300] if last else "") + ".")
+                    _take_tree(out, "cache", dest / "cache")
+                except NotPlain:
+                    raise RunFailed(NOT_PLAIN.replace("so nothing of it was kept", "so nothing was changed")) from None
+                for name in staged:
+                    os.replace(dest / f".{name}.new", dest / name)
+            finally:    # nothing half-written stays beside the results (after a save that worked, none is there)
+                if [n for n in EXPLAINED_FILES if removal.remove(dest / f".{n}.new") is not None]:
+                    log("a page that was only half written could not be removed; it goes with this check's results")
             exps = ex.get("explanations") if isinstance(ex.get("explanations"), dict) else {}
             summary = {"functions": len(exps),
                        "validated": sum(1 for v in exps.values() if isinstance(v, dict) and v.get("validated")),
@@ -468,8 +529,10 @@ class Worker:
             error = "Something went wrong on Lantern's side. Nothing was changed; click Explain again."
             log(f"internal error ({type(e).__name__})")
         finally:
-            sandbox._rm(root)
-            self.store.update_run(rid, explain_status=status, explain_error=error, explain_summary=summary)
+            try:
+                self._tidy(root, [], log)
+            finally:
+                self.store.update_run(rid, explain_status=status, explain_error=error, explain_summary=summary)
 
     @staticmethod
     def analyze_cmd(repo: Path, out: Path, privacy: str, offline: bool = True) -> list[str]:
@@ -539,6 +602,140 @@ def _now() -> str:
 def _model_name() -> str:
     from lantern.providers import DEFAULT_MODEL_NAME
     return DEFAULT_MODEL_NAME
+
+
+class NotPlain(Exception):
+    """Something a restricted step left where a result belongs is not a plain file of its own or a real folder."""
+
+
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+MAX_CACHE_DEPTH = 8      # the explain cache is one folder of files; anything nested deeper is not Lantern's
+
+
+def _folder(name, dir_fd: int | None = None) -> int | None:
+    """Open a real folder (never a link to one). None when nothing is there."""
+    try:
+        return os.open(name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NOFOLLOW, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.ENOTDIR, errno.EMLINK):
+            raise NotPlain() from None
+        raise
+
+
+def _own_file(st: os.stat_result) -> bool:
+    """A plain file with one name. A file that has a second name somewhere (a hard link) may be somebody else's
+    file, which the step could name and the service can read; a file the step wrote has one."""
+    return stat.S_ISREG(st.st_mode) and st.st_nlink <= 1
+
+
+def _there(out: Path, name: str) -> bool:
+    """Whether the folder `out` holds something called `name`, a file or not. Nothing is followed: the folder is
+    opened only as a real folder (`NotPlain` when it is a link), and the name is looked at, never opened."""
+    fd = _folder(out)
+    if fd is None:
+        return False
+    try:
+        os.stat(name, dir_fd=fd, follow_symlinks=False)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _take_one(fd: int, name: str, dst: Path) -> bool:
+    """Copy the plain file `name` of the folder held open as `fd` to `dst`. False when there is no such file."""
+    try:
+        f = os.open(name, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | _NOFOLLOW, dir_fd=fd)
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.EMLINK):
+            raise NotPlain() from None
+        raise
+    try:
+        if not _own_file(os.fstat(f)):     # asked of what is open, not of its name (a folder or a pipe opens too)
+            raise NotPlain()
+        src = os.fdopen(f, "rb")
+    except BaseException:
+        os.close(f)
+        raise
+    with src, open(dst, "wb") as to:
+        shutil.copyfileobj(src, to)
+    return True
+
+
+def _take(out: Path, names, dest: Path, as_name: str = "{}") -> list[str]:
+    """Copy the files `names` that a restricted step wrote in `out` into `dest`, a folder of the service's, and
+    return the ones that were there. Only plain files are taken, reached from the folder itself held open: neither
+    `out` nor a file in it is followed when it is a link, and a file with a second name elsewhere is not read. The
+    step runs with fewer rights than the service, which would otherwise read the link's target for it and keep the
+    copy where the run's owner can download it (until 2026-11-10: `shutil.copyfile` after `is_file()`, both of
+    which follow links). `NotPlain` for a link, a folder or a device where a file belongs; the step has ended by now
+    (`_jailed`), so nothing changes under the copy."""
+    fd = _folder(out)
+    if fd is None:
+        return []
+    try:
+        return [n for n in names if _take_one(fd, n, dest / as_name.format(n))]
+    finally:
+        os.close(fd)
+
+
+def _take_tree(out: Path, name: str, dest: Path) -> int:
+    """Copy the folder `name` of `out` (the explain cache) into `dest`, adding to what is there, and return how many
+    files that was: plain files and real folders only, each reached from its folder held open. `NotPlain` for
+    anything else, looked for in the whole tree before the first file is copied. Each file arrives whole or not at
+    all: it is written beside its place and then put there, so a copy that stops half-way (a full disk) leaves the
+    explanation that was kept before as it was."""
+    top = _folder(out)
+    if top is None:
+        return 0
+    try:
+        fd = _folder(name, dir_fd=top)
+    finally:
+        os.close(top)
+    if fd is None:
+        return 0
+
+    def walk(fd: int, into: Path | None, depth: int) -> int:
+        if depth > MAX_CACHE_DEPTH:
+            raise NotPlain()
+        with os.scandir(fd) as it:
+            entries = [e.name for e in it]
+        n = 0
+        for entry in entries:
+            st = os.stat(entry, dir_fd=fd, follow_symlinks=False)
+            if stat.S_ISDIR(st.st_mode):
+                sub = _folder(entry, dir_fd=fd)
+                if sub is None:
+                    continue
+                try:
+                    if into is not None:
+                        (into / entry).mkdir(exist_ok=True)
+                    n += walk(sub, into / entry if into is not None else None, depth + 1)
+                finally:
+                    os.close(sub)
+            elif not _own_file(st):
+                raise NotPlain()
+            elif into is not None:       # (the first pass, with `into` None, only looks)
+                part = into / f".{entry}.part"
+                try:
+                    if _take_one(fd, entry, part):
+                        os.replace(part, into / entry)
+                        n += 1
+                finally:
+                    with contextlib.suppress(OSError):
+                        os.unlink(part)             # there only when the copy stopped half-way
+        return n
+    try:
+        walk(fd, None, 0)
+        dest.mkdir(parents=True, exist_ok=True)
+        return walk(fd, dest, 0)
+    finally:
+        os.close(fd)
 
 
 def _read_json(p: Path):

@@ -521,8 +521,14 @@ class Cache:
         return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
     def get(self, k: str) -> dict | None:
-        p = self.root / f"{k}.json"
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        """The record kept under `k`, or None when there is none, or when what is there is not a record: a file that
+        was cut short while it was written (the program was stopped, the disk was full) is asked for again and
+        written anew. Until 2026-11-10 one such file stopped every later explain of the project."""
+        try:
+            rec = json.loads((self.root / f"{k}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            return None
+        return rec if isinstance(rec, dict) else None
 
     def put(self, k: str, rec: dict) -> None:
         (self.root / f"{k}.json").write_text(json.dumps(rec, indent=1), encoding="utf-8")

@@ -5,6 +5,98 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- The cloud service deletes only what it made, and a delete that fails is written down, said and tried again
+  (2026-11-10; stage 7 of the 2026-11-09 directive, part 2). Measured first, on the code as it was, in nine
+  situations, as root and as an ordinary user, on the Python the live image runs (3.12); both users gave the same
+  results. When the service started, it deleted everything it found in its work folder and its uploads folder: a
+  folder and a file that were not Lantern's, a person's folder that was only named like a run's, a `.zip` that was
+  no run's. A link in the work folder, named like a run's folder, had the folder it pointed at (read-only before)
+  set to owner-only, and the link stayed. A person who deleted a run while the disk refused deletes was answered
+  `{"deleted": "<id>"}`: the run's 8 result files stayed on the server, nothing was recorded, and neither a healthy
+  disk nor a restart removed them. The same 8 files stayed for good when the service was cut off between deleting
+  a run's record and its files. A retention pass that failed every hour told nobody: nothing in the owner's
+  statistics, nothing on the health page. A repository whose folders are nested 1,100 deep left its run "running"
+  for good, its owner was refused every new check ("You already have a run going"), and after a restart the service
+  did not start at all (RecursionError). On a person's computer, copying a repository into a folder that already
+  held files failed in git, and the folder was then deleted with the files in it; removing a clone whose path was a
+  link set the folder it pointed at, and the folder around it (shared by all users, in the test), to owner-only and
+  left the link.
+  Now there is one way to delete (`lantern/removal.py`): never through a link, nothing changed outside the thing,
+  any depth of folders with one folder held open at a time, and an answer that says what stayed and the system's
+  reason, with no name from inside. The cloud service has one place that deletes (`cloud/lantern_cloud/cleanup.py`).
+  It removes by name, never by a path it was handed, and only what the service made: a run's result folder, a work
+  folder that carries the mark file the service writes into each one it makes, a half-received upload, the upload
+  of a run that is over. Everything else in its three folders is left alone and counted for the owner. Each removal
+  is written down before it starts (table `leftovers`; for a deleted run, in the same transaction as the delete)
+  and the record goes when nothing is left, so a service cut off in the middle finishes at its next start. A
+  removal the system refuses keeps its record with the reason and is tried again at each start and every hour. The
+  person is told: deleting a run or an account answers `files: "removed"` or `"waiting"`, and the website says
+  "Deleted, with one thing still to do" when files wait. The owner is told: `/v1/admin/stats` has `cleanup` (how
+  many things wait and since when, the reasons, how the last pass ended, how many things in the folders are not
+  the service's; never a run id or a name), `/v1/health` says one word (`ok`; `behind` after 24 hours; `unknown`),
+  and the uptime check fails on any word but `ok`, which is a mail. A run is recorded as ended whatever its
+  tidy-up does, and nothing in the start-up sweeps or the hourly pass can keep the service from starting.
+  Explanations are saved so that "Nothing was changed" is true when a save fails: each rewritten page is written
+  beside its old one and put in its place only when all are written (before, with the disk refusing the third of
+  the four pages, the explanations and the report were already replaced while the message said that nothing was).
+  Three more defects were found on the way and fixed, each with a test written first. (1) The service took a run's
+  result files, and the explanations and their cache, out of the finished step's folder with copies that follow
+  links (`shutil.copyfile` after `is_file()`, `shutil.copytree`). The step runs with fewer rights than the service,
+  so a step that was taken over could leave a link and have the service read the link's target for it: in the
+  tests a file from outside the run landed in the run's results (as `graph.json`, as `report.html`, as
+  `explanations.json`, in the cache), where the run's owner can download it. Now only plain files are taken, each
+  reached from the step's folder held open, never by a path (`worker._take`, `_take_tree`, `_there`): a link, a
+  file that has a second name somewhere else (a hard link), a folder, a pipe, or the folder itself being a link
+  ends the run or the explanations with "Lantern's own step left something that is not a plain file where a result
+  belongs", and nothing of that step is kept. (2) Explanations stopped at the time limit said "The ones already
+  written are kept; click Explain again to go on" and threw them away with the work folder, so every new try paid
+  for the same explanations again from the person's allowance (in the test: 25 paid for, 0 kept). Now they are
+  kept with the run, and the next try asks for none of them again; when they cannot be kept the message no longer
+  says so. (3) One saved explanation that was cut short while it was written (the program was stopped, the disk
+  was full) stopped every later explain of that project with an error, in the cloud and in the app, until somebody
+  deleted the cache folder by hand. Now that one is asked for again and written anew (`explain.Cache.get`), and
+  the cloud keeps each cache file whole or not at all.
+  The same nine situations on the new code (root and an ordinary user, Python 3.12, the same results for both):
+  nothing that is not Lantern's was deleted or changed (situations 1, 2, 3, 7 and 8); the delete that could not
+  remove its files answered `files: "waiting"`, the statistics said "8 things in it could not be removed; the first
+  reason: no permission (PermissionError 13)", and after the restart 0 files were left (4); the failing retention
+  pass is in the statistics (`last_pass`: `ok` false, `RuntimeError`) (5); the repository nested 1,100 deep ended
+  `done` and left nothing, its owner's next check was accepted, and the service started again (6); the cut-off
+  delete was finished at the next start, 0 files left (9).
+  On a person's computer: `remote.fetch` refuses a folder that is not new or empty before anything is copied; a
+  failed checkout removes the folder only when Lantern cloned it (that very call, Lantern's mark, or Lantern's own
+  repos folder), so a repository folder of the person's with no files checked out stays; the error after a failed
+  clone ends with what could not be removed; a sandbox temp folder that could not be deleted is written down
+  (`LANTERN_HOME/leftovers.json`) and deleted when the next test run starts, only if it is still the same folder.
+  Changed answers (`docs/api.md`): `DELETE /v1/runs/{id}` and `DELETE /v1/me` gain `files`, `/v1/health` gains
+  `cleanup`, `/v1/admin/stats` gains `cleanup`. `docs/terms.md` gains one sentence saying the same to the person.
+  At the first deploy of this version: a work folder that a cut-off run of the older version left is no longer
+  deleted at start-up (it has no mark); `docs/deploy.md` ("Clean-up") says how to see and remove it, and what the
+  count `left_alone` means.
+  Tests: 89 new ones, each dangerous case with a safe twin: `tests/test_removal.py` (37),
+  `tests/test_cloud_cleanup.py` (39), 8 more in `tests/test_cloud_ai.py`, 3 in `tests/test_explain.py`, 2 in
+  `tests/test_uptime.py`. Run on the code from before this change: 70 failed and 3 passed (the 3 are checks of
+  ordinary cases that must keep working: a plain folder is removed, a failed copy into a new folder leaves
+  nothing, a service that says nothing about clean-up passes the uptime check). The other 16 were not run there:
+  14 try the new copying functions directly, which the older code does not have (the same defects are shown on
+  the older code by 11 tests that go through the service), 1 reads the website's new note, 1 is the safe twin of
+  the link tests. One older test was moved to where an older Lantern kept its clones
+  (`test_an_earlier_clone_without_files_is_checked_out`: its folder lay outside Lantern's repos folder with no
+  mark, which is now a folder of the person's and is kept). The browser check deletes a run whose files cannot be
+  removed and reads the note. Found and not fixed: the restricted step can still read whatever its user can read
+  (its second wall, Landlock, limits writing and the network, not reading), and on the live service the step runs
+  as the service's own user, so a step that was taken over could read another run's results and write them into
+  its own report. Taking only plain files closes the way through a link, not this one. Also found, at the end
+  of this part, and not fixed in it: Lantern asks git for the commit and for uncommitted changes inside the
+  folder it analyzes (`evidence.git_info`: `git status`), and git obeys that folder's own settings file. A
+  command planted in `.git/config` (`core.fsmonitor`) was run by `lantern analyze` with the rights of the
+  person who started it (shown with a harmless marker file, git 2.43.0); `git ls-files --deleted`, which
+  Lantern asks of a folder that carries its clone mark (`remote.check_complete`), runs it too, and the mark
+  can be planted. A clone Lantern makes itself is not affected (git never copies settings from the other
+  side); a folder that arrives another way is: an unpacked download, an upload to the cloud service (the
+  archive's `.git` entries are unpacked like any other file). The fix, reading `.git` by hand and starting
+  git only where the project's settings do not reach, is the next part of this stage. Known limits:
+  `docs/audit/CLAIMS.md` (C2, C5, C8 to C13, L7) and CLAUDE.md's Known gaps.
 - A project's tests are not run without their sandbox, and nothing they start is left running (2026-11-10; stage 7
   of the 2026-11-09 directive, part 1). Measured first, on the code as it was, with a planted test that starts
   three programs (a plain child, one that moves to its own session, a daemon): all three were still running after
