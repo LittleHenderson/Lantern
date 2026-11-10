@@ -117,6 +117,7 @@ def clone(link: str, log=None, dest: Path | None = None, root: Path | None = Non
     log = log or (lambda m: None)
     if (dest / ".git").exists():
         log(f"updating {dest}")
+        _git(["config", "core.symlinks", "false"], cwd=dest)   # a clone an earlier Lantern made: no new link from here on
         r = _git(["pull", "--ff-only", "--quiet"], cwd=dest)
         if r.returncode != 0:
             log("could not update it, kept the copy that was there: " + _tail(r.stderr))
@@ -212,6 +213,14 @@ def skipped(folder: Path) -> dict | None:
     return d if isinstance(d, dict) and isinstance(d.get("files"), int) else None
 
 
+# A repository can hold links to any path of the computer it is cloned on. Lantern's clones are written without
+# them (2026-11-10): git then writes a link as a small file that holds the link's own text, as it does on a Windows
+# without links, and keeps the setting in the clone, so a later update writes none either. The readers refuse a link
+# that leads out of a project themselves (`python_frontend.inside_repo`); this is for every program that reads a
+# clone after them.
+NO_LINKS = ["-c", "core.symlinks=false"]
+
+
 def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900, auth: str | None = None) -> None:
     """`git clone --depth 1` of `url` into `dest` (an empty or missing folder), without a checkout first: the files
     are measured from the index and refused above the size cap, then checked out. RuntimeError with a plain message.
@@ -220,8 +229,8 @@ def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900, a
     comes first.
     `auth`: a read-only GitHub token (Lantern cloud's "Connect GitHub"), handed to git as an HTTP header through
     environment variables only (never in the link, `.git/config` or the log)."""
-    args = (["clone", "--depth", "1", "--single-branch", "--no-checkout"] + (["--branch", branch] if branch else [])
-            + ["--", url, str(dest)])
+    args = (["clone", *NO_LINKS, "--depth", "1", "--single-branch", "--no-checkout"]
+            + (["--branch", branch] if branch else []) + ["--", url, str(dest)])
     try:
         r = _git(args, cwd=None, timeout=timeout, **({"env": _auth_env(url, auth)} if auth else {}))
     except RuntimeError:

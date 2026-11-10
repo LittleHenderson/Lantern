@@ -5,6 +5,45 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Security: a link in a project that leads out of the project is no longer read or shown (2026-11-10; found during
+  stage 7 of the 2026-11-09 directive, while measuring what Lantern does with each file of 16 sample projects when
+  that file is a link). A project comes from anywhere, and a git repository can hold symbolic links to any path of the
+  computer it is cloned on. Lantern's readers of source files refused a file that was itself such a link
+  (`python_frontend.inside_repo`). Measured on the code before:
+  the notes file (`lantern-narratives.md`) was read without asking, and the Evidence Report shows it as it is. A
+  project that brought that name as a link had the first 20,000 characters of the file it led to in `evidence.html`
+  and `evidence.json`; a pipe under that name held the run up for good.
+  `inside_repo` looked at the last name of a path only, so a file reached through a folder that is a link out of the
+  project counted as the project's: `lantern-packs -> /somewhere` had the packs of rules in that folder loaded.
+  Bandit finds its files itself. It opened a `.py` link wherever it led, and its findings quote the lines; a pipe
+  under a `.py` name held it up until Lantern's time limit ended the whole Python check, so a project could switch
+  that check off by bringing one.
+  Now `inside_repo` answers for the whole path: a plain file, or a link to one, that lies inside the project by
+  whatever folders it is reached. A link that leads out, a file behind a folder that is such a link (on Windows a
+  junction too), a pipe, a device, a folder under a file's name and a name nothing answers to are not files of the
+  project. A link that stays inside the project is read as before, and so is a project that is itself reached through
+  the person's own shortcut. The notes file asks it. `security.run_bandit` hands Bandit an exclusion for each Python
+  file that is not the project's (`_not_the_projects`, `_only`: a pattern that fits that one file, since Bandit's own
+  matching would take `a.pyw` along with `a.py`), names those files in the record's `exclusions`, and takes no
+  finding, no count and no error from such a file whatever Bandit did. And a repository Lantern clones is written with
+  no link at all (`remote.NO_LINKS`, git's `core.symlinks=false`): git writes a small file that holds the link's own
+  text, as it does on a Windows without links, the clone does not count as changed for it, and a clone an earlier
+  Lantern made gets the setting the next time it is updated.
+  Changed for the person: in a repository Lantern clones from a link, a file that is a link to another file of the
+  same repository is now that small text file, not a second copy of the other file (a folder the person cloned
+  themselves and added is read as before, links inside it included). A file Bandit is told to leave out is named in
+  its record; before, a link to nothing made the Python check "partial".
+  Tests: `tests/test_links_out.py` (19 tests, each refusal beside a safe twin: the project's own notes file, a link
+  that stays inside, the person's shortcut, the project's own pack, real files whose names begin like a link's, a
+  project file Bandit cannot read). On the code before, 17 fail, 1 passes (the safe twin of the notes file) and 1
+  needs Windows; with this change 18 pass and 1 needs Windows (a junction), where CI's Windows job runs it.
+  Not covered: a clone an earlier Lantern made keeps the links it already has until it is cloned again (the readers
+  above refuse them all the same); a Python file that is not the project's and has a comma in its path, or is one of
+  more than fit a command line (24,000 characters of exclusions), is not handed to Bandit as an exclusion, so nothing
+  is taken from it but a pipe there still holds Bandit up to its time limit, which the record then says; an exclusion
+  is found, letter for letter, in no path but its own unless a folder was named for that purpose (`tool.p[y]z/`), and
+  a file in such a folder is then left out of Bandit as one in `build/` or `vendor/` already is; a link put in place
+  while an analysis runs (that takes another program of the same computer writing in the project at that moment).
 - Security: the git settings of a folder Lantern reads are no longer obeyed (2026-11-10; found during stage 7 of
   the 2026-11-09 directive). `lantern analyze` asked git about the folder it was given: `git status` for
   uncommitted changes (`evidence.git_info`) and, for a folder that carries the mark of a Lantern clone,

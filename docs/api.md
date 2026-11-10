@@ -266,7 +266,8 @@ maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, packs): `tool`,
 `error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
 `applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
 patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`), `exclusions` (folders a tool was
-told to skip), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
+told to skip, and for bandit the Python files it was told to leave out because they are not files of the project: a
+link that leads out of it, a pipe), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
 `fallback_for` (the built-in secret scan when gitleaks did not finish). `partial` keeps the findings the tool did
 produce. `incomplete` is read by readiness (`sec-scanners`), the Evidence Report, the badge (`scan incomplete`), the
 command line (`--fail-on` exits 1 for any state but `skipped`) and the app's project cards; a run with `--offline`
@@ -364,6 +365,8 @@ notice under the tiles and the badge say `scan incomplete`, and the badge is nev
 finished_at), `baseline.json` (first-run findings for "fixed since"),
 `cache/` (explanation cache). In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed),
 `lantern-packs/*.json` (project analysis packs), `lantern-narratives.md` (the builder's own notes for the Evidence Report).
+Each is read only as a file of the project (`python_frontend.inside_repo`): a notes file or a packs folder that is a link
+leading out of the project counts as not there.
 
 ## Cloud service (`cloud/`, cloud mode)
 

@@ -11,6 +11,7 @@ import builtins
 import hashlib
 import os
 import re
+import stat
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,14 +65,51 @@ TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$|(^|/)tests?/")
 # --------------------------------------------------------------------------------------------
 
 def inside_repo(p: Path, repo: Path) -> bool:
-    """False for a symlink that points outside the repository: a hostile repo could otherwise link to
-    ~/.ssh or ~/.aws and get that file scanned and embedded in a report."""
-    if not p.is_symlink():
-        return True
+    """Whether `p` is a file of the project: a plain file, or a link to one, that lies inside the project by whatever
+    folders it is reached. False for a link that leads out of the project (a hostile repository could otherwise link
+    to ~/.ssh or ~/.aws and get that file read and shown in a report), for a file reached through a folder that is
+    such a link, for a pipe, a device or a folder under a file's name, and for a name nothing answers to. A project
+    that is itself reached through a link (the person's own shortcut to it) is read as before.
+    Until 2026-11-10 only the last name of the path was looked at, so `linked-folder/file` counted as the project's."""
     try:
-        return p.resolve().is_relative_to(repo.resolve())
-    except OSError:
+        st = os.lstat(p)
+        if stat.S_ISREG(st.st_mode) and not _reparse(st) and _plain_way(p, repo):
+            return True   # the usual case: a file of its own, in folders of their own; nothing to follow
+        real, root = os.path.realpath(p), os.path.realpath(repo)
+        return Path(real).is_relative_to(root) and stat.S_ISREG(os.stat(real).st_mode)
+    except (OSError, ValueError):
         return False
+
+
+def _reparse(st: os.stat_result) -> bool:
+    """Windows: a junction, a link or another name that stands for something else (never set anywhere else)."""
+    return bool(getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+_SEPS = tuple(x for x in (os.sep, os.altsep) if x)
+
+
+def _plain_way(p: Path, repo: Path) -> bool:
+    """Every folder between the project and the file is a folder of its own, not a link: then the file lies where
+    its path says. Anything else (a link on the way, `..`, a path that is not written under the project's own
+    path) is for the slower look, which follows every link. Asked for every file of a project, so it works on the
+    text of the two paths."""
+    ps, cur = os.fspath(p), os.fspath(repo)
+    rest = ps[len(cur):]
+    if not ps.startswith(cur) or not cur or not (cur.endswith(_SEPS) or rest.startswith(_SEPS)):
+        return False   # `/a/proj` is not the start of `/a/project/x`
+    if os.altsep:
+        rest = rest.replace(os.altsep, os.sep)
+    for part in rest.split(os.sep)[:-1]:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return False
+        cur = os.path.join(cur, part)
+        st = os.lstat(cur)
+        if not stat.S_ISDIR(st.st_mode) or _reparse(st):
+            return False
+    return True
 
 
 def discover(repo: Path) -> list[tuple[Path, str]]:
