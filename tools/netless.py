@@ -5,9 +5,11 @@ computer's loopback address (a new network namespace with only `lo`). No program
 it is written in and whatever it does with proxy settings: this is the part the Python-level guard (tools/netguard)
 cannot promise.
 
-It needs the right to make that network: root (in CI: `sudo -E env "PATH=$PATH" "HOME=$HOME" python tools/netless.py
+It needs the right to make that network: root (in CI: `sudo env "PATH=$PATH" "HOME=$HOME" python tools/netless.py
 -- ...`; the command then runs as the user who called sudo, not as root), or a system that lets ordinary users create
-user namespaces.
+user namespaces. sudo hands the command only the variables written after `env`: one it needs is written there too
+(`"LANTERN_TESTS_NETLESS=required"`). `sudo -E` is no way round that: the sudo of newer systems (sudo-rs: GitHub's
+Linux machines) ignores it.
 
 --watch FILE also has the operating system write down every address any program of the run connects or sends to (the
 `strace` program must be installed). FILE gets one JSON object: the addresses outside this computer, each with the
@@ -36,7 +38,7 @@ import lantern_netguard as netguard  # noqa: E402
 USAGE = "usage: python tools/netless.py [--watch FILE] -- COMMAND [ARGUMENT...]\n"
 CLONE_NEWUSER, CLONE_NEWNET = 0x10000000, 0x40000000
 SIOCGIFFLAGS, SIOCSIFFLAGS, IFF_UP = 0x8913, 0x8914, 0x1
-WITH_SUDO = 'sudo -E env "PATH=$PATH" "HOME=$HOME" python tools/netless.py -- COMMAND'
+WITH_SUDO = 'sudo env "PATH=$PATH" "HOME=$HOME" python tools/netless.py -- COMMAND'
 
 
 class Cannot(Exception):

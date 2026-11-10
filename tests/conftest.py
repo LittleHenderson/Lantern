@@ -28,6 +28,14 @@ tests/test_netguard.py a second time that way, as root and with the computer's o
 isolation itself cannot run in the first pass (two need root, one starts the no-network runner, which cannot be
 started inside itself without root, one needs a way out for the refusal to show). Until 2026-11-10 three of them
 ran nowhere in CI, and the fourth only in the one-command audit of the Python 3.13 job.
+
+A run under any of these rules names them in its last lines ("rules of this run: ..."), and CI looks for them there.
+That second pass, on its first run in CI, showed why: both of CI's Linux passes start through sudo, the sudo of
+GitHub's machines hands a command none of the caller's variables (`-E` is ignored there, and sudo says so), and so,
+wherever that sudo ran, neither LANTERN_TESTS_NETLESS=required nor LANTERN_TESTS_COMPLETE=required reached the tests
+of those jobs: it printed its line in both runs whose logs were read (commits 1a2bc59 and eaf4045). The runs were
+inside the no-network runner all the same (its own last line says so), but a test skipped there for a missing library
+would not have failed that pass. CI now writes each rule on the sudo line itself.
 """
 import functools
 import os
@@ -69,7 +77,7 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "network_refused(reason): this test tries an address outside this computer on "
                             "purpose, to see the refusal (listed in tests/test_isolation.py)")
     config.addinivalue_line("markers", "live: needs a real model provider; never part of a normal run (bench/live.py)")
-    if os.environ.get("LANTERN_TESTS_NETLESS", "").strip().lower() == "required" and netguard.has_route_out():
+    if _netless_required() and netguard.has_route_out():
         raise pytest.UsageError("LANTERN_TESTS_NETLESS=required, and this run has a route to the outside. Start it "
                                 "inside the netless runner: python tools/netless.py -- python -m pytest")
 
@@ -121,6 +129,24 @@ def _complete() -> str:
 
 def _every_test_must_run() -> bool:
     return _complete() in ("required", "no-skips")
+
+
+def _netless_required() -> bool:
+    return os.environ.get("LANTERN_TESTS_NETLESS", "").strip().lower() == "required"
+
+
+def _rules() -> list:
+    """The rules this run was started under, as its last lines name them. CI looks for these words in the run's own
+    output (.github/workflows/ci.yml): a rule that was set where the run was started and did not reach it is a rule
+    nobody was held to, and that is how it was on CI's Linux machines until 2026-11-10 (see the top of this file)."""
+    rules = []
+    if _complete() == "required":
+        rules.append("LANTERN_TESTS_COMPLETE=required (a test skipped for a missing library fails the run)")
+    elif _complete() == "no-skips":
+        rules.append("LANTERN_TESTS_COMPLETE=no-skips (a test skipped for any reason fails the run)")
+    if _netless_required():
+        rules.append("LANTERN_TESTS_NETLESS=required (the run starts only where there is no route to the outside)")
+    return rules
 
 
 def _no_test_may_be_skipped() -> bool:
@@ -286,6 +312,8 @@ def pytest_terminal_summary(terminalreporter):
                                     "and these were. The run fails for it:")
         for where, why in _skipped:
             terminalreporter.write_line(f"  {where}{'' if '::' in where else ' (the whole file)'}: {why}")
+    if _rules():
+        terminalreporter.write_line("rules of this run: " + "; ".join(_rules()))
 
 
 def pytest_unconfigure(config):

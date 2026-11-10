@@ -28,6 +28,29 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   whole"): pytest counts such a file as one skipped test whatever it holds and names the line that skipped, which is
   in another file when the skip came with an import. On Windows that is four files with 53 tests (the cloud worker
   runs on Linux), two of them named nowhere in the log before; `20 skipped` there means 69 tests that do not run.
+  That second pass failed on its first run in CI, and what it found is fixed. One: a program that root starts under
+  another user started with no network guard in it where that user cannot read the folder the guard is in. Python
+  leaves a folder it cannot read out of its path without a word, CI's checkout is under a home folder that others
+  may not enter, and the test's program tried its address and carried on (a documentation address: nothing was
+  reached). For root, where that folder is closed to others, the programs of a run now load the guard from a copy
+  that every user can read and only root can change (`guard_folder`), so such a program is refused and stops like
+  any other. The copy is one folder with two files, in `/run` (or `/tmp`), named after its content. It stays when
+  the run ends: a program still going would otherwise start its next one from a path whose first folder is gone,
+  and Python passes over that as quietly as over a folder it cannot read. The next run uses it again, and only if
+  it is root's own, closed to everyone else and the same byte for byte. Two folders that hold the guard on the path
+  used to start each other until Python gave up, and the next start-up file never ran; the path now holds one, and
+  the start-up file passes any other by. Two: both of CI's Linux passes start through sudo, and the sudo of
+  GitHub's machines (sudo-rs) hands a command none of the caller's variables: "preserving the entire environment
+  is not supported, '-E' is ignored". So where that sudo ran, neither `LANTERN_TESTS_NETLESS=required` nor
+  `LANTERN_TESTS_COMPLETE=required` reached the tests of the Linux jobs, from the commit that set each: in both
+  runs whose logs were read for this (commits 1a2bc59 and eaf4045) sudo printed that line before each pass. Those
+  runs were inside the no-network runner all the same (its last line and the recorded addresses say so: 0 outside),
+  but a test skipped there for a missing library would not have failed that pass; the Windows job, the audit pass
+  and the release build, which do not start through sudo, were held to the rule. Each rule is now written on the
+  sudo line itself, a run under a rule names it in its last lines ("rules of this run: ..."), and each of the two
+  steps looks for its rules there and fails without them. CI also waits for Docker before the tests: in one of the
+  six Linux jobs of that run `docker info` did not answer and the four Docker sandbox tests were skipped (the log
+  named them).
 - Tests and benchmarks can no longer reach a real AI provider or the internet, and never see the keys of the person
   running them (2026-11-09). Before, a full test run made 11 connections to the outside (6 by a `pip-audit` program one
   test started, 5 to the OSV vulnerability database from the set-up of five test files), a test could read 13 of 19

@@ -38,8 +38,9 @@ def _bare_env(**extra) -> dict:
     return env
 
 
-def _program(code: str, *args, env=None, **kw):
-    head = "import json, os, socket, sys, tempfile, threading\nsys.path.insert(0, %r)\nimport lantern_netguard as ng\n" % str(NETGUARD)
+def _program(code: str, *args, env=None, guard=NETGUARD, **kw):
+    """A program of its own that has the guard's module (from `guard`, a folder that holds it) and nothing switched on."""
+    head = "import json, os, socket, sys, tempfile, threading\nsys.path.insert(0, %r)\nimport lantern_netguard as ng\n" % str(guard)
     return subprocess.run([sys.executable, "-c", head + textwrap.dedent(code), *args], env=env or _bare_env(),
                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **kw)
 
@@ -456,17 +457,64 @@ def test_every_way_to_name_an_outside_address_is_refused(network_attempts):
         six.close()
 
 
+def _closed_copy_of_the_guard(tmp_path) -> Path:
+    """The guard's two files in a folder that only its owner can enter, as a checkout under a private home folder is
+    (CI's is). pytest's own folders are their owner's alone already; the mode says so here."""
+    closed = tmp_path / "closed"
+    closed.mkdir(mode=0o700)
+    shutil.copytree(NETGUARD, closed / "netguard", ignore=shutil.ignore_patterns("__pycache__"))
+    return closed / "netguard"
+
+
+@pytest.fixture
+def public_place():
+    """A folder of the test's own that every user of this computer may enter: what the guard asks of the place where
+    it keeps a copy of itself for root's programs (`ng.PUBLIC_PLACES`). pytest's temporary folders are their user's
+    alone, so this one is made beside them, and removed with everything the test's programs put in it. The programs
+    are told to use it, so a test leaves nothing in the computer's own places."""
+    if os.name != "posix":
+        yield ""                                    # no such places there, and nothing asks for one
+        return
+    import tempfile
+    place = tempfile.mkdtemp(prefix="lantern-test-place-", dir=next(p for p in ("/tmp", "/var/tmp") if os.path.isdir(p)))
+    try:
+        os.chmod(place, 0o755)
+        yield place
+    finally:
+        shutil.rmtree(place, ignore_errors=True)
+
+
 @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0, reason="needs root to start a program as another user")
-def test_a_program_under_another_user_cannot_write_the_record_so_it_stops_and_says_why(network_attempts):
+def test_a_program_under_another_user_cannot_write_the_record_so_it_stops_and_says_why(network_attempts, tmp_path,
+                                                                                       public_place):
     """The record of attempts is its owner's alone: nobody else on the computer can add to it or empty it. A program
-    of the run that has become another user therefore cannot write there. It must not carry on as if nothing happened."""
+    of the run that has become another user therefore cannot write there. It must not carry on as if nothing happened.
+
+    Nor where that user cannot even read the guard's own files. Python leaves a folder it cannot read out of its path
+    without a word, so there the program used to start with no guard in it and carried on. Found on 2026-11-10, the
+    first time this test ran in CI: the checkout there is under a home folder other users may not enter."""
     code = ("import socket\ntry:\n    socket.create_connection(('192.0.2.1', 9), timeout=1)\n"
             "except OSError as e:\n    print('hidden:', e)\nprint('carried on')\n")
     r = subprocess.run([sys.executable, "-c", code], user=65534, group=65534, extra_groups=[], cwd="/",
                        capture_output=True, text=True, timeout=60)
-    assert r.returncode == ng.UNRECORDED and "carried on" not in r.stdout, r.stdout + r.stderr
+    loaded = f" (this run's programs load the guard from {os.environ['PYTHONPATH'].split(os.pathsep)[0]})"
+    assert r.returncode == ng.UNRECORDED and "carried on" not in r.stdout, r.stdout + r.stderr + loaded
     assert ng.MARK + ": could not be written down" in r.stderr and '"host": "192.0.2.1"' in r.stderr
     assert network_attempts() == []                       # and the record was not touched by the other user
+    # the same run, started from a guard that only root can read
+    closed = _closed_copy_of_the_guard(tmp_path)
+    got = _json(_program("""
+        import subprocess
+        ng.PUBLIC_PLACES = (sys.argv[3],)              # the test's own place, removed with the test
+        guard = ng.isolate(sys.argv[1])
+        r = subprocess.run([sys.executable, "-c", sys.argv[2]], user=65534, group=65534, extra_groups=[], cwd="/",
+                           capture_output=True, text=True, timeout=60)
+        print(json.dumps({"result": r.returncode, "out": r.stdout, "err": r.stderr, "written": len(guard.since(0)),
+                          "from": os.environ["PYTHONPATH"].split(os.pathsep)[0]}))
+    """, str(tmp_path / "run"), code, public_place, guard=closed))
+    assert got["result"] == ng.UNRECORDED and "carried on" not in got["out"], got
+    assert ng.MARK + ": could not be written down" in got["err"] and '"host": "192.0.2.1"' in got["err"], got
+    assert got["written"] == 0 and os.path.dirname(got["from"]) == public_place, got
 
 
 def test_the_record_and_its_folder_are_the_owners_alone():
@@ -504,6 +552,139 @@ def test_without_the_guards_variable_the_start_up_file_does_nothing(tmp_path):
     r = subprocess.run([sys.executable, "-c", "import sys; print('lantern_netguard' in sys.modules)"], env=env,
                        capture_output=True, text=True, timeout=60)
     assert r.stdout.strip() == "False", r.stdout + r.stderr
+
+
+def test_two_folders_that_hold_the_guard_on_the_path_start_it_once(tmp_path):
+    """A second folder with the guard on the path (the copy a run made for another user's programs, inherited by a
+    run started inside it) is not "another start-up file": handed over to, it would hand back, and so on until Python
+    gives up, and the start-up file that really is another one would never run. The start-up file passes such a
+    folder by, and switching the guard on leaves one of them on the path."""
+    second = tmp_path / "second"
+    shutil.copytree(NETGUARD, second, ignore=shutil.ignore_patterns("__pycache__"))
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "sitecustomize.py").write_text("import os\nos.environ['OTHER_STARTUP_RAN'] = 'yes'\n", encoding="utf-8")
+    env = _bare_env(PYTHONPATH=os.pathsep.join([str(NETGUARD), str(second), str(other)]),
+                    **{ng.LOG_ENV: str(tmp_path / "log")})
+    code = "import os, sys; print(os.environ.get('OTHER_STARTUP_RAN'), sys.modules['lantern_netguard'].installed())"
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and r.stdout.split() == ["yes", "True"], r.stdout + r.stderr
+    assert "Error in the sitecustomize" not in r.stderr, r.stderr
+    got = _json(_program("""
+        ng.activate(sys.argv[1])
+        paths = os.environ["PYTHONPATH"].split(os.pathsep)
+        print(json.dumps({"paths": paths, "the first holds the guard": ng.holds_the_guard(paths[0])}))
+    """, str(tmp_path / "log2"), env=_bare_env(PYTHONPATH=os.pathsep.join([str(second), str(other)]))))
+    assert len(got["paths"]) == 2 and got["paths"][1] == str(other) and got["the first holds the guard"], got
+    assert got["paths"][0] != str(second), got       # the folder of the guard that was switched on (or its copy)
+
+
+FOR_ROOT = """
+    import stat, subprocess
+    ng._is_root = lambda: sys.argv[2] == "root"            # what the guard asks; nothing here needs root
+    ng.PUBLIC_PLACES = tuple(sys.argv[3:])                 # the test's own place; none: a computer that has no such folder
+    ng.isolate(sys.argv[1])
+    paths = os.environ["PYTHONPATH"].split(os.pathsep)
+    files = {}
+    for name in ng.GUARD_FILES:
+        with open(os.path.join(paths[0], name), "rb") as copy, open(os.path.join(ng.HERE, name), "rb") as mine:
+            files[name] = [stat.S_IMODE(os.stat(copy.name).st_mode), copy.read() == mine.read()]
+    asks = ("import json, sys; g = sys.modules.get('lantern_netguard'); g._is_root = lambda: sys.argv[1] == 'root'; "
+            "g.PUBLIC_PLACES = tuple(sys.argv[2:]); print(json.dumps([bool(g and g.installed()), g.HERE, g.guard_folder()]))")
+    child = subprocess.run([sys.executable, "-c", asks, *sys.argv[2:]], capture_output=True, text=True, timeout=60)
+    print(json.dumps({"own": ng.HERE, "paths": paths, "mode": stat.S_IMODE(os.stat(paths[0]).st_mode),
+                      "mine": not hasattr(os, "getuid") or os.stat(paths[0]).st_uid == os.getuid(), "files": files,
+                      "isolated": ng.python_isolated("-m", "x")[2],
+                      "child": json.loads(child.stdout or "null"), "child said": child.stderr}))
+"""
+
+
+def _same_folder(a, b) -> bool:
+    return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
+
+
+def _copies_in_the_computers_own_places() -> list:
+    return sorted(str(p) for place in ng.PUBLIC_PLACES if os.path.isdir(place) for p in Path(place).glob("lantern-netguard-*"))
+
+
+def test_for_root_the_programs_of_a_run_load_the_guard_from_a_folder_every_user_can_read(tmp_path, public_place):
+    """Root can start a program under another user. Where that user could not read the folder the guard is in, the
+    program would start without it (test_a_program_under_another_user_cannot_write_the_record_so_it_stops_and_says_why,
+    which needs root; this one asks the same question of the guard without being root). So for root, and only where
+    the guard's own folder is closed to others, the programs of the run load a copy that every user can read and only
+    its owner can change. Everyone else loads the guard from where it is; so does root where that folder is open; and
+    where this computer has no place for such a copy, root is told.
+
+    The copy stays when the program that made it ends: Python leaves a folder that is gone out of the path as quietly
+    as one it cannot read, so a program of the run that was still going would start its next one with no guard. The
+    next run uses the same copy again, and only that one: what is under its name must be this user's own, closed to
+    everyone else, and the same byte for byte, or the run makes a copy of its own beside it."""
+    closed = _closed_copy_of_the_guard(tmp_path)
+    before = _copies_in_the_computers_own_places()
+    runs = iter(range(1, 99))
+    run = lambda who, *places: _program(FOR_ROOT, str(tmp_path / f"run{next(runs)}"), who, *places, guard=closed)   # noqa: E731
+    user = _json(run("user", public_place))
+    assert _same_folder(user["paths"][0], closed) and _same_folder(user["own"], closed), user
+    assert user["child"][0] is True and all(_same_folder(f, closed) for f in user["child"][1:]), user   # guarded from where it is
+    assert _same_folder(os.path.dirname(user["isolated"]), closed), user
+    if os.name != "posix":
+        return                                     # permissions of this kind, and other users to start, are POSIX's
+    assert os.listdir(public_place) == []          # and no copy was made for it
+    root = _json(run("root", public_place))
+    copy = root["paths"][0]
+    assert os.path.dirname(copy) == public_place and str(closed) not in root["paths"], root
+    assert root["mode"] == 0o755 and root["mine"], root
+    assert root["files"] == {name: [0o644, True] for name in ng.GUARD_FILES}, root
+    assert root["child"] == [True, copy, copy], root              # guarded from the copy, and no copy of an open folder
+    assert os.path.dirname(root["isolated"]) == copy, root        # a program in isolated mode is started from it too
+    # the program that made it has ended, and the copy is still there: what a program of that run that is still going
+    # starts next has the guard. The next run uses the same copy and makes no second one
+    assert os.listdir(public_place) == [os.path.basename(copy)]
+    late = subprocess.run([sys.executable, "-c", "import sys; print(sys.modules['lantern_netguard'].installed())"],
+                          env=_bare_env(PYTHONPATH=copy, **{ng.LOG_ENV: str(tmp_path / "late.jsonl")}),
+                          capture_output=True, text=True, timeout=60)
+    assert late.stdout.strip() == "True", late.stdout + late.stderr
+    assert _json(run("root", public_place))["paths"][0] == copy and os.listdir(public_place) == [os.path.basename(copy)]
+    # what is under that name is used only when it can be trusted; otherwise the run has a copy of its own beside it
+    startup = os.path.join(copy, "sitecustomize.py")
+    moved = copy + ".moved"
+
+    def a_link():
+        os.rename(copy, moved)
+        os.symlink(moved, copy)
+
+    def no_link():
+        os.remove(copy)
+        os.rename(moved, copy)
+
+    def other_words():
+        with open(startup, "ab") as f:
+            f.write(b"# one more line\n")
+
+    def our_words():
+        shutil.copyfile(NETGUARD / "sitecustomize.py", startup)
+
+    mode = lambda path, bits: lambda: os.chmod(path, bits)   # noqa: E731
+    for why, spoil, mend in (("others may change the folder", mode(copy, 0o777), mode(copy, 0o755)),
+                             ("others may change a file in it", mode(startup, 0o666), mode(startup, 0o644)),
+                             ("a file in it is not the same", other_words, our_words),
+                             ("the name is a link to a copy elsewhere", a_link, no_link)):
+        spoil()
+        try:
+            beside = _json(run("root", public_place))
+            own = beside["paths"][0]
+            assert own != copy and os.path.dirname(own) == public_place and not os.path.islink(own), (why, beside)
+            assert beside["mode"] == 0o755 and beside["files"] == {name: [0o644, True] for name in ng.GUARD_FILES}, (why, beside)
+            assert beside["child"] == [True, own, own], (why, beside)
+            shutil.rmtree(own)
+        finally:
+            mend()
+    assert _json(run("root", public_place))["paths"][0] == copy              # mended, and trusted again
+    nowhere = run("root")
+    assert _json(nowhere)["paths"][0] == str(closed), nowhere.stdout
+    assert "under another user" in nowhere.stderr and "without the guard" in nowhere.stderr, nowhere.stderr
+    assert "under another user" not in run("root", public_place).stderr      # said only where it is so
+    assert _copies_in_the_computers_own_places() == before                   # and all of it in the test's own place
 
 
 # ----------------------------------------------------------------------------- a Python program in isolated mode

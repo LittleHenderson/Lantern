@@ -44,7 +44,7 @@ def developer_env(tmp: Path, forwarder: int) -> dict:
     (home / ".lantern" / "keys.json").write_text('{"anthropic": "saved-key-of-the-developer"}', encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if k not in ISOLATION_VARS}
     env["PYTHONPATH"] = os.pathsep.join(p for p in env.get("PYTHONPATH", "").split(os.pathsep)
-                                        if p and Path(p).resolve() != (ROOT / "tools" / "netguard").resolve())
+                                        if p and not ng.holds_the_guard(p))      # the checkout's, or a copy of it
     env.update({"HOME": str(home), "USERPROFILE": str(home), "PROBE_DEV_HOME": str(home),
                 "PROBE_PLANTED": ",".join(PLANTED)})
     for name in PLANTED:
@@ -280,13 +280,14 @@ def test_work_handed_out_while_the_harness_waits_is_finished_too(request):
 
 
 # ----------------------------------------------------------------------------- this run itself
-def _missing_library_run(tmp: Path, where: str, complete: bool | str):
+def _missing_library_run(tmp: Path, where: str, complete: bool | str, **more):
     """A second pytest on tests/probe_missing_library.py, in which `where` (`file`, `test` or nothing) needs a library
     that is not installed. `complete` starts it the way CI does, with LANTERN_TESTS_COMPLETE=required (True), or with
-    the value given (`no-skips`: CI's second pass over the isolation's own tests)."""
+    the value given (`no-skips`: CI's second pass over the isolation's own tests). `more` are further variables."""
     forwarder = Forwarder()
     env = developer_env(tmp, forwarder.port)
     env["PROBE_MISSING_AT"] = where
+    env.update(more)
     if complete:
         env["LANTERN_TESTS_COMPLETE"] = "required" if complete is True else complete
     try:
@@ -351,12 +352,47 @@ def test_where_no_test_may_be_skipped_any_skipped_test_fails_the_run(tmp_path):
     assert "tests/probe_missing_library.py::test_that_needs_another_computer: this needs" in out, out[-4000:]
 
 
+def _rules_gates() -> list:
+    """The lines of CI that look in a run's own words for the rules it ran under: (what must be found, in which file)."""
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    return re.findall(r"""grep -q '(\^rules of this run: [^']+)' (\S+)""", ci)
+
+
+def test_a_run_names_the_rules_it_ran_under_and_ci_looks_for_them(tmp_path):
+    """Found on 2026-11-10, when CI's second pass failed on its first run: the sudo of GitHub's Linux machines (sudo-rs)
+    hands a command none of the caller's variables, `-E` or not ("preserving the entire environment is not supported,
+    '-E' is ignored"), so wherever that sudo ran, LANTERN_TESTS_NETLESS=required and LANTERN_TESTS_COMPLETE=required
+    did not reach the tests of the Linux jobs, which run through sudo: a run there was held to neither rule, and
+    nothing showed it.
+    A run now ends by naming the rules it ran under, CI writes each rule on the sudo line itself, and CI looks for
+    the rule in the run's own words afterwards, so a rule that did not arrive is a red run."""
+    gates = _rules_gates()
+    assert [where for _, where in gates] == ["pytest.log", '"$RUNNER_TEMP/second-pass.log"'], gates
+    first, second = (re.compile(what, re.M) for what, _ in gates)       # nothing in them that grep and Python read apart
+    code, out = _missing_library_run(tmp_path / "required", "", complete=True)
+    assert code == 0 and "\nrules of this run: LANTERN_TESTS_COMPLETE=required (" in out, out[-3000:]
+    assert not first.search(out) and not second.search(out), out[-3000:]       # one rule is not both; nor the other one
+    code, out = _missing_library_run(tmp_path / "no-skips", "", complete="no-skips")
+    assert code == 1 and second.search(out) and not first.search(out), out[-3000:]
+    code, out = _missing_library_run(tmp_path / "none", "", complete=False)
+    assert code == 0 and "rules of this run" not in out, out[-3000:]      # a developer's own run: no rule, no line
+    if ng.has_route_out():
+        # the dangerous shape: the rule arrives where there is a way out, and the run does not start
+        code, out = _missing_library_run(tmp_path / "out", "", complete=True, LANTERN_TESTS_NETLESS="required")
+        assert code == 4 and "LANTERN_TESTS_NETLESS=required" in out and "passed" not in out, out[-3000:]
+    else:
+        # inside the no-network runner (CI's first pass): both rules, in the words CI looks for
+        code, out = _missing_library_run(tmp_path / "both", "", complete=True, LANTERN_TESTS_NETLESS="required")
+        assert code == 0 and first.search(out), out[-3000:]
+
+
 def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_named():
     """CI and the release build: every pytest line carries -rs (the log names each skipped test with its reason) and
     runs with LANTERN_TESTS_COMPLETE=required; the audit script shows its skipped tests also when the run passed; and
     the libraries the tests need are what CI installs (`dev`), PyJWT with cryptography among them: the 14 Connect
     GitHub tests need both. CI's Linux jobs run the isolation's own tests a second time, as root and outside the
-    no-network runner, where no test may be skipped."""
+    no-network runner, where no test may be skipped. Each of those two passes is handed its rules on the sudo line
+    and is checked to have run under them."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -371,11 +407,25 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert "LANTERN_TESTS_COMPLETE: required" in ci[: ci.index("\njobs:")]        # for every job of the workflow
     first = next(line for name, line in runs if name == "ci.yml" and "--cov" in line)     # the pass without a network
     again = [line for name, line in runs if name == "ci.yml" and "tests/test_netguard.py" in line]
-    assert len(again) == 1 and again[0].startswith("run: sudo -E ") and "netless.py" not in again[0], again
-    assert again[0].endswith("python -m pytest -q -rs -p no:cacheprovider tests/test_netguard.py"), again
+    assert again == ['python -m pytest -q -rs -p no:cacheprovider tests/test_netguard.py | tee '
+                     '"$RUNNER_TEMP/second-pass.log"'], again
     between = ci[ci.index(first): ci.index(again[0])]              # after the first pass, in the second pass's own step
     assert ci.count("LANTERN_TESTS_COMPLETE: no-skips") == 1 and "LANTERN_TESTS_COMPLETE: no-skips" in between
     assert "LANTERN_TESTS_NETLESS" not in between[between.index("LANTERN_TESTS_COMPLETE: no-skips"):]
+    assert "set -o pipefail" in between[between.index("LANTERN_TESTS_COMPLETE: no-skips"):]    # it pipes into tee too
+    # Both passes start through sudo, which hands a command only what is written on its own line (the sudo of GitHub's
+    # machines ignores -E): each rule is written there, and each step then looks for it in the run's own words
+    # (test_a_run_names_the_rules_it_ran_under_and_ci_looks_for_them).
+    through_sudo = [line.strip() for line in ci.replace("\\\n", " ").splitlines()
+                    if re.search(r"^\s*sudo\b.*\bpython\b", line)]
+    assert len(through_sudo) == 2 and not any(re.search(r"\bsudo\s+-E\b", line) for line in through_sudo), through_sudo
+    handed = [line[: line.index(" python ")] for line in through_sudo]
+    assert all('"LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE"' in words for words in handed), handed
+    assert '"LANTERN_TESTS_NETLESS=$LANTERN_TESTS_NETLESS"' in handed[0] and "netless.py" in through_sudo[0], through_sudo
+    assert "LANTERN_TESTS_NETLESS" not in handed[1] and "netless.py" not in through_sudo[1], through_sudo
+    assert [what for what, _ in _rules_gates()] == [
+        "^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required",
+        "^rules of this run: LANTERN_TESTS_COMPLETE=no-skips"]
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     step = release[release.index("Tests against the built wheel"):]
     assert "LANTERN_TESTS_COMPLETE: required" in step[: step.index("python -m pytest")]
