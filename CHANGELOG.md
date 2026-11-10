@@ -182,7 +182,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   Tests: `tests/test_gitfacts.py`, 44 tests kept apart by kind: planted settings, pointers and variables that
   must not be obeyed (24); what cannot be told, which must be said (3); repositories as people have them, which
   must get the answers git itself gives (13: plain, packed refs, detached, linked worktree, shallow, sha256,
-  sparse checkout, submodules, line endings); the settings reader against git's own (1); and the limits (3). On
+  sparse checkout, submodules, line endings); the settings reader against git's own (1); and the limits (3). The
+  reader keeps a tab written inside a value as a tab, which is git's own reading since 2.45; older git made it a
+  space, so that one value is asked of git only as one of the two (GitHub's first run of these tests, on git
+  2.56, failed on it: written beside git 2.43, the reader made it a space, and the test said so). On
   the code before, 28 of them fail (17 show a defect, 11 test the new reading, its words and its limits), 14 pass
   and 2 need Windows; with the fix 42 pass and 2 need Windows. `tests/test_cloud_runs.py` has
   2 more (an upload with planted git settings; the service starts no program to read a commit): both failed
