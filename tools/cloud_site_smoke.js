@@ -7,6 +7,7 @@
 const chromium = require('playwright')[process.env.PW_BROWSER || 'chromium'];
 const fs = require('fs');
 const a11y = require('./a11y.js');
+const outside = require('./outside.js');   // no page under test reaches the internet
 
 async function fresh(p, url) { await p.goto('about:blank'); await p.goto(url); await p.waitForLoadState('load'); }
 async function until(p, fn, timeout) {
@@ -22,7 +23,7 @@ async function until(p, fn, timeout) {
   const [base, tokenFile, out] = process.argv.slice(2);
   const site = base.replace(/\/?$/, '/') + '?intro=0';   // the site itself, without the landing intro (checked once below)
   const token = fs.readFileSync(tokenFile, 'utf8').trim();
-  const b = await chromium.launch();
+  const b = await outside.launch(chromium);   // its only way out is a proxy on this computer that refuses
   const errs = [];
   let allow503 = false, allow409 = false, allow404 = false;
   const token2 = fs.readFileSync(tokenFile + '.2', 'utf8').trim();
@@ -30,12 +31,13 @@ async function until(p, fn, timeout) {
   for (const [name, viewport] of sizes) for (const scheme of ['light', 'dark']) {
     const tag = `${name}-${scheme}`;
     const ctx = await b.newContext({ viewport, colorScheme: scheme });
+    await outside.watch(ctx, errs, outside.FONTS);
     const watch = p => {
       p.on('pageerror', e => errs.push(`${tag}: ${e.message}`));
       // Firefox-only noise, not page code: its favicon loader reporting the page's own content policy
       // (resource:///modules/FaviconLoader), and the live-progress stream being cut when the smoke leaves the page
       const browserNoise = m => /resource:\/\/\//.test((m.location && m.location().url) || '') || /resource:\/\/\/modules/.test(m.text()) || /establish a connection to the server at .*\/stream/.test(m.text());
-      p.on('console', m => { if (m.type() === 'error' && !browserNoise(m) && !/status of 401/.test(m.text()) && !(allow503 && /status of 503/.test(m.text())) && !(allow409 && /status of 409/.test(m.text())) && !(allow404 && /status of 404/.test(m.text())) && !/status of 401/.test(m.text())) errs.push(`${tag} console: ${m.text()}`); });
+      p.on('console', m => { if (m.type() === 'error' && !browserNoise(m) && !outside.refusedFont(m) && !/status of 401/.test(m.text()) && !(allow503 && /status of 503/.test(m.text())) && !(allow409 && /status of 409/.test(m.text())) && !(allow404 && /status of 404/.test(m.text())) && !/status of 401/.test(m.text())) errs.push(`${tag} console: ${m.text()}${outside.where(m)}`); });
       p.on('dialog', d => { errs.push(`${tag}: a dialog opened: ${d.message()}`); d.dismiss(); });
     };
     const clean = async (p, where) => {
@@ -132,7 +134,8 @@ async function until(p, fn, timeout) {
     await p.click('#doshare'); await p.waitForSelector('#shareurl');
     const shareUrl = await p.$eval('#shareurl', i => i.value);
     await p.screenshot({ path: `${out}-${tag}-shared.png` });
-    const anon = await b.newContext({ viewport, colorScheme: scheme }); const q = await anon.newPage(); watch(q);
+    const anon = await b.newContext({ viewport, colorScheme: scheme }); await outside.watch(anon, errs, outside.FONTS);
+    const q = await anon.newPage(); watch(q);
     const got = await q.goto(shareUrl);
     if (!got || got.status() !== 200) errs.push(`${tag}: the share link did not open (${got && got.status()})`);
     await q.waitForSelector('#tabs'); await clean(q, 'shared report');
@@ -161,6 +164,7 @@ async function until(p, fn, timeout) {
       allow409 = false;
       // the second demo account has nothing running: deleting it signs the browser out and the account is gone
       const ctx2 = await b.newContext({ viewport, colorScheme: scheme });
+      await outside.watch(ctx2, errs, outside.FONTS);
       await ctx2.addCookies([{ name: 'lt', value: token2, url: base }]);
       const r = await ctx2.newPage(); watch(r);
       await r.goto(site); await r.waitForSelector('article.app');
@@ -174,7 +178,7 @@ async function until(p, fn, timeout) {
     }
     await p.close(); await ctx.close();
   }
-  await b.close();
+  console.log(await outside.close(b, errs));   // closes the browser, then says what was asked of the outside
   if (errs.length) { console.error(errs.join('\n')); process.exit(1); }
   console.log('cloud website: no JS errors, no dialogs, run data stayed text (desktop + phone, light + dark)');
 })().catch(e => { console.error(e); process.exit(1); });

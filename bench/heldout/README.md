@@ -10,6 +10,12 @@ python bench/heldout/run_heldout.py /tmp/heldout --offline       # without depen
 python bench/heldout/run_heldout.py /tmp/heldout --only dvna --only express-unsafe
 ```
 
+Every run is isolated (`tools/netguard/`): a temporary home folder, none of your keys or saved sign-ins, real model
+providers off, and only the addresses the run needs can be reached: github.com, where the public apps are fetched
+from, and, without `--offline`, the three the dependency audit asks. Anything else is refused, listed at the end, and
+fails the run. Each analysis is its own Python program in isolated mode, started through the guard so the guard is in
+it too.
+
 `baseline.json` / `baseline.md` here are the frozen "before". A later run compares with them only when its
 `definition_sha256` is the same (the hash covers `cases.json` and every file under `apps/`). Changing a case, an app or a
 rule makes a new definition; the old baseline then no longer applies and must be re-run on the old engine.

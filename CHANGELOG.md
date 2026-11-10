@@ -5,6 +5,58 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Tests and benchmarks can no longer reach a real AI provider or the internet, and never see the keys of the person
+  running them (2026-11-09). Before, a full test run made 11 connections to the outside (6 by a `pip-audit` program one
+  test started, 5 to the OSV vulnerability database from the set-up of five test files), a test could read 13 of 19
+  keys planted in the shell and the saved sign-in, and code that hid a connection error let the attempt pass unseen.
+  Now every run starts in an empty temporary home folder with every key, token and saved sign-in taken out of the
+  environment, real model providers switched off (`LANTERN_NO_REAL_PROVIDERS`: only a model on this computer may
+  answer, anything else is refused with a plain error), and every connection or name lookup that is not for this
+  computer refused and written down, in the tests and in the programs they start (`tools/netguard/`). A test that
+  tries the network fails, also when the code under test swallowed the error, when the attempt was made by a program
+  it started, or in a set-up step; so does the run when something tries outside any test. On Linux, CI also runs the
+  tests in a network that holds nothing but the computer's own address and has the operating system write down every
+  address any program tries (`tools/netless.py --watch`); the measured count after the change is 0. The benchmarks
+  (`bench/run_bench.py`, `bench/mobile/run_mobile.py`, `bench/heldout/run_heldout.py`, `bench/fuzz.py`,
+  `tools/large_apps.py`, `tools/mutation.py`, `tools/load_test.py`) and `tools/audit.sh` start the same way and may
+  only reach the hosts they name (the repositories they clone, the three addresses the dependency audit asks); the
+  load test refuses any website that is not on this computer. The held-out benchmark starts each analysis as a Python
+  program in isolated mode (`-I`), which reads nothing from the variable the guard uses to get into a program, so the
+  plain way left the guard out of it; it now starts through the guard (`python_isolated`). The two scripts that measure a real model (`bench/explain_eval.py`, `bench/ask_eval.py`,
+  the `model-eval` workflow) are now a separate live suite that starts only with `--live --model PROVIDER/MODEL
+  --destination HOST --max-requests N` (and `--send-this-code` for code that is not a Lantern sample): there is no
+  default model and no falling back to whatever key the shell holds, the model must be served from the approved host,
+  and the run stops at the request cap and keeps what it has. Also fixed on the way: the CI step that runs the tests
+  piped its output into `tee` without `pipefail`, so on Python 3.11 and 3.12 a failing test run could not fail the
+  step (the same in the weekly large-apps job's phone and load checks).
+  The browser checks keep their pages off the internet too (`tools/outside.js`): the app and the website ask the
+  outside for one thing, their font stylesheet, which the one-command audit fetched from Google 26 times in one run
+  with one browser (measured: 26 refused connections to fonts.googleapis.com). It is now answered inside the
+  browser, so nothing is sent; anything else a page asks of the outside fails the check with the address, and a
+  report may ask for nothing at all. A browser has more ways out than the requests its pages make (a connection it
+  opens ahead of time because a page hinted at an address, a page nobody watched, its own housekeeping), so every
+  browser a check starts, the report speed check included, now has a proxy on this computer as its only way out; the
+  proxy forwards nothing, and a try for anything but the pages' font host, or an address the browser itself is known
+  to ask of its maker (listed in `tools/outside.js`), fails the check with the address.
+  Found by the new tests in their first CI run: the step that fetches the code left that run's own GitHub sign-in in
+  the checkout's git settings, where every test and every program a test starts there could read it (all 13 checkout
+  steps in the 7 workflows). No workflow leaves it now (`persist-credentials: false`); one test reads every workflow
+  for it and another looks in the checkout the tests run in. A test about git's settings now names only the kind of
+  setting it met, never the setting's name or value.
+  Found in their second CI run: an older test started a check on the cloud service and returned; its stand-in for the
+  download was taken away with the test, and the check, still going, asked github.com for the repository while the
+  next test ran (refused, and that test failed for it). Every test now finishes the checks and explanations it asked
+  the cloud service for before its stand-ins are taken away; measured on the whole suite that day, 3 of the 1,046
+  tests that ran had left one going. The browser proxy also showed three things in its first run in CI. CI's
+  Playwright (1.48.2; a developer's computer here has 1.63.0) sent Chromium's requests for this computer's own pages
+  to the proxy as well, so the app under test got the proxy's refusal; the list of addresses that go round the proxy
+  is now written so that both versions keep them out of it. On the website check WebKit and Firefox made 39 and 17
+  tries for the font host that the first layer never saw, WebKit told the page about 17 refusals in its console, and
+  Firefox asked its maker for a newer Firefox twice. All of these were stopped at this computer; they are now counted
+  and shown instead of failing the check, and any other address, any other console line and anything at all in a
+  report still fail. The one-command audit prints, for each browser, what the helper's own check found and what the
+  first report and the website asked and tried, also when the check passed: Firefox and WebKit run only in CI, so
+  CI's log is where their counts can be read.
 - Every call is counted once, and Lantern follows far more of them (2026-11-09, directive stage 3). A new call-site
   inventory (`calls.json`, `graph.json` `meta.calls`) gives each call written in Python or JavaScript/TypeScript one
   record, by file, line and column, with one outcome (into the repo, likely, one of several, guessed by name only,

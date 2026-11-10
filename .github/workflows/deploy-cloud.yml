@@ -39,6 +39,7 @@ jobs:
             echo "::error::No Fly token secret for ${{ github.event.inputs.app }} (FLY_API_TOKEN for lantern-cloud, FLY_GATEWAY_TOKEN for lantern-gateway). Make one with 'fly tokens create deploy -a ${{ github.event.inputs.app }}' and add it under Settings → Secrets and variables → Actions."; exit 1; fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
           ref: ${{ github.event.inputs.ref || github.ref }}
       - uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be  # v1.5
       - name: the volume is big enough

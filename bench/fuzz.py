@@ -26,6 +26,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "netguard"))
+import lantern_netguard as netguard  # noqa: E402  (tools/netguard: every benchmark starts isolated)
 EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".kt", ".swift", ".dart", ".cs", ".php", ".rb", ".c",
         ".cc", ".cpp", ".h", ".hpp", ".html", ".json", ".toml", ".yaml", ".xml", ".gradle", ".kts", ".plist", ".lock",
         ".csproj", ".txt", ".erb", ".mod", ".sum"}
@@ -119,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--timeout", type=int, default=60, help="wall clock per case")
     ap.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "lantern-fuzz"))
     a = ap.parse_args(argv)
+    guard = netguard.begin()                      # isolated (tools/netguard); this benchmark needs no network at all
     rnd = random.Random(a.seed)
     out = Path(a.out)
     finds = out / "finds"
@@ -153,7 +156,8 @@ def main(argv: list[str] | None = None) -> int:
         if cases % 25 == 0:
             print(f"  {cases} cases, {found} finds", flush=True)
     print(f"done: {cases} cases, {found} finds" + (f" (see {finds})" if found else ""))
-    return 1 if found else 0
+    refused = netguard.end(guard)
+    return 1 if found or refused else 0
 
 
 if __name__ == "__main__":

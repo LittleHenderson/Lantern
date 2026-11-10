@@ -1,8 +1,10 @@
 # Real-model explanation runs
 
-New rows come from `python bench/explain_eval.py tests/fixtures/shop --record docs/explain-runs.md --note "…"`
-(or the `model-eval` workflow in the Actions tab), which prints the row in the lens-v5 table's shape; paste it under the
-latest table. Run it before the default model changes and after any provider announcement (test checklist 8.4).
+New rows come from `python bench/explain_eval.py tests/fixtures/shop --live --model lantern/claude-haiku-5-5
+--destination lantern-gateway.fly.dev --max-requests 80 --record docs/explain-runs.md --note "…"` (or the `model-eval`
+workflow in the Actions tab), which prints the row in the lens-v5 table's shape; paste it under the latest table. It is
+part of the live suite (`bench/live.py`): without `--live`, the model, the one host the code may go to and the request
+cap it sends nothing. Run it before the default model changes and after any provider announcement (test checklist 8.4).
 
 The record of `lantern explain` against real models, with the anchor validator unchanged (it is never loosened to
 make a model pass). Target: 90% of explanations validated on the first try. Sample: the 25 selected functions of

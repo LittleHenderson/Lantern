@@ -10,18 +10,36 @@ jobs:
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Tesseract, so the screenshot-reading tests run (tests/test_ocr.py)
-        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
+      - name: Tesseract, so the screenshot-reading tests run (tests/test_ocr.py), and strace, which writes down every address a program tries
+        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr strace
       - run: pip install -e ".[scan,dev]" pytest-cov
       - name: Tests, measuring how much of the code they run (coverage; the build fails under 85%)
+        # The tests run without a network: tools/netless.py gives the run one that holds nothing but this computer's
+        # own address, and has the operating system write down every address any program of the run tries. Anything
+        # tried outside this computer fails the step (result 4) even when every test passed. LANTERN_TESTS_NETLESS
+        # makes the tests refuse to start anywhere else. Making that network needs root; the tests themselves then
+        # run as the ordinary user again.
+        env:
+          LANTERN_TESTS_NETLESS: required
         run: |
-          python -m pytest -q --cov=lantern --cov=gateway --cov=cloud --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=85 | tee pytest.log
-          { echo "### Coverage (Python ${{ matrix.python }})"; echo '```'; grep -E '^(TOTAL|Required|FAIL)' pytest.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          set -o pipefail   # the run is piped into tee: without this the step would pass whatever the tests did
+          sudo -E env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" python tools/netless.py --watch "$RUNNER_TEMP/network.json" -- \
+            python -m pytest -q --cov=lantern --cov=gateway --cov=cloud --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=85 | tee pytest.log
+      - name: Coverage and the network record, for the summary
+        if: always()
+        run: |
+          { echo "### Coverage (Python ${{ matrix.python }})"; echo '```'; grep -E '^(TOTAL|Required|FAIL)' pytest.log || true; echo '```'
+            echo "### Network during the tests (Python ${{ matrix.python }})"; echo '```'
+            python -c "import json, sys; d = json.load(open(sys.argv[1])); print(sum(e['count'] for e in d['outside']), 'attempts to reach outside this computer;', d['connections_on_this_computer'], 'connections stayed on it'); [print(' ', e['count'], 'x', e['kind'], e['address'], e['port'], 'by:', e['program']) for e in d['outside']]" "$RUNNER_TEMP/network.json" || echo "no record was written"
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Lantern audits itself (no critical, high, or medium findings)
-        run: lantern analyze . --out /tmp/self --fail-on medium
+        # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
+        run: python tools/netguard/lantern_netguard.py --allow pypi.org,registry.npmjs.org,api.osv.dev -- lantern analyze . --out /tmp/self --fail-on medium
       - name: Lantern passes its own readiness checks (grade A, every check pass or skip except the listed ones)
         run: python tools/self_readiness.py /tmp/self/readiness.json
       - name: Audit package checks (tools/audit.sh)
@@ -34,6 +52,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
@@ -69,6 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - run: docker build -f cloud/Dockerfile -t lantern-cloud .
       - name: start it and read /v1/health
         run: |
@@ -99,19 +121,24 @@ jobs:
       PYTHONUTF8: "0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - run: pip install -e ".[scan,dev]"
       - run: python -m pytest -q
       - name: Lantern audits itself (no critical, high, or medium findings)
-        run: lantern analyze . --out "$env:RUNNER_TEMP\self" --fail-on medium
+        # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
+        shell: bash
+        run: python tools/netguard/lantern_netguard.py --allow pypi.org,registry.npmjs.org,api.osv.dev -- lantern analyze . --out "$RUNNER_TEMP/self" --fail-on medium
       - name: Next.js sample finds the unprotected route
         shell: python
         run: |
-          import json, os, subprocess
+          import json, os, subprocess, sys
           out = os.path.join(os.environ["RUNNER_TEMP"], "nx")
-          subprocess.run(["lantern", "analyze", "tests/fixtures/nextapp", "--out", out], check=True)
+          isolated = [sys.executable, "tools/netguard/lantern_netguard.py", "--allow", "pypi.org,registry.npmjs.org,api.osv.dev", "--"]
+          subprocess.run([*isolated, "lantern", "analyze", "tests/fixtures/nextapp", "--out", out], check=True)
           rules = {f["rule"] for f in json.load(open(os.path.join(out, "security.json"), encoding="utf-8"))["findings"]}
           assert "LW-AUTH-MISSING" in rules, rules
 
@@ -122,6 +149,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.13"
@@ -149,6 +178,8 @@ jobs:
       SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4   # only for tests/fixtures/shop; Lantern itself comes from pip below
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
