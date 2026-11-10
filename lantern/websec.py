@@ -931,6 +931,11 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
     sig = signature_sign(n.signature or "")
     if sig:
         return sig
+    for mid in (n.entry or {}).get("middleware") or ():   # Express: router.delete('/x', requireLogin, handler)
+        # the function's own name: not the package or file it comes from, and never the folders on the way
+        name = _func_name(g, mid).split("(")[0].rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+        if auth_word(name, True):
+            return f"middleware `{name}`"
     seen, frontier = {n.id}, [n.id]
     for _ in range(depth):
         nxt = []
