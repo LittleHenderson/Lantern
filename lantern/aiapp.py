@@ -23,10 +23,10 @@ Nothing here changes a finding another scanner made, and none of it needs the ne
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
+from . import manifest
 from .graph import Graph
 
 # kind, provider, pattern. Kinds: model | embedding | vector | image | speech | payment | email | sms
@@ -194,7 +194,7 @@ def wallet_drain(g: Graph, calls: list[dict], cache: dict[str, list[str]]) -> li
             continue
         kinds = sorted({WORDS[h["kind"]] for h in hit})
         what = ", ".join(kinds)
-        detail = r.entry.get("detail", "")
+        detail = r.entry.get("detail") or r.qualname
         if not logged_in and not limited:
             sev, title = "HIGH", f"{detail} spends money ({what}) and anyone can call it as often as they like"
             why = ("No login check was found on this route and no rate-limiting library or setting anywhere in the app. "
@@ -264,6 +264,14 @@ def model_output_sinks(g: Graph, calls: list[dict], cache: dict[str, list[str]])
     return out
 
 
+def _said(value) -> str:
+    """The text of a notebook cell or output: one text, or a list of lines. The file comes with the project, so
+    whatever else is there is read as the text it would print as: a key written inside it is still a key."""
+    if isinstance(value, list):
+        return "".join(x if isinstance(x, str) else str(x) for x in value)
+    return value if isinstance(value, str) else str(value or "")
+
+
 def notebooks(repo: Path) -> tuple[list[dict], list[dict]]:
     """Secrets in .ipynb code cells and saved outputs. Returns (findings, notebook summaries)."""
     from .python_frontend import SKIP_DIRS
@@ -274,8 +282,8 @@ def notebooks(repo: Path) -> tuple[list[dict], list[dict]]:
         if any(part in SKIP_DIRS or part.startswith(".") for part in rel.split("/")[:-1]):
             continue
         try:
-            nb = json.loads(p.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, ValueError):
+            nb = manifest.parse_json(p.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
             continue
         cells = nb.get("cells") if isinstance(nb, dict) else None
         if not isinstance(cells, list):
@@ -284,18 +292,15 @@ def notebooks(repo: Path) -> tuple[list[dict], list[dict]]:
         for ci, cell in enumerate(cells, 1):
             if not isinstance(cell, dict):
                 continue
-            src = cell.get("source")
-            text = "".join(src) if isinstance(src, list) else str(src or "")
+            text = _said(cell.get("source"))
             if cell.get("cell_type") == "code":
                 code_cells += 1
                 for kind, _prov, rx in CALL_PATTERNS:
                     if rx.search(text):
                         ai_kinds.add(kind)
             outputs = []
-            for o in cell.get("outputs") or []:
-                if isinstance(o, dict):
-                    t = o.get("text") or (o.get("data") or {}).get("text/plain") or ""
-                    outputs.append("".join(t) if isinstance(t, list) else str(t))
+            for o in manifest.tables(cell.get("outputs")):
+                outputs.append(_said(o.get("text") or manifest.table(o.get("data")).get("text/plain")))
             for where, blob in (("code cell", text), ("saved output", "\n".join(outputs))):
                 found = next(((label, m) for label, rx in KEY_PATTERNS for m in rx.finditer(blob)
                               if not PLACEHOLDER.search(m.group(0))), None)

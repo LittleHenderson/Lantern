@@ -7,13 +7,12 @@ health endpoint. Checks that rely on text patterns say so in `how`.
 
 from __future__ import annotations
 
-import json
 import re
 import tomllib
 from collections import Counter
 from pathlib import Path
 
-from . import scanresult
+from . import manifest, scanresult
 from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
 from .graph import Graph
 from .protections import advise as advise_protections
@@ -468,28 +467,29 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
         out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "skip",
                           "not checked: " + ("; ".join(unchecked) if unchecked else "no dependency files"),
                           how="pip-audit, npm audit, OSV (Gradle/Maven)"))
-    loose = []
+    loose, unread = [], []      # `unread`: what could not be checked at all; said first, so the list never cuts it off
     for pj in js_manifests:
-        try:
-            d = json.loads(repo.text(pj) or "{}")
-        except json.JSONDecodeError:
-            d = None
+        d = manifest.parse_json(repo.text(pj) or "{}")
         if not isinstance(d, dict):
-            loose.append(f"{pj} could not be read (not valid JSON), so its versions were not checked")
+            unread.append(f"{pj} could not be read (not valid JSON), so its versions were not checked")
             continue
         for sect in ("dependencies", "devDependencies"):
-            for k, v in (d.get(sect) or {}).items():
+            if not isinstance(d.get(sect), (dict, type(None))):     # the file comes with the project (manifest.py)
+                unread.append(f"{pj}: its {sect} are not a table, so the versions there were not checked")
+            for k, v in manifest.table(d.get(sect)).items():
                 if isinstance(v, str) and v.strip() in ("*", "latest", "") :
                     loose.append(f"{pj}: {k}@{v or '(empty)'}")
-    py_deps = python_dependencies(repo)
+    odd: list[str] = []
+    py_deps = python_dependencies(repo, odd)
     for man, spec in py_deps:
         if spec is None:
-            loose.append(f"{man} could not be read, so its versions were not checked")
+            unread.append(f"{man} could not be read, so its versions were not checked")
         elif not re.search(r"[=<>~!@^]|://", spec.split(";")[0]):
             loose.append(f"{man}: {spec.split(';')[0].strip()}")
+    loose = unread + [f"{x}, so the versions there were not checked" for x in odd] + loose
     # Every file that declares dependencies is checked, whatever the project's shape: a library should give
     # bounds too (a lower bound at least), it just should not pin exact versions.
-    manifests = js_manifests + sorted({m for m, _ in py_deps})
+    manifests = js_manifests + sorted({m for m, _ in py_deps} | {x.split(": ", 1)[0] for x in odd})
     if manifests:
         out.append(_check("deps-pinned", "Versions are bounded (no `*`, `latest`, or bare names)", 2,
                           "pass" if not loose else "fail",
@@ -504,42 +504,57 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
     return out
 
 
-def python_dependencies(repo: Repo) -> list[tuple[str, str | None]]:
+def python_dependencies(repo: Repo, odd: list[str] | None = None) -> list[tuple[str, str | None]]:
     """(manifest, requirement) for every Python dependency declared in pyproject.toml ([project] dependencies and
     optional-dependencies, [dependency-groups], [tool.poetry.dependencies]), Pipfile, and requirements*.txt.
-    A manifest that cannot be parsed yields one (manifest, None) entry."""
+    A manifest that cannot be parsed yields one (manifest, None) entry. A part of one that is not the shape it
+    should be (`[project]` a word, a list where a table belongs: the file comes with the project) is passed over
+    and named in `odd`, as "pyproject.toml: its [project] is not a table"."""
     out: list[tuple[str, str | None]] = []
+    odd = odd if odd is not None else []
+
+    def part(value, kind, f: str, what: str):
+        """`value` when it is of `kind`; an empty one when it is absent, or (named in `odd`) something else."""
+        if isinstance(value, kind):
+            return value
+        if value is not None:
+            odd.append(f"{f}: its {what} {'is' if what.startswith('[') else 'are'} not a "
+                       f"{'table' if kind is dict else 'list'}")
+        return kind()
+
     for f in repo.project_files:
         name = f.rsplit("/", 1)[-1]
         if name == "pyproject.toml":
             try:
                 d = tomllib.loads(repo.text(f))
-            except (tomllib.TOMLDecodeError, ValueError):
+            except (tomllib.TOMLDecodeError, ValueError, RecursionError):
                 out.append((f, None))
                 continue
-            proj = d.get("project") or {}
-            specs = list(_strs(proj.get("dependencies")))
-            for group in (proj.get("optional-dependencies") or {}).values():
-                specs += _strs(group)
-            for group in (d.get("dependency-groups") or {}).values():
-                specs += _strs(group)
-            for k, v in ((d.get("tool") or {}).get("poetry") or {}).get("dependencies", {}).items():
+            proj = part(d.get("project"), dict, f, "[project]")
+            specs = list(_strs(part(proj.get("dependencies"), list, f, "dependencies")))
+            for group in part(proj.get("optional-dependencies"), dict, f, "optional dependencies").values():
+                specs += _strs(part(group, list, f, "optional dependencies"))
+            for group in part(d.get("dependency-groups"), dict, f, "dependency groups").values():
+                specs += _strs(part(group, list, f, "dependency groups"))
+            poetry = part(part(d.get("tool"), dict, f, "[tool]").get("poetry"), dict, f, "[tool.poetry]")
+            for k, v in part(poetry.get("dependencies"), dict, f, "[tool.poetry.dependencies]").items():
                 if k == "python":
                     continue
                 if isinstance(v, dict):
-                    v = v.get("version") or ("@ " + v["git"] if v.get("git") else "@ " + v["path"] if v.get("path") else "")
+                    v = manifest.text(v.get("version")) or ("@ vcs" if v.get("git") or v.get("path") or v.get("url") else "")
                 specs.append(f"{k} {v}" if isinstance(v, str) and v.strip() not in ("*", "") else k)
             out += [(f, sp) for sp in specs]
         elif name == "Pipfile":
             try:
                 d = tomllib.loads(repo.text(f))
-            except (tomllib.TOMLDecodeError, ValueError):
+            except (tomllib.TOMLDecodeError, ValueError, RecursionError):
                 out.append((f, None))
                 continue
             for sect in ("packages", "dev-packages"):
-                for k, v in (d.get(sect) or {}).items():
+                for k, v in part(d.get(sect), dict, f, f"[{sect}]").items():
                     if isinstance(v, dict):
-                        v = v.get("version") or ("@ vcs" if v.get("git") or v.get("path") or v.get("file") else "")
+                        v = manifest.text(v.get("version")) or (
+                            "@ vcs" if v.get("git") or v.get("path") or v.get("file") else "")
                     out.append((f, f"{k} {v}" if isinstance(v, str) and v.strip() not in ("*", "") else k))
         elif re.search(r"(^|/)requirements[^/]*\.txt$", f):
             for ln in repo.text(f).splitlines():

@@ -11,14 +11,13 @@ import builtins
 import hashlib
 import os
 import re
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import tree_sitter_python as tsp
 from tree_sitter import Language, Node as TSNode, Parser
 
-from . import calls
+from . import calls, manifest
 from .graph import (CALLABLE, CALLS, CLASS, CONTAINS, IMPLEMENTS, INFERRED, MAY_CALL, MODULE,
                     POSSIBLE, RESOLVED, Graph, Node)
 
@@ -1624,11 +1623,17 @@ def _scripts_from_config(repo: Path) -> dict[str, str]:
     pp = repo / "pyproject.toml"
     if pp.exists():
         try:
-            data = tomllib.loads(pp.read_text(encoding="utf-8"))
-            out.update(data.get("project", {}).get("scripts", {}) or {})
-            out.update(data.get("tool", {}).get("poetry", {}).get("scripts", {}) or {})
-        except Exception:
-            pass
+            data = manifest.parse_toml(pp.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            data = {}
+        # the file comes with the project: only a name with a "module:function" beside it is a script (manifest.py);
+        # Poetry also writes one as a table, `app = { callable = "pkg.cli:main" }`
+        for scripts in (manifest.table(data.get("project")).get("scripts"),
+                        manifest.table(manifest.table(data.get("tool")).get("poetry")).get("scripts")):
+            for name, target in manifest.table(scripts).items():
+                target = target if isinstance(target, str) else manifest.text(manifest.table(target).get("callable"))
+                if target:
+                    out[name] = target
     for f in ("setup.cfg", "setup.py"):
         p = repo / f
         if p.exists():

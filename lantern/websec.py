@@ -988,7 +988,7 @@ def missing_auth(g: Graph) -> list[dict]:
         n = g.nodes.get(rid)
         if n is None or not n.entry:
             continue
-        route = n.entry.get("detail", "")
+        route = n.entry.get("detail") or ""
         if not mutating_route(route) or is_public_route(route):
             continue
         if n.file and n.file not in texts:

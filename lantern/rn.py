@@ -16,10 +16,10 @@ the project has them, are read by `android.py` and `ios.py` as usual.
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
+from . import manifest
 from .graph import Graph
 
 SKIP = re.compile(r"(^|/)(node_modules|build|dist|\.expo|tests?|fixtures|__tests__)/")
@@ -37,12 +37,12 @@ def find_projects(repo: Path) -> list[dict]:
         rel = p.relative_to(repo).as_posix()
         if SKIP.search(rel):
             continue
-        try:
-            pkg = json.loads(p.read_text(encoding="utf-8", errors="replace")[:500_000])
-        except (OSError, ValueError):
+        try:        # the file comes with the project: what is not the shape a package.json has is passed over
+            pkg = manifest.table(manifest.parse_json(p.read_text(encoding="utf-8", errors="replace")[:500_000]))
+        except OSError:
             continue
-        deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})} if isinstance(pkg, dict) else {}
-        if not isinstance(deps, dict) or not ({"react-native", "expo"} & set(deps)):
+        deps = {**manifest.table(pkg.get("dependencies")), **manifest.table(pkg.get("devDependencies"))}
+        if not ({"react-native", "expo"} & set(deps)):
             continue
         root = rel.rpartition("/")[0]
         root = root + "/" if root else ""
@@ -50,11 +50,11 @@ def find_projects(repo: Path) -> list[dict]:
         aj = p.parent / "app.json"
         if aj.is_file():
             try:
-                data = json.loads(aj.read_text(encoding="utf-8", errors="replace")[:500_000])
-                cfg = data.get("expo", data) if isinstance(data, dict) else {}
-                cfg_file = root + "app.json"
-            except (OSError, ValueError):
-                pass
+                data = manifest.parse_json(aj.read_text(encoding="utf-8", errors="replace")[:500_000])
+            except OSError:
+                data = None
+            if isinstance(data, dict):
+                cfg, cfg_file = manifest.table(data.get("expo", data)), root + "app.json"
         out.append({"root": root, "expo": "expo" in deps, "router": "expo-router" in deps, "config": cfg,
                     "config_file": cfg_file})
     return out
@@ -243,7 +243,10 @@ def config_findings(repo: Path, proj: dict, code: str) -> tuple[list[dict], list
     cfg, file = proj["config"], proj["config_file"]
     if not file or not isinstance(cfg, dict):
         return out, perms
-    text = (repo / file).read_text(encoding="utf-8", errors="replace")
+    try:
+        text = (repo / file).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return out, perms
     schemes = cfg.get("scheme")
     for s in ([schemes] if isinstance(schemes, str) else schemes if isinstance(schemes, list) else []):
         if isinstance(s, str) and s:
@@ -261,9 +264,7 @@ def config_findings(repo: Path, proj: dict, code: str) -> tuple[list[dict], list
         ln = _line_of(text, "NSAllowsArbitraryLoads")
         out.append(_f("LN-ATS-OFF", "App Transport Security is off: the iPhone app may load anything over plain http",
                       "MEDIUM", file, ln, cwe=319, rank="medium", snippet=text.splitlines()[ln - 1].strip()))
-    for p in android.get("permissions") or []:
-        if not isinstance(p, str):
-            continue
+    for p in manifest.texts(android.get("permissions")):
         short = p.rsplit(".", 1)[-1]
         ln = _line_of(text, f'"{p}"')
         words, rx = PERMS.get(short, (None, None))

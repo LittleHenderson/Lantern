@@ -166,7 +166,8 @@ def incomplete_lines(tools: list[dict]) -> list[str]:
     return out
 
 
-def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy: str, exp: dict | None) -> list[str]:
+def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy: str, exp: dict | None,
+           baseline_unread: str | None = None) -> list[str]:
     st = g.stats()
     out = [
         "Business-logic flaws. Scanners and graph checks find known patterns; they can't tell whether your "
@@ -198,13 +199,24 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
     tools = [t for t in (sec or {}).get("tools", []) if isinstance(t, dict)]
     out += incomplete_lines(tools)
     for t in tools:
-        if t.get("tool") == "pip-audit" and t.get("unpinned"):
-            out.append(f"{t['unpinned']} Python requirement(s) give a range, not an exact version, so they were not "
-                       "checked for known vulnerabilities. A lock file fixes this.")
-        if t.get("tool") == "maven-audit" and t.get("status") == "ok":
+        n = t.get("unpinned")           # the record may be one read back from disk: only a count is taken for a count
+        n = n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+        tool, were = t.get("tool"), "they were" if n != 1 else "it was"
+        if tool == "pip-audit" and n:
+            out.append(f"{n} Python requirement{'s name' if n != 1 else ' names'} no exact released version (a range, "
+                       f"or a package installed from a link or a folder), so {were} not checked for known "
+                       "vulnerabilities. For a range, a lock file fixes this.")
+        if tool == "maven-audit" and (t.get("status") == "ok" or (t.get("state") == "partial" and t.get("checked"))):
             out.append("Gradle/Maven libraries were checked as written in the build files; the libraries they pull in "
-                       "were not" + (f", and {t['unpinned']} written without an exact version were not checked either"
-                                     if t.get("unpinned") else "") + ".")
+                       "were not.")
+        if tool == "maven-audit" and n:
+            out.append(f"{n} Gradle/Maven librar{'ies are' if n != 1 else 'y is'} written without an exact name and "
+                       "version (no version, a range, a `+`, or a variable Lantern cannot fill in), so "
+                       f"{were} not checked for known vulnerabilities.")
+        if tool == "composer-audit" and n:
+            out.append(f"{n} PHP librar{'ies' if n != 1 else 'y'} in composer.lock {'are' if n != 1 else 'is'} "
+                       f"installed from a branch, not a released version, so {were} not checked for known "
+                       "vulnerabilities.")
     if any(f.get("category") == "dependency" for f in (sec or {}).get("findings", [])) or any(
             t.get("tool") in AUDIT_TOOLS and t.get("status") == "ok" for t in (sec or {}).get("tools", [])):
         out.append("Dependency findings come from live vulnerability databases, so a re-check can find new ones "
@@ -223,6 +235,11 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "which model wrote them.")
     if privacy != "full":
         out.append("Source code was left out of this report (structure-only privacy).")
+    if baseline_unread:     # `results.earlier`: fixed words, never text from the file
+        out.append("What was fixed since the first analysis. The file that records the first analysis "
+                   f"(baseline.json in the results folder) could not be used: {str(baseline_unread)[:300]}. It was "
+                   "left as it is, and this report compares with nothing. `lantern evidence PATH --reset-baseline` "
+                   "starts a new record from today's findings.")
     left = run_meta.get("skipped") if isinstance(run_meta.get("skipped"), dict) else None
     if left and isinstance(left.get("files"), int):
         ex = [str(x)[:120] for x in (left.get("examples") or []) if isinstance(x, str)][:3]
@@ -241,7 +258,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
 # ---------------------------------------------------------------------------- build
 
 def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_meta: dict | None,
-          baseline: dict | None, privacy: str = "full") -> dict:
+          baseline: dict | None, privacy: str = "full", baseline_unread: str | None = None) -> dict:
     repo = Path(g.repo_root)
     run_meta = run_meta or {}
     gi = git_info(repo)
@@ -259,7 +276,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         s = exp["stats"]
         models.append({"model": s.get("model"), "task": "Three-Lens explanations", "validated": s.get("validated"),
                        "failed": s.get("failed"), "prompt_version": next(
-                           (r.get("prompt_version") for r in exp.get("explanations", {}).values()), None)})
+                           (r.get("prompt_version") for r in (exp.get("explanations") or {}).values()), None)})
     payload = digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False), run_options(sec, run_meta))
     return {
         "evidence_version": EVIDENCE_VERSION,
@@ -302,7 +319,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
                                  f"readiness checks v{(rd or {}).get('version', '-')}", f"graph schema {SCHEMA_VERSION}"]
                        + [f"analysis pack {t['tool'].split(':', 1)[1]} v{t.get('version', '-')} ({t.get('status', '')})"
                           for t in (sec or {}).get("tools", []) if str(t.get("tool", "")).startswith("lantern-pack:")]},
-        "limits": limits(g, sec, rd, run_meta, privacy, exp),
+        "limits": limits(g, sec, rd, run_meta, privacy, exp, baseline_unread),
         "digest": digest(payload), "payload": payload,
     }
 

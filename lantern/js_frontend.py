@@ -26,7 +26,7 @@ import tree_sitter_javascript as tsj
 import tree_sitter_typescript as tst
 from tree_sitter import Language, Node as TSNode, Parser
 
-from . import calls
+from . import calls, manifest
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, RESOLVED, Graph, Node
 from .python_frontend import SKIP_DIRS, inside_repo
 
@@ -1302,16 +1302,23 @@ def _normalize_http(raw: str, method: str, scope: str, line: int, ui) -> HttpCal
 # --------------------------------------------------------------------------------------------
 
 def _load_jsonc(p: Path) -> dict:
+    """The table a tsconfig/jsconfig holds (comments and trailing commas allowed); an empty one when the file cannot
+    be read, is not valid, or holds something else than a table."""
     try:
         txt = p.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {}
     txt = re.sub(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', lambda m: m.group(1) or "", txt, flags=re.S)
     txt = re.sub(r",(\s*[}\]])", r"\1", txt)
+    return manifest.table(manifest.parse_json(txt))
+
+
+def _whole(base: Path, rel: str) -> Path | None:
+    """`rel` under `base` as a whole path, or None when what the file says there cannot be a path at all."""
     try:
-        return json.loads(txt)
-    except json.JSONDecodeError:
-        return {}
+        return (base / rel).resolve()
+    except (ValueError, OSError, RuntimeError):
+        return None
 
 
 class SpecResolver:
@@ -1334,10 +1341,13 @@ class SpecResolver:
             for c in cands:
                 if not c.exists():
                     continue
-                co = _load_jsonc(c).get("compilerOptions", {}) or {}
-                base = (c.parent / co.get("baseUrl", ".")).resolve()
-                for pat, targets in (co.get("paths") or {}).items():
-                    found.append((pat, [(base / t).resolve() for t in targets]))
+                # the file comes with the project: what is not the shape a tsconfig has is passed over (manifest.py)
+                co = manifest.table(_load_jsonc(c).get("compilerOptions"))
+                base = _whole(c.parent, manifest.text(co.get("baseUrl"), "."))
+                if base is None:
+                    continue
+                for pat, targets in manifest.table(co.get("paths")).items():
+                    found.append((pat, [t for t in (_whole(base, x) for x in manifest.texts(targets)) if t is not None]))
                 if isinstance(co.get("baseUrl"), str) and ("*", [base / "*"]) not in bases:
                     bases.append(("*", [base / "*"]))
             if found or (cur / "package.json").exists() or cur == self.repo or cur == cur.parent:
@@ -1349,8 +1359,9 @@ class SpecResolver:
             cur = cur.parent
 
     def _try(self, base: Path) -> str | None:
-        cands = [base] + [base.with_name(base.name + e) for e in RESOLVE_EXTS] + \
-                [base / ("index" + e) for e in RESOLVE_EXTS]
+        # an alias may name the root folder (`"@/*": ["/"]`), which has no name to put an ending on
+        named = [base.with_name(base.name + e) for e in RESOLVE_EXTS] if base.name else []
+        cands = [base] + named + [base / ("index" + e) for e in RESOLVE_EXTS]
         for c in cands:
             try:
                 rel = c.resolve().relative_to(self.repo).as_posix()
@@ -1462,10 +1473,10 @@ def _nearest_package(path: Path, repo: Path, cache: dict) -> dict:
         pj = cur / "package.json"
         if pj.exists():
             try:
-                data = json.loads(pj.read_text(encoding="utf-8", errors="replace"))
-            except json.JSONDecodeError:
+                data = manifest.table(manifest.parse_json(pj.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
                 data = {}
-            deps = {**(data.get("dependencies") or {}), **(data.get("devDependencies") or {})}
+            deps = {**manifest.table(data.get("dependencies")), **manifest.table(data.get("devDependencies"))}
             info = {"dir": cur, "deps": set(deps)}
             cache[cur] = info
             return info

@@ -18,8 +18,20 @@ RANKS = ["critical", "high", "medium", "low"]
 
 
 def load(out: Path, name: str) -> dict | None:
+    """A result file the command is about, read strictly: one that cannot be read is an error, never "nothing"."""
     p = out / name
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def earlier(out: Path, name: str, log: Log | None = None, then: str = "") -> dict | None:
+    """A file an earlier run left in `out` that this run can do without (`results.earlier`): its table, or None when
+    there is none. When one is there and cannot be used, nothing stops: one line in the log says why and what that
+    costs (`then`), and the file is left as it is."""
+    from . import results
+    data, why = results.earlier(out, name)
+    if why and log:
+        log(f"earlier {name} from an earlier run was not used: {why}. {then}".rstrip())
+    return data
 
 
 def out_dir(repo: Path, out: str | Path | None = None) -> Path:
@@ -111,11 +123,12 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
         sec = scan(g, offline)
         from . import case
         from .evidence import git_info
-        earlier = load(out, "security.json")    # the previous run of this folder, before it is replaced
-        base = load(out, "baseline.json")
+        # the previous run of this folder, before it is replaced, and the first one
+        before = earlier(out, "security.json", log, "This run does not say which findings were there before.")
+        base = earlier(out, "baseline.json")    # `evidence` below says so when this one cannot be used
         ids = None
-        if earlier and earlier.get("id_version") == sec.get("id_version"):
-            ids = {f.get("id") for f in earlier.get("findings", [])}
+        if before and before.get("id_version") == sec.get("id_version"):
+            ids = {f.get("id") for f in before.get("findings") or []}
         if base and base.get("id_version") == sec.get("id_version"):
             ids = (ids or set()) | set(base.get("findings") or {})
         case.stamp(sec, git_info(repo), ids)
@@ -138,21 +151,34 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     log(f"ready   {rd['score']}/100 (grade {rd['grade']}), {rd['shape']}")
     run_meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M")
     (out / "run.json").write_text(json.dumps(run_meta, indent=1), encoding="utf-8")
-    path = write_report(out, g, sec, load(out, "explanations.json"), privacy, timings, rd)
+    words = earlier(out, "explanations.json", log, "The report is written without a model's explanations; "
+                    "`lantern explain` writes them again.")
+    path = write_report(out, g, sec, words, privacy, timings, rd)
     log(f"report  {path}")
-    log(f"proof   {evidence(out, g, sec, rd, run_meta, privacy)}")
+    log(f"proof   {evidence(out, g, sec, rd, run_meta, privacy, log)}")
     return {"score": rd["score"], "grade": rd["grade"], "shape": rd["shape"],
             "counts": (sec or {}).get("counts"), "incomplete": run_meta.get("incomplete") or [], "report": str(path)}
 
 
-def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str) -> Path:
+def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str, log: Log | None = None) -> Path:
+    """Write the Evidence Report. The baseline (the first analysis) is made here when there is none, or when finding
+    ids changed. One that is there and cannot be used (`results.earlier`) is neither compared with nor replaced: it
+    may be the only record of the first analysis (a file a merge left with conflict marks), so the report says in its
+    Limits that it does not know what was fixed, and `lantern evidence PATH --reset-baseline` starts a new one."""
     from . import evidence as ev
-    base = load(out, "baseline.json")
+    from . import results
+    base, unread = results.earlier(out, "baseline.json")
     from .security import ID_VERSION
-    if sec is not None and (base is None or base.get("id_version") != ID_VERSION):   # first run, or ids changed
+    if unread:
+        if log:
+            log(f"earlier baseline.json was not used: {unread}. The report does not say what was fixed since the "
+                "first analysis, and the file is left as it is (`lantern evidence PATH --reset-baseline` starts a "
+                "new one).")
+    elif sec is not None and (base is None or base.get("id_version") != ID_VERSION):   # first run, or ids changed
         base = ev.baseline_from(sec, ev.git_info(Path(g.repo_root)).get("commit"), rd)
         (out / "baseline.json").write_text(json.dumps(base, indent=1), encoding="utf-8")
-    rec = ev.build(g, sec, rd, load(out, "explanations.json"), run_meta, base, privacy)
+    rec = ev.build(g, sec, rd, results.earlier(out, "explanations.json")[0], run_meta, base, privacy,
+                   baseline_unread=unread)
     return ev.write(out, rec)["html"]
 
 

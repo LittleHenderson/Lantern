@@ -269,7 +269,16 @@ maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, packs): `tool`,
 patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`), `exclusions` (folders a tool was
 told to skip), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
 `fallback_for` (the built-in secret scan when gitleaks did not finish). `partial` keeps the findings the tool did
-produce. `incomplete` is read by readiness (`sec-scanners`), the Evidence Report, the badge (`scan incomplete`), the
+produce. The dependency audits (pip-audit, maven-audit, composer-audit, gem-audit) add, when they apply: `files` (the
+dependency files read), `checked` (how many name-and-version pairs were asked about), `unpinned` (how many entries
+have no exact released version to look up: a range, a branch, a link or a folder, no version, a variable) with
+`unpinned_examples` (the first five, as text), and `not_read` (how many parts of the dependency files are no package
+name and version, or no dependency file at all: a list where a table belongs, a number where a name belongs, a file
+that is not valid TOML or JSON, a pipe, a file over 32 MB). With `not_read` the state is `partial` and `errors` names
+the first 20, each as `<file>: <what>` on one line of printable ASCII of at most 200 characters (of a path over
+100 characters the end is kept, after `...`; `files` has every path whole); the rest of the file is still checked. An
+audit that is skipped (`--offline`, tool not installed) carries `not_read` only when nothing in the files could be
+used. `incomplete` is read by readiness (`sec-scanners`), the Evidence Report, the badge (`scan incomplete`), the
 command line (`--fail-on` exits 1 for any state but `skipped`) and the app's project cards; a run with `--offline`
 lists its skipped audits there without failing the gate.
 
@@ -358,7 +367,10 @@ the folder and is not the current user's) or when git could not compare the file
 why, role, version}]`, the scanners that did not finish or did not cover everything; while it is not empty the memo, a
 notice under the tiles and the badge say `scan incomplete`, and the badge is never green), `understanding`,
 `provenance` (`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs), `limits`
-(strings: what the report does not prove; one line per incomplete scanner), `digest` (`sha256:…`), `payload`.
+(strings: what the report does not prove; one line per incomplete scanner; one line per kind of project for the
+dependency entries that were not checked because they have no exact version, whatever state that audit ended in; one
+line when the baseline in the results folder could not be used, in which case `scorecard.before`, `baseline_date` and
+`baseline_commit` are null and `security.fixed` and `changed` are empty), `digest` (`sha256:…`), `payload`.
 
 ### Other files
 
@@ -368,7 +380,18 @@ backend, language, traced, timed_out, blocked, not_ended, ran}`, or `{command, r
 returncode: null, observed_edges: 0, …}` when the sandbox could not be set up and the tests were not run;
 `lantern.trace.counted` says whether anything of the run is in the results; tests the person stopped leave no record,
 because a stopped run writes no file), `baseline.json` (first-run findings for "fixed since"),
-`cache/` (explanation cache). In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed),
+`cache/` (explanation cache).
+
+What `lantern analyze` reads back from an earlier run of the same folder (`lantern/results.py`, `earlier`):
+`security.json` (which findings were there before), `baseline.json` and `explanations.json` (for the report). Each is
+read only when it is a plain file (not a link, a folder, a pipe or a device) of at most 256 MB that holds a JSON
+table whose parts this run uses have the shape above. One that is cut off, empty, not text or of another shape is
+passed over, and the run's log says `earlier <name> from an earlier run was not used: <why>.` with a reason in fixed
+words (never text from the file); the run then finishes without what that file would have given. A `baseline.json`
+that cannot be used is neither compared with nor replaced, and the Evidence Report's Limits say so;
+`lantern evidence PATH --reset-baseline` starts a new one. The commands about a finished run (`report`, `evidence`,
+`explain`, `verify`, `export`, the connector's tools) read its files strictly: one that cannot be read is an error
+there, never "no findings". In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed),
 `lantern-packs/*.json` (project analysis packs), `lantern-narratives.md` (the builder's own notes for the Evidence Report).
 
 ## Cloud service (`cloud/`, cloud mode)

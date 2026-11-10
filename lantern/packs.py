@@ -80,9 +80,12 @@ def validate(pack: dict) -> list[str]:
         errs.append("`pack` must be a short lowercase name (letters, digits, dashes)")
     if "version" in pack and not isinstance(pack["version"], (str, int)):
         errs.append("`version` must be a string")
+    for k in ("about", "homepage"):
+        if k in pack and not isinstance(pack[k], str):
+            errs.append(f"`{k}` must be a string")
     req = pack.get("requires", {})
-    if not isinstance(req, dict) or any(not isinstance(req.get(k, []), list) for k in ("files", "text")):
-        errs.append("`requires` must be an object with optional `files` and `text` lists")
+    if not isinstance(req, dict) or any(not _words(req.get(k, [])) for k in ("files", "text")):
+        errs.append("`requires` must be an object with optional `files` and `text` lists of strings")
     rules, entries = pack.get("rules", []), pack.get("entries", [])
     if not isinstance(rules, list) or not isinstance(entries, list):
         return errs + ["`rules` and `entries` must be lists"]
@@ -101,7 +104,8 @@ def validate(pack: dict) -> list[str]:
             errs.append(f"{w}: `id` must look like LP-NAME (uppercase, starts with LP-)")
         elif rid in seen:
             errs.append(f"{w}: duplicate id {rid}")
-        seen.add(rid)
+        else:
+            seen.add(rid)
         if not isinstance(r.get("title"), str) or not 3 <= len(r["title"]) <= 160:
             errs.append(f"{w}: `title` is a short sentence")
         if r.get("severity") not in SEVERITIES:
@@ -112,6 +116,9 @@ def validate(pack: dict) -> list[str]:
             errs.append(f"{w}: `cwe` is a number")
         if "confidence" in r and r["confidence"] not in ("HIGH", "LOW"):
             errs.append(f"{w}: `confidence` is HIGH or LOW")
+        for k in ("fix", "more", "category"):
+            if k in r and not isinstance(r[k], str):
+                errs.append(f"{w}: `{k}` is a string")
         if "unless" in r:
             errs += _check_pattern(r["unless"], w + ".unless")
     for i, e in enumerate(entries):
@@ -128,6 +135,11 @@ def validate(pack: dict) -> list[str]:
         if "detail" in e and not isinstance(e["detail"], str):
             errs.append(f"{w}: `detail` is a string with {{n}} placeholders")
     return errs
+
+
+def _words(value) -> bool:
+    """A list of non-empty strings (an empty list too)."""
+    return isinstance(value, list) and all(isinstance(x, str) and x for x in value)
 
 
 def _check_pattern(pat, where: str) -> list[str]:
@@ -336,7 +348,8 @@ def apply_entries(g: Graph, repo: Path, packs: list[dict]) -> dict:
                         detail = e.get("detail") or ""
                         for k in range(1, (m.lastindex or 0) + 1):
                             detail = detail.replace(f"{{{k}}}", m.group(k) or "")
-                        detail = re.sub(r"/{2,}", "/", detail).strip() or None
+                        # always words: every reader of an entry point takes its detail for text
+                        detail = re.sub(r"/{2,}", "/", detail).strip() or m.group(gi)
                         ids = _handler_nodes(g, m.group(gi), rel)
                         if not ids:
                             stats["unresolved"] += 1

@@ -14,7 +14,7 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from . import context, lanes
+from . import context, lanes, manifest
 from .graph import Graph
 from .python_frontend import SKIP_DIRS, inside_repo
 
@@ -636,10 +636,12 @@ def load_accepted(repo: Path) -> dict[str, dict]:
     """Accepted risks live in the repo (committed), each with the builder's written reason."""
     p = repo / ACCEPTED_FILE
     try:
-        rows = json.loads(p.read_text(encoding="utf-8")).get("accepted", []) if p.exists() else []
-    except (OSError, json.JSONDecodeError, AttributeError):
+        data = manifest.parse_json(p.read_text(encoding="utf-8", errors="replace")) if p.is_file() else None
+    except OSError:
         return {}
-    return {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id") and reason_ok(r.get("reason"))}
+    # the file comes with the project: only a row with a finding's id and a written reason accepts anything
+    return {r["id"]: r for r in manifest.tables(manifest.table(data).get("accepted"))
+            if isinstance(r.get("id"), str) and r["id"] and reason_ok(r.get("reason"))}
 
 
 def reason_ok(reason) -> bool:
@@ -689,14 +691,13 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     (None: follow LANTERN_OFFLINE)."""
     repo = Path(g.repo_root)
     findings, tools = [], []
-    from . import scanresult
-    from .depaudit import run_composer_audit, run_gem_audit, run_maven_audit, run_npm_audit, run_pip_audit
+    from . import depaudit, scanresult
     # Bandit's absence is a gap only when there is Python to read
     f, info = run_bandit(repo, applicable="python" in (g.meta.get("languages") or {}))
     findings += f
     tools.append(info)
-    for fn in (run_pip_audit, run_npm_audit, run_maven_audit, run_composer_audit, run_gem_audit):
-        f, info = fn(repo, offline)
+    for tool, fn in depaudit.audits():      # each behind its own wall: one that raises is one `failed` record
+        f, info = depaudit.guarded(tool, fn, repo, offline)
         findings += f
         tools.append(info)
     f, records = run_secrets(repo)
@@ -780,7 +781,7 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
         acc = accepted.get(f["id"])
         f["status"] = "accepted" if acc else "open"
         if acc:
-            f["accepted"] = {k: acc.get(k) for k in ("reason", "by", "date")}
+            f["accepted"] = {k: acc.get(k) if isinstance(acc.get(k), str) else None for k in ("reason", "by", "date")}
     # Scenarios (scenarios.py): a short story of one person meeting each finding, built from the facts above only.
     from .scenarios import attach as attach_scenarios
     attach_scenarios(findings, g)

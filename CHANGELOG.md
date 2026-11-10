@@ -5,6 +5,79 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Security: what a project's dependency files say is checked before it is used (2026-11-10; stage 7 of the
+  2026-11-09 directive, part 3). A lock file comes with the project, so it is as untrusted as the code. Until now
+  the names and versions in uv.lock, poetry.lock, pdm.lock and Pipfile.lock went unchecked into the file Lantern
+  hands to pip-audit. Measured on the code before: a "version" that goes on after a line end put lines of its own
+  into that file (`-r /etc/hostname`, `-e /etc`, another index address), Lantern's record said `ok`, and the real
+  pip-audit took the file with such a line and went on to its questions. One entry pip-audit cannot read (a version
+  such as `1.0-SNAPSHOT.final`) made it give up on every package, the vulnerable ones included. Entries Lantern
+  could not use were left out without a word: of a composer.lock with 4 entries 1 was checked and the other 3 were
+  named nowhere, of 4 gems in a Gemfile.lock 2 were checked. And a dependency file of an unexpected shape (a list
+  where a table belongs, a number where a name belongs) ended the whole analysis with a Python error, `--offline`
+  or not: 14 of the 14 shapes tried.
+  Now only a package name and a version of the form the ecosystem defines leave Lantern (`depaudit.PY_NAME`,
+  `PY_VERSION`, `MAVEN_NAME`, `MAVEN_VERSION`, `COMPOSER_NAME`, `COMPOSER_VERSION`, `GEM_LINE`; plain ASCII, with a
+  length limit). Whatever else an entry holds is counted and named in that audit's record (`not_read`, and
+  `errors` with the first 20, each one line of printable characters; the audit's state is then `partial`, so the
+  report, the badge and `--fail-on` treat the scan as incomplete), and the rest is still checked. What has no
+  released version to look up is counted as not checked (`unpinned`, with examples), as ranges already were: a
+  Composer library installed from a branch, a Pipfile.lock entry from a link or a folder, a lock entry with no
+  version, a Gradle catalog library with no version, a range or a variable. The Evidence Report's Limits say how
+  many, whatever state the audit ended in, and the readiness check for pinned versions names a part of a manifest
+  it could not check first. A dependency file is read only when it is a plain file of at most 32 MB (a pipe under
+  such a name, also under the composer.json or Gemfile beside a lock file, held the audit up for good), a
+  byte-order mark at its start is passed over (such a file was unreadable before), and an audit that raises
+  anything nobody foresaw becomes that audit's `failed` record (`depaudit.guarded`), in `lantern analyze` and in
+  the cloud's audit step alike.
+  Files as people have them change nothing: on 32 real lock files of public projects all 6,002 names and versions
+  are the same before and after. 33 entries in six of those files have no exact version (branches, catalog
+  libraries with no single version); they were dropped without a word before and are now counted as not checked.
+  The version pattern agrees with pip's own parser on 300,000 random strings. `tests/test_lockfiles.py` (55 tests;
+  with the real pip-audit only as its dry run, which asks nobody). Not changed: `npm audit` still reads
+  package-lock.json itself. An audit that is skipped (`--offline`, or its tool is not installed) names odd entries
+  only when nothing in those files could be used; where some entries are usable its record says that it was
+  skipped, and the odd ones are named by the next run that asks.
+- A project file of the wrong shape no longer stops the analysis (2026-11-10; the same stage). A manifest comes
+  with the project too. `"dependencies": "x"`, `paths = 5`, a list where a table belongs: each is valid JSON or
+  TOML, and each ended `lantern analyze` with a Python error, so one odd line in a project could keep it from
+  being checked at all. Measured with a new sweep (`bench/manifests.py`: every value in 21 kinds of project file
+  replaced, one at a time, by 21 other values, and the whole analysis run offline on each): on the code before,
+  839 of 11,652 variants stopped the analysis, at 50 lines of Lantern's code in 11 files (package.json 40 of 965,
+  tsconfig.json 113 of 502, app.json 19 of 730, pyproject.toml 98 of 1,861, Pipfile 24 of 344, a notebook 102 of
+  752, lantern-accepted.json 13 of 168, a project pack 69 of 672, uv.lock 56 of 385, Pipfile.lock 43 of 419,
+  composer.lock 19 of 522, the Gradle catalog 45 of 465, an earlier security.json 55 of 354, baseline.json 84 of
+  584, explanations.json 59 of 459; six kinds that are read as text, 0 of 2,470). Now: 0 of 11,652. An odd value
+  costs the one fact it would have given and nothing else (`lantern/manifest.py`): the other dependency section
+  of that package.json is still read, the other aliases of that tsconfig still lead to their files, the other
+  rows of `lantern-accepted.json` still count, the other cells of that notebook are still read. A project pack
+  with an odd part is skipped whole and named with the reason, as a pack with any other problem already was. An
+  odd dependency section of a manifest is named by the readiness check for pinned versions ("package.json: its
+  devDependencies are not a table, so the versions there were not checked"); any other odd part of a manifest (an
+  alias, a script, a notebook cell) is passed over without a line in the report.
+  The same for what an earlier run left in the results folder. A `security.json`, `baseline.json` or
+  `explanations.json` that was cut off (the computer was switched off while it was written), emptied, or changed
+  by hand ended every later `lantern analyze` of that folder, until somebody deleted the file. Now such a file is
+  passed over and the log says so in one sentence of fixed words, never text from the file
+  (`lantern/results.py`): without the earlier `security.json` the run does not say which findings were there
+  before; without `explanations.json` the report is written without a model's explanations; a `baseline.json`
+  that cannot be used is neither compared with nor replaced (it may be the only record of the first analysis: a
+  merge can leave it with conflict marks), the Evidence Report says in its Limits that it does not know what was
+  fixed, and `lantern evidence PATH --reset-baseline` starts a new one. Only a plain file is read back: not a
+  link, a folder, a pipe (which held the run up for good) or a file over 256 MB. The commands that are about a
+  finished run (`lantern report`, `evidence`, `explain`, `verify`, `export`, the connector's tools) still read
+  its files strictly: passing a damaged scan result over there would turn it into "no findings". The app, Ask
+  Lantern and the Learn tab read them with readers of their own, which are not changed here.
+  Also fixed on the way: a project pack whose route entry leaves `detail` out, a tsconfig alias that points at
+  the root folder, and a JSON manifest saved with a byte-order mark each stopped or blinded a reader.
+  `tests/test_manifests.py` (117 tests: the cases the sweep found, the top level of every file in four other
+  shapes, projects as they should be, which give every fact they gave before, and 47 that hand the reader of
+  earlier results one value of the wrong kind at a time). On the code before, 166 of the 172 new tests of both
+  entries fail (111 show the fault; 55 only meet a name that did not exist yet, the 47 just named among them)
+  and 6 pass: the three of projects and results as they should be, the top level of two files that stopped
+  nothing before either, and one that holds on to what "seen in the run before" already said rightly (a mistake
+  planted in those two lines went unnoticed by every older test). The sweep is not part of CI (about two
+  minutes); run it after changing how any of these files is read.
 - Security: a git folder that is not yours no longer puts its commit on your report (2026-11-10; stage 7 of the
   2026-11-09 directive, part 3). Since the git-settings fix of the same day (further down) nothing in a git folder
   is obeyed, but a git folder was still read whoever it belonged to, also when it was found in a folder above the
