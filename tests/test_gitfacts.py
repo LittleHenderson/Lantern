@@ -32,8 +32,12 @@ WHEN = {"GIT_AUTHOR_DATE": "2026-11-01T10:00:00+0100", "GIT_COMMITTER_DATE": "20
 
 
 def git(*args, cwd, ok=True, env=None) -> str:
-    """git as the test itself uses it, on repositories the test made before anything was planted in them."""
-    r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=cwd,
+    """git as the test itself uses it, on repositories the test made before anything was planted in them. Its own
+    upkeep after a commit is off (`gc.auto` says the same to a git older than 2.29), so that nothing of the test's
+    making is still at work in a folder when the test looks at it: see
+    `test_git_as_these_tests_use_it_leaves_no_upkeep_going_in_the_folder`."""
+    r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "maintenance.auto=false",
+                        "-c", "gc.auto=0", *args], cwd=cwd,
                        env={**os.environ, **WHEN, **(env or {})}, capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0 or not ok, (args, r.stderr)
     return r.stdout.strip()
@@ -198,6 +202,20 @@ def test_only_settings_that_cannot_name_anything_reach_git(tmp_path, monkeypatch
         assert "GIT_ALTERNATE_OBJECT_DIRECTORIES" not in env and env["GIT_OPTIONAL_LOCKS"] == "0"
         assert cmd[1:5] == ["-c", "core.fsmonitor=false", "-c", f"core.hooksPath={shadow / 'no-hooks'}"]
         assert Path(cwd) == d
+
+
+def test_git_as_these_tests_use_it_leaves_no_upkeep_going_in_the_folder(tmp_path):
+    """After a commit git starts its own upkeep (`git maintenance run --auto`), and since git 2.47 that goes on in the
+    background when the commit has already come back, holding `.git/objects/maintenance.lock` for a moment. A test
+    that compares a folder before and after asking then sees a file go that Lantern never touched: on 2026-11-10 the
+    test below failed that way once on CI (git 2.56), on that lock file. So `git()` turns the upkeep off, and the
+    repositories these tests make are at rest when a test looks at them."""
+    d, trace = make(tmp_path), tmp_path / "trace"
+    write(d / "app.py", "print('again')\n")
+    git("commit", "-q", "-a", "-m", "two", cwd=d, env={"GIT_TRACE": str(trace)})        # git writes down what it starts
+    said = [line.split("trace:", 1)[-1].strip() for line in trace.read_text(encoding="utf-8").splitlines()]
+    assert any(line.startswith("built-in: git commit") for line in said), said
+    assert [line for line in said if re.search(r"\b(maintenance|gc)\b", line)] == [], "the commit started git's upkeep"
 
 
 def test_asking_writes_nothing_into_the_folder_and_leaves_nothing_behind(tmp_path, monkeypatch):
