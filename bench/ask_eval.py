@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     from lantern.providers import make_provider, resolve_default
-    provider = make_provider(a.model or resolve_default())
+    provider = make_provider(a.model or resolve_default()[0])
     res = run_eval(provider, Path(a.project))
     for r in res["rows"]:
         bad = [k for k, v in r["checks"].items() if not v]
