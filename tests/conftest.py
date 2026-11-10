@@ -17,9 +17,15 @@ next test ran, which was the one that failed.
 
 CI on Linux also runs the suite with no network at all (tools/netless.py) and sets LANTERN_TESTS_NETLESS=required,
 which stops the run when a route to the outside exists.
+
+CI also sets LANTERN_TESTS_COMPLETE=required: there every test must run, and a test file or a test that is skipped
+because a library is not installed fails the run. Until 2026-11-10 CI's test jobs installed neither PyJWT nor
+cryptography; tests/test_cloud_github.py was skipped while it was imported, its 14 tests counted as one skipped test,
+and the runs were green. A developer's own run without those libraries still skips, and says so.
 """
 import functools
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -47,6 +53,8 @@ _between: list = []                     # attempts that happened outside every t
 _seen_to = 0
 _work: list = []                        # (future, what it is) for work the cloud service was asked for and has not ended
 _WORK_LIMIT = 180.0                     # seconds such work may take to end once the test that asked for it is over
+_unrun: list = []                       # (test file or test, library) skipped because that library is not installed
+_NOT_INSTALLED = re.compile(r"could not import '([^']+)'")   # pytest.importorskip's own words
 
 
 def pytest_configure(config):
@@ -95,6 +103,27 @@ def _finish_work(limit: float = _WORK_LIMIT) -> list:
 
 def pytest_collection_finish(session):
     _keep_work()
+
+
+def _every_test_must_run() -> bool:
+    return os.environ.get("LANTERN_TESTS_COMPLETE", "").strip().lower() == "required"
+
+
+def _keep_unrun(report) -> None:
+    """Write down a test file (skipped while it was imported) or a test that was skipped because a library is not
+    installed. Any other reason for skipping (another operating system, a program that is not there) is not kept."""
+    if report.skipped and isinstance(report.longrepr, tuple):
+        missing = _NOT_INSTALLED.search(str(report.longrepr[2]))
+        if missing:
+            _unrun.append((report.nodeid, missing.group(1)))
+
+
+def pytest_collectreport(report):
+    _keep_unrun(report)
+
+
+def pytest_runtest_logreport(report):
+    _keep_unrun(report)
 
 
 def _new_home(monkeypatch) -> str:
@@ -195,6 +224,10 @@ def pytest_sessionfinish(session, exitstatus):
     _between.extend(GUARD.since(_seen_to)[: 50])
     if _between and session.exitstatus == 0:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    # Where every test must run (CI), a test that did not run for a missing library fails the run as well; a run in
+    # which the only file was skipped that way ends as "no test was collected", which is no pass either.
+    if _unrun and _every_test_must_run() and session.exitstatus in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED):
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def pytest_terminal_summary(terminalreporter):
@@ -203,6 +236,14 @@ def pytest_terminal_summary(terminalreporter):
         terminalreporter.write_line("Something tried to reach the network while no test was running (every attempt "
                                     "was refused). The run fails for it:")
         terminalreporter.write_line(netguard.describe(_between))
+    if _unrun and _every_test_must_run():
+        terminalreporter.section("tests that did not run", sep="=", red=True, bold=True)
+        terminalreporter.write_line("LANTERN_TESTS_COMPLETE=required: every test must run here, and these did not run "
+                                    "because a library is not installed. The run fails for it:")
+        for where, library in _unrun:
+            terminalreporter.write_line(f"  {where}{'' if '::' in where else ' (the whole file)'}: {library}")
+        terminalreporter.write_line('Install what the tests need (pip install -e ".[scan,dev]"). A library a new test '
+                                    "needs belongs in the `dev` list in pyproject.toml.")
 
 
 def pytest_unconfigure(config):

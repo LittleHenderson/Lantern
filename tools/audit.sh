@@ -36,7 +36,8 @@ step "environment"
 "$PY" --version; lantern --version || { echo "lantern not installed: pip install -e \".[scan,dev]\""; exit 2; }
 
 step "unit and integration tests"
-check "pytest" "$PY" -m pytest -q
+check "pytest" "$PY" -m pytest -q -rs
+said '^SKIPPED \['      # each skipped test with its reason, also when the run passed
 
 step "Lantern audits itself"
 budget "self-audit: no open critical/high/medium" 300 lantern analyze . --out "$W/self" --fail-on medium

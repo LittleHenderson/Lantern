@@ -30,7 +30,7 @@ GIT_PLANTED = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.https://rewritt
 ISOLATION_VARS = ("LANTERN_OFFLINE", "LANTERN_NO_REAL_PROVIDERS", "LANTERN_HOME", "LANTERN_CONFIG_DIR",
                   "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "APPDATA", "LOCALAPPDATA",
                   "GIT_CONFIG_NOSYSTEM", "PIP_CONFIG_FILE", "NPM_CONFIG_USERCONFIG",
-                  ng.LOG_ENV, ng.ALLOW_ENV, ng.DENY_ENV, "LANTERN_TESTS_NETLESS")
+                  ng.LOG_ENV, ng.ALLOW_ENV, ng.DENY_ENV, "LANTERN_TESTS_NETLESS", "LANTERN_TESTS_COMPLETE")
 
 
 def developer_env(tmp: Path, forwarder: int) -> dict:
@@ -280,6 +280,77 @@ def test_work_handed_out_while_the_harness_waits_is_finished_too(request):
 
 
 # ----------------------------------------------------------------------------- this run itself
+def _missing_library_run(tmp: Path, where: str, complete: bool):
+    """A second pytest on tests/probe_missing_library.py, in which `where` (`file`, `test` or nothing) needs a library
+    that is not installed. `complete` starts it the way CI does, with LANTERN_TESTS_COMPLETE=required."""
+    forwarder = Forwarder()
+    env = developer_env(tmp, forwarder.port)
+    env["PROBE_MISSING_AT"] = where
+    if complete:
+        env["LANTERN_TESTS_COMPLETE"] = "required"
+    try:
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider",
+                            str(ROOT / "tests" / "probe_missing_library.py")], cwd=ROOT, env=env, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=300)
+    finally:
+        forwarder.listener.close()
+    return r.returncode, (r.stdout + r.stderr).replace("\\", "/")
+
+
+@pytest.mark.parametrize("where, counted, named", [
+    ("file", "1 skipped", "tests/probe_missing_library.py (the whole file)"),
+    ("test", "1 passed, 2 skipped", "tests/probe_missing_library.py::test_that_needs_the_library"),
+])
+def test_where_every_test_must_run_a_missing_library_fails_the_run(tmp_path, where, counted, named):
+    """Found on 2026-11-10 while counting skipped tests: CI's test jobs installed neither PyJWT nor cryptography, so
+    tests/test_cloud_github.py was skipped while it was imported. Its 14 tests counted as 1 skipped test, in a log that
+    named no skipped test, and every run was green. Where LANTERN_TESTS_COMPLETE=required (CI), a test file or a test
+    that is skipped because a library is not installed fails the run, and the run says which and what is missing."""
+    code, out = _missing_library_run(tmp_path / "ci", where, complete=True)
+    assert code == 1 and counted in out, out[-4000:]
+    assert "did not run because a library is not installed" in out, out[-4000:]
+    assert f"{named}: a_library_nobody_installed_for_lantern" in out, out[-4000:]
+    # a developer's own run, without the switch, stays as it was: skipped, named with the reason, not failed
+    code, out = _missing_library_run(tmp_path / "dev", where, complete=False)
+    assert code in (0, 5) and counted in out, out[-4000:]          # 5: pytest's "no test was collected"
+    assert "could not import 'a_library_nobody_installed_for_lantern'" in out, out[-4000:]
+    assert "did not run because a library is not installed" not in out, out[-4000:]
+
+
+def test_a_test_skipped_for_another_reason_is_no_missing_library(tmp_path):
+    """The safe twin: a test that is skipped because it needs another kind of computer stays skipped, also in CI."""
+    code, out = _missing_library_run(tmp_path, "", complete=True)
+    assert code == 0 and "2 passed, 1 skipped" in out, out[-4000:]
+    assert "this needs a kind of computer that is not here" in out, out[-4000:]
+    assert "did not run because a library is not installed" not in out, out[-4000:]
+
+
+def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_named():
+    """CI and the release build: every pytest line carries -rs (the log names each skipped test with its reason) and
+    runs with LANTERN_TESTS_COMPLETE=required; the audit script shows its skipped tests also when the run passed; and
+    the libraries the tests need are what CI installs (`dev`), PyJWT with cryptography among them: the 14 Connect
+    GitHub tests need both."""
+    import tomllib
+    runs = []
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        text = path.read_text(encoding="utf-8")
+        mine = [line.strip() for line in text.splitlines()
+                if re.search(r"\bpython -m pytest\b", line) and not line.lstrip().startswith("#")]
+        assert all(" -rs" in line for line in mine), (path.name, mine)
+        assert not mine or "LANTERN_TESTS_COMPLETE: required" in text, path.name
+        runs += [(path.name, line) for line in mine]
+    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 3, runs
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "LANTERN_TESTS_COMPLETE: required" in ci[: ci.index("\njobs:")]        # for every job of the workflow
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    step = release[release.index("Tests against the built wheel"):]
+    assert "LANTERN_TESTS_COMPLETE: required" in step[: step.index("python -m pytest")]
+    audit = (ROOT / "tools" / "audit.sh").read_text(encoding="utf-8")
+    assert 'check "pytest" "$PY" -m pytest -q -rs\nsaid \'^SKIPPED \\[\'' in audit
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert any(d.lower().startswith("pyjwt[crypto]") for d in project["optional-dependencies"]["dev"])
+
+
 def test_this_run_is_isolated():
     from lantern import providers
     assert os.environ.get("LANTERN_OFFLINE") == "1" and os.environ.get("LANTERN_NO_REAL_PROVIDERS") == "1"

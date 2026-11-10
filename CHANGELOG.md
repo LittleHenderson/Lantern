@@ -5,6 +5,16 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- CI runs every test, and its log names each test it skips (2026-11-10). CI's test jobs installed neither PyJWT nor
+  cryptography, so `tests/test_cloud_github.py` was skipped while it was imported: its 14 tests (a private
+  repository is opened only for a person GitHub says may read it) counted as one skipped test, `pytest -q` named no
+  skipped test, and the runs were green. Found while counting the skipped tests of the entry below: 1,052 tests on a
+  developer's computer, 1,039 in CI. Now the `dev` extra holds what the tests need (`PyJWT[crypto]`, pinned in
+  `requirements-lock.txt` with what it brings: cryptography, cffi, pycparser), and CI and the release build run
+  pytest with `-rs` and with `LANTERN_TESTS_COMPLETE=required`: there a test file or a test that is skipped because a
+  library is not installed fails the run and is named with the library. The one-command audit prints its skipped
+  tests also when the run passed. A developer's own run without those libraries still skips and says so, and a test
+  skipped for another reason (another operating system, a program that is not installed) is not touched.
 - Tests and benchmarks can no longer reach a real AI provider or the internet, and never see the keys of the person
   running them (2026-11-09). Before, a full test run made 11 connections to the outside (6 by a `pip-audit` program one
   test started, 5 to the OSV vulnerability database from the set-up of five test files), a test could read 13 of 19

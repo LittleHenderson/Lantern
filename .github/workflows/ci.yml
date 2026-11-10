@@ -2,6 +2,12 @@ name: ci
 on: [push, pull_request]
 permissions:
   contents: read
+env:
+  # Every test must run here. A test file or a test that is skipped because a library is not installed fails the run
+  # and is named (tests/conftest.py). Until 2026-11-10 the test jobs had neither PyJWT nor cryptography, so the 14
+  # Connect GitHub tests were skipped as one, in runs that were green. Each pytest line carries -rs, so the log names
+  # every skipped test with its reason.
+  LANTERN_TESTS_COMPLETE: required
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -29,7 +35,7 @@ jobs:
         run: |
           set -o pipefail   # the run is piped into tee: without this the step would pass whatever the tests did
           sudo -E env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" python tools/netless.py --watch "$RUNNER_TEMP/network.json" -- \
-            python -m pytest -q --cov=lantern --cov=gateway --cov=cloud --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=85 | tee pytest.log
+            python -m pytest -q -rs --cov=lantern --cov=gateway --cov=cloud --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=85 | tee pytest.log
       - name: Coverage and the network record, for the summary
         if: always()
         run: |
@@ -127,7 +133,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[scan,dev]"
-      - run: python -m pytest -q
+      - run: python -m pytest -q -rs
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
         shell: bash
