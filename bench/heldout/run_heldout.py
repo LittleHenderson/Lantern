@@ -4,6 +4,10 @@ safe twins, link the code, and refuse a green release to a vulnerable app?
     python bench/heldout/run_heldout.py WORKDIR [--offline] [--only NAME] [--out results.json] [--label LABEL]
     python bench/heldout/run_heldout.py WORKDIR --score-only     # score results already under WORKDIR/out
 
+The run is isolated (tools/netguard): a temporary home folder, no keys or saved sign-ins, real model providers off, and
+the network refused except for where the public apps are fetched from and, without --offline, the dependency audit's
+addresses. What else was tried is listed at the end and fails the run. --score-only reaches nothing.
+
 The case list (cases.json), the local apps (apps/*.tmpl) and the rules are frozen; `definition_sha256` in every
 result says which definition produced it. Two results compare only when that hash is the same.
 
@@ -29,11 +33,16 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools" / "netguard"))
+import lantern_netguard as netguard  # noqa: E402  (tools/netguard: every benchmark starts isolated)
+
+from lantern.depaudit import AUDIT_HOSTS  # noqa: E402
 
 RANKS = ["critical", "high", "medium", "low"]
 MEDIUM_UP = {"critical", "high", "medium"}
@@ -86,7 +95,8 @@ def fetch(app: dict, dest: Path) -> Path:
 def analyze(src: Path, out: Path, offline: bool, budget: int = 900) -> dict:
     if out.exists():
         shutil.rmtree(out)
-    cmd = [sys.executable, "-I", "-m", "lantern.cli", "analyze", str(src), "--out", str(out)]
+    # isolated mode (-I), started through the guard so the analysis has it too: -I alone would leave it out
+    cmd = netguard.python_isolated("-m", "lantern.cli", "analyze", str(src), "--out", str(out))
     if offline:
         cmd.append("--offline")
     env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY") and k not in ("LANTERN_TOKEN", "LANTERN_MODEL")}
@@ -326,6 +336,15 @@ def markdown(result: dict) -> str:
     return "\n".join(L)
 
 
+def hosts(apps: list[dict], offline: bool, score_only: bool) -> list[str]:
+    """Everything this run may reach: where its public apps are fetched from and, unless --offline, the dependency
+    audit's addresses. Scoring results that are already there reaches nothing."""
+    if score_only:
+        return []
+    fetched = {urllib.parse.urlsplit(app["source"]).hostname for app in apps if "path" not in app}
+    return sorted({*fetched, *(() if offline else AUDIT_HOSTS)} - {None})
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("workdir")
@@ -340,13 +359,13 @@ def main(argv=None) -> int:
     (work / "src").mkdir(parents=True, exist_ok=True)
     (work / "out").mkdir(parents=True, exist_ok=True)
     cases = json.loads((HERE / "cases.json").read_text(encoding="utf-8"))
+    chosen = [app for app in cases["apps"] + cases["local"] if not a.only or app["name"] in a.only]
+    guard = netguard.begin(allow=hosts(chosen, a.offline, a.score_only))
     labels_p = HERE / "labels.json"
     labels = json.loads(labels_p.read_text(encoding="utf-8")) if labels_p.exists() else {}
     engine = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or "?"
     results = []
-    for app in cases["apps"] + cases["local"]:
-        if a.only and app["name"] not in a.only:
-            continue
+    for app in chosen:
         src, out = work / "src" / app["name"], work / "out" / app["name"]
         run_info = None
         if not a.score_only:
@@ -365,7 +384,7 @@ def main(argv=None) -> int:
     out_p.with_suffix(".md").write_text(markdown(result), encoding="utf-8")
     print(markdown(result))
     print(f"\nwrote {out_p} and {out_p.with_suffix('.md')}")
-    return 0
+    return netguard.end(guard)                    # anything but the declared hosts was refused, and fails the run
 
 
 if __name__ == "__main__":

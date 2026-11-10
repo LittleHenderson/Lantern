@@ -17,10 +17,12 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   it started, or in a set-up step; so does the run when something tries outside any test. On Linux, CI also runs the
   tests in a network that holds nothing but the computer's own address and has the operating system write down every
   address any program tries (`tools/netless.py --watch`); the measured count after the change is 0. The benchmarks
-  (`bench/run_bench.py`, `bench/mobile/run_mobile.py`, `bench/fuzz.py`, `tools/large_apps.py`, `tools/mutation.py`,
-  `tools/load_test.py`) and `tools/audit.sh` start the same way and may only reach the hosts they name (the
-  repositories they clone, the three addresses the dependency audit asks); the load test refuses any website that is
-  not on this computer. The two scripts that measure a real model (`bench/explain_eval.py`, `bench/ask_eval.py`,
+  (`bench/run_bench.py`, `bench/mobile/run_mobile.py`, `bench/heldout/run_heldout.py`, `bench/fuzz.py`,
+  `tools/large_apps.py`, `tools/mutation.py`, `tools/load_test.py`) and `tools/audit.sh` start the same way and may
+  only reach the hosts they name (the repositories they clone, the three addresses the dependency audit asks); the
+  load test refuses any website that is not on this computer. The held-out benchmark starts each analysis as a Python
+  program in isolated mode (`-I`), which reads nothing from the variable the guard uses to get into a program, so the
+  plain way left the guard out of it; it now starts through the guard (`python_isolated`). The two scripts that measure a real model (`bench/explain_eval.py`, `bench/ask_eval.py`,
   the `model-eval` workflow) are now a separate live suite that starts only with `--live --model PROVIDER/MODEL
   --destination HOST --max-requests N` (and `--send-this-code` for code that is not a Lantern sample): there is no
   default model and no falling back to whatever key the shell holds, the model must be served from the approved host,

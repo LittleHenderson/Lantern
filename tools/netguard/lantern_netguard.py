@@ -7,14 +7,17 @@ Layers, each for what the others cannot see:
      uses `_socket` directly.
   2. the same hook in every Python child: `activate` puts this folder first on PYTHONPATH, and `sitecustomize.py`
      beside this file installs the hook when the child starts. Every process appends its attempts to one log file.
+     A child in isolated mode (`python -I`) reads nothing from PYTHONPATH: a benchmark starts one through
+     `python_isolated`, which switches the hook on first.
   3. a proxy on 127.0.0.1 for programs that are not Python (git, npm, curl): every proxy variable points at it. It
      writes down what was asked for and answers 403; a host a benchmark declared is passed through instead.
   4. a forwarding proxy this computer was already configured with (a company proxy, a container's own) is a way out
      even when it listens on 127.0.0.1: its address is refused like any outside address, and the proxy variables
      that named it are pointed at 3.
 
-What these cannot stop (a program that ignores the proxy variables, a child started with a clean environment) is
-stopped on Linux by running the whole command without a network: `tools/netless.py`.
+What these cannot stop (a program that ignores the proxy variables, a child started with a clean environment or in
+isolated mode by code that does not use `python_isolated`, such as the test sandbox's own jail) is stopped on Linux by
+running the whole command without a network: `tools/netless.py`.
 
 `scrub` and `temp_home` take the developer's keys, tokens and saved sign-ins out of the run; `isolate` does all of it
 in the right order.
@@ -674,6 +677,32 @@ def end(guard, out=None) -> int:
     return 1 if refused else 0
 
 
+def python_isolated(*arguments: str) -> list:
+    """The command line that starts a Python program in isolated mode (`-I`: nothing from PYTHONPATH, the user's own
+    packages or the current folder) inside a guarded run, with the guard in it. `-I` also keeps the start-up file
+    beside this one from being loaded, so the program is started through this file, which switches the guard on first
+    and then runs `-m MODULE ARGUMENT...` or `SCRIPT ARGUMENT...` as the program."""
+    return [sys.executable, "-I", os.path.join(HERE, "lantern_netguard.py"), "--inside", *arguments]
+
+
+def _inside(argv: list) -> int:
+    """`--inside -m MODULE ARGUMENT...` or `--inside SCRIPT ARGUMENT...`: what `python_isolated` starts."""
+    if not os.environ.get(LOG_ENV) or not argv or (argv[0] == "-m" and len(argv) < 2):
+        sys.stderr.write(f"{MARK}: --inside starts a program inside a guarded run: no guarded run is around this one, "
+                         f"or no program was named, so nothing was started\n")
+        return UNGUARDED
+    import runpy
+    sys.modules.setdefault("lantern_netguard", sys.modules[__name__])   # one guard, whatever name the program asks by
+    install()
+    if argv[0] == "-m":
+        sys.argv = argv[1:]
+        runpy.run_module(argv[1], run_name="__main__", alter_sys=True)
+    else:
+        sys.argv = argv
+        runpy.run_path(argv[0], run_name="__main__")
+    return 0
+
+
 def has_route_out() -> bool:
     """Whether this process has any route to the outside (false inside `tools/netless.py`). Nothing is sent: a
     datagram socket is only pointed at a documentation address, which fails at once when there is no route."""
@@ -698,6 +727,9 @@ USAGE = """usage:
       providers switched off, and with the network refused except for the hosts named with --allow. --offline also
       sets LANTERN_OFFLINE=1. Every refused attempt is listed at the end; the result is COMMAND's own, or 4 when
       COMMAND succeeded and something was refused.
+  python -I lantern_netguard.py --inside -m MODULE [ARGUMENT...]      (or: --inside SCRIPT [ARGUMENT...])
+      What python_isolated() starts: a Python program in isolated mode inside a guarded run. -I ignores PYTHONPATH,
+      so the guard is switched on here first, from what the run's environment says, and then the program runs.
 """
 
 
@@ -719,6 +751,8 @@ def _run(allow: list, offline: bool, command: list) -> int:
 
 
 def main(argv: list) -> int:
+    if argv[:1] == ["--inside"]:
+        return _inside(argv[1:])
     allow, offline, i = [], False, 0
     while i < len(argv) and argv[i] != "--":
         if argv[i] == "--allow" and i + 1 < len(argv):

@@ -414,6 +414,52 @@ def test_without_the_guards_variable_the_start_up_file_does_nothing(tmp_path):
     assert r.stdout.strip() == "False", r.stdout + r.stderr
 
 
+# ----------------------------------------------------------------------------- a Python program in isolated mode
+REPORTS = ("import json, socket, sys\n"
+           "guard = sys.modules.get('lantern_netguard')\n"
+           "tried = None\n"
+           "if 'try' in sys.argv:\n"
+           "    try:\n        socket.create_connection(%r, timeout=1); tried = 'connected'\n"
+           "    except OSError as e:\n        tried = str(e)\n"
+           "print(json.dumps({'guarded': bool(guard and guard.installed()), 'isolated': sys.flags.isolated, 'tried': tried,\n"
+           "                  'argv': sys.argv[1:], 'name': __name__}))\n"
+           "if 'seven' in sys.argv:\n    raise SystemExit(7)\n" % (ng.PROBE,))
+
+
+def test_a_python_program_in_isolated_mode_is_guarded_when_started_through_the_guard(tmp_path):
+    """`python -I` reads nothing from PYTHONPATH, so the start-up file beside the guard is never loaded: started the
+    plain way, such a program has no guard in it (only the proxy and, on Linux, the netless runner stand in its way).
+    Started through the guard (`python_isolated`, as the held-out benchmark starts its analyses) it is refused and
+    written down like any other program."""
+    script = tmp_path / "reports.py"
+    script.write_text(REPORTS, encoding="utf-8")
+    log = tmp_path / "log.jsonl"
+    env = _bare_env(PYTHONPATH=str(NETGUARD), **{ng.LOG_ENV: str(log)})
+    run = lambda cmd, e=env: subprocess.run(cmd, env=e, capture_output=True, text=True, encoding="utf-8", timeout=60)  # noqa: E731
+    # the dangerous shape: the plain way, the guard is not in the program (it tries nothing here)
+    plain = run([sys.executable, "-I", str(script)])
+    assert json.loads(plain.stdout) == {"guarded": False, "isolated": 1, "tried": None, "argv": [], "name": "__main__"}
+    # the same program, same mode, through the guard
+    cmd = ng.python_isolated(str(script), "try", "b")
+    assert cmd[:2] == [sys.executable, "-I"] and cmd[-3:] == [str(script), "try", "b"]
+    through = run(cmd)
+    seen = json.loads(through.stdout)
+    assert through.returncode == 0 and ng.MARK in seen.pop("tried"), through.stdout + through.stderr
+    assert seen == {"guarded": True, "isolated": 1, "argv": ["try", "b"], "name": "__main__"}
+    attempts = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert [(a["kind"], a["host"], a["port"]) for a in attempts] == [("connect", *ng.PROBE)]
+    # the program's own result is passed on, and a program that tries nothing leaves nothing in the record
+    assert run(ng.python_isolated(str(script), "seven")).returncode == 7
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 1
+    # a module, the way the held-out benchmark starts `lantern.cli`
+    module = run(ng.python_isolated("-m", "json.tool", "--help"))
+    assert module.returncode == 0 and "usage" in module.stdout.lower(), module.stdout + module.stderr
+    # with no guarded run around it, nothing is started
+    for wrong, e in ((ng.python_isolated(str(script)), _bare_env()), (ng.python_isolated(), env), (ng.python_isolated("-m"), env)):
+        r = run(wrong, e)
+        assert r.returncode == 97 and r.stdout == "" and ng.MARK in r.stderr, wrong
+
+
 # ----------------------------------------------------------------------------- from a shell
 RUNNER = [sys.executable, str(NETGUARD / "lantern_netguard.py")]
 SEES = ("import json, os, socket\n"

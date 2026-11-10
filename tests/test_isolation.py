@@ -229,8 +229,8 @@ def test_only_these_tests_may_try_the_network(request):
 
 
 # ----------------------------------------------------------------------------- benchmarks and the audit script
-BENCHMARKS = ("bench/run_bench.py", "bench/mobile/run_mobile.py", "bench/fuzz.py", "tools/large_apps.py",
-              "tools/mutation.py", "tools/load_test.py")
+BENCHMARKS = ("bench/run_bench.py", "bench/mobile/run_mobile.py", "bench/heldout/run_heldout.py", "bench/fuzz.py",
+              "tools/large_apps.py", "tools/mutation.py", "tools/load_test.py")
 LIVE_SUITE = ("bench/explain_eval.py", "bench/ask_eval.py")          # they go through bench/live.py's gate instead
 
 
@@ -262,6 +262,25 @@ def test_no_benchmark_is_left_out():
     started = {p.relative_to(ROOT).as_posix() for p in (ROOT / "bench").rglob("*.py")
                if "__main__" in p.read_text(encoding="utf-8")}
     assert started == {s for s in (*BENCHMARKS, *LIVE_SUITE) if s.startswith("bench/")}, started
+
+
+def _bare_isolated(text: str) -> list[str]:
+    """The lines that start Python in isolated mode (`-I`) the plain way, which leaves the guard out of that program."""
+    return [line.strip() for line in text.splitlines() if re.search(r"""sys\.executable,\s*["']-I["']""", line)]
+
+
+def test_a_benchmark_starts_python_in_isolated_mode_only_through_the_guard():
+    """`python -I` reads nothing from PYTHONPATH, and PYTHONPATH is how the guard gets into a Python program a
+    benchmark starts. `netguard.python_isolated` starts the same thing with the guard switched on first
+    (tests/test_netguard.py runs both)."""
+    assert _bare_isolated('cmd = [sys.executable, "-I", "-m", "lantern.cli", "analyze", str(src)]') != []
+    assert _bare_isolated('cmd = netguard.python_isolated("-m", "lantern.cli", "analyze", str(src))') == []
+    assert _bare_isolated('cmd = [sys.executable, "-m", "lantern.cli", "analyze", str(src)]') == []
+    for folder in ("bench", "tools"):
+        for p in sorted((ROOT / folder).rglob("*.py")):
+            if p.parent.name != "netguard":                       # the guard itself is what builds that command line
+                assert _bare_isolated(p.read_text(encoding="utf-8")) == [], p.relative_to(ROOT).as_posix()
+    assert "netguard.python_isolated(" in (ROOT / "bench" / "heldout" / "run_heldout.py").read_text(encoding="utf-8")
 
 
 def test_the_load_test_is_never_pointed_at_another_computer(network_attempts, tmp_path, capsys):
