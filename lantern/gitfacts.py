@@ -29,8 +29,11 @@ an index or an objects folder that is a link, a submodule whose own git folder i
 index points out of the folder, submodules nested more than five deep. A filter that only the repository's own
 settings define (`git lfs install --local`) is not run, so a file it would have cleaned can count as changed once
 its time stamp differs from the index. A submodule the repository's settings tell git to ignore is looked into all
-the same. The index (a split or sparse one too), the objects (and the other object folders the repository names)
-and `.gitattributes` are still read by git, as they are for any repository a person clones. Standard library only.
+the same. Whose git folder it is, is not looked at: git refuses a repository that another user of the computer owns
+(unless the person listed it, `safe.directory`), because it would obey that user's settings; Lantern obeys none of
+them and reads it, also when it sits in a folder above the one asked about. The index (a split or sparse one too),
+the objects (and the other object folders the repository names) and `.gitattributes` are still read by git, as
+they are for any repository a person clones. Standard library only.
 """
 from __future__ import annotations
 

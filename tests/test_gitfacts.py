@@ -337,7 +337,8 @@ def test_a_submodule_entry_that_points_out_of_the_folder_is_not_looked_into(name
     git("init", "-q", "-b", "main", cwd=d)
     write(d / "zz.py", "x = 1\n")
     git("add", "-A", cwd=d)
-    target = str(other) if name == "an absolute name" else os.path.relpath(other, d).replace(os.sep, "/")
+    # both written with "/", as git writes names: git prints a name that holds a "\" in quotes (a Windows path)
+    target = other.as_posix() if name == "an absolute name" else os.path.relpath(other, d).replace(os.sep, "/")
     stand_in = "m" * len(target.encode())                           # a name of the same length, which git accepts
     git("update-index", "--add", "--cacheinfo", f"160000,{git('rev-parse', 'HEAD', cwd=other)},{stand_in}", cwd=d)
     git("commit", "-q", "-m", "a submodule entry", cwd=d)

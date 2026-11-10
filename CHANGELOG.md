@@ -39,7 +39,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   What changes for a repository of your own: nothing, unless its `.git` is a link or was made with
   `git init --separate-git-dir` (no commit is reported, with the reason), it keeps its refs in the reftable form
   (the same), or it relies on a filter or a submodule-ignore rule that only its own settings define (a file can
-  then count as changed). The person's own git settings, in the home folder or the computer's, still apply.
+  then count as changed). In the other direction: a repository that belongs to another user of the computer,
+  which git itself refuses unless the person listed it (`safe.directory`), is now read, also from a folder above
+  the one analyzed (before, no commit was reported for it). Nothing in it is obeyed; a rule of Lantern's own for
+  whose git folder may be read is not part of this change. The person's own git settings, in the home folder or
+  the computer's, still apply.
   Tests: `tests/test_gitfacts.py`, 44 tests kept apart by kind: planted settings, pointers and variables that
   must not be obeyed (24); what cannot be told, which must be said (3); repositories as people have them, which
   must get the answers git itself gives (13: plain, packed refs, detached, linked worktree, shallow, sha256,
@@ -48,7 +52,6 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   and 2 need Windows; with the fix 42 pass and 2 need Windows. `tests/test_cloud_runs.py` has
   2 more (an upload with planted git settings; the service starts no program to read a commit): both failed
   before. One existing test of `tests/test_remote.py` now makes git fail for real instead of through a stand-in.
-  Until this change is deployed, the live cloud service runs the code before it.
 
 - CI runs every test, and its log names each test it skips (2026-11-10). CI's test jobs installed neither PyJWT nor
   cryptography, so `tests/test_cloud_github.py` was skipped while it was imported: its 14 tests (a private
