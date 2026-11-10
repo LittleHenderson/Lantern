@@ -5,6 +5,42 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Security: a git folder that is not yours no longer puts its commit on your report (2026-11-10; stage 7 of the
+  2026-11-09 directive, part 3). Since the git-settings fix of the same day (further down) nothing in a git folder
+  is obeyed, but a git folder was still read whoever it belonged to, also when it was found in a folder above the
+  one analyzed. On a shared computer anybody can make one there: `/tmp/.git`, `C:\.git`, a `.git` in a shared
+  projects folder. Every project beneath it that has no git folder of its own was then reported with that user's
+  commit, branch and address, and with "no uncommitted changes": an Evidence Report that seemed to pin the code to
+  a commit somebody else chose. git itself refuses such a repository.
+  Measured on the code before (as root, git 2.43.0), with a real other owner: a project folder inside a repository
+  whose `.git` belonged to another user was reported with that repository's commit, its branch, its `origin`
+  address and no uncommitted changes, where git answers `fatal: detected dubious ownership`. A second fault was
+  found on the way, in the cloud service: where the folder the service works in lies inside a repository (a
+  developer's checkout, a demo started from one), an upload with no git folder of its own got that repository's
+  commit in the run's record and on its evidence page.
+  Now Lantern keeps git's own rule for everything of a repository that lies outside the folder you asked about: a
+  `.git` in a folder above and that folder, the place a `.git` file names, the folder a linked worktree shares.
+  Each must be yours (for root also the user `sudo` came from; on Windows also the Administrators' when you are one
+  of them, `lantern/winowner.py`), or you must have named the repository in git's `safe.directory` list. git itself
+  is asked for that list, in a git folder Lantern makes, so your own settings answer and never the project's. An
+  owner the system does not tell (an error, a network name on Windows, a disk that keeps none) counts as nobody's.
+  Otherwise the report says "not pinned: no git commit", and why. The folder you name yourself is read whoever owns
+  it, as before: you named it, and nothing in it is obeyed. The cloud service reads a run's commit only from a git
+  folder inside the run's own code, without starting a program, and tells every step to look no higher.
+  What changes for a repository of your own: nothing. What can change: a repository in a folder above the one you
+  analyze that is not yours (a shared checkout, one made by another account or through `sudo`, a folder mounted
+  into a container under another user) gives no commit until you name it
+  (`git config --global --add safe.directory <its folder>`), which is what git asks for there too. In one place
+  Lantern is stricter than git: on Windows git takes your home folder for yours even when the system owns it;
+  Lantern does not, so a repository kept in the home folder itself gives no commit to a folder beneath it for a
+  person who is not an administrator, until it is named the same way.
+  Tests: 22 new ones in `tests/test_gitfacts.py` (66 in all) and 1 in `tests/test_cloud_runs.py`; one existing test
+  in each file was extended. On the code before, 20 of the 22 fail (10 show the older answer, 10 try functions that
+  code does not have) and 2 need Windows; the new cloud test and both extended tests fail as well. With the change,
+  here: 62 pass and 4 need Windows (2 a junction, 2 Windows itself), and all 34 of `tests/test_cloud_runs.py` pass.
+  Not covered by CI, and said in `docs/audit/CLAIMS.md` (A4f): the test with real other owners needs root; on
+  Windows the calls are tried against Windows itself by two tests only, and the path for an administrator who is
+  not elevated against a stand-in only.
 - The cloud service deletes only what it made, and a delete that fails is written down, said and tried again
   (2026-11-10; stage 7 of the 2026-11-09 directive, part 2). Measured first, on the code as it was, in nine
   situations, as root and as an ordinary user, on the Python the live image runs (3.12); both users gave the same
@@ -177,7 +213,8 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   then count as changed). In the other direction: a repository that belongs to another user of the computer,
   which git itself refuses unless the person listed it (`safe.directory`), is now read, also from a folder above
   the one analyzed (before, no commit was reported for it). Nothing in it is obeyed; a rule of Lantern's own for
-  whose git folder may be read is not part of this change. The person's own git settings, in the home folder or
+  whose git folder may be read is not part of this change (it followed the same day: the first entry of this
+  section). The person's own git settings, in the home folder or
   the computer's, still apply.
   Tests: `tests/test_gitfacts.py`, 44 tests kept apart by kind: planted settings, pointers and variables that
   must not be obeyed (24); what cannot be told, which must be said (3); repositories as people have them, which

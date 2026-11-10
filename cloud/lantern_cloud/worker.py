@@ -568,6 +568,10 @@ class Worker:
         # to another user, would answer. No step starts git in the project's folder any more (`lantern.gitfacts`).
         # Where the step runs as another user than the folder's owner (the service as root), git's own refusal
         # there is a second wall should some code do it again; where both are one user, it is not.
+        # A step looks for the project's git folder in the folder it was given and no higher (git's own variable,
+        # which `lantern.gitfacts` keeps): the two places a run's code is put, a clone's and an upload's. Until
+        # that day a `.git` above the service's work folder gave its commit to an upload that had none.
+        env["GIT_CEILING_DIRECTORIES"] = os.pathsep.join([str(root / "src"), str(tmp / "src")])
         if audits:
             env["LANTERN_AUDITS_FROM"] = str(audits)
         if net:
@@ -759,10 +763,12 @@ def _scrub(text: str, roots: list[str]) -> str:
 
 
 def _commit(repo: Path) -> str | None:
-    """The commit the code is at, read from the folder's `.git` by hand (`gitfacts.head_commit`). No program is
-    started: this runs in the service itself, outside the restricted step, and an uploaded folder brings its own
-    `.git`, whose settings git would obey."""
-    return gitfacts.head_commit(repo)
+    """The commit the code is at, read by hand (`gitfacts.head_commit`) from a git folder that lies in the run's
+    code itself, and from nowhere else: not from a folder above it and not from a place its `.git` names. What is
+    outside a run's code is the service's, not the project's. No program is started, whatever the folder holds:
+    this runs in the service itself, outside the restricted step, and an uploaded folder brings its own `.git`,
+    whose settings git would obey."""
+    return gitfacts.head_commit(repo, alone=True)
 
 
 def _summary(out: Path) -> dict:

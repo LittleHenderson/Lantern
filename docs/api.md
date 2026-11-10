@@ -350,8 +350,9 @@ the scenario of the function's finding, else a one-line sketch from the map.
 
 `header` (`repo`, `name`, `commit`, `branch`, `dirty`, `remote`, `committed_at`, `generated_at`, `mode`, `privacy`;
 `note?`: a sentence, present when there is no commit (`not a git repository`, `git not installed`, or why the folder's
-git folder was not read) or when git could not compare the files with the commit, in which case `dirty` is `true`:
-`lantern/gitfacts.py`),
+git folder was not read: it is a link, it is kept in a place that does not name the folder back, or it lies outside
+the folder and is not the current user's) or when git could not compare the files with the commit, in which case
+`dirty` is `true`: `lantern/gitfacts.py`),
 `scorecard` (`readiness`, `now` counts, `before` counts, `baseline_date`, `baseline_commit`), `architecture`,
 `security` (`open`, `accepted`, `fixed`, `changed`, `in_tests`, `protections`, `incomplete`: `[{tool, state, status,
 why, role, version}]`, the scanners that did not finish or did not cover everything; while it is not empty the memo, a

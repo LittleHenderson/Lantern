@@ -484,12 +484,52 @@ def test_an_upload_that_brings_git_settings_has_none_of_them_run(tmp_path, monke
 def test_the_service_itself_starts_no_program_to_read_a_commit(tmp_path, monkeypatch):
     """`_commit` runs in the service, outside the restricted step, on a folder somebody uploaded."""
     app, commit = _app_with_git_settings(tmp_path, PLANTED_IN_GIT)
+    kept_elsewhere = tmp_path / "plain"         # a folder whose git folder is in another place of the computer
+    kept_elsewhere.mkdir()
+    (kept_elsewhere / "a.txt").write_text("a\n", encoding="utf-8")
+    git("init", "-q", "-b", "main", cwd=kept_elsewhere)
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", "-A", cwd=kept_elsewhere)
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "x", cwd=kept_elsewhere)
+    linked = tmp_path / "linked"
+    git("worktree", "add", "-q", str(linked), "-b", "side", cwd=kept_elsewhere)
 
     def none(*a, **k):
         raise AssertionError("a program was started")
     monkeypatch.setattr(subprocess, "Popen", none)
     assert worker_mod._commit(app) == commit
     assert worker_mod._commit(tmp_path / "nothing-here") is None
+    (app / "inside").mkdir()        # only the folder's own `.git` says where a run's code is at, never one above it
+    assert worker_mod._commit(app / "inside") is None
+    assert worker_mod._commit(kept_elsewhere) is not None       # the safe twin: all of it is in the folder
+    assert worker_mod._commit(linked) is None                   # ... and nothing is read from outside a run's code
+
+
+def test_a_run_takes_no_commit_from_a_git_folder_above_its_code(tmp_path):
+    """The folder the service works in may lie inside a repository: a developer's checkout, a demo started from one,
+    a `.git` somebody left in the temp folder of a shared computer. Until 2026-11-10 an upload with no git folder of
+    its own was then given that repository's commit, in the run's record and on its evidence page, where it read
+    as "this code is commit X, with no uncommitted changes"."""
+    cloud, gw, s = make(tmp_path)
+    above = Path(s.work_dir)
+    git("init", "-q", "-b", "main", cwd=above)
+    (above / "readme.txt").write_text("not the uploaded app\n", encoding="utf-8")
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", "readme.txt", cwd=above)
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "the service's own", cwd=above)
+    theirs = subprocess.run(["git", "rev-parse", "HEAD"], cwd=above, capture_output=True, text=True, check=True,
+                            encoding="utf-8").stdout.strip()
+    app = tmp_path / "plain-app"
+    app.mkdir()
+    (app / "app.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    tok = gw.sign_in("github:1", "github:octo")
+    r = cloud.post("/v1/uploads?name=app", content=_zip_of(app, top="app"), headers=bearer(tok))
+    assert r.status_code == 202, r.text
+    done = wait(cloud, tok, r.json()["id"])
+    assert done["status"] == "done", done
+    res = Path(s.results_dir) / done["id"]
+    head = json.loads((res / "evidence.json").read_text(encoding="utf-8"))["header"]
+    assert done["commit"] is None, "the run was given the commit of a repository above its code"
+    assert (head["commit"], head.get("note")) == (None, "not a git repository"), head
+    assert holds(res, theirs) == [] and theirs[:12] not in done["log_tail"]
 
 
 def test_bad_uploads_are_refused(tmp_path):
