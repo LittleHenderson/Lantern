@@ -221,6 +221,38 @@ def test_a_path_alias_that_finds_no_file_names_a_project_file_not_a_library(tmp_
     assert any(e.dst == "ext:generated/api.load" and e.via == "import" for e in g.edges)
 
 
+def test_an_import_found_through_baseurl_is_the_projects_own_file(tmp_path):
+    """`"baseUrl": "src"` makes `import { label } from 'components/Button'` name src/components/Button.ts, as the
+    TypeScript compiler reads it: the project's own function, not a package's. Written `paths` are tried first.
+    The twin: a name that finds no file under baseUrl is a package, as before."""
+    g = _g(tmp_path, {
+        "tsconfig.json": '{"compilerOptions": {"baseUrl": "src", "paths": {"components/Old": ["./legacy/Old"]}}}',
+        "src/components/Button.ts": "export function label (s: string) { return s }\n",
+        "src/components/Old.ts": "export function old () { return 1 }\n",
+        "src/legacy/Old.ts": "export function old () { return 2 }\n",
+        "src/page.ts": ("import { label } from 'components/Button'\n"
+                        "import { old } from 'components/Old'\n"
+                        "import Joi from 'joi'\n"
+                        "import { helper } from 'components/Missing'\n\n"
+                        "export function page () {\n  Joi.string()\n  helper()\n  old()\n  return label(' a ')\n}\n"),
+    })
+    s = _one(g, "label")
+    assert (s["outcome"], s["to"]) == ("resolved", ["js:src/components/Button::label"]), s
+    assert _edge(g, "js:src/page::page", "js:src/components/Button::label") is not None
+    assert _one(g, "old")["to"] == ["js:src/legacy/Old::old"]      # the written alias wins over baseUrl
+    assert _one(g, "Joi.string")["to"] == ["ext:joi.string"]
+    assert _one(g, "helper")["to"] == ["ext:components/Missing.helper"]   # no file there: a package, as before
+
+
+def test_without_baseurl_a_bare_name_is_a_package(tmp_path):
+    g = _g(tmp_path, {
+        "tsconfig.json": '{"compilerOptions": {"strict": true}}',
+        "components/Button.ts": "export function label (s: string) { return s }\n",
+        "page.ts": "import { label } from 'components/Button'\nexport function page () { return label(' a ') }\n",
+    })
+    assert _one(g, "label")["to"] == ["ext:components/Button.label"]
+
+
 def test_typescript_parameter_types_are_followed(tmp_path):
     g = _g(tmp_path, {"src/h.ts": (
         "import { Request, Response } from 'express'\n"

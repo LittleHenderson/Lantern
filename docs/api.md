@@ -110,8 +110,11 @@ The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`
 * Node: `id`, `kind` (`module`|`class`|`callable`|`external`), `name`, `qualname`, `file`, `start_line`, `end_line`,
   `parent`, `signature`, `docstring`, `decorators`, `entry` (null or `{"kind": "page"|"route"|"main"|"cli"|"script"|"test",
   "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?, "middleware"?: [node ids]}`
-  (`middleware`: an Express route's own middleware, in order, e.g. `router.delete('/x', requireLogin, h)`; the login
-  check reads it); an HTML page with script inside it is
+  (`middleware`: an Express route's own middleware, in order, e.g. `router.delete('/x', requireLogin, h)`: node ids,
+  or the `ext:` name of a library's function or of one imported from a file that is not in the repo
+  (`ext:./mw/guards.requireLogin`, for which no node exists); the login check reads each one's own name, what
+  follows the last `.` and `/`. An entry is only ever on a function of the repo: a route whose handler is a
+  library's function, or comes from a file that is not there, marks no node); an HTML page with script inside it is
   a `page` entry whose `detail` is the file path, and its functions are `js:<path>.html::<name>` with the page's own
   line numbers), `lane` (the stack strip stop the
   node lives on: `browser`|`frontend`|`server`|`data`, or null for an external that is not a data hop — see
@@ -151,6 +154,13 @@ The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`
   that name on that kind of object (`res.fail = function`, `String.prototype.shout = …`). A route's `middleware`
   list keeps such a function's name; no record calls it a library function. `window.<name>…`, when `<name>` is not
   one of the browser's or Node's own names, is unresolved `global-property`, not a built-in.
+  JavaScript imports: a bare name is looked up through the nearest tsconfig/jsconfig `paths`, then under a written
+  `baseUrl` (`components/Button` → `<baseUrl>/components/Button`), as the compiler does. An import that finds no
+  file names a file of the project, never a library, when it is a relative, `@/`, `~/` or `#` path or a `paths`
+  alias that points at a project folder (`"contentlayer/generated": ["./.contentlayer/generated"]`, generated code
+  that is not committed; not a catch-all `*`, not a target in `node_modules`, and not an alias that covers a
+  package the nearest `package.json` depends on): the record is unresolved `missing-module`, nothing is built on
+  the value, and the map keeps the `ext:` edge older versions drew.
   Route paths include the prefixes of `app.use('/p', router)` (Express; the router may be a variable, a required
   module, or what a factory returns: `require('./routes')()` whose function ends `return router`),
   `include_router(r, prefix=…)` (FastAPI) and `register_blueprint(bp, url_prefix=…)` (Flask, which replaces the
@@ -174,8 +184,8 @@ The call-site inventory (`lantern/calls.py`): every call written in Python or Ja
   `not-in-class`, `unknown-base` (the class has a base class Lantern cannot look into: a library class, a star
   import, a computed base, or a file it cannot find), `this-outside-class`, `repo-variable`, `missing-member`,
   `missing-export`, `missing-module` (the name comes from a project file Lantern did not read: a relative import or
-  require that finds no file; the graph keeps the older `ext:` edge for such a call, the inventory does not call it a
-  library), `not-defined`, `computed`, `dynamic-require`, `function-member`, `library-or-repo` (the value comes from
+  require, or in JavaScript a tsconfig `paths` alias to a project folder, that finds no file; the graph keeps the
+  older `ext:` edge for such a call, the inventory does not call it a library), `not-defined`, `computed`, `dynamic-require`, `function-member`, `library-or-repo` (the value comes from
   a library or the language, but the project has a function of that name it may carry, so Lantern does not say
   which one runs), `global-property` (reached through `window`/`globalThis`/`self`/`global` under a name that is
   not the browser's or Node's own), `not-read` (a call the JavaScript reader skipped: counted so the total stays

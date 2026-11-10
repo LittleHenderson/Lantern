@@ -1321,13 +1321,16 @@ class SpecResolver:
         self._alias_cache: dict[Path, list[tuple[str, list[Path]]]] = {}
 
     def _aliases(self, d: Path) -> list[tuple[str, list[Path]]]:
-        """Path aliases from the nearest tsconfig/jsconfig (and its tsconfig.*.json siblings)."""
+        """Path aliases from the nearest tsconfig/jsconfig (and its tsconfig.*.json siblings). A written `baseUrl`
+        comes last, as the catch-all it is: the compiler looks a bare name up under it (`components/Button` ->
+        `<baseUrl>/components/Button`) after the `paths` and before node_modules."""
         cur = d
         while True:
             if cur in self._alias_cache:
                 return self._alias_cache[cur]
             cands = [cur / n for n in ("tsconfig.json", "jsconfig.json")] + sorted(cur.glob("tsconfig.*.json"))
             found: list[tuple[str, list[Path]]] = []
+            bases: list[tuple[str, list[Path]]] = []
             for c in cands:
                 if not c.exists():
                     continue
@@ -1335,12 +1338,14 @@ class SpecResolver:
                 base = (c.parent / co.get("baseUrl", ".")).resolve()
                 for pat, targets in (co.get("paths") or {}).items():
                     found.append((pat, [(base / t).resolve() for t in targets]))
+                if isinstance(co.get("baseUrl"), str) and ("*", [base / "*"]) not in bases:
+                    bases.append(("*", [base / "*"]))
             if found or (cur / "package.json").exists() or cur == self.repo or cur == cur.parent:
                 if not found and (cur / "package.json").exists():
                     root = cur / "src" if (cur / "src").is_dir() else cur
                     found = [("@/*", [root.resolve() / "*"]), ("~/*", [root.resolve() / "*"])]
-                self._alias_cache[cur] = found
-                return found
+                self._alias_cache[cur] = found + bases
+                return self._alias_cache[cur]
             cur = cur.parent
 
     def _try(self, base: Path) -> str | None:
