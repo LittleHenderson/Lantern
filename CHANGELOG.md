@@ -15,6 +15,19 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   library is not installed fails the run and is named with the library. The one-command audit prints its skipped
   tests also when the run passed. A developer's own run without those libraries still skips and says so, and a test
   skipped for another reason (another operating system, a program that is not installed) is not touched.
+  The first log that named its skipped tests showed four more that CI's test pass does not run, all four tests of
+  the isolation itself (`tests/test_netguard.py`): two need root, one starts the no-network runner (which cannot be
+  started inside itself without root) and one needs a way out for the refusal to show, while CI's tests run as the
+  ordinary user inside the no-network runner. Three of them ran nowhere in CI, the fourth only in the one-command
+  audit of the Python 3.13 job. CI's Linux jobs now run that file a second time, as root and with the
+  computer's ordinary network (the guard refuses and records as everywhere), with
+  `LANTERN_TESTS_COMPLETE=no-skips`: there a test that is skipped, whatever the reason, fails the run and is named.
+  One of the four failed when the session itself was started through sudo (the runner went back to the user who
+  called sudo, who cannot write where root's test keeps its files); the tests no longer hand sudo's variables on
+  (`_bare_env`). And a test file that is skipped while it is imported is now named by every run ("test files skipped
+  whole"): pytest counts such a file as one skipped test whatever it holds and names the line that skipped, which is
+  in another file when the skip came with an import. On Windows that is four files with 53 tests (the cloud worker
+  runs on Linux), two of them named nowhere in the log before; `20 skipped` there means 69 tests that do not run.
 - Tests and benchmarks can no longer reach a real AI provider or the internet, and never see the keys of the person
   running them (2026-11-09). Before, a full test run made 11 connections to the outside (6 by a `pip-audit` program one
   test started, 5 to the OSV vulnerability database from the set-up of five test files), a test could read 13 of 19

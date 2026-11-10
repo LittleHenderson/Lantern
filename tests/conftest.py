@@ -22,6 +22,12 @@ CI also sets LANTERN_TESTS_COMPLETE=required: there every test must run, and a t
 because a library is not installed fails the run. Until 2026-11-10 CI's test jobs installed neither PyJWT nor
 cryptography; tests/test_cloud_github.py was skipped while it was imported, its 14 tests counted as one skipped test,
 and the runs were green. A developer's own run without those libraries still skips, and says so.
+
+LANTERN_TESTS_COMPLETE=no-skips is stricter: there no test may be skipped, whatever the reason. CI's Linux jobs run
+tests/test_netguard.py a second time that way, as root and with the computer's ordinary network: four tests of the
+isolation itself cannot run in the first pass (two need root, one starts the no-network runner, which cannot be
+started inside itself without root, one needs a way out for the refusal to show). Until 2026-11-10 three of them
+ran nowhere in CI, and the fourth only in the one-command audit of the Python 3.13 job.
 """
 import functools
 import os
@@ -54,6 +60,8 @@ _seen_to = 0
 _work: list = []                        # (future, what it is) for work the cloud service was asked for and has not ended
 _WORK_LIMIT = 180.0                     # seconds such work may take to end once the test that asked for it is over
 _unrun: list = []                       # (test file or test, library) skipped because that library is not installed
+_skipped: list = []                     # (test file or test, reason) skipped for any other reason
+_whole: list = []                       # (test file, reason) skipped while it was imported, whatever the reason
 _NOT_INSTALLED = re.compile(r"could not import '([^']+)'")   # pytest.importorskip's own words
 
 
@@ -105,17 +113,37 @@ def pytest_collection_finish(session):
     _keep_work()
 
 
+def _complete() -> str:
+    """LANTERN_TESTS_COMPLETE: `required` (a test skipped for a missing library fails the run) or `no-skips` (a test
+    skipped for any reason does)."""
+    return os.environ.get("LANTERN_TESTS_COMPLETE", "").strip().lower()
+
+
 def _every_test_must_run() -> bool:
-    return os.environ.get("LANTERN_TESTS_COMPLETE", "").strip().lower() == "required"
+    return _complete() in ("required", "no-skips")
+
+
+def _no_test_may_be_skipped() -> bool:
+    return _complete() == "no-skips"
 
 
 def _keep_unrun(report) -> None:
-    """Write down a test file (skipped while it was imported) or a test that was skipped because a library is not
-    installed. Any other reason for skipping (another operating system, a program that is not there) is not kept."""
-    if report.skipped and isinstance(report.longrepr, tuple):
-        missing = _NOT_INSTALLED.search(str(report.longrepr[2]))
+    """Write down a test file (skipped while it was imported) or a test that was skipped: because a library is not
+    installed (`_unrun`), or for any other reason, such as another operating system or a program that is not there
+    (`_skipped`, which fails a run only where no test may be skipped). A test that is expected to fail did run, and is
+    not kept. A file skipped while it was imported is kept in `_whole` as well, whatever the reason: pytest counts it
+    as one skipped test and names the line that skipped, which is in another file when the skip came with an import
+    (on Windows, tests/test_cloud_share.py and tests/test_cloud_view.py are skipped by a line of
+    tests/test_cloud_runs.py), so the run's summary names each such file itself."""
+    if report.skipped and isinstance(report.longrepr, tuple) and not hasattr(report, "wasxfail"):
+        why = str(report.longrepr[2]).removeprefix("Skipped: ")
+        missing = _NOT_INSTALLED.search(why)
         if missing:
             _unrun.append((report.nodeid, missing.group(1)))
+        else:
+            _skipped.append((report.nodeid, why))
+        if "::" not in report.nodeid:
+            _whole.append((report.nodeid, why))
 
 
 def pytest_collectreport(report):
@@ -226,7 +254,9 @@ def pytest_sessionfinish(session, exitstatus):
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
     # Where every test must run (CI), a test that did not run for a missing library fails the run as well; a run in
     # which the only file was skipped that way ends as "no test was collected", which is no pass either.
-    if _unrun and _every_test_must_run() and session.exitstatus in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED):
+    # Where no test may be skipped (CI's second pass over the isolation's own tests), any skipped test does the same.
+    unrun = (_unrun and _every_test_must_run()) or (_skipped and _no_test_may_be_skipped())
+    if unrun and session.exitstatus in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED):
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
@@ -244,6 +274,18 @@ def pytest_terminal_summary(terminalreporter):
             terminalreporter.write_line(f"  {where}{'' if '::' in where else ' (the whole file)'}: {library}")
         terminalreporter.write_line('Install what the tests need (pip install -e ".[scan,dev]"). A library a new test '
                                     "needs belongs in the `dev` list in pyproject.toml.")
+    if _whole:
+        terminalreporter.section("test files skipped whole", sep="=", yellow=True)
+        terminalreporter.write_line("Skipped while they were imported. pytest counts each of these files as 1 skipped "
+                                    "test, whatever it holds:")
+        for where, why in _whole:
+            terminalreporter.write_line(f"  {where}: {why}")
+    if _skipped and _no_test_may_be_skipped():
+        terminalreporter.section("tests that were skipped", sep="=", red=True, bold=True)
+        terminalreporter.write_line("LANTERN_TESTS_COMPLETE=no-skips: no test may be skipped here, whatever the reason, "
+                                    "and these were. The run fails for it:")
+        for where, why in _skipped:
+            terminalreporter.write_line(f"  {where}{'' if '::' in where else ' (the whole file)'}: {why}")
 
 
 def pytest_unconfigure(config):

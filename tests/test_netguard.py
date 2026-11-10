@@ -24,9 +24,16 @@ import netless  # noqa: E402
 GUARD_VARS = (ng.LOG_ENV, ng.ALLOW_ENV, ng.DENY_ENV, "PYTHONPATH", "NO_PROXY", "no_proxy", *ng.PROXY_VARS)
 
 
+FROM_SUDO = ("SUDO_UID", "SUDO_GID", "SUDO_USER", "SUDO_COMMAND")
+
+
 def _bare_env(**extra) -> dict:
-    """This run's environment without its guard: what a program started from an ordinary shell would see."""
-    env = {k: v for k, v in os.environ.items() if k not in GUARD_VARS and k not in ng.proxy_variables()}
+    """This run's environment without its guard: what a program started from an ordinary shell would see. Not what
+    sudo adds either: CI runs this file a second time through sudo, and the no-network runner, started with sudo's
+    variables, goes back to the user who called sudo, who cannot write where root's test keeps its files. The one test
+    that is about sudo sets them itself."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in GUARD_VARS and k not in ng.proxy_variables() and k not in FROM_SUDO}
     env.update(extra)
     return env
 

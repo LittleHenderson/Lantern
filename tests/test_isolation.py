@@ -280,14 +280,15 @@ def test_work_handed_out_while_the_harness_waits_is_finished_too(request):
 
 
 # ----------------------------------------------------------------------------- this run itself
-def _missing_library_run(tmp: Path, where: str, complete: bool):
+def _missing_library_run(tmp: Path, where: str, complete: bool | str):
     """A second pytest on tests/probe_missing_library.py, in which `where` (`file`, `test` or nothing) needs a library
-    that is not installed. `complete` starts it the way CI does, with LANTERN_TESTS_COMPLETE=required."""
+    that is not installed. `complete` starts it the way CI does, with LANTERN_TESTS_COMPLETE=required (True), or with
+    the value given (`no-skips`: CI's second pass over the isolation's own tests)."""
     forwarder = Forwarder()
     env = developer_env(tmp, forwarder.port)
     env["PROBE_MISSING_AT"] = where
     if complete:
-        env["LANTERN_TESTS_COMPLETE"] = "required"
+        env["LANTERN_TESTS_COMPLETE"] = "required" if complete is True else complete
     try:
         r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider",
                             str(ROOT / "tests" / "probe_missing_library.py")], cwd=ROOT, env=env, capture_output=True,
@@ -315,6 +316,9 @@ def test_where_every_test_must_run_a_missing_library_fails_the_run(tmp_path, whe
     assert code in (0, 5) and counted in out, out[-4000:]          # 5: pytest's "no test was collected"
     assert "could not import 'a_library_nobody_installed_for_lantern'" in out, out[-4000:]
     assert "did not run because a library is not installed" not in out, out[-4000:]
+    # a file skipped whole counts as one skipped test whatever it holds: every run names such a file itself
+    whole = "tests/probe_missing_library.py: could not import 'a_library_nobody_installed_for_lantern'"
+    assert ("test files skipped whole" in out and whole in out) == (where == "file"), out[-4000:]
 
 
 def test_a_test_skipped_for_another_reason_is_no_missing_library(tmp_path):
@@ -325,11 +329,34 @@ def test_a_test_skipped_for_another_reason_is_no_missing_library(tmp_path):
     assert "did not run because a library is not installed" not in out, out[-4000:]
 
 
+def test_where_no_test_may_be_skipped_any_skipped_test_fails_the_run(tmp_path):
+    """Found on 2026-11-10, the first time CI's log named what it skips: four tests of the isolation itself did not
+    run in CI's test pass. Two need root, one starts the no-network runner (which cannot be started inside itself
+    without root), one needs a way out for the refusal to show; CI's tests run as the ordinary user inside the
+    no-network runner. Three of the four ran nowhere in CI, the fourth only in the one-command audit of one job. CI
+    now runs tests/test_netguard.py a second time, as root, with LANTERN_TESTS_COMPLETE=no-skips: there a test that
+    is skipped, whatever the reason, fails the run and is named with the reason, so these four cannot go unrun again
+    without a red run. (With `required`, the same skipped test passes:
+    test_a_test_skipped_for_another_reason_is_no_missing_library.)"""
+    code, out = _missing_library_run(tmp_path / "skipped", "", complete="no-skips")
+    assert code == 1 and "2 passed, 1 skipped" in out, out[-4000:]
+    assert "no test may be skipped here" in out, out[-4000:]
+    assert ("tests/probe_missing_library.py::test_that_needs_another_computer: "
+            "this needs a kind of computer that is not here") in out, out[-4000:]
+    assert "did not run because a library is not installed" not in out, out[-4000:]
+    # a missing library fails that run too, and both lists are shown
+    code, out = _missing_library_run(tmp_path / "library", "test", complete="no-skips")
+    assert code == 1 and "1 passed, 2 skipped" in out, out[-4000:]
+    assert "tests/probe_missing_library.py::test_that_needs_the_library: a_library_nobody_installed_for_lantern" in out
+    assert "tests/probe_missing_library.py::test_that_needs_another_computer: this needs" in out, out[-4000:]
+
+
 def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_named():
     """CI and the release build: every pytest line carries -rs (the log names each skipped test with its reason) and
     runs with LANTERN_TESTS_COMPLETE=required; the audit script shows its skipped tests also when the run passed; and
     the libraries the tests need are what CI installs (`dev`), PyJWT with cryptography among them: the 14 Connect
-    GitHub tests need both."""
+    GitHub tests need both. CI's Linux jobs run the isolation's own tests a second time, as root and outside the
+    no-network runner, where no test may be skipped."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -339,9 +366,16 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
         assert all(" -rs" in line for line in mine), (path.name, mine)
         assert not mine or "LANTERN_TESTS_COMPLETE: required" in text, path.name
         runs += [(path.name, line) for line in mine]
-    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 3, runs
+    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 4, runs
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "LANTERN_TESTS_COMPLETE: required" in ci[: ci.index("\njobs:")]        # for every job of the workflow
+    first = next(line for name, line in runs if name == "ci.yml" and "--cov" in line)     # the pass without a network
+    again = [line for name, line in runs if name == "ci.yml" and "tests/test_netguard.py" in line]
+    assert len(again) == 1 and again[0].startswith("run: sudo -E ") and "netless.py" not in again[0], again
+    assert again[0].endswith("python -m pytest -q -rs -p no:cacheprovider tests/test_netguard.py"), again
+    between = ci[ci.index(first): ci.index(again[0])]              # after the first pass, in the second pass's own step
+    assert ci.count("LANTERN_TESTS_COMPLETE: no-skips") == 1 and "LANTERN_TESTS_COMPLETE: no-skips" in between
+    assert "LANTERN_TESTS_NETLESS" not in between[between.index("LANTERN_TESTS_COMPLETE: no-skips"):]
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     step = release[release.index("Tests against the built wheel"):]
     assert "LANTERN_TESTS_COMPLETE: required" in step[: step.index("python -m pytest")]
