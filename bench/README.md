@@ -1,6 +1,8 @@
 # Benchmark
 
-This file: the Python map benchmark (edges against a trace). Also here: `mobile/` (findings precision on real phone
+This file: the Python map benchmark (edges against a trace). Also here: `heldout/` (the frozen held-out set of 2026-11-09:
+five documented-vulnerable public apps, three clean ones and safe/unsafe twins, scored by `heldout/run_heldout.py`;
+`heldout/baseline.md` is the before), `mobile/` (findings precision on real phone
 apps, labelled by engineers), `explain_eval.py` (explanation pass rate with a real model), `ask_eval.py` (Ask Lantern
 answers), `fuzz.py` (random file mutation), `large_apps_results.md` (speed and memory on big apps), `mutation_results.md`
 (do the tests catch deliberate mistakes).

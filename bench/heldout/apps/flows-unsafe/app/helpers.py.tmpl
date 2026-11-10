@@ -1,0 +1,19 @@
+"""Helpers with reassuring names that do not protect anything."""
+import html
+
+import requests
+
+
+def validate_sort(sort: str) -> str:
+    """Sounds like a check; only trims spaces. The value still carries whatever the caller typed."""
+    return sort.strip()
+
+
+def clean_name(name: str) -> str:
+    """HTML escaping: right for a web page, no protection at all inside SQL."""
+    return html.escape(name)
+
+
+def fetch_page(url: str) -> str:
+    """Any address the caller gives is fetched from the server, including internal ones."""
+    return requests.get(url, timeout=5).text

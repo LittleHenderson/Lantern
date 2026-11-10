@@ -32,6 +32,15 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   with one browser (measured: 26 refused connections to fonts.googleapis.com). It is now answered inside the
   browser, so nothing is sent; anything else a page asks of the outside fails the check with the address, and a
   report may ask for nothing at all.
+- The rest of what Lantern's report on itself got wrong (2026-11-09). "Allow-list for outgoing requests" counted a
+  list of the host names a server answers to (`ALLOWED_HOSTS`, lantern-cloud's settings) as a list of the places it
+  may call; only an allow-list in a file that makes the requests counts now. An app-wide login check was read into a
+  request hook that only counts visits (the 20 lines after it, which belonged to the next function); only the hook's
+  own body is read now, and a word in Lantern's own pattern lists no longer counts as an auth library. Sign-out
+  routes (`/signout`, `/sign-out`, `/log-out`) need no login. The Evidence Report's "verify it yourself" command
+  installed the newest Lantern, which can give another digest once the analysis changes; it now installs the exact
+  Lantern that made the report (the commit, written into the lantern-cloud image at deploy time, or the release tag).
+  The scorecard says that low findings don't lower the score, so 100/100 beside open low findings reads as intended.
 
 - Lantern's report on its own code told four things wrong (2026-11-09, found by checking the Evidence Report of run
   b51NcYcvaZzhuElb). Reports made on the website were titled "repo" for every project, because the code was read

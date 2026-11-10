@@ -1,0 +1,16 @@
+"""Safe twin: `list()` here is Python's own list, so `out.append` is a built-in call and must NOT link to Box.append."""
+
+
+class Box:
+    def __init__(self):
+        self.items = []
+
+    def append(self, value):
+        self.items.append(value)
+        return value
+
+
+def run():
+    out = list()
+    out.append(1)
+    return out

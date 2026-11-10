@@ -141,7 +141,7 @@ ASSIGNMENT = re.compile(r"^\s*(?:(?:const|let|var)\s+)?(?P<lhs>[\w$]+(?:\s*,\s*[
                         r"\s*(?::[^=\n]+?)?\s*(?:[-+*/%&|^]|\*\*|//|\?\?|\|\||&&)?=(?![=>])\s*(?P<rhs>.+)$")
 CONDITION = re.compile(r"\b(?:if|elif|while|assert|unless)\b|[=!]==?|\bis\b|\bnot\b|!|&&|\|\||\?")
 PUBLIC_ROUTE_RE = re.compile(r"login|signin|sign-in|signup|sign-up|register|password|reset|recover|health|"
-                             r"webhook|callback|logout|verify|token|public|contact|subscribe|oauth|"
+                             r"webhook|callback|logout|log-out|signout|sign-out|verify|token|public|contact|subscribe|oauth|"
                              r"(?<![a-z])auth(?![a-z])", re.I)   # /auth/refresh, not /authors
 MUTATING = {"POST", "PUT", "PATCH", "DELETE", "ANY"}
 
