@@ -33,7 +33,10 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   (`git config --global --add safe.directory <its folder>`), which is what git asks for there too. In one place
   Lantern is stricter than git: on Windows git takes your home folder for yours even when the system owns it;
   Lantern does not, so a repository kept in the home folder itself gives no commit to a folder beneath it for a
-  person who is not an administrator, until it is named the same way.
+  person who is not an administrator, until it is named the same way. In one place it follows your own word
+  further than git for Windows does: an entry of that list stands for the folder it names however the folder is
+  spelled (a link, a Windows short name such as `C:/Users/RUNNER~1/...`); git for Windows 2.56 takes it so for a
+  whole path and not for an entry that ends in `/*`.
   Tests: 22 new ones in `tests/test_gitfacts.py` (66 in all) and 1 in `tests/test_cloud_runs.py`; one existing test
   in each file was extended. On the code before, 20 of the 22 fail (10 show the older answer, 10 try functions that
   code does not have) and 2 need Windows; the new cloud test and both extended tests fail as well. With the change,
@@ -41,6 +44,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   Not covered by CI, and said in `docs/audit/CLAIMS.md` (A4f): the test with real other owners needs root; on
   Windows the calls are tried against Windows itself by two tests only, and the path for an administrator who is
   not elevated against a stand-in only.
+  GitHub's first run of this change on Windows failed: 1 failed, 1124 passed, 68 skipped. Both Windows-only tests
+  passed in it (the calls work against Windows itself, and a `.git` given to another owner with `icacls` got git's
+  own answer). The one failure was a line of a test that compared with git for a `safe.directory` entry spelled
+  with a short name, the difference described above; the test now writes its entries with the folder's real name
+  and keeps the other spelling as lines of its own.
 - The cloud service deletes only what it made, and a delete that fails is written down, said and tried again
   (2026-11-10; stage 7 of the 2026-11-09 directive, part 2). Measured first, on the code as it was, in nine
   situations, as root and as an ordinary user, on the Python the live image runs (3.12); both users gave the same

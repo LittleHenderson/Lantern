@@ -481,23 +481,40 @@ def test_the_persons_own_list_of_repositories_to_trust_is_kept_as_git_keeps_it(t
     plant(shared / ".git" / "config", "[safe]\n\tdirectory = *\n")          # the repository calling itself safe
     assert evidence.git_info(project) == not_yours() and not git_would_read(project)
     newer = tuple(int(n) for n in re.search(r"(\d+)\.(\d+)", git("--version", cwd=home)).groups()) >= (2, 46)
-    at = shared.as_posix()
+    # Entries are written with the folder's real name, as a person types it. The temp folder of GitHub's Windows
+    # machines is spelled with a short name (`C:/Users/RUNNER~1/...`), and that spelling has its own lines below.
+    real = home.resolve()
+    at = shared.resolve().as_posix()
     monkeypatch.chdir(home)                                 # so that "work/shared" below would name it from here
     for listed, read, every_git in [
-            ([(home / "elsewhere").as_posix()], False, True),
+            ([(real / "elsewhere").as_posix()], False, True),
             ([at], True, True),
             (["*"], True, True),
             (["~/work/shared"], True, True),
             ([at, ""], False, True),                        # an empty entry forgets the ones before it
             ([at, "", at], True, True),
             (["work/shared"], False, True),                 # not a whole path
-            ([(home / "work").as_posix() + "/*"], True, False),     # everything inside a folder: git since 2.46
+            ([(real / "work").as_posix() + "/*"], True, False),     # everything inside a folder: git since 2.46
             ([at + "/*"], False, False),                    # ... which is what is inside it, not the folder itself
     ]:
         trust(*listed)
         assert evidence.git_info(project) == (said if read else not_yours()), listed
         if every_git or newer:
             assert git_would_read(project) is read, f"git itself answers otherwise for {listed}"
+    # The same folders under another spelling of their name: the short name above, or a link. Lantern takes the
+    # person's entry for the folder it names, however it is spelled. git for Windows 2.56 does so for a whole path
+    # and not for `folder/*` (found by this test's first run on Windows: it leaves a short name in such an entry as
+    # written, and then the entry does not match), so git is not asked here.
+    spellings = [home] if home != real else []
+    if os.name == "posix":
+        os.symlink(real, tmp_path / "another-name")
+        spellings.append(tmp_path / "another-name")
+    for spelled in spellings:
+        for listed in ([(spelled / "work" / "shared").as_posix()], [(spelled / "work").as_posix() + "/*"]):
+            trust(*listed)
+            assert evidence.git_info(project) == said, listed
+        trust((spelled / "elsewhere").as_posix() + "/*")
+        assert evidence.git_info(project) == not_yours()
     trust()
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")             # the person's word for one command, in its variables
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "safe.directory")

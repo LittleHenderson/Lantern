@@ -347,7 +347,9 @@ def _said_safe(top: Path, asked: Path) -> bool:
     reads it (`safe_directory_cb` in its setup.c): the last word wins; an empty entry forgets the ones before it;
     `*` is every repository; `/folder/*` every repository inside that folder; `.` the repository whose top is where
     the person stands, which here is the folder they asked about; `~` is their home folder; anything else must be
-    the whole path of the repository's top folder."""
+    the whole path of the repository's top folder. An entry stands for the folder it names however that folder is
+    spelled (a link, a Windows short name), also before `/*`, where git for Windows leaves a short name as
+    written."""
     here, safe = os.path.normcase(str(top)), False
     for said in _trusted():
         if said == "":
