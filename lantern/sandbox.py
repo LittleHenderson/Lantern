@@ -410,6 +410,7 @@ _LINUX = sys.platform.startswith("linux")
 # number still names its session and process group, so those can be ended without the number meaning another program
 _WAITID = os.name == "posix" and all(hasattr(os, n) for n in ("waitid", "P_PID", "WEXITED", "WNOWAIT", "WNOHANG"))
 _LIVE: set = set()             # the commands running now
+_GOING: set = set()            # the calls of `run()` under way, each until its temp folder has been dealt with
 _LIVE_LOCK = threading.Lock()
 _KILL_WAIT = 5.0               # seconds a stop goes on ending what is still there before it says what is left
 # the launcher's own last line when it could not end something (`lantern._jail._supervise`); only the number is read
@@ -418,18 +419,40 @@ _LEFT_BY_LAUNCHER = re.compile(r"sandbox: (\d{1,6}) process\(es\) the command st
 
 def stop_all(wait: float = 30.0) -> int:
     """Ask every command the sandbox is running to end, with everything it started, and wait until that is done
-    (the app closing, the service shutting down, the program leaving). Returns how many were running."""
+    and each run has tidied up after itself: its last lines logged, its temp folder deleted (the app closing, the
+    service shutting down, the program leaving). A run that has not started its command yet (it is still copying
+    the project) starts none. Returns how many commands were running.
+
+    Until 2026-11-10 it came back as soon as the processes were ended. The program then left while the run's own
+    thread was still at work: the copy of the project stayed in the temp folder, without a word."""
     with _LIVE_LOCK:
-        runs = list(_LIVE)
+        runs, going = list(_LIVE), list(_GOING)
+    for g in going:
+        g.asked.set()
     for r in runs:
         r.asked.set()
     end = time.monotonic() + wait
     for r in runs:
         r.over.wait(max(0.0, end - time.monotonic()))
+    for g in going:
+        g.done.wait(max(0.0, end - time.monotonic()))
     return len(runs)
 
 
 atexit.register(stop_all)
+
+
+class _Going:
+    """One call of `run()`, from before its temp folder is made until that folder has been dealt with. It is what
+    the run's commands are handed as their `cancel`: set by the caller's own event, or by `stop_all`."""
+
+    def __init__(self, cancel):
+        self.cancel = cancel                  # the caller's event (the person pressed Stop), or None
+        self.asked = threading.Event()        # stop_all(): end this run, and start nothing more for it
+        self.done = threading.Event()         # nothing of it is left to do
+
+    def is_set(self) -> bool:
+        return self.asked.is_set() or (self.cancel is not None and self.cancel.is_set())
 
 
 class _Run:
@@ -549,7 +572,10 @@ def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None,
     process is put in before it runs). `ask`: seconds the command has to end what it started after SIGTERM, for a
     launcher that does so (`_jail`), before everything is killed. `also`: called once the command was stopped
     before its end (Docker: remove the container); it returns None, or the words for what it could not do.
-    `left`: a list that is given what could not be ended, each in Lantern's own words (empty: all of it was)."""
+    `left`: a list that is given what could not be ended, each in Lantern's own words (empty: all of it was).
+    When `cancel` is set before the command is made, nothing is started: the result is that of a stopped command."""
+    if cancel is not None and cancel.is_set():
+        return None, "", False
     held = job() if job is not None else None
     if sys.platform == "win32":
         from . import winjob
@@ -707,15 +733,23 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
     repo = Path(repo).resolve()
     language = check_command(words)
     backend = backend or backend_for(language)
-    root = Path(tempfile.mkdtemp(prefix="lantern-sandbox-"))
+    me = _Going(cancel)
+    with _LIVE_LOCK:
+        _GOING.add(me)
     try:
-        if backend == "docker":
-            res = _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel)
-        else:
-            res = _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel)
+        root = Path(tempfile.mkdtemp(prefix="lantern-sandbox-"))
+        try:
+            if backend == "docker":
+                res = _run_docker(repo, words, language, root, log, timeout, cwd_rel, me)
+            else:
+                res = _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, me)
+        finally:
+            if not _rm(root):
+                log(f"sandbox: its temp folder could not be deleted and is still there: {root}")
     finally:
-        if not _rm(root):
-            log(f"sandbox: its temp folder could not be deleted and is still there: {root}")
+        with _LIVE_LOCK:
+            _GOING.discard(me)
+        me.done.set()            # stop_all() waits for this, so the program does not leave in the middle of the lines above
     res.update(backend=backend, language=language, traced=language == "python")
     res["cancelled"] = res.get("returncode") is None and not res.get("timed_out")
     res["blocked"] = blocked_reasons(res.get("output_tail", "") + "\n" + res.pop("_full", ""))

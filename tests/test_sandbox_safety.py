@@ -569,7 +569,7 @@ def test_tests_that_end_with_125_by_themselves_are_tests_that_ran(tmp_path, monk
 
 
 RUNNER = '''
-import os, sys, threading
+import os, sys, threading, time
 from pathlib import Path
 from lantern import sandbox
 repo, how = Path(sys.argv[1]), sys.argv[2]
@@ -578,6 +578,8 @@ def log(line):
     print(line, flush=True)
     if line.startswith("STARTED"):
         seen.set()
+    if how == "leave" and line.startswith("sandbox: stopped"):
+        time.sleep(1.0)                 # a log that takes its time (a window to draw, a slow terminal)
 def go():
     sandbox.run(repo, ["python", "-m", "pytest", "-q", "-s", "-p", "no:randomly"], log=log, backend="subprocess", timeout=120)
 print("RUNNER", os.getpid(), flush=True)
@@ -589,8 +591,11 @@ go()                                    # "killed": the test ends this program f
 '''
 
 
-def _runner(repo: Path, how: str):
-    return subprocess.Popen([sys.executable, "-c", RUNNER, str(repo), how], cwd=ROOT, stdout=subprocess.PIPE,
+def _runner(repo: Path, how: str, temp: Path | None = None):
+    env = dict(os.environ)
+    if temp is not None:                # where this program's sandbox makes its temp folder
+        env.update(TMPDIR=str(temp), TEMP=str(temp), TMP=str(temp))
+    return subprocess.Popen([sys.executable, "-c", RUNNER, str(repo), how], cwd=ROOT, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
 
 
@@ -606,15 +611,141 @@ def _read_until_started(p) -> tuple[list[int], int, list[str]]:
     return _started(lines), runner, lines
 
 
-def test_nothing_is_left_when_the_program_leaves_while_the_tests_run(tmp_path, sweep):
+@pytest.fixture()
+def own_temp(tmp_path):
+    """A temp folder of this test's own, for the sandbox to make its folder in. As root the tests of a run are
+    another user, who cannot enter pytest's folder (the sandbox then refuses to run them): there it is made in
+    the system's temp folder, open to that user, and removed by its own name when the test is over."""
+    import shutil
+    import tempfile
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        temp = Path(tempfile.mkdtemp(prefix="lantern-test-temp-"))
+        temp.chmod(0o1777)
+    else:
+        temp = tmp_path / "temp"
+        temp.mkdir()
+    yield temp
+    shutil.rmtree(temp, ignore_errors=True)
+
+
+def _copies_left(temp: Path, said) -> list[str]:
+    '''The sandbox temp folders (each a copy of a project) still in `temp`. None may stay without a word: on
+    Windows a folder can refuse to go for a moment after the processes that used it were ended, and the run then
+    says so in its log, which is all this asks of it there.'''
+    left = sorted(p.name for p in temp.iterdir() if p.name.startswith("lantern-sandbox-"))
+    if WINDOWS and left and any("its temp folder could not be deleted and is still there" in x for x in said):
+        return []
+    return left
+
+
+def test_nothing_is_left_when_the_program_leaves_while_the_tests_run(tmp_path, sweep, own_temp):
+    '''The app is closed while a project's tests run. Until 2026-11-10 (the second fix of that day) the program
+    waited until the tests' processes were ended and then left, while the run's own thread had not finished: the
+    copy of the project stayed in the temp folder (20 of 20 tries), nothing said so, and a thread cut off in the
+    middle of its last log line took the whole program down as it left ("Fatal Python error ... at interpreter
+    shutdown", twice on CI).'''
     repo = _project(tmp_path, STARTS + "\ndef test_never_ends():\n    start()\n    time.sleep(300)\n")
-    p = _runner(repo, "leave")
+    temp = own_temp
+    p = _runner(repo, "leave", temp)
     pids, _runner_pid, lines = _read_until_started(p)
     sweep.extend(pids)
     rest = p.communicate(timeout=120)[0]
     assert len(pids) >= 2, lines + rest.splitlines()
     assert p.returncode == 0, rest
     assert _still_there(_must_end(pids)) == [], "a process the tests started outlived the program that ran them"
+    assert any(x.startswith("sandbox: stopped because it was asked to") for x in rest.splitlines()), rest
+    assert _copies_left(temp, rest.splitlines()) == [], "the program left before the copy of the project was deleted:\n" + rest
+
+
+def test_stopping_everything_comes_back_only_when_each_run_has_tidied_up(tmp_path, monkeypatch, sweep, own_temp):
+    '''`stop_all` is what the app calls as it closes. When it comes back, the run's temp folder is gone and its
+    last line is logged, however long the log takes over that line.'''
+    import tempfile
+    repo = _project(tmp_path, STARTS + "\ndef test_never_ends():\n    start()\n    time.sleep(300)\n")
+    temp = own_temp
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    lines, out, started = [], {}, threading.Event()
+
+    def log(line):
+        lines.append(line)
+        if line.startswith("STARTED"):
+            started.set()
+        if line.startswith("sandbox: stopped"):
+            time.sleep(1.0)
+
+    t = threading.Thread(target=lambda: out.update(r=sandbox.run(repo, PYTEST, log=log, backend="subprocess", timeout=120)))
+    t.start()
+    try:
+        assert started.wait(90), lines
+        sweep.extend(_started(lines))
+        assert sandbox.stop_all() == 1
+        assert _copies_left(temp, lines) == [], "stop_all came back before the run had deleted its temp folder"
+        assert any(x.startswith("sandbox: stopped because it was asked to") for x in lines), lines
+    finally:
+        sandbox.stop_all()
+        t.join(60)
+    assert not t.is_alive() and out["r"]["cancelled"] and out["r"]["returncode"] is None, out
+    assert _still_there(_must_end(_started(lines))) == []
+
+
+def test_a_run_that_is_still_copying_the_project_when_all_is_stopped_starts_no_test(tmp_path, monkeypatch, own_temp):
+    '''The app is closed while the project is still being copied into the sandbox: no command is running yet.
+    Until 2026-11-10 `stop_all` saw nothing to stop and came back at once; the run then started the tests, and
+    the program left under them.'''
+    import tempfile
+    repo = _project(tmp_path, QUIET)
+    temp = own_temp
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    copying, go_on, real = threading.Event(), threading.Event(), sandbox._copy
+
+    def slow_copy(src, dst):
+        real(src, dst)
+        copying.set()
+        go_on.wait(60)
+
+    monkeypatch.setattr(sandbox, "_copy", slow_copy)
+    lines, out = [], {}
+    t = threading.Thread(target=lambda: out.update(r=sandbox.run(repo, PYTEST, log=lines.append, backend="subprocess", timeout=120)))
+    t.start()
+    stopper = threading.Thread(target=sandbox.stop_all)
+    try:
+        assert copying.wait(60), lines
+        stopper.start()
+        stopper.join(1.0)
+        assert stopper.is_alive(), "stop_all came back while a run had not tidied up"
+    finally:
+        go_on.set()
+        if stopper.ident is not None:
+            stopper.join(60)
+        t.join(120)
+    assert not stopper.is_alive() and not t.is_alive()
+    assert out["r"]["cancelled"] and out["r"]["returncode"] is None and not out["r"]["timed_out"], out
+    assert not any("PLANTED-RAN" in x or "passed" in x for x in lines), lines          # no test was started
+    assert any(x.startswith("sandbox: stopped because it was asked to") for x in lines), lines
+    assert _copies_left(temp, lines) == []
+
+
+def test_a_run_asked_to_stop_before_it_began_starts_nothing_and_a_run_not_asked_runs(tmp_path, monkeypatch):
+    """Until 2026-11-10 the command was started and then stopped: the tests could have run their first lines."""
+    made, real = [], subprocess.Popen
+
+    def popen(*args, **kw):
+        made.append(args)
+        return real(*args, **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    cancel = threading.Event()
+    cancel.set()
+    lines = []
+    r = sandbox.run(_project(tmp_path, QUIET), PYTEST, log=lines.append, backend="subprocess", timeout=120, cancel=cancel)
+    assert r["cancelled"] and r["returncode"] is None and r["not_ended"] == [], r
+    assert made == [] and not any("PLANTED-RAN" in x for x in lines), (made, lines)
+    lines = []                           # the safe twin: the same run, nobody asking
+    r = sandbox.run(_project(tmp_path, QUIET, "twin"), PYTEST, log=lines.append, backend="subprocess", timeout=120,
+                    cancel=threading.Event())
+    assert r["returncode"] == 0 and not r["cancelled"] and any("PLANTED-RAN" in x for x in lines), lines
+    assert len(made) == 1 and sandbox.stop_all() == 0       # one command was made, and nothing is going afterwards
+    assert not sandbox._GOING and not sandbox._LIVE
 
 
 @pytest.mark.skipif(not (LINUX or WINDOWS), reason="needs Linux (the supervisor is told when its parent ends) or Windows (the job ends with its last handle)")

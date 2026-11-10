@@ -43,6 +43,14 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   the analysis step ran without its guard (tried with a stand-in for that step which sends a packet to this
   computer: the packet went out; now it is refused and the run ends `blocked`). These steps read a project and
   never run it, so without Landlock or the guard they say so in the run's log and carry on.
+  Found by CI on this change itself, and fixed (same day): when the app was closed while a project's tests ran,
+  Lantern ended the tests and then left before the run had tidied up. Measured on that code: the copy of the
+  project stayed in the temp folder in 20 of 20 tries, without a word; on a busy computer the run's last log line
+  was lost in 4 of 25 (and the copy stayed in 25 of 25); and on CI a small program that prints its log was taken down as it left, in two of the
+  four Linux test jobs that finished ("Fatal Python error ... at interpreter shutdown"). Closing the app now waits until each run has logged
+  its last line and deleted its temp folder (0 of 20 left, 0 of 20 with a slow log, 0 of 25 on a busy computer),
+  and a run that was still copying the project when the app closed starts no test at all (before, such a run
+  was told nothing: it went on, and could start the tests while the program was leaving).
   Tests: `tests/test_sandbox_safety.py` (new), six more in `tests/test_cloud_runs.py`, and the browser check now
   presses the button. Not proven here: Windows itself (four tests that only CI's Windows job runs). Known limits
   are in `docs/audit/CLAIMS.md` (A4c, A4d) and CLAUDE.md's Known gaps.
