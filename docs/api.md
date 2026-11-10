@@ -267,7 +267,8 @@ maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, packs): `tool`,
 `error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
 `applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
 patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`), `exclusions` (folders a tool was
-told to skip), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
+told to skip, and for bandit the Python files it was told to leave out because they are not files of the project: a
+link that leads out of it, a pipe), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
 `fallback_for` (the built-in secret scan when gitleaks did not finish). `partial` keeps the findings the tool did
 produce. The dependency audits (pip-audit, maven-audit, composer-audit, gem-audit) add, when they apply: `files` (the
 dependency files read), `checked` (how many name-and-version pairs were asked about), `unpinned` (how many entries
@@ -407,6 +408,8 @@ a link.
 
 In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed; written the same way),
 `lantern-packs/*.json` (project analysis packs), `lantern-narratives.md` (the builder's own notes for the Evidence Report).
+Each is read only as a file of the project (`python_frontend.inside_repo`): a notes file or a packs folder that is a link
+leading out of the project counts as not there.
 
 ## Cloud service (`cloud/`, cloud mode)
 
