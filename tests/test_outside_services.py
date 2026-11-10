@@ -7,15 +7,15 @@ that finishes with a plain status line saying what was not checked, never a trac
 """
 import json
 import socket
-import subprocess
 import urllib.error
 
 import pytest
 
 from tests.test_server import srv  # noqa: F401 - fixture
 
-from lantern import depaudit
+from lantern import depaudit, scanresult
 from lantern.engine import build_graph
+from lantern.scanresult import ToolRun
 from lantern.security import scan
 
 
@@ -62,32 +62,26 @@ def test_pip_audit_and_npm_failing_are_status_lines(tmp_path, monkeypatch):
     (tmp_path / "package.json").write_text('{"name": "x", "dependencies": {"lodash": "4.17.0"}}', encoding="utf-8")
     (tmp_path / "package-lock.json").write_text('{"name": "x", "lockfileVersion": 3, "packages": {}}', encoding="utf-8")
     monkeypatch.setattr(depaudit.shutil, "which", lambda name: f"/usr/bin/{name}")
-
-    def crash(*a, **k):
-        raise OSError("the tool crashed")
-    monkeypatch.setattr(depaudit.subprocess, "run", crash)
+    # the tool could not even start (scanresult.run_tool reports it instead of raising)
+    monkeypatch.setattr(scanresult, "run_tool", lambda cmd, **k: ToolRun(None, error="OSError: the tool crashed"))
     findings, info = depaudit.run_pip_audit(tmp_path, False)
-    assert findings == [] and info["status"].startswith("error: OSError"), info
+    assert findings == [] and info["state"] == "failed" and info["status"].startswith("error: OSError"), info
     findings, info = depaudit.run_npm_audit(tmp_path, False)
-    assert findings == [] and info["status"].startswith("error"), info
-
-    def garbage(*a, **k):
-        return subprocess.CompletedProcess(a, 0, stdout="<html>registry is down</html>", stderr="")
-    monkeypatch.setattr(depaudit.subprocess, "run", garbage)
+    assert findings == [] and info["state"] == "failed" and info["status"].startswith("error"), info
+    # it ran, but what came back was not JSON
+    monkeypatch.setattr(scanresult, "run_tool", lambda cmd, **k: ToolRun(0, stdout="<html>registry is down</html>"))
     findings, info = depaudit.run_pip_audit(tmp_path, False)
-    assert findings == [] and info["status"].startswith("error: JSONDecodeError"), info
-
-    def hang(*a, **k):
-        raise subprocess.TimeoutExpired(a[0], k.get("timeout", 1))
-    monkeypatch.setattr(depaudit.subprocess, "run", hang)
+    assert findings == [] and info["state"] == "failed" and "broken JSON" in info["status"], info
+    # it hung until the time limit killed it
+    monkeypatch.setattr(scanresult, "run_tool", lambda cmd, **k: ToolRun(None, timed_out=True))
     findings, info = depaudit.run_pip_audit(tmp_path, False)
-    assert info["status"].startswith("error: TimeoutExpired"), info
+    assert info["state"] == "timeout" and info["status"].startswith("error: timed out"), info
 
 
 def test_one_audit_tool_crashing_does_not_drop_the_others(tmp_path, monkeypatch):
     """`python -m lantern.depaudit` (the cloud audit step) writes every tool's result even when one raises."""
     repo = _java_repo(tmp_path)
-    monkeypatch.setattr(depaudit, "_osv_post", lambda *a, **k: {"results": [{} for _ in range(50)]})
+    monkeypatch.setattr(depaudit, "_osv_post", lambda path, body, **k: {"results": [{} for _ in body["queries"]]})
 
     def boom(repo, no_network=None):
         raise RuntimeError("surprise")

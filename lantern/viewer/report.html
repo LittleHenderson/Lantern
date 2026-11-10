@@ -494,6 +494,8 @@ mark.p.on{background:var(--l3);color:var(--surface);border-radius:4px}
 .warn{display:flex;gap:8px;background:var(--warning-soft);color:var(--ink);font-size:12.5px;padding:10px 12px;border-radius:10px;margin:10px 0}
 .warn .ic{color:var(--warn-ink);margin-top:1px}
 .note{font-size:12.5px;color:var(--muted)}
+.scanwarn{margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--warning-soft);color:var(--ink);font-size:13.5px;line-height:1.5} .scanwarn b{color:var(--warn-ink)} .scanwarn .note{display:block;margin-top:2px}
+.kv b.timeout,.kv b.failed,.kv b.partial,.kv b.unavailable{color:var(--warn-ink)}
 .byline{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:10px}
 .unexplained{border:1px dashed var(--line-2);border-radius:12px;padding:14px 16px;color:var(--muted);font-size:13px}
 .unexplained .btn{margin-top:10px}
@@ -671,6 +673,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 // Every value from the data goes through esc() before it reaches innerHTML. Values used as CSS class names or as
 // lookup keys go through cls()/pick(), so only known words come out; numbers used in styles go through pct().
 const RANKS = ['critical', 'high', 'medium', 'low'], STATUSES = ['pass', 'fail', 'partial', 'skip'];
+const SCAN_STATES = ['ok', 'partial', 'failed', 'timeout', 'unavailable', 'skipped'];   // lantern/scanresult.py
 const CONFS = ['observed', 'resolved', 'inferred', 'possible'], GRADES = ['A', 'B', 'C', 'D', 'F'];
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'ANY', 'WS'];
 const cls = (v, set) => set.includes(v) ? v : '';
@@ -1736,10 +1739,20 @@ function setMode(simple, save = true) {
   }
 }
 function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { setMode(b.dataset.vm === 'simple'); render(); }); wireHelp(el); }
+// A scanner that did not finish, did not cover everything or was skipped (security.json `incomplete`, lantern/scanresult.py):
+// said above the findings, because "no findings" from a tool that never ran is not a clean result.
+function scanNotice(about) {
+  const inc = arr(SEC.incomplete).filter(t => t && typeof t === 'object' && t.tool);
+  if (!inc.length) return '';
+  const word = t => { const s = String(t.state || ''); return s === 'timeout' || s === 'failed' ? 'did not finish' : s === 'partial' ? 'covered only part of your app' : s === 'unavailable' ? 'is not installed' : 'was skipped'; };
+  // the reason without the "error:" / "skipped:" prefix of the status sentence ("timed out after 600 s", "offline")
+  const reason = t => { if (t.state === 'unavailable') return String(t.why || ''); const s = String(t.status || ''), i = s.indexOf(':'); return i > 0 ? s.slice(i + 1).trim() : String(t.why || ''); };
+  return `<div class="scanwarn" role="status"><b>Scan incomplete.</b> ${inc.slice(0, 6).map(t => `<span>${esc(t.tool)} ${word(t)}${reason(t) ? ` (${esc(reason(t))})` : ''}.</span>`).join(' ')}${inc.length > 6 ? ` <span>And ${esc(inc.length - 6)} more.</span>` : ''} Anything those scanners would have found is missing from this ${about ? 'report' : 'list'}.${about ? '' : ' <span class="note">Details under About › Security tools.</span>'}</div>`;
+}
 function renderFindings() {
   const el = document.getElementById('center');
   const all = SEC.findings;
-  if (!all.length) { el.innerHTML = `<div class="empty">${ART}<b>No findings</b>None from the scanners that ran. See About for which tools ran.</div>`; return; }
+  if (!all.length) { el.innerHTML = `${scanNotice()}<div class="empty">${ART}<b>No findings</b>None from the scanners that ran. See About for which tools ran.</div>`; return; }
   // Counts are for the app itself, the same numbers as the summary, readiness and Ask Lantern: findings in test code
   // (test files and fixtures, often planted on purpose) are listed last and not counted.
   const app = all.filter(f => !f.in_tests), tests = all.filter(f => f.in_tests);
@@ -1749,7 +1762,7 @@ function renderFindings() {
   const TESTS_SHOWN = 200;
   if (S.simple) {
     const sevs = RANKS.filter(by);
-    el.innerHTML = `<div class="memo"><div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
+    el.innerHTML = `<div class="memo">${scanNotice()}<div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
       <p class="lede">${countWord(open.length)} open in your app${tests.length ? ` (${esc(tests.length)} more in test code are listed at the end and not counted)` : ''}. ${ANDROID_APP ? 'Ranked by severity and by whether someone can reach them. A finding is critical only when a screen, a link or another app leads to it and it uses the data they send.' : 'Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.'}</p></div>${modeSeg()}</div>
       <div class="countrow">${RANKS.map(r => `<span class="${cls(r, RANKS)}"><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>${phoneCard()}
       <p class="note" style="margin:-8px 0 10px">Each finding says which part of your app it lives on; the filled dot on its card marks that part. Hover a name below to learn what each part does.</p>${laneStrip(null, new Set(), {legend: true})}
@@ -1769,7 +1782,7 @@ function renderFindings() {
   if (S.ftool) fs = fs.filter(f => f.tool === S.ftool);
   const tools = [...new Set(all.map(f => f.tool))];
   const fchip = (k, label, n) => `<button class="fchip ${k === 'all' ? '' : k} ${S.fsev === k ? 'on' : ''}" data-sev="${k}">${k === 'all' ? '' : '<i></i>'}${label} <b>${esc(n)}</b></button>`;
-  el.innerHTML = `<div class="toolbar"><h2>Security findings <span class="c">${esc(open.length)}</span></h2>${modeSeg()}<button class="btn" id="exportjson">Export JSON</button></div>${phoneCard()}
+  el.innerHTML = `${scanNotice()}<div class="toolbar"><h2>Security findings <span class="c">${esc(open.length)}</span></h2>${modeSeg()}<button class="btn" id="exportjson">Export JSON</button></div>${phoneCard()}
     <div class="filters">${fchip('all', 'All', app.length)}${RANKS.filter(r => app.some(f => f.rank === r)).map(r => fchip(r, r[0].toUpperCase() + r.slice(1), app.filter(f => f.rank === r).length)).join('')}${tests.length ? fchip('tests', 'In test code', tests.length) : ''}<span class="spacer"></span>
       <button class="fchip ${S.freach ? 'on' : ''}" id="freach">Reachable only</button><button class="fchip ${S.finput ? 'on' : ''}" id="finput">Uses input</button>
       <select id="ftool" class="fsel" aria-label="Tool"><option value="">Tool ▾</option>${tools.map(t => `<option value="${esc(t)}" ${S.ftool === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
@@ -1995,7 +2008,7 @@ function renderAbout() {
     ${Object.keys(LANGS).length ? `<h3>Languages</h3><div class="kv">${Object.entries(LANGS).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v.files)} files · ${esc(v.lines)} lines${v.components ? ` · ${esc(v.components)} components` : ''}</div>`).join('')}</div>` : ''}
     ${BR && BR.http_calls ? `<h3>Frontend → backend links</h3><div class="kv"><div>HTTP calls found</div><div>${esc(BR.http_calls)}</div><div>Linked to a route</div><div>${esc(BR.matched)} (${esc(BR.exact)} exact path, ${(+BR.suffix || 0) + (+BR['unknown-prefix'] || 0)} with a prefix added elsewhere${BR.ambiguous ? `, ${esc(BR.ambiguous)} ambiguous` : ''})</div><div>External services</div><div>${esc(BR.external)}</div><div>No route in this repo</div><div>${esc(BR.unmatched)}${arr(BR.unmatched_examples).length ? '<br><span class="note">' + arr(BR.unmatched_examples).slice(0, 8).map(esc).join('<br>') + '</span>' : ''}</div></div>` : ''}
     ${tr ? `<h3>Runtime trace</h3><div class="kv"><div>Calls seen running</div><div>${esc(tr.observed_edges)}</div><div>Also found statically</div><div>${esc(tr.static_found)} (recall ${esc(tr.recall)})</div><div>Only seen at runtime</div><div>${esc(tr.runtime_only)}</div></div>` : ''}
-    <h3>Security tools</h3><div class="kv">${arr(SEC.tools).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${esc(t.status)}</div>`).join('')}</div>
+    <h3>Security tools</h3>${scanNotice(true)}<div class="kv">${arr(SEC.tools).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${t.state && t.state !== 'ok' && t.state !== 'skipped' ? `<b class="${cls(t.state, SCAN_STATES)}">${esc(t.state)}</b> · ` : ''}${esc(t.status)}${arr(t.errors).length ? `<div class="note">${arr(t.errors).slice(0, 5).map(esc).join('<br>')}${arr(t.errors).length > 5 ? `<br>and ${esc(arr(t.errors).length - 5)} more` : ''}</div>` : ''}</div>`).join('')}</div>
     ${exStats ? `<h3>Explanations</h3><div class="kv"><div>Model</div><div>${esc(exStats.model)}</div><div>Metaphor world</div><div>${esc((DATA.explanations.metaphor || {}).world)}</div><div>Validated</div><div>${esc(exStats.validated)} of ${(+exStats.validated || 0) + (+exStats.failed || 0)} (${esc(exStats.first_try)} on first try)</div><div>Tokens</div><div>${esc((exStats.usage || {}).input_tokens)} in · ${esc((exStats.usage || {}).output_tokens)} out</div></div>` : ''}
     <h3>Line styles</h3><p>Solid bold: seen while the program ran. Solid: confirmed by name resolution. Dashed: likely, based on types Lantern could infer. Dotted: one of several possible targets.</p>
     <h3>What this report does not prove</h3><ul>

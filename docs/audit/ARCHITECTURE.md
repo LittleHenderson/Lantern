@@ -35,6 +35,7 @@ lines and the server streams them to the browser.
 | Module | Responsibility | Key functions |
 |---|---|---|
 | `graph.py` | Node/Edge dataclasses, confidence ranks, JSON round-trip, stats | `Graph.add_edge` keeps the strongest confidence |
+| `calls.py` | Call-site inventory (Python and JS/TS): one record per call written in the code, keyed `file:line:col`, one outcome each, a reason for every unresolved one, groups written / handed / implicit, test code apart. The frontends call `record`; `engine.build_graph` ends with `finish` | `record`, `classify`, `why`, `finish`, `summarize`, `write` |
 | `python_frontend.py` | Python discovery, parsing, name and type resolution | `discover`, `inside_repo`, `build_graph`, `Resolver` |
 | `js_frontend.py` | TS/JS discovery, ES module resolution, React/Next/Express entry points | `add_js`, `Walker`, `SpecResolver`, `JSResolver` |
 | `java_frontend.py`, `kotlin_frontend.py` | Java and Kotlin parsing, packages/classes/methods, call resolution (`name`, `import`, `receiver-type`, `interface`, …), Spring routes | `add_java`, `add_kotlin`, `Linker` |
@@ -65,6 +66,7 @@ lines and the server streams them to the browser.
 | File | Contents |
 |---|---|
 | `graph.json` | `schema`, `repo_root`, `meta` (languages, files, lines, `http_calls`, `bridge` stats), `nodes[]` (`id`, `kind`, `qualname`, `file`, `start_line`, `end_line`, `fingerprint`, `signature`, `entry`), `edges[]` (`src`, `dst`, `kind`, `confidence`, `lines`, `via`, `detail`), `unresolved` |
+| `calls.json` | `summary` (for `written`, `handed`, `implicit`, `in_tests`: `total`, `outcomes`, `reasons`, `by_via`, `with_several_targets`, `lines_with_several_calls`; `languages`, `not_inventoried`), `outcomes` and `reasons` (the words for each code), `sites[]` (`at`, `file`, `line`, `col`, `callee`, `caller`, `lang`, `group`, `outcome`, `to`, `via`, `confidence`, `reason`, `why`, `test`; at most 250,000, `truncated` says when) |
 | `security.json` | `findings[]` (`id`, `tool`, `rule`, `title`, `tool_severity`, `tool_confidence`, `file`, `line`, `category`, `node`, `reachable`, `ui_path`, `rank`, `status`, `accepted`), `tools[]`, `counts` (open only, plus `in_tests`, `accepted`) |
 | `readiness.json` | `score`, `grade`, `categories[]` → `checks[]` (`id`, `status` pass/fail/partial/skip, `points`, `earned`, `evidence`, `fix`, `how`), `shape`, `stack`, `advice`, `hotspots`, `next_steps`, `starter` |
 | `explanations.json` | `metaphor`, `explanations{node_id → record}` (`lens1`, `lens2`, `lens3.pairs[]` with `anchor`, `scenario`, `findings` (each may carry `scenario`), `dropped_scenarios`, `validated`, `validation_errors`, `model`, `prompt_version`, `code_hash`), `stats` |

@@ -109,7 +109,12 @@ The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`
 
 * Node: `id`, `kind` (`module`|`class`|`callable`|`external`), `name`, `qualname`, `file`, `start_line`, `end_line`,
   `parent`, `signature`, `docstring`, `decorators`, `entry` (null or `{"kind": "page"|"route"|"main"|"cli"|"script"|"test",
-  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?}`; an HTML page with script inside it is
+  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?, "middleware"?: [node ids]}`
+  (`middleware`: an Express route's own middleware, in order, e.g. `router.delete('/x', requireLogin, h)`: node ids,
+  or the `ext:` name of a library's function or of one imported from a file that is not in the repo
+  (`ext:./mw/guards.requireLogin`, for which no node exists); the login check reads each one's own name, what
+  follows the last `.` and `/`. An entry is only ever on a function of the repo: a route whose handler is a
+  library's function, or comes from a file that is not there, marks no node); an HTML page with script inside it is
   a `page` entry whose `detail` is the file path, and its functions are `js:<path>.html::<name>` with the page's own
   line numbers), `lane` (the stack strip stop the
   node lives on: `browser`|`frontend`|`server`|`data`, or null for an external that is not a data hop — see
@@ -121,7 +126,76 @@ The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`
 * Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.name>`; external `ext:<pkg.member>`
   or `ext:HTTP <METHOD> <path>`.
 * `meta`: `files`, `lines`, `languages`, `bridge` (link counts), `http_calls`, `packs` (`{added, ambiguous, unresolved, packs}`),
-  `lanes` (`{browser, frontend, server, data}` node counts).
+  `lanes` (`{browser, frontend, server, data}` node counts), `calls` (the summary of `calls.json`, below).
+* JavaScript `via` values added in stage 3 (2026-11-09): `require-call` (`require('./x')(...)`), `route-handler` and
+  `middleware` (a function handed to an Express router by name: resolved when it is named straight from a module,
+  inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),
+  `wrapped-function` (`const f = wrap(async ...)`
+  handed to a router; inferred), `library-value` (a variable or module export holding what a library call returned:
+  `const app = express()`), `library-result` (a call on a library call's result: `Joi.string().min()`),
+  `express-param` (`req`/`res`/`next` by position in a handler of a package that depends on express; inferred),
+  `param-type` (a written TypeScript parameter type), `builtin-value` (DOM lists and elements, events, fetch
+  responses), `module-value`, `member`. Python: `inherited-library` / `inherited-builtin` (a method or attribute the
+  repo class does not define, from its first base outside the repo: `ext:django.Model.objects.filter`,
+  `ext:unittest.TestCase.assertEqual`; inferred; not given when the class also has a base Lantern cannot identify:
+  a library's star import, a computed base, or a class from a project file it did not read) and `library-result`
+  (`ext:requests.get().json`).
+  A library label is not given where the function may be the project's own. Python: `self.<attr>.<m>()` through a
+  library base's attribute, and `<lib call>().<m>()`, are library calls only when no class of the repo has a method
+  `<m>` (for a call's result, everyday names such as `get` or `items` do not count, and `str(x).title()` stays a
+  built-in); otherwise the older reading stands (a name-only guess, or unresolved `library-or-repo`), and a method a
+  sibling mixin gives a subclass is not the library's. JavaScript: a member of what a library call returned, or of a
+  property of `req`/`res`, is not labelled when the repo puts a function of that name on an object that is not its
+  own (`schema.statics.find = function`, `schema.methods = {…}`, `{ methods: {…} }`, `schema.method('x', fn)`,
+  `Object.assign(obj, {…})`), when a class of the repo with that method was handed to the library calls the value
+  came from (`getRepository(User).findOne()`), or, for what hangs on `req`/`res`, when any class of the repo has
+  that method (names JavaScript's own objects have aside); a direct member of Express's `req`, `res`, app or router,
+  of a written TypeScript type, of `new LibraryClass()` or of a built-in value only when the repo puts a function of
+  that name on that kind of object (`res.fail = function`, `String.prototype.shout = …`). A route's `middleware`
+  list keeps such a function's name; no record calls it a library function. `window.<name>…`, when `<name>` is not
+  one of the browser's or Node's own names, is unresolved `global-property`, not a built-in.
+  JavaScript imports: a bare name is looked up through the nearest tsconfig/jsconfig `paths`, then under a written
+  `baseUrl` (`components/Button` → `<baseUrl>/components/Button`), as the compiler does. An import that finds no
+  file names a file of the project, never a library, when it is a relative, `@/`, `~/` or `#` path or a `paths`
+  alias that points at a project folder (`"contentlayer/generated": ["./.contentlayer/generated"]`, generated code
+  that is not committed; not a catch-all `*`, not a target in `node_modules`, and not an alias that covers a
+  package the nearest `package.json` depends on): the record is unresolved `missing-module`, nothing is built on
+  the value, and the map keeps the `ext:` edge older versions drew.
+  Route paths include the prefixes of `app.use('/p', router)` (Express; the router may be a variable, a required
+  module, or what a factory returns: `require('./routes')()` whose function ends `return router`),
+  `include_router(r, prefix=…)` (FastAPI) and `register_blueprint(bp, url_prefix=…)` (Flask, which replaces the
+  blueprint's own); a router mounted in two places, or under a prefix that is not a written string, keeps the
+  paths written on it. Express verbs hung on `router.route('/p')` (`.get(h).post(mw, h)`) are routes on that path.
+
+### `calls.json`
+
+The call-site inventory (`lantern/calls.py`): every call written in Python or JavaScript/TypeScript, once.
+`{"version": 1, "summary", "outcomes": {outcome: words}, "reasons": {code: sentence}, "sites": [...], "truncated"?}`
+
+* Site: `at` (`file:line:col`, the identity: line and byte column, from 1, of the call's `(`, or of the callee for a
+  call written without one, such as a decorator or a JSX element), `file`, `line`, `col`, `callee` (as written, at most
+  120 characters), `caller` (node id), `lang`, `group`, `outcome`, `to` (target ids; several for one call with several
+  possible targets), `via`, `confidence`, `reason` and `why` (only when unresolved), `test` (inside a test file).
+* `group`: `written` (calls written in the code: the main count), `handed` (functions handed to code that calls them:
+  FastAPI `Depends(fn)`, Express route handlers and middleware, callbacks by name; counted only where they are
+  functions), `implicit` (context managers, properties, decorator closures; only when they reach repo code).
+* `outcome` (exactly one): `resolved`, `likely`, `possible`, `name-only`, `external`, `builtin`, `unresolved`.
+* `reason` codes: `parameter`, `callback-parameter`, `local-unknown`, `call-result`, `self-attribute`,
+  `not-in-class`, `unknown-base` (the class has a base class Lantern cannot look into: a library class, a star
+  import, a computed base, or a file it cannot find), `this-outside-class`, `repo-variable`, `missing-member`,
+  `missing-export`, `missing-module` (the name comes from a project file Lantern did not read: a relative import or
+  require, or in JavaScript a tsconfig `paths` alias to a project folder, that finds no file; the graph keeps the
+  older `ext:` edge for such a call, the inventory does not call it a library), `not-defined`, `computed`, `dynamic-require`, `function-member`, `library-or-repo` (the value comes from
+  a library or the language, but the project has a function of that name it may carry, so Lantern does not say
+  which one runs), `global-property` (reached through `window`/`globalThis`/`self`/`global` under a name that is
+  not the browser's or Node's own), `not-read` (a call the JavaScript reader skipped: counted so the total stays
+  complete).
+* `summary` (also `graph.json` `meta.calls`): `version`, `languages` (inventoried), `not_inventoried` (languages that
+  have only the edge-line count of `Graph.call_sites()`), and for each of `written`, `handed`, `implicit` and
+  `in_tests` (written calls in test files): `total`, `outcomes` (adds up to `total`), `reasons`, `by_via`,
+  `with_several_targets`, `lines_with_several_calls`.
+* `Graph.call_sites()` (in `stats()`) is the older edge-line count and is kept unchanged so results compare across
+  versions: an edge with three call lines counts three, and two calls on one line to the same function count once.
 
 #### Stack lanes (the stack strip)
 
@@ -182,8 +256,21 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 
 ### `security.json`
 
-`{"findings": [...], "tools": [{"tool", "status", "version"}], "counts": {critical, high, medium, low, in_tests, accepted},
-"id_version", "reachable_nodes", "total_callables", "ai", "mobile"}`
+`{"findings": [...], "tools": [scanner records], "incomplete": [the scanner records that apply and are not ok],
+"counts": {critical, high, medium, low, in_tests, accepted}, "id_version", "reachable_nodes", "total_callables", "ai",
+"mobile"}`
+
+A scanner record (`lantern/scanresult.py`, one per tool run: bandit, gitleaks, lantern-secrets, pip-audit, npm-audit,
+maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, packs): `tool`, `state` (`ok` | `partial` | `failed` |
+`timeout` | `unavailable` | `skipped`), `status` (the same as one sentence: `ok`, `ok (…)`, `partial: …`, `error: …`,
+`error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
+`applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
+patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`), `exclusions` (folders a tool was
+told to skip), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
+`fallback_for` (the built-in secret scan when gitleaks did not finish). `partial` keeps the findings the tool did
+produce. `incomplete` is read by readiness (`sec-scanners`), the Evidence Report, the badge (`scan incomplete`), the
+command line (`--fail-on` exits 1 for any state but `skipped`) and the app's project cards; a run with `--offline`
+lists its skipped audits there without failing the gate.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -241,8 +328,10 @@ shown, also show `title` as "<tool> says: …"), `scenario` (`{"kind", "who", "s
 `version`, `score`, `grade`, `shape`, `stack` (`{frameworks, …}`), `categories` (`[{key, title, weight, score, percent,
 checks: [{id, title, points, earned, status: pass|fail|partial|skip, evidence, fix, how}]}]`), `next_steps` (the
 highest-gain failed checks, with `gain` and `category`), `protections` (`[{id, title, status: add|check|in place, why,
-evidence, found, how}]`), `advice` (deployment advice strings for the shape), `hotspots`, `env_vars`,
-`starter` (`{filename: {content, snippet?}}`).
+evidence, found, how}]`), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
+`sec-scanners` check in Security findings fails when one `failed` or timed out, is partial for a gap the run knew
+about, and passes only when every applicable scanner finished), `advice` (deployment advice strings for the shape),
+`hotspots`, `env_vars`, `starter` (`{filename: {content, snippet?}}`).
 
 ### `explanations.json`
 
@@ -260,13 +349,16 @@ the scenario of the function's finding, else a one-line sketch from the map.
 
 `header` (`repo`, `name`, `commit`, `branch`, `dirty`, `remote`, `committed_at`, `generated_at`, `mode`, `privacy`),
 `scorecard` (`readiness`, `now` counts, `before` counts, `baseline_date`, `baseline_commit`), `architecture`,
-`security` (`open`, `accepted`, `fixed`, `changed`, `in_tests`, `protections`), `understanding`, `provenance`
-(`tools`, `models`, `rules`, including analysis packs), `limits` (strings: what the report does not prove),
-`digest` (`sha256:…`), `payload`.
+`security` (`open`, `accepted`, `fixed`, `changed`, `in_tests`, `protections`, `incomplete`: `[{tool, state, status,
+why, role, version}]`, the scanners that did not finish or did not cover everything; while it is not empty the memo, a
+notice under the tiles and the badge say `scan incomplete`, and the badge is never green), `understanding`,
+`provenance` (`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs), `limits`
+(strings: what the report does not prove; one line per incomplete scanner), `digest` (`sha256:…`), `payload`.
 
 ### Other files
 
-`run.json` (timings, privacy, offline, trace, finished_at), `baseline.json` (first-run findings for "fixed since"),
+`calls.json` (above), `run.json` (timings, privacy, offline, trace, `incomplete` `[{tool, state, status, why, role}]`,
+finished_at), `baseline.json` (first-run findings for "fixed since"),
 `cache/` (explanation cache). In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed),
 `lantern-packs/*.json` (project analysis packs), `lantern-narratives.md` (the builder's own notes for the Evidence Report).
 
