@@ -138,25 +138,28 @@ _NAME = re.compile(r"([A-Za-z][A-Za-z0-9-]*)[ \t]*")
 def _value(text: str, pos: int) -> tuple[str | None, int]:
     """(the value that starts at `pos`, where the next line starts), read the way git's own `parse_value` reads
     it: quotes keep spaces, a `#` or `;` outside quotes ends it, a backslash at the end of a line carries on in the
-    next. None for a value git refuses (a quote left open, an escape it does not know)."""
-    out: list[str] = []
-    quote, comment, space, n = False, False, 0, len(text)
+    next. Blanks before and after the value are dropped; blanks inside it are kept as written, a tab as a tab,
+    which is git's reading since 2.45 (older git made each of them a space). None for a value git refuses (a quote
+    left open, an escape it does not know)."""
+    out: list[str] = []                         # one character each
+    quote, comment, n = False, False, len(text)
+    cut: int | None = None      # where a run of blanks began: the value ends there unless something follows them
     while True:
         c = text[pos] if pos < n else "\n"
         pos += 1
         if c == "\n":
-            return (None if quote else "".join(out)), pos
+            return (None if quote else "".join(out[:cut])), pos
         if comment:
             continue
         if c in " \t\r" and not quote:
-            space += bool(out)                  # spaces before the value are dropped, those at its end too
+            if out:                             # blanks before the value are dropped
+                cut = len(out) if cut is None else cut
+                out.append(c)
             continue
         if c in "#;" and not quote:
             comment = True
             continue
-        if space:
-            out.append(" " * space)
-            space = 0
+        cut = None
         if c == "\\":
             c = text[pos] if pos < n else "\n"
             pos += 1

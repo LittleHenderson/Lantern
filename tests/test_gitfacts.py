@@ -580,9 +580,14 @@ def test_the_settings_file_is_read_as_text_the_way_git_reads_it(tmp_path):
     got = gitfacts.settings(tmp_path)
     listed = git("config", "-f", str(cfg), "--null", "--list", cwd=tmp_path)    # git's own reading of the same text
     want = dict(item.split("\n", 1) for item in listed.split("\0") if item)     # the last value of a name wins
-    assert len(want) == 15 and got == want
+    # One of the 15 depends on git's age. A tab written inside a value is kept as written since git 2.45 (its
+    # release notes: `"git config" corrupted literal HT characters written in the configuration file as part of a
+    # value, which has been corrected`); before that every blank inside a value came out as a space (2.43.0,
+    # measured). Lantern reads it the way git reads it today; the other 14 must be git's own reading at any age.
+    assert len(want) == 15 and want["core.spaced"] in ("a \t b", "a   b")
+    assert got == want | {"core.spaced": "a \t b"}
     assert got["core.quoted"] == " a b " and got["core.half"] == "a b c" and got["core.long"] == "one   two"
-    assert got["core.escaped"] == 'a\tb\\c"d' and got["core.spaced"] == "a   b" and got["core.hash"] == "a#b;c"
+    assert got["core.escaped"] == 'a\tb\\c"d' and got["core.spaced"] == "a \t b" and got["core.hash"] == "a#b;c"
     assert got["remote.origin.url"] == "last" and got["remote.Origin.url"] == "first"   # a subsection keeps its case
     assert got["branch.main.remote"] == "origin" and got['section.with "quote".name'] == "on the same line"
     assert "core.fsmonitor" not in got                                           # includes are not followed
