@@ -357,7 +357,7 @@ def test_watch_tests_accepts_only_test_runners(tmp_path):
 def test_terminal_drawer_runs_lantern_commands_only(tmp_path):
     from lantern.server import TerminalRefused, run_terminal_command
     class Jobs:
-        def start(self, pid, kind, fn):
+        def start(self, pid, kind, fn, stop=None):
             return {"id": "j1", "kind": kind, "status": "running"}
     class Store:
         def settings(self):

@@ -15,6 +15,7 @@ Run:  LANTERN_ADMIN_SECRET=... uvicorn lantern_cloud.app:create_app --factory --
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gzip
 import hashlib
 import hmac
@@ -174,7 +175,14 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     ident = Identity(s.gateway_url, s.identity_ttl, transport=transport)
     worker = Worker(s, store) if start_worker else None
     gh = s.github_app()     # Connect GitHub (private repositories), or None
-    app = FastAPI(title="Lantern cloud", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        if worker is not None:   # the service is stopping: no new run starts, and the step each run is in is
+            worker.shutdown()    # ended with everything it started; the run's record then says why it stopped
+
+    app = FastAPI(title="Lantern cloud", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store, app.state.settings, app.state.identity, app.state.worker = store, s, ident, worker
     provider_for = provider_for or (lambda token: hosted(token, s.gateway_url))
     idle = IdleExit(s.idle_minutes, busy=lambda: store.busy() > 0)

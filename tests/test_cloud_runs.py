@@ -460,3 +460,96 @@ def test_the_code_is_read_from_a_folder_named_after_the_repository():
     assert s("lantern:upload/my app.zip") == "my-app"
     for bad in ("lantern:upload/..", "lantern:upload/", "not a link", None):
         assert s(bad) == "app"
+
+
+# ---------------------------------------------------------------------------- stage 7: stopping, and the guard
+def _lines(cloud, rid) -> list[str]:
+    return cloud.app.state.worker.logs.since(rid, 0)[0]
+
+
+def test_shutting_the_service_down_ends_the_step_a_run_is_in_with_everything_it_started(tmp_path, clone_from, monkeypatch):
+    """Before, `shutdown` only kept waiting runs from starting: the step that was running went on to its end, and
+    the processes it had started (here a child, one in a session of its own, a daemon) stayed after it."""
+    from test_sandbox_safety import LEAVES, _started, _still_there
+    monkeypatch.setattr(worker_mod.Worker, "analyze_cmd",
+                        staticmethod(lambda repo, out, privacy, offline=True: [sys.executable, "-c", LEAVES]))
+    cloud, gw, s = make(tmp_path)
+    tok = gw.sign_in("github:1", "github:octo")
+    rid = cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"]
+    end, pids = time.time() + 120, []
+    while not pids and time.time() < end:
+        pids = _started(_lines(cloud, rid))
+        time.sleep(0.1)
+    try:
+        assert len(pids) == 3, _lines(cloud, rid)
+        t = time.time()
+        cloud.app.state.worker.shutdown()
+        done = wait(cloud, tok, rid, timeout=60)
+        assert done["status"] == "error" and done["error"] == worker_mod.SHUT_DOWN, done
+        assert time.time() - t < 30
+        assert _still_there(pids) == [], "a process the step started outlived the service's shutdown"
+        assert list(Path(s.work_dir).iterdir()) == [] and not (Path(s.results_dir) / rid).exists()
+    finally:
+        for pid in pids:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+
+
+def test_a_step_is_not_started_once_the_service_is_stopping(tmp_path, clone_from):
+    cloud, gw, s = make(tmp_path)
+    worker = cloud.app.state.worker
+    worker.stopping.set()                      # as `shutdown` does, with the pool left open so the run is taken up
+    tok = gw.sign_in("github:1", "github:octo")
+    done = wait(cloud, tok, cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"])
+    assert done["status"] == "error" and done["error"] == worker_mod.SHUT_DOWN
+    assert not any("sandbox: Landlock" in x for x in _lines(cloud, done["id"])), "a step was started"
+    assert list(Path(s.work_dir).iterdir()) == []
+
+
+def test_the_service_stops_its_worker_when_it_is_shut_down(tmp_path):
+    cloud, _gw, _s = make(tmp_path)
+    worker = cloud.app.state.worker
+    with cloud:                                # start-up and shutdown, as the server that runs the service does them
+        assert cloud.get("/v1/health").status_code == 200 and not worker.stopping.is_set()
+    assert worker.stopping.is_set()
+
+
+@pytest.mark.parametrize("guard", ["missing", "there"])
+def test_a_reading_step_whose_guard_did_not_load_says_so_and_goes_on(guard, tmp_path, clone_from, monkeypatch):
+    """The cloud's steps read a project and run none of it, so they carry on without the guard. Before, nothing
+    said that it was not there."""
+    from lantern import _jail, sandbox
+    if guard == "missing":
+        monkeypatch.setattr(sandbox, "SITECUSTOMIZE", "# a guard that did not load\n")
+    cloud, gw, s = make(tmp_path)
+    tok = gw.sign_in("github:1", "github:octo")
+    done = wait(cloud, tok, cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"])
+    assert done["status"] == "done", done
+    said = [x for x in _lines(cloud, done["id"]) if x == _jail.GUARD_MISSING]
+    assert len(said) == (1 if guard == "missing" else 0), _lines(cloud, done["id"])
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="needs root (the steps then run as another user)")
+def test_as_root_with_files_made_owner_only_a_step_still_has_its_guard(tmp_path, clone_from, monkeypatch):
+    """Where root's files are made owner-only (umask 077), the user the steps run as could not read the guard's
+    folder; Python left it out of its path without a word and the step ran with no guard."""
+    script = ("import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+              "s.sendto(b'x', ('127.0.0.1', 9))\nprint('PACKET-SENT', flush=True)\n")
+    monkeypatch.setattr(worker_mod.Worker, "analyze_cmd", staticmethod(lambda repo, out, privacy, offline=True: [sys.executable, "-c", script]))
+    cloud, gw, s = make(tmp_path)
+    tok = gw.sign_in("github:1", "github:octo")
+    old = os.umask(0o077)
+    try:
+        done = wait(cloud, tok, cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"])
+    finally:
+        os.umask(old)
+    lines = _lines(cloud, done["id"])
+    assert done["status"] == "blocked" and "network sendto" in done["error"], (done, lines)
+    assert not any("PACKET-SENT" in x for x in lines) and _jail_guard_missing() not in lines
+
+
+def _jail_guard_missing() -> str:
+    from lantern import _jail
+    return _jail.GUARD_MISSING

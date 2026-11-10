@@ -5,6 +5,47 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- A project's tests are not run without their sandbox, and nothing they start is left running (2026-11-10; stage 7
+  of the 2026-11-09 directive, part 1). Measured first, on the code as it was, with a planted test that starts
+  three programs (a plain child, one that moves to its own session, a daemon): all three were still running after
+  the tests had ended; two of the three after the time limit, while the log said "every process it started was
+  ended"; and all three, with the test command itself, after Lantern was killed. When the kernel refused the rules
+  that keep writes inside the sandbox's temp folder, the launcher printed "Landlock restrict error 7" and ran the
+  tests all the same. They also ran when the guard that refuses writes and network connections was not in their
+  Python, which is what happened for root with new files made owner-only (`umask 077`): a planted test sent a
+  network packet and nothing was refused. On Windows no answer of the calls that build the Job Object was looked
+  at (tried against a stand-in for Windows' own library: when Windows refuses to put the tests in the job they run
+  outside it without a word, and the job's handle stays open). Deleting the sandbox's folder changed the mode of a
+  folder outside it that the project's copy held a link to, and when the folder could not be deleted it set the
+  folder around it to owner-only (the system's temp folder, for every user, when Lantern is root). As an ordinary
+  user, a test that left a folder with every right taken off stopped the run with a `TypeError` and left the copy
+  of the project on disk.
+  Now the tests are not started when a restriction the sandbox counts on cannot be put in place (the kernel
+  refuses the Landlock rules, the no-new-privileges switch or the change to the unprivileged user; the guard is not
+  in the tests' Python; a Windows call that builds or fills the Job Object fails, each one checked and named with
+  its error number in the new `lantern/winjob.py`; the project cannot be copied; Docker could not start its
+  container). The check of the code goes on, and the results say that the tests were not run and why, in Lantern's
+  own words: `run.json` (`trace.ran` false, `trace.unavailable`), the score ("Tests pass" is left out, not failed),
+  the Evidence Report's Limits, and the app ("Your tests were not run."). A system that has fewer walls by design
+  (a Linux kernel with no Landlock, macOS, Windows) still runs tests with the walls it has, listed on the sheet.
+  Nothing a test run starts outlives it: on Linux the launcher stays as the command's supervisor and ends every
+  process beneath it (also one that moved to another session or became a daemon) when the tests end, at the time
+  limit, on a stop, when the app closes and when Lantern is killed; on Windows the Job Object does; with Docker
+  the container is removed and the answer read. The app has a **Stop the tests** button
+  (`POST /api/jobs/<id>/stop`); a stop changes no result (in the browser check the tests were ended 0.8 seconds
+  after the click). What could not be ended is said (`not_ended`, the log, the app's message), and nothing says
+  beside it that everything was. A test run stopped at the time limit reads "stopped at the time limit" in the
+  score, not "exited None". Deleting the sandbox's folder changes nothing outside it and the log names a folder
+  that is still there.
+  The cloud service's steps go through the same launcher: a step is ended with everything it started when the
+  service shuts down (the run then fails with "Lantern was shut down while this run was going. Start it again.")
+  and when the service's process is gone. One silent case was found there and fixed: as root with owner-only files
+  the analysis step ran without its guard (tried with a stand-in for that step which sends a packet to this
+  computer: the packet went out; now it is refused and the run ends `blocked`). These steps read a project and
+  never run it, so without Landlock or the guard they say so in the run's log and carry on.
+  Tests: `tests/test_sandbox_safety.py` (new), six more in `tests/test_cloud_runs.py`, and the browser check now
+  presses the button. Not proven here: Windows itself (four tests that only CI's Windows job runs). Known limits
+  are in `docs/audit/CLAIMS.md` (A4c, A4d) and CLAUDE.md's Known gaps.
 - CI runs every test, and its log names each test it skips (2026-11-10). CI's test jobs installed neither PyJWT nor
   cryptography, so `tests/test_cloud_github.py` was skipped while it was imported: its 14 tests (a private
   repository is opened only for a person GitHub says may read it) counted as one skipped test, `pytest -q` named no

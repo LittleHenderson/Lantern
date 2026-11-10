@@ -28,11 +28,25 @@ def out_dir(repo: Path, out: str | Path | None = None) -> Path:
     return d
 
 
+class Stopped(Exception):
+    """The person stopped the project's tests while they ran (`analyze(cancel=)`). The run ends there and no result
+    file is written, so the results stay those of the last check that finished: a stop takes nothing away.
+    `not_ended`: what the tests started and Lantern could not end, in its own words (empty when nothing is left)."""
+
+    def __init__(self, not_ended=()):
+        super().__init__("the tests were stopped before they ended; no result was changed")
+        self.not_ended = [str(x) for x in not_ended]
+
+
 def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] | None = None,
             no_scan: bool = False, log: Log = print, offline: bool | None = None, sandbox: bool = False,
-            test_cwd: str = "") -> dict:
+            test_cwd: str = "", cancel=None) -> dict:
     """Graph -> (trace) -> scan -> readiness -> report -> evidence. Returns a short summary.
-    `sandbox`: run `trace_cmd` (a test command) in `lantern.sandbox` instead of directly (the app always does)."""
+    `sandbox`: run `trace_cmd` (a test command) in `lantern.sandbox` instead of directly (the app always does).
+    When the sandbox cannot be set up the tests are not run, `run.json` says why (`trace.ran` false,
+    `trace.unavailable`), and the rest, which only reads the code, is done all the same. `cancel`: a
+    threading.Event; set while the tests run, it ends them and everything they started, and `Stopped` is raised
+    before any result file is written."""
     from . import remote
     if remote.is_clone(repo):   # a clone whose checkout could not be completed would report on part of a repository
         remote.check_complete(repo)
@@ -65,11 +79,25 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
         extra: dict = {}
         if sandbox:
             from . import sandbox as sbx
-            data = sbx.run(repo, trace_cmd, log=log, cwd_rel=test_cwd)
-            extra = {k: data.get(k) for k in ("backend", "language", "traced", "timed_out", "blocked")}
-            m = merge_trace(g, data) if data.get("traced") else {"returncode": data.get("returncode"), "observed_edges": 0,
-                                                                  "recall": None, "runtime_only": 0}
-            m["stderr_tail"] = data.get("stderr_tail")
+            nothing = {"returncode": None, "observed_edges": 0, "recall": None, "runtime_only": 0}
+            try:
+                data = sbx.run(repo, trace_cmd, log=log, cwd_rel=test_cwd, cancel=cancel)
+            except sbx.Unavailable as e:   # no sandbox, no tests; reading the code needs neither
+                data = None
+                extra = {"ran": False, "unavailable": str(e)}
+                m = dict(nothing)
+                log(f"trace   the tests were not run: {e}. The rest of the check reads the code and goes on.")
+            if data is not None:
+                if data.get("cancelled"):   # stopped part-way: what was recorded until then is not a test run
+                    log("trace   the tests were stopped before they ended; the results are left as they were")
+                    raise Stopped(data.get("not_ended") or [])
+                extra = {k: data.get(k) for k in ("backend", "language", "traced", "timed_out", "blocked", "not_ended")}
+                extra["ran"] = True
+                if data.get("traced"):
+                    m = merge_trace(g, data)
+                else:
+                    m = dict(nothing, returncode=data.get("returncode"))
+                m["stderr_tail"] = data.get("stderr_tail")
         else:
             m = merge_trace(g, run_trace(repo, trace_cmd))
         timings["trace"] = round(time.perf_counter() - t, 2)

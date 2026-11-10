@@ -606,9 +606,15 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
     else:
         out.append(_check("tests-entries", "Tests touch every entry point", 4, "skip", "no routes, pages, or commands"))
     tr = run_meta.get("trace") or {}
-    if "returncode" in tr:
-        out.append(_check("tests-pass", "Tests pass", 2, "pass" if tr["returncode"] == 0 else "fail",
-                          f"traced test run exited {tr['returncode']}", how="lantern analyze --trace"))
+    if tr.get("ran") is False:      # no sandbox, no tests: not run is not the same as failed
+        out.append(_check("tests-pass", "Tests pass", 2, "skip",
+                          "not run: the sandbox the tests run in could not be set up on this computer"))
+    elif "returncode" in tr:
+        rc = tr["returncode"]
+        said = (f"traced test run exited {rc}" if rc is not None else
+                "the test run did not end by itself: it was stopped at the time limit" if tr.get("timed_out") else
+                "the test run did not end by itself")
+        out.append(_check("tests-pass", "Tests pass", 2, "pass" if rc == 0 else "fail", said, how="lantern analyze --trace"))
     else:
         out.append(_check("tests-pass", "Tests pass", 2, "skip",
                           "not run (Lantern never runs your code unless you pass --trace)"))

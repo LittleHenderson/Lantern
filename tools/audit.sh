@@ -230,6 +230,8 @@ EOF
     bash -c "'$PY' tools/poison_report.py '$W/ca/report.html' '$W/poison-ca/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-ca/report.html' '$W/cshot'"
   # the live app: the test sheet (sandboxed run), the terminal drawer, a screenshot in Ask Lantern, a pack toggle
   A="$W/app"; mkdir -p "$A"; cp -r tests/fixtures/shop "$A/shop"
+  # a test that goes on for minutes, for the "Stop the tests" button; its name keeps it out of a plain `pytest` run
+  printf 'import time\n\n\ndef test_goes_on_until_it_is_stopped():\n    time.sleep(300)\n' > "$A/shop/tests/stop_check.py"
   "$PY" - "$A/shot.png" <<'PYEOF'
 import sys
 from PIL import Image, ImageDraw, ImageFont
@@ -247,8 +249,9 @@ PYEOF
   SPID=$!
   for _ in $(seq 100); do grep -q 'token=' "$A/serve.log" && break; sleep 0.2; done
   URL="$(grep -o 'http://[^ ]*token=[^ ]*' "$A/serve.log" | head -1)"
-  check "app: test sheet, terminal drawer, screenshot upload and pack toggle work with no JS errors" \
-    node tools/viewer_smoke.js --app "$URL" "$W/app" --image "$A/shot.png" "${EXPECT[@]}"
+  check "app: test sheet, Stop the tests, terminal drawer, screenshot upload and pack toggle work with no JS errors" \
+    node tools/viewer_smoke.js --app "$URL" "$W/app" --image "$A/shot.png" "${EXPECT[@]}" \
+      --slow-tests "python -m pytest -q tests/stop_check.py"
   cat "$W/log"
   kill $SPID 2>/dev/null; wait $SPID 2>/dev/null
   # the cloud website: signed out, sign-in sheet, My runs, progress, report; every run field carries an HTML payload

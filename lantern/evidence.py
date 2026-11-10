@@ -22,6 +22,7 @@ from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
 from .security import ID_VERSION
+from .trace import counted
 
 EVIDENCE_VERSION = 1
 NARRATIVES_FILE = "lantern-narratives.md"
@@ -93,7 +94,9 @@ def tool_versions(sec: dict | None) -> list[dict]:
 
 def run_options(sec: dict | None, run_meta: dict | None) -> dict:
     """How the results were made, so `lantern verify` can make them the same way."""
-    return {"scan": sec is not None, "trace": ((run_meta or {}).get("trace") or {}).get("command"),
+    tr = (run_meta or {}).get("trace")
+    # tests that were asked for and not run left nothing in the results: no trace to repeat
+    return {"scan": sec is not None, "trace": tr.get("command") if counted(tr) else None,
             "offline": bool((run_meta or {}).get("offline"))}
 
 
@@ -191,9 +194,14 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "type was unknown. They are marked likely or possible, never confirmed, and can point at the "
                    "wrong function.")
     tr = run_meta.get("trace")
-    if tr:
+    if counted(tr):
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "
                    "running are marked observed; everything else is static.")
+    elif isinstance(tr, dict) and tr.get("ran") is False:
+        why = tr.get("unavailable")
+        out.append("Runtime behavior. The project's tests were asked for and were not run, because the sandbox they "
+                   "run in could not be set up" + (f" ({why[:300]})" if isinstance(why, str) and why else "")
+                   + ". Every edge is from static analysis.")
     else:
         out.append("Runtime behavior. No code was run for this report, so every edge is from static analysis and "
                    "tests were not executed.")

@@ -36,7 +36,7 @@ from pathlib import Path
 
 import httpx
 
-from lantern import learn, remote, sandbox
+from lantern import _jail, learn, remote, sandbox
 
 from .ghapp import NoAccess
 from .settings import Settings
@@ -56,6 +56,8 @@ PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROX
               "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS")
 
 
+SHUT_DOWN = "Lantern was shut down while this run was going. Start it again."
+SHUT_DOWN_EXPLAIN = "Lantern was shut down while writing these. Click Explain again."
 UPLOAD_EXPLAIN = ("An uploaded app is deleted when its check ends, so Lantern cannot read its code again to explain it. "
                   "Explanations work for apps checked from a link, or in the Lantern app on your computer.")
 
@@ -66,6 +68,13 @@ class RunFailed(Exception):
     def __init__(self, message: str, status: str = "error"):
         super().__init__(message)
         self.status = status
+
+
+class ShutDown(RunFailed):
+    """The service is stopping (`Worker.shutdown`): the step was ended, with everything it had started."""
+
+    def __init__(self):
+        super().__init__(SHUT_DOWN)
 
 
 def clone_repo(link: str, dest: Path, log, token: str | None = None) -> Path:
@@ -221,6 +230,7 @@ class Worker:
         self.uploads.mkdir(parents=True, exist_ok=True)
         os.chmod(self.work, 0o711)   # nosec B103 - a folder: others may pass through (the analysis user, when we run as root), not list
         self.pool = ThreadPoolExecutor(max_workers=max(1, settings.concurrent_jobs), thread_name_prefix="lantern-run")
+        self.stopping = threading.Event()   # shutdown(): the steps that are running end, with all they started
         self.tokens: dict[str, str] = {}    # run id -> allowance token, only while its explanations wait
         self.github = settings.github_app()   # Connect GitHub, or None
         self._sweep_work()
@@ -257,6 +267,9 @@ class Worker:
         return self.pool.submit(self.explain, rid)
 
     def shutdown(self) -> None:
+        """No new run starts, and a step that is running is ended with everything it started. (When the service
+        itself is killed, the launcher of each step is told by the kernel and does the same: `lantern._jail`.)"""
+        self.stopping.set()
         self.pool.shutdown(wait=False, cancel_futures=True)
 
     # ------------------------------------------------------------------ one run
@@ -449,7 +462,7 @@ class Worker:
             status = "done"
             log(f"done: {summary['validated']} of {summary['functions']} functions explained")
         except RunFailed as e:
-            error = str(e)
+            error = SHUT_DOWN_EXPLAIN if isinstance(e, ShutDown) else str(e)
             log("stopped: " + error)
         except Exception as e:  # noqa: BLE001 - recorded, never shown with a traceback
             error = "Something went wrong on Lantern's side. Nothing was changed; click Explain again."
@@ -471,7 +484,10 @@ class Worker:
 
     def _jailed(self, rid, root: Path, cmd: list[str], *, cwd: Path, net: bool, log, timeout: float,
                 audits: Path | None = None, extra: dict | None = None):
-        """Run `cmd` in the restricted process: writes only under root/tmp, no network unless `net`."""
+        """Run `cmd` in the restricted process: writes only under root/tmp, no network unless `net`. `ShutDown`
+        when the service is stopping: the step is then not started, or ended with everything it had started."""
+        if self.stopping.is_set():
+            raise ShutDown()
         tmp = root / "tmp"
         env = sandbox._env_base(tmp)
         hook = root / "hook"
@@ -481,6 +497,7 @@ class Worker:
         if not net:   # the audit hook refuses sockets and writes outside tmp, and says so in the output
             (hook / "sitecustomize.py").write_text(sandbox.SITECUSTOMIZE, encoding="utf-8")
             paths.insert(0, str(hook))
+            env["LANTERN_SANDBOX_GUARD"] = "expected"   # the step says so in the log when it is not in its Python
         env.update({"PYTHONPATH": os.pathsep.join(paths), "LANTERN_HOME": str(tmp / "home"),
                     "LANTERN_OFFLINE": "0" if net or audits else "1", "LANTERN_CLOUD_RUN": "1", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
                     "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": "*",
@@ -497,12 +514,21 @@ class Worker:
                 for f in files:
                     os.chown(os.path.join(dirpath, f), 65534, 65534)
             os.chmod(root, 0o711)
+            if not net:   # where root's files are made owner-only (umask 077) the step ran with no guard, unsaid
+                sandbox._others_may_read(hook)
         if os.name == "posix":
-            policy = {"writable": [str(tmp)], "nobody": as_nobody, "python": True, "net": not net}
+            # no "must": these steps read a project and never run it, so where the kernel has no Landlock, or
+            # refuses it, they say so in the log and carry on (lantern/_jail.py). "parent": a launcher whose service
+            # is gone does not start its step, and one whose service ends, ends its step.
+            policy = {"writable": [str(tmp)], "nobody": as_nobody, "python": True, "net": not net, "parent": os.getpid()}
             cmd = [sys.executable, "-I", "-c",
                    f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])",
                    json.dumps(policy), "--", *cmd]
-        return sandbox._stream(cmd, cwd, env, timeout, log)
+        rc, output, timed_out = sandbox._stream(cmd, cwd, env, timeout, log, cancel=self.stopping,
+                                                ask=_jail.ASK if sandbox._LINUX else 0.0)
+        if rc is None and not timed_out:
+            raise ShutDown()
+        return rc, output, timed_out
 
 
 def _now() -> str:

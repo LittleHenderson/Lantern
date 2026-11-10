@@ -239,18 +239,22 @@ class Store:
 class Jobs:
     def __init__(self):
         self.jobs: dict[str, dict] = {}
+        self.stops: dict[str, threading.Event] = {}   # beside the jobs, which are sent to the page as they are
         self.lock = threading.Lock()
 
     def busy(self, pid: str) -> dict | None:
         return next((j for j in self.jobs.values() if j["project"] == pid and j["status"] == "running"), None)
 
-    def start(self, pid: str, kind: str, fn) -> dict:
+    def start(self, pid: str, kind: str, fn, stop: threading.Event | None = None) -> dict:
+        """`stop`: the event `fn` watches. A job that has one can be stopped by the person (`can_stop`, `stop()`)."""
         with self.lock:
             if self.busy(pid):
                 raise RuntimeError("a run is already in progress for this project")
             job = {"id": uuid.uuid4().hex[:12], "project": pid, "kind": kind, "status": "running",
-                   "log": [], "result": None, "error": None, "started": time.time()}
+                   "log": [], "result": None, "error": None, "started": time.time(), "can_stop": stop is not None}
             self.jobs[job["id"]] = job
+            if stop is not None:
+                self.stops[job["id"]] = stop
 
         def log(line):
             job["log"].append(str(line))
@@ -266,6 +270,20 @@ class Jobs:
             job["finished"] = time.time()
 
         threading.Thread(target=work, daemon=True).start()
+        return job
+
+    def stop(self, jid: str) -> dict | None:
+        """Ask a running job to stop (a test run: the tests and everything they started are ended). None when there
+        is no such job; ValueError when it is not one that can be stopped."""
+        job = self.jobs.get(jid)
+        if job is None:
+            return None
+        event = self.stops.get(jid)
+        if event is None:
+            raise ValueError("this job cannot be stopped part-way; it ends by itself")
+        if job["status"] == "running":
+            job["stopping"] = True
+            event.set()
         return job
 
 
@@ -493,8 +511,15 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
         app.store.confirm_test(p["id"], " ".join(cmd))   # typed in full by the user: that is the confirmation
         det = sandbox.detect(repo)
         test_cwd = det.get("cwd", "") if det.get("language") == language else ""
-        return {"job": app.jobs.start(p["id"], "trace", lambda log: pipeline.analyze(
-            repo, out, privacy_default, trace_cmd=cmd, log=log, sandbox=True, test_cwd=test_cwd))}
+        stop = threading.Event()
+
+        def work(log):
+            try:
+                return pipeline.analyze(repo, out, privacy_default, trace_cmd=cmd, log=log, sandbox=True,
+                                        test_cwd=test_cwd, cancel=stop)
+            except pipeline.Stopped as e:   # asked to (POST /api/jobs/<id>/stop): not an error, and nothing changed
+                return {"cancelled": True, "not_ended": e.not_ended[:10]}
+        return {"job": app.jobs.start(p["id"], "trace", work, stop=stop)}
     a = _terminal_parser(verb).parse_args(args)
     if a.out is not None and _inside(repo, a.out, "--out") != out.resolve():
         raise TerminalRefused("--out is always this project's .lantern/ folder")
@@ -942,6 +967,10 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------ write routes
     def _post(self, method: str, path: str, b: dict):
         app = self.app
+        m = re.fullmatch(r"/api/jobs/(\w+)/stop", path)
+        if m and method == "POST":
+            job = app.jobs.stop(m.group(1))   # ValueError (400) for a job that cannot be stopped part-way
+            return self._json(job) if job else self._err(404, "no such job")
         if path == "/api/projects" and method == "POST":
             raw = str(b.get("path") or "").strip()
             if not raw:
@@ -1066,17 +1095,31 @@ class Handler(BaseHTTPRequestHandler):
             before = _load(out / "readiness.json") or {}
             before_score = _int(before.get("score"))
 
+            stop = threading.Event()   # set by POST /api/jobs/<id>/stop: the tests and all they started are ended
+
             def work(log):
-                res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log, sandbox=True, test_cwd=test_cwd)
+                try:
+                    res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log, sandbox=True,
+                                           test_cwd=test_cwd, cancel=stop)
+                except pipeline.Stopped as e:
+                    # The person pressed Stop. Not an error: the job ends `done`, no result file was written, and
+                    # the results are those of the last check that finished.
+                    return {"cancelled": True, "ran": True, "unavailable": None, "returncode": None, "observed": 0,
+                            "recall": None, "timed_out": False, "blocked": [], "not_ended": e.not_ended[:10],
+                            "note": None, "score_before": before_score, "score_after": before_score, "summary": None}
                 run = _load(out / "run.json") or {}
                 tr = run.get("trace") or {}
                 after = _load(out / "readiness.json") or {}
                 return {"returncode": tr.get("returncode"), "observed": tr.get("observed_edges"), "recall": tr.get("recall"),
                         "backend": tr.get("backend"), "language": tr.get("language"), "traced": tr.get("traced"),
                         "timed_out": tr.get("timed_out"), "blocked": tr.get("blocked") or [],
+                        # the sandbox could not be set up, so the tests were not run (the reason, in Lantern's words)
+                        "ran": tr.get("ran") is not False, "unavailable": tr.get("unavailable"), "cancelled": False,
+                        # what the tests started and Lantern could not end, in its own words (empty: nothing is left)
+                        "not_ended": [str(x)[:300] for x in (tr.get("not_ended") or [])][:10],
                         "note": None if tr.get("traced") else sandbox.JS_NOTE,
                         "score_before": before_score, "score_after": _int(after.get("score")), "summary": res}
-            return self._json(app.jobs.start(p["id"], "trace", work), 202)
+            return self._json(app.jobs.start(p["id"], "trace", work, stop=stop), 202)
         if action == "explain":
             usage.record("explain_one" if b.get("nodes") else "explain")
             provider = app.make_provider()
@@ -1234,5 +1277,7 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
     except KeyboardInterrupt:
         print("\nstopped")
     finally:
+        from . import sandbox
+        sandbox.stop_all()   # tests that are running, and everything they started, end with the app
         httpd.server_close()
     return 0

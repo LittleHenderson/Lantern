@@ -13,7 +13,19 @@ map can mark the calls that really happen. Those tests run here, never in the pr
   limits on POSIX (CPU, file size, memory for Python) and a Job Object on Windows (memory, kill on close); on Linux a
   Landlock rule set that allows writes only inside the sandbox's temp folder and denies TCP connect/bind; for Python a
   start-up audit hook that refuses writes outside the temp folder and any network socket, on every OS; when Lantern
-  runs as root the tests run as `nobody`. The whole process tree is killed at the wall clock.
+  runs as root the tests run as `nobody`.
+
+Nothing the tests start outlives them (2026-11-10). When the test command ends, at the wall clock, when the caller
+asks (`cancel`, the app's Stop) and when Lantern itself ends, every process it started is ended too: on Linux by the
+launcher, which stays as their supervisor and finds them in /proc whatever session or process group they moved to
+(`lantern._jail`); on Windows by the Job Object, which the process is put in before it runs (`lantern.winjob`);
+elsewhere through the process group. What could not be ended is said in the log, never passed over.
+
+If the sandbox cannot be set up, the tests are not run (`Unavailable`): the Job Object on Windows, Landlock where
+the kernel has it, the change to `nobody`, the copy, and for Python the guard above (checked from inside the tests'
+Python before the first test is imported). Reading the code needs none of this, so the analysis carries on
+(`pipeline.analyze` records why the tests did not run). Before, each of these failed without a word and the tests
+ran anyway.
 
 Both backends print `LANTERN-SANDBOX-BLOCKED: <what>` when a test tries to write outside its temp folder or open a
 network connection; `blocked` in the result lists them so the app can say why the tests failed.
@@ -26,10 +38,13 @@ Nothing here can create, close or re-rank a finding: the result is call pairs an
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import re
 import shlex
 import shutil
+import signal
 import site
 import stat
 import subprocess
@@ -183,18 +198,28 @@ def backend_for(language: str) -> str:
 
 
 def describe(repo: Path, language: str) -> dict:
-    """What the sheet shows before the user clicks Run."""
+    """What the sheet shows before the user clicks Run: the walls this system's sandbox has. Each line is something
+    that is either put in place or, when it cannot be, keeps the tests from running (`Unavailable`), and the last
+    line says so. A promise is made only where it is kept: "everything it started is stopped" needs the launcher's
+    supervisor (Linux) or the job (Windows)."""
     b = backend_for(language)
+    without = "if any of this cannot be set up, your tests are not run"
     if b == "docker":
         return {"name": "docker", "label": "Docker container", "image": image_for(language),
                 "details": ["your project is mounted read-only at /app", "network off (--network none)",
-                            "2 CPUs, 2 GB memory, 10 minutes", "runs as an unprivileged user; scratch space is wiped after"]}
+                            "2 CPUs, 2 GB memory, 10 minutes", "runs as an unprivileged user; scratch space is wiped after",
+                            without]}
     det = ["a fresh read-only copy of your project in a temp folder, deleted after",
-           "your environment variables are not passed on (no keys or tokens)", "10 minutes, then everything it started is stopped"]
+           "your environment variables are not passed on (no keys or tokens)",
+           "10 minutes, then everything it started is stopped" if _LINUX or sys.platform == "win32" else
+           "10 minutes, then the tests are stopped (a program they moved out of their group is not found again)"]
     if sys.platform.startswith("linux") and landlock_abi() >= 1:
         det.insert(1, "writes allowed only in its own temp folder" + (", network connections refused" if landlock_abi() >= 4 else ""))
     if language == "python":
         det.insert(1, "writing outside its temp folder and opening network connections are refused")
+    if sys.platform == "win32":
+        det.insert(1, "inside a Windows job: 2 GB of memory for each process, and nothing it starts can leave the job")
+    det.append(without)
     return {"name": "subprocess", "label": "Restricted process on this computer", "image": None, "details": det}
 
 
@@ -263,6 +288,7 @@ def _hook(ev, args):
         if host not in (None, "", "localhost", "127.0.0.1", "::1", b"localhost"):
             _block("network lookup " + repr(host)[:80])
 _sys.addaudithook(_hook)
+_sys.lantern_sandbox_guard = "on"   # lantern.tracehook looks for this before it runs a test (LANTERN_SANDBOX_GUARD)
 '''
 
 
@@ -290,25 +316,52 @@ def _make_read_only(root: Path) -> None:
         os.chmod(dirpath, os.stat(dirpath).st_mode & ~_WRITE_BITS)
 
 
-def _rm(path: Path) -> None:
-    def onerr(fn, p, exc):
+def _unlock(path) -> None:
+    """Give the owner its rights back on every real folder at and beneath `path`, so that the copy (made read-only)
+    and whatever the tests left (a folder with every right taken off) can be deleted. A link is never followed and
+    never changed: what it points at is not the sandbox's."""
+    todo = [os.fspath(path)]
+    while todo:
+        d = todo.pop()
         try:
-            os.chmod(p, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
-            parent = os.path.dirname(p)
-            os.chmod(parent, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
-            fn(p)
+            st = os.lstat(d)
+            if not stat.S_ISDIR(st.st_mode):
+                continue
+            if stat.S_IMODE(st.st_mode) & stat.S_IRWXU != stat.S_IRWXU:
+                os.chmod(d, stat.S_IMODE(st.st_mode) | stat.S_IRWXU)
+            with os.scandir(d) as entries:
+                todo.extend(e.path for e in entries if e.is_dir(follow_symlinks=False))
+        except OSError:
+            continue
+
+
+def _rm(path: Path) -> bool:
+    """Delete a folder the sandbox made, with all that is in it. True when nothing is left of it.
+
+    Only what is inside `path` is changed. Until 2026-11-10 a link in the copy that pointed at a folder outside had
+    that folder's mode changed, and when the folder could not be deleted the mode of the folder it is in was set to
+    owner-only: the system's temp folder, for all its users, when Lantern ran as root. Both without a word, and
+    with the folder still there."""
+    path = Path(path)
+    if not os.path.lexists(path):
+        return True
+    if os.path.islink(path) or not path.is_dir():
+        try:
+            os.unlink(path)
         except OSError:
             pass
-    def owner_writable(p):   # give the owner its write bit back so the copy can be deleted
+        return not os.path.lexists(path)
+    _unlock(path)
+
+    def again(fn, p, exc):   # Windows refuses to delete a read-only file: give it its write bit, try once more
         try:
-            os.chmod(p, os.stat(p).st_mode | stat.S_IWUSR)
+            if fn in (os.unlink, os.remove, os.rmdir) and not os.path.islink(p):
+                os.chmod(p, stat.S_IMODE(os.lstat(p).st_mode) | stat.S_IWRITE | stat.S_IREAD)
+                fn(p)
         except OSError:
             pass
-    owner_writable(path)
-    for dirpath, dirs, _files in os.walk(path):
-        for d in dirs:
-            owner_writable(os.path.join(dirpath, d))
-    shutil.rmtree(path, onerror=onerr) if sys.version_info < (3, 12) else shutil.rmtree(path, onexc=onerr)
+    shutil.rmtree(path, onerror=again) if sys.version_info < (3, 12) else shutil.rmtree(path, onexc=again)
+    return not os.path.lexists(path)
 
 
 def _env_base(tmp: Path) -> dict:
@@ -347,77 +400,262 @@ def _python_argv(words: list[str]) -> list[str]:
     return rest
 
 
-def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None) -> tuple[int | None, str, bool]:
-    """Run, streaming each output line to `log`; at the wall clock the whole process tree is killed."""
-    from .remote import _kill_tree
-    kw: dict = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {"start_new_session": True}
-    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", **kw)
-    if job is not None:
-        job(proc)
+class Unavailable(RuntimeError):
+    """The sandbox could not be set up, so the project's tests were not run. `str()` says why, in words for a
+    person; it is never text read from the project or from a run's output."""
+
+
+_LINUX = sys.platform.startswith("linux")
+# POSIX with waitid: a process that has ended can be seen without being collected, and until it is collected its
+# number still names its session and process group, so those can be ended without the number meaning another program
+_WAITID = os.name == "posix" and all(hasattr(os, n) for n in ("waitid", "P_PID", "WEXITED", "WNOWAIT", "WNOHANG"))
+_LIVE: set = set()             # the commands running now
+_LIVE_LOCK = threading.Lock()
+_KILL_WAIT = 5.0               # seconds a stop goes on ending what is still there before it says what is left
+# the launcher's own last line when it could not end something (`lantern._jail._supervise`); only the number is read
+_LEFT_BY_LAUNCHER = re.compile(r"sandbox: (\d{1,6}) process\(es\) the command started could not be ended")
+
+
+def stop_all(wait: float = 30.0) -> int:
+    """Ask every command the sandbox is running to end, with everything it started, and wait until that is done
+    (the app closing, the service shutting down, the program leaving). Returns how many were running."""
+    with _LIVE_LOCK:
+        runs = list(_LIVE)
+    for r in runs:
+        r.asked.set()
+    end = time.monotonic() + wait
+    for r in runs:
+        r.over.wait(max(0.0, end - time.monotonic()))
+    return len(runs)
+
+
+atexit.register(stop_all)
+
+
+class _Run:
+    """One command the sandbox is running: its process, the Windows job that holds it, and the one way to end it."""
+
+    def __init__(self, proc, job, ask: float, also):
+        self.proc, self.job, self.ask, self.also = proc, job, ask, also
+        self.asked = threading.Event()        # stop_all(): end this run
+        self.over = threading.Event()         # it has been ended and collected
+        self.said: list[str] | None = None
+        self.left: list[str] = []             # of `said`: what could not be ended
+
+    def ended(self) -> bool:
+        p = self.proc
+        if p.returncode is not None:
+            return True
+        if _WAITID:
+            try:
+                return os.waitid(os.P_PID, p.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG) is not None
+            except ChildProcessError:
+                pass
+        return p.poll() is not None
+
+    def stop(self) -> list[str]:
+        """End the command and everything it started; also after it ended by itself, for what it left running.
+        Returns what there is to say about it, in words; `self.left` holds the ones about something that could not
+        be ended (a run says "everything it started was ended" only when that list is empty)."""
+        if self.said is not None:
+            return self.said
+        p, said = self.proc, []
+
+        def failed(text: str) -> None:
+            said.append(text)
+            self.left.append(text)
+        running = not self.ended()
+        if self.job is not None:              # Windows: every process is in the job, whatever it started
+            try:
+                self.job.stop()
+                end = time.monotonic() + _KILL_WAIT
+                while self.job.count() > 0:
+                    if time.monotonic() > end:
+                        failed(f"{self.job.count()} process(es) are still in the job after Windows was asked to end them")
+                        break
+                    time.sleep(0.02)
+            except OSError as e:
+                failed(f"Windows did not end the processes of this run ({e})")
+        if os.name == "posix":
+            if running and self.ask > 0:
+                # ask first: the launcher (lantern._jail) ends everything the command started, also what left its
+                # session and process group, and then goes
+                try:
+                    os.kill(p.pid, signal.SIGTERM)
+                    os.kill(p.pid, signal.SIGCONT)     # a launcher that was stopped would not hear it
+                except OSError:
+                    pass
+                end = time.monotonic() + self.ask
+                while not self.ended() and time.monotonic() < end:
+                    time.sleep(0.02)
+                if not self.ended():
+                    said.append("the launcher did not answer when asked to stop, so its processes were killed")
+            if _LINUX and not self.ended():
+                # still there: every process of the run is beneath it, also one that left its session, so they
+                # are ended first and the launcher after them
+                from . import _jail
+                _jail.end_beneath(p.pid)
+            end = time.monotonic() + _KILL_WAIT
+            while True:                       # whatever is still there, the command itself included
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                rest = []
+                if _LINUX:
+                    from . import _jail
+                    _jail.end_session(p.pid)
+                    rest = _jail.in_session(p.pid)
+                if not rest:
+                    break
+                if time.monotonic() > end:
+                    failed(f"{len(rest)} process(es) this run started could not be ended")
+                    break
+                time.sleep(0.02)
+        elif p.poll() is None:
+            if self.job is None:
+                from .remote import _kill_tree
+                _kill_tree(p)
+            else:                             # a process that never got into the job (it has not run)
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            failed("the command did not end when it was killed")
+        if running and self.also is not None:
+            try:
+                problem = self.also()
+            except (OSError, subprocess.SubprocessError) as e:
+                problem = f"the clean-up after stopping it failed ({type(e).__name__})"
+            if problem:
+                failed(str(problem))
+        if self.job is not None:
+            self.job.close()
+        self.said = said
+        return said
+
+
+def _stream(cmd: list[str], cwd: Path, env: dict, timeout: float, log, job=None, cancel=None, ask: float = 0.0,
+            also=None, left: list | None = None) -> tuple[int | None, str, bool]:
+    """Run, streaming each output line to `log`, and leave nothing behind: when the command ends, at the wall
+    clock (`timeout`), when `cancel` (a threading.Event) is set and when `stop_all` is called, every process it
+    started is ended too. Returns (result, output, stopped at the wall clock); the result is None when the command
+    was stopped, at the wall clock or because it was asked.
+
+    `job`: called before the process is made; what it returns holds the process (Windows: `winjob.Job`, which the
+    process is put in before it runs). `ask`: seconds the command has to end what it started after SIGTERM, for a
+    launcher that does so (`_jail`), before everything is killed. `also`: called once the command was stopped
+    before its end (Docker: remove the container); it returns None, or the words for what it could not do.
+    `left`: a list that is given what could not be ended, each in Lantern's own words (empty: all of it was)."""
+    held = job() if job is not None else None
+    if sys.platform == "win32":
+        from . import winjob
+        kw: dict = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | (winjob.SUSPENDED if held is not None else 0)}
+    else:
+        kw = {"start_new_session": True}
+    try:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", **kw)
+    except BaseException:
+        if held is not None:
+            held.close()
+        raise
+    run = _Run(proc, held, ask, also)
+    with _LIVE_LOCK:
+        _LIVE.add(run)
     lines: list[str] = []
 
-    def reader():
+    def read():
         for line in proc.stdout:
             line = line.rstrip("\n")
             lines.append(line)
             if len(lines) > 4000:
                 del lines[:1000]
             log(line)
-    t = threading.Thread(target=reader, daemon=True)
-    t.start()
-    timed_out = False
+    reader, why = None, ""
     try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill_tree(proc)
+        if held is not None:
+            try:
+                held.take(proc.pid)           # in the job before it has run one instruction
+                held.release(proc.pid)        # from here it runs
+            except OSError as e:
+                raise Unavailable("Windows could not put the tests in the job that limits them and ends what they "
+                                  f"start ({e}), so they were not started") from e
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        deadline, delay = time.monotonic() + timeout, 0.001
+        while not run.ended():
+            if run.asked.is_set() or (cancel is not None and cancel.is_set()):
+                why = "asked"
+                break
+            if time.monotonic() >= deadline:
+                why = "clock"
+                break
+            time.sleep(delay)
+            delay = min(delay * 2, 0.05)
+    finally:
         try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            pass
-    except BaseException:
-        _kill_tree(proc)
-        raise
-    t.join(timeout=5)
-    return (None if timed_out else proc.returncode), "\n".join(lines), timed_out
+            said = run.stop()
+        finally:
+            with _LIVE_LOCK:
+                _LIVE.discard(run)
+            run.over.set()
+            if reader is None:
+                proc.stdout.close()
+    for line in said:
+        log("sandbox: " + line)
+    if left is not None:
+        left.extend(run.left)
+    reader.join(timeout=5)
+    if reader.is_alive():
+        log("sandbox: something this run started still holds its output open")
+    return (None if why else proc.returncode), "\n".join(lines), why == "clock"
 
 
-def _windows_job(proc) -> None:
-    """Windows: put the test process in a Job Object (2 GB per process, everything killed when the job closes)."""
+def _windows_job():
+    """Windows: the Job Object a project's tests run in (2 GB for each process; every process in it ends when the
+    job is stopped or closed, and nothing started inside can leave it). None on other systems, where `lantern._jail`
+    does that work. `Unavailable` when Windows does not make it: the tests are then not run."""
     if sys.platform != "win32":
-        return
+        return None
+    from . import winjob
     try:
-        import ctypes
-        from ctypes import wintypes
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        return winjob.Job()
+    except OSError as e:
+        raise Unavailable(f"Windows could not make the job that limits the tests and ends what they start ({e}), "
+                          "so they were not started") from e
 
-        class IO(ctypes.Structure):
-            _fields_ = [(n, ctypes.c_ulonglong) for n in ("r", "w", "o", "rt", "wt", "ot")]
 
-        class BASIC(ctypes.Structure):
-            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
-                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
-                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
-                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
+def _stopped(how: str, left: list[str], done: str) -> str:
+    """The log's line for a run that was stopped. It says that everything was ended only when that is so: until
+    2026-11-10 it said "every process it started was ended" whatever had happened."""
+    return f"sandbox: stopped {how}; " + (done if not left else "not everything it started could be ended (the lines above say what)")
 
-        class EXT(ctypes.Structure):
-            _fields_ = [("Basic", BASIC), ("Io", IO), ("ProcessMemoryLimit", ctypes.c_size_t),
-                        ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
-        k32.CreateJobObjectW.restype = wintypes.HANDLE
-        job = k32.CreateJobObjectW(None, None)
-        info = EXT()
-        info.Basic.LimitFlags = 0x2000 | 0x100   # KILL_ON_JOB_CLOSE | PROCESS_MEMORY
-        info.ProcessMemoryLimit = 2 << 30
-        k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))   # ExtendedLimitInformation
-        k32.OpenProcess.restype = wintypes.HANDLE
-        h = k32.OpenProcess(0x1F0FFF, False, proc.pid)
-        k32.AssignProcessToJobObject(job, h)
-        k32.CloseHandle(h)
-        proc._lantern_job = job   # closed (and the tree killed) when the Popen object goes away
-    except Exception:  # noqa: BLE001 - the wall clock and the scrubbed copy still apply
-        pass
+
+def _left_by_launcher(output: str) -> list[str]:
+    """What the launcher said it could not end, in Lantern's own words. Its only way to say it is a line of the
+    run's output, which a test can print as well: such a test says of itself that it left something."""
+    counts = [int(m.group(1)) for m in map(_LEFT_BY_LAUNCHER.fullmatch, output.splitlines()) if m]
+    return [f"{counts[-1]} process(es) the tests started could not be ended by their launcher"] if counts else []
+
+
+def _unavailable(rc, output: str) -> str | None:
+    """The launcher, or the tests' own Python before its first test, said the sandbox could not be set up: the
+    words for it (always Lantern's own, from `_jail.REASONS`), or None."""
+    from . import _jail
+    if rc != _jail.UNAVAILABLE:
+        return None
+    why = None
+    for line in output.splitlines():
+        i = line.find(_jail.MARK)
+        parts = line[i + len(_jail.MARK):].split() if i >= 0 else []
+        if parts and parts[0] in _jail.REASONS:
+            number = parts[1] if len(parts) > 1 and parts[1].isdigit() else ""
+            why = _jail.REASONS[parts[0]] + (f" (error {number})" if number else "")
+    return why
 
 
 def blocked_reasons(output: str) -> list[str]:
@@ -460,46 +698,68 @@ def _map_pairs(data: dict, inner_root: str, repo: Path) -> dict:
 
 
 def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, backend: str | None = None,
-        cwd_rel: str = "") -> Result:
+        cwd_rel: str = "", cancel=None) -> Result:
     """Run the test command `words` for `repo` in the sandbox. Returns trace data for `trace.merge_trace` (`pairs`)
-    plus `backend`, `language`, `traced`, `returncode`, `timed_out`, `blocked`, `output_tail`, `stderr_tail`."""
+    plus `backend`, `language`, `traced`, `returncode`, `timed_out`, `cancelled`, `blocked`, `not_ended` (what the
+    tests started and Lantern could not end, in its own words; empty when nothing is left), `output_tail`,
+    `stderr_tail`. `cancel`: a threading.Event; once set, the tests and everything they started are ended.
+    Raises `Unavailable` when the sandbox cannot be set up: the tests were then not run."""
     repo = Path(repo).resolve()
     language = check_command(words)
     backend = backend or backend_for(language)
     root = Path(tempfile.mkdtemp(prefix="lantern-sandbox-"))
     try:
         if backend == "docker":
-            res = _run_docker(repo, words, language, root, log, timeout, cwd_rel)
+            res = _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel)
         else:
-            res = _run_subprocess(repo, words, language, root, log, timeout, cwd_rel)
+            res = _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel)
     finally:
-        _rm(root)
+        if not _rm(root):
+            log(f"sandbox: its temp folder could not be deleted and is still there: {root}")
     res.update(backend=backend, language=language, traced=language == "python")
+    res["cancelled"] = res.get("returncode") is None and not res.get("timed_out")
     res["blocked"] = blocked_reasons(res.get("output_tail", "") + "\n" + res.pop("_full", ""))
     res["stderr_tail"] = res.get("output_tail", "")[-2000:]
     return res
 
 
-def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel) -> Result:
+def _others_may_read(folder: Path) -> None:
+    """The tests run as another user (`nobody`, when Lantern is root): let that user read what Lantern wrote for
+    them. Where root's own files are made owner-only (umask 077), Python left the folder of the guard out of its
+    path without a word and the tests ran with no guard."""
+    os.chmod(folder, stat.S_IRWXU | stat.S_IROTH | stat.S_IXOTH)
+    for f in folder.iterdir():
+        os.chmod(f, stat.S_IRUSR | stat.S_IWUSR | stat.S_IROTH)
+
+
+def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=None) -> Result:
+    from . import _jail
     app, tmp, hook = root / "app", root / "tmp", root / "hook"
-    tmp.mkdir()
-    hook.mkdir()
-    (hook / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
-    log("sandbox: copying the project to a temp folder")
-    _copy(repo, app)
-    _make_read_only(app)
-    env = _env_base(tmp)
     as_nobody = hasattr(os, "geteuid") and os.geteuid() == 0
-    if as_nobody:   # root ignores file modes: run the tests as nobody, who owns only the sandbox folder and its temp
-        for dirpath, _dirs, files in os.walk(tmp):
-            os.chown(dirpath, 65534, 65534)
-            for f in files:
-                os.chown(os.path.join(dirpath, f), 65534, 65534)
-        os.chown(root, 65534, 65534)   # mode stays 0700; the copy inside keeps root as owner and no write bits
+    try:
+        tmp.mkdir()
+        hook.mkdir()
+        (hook / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
+        log("sandbox: copying the project to a temp folder")
+        _copy(repo, app)
+        _make_read_only(app)
+        env = _env_base(tmp)
+        if as_nobody:   # root ignores file modes: run the tests as nobody, who owns only the sandbox folder and its temp
+            for dirpath, _dirs, files in os.walk(tmp):
+                os.chown(dirpath, 65534, 65534)
+                for f in files:
+                    os.chown(os.path.join(dirpath, f), 65534, 65534)
+            os.chown(root, 65534, 65534)   # mode stays 0700; the copy inside keeps root as owner and no write bits
+            _others_may_read(hook)
+    except OSError as e:
+        first = e.args[0][0] if isinstance(e, shutil.Error) and e.args and e.args[0] else None
+        what = f"{first[0]}: {first[2]}" if isinstance(first, (tuple, list)) and len(first) >= 3 else (e.strerror or type(e).__name__)
+        raise Unavailable(f"the project could not be copied into the sandbox's temp folder ({str(what)[:200]})") from e
     out_json = tmp / "trace.json"
     pkg_root = str(Path(__file__).resolve().parent.parent)
     if language == "python":
         env["PYTHONPATH"] = os.pathsep.join([str(hook), pkg_root, str(app)])
+        env["LANTERN_SANDBOX_GUARD"] = "required"   # lantern.tracehook runs no test without the guard above
         cmd = [sys.executable, "-m", "lantern.tracehook", str(out_json), str(app), "--", *_python_argv(words)]
     else:
         exe = shutil.which(words[0], path=env.get("PATH")) or (str(app / words[0]) if words[0].startswith("./") else words[0])
@@ -507,7 +767,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel) -> Resul
     cwd = app / cwd_rel if cwd_rel else app
     if os.name == "posix":
         policy = {"writable": [str(tmp)], "nobody": as_nobody, "python": language == "python",
-                  "net": True}
+                  "net": True, "must": True, "parent": os.getpid()}
         cmd = [sys.executable, "-I", "-m", "lantern._jail", json.dumps(policy), "--", *cmd]
         env_jail = dict(env)
         env_jail["PYTHONPATH"] = env.get("PYTHONPATH", "") if language == "python" else ""
@@ -515,9 +775,18 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel) -> Resul
         # -I ignores PYTHONPATH for the jail itself; it finds lantern from its own path below
         cmd[2:4] = ["-c", f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])"]
     log(f"sandbox: restricted process, running {' '.join(words)}")
-    rc, output, timed_out = _stream(cmd, cwd, env, timeout, log, job=_windows_job)
+    left: list[str] = []
+    rc, output, timed_out = _stream(cmd, cwd, env, timeout, log, job=_windows_job, cancel=cancel,
+                                    ask=_jail.ASK if _LINUX else 0.0, left=left)
+    why = _unavailable(rc, output)
+    if why:
+        raise Unavailable(why)
+    if os.name == "posix":
+        left += _left_by_launcher(output)
     if timed_out:
-        log(f"sandbox: stopped after {int(timeout)} s (the wall clock); every process it started was ended")
+        log(_stopped(f"after {int(timeout)} s (the wall clock)", left, "every process it started was ended"))
+    elif rc is None:
+        log(_stopped("because it was asked to", left, "every process it started was ended"))
     data = {}
     if out_json.exists():
         try:
@@ -525,7 +794,8 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel) -> Resul
         except ValueError:
             data = {}
     _map_pairs(data, str(app), repo)
-    return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, output_tail=output[-6000:], _full=output)
+    return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, output_tail=output[-6000:], _full=output,
+                  not_ended=left)
 
 
 def _site_dirs() -> list[str]:
@@ -542,7 +812,7 @@ def _site_dirs() -> list[str]:
     return seen
 
 
-def _run_docker(repo, words, language, root, log, timeout, cwd_rel) -> Result:
+def _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel=None) -> Result:
     img = image_for(language)
     if not img:
         raise RuntimeError(f"no pinned Docker image for {language}")
@@ -554,6 +824,8 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel) -> Result:
     if os.getuid() == 0:
         os.chown(out, uid, gid)
     (hook / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
+    if os.getuid() == 0:
+        _others_may_read(hook)
     name = "lantern-sbx-" + uuid.uuid4().hex[:12]
     pkg = Path(__file__).resolve().parent
     args = ["docker", "run", "--rm", "--name", name, "--network", "none", "--cpus", "2", "--memory", "2g",
@@ -570,7 +842,7 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel) -> Result:
         for i, s in enumerate(sites):
             args += ["-v", f"{s}:/opt/site/{i}:ro"]
         args += ["-v", f"{pkg}:/opt/lantern/lantern:ro",
-                 "-e", "PYTHONPATH=" + ":".join(["/opt/hook", "/opt/lantern", "/app"]),
+                 "-e", "PYTHONPATH=" + ":".join(["/opt/hook", "/opt/lantern", "/app"]), "-e", "LANTERN_SANDBOX_GUARD=required",
                  "-e", "LANTERN_SANDBOX_SITE=" + ":".join(f"/opt/site/{i}" for i in range(len(sites)))]
         cmd = ["python", "-m", "lantern.tracehook", "/out/trace.json", "/app", "--", *_python_argv(words)]
     else:
@@ -588,10 +860,31 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel) -> Result:
             args += ["-v", f"{m2}:/m2:ro", "-e", "MAVEN_OPTS=-Dmaven.repo.local=/m2"]
         cmd = list(words)
     log(f"sandbox: Docker ({img.split('@')[0]}, network off, project read-only), running {' '.join(words)}")
-    rc, output, timed_out = _stream(args + [img, *cmd], root, {k: v for k, v in os.environ.items()}, timeout, log)
+    def remove() -> str | None:
+        """The docker program was only the container's client: the container goes with this. None when it is gone,
+        else the words for it (until 2026-11-10 the answer was not looked at)."""
+        try:
+            r = subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=30)
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"its Docker container {name} may still be running: docker rm could not be run ({type(e).__name__})"
+        if r.returncode != 0 and "No such container" not in (r.stderr or ""):
+            return f"its Docker container {name} may still be running: docker rm ended with {r.returncode}"
+        return None
+    left: list[str] = []
+    rc, output, timed_out = _stream(args + [img, *cmd], root, {k: v for k, v in os.environ.items()}, timeout, log,
+                                    cancel=cancel, also=remove, left=left)
+    why = _unavailable(rc, output)
+    if why:
+        raise Unavailable(why)
+    if rc == 125 and any(line.startswith("docker: ") for line in output.splitlines()):
+        # the docker program's own result and words when Docker itself failed: no container, so no test has run
+        raise Unavailable("Docker could not start the container the tests run in (docker run ended with 125; "
+                          "what Docker said is in the log)")
     if timed_out:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30)
-        log(f"sandbox: stopped after {int(timeout)} s (the wall clock); the container was removed")
+        log(_stopped(f"after {int(timeout)} s (the wall clock)", left, "the container was removed"))
+    elif rc is None:
+        log(_stopped("because it was asked to", left, "the container was removed"))
     data = {}
     if (out / "trace.json").exists():
         try:
@@ -599,4 +892,5 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel) -> Result:
         except ValueError:
             data = {}
     _map_pairs(data, "/app", repo)
-    return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, output_tail=output[-6000:], _full=output)
+    return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, output_tail=output[-6000:], _full=output,
+                  not_ended=left)

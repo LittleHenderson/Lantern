@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -388,6 +389,9 @@ def cmd_login(a) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if os.environ.get("LANTERN_SANDBOX_GUARD") == "expected":   # a step of the cloud service: is its guard here?
+        from ._jail import say_if_guard_missing
+        say_if_guard_missing()
     if argv[:1] == ["mcp"]:   # its own small parser; stdout belongs to the protocol
         from .mcp_server import main as mcp_main
         return mcp_main(argv[1:])

@@ -12,6 +12,14 @@ from pathlib import Path
 from .graph import CALLS, OBSERVED, Graph
 
 
+def counted(tr) -> bool:
+    """`run.json`'s record of a test run (`trace`): is anything of that run in the results? Not when the sandbox
+    could not be set up and the tests were not run (`ran` false). The results are then those of a check that ran
+    no tests, and the Evidence Report, the readiness score and `lantern verify` treat them so. (Tests the person
+    stopped part-way leave no record at all: `pipeline.Stopped`.)"""
+    return isinstance(tr, dict) and bool(tr) and tr.get("ran") is not False
+
+
 def run_trace(repo: str | Path, command: list[str], timeout: int = 900) -> dict:
     """Run `command` (a Python invocation) with the hook installed. Returns raw pair data."""
     repo = str(Path(repo).resolve())
