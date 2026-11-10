@@ -1,0 +1,59 @@
+"""Flows the directive names (section 4), unsafe side. Each problem crosses at least two functions."""
+import shutil
+import subprocess
+import tempfile
+
+from fastapi import Depends, FastAPI, UploadFile
+
+from . import files, helpers, service
+from .auth import current_user, require_admin
+
+app = FastAPI()
+
+
+@app.get("/items/search")
+def search(sort: str = "id"):
+    # request -> route -> helper with a reassuring name -> service -> database query
+    return service.list_items(helpers.validate_sort(sort))
+
+
+@app.get("/items/by-name")
+def by_name(name: str):
+    # HTML escaping before an SQL query protects nothing
+    return service.find_by_name(helpers.clean_name(name))
+
+
+@app.get("/preview")
+def preview(url: str):
+    # caller's address -> helper -> outgoing request from the server
+    return helpers.fetch_page(url)
+
+
+@app.post("/import")
+def import_archive(upload: UploadFile):
+    # uploaded archive -> extraction -> file writes wherever the archive says
+    tmp = tempfile.mkdtemp()
+    path = f"{tmp}/upload.zip"
+    with open(path, "wb") as out:
+        shutil.copyfileobj(upload.file, out)
+    return files.extract_upload(path, tmp)
+
+
+@app.get("/notes/{note_id}")
+def note(note_id: int, user: dict = Depends(current_user)):
+    # frontend request -> signed-in user known -> another person's note returned anyway
+    return service.get_note(note_id, user["id"])
+
+
+@app.post("/login")
+def login(username: str, password: str):
+    # slowapi is installed (requirements.txt) but no limiter is applied to this route
+    return {"ok": username == "admin" and password == "admin"}
+
+
+@app.post("/admin/run")
+def admin_run(cmd: str, user: dict = Depends(current_user)):
+    # the command runs first; the admin check comes too late to protect it
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    require_admin(user)
+    return {"out": result.stdout}
