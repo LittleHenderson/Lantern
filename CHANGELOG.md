@@ -36,12 +36,25 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   report may ask for nothing at all. A browser has more ways out than the requests its pages make (a connection it
   opens ahead of time because a page hinted at an address, a page nobody watched, its own housekeeping), so every
   browser a check starts, the report speed check included, now has a proxy on this computer as its only way out; the
-  proxy forwards nothing, and a try for anything but the font host fails the check with the address.
+  proxy forwards nothing, and a try for anything but the pages' font host, or an address the browser itself is known
+  to ask of its maker (listed in `tools/outside.js`), fails the check with the address.
   Found by the new tests in their first CI run: the step that fetches the code left that run's own GitHub sign-in in
   the checkout's git settings, where every test and every program a test starts there could read it (all 13 checkout
   steps in the 7 workflows). No workflow leaves it now (`persist-credentials: false`); one test reads every workflow
   for it and another looks in the checkout the tests run in. A test about git's settings now names only the kind of
   setting it met, never the setting's name or value.
+  Found in their second CI run: an older test started a check on the cloud service and returned; its stand-in for the
+  download was taken away with the test, and the check, still going, asked github.com for the repository while the
+  next test ran (refused, and that test failed for it). Every test now finishes the checks and explanations it asked
+  the cloud service for before its stand-ins are taken away; measured on the whole suite that day, 3 of the 1,046
+  tests that ran had left one going. The browser proxy also showed three things in its first run in CI. CI's
+  Playwright (1.48.2; a developer's computer here has 1.63.0) sent Chromium's requests for this computer's own pages
+  to the proxy as well, so the app under test got the proxy's refusal; the list of addresses that go round the proxy
+  is now written so that both versions keep them out of it. On the website check WebKit and Firefox made 39 and 17
+  tries for the font host that the first layer never saw, WebKit told the page about 17 refusals in its console, and
+  Firefox asked its maker for a newer Firefox twice. All of these were stopped at this computer; they are now counted
+  and shown instead of failing the check, and any other address, any other console line and anything at all in a
+  report still fail.
 - Every call is counted once, and Lantern follows far more of them (2026-11-09, directive stage 3). A new call-site
   inventory (`calls.json`, `graph.json` `meta.calls`) gives each call written in Python or JavaScript/TypeScript one
   record, by file, line and column, with one outcome (into the repo, likely, one of several, guessed by name only,

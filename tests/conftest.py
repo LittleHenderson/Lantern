@@ -18,12 +18,13 @@ next test ran, which was the one that failed.
 CI on Linux also runs the suite with no network at all (tools/netless.py) and sets LANTERN_TESTS_NETLESS=required,
 which stops the run when a route to the outside exists.
 """
-import concurrent.futures
 import functools
 import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import urllib.request
 from pathlib import Path
 
@@ -77,13 +78,18 @@ def _keep_work() -> None:
 
 
 def _finish_work(limit: float = _WORK_LIMIT) -> list:
-    """Wait until the work asked for so far has ended. Returns what is still going after `limit` seconds, which is
-    then forgotten: one piece of work that never ends fails one test, not every test after it."""
-    if not _work:
-        return []
-    _, going = concurrent.futures.wait([future for future, _ in _work], timeout=limit)
-    left = [what for future, what in _work if future in going]
-    _work.clear()
+    """Wait until the work asked for so far has ended, work handed out while waiting included. Returns what is still
+    going after `limit` seconds, which is then forgotten: one piece of work that never ends fails one test, not every
+    test after it. Work that was cancelled while it waited its turn (`Worker.shutdown`) has ended: nothing will run it.
+    `concurrent.futures.wait` never hears of that and would sit out the whole limit, so each piece of work is asked to
+    say when it is over, which it also does when cancelled, and at once when it is over already."""
+    left, deadline = [], time.monotonic() + limit
+    while _work:
+        future, what = _work.pop(0)
+        over = threading.Event()
+        future.add_done_callback(lambda _future, over=over: over.set())
+        if not over.wait(max(0.0, deadline - time.monotonic())):
+            left.append(what)
     return left
 
 

@@ -43,7 +43,7 @@ const HERE = ['localhost', '127.0.0.1', '[::1]'];
 // list, where it overrules the two addresses, so on 2026-11-10 CI's Chromium sent the app's own pages to the proxy
 // and got its 403 (Playwright 1.63 does not, which is why it passed on a developer's computer). Written first, it
 // is the two addresses that overrule it, in both. Firefox and WebKit take the plain list (seen passing in CI).
-const HOME = { chromium: '<-loopback>,localhost,127.0.0.1' };
+const BYPASS = { chromium: '<-loopback>,localhost,127.0.0.1' };
 const asked = { fonts: 0, refused: [], stopped: [], mayTry: new Set(), own: new Set(), said: 0 };
 let proxyAt = null;
 
@@ -70,7 +70,7 @@ function proxy() {
 
 async function launch(browserType, options = {}) {
   for (const host of OWN[browserType.name()] || []) asked.own.add(host);
-  return browserType.launch({ ...options, proxy: { server: await proxy(), bypass: HOME[browserType.name()] || 'localhost,127.0.0.1' } });
+  return browserType.launch({ ...options, proxy: { server: await proxy(), bypass: BYPASS[browserType.name()] || 'localhost,127.0.0.1' } });
 }
 
 async function watch(target, errs, fonts = []) {
@@ -133,7 +133,7 @@ async function close(browser, errs) {
   return summary(errs);
 }
 
-module.exports = { FONTS, OWN, HOME, launch, watch, close, summary, refusedFont, where };
+module.exports = { FONTS, OWN, BYPASS, launch, watch, close, summary, refusedFont, where };
 
 if (require.main === module) (async () => {
   const http = require('http');
@@ -148,7 +148,7 @@ if (require.main === module) (async () => {
   // like the app's and the website's: a service worker that leaves a request for another computer to the browser
   const CONTROLLED = '<!doctype html><meta charset="utf-8"><title>s</title>' +
     '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans"><p>a service worker controls this page</p>' +
-    '<script>if (navigator.serviceWorker) navigator.serviceWorker.register("/sw.js");</script>';
+    '<script>if (navigator.serviceWorker) navigator.serviceWorker.register("/sw.js").catch(() => {});</script>';
   const WORKER = "self.addEventListener('install', () => self.skipWaiting());" +
     "self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));self.addEventListener('fetch', () => {});";
   let fetched = 0;

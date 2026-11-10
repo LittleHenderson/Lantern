@@ -191,9 +191,9 @@ def test_an_attempt_outside_every_test_fails_the_run(tmp_path):
 def test_work_a_test_leaves_going_ends_with_that_test(tmp_path):
     """CI, 2026-11-10: tests/test_cloud_runs.py::test_limits_answer_429_with_a_sentence started a run and returned.
     Its stand-in for the download was taken away with the test; the run, still going, then asked github.com for the
-    repository, and the test that was running by then failed for it. (Of 899 tests, 3 left a run going like this.)
-    The probe walks away from two runs the same way: both must end before the next test begins, each on the stand-in
-    of the test that started it."""
+    repository, and the test that was running by then failed for it. (Measured that day: 3 of the 1,046 tests that
+    ran left a run going.) The probe walks away from two runs the same way: both must end before the next test
+    begins, each on the stand-in of the test that started it."""
     pytest.importorskip("fastapi")
     pytest.importorskip("httpx")
     if os.name != "posix":
@@ -211,10 +211,17 @@ def test_work_a_test_leaves_going_ends_with_that_test(tmp_path):
     assert "tried to reach the network" not in out and forwarder.heard == [], out[-6000:]
 
 
-def test_work_that_never_ends_fails_one_test_and_not_every_test_after_it():
+def _harness(request):
+    """tests/conftest.py as this run loaded it, whatever name the import mode gave the module."""
+    here = (ROOT / "tests" / "conftest.py").resolve()
+    return next(p for p in request.config.pluginmanager.get_plugins()
+                if getattr(p, "__file__", None) and Path(p.__file__).resolve() == here)
+
+
+def test_work_that_never_ends_fails_one_test_and_not_every_test_after_it(request):
     """What is still going when the time is up is named once and then forgotten (the test it belongs to fails)."""
     import concurrent.futures
-    harness = sys.modules["conftest"]
+    harness = _harness(request)
     assert harness._work == []                                  # nothing is carried from one test into the next
     ended, stuck = concurrent.futures.Future(), concurrent.futures.Future()
     ended.set_result(None)
@@ -224,6 +231,51 @@ def test_work_that_never_ends_fails_one_test_and_not_every_test_after_it():
         assert harness._work == [] and harness._finish_work(limit=0.05) == []
     finally:
         stuck.cancel()
+        harness._work.clear()
+
+
+def test_work_that_was_cancelled_while_it_waited_its_turn_has_ended(request):
+    """A worker that is shut down cancels what was still waiting for a free thread (`Worker.shutdown`). Nothing will
+    ever run that, so it has ended: waiting for it would hold the test up for the whole limit and then fail it."""
+    import concurrent.futures
+    import time
+    harness = _harness(request)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    go = threading.Event()
+    first = pool.submit(go.wait, 30)
+    second = pool.submit(lambda: None)                          # waits behind the first
+    pool.shutdown(wait=False, cancel_futures=True)              # what Worker.shutdown does
+    go.set()
+    harness._work.extend([(first, "a run"), (second, "a run")])
+    began = time.monotonic()
+    try:
+        assert harness._finish_work(limit=10) == [] and first.done() and second.cancelled()
+        assert time.monotonic() - began < 8
+    finally:
+        harness._work.clear()
+
+
+def test_work_handed_out_while_the_harness_waits_is_finished_too(request):
+    """Work that is handed out while the harness waits for the work before it is waited for as well, not dropped."""
+    import concurrent.futures
+    import time
+    harness = _harness(request)
+    one, two = concurrent.futures.Future(), concurrent.futures.Future()
+
+    def later():
+        time.sleep(0.2)
+        harness._work.append((two, "a run"))
+        one.set_result(None)
+        time.sleep(0.3)
+        two.set_result(None)
+
+    harness._work.append((one, "a run"))
+    thread = threading.Thread(target=later)
+    thread.start()
+    try:
+        assert harness._finish_work(limit=10) == [] and two.done()
+    finally:
+        thread.join()
         harness._work.clear()
 
 
@@ -457,8 +509,8 @@ def test_every_browser_a_check_starts_has_no_way_out_but_a_proxy_here_that_refus
     # Only this computer's own two addresses go round the proxy. For Chromium "<-loopback>" comes first: Playwright up
     # to 1.48 (the version CI installs) writes it after the list when it is missing, where it sends this computer's
     # own pages to the proxy (CI, 2026-11-10: the app got the proxy's 403; 1.63 on a developer's computer did not).
-    assert "proxy: { server: await proxy(), bypass: HOME[browserType.name()] || 'localhost,127.0.0.1' }" in helper
-    assert "const HOME = { chromium: '<-loopback>,localhost,127.0.0.1' };" in helper
+    assert "proxy: { server: await proxy(), bypass: BYPASS[browserType.name()] || 'localhost,127.0.0.1' }" in helper
+    assert "const BYPASS = { chromium: '<-loopback>,localhost,127.0.0.1' };" in helper
     assert "socket.end('HTTP/1.1 403 Forbidden" in helper and "net.connect(" not in helper.split("if (require.main === module)")[0]
 
 
