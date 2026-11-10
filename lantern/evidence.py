@@ -51,6 +51,26 @@ def git_info(repo: Path) -> dict:
             "remote": remote or None, "committed_at": run("log", "-1", "--format=%cI")}
 
 
+def engine_ref() -> str:
+    """The Lantern to install to re-check a report: the commit this copy was built from (written into the cloud image,
+    or read from the git checkout Lantern runs from), else the release tag. Installing the newest Lantern instead can
+    give a different digest once the analysis changes."""
+    from . import _build
+    if re.fullmatch(r"[0-9a-f]{40}", _build.COMMIT or ""):
+        return _build.COMMIT
+    root = Path(__file__).resolve().parent.parent
+    git = shutil.which("git")
+    if git and (root / ".git").exists() and (root / "pyproject.toml").is_file():
+        try:
+            p = subprocess.run([git, "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=10)
+            if p.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", p.stdout.strip()):
+                return p.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return f"v{__version__}"
+
+
 def tool_versions(sec: dict | None) -> list[dict]:
     rows = [{"tool": "lantern", "version": __version__, "role": "graph, bridge, web rules, readiness"},
             {"tool": "python", "version": platform.python_version(), "role": "runtime"}]
@@ -251,7 +271,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         "evidence_version": EVIDENCE_VERSION,
         "header": {"repo": gi.get("remote") or repo.name, "name": repo.name, **gi,
                    "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-                   "mode": "local", "privacy": privacy},
+                   "mode": "local", "privacy": privacy, "engine": engine_ref()},
         "scorecard": {
             "readiness": None if not rd else {"score": rd["score"], "grade": rd["grade"], "shape": rd["shape"],
                                               "categories": [{k: c[k] for k in ("title", "weight", "score", "percent")}
@@ -648,7 +668,9 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     models = "".join(f"<tr><td>{E(m['model'] or '')}</td><td>{E(m['task'])}</td><td class='muted'>{E(m.get('validated'))} "
                      f"validated, {E(m.get('failed'))} rejected · prompt {E(m.get('prompt_version') or '-')}</td></tr>"
                      for m in ev["provenance"]["models"]) or "<tr><td colspan=3 class='muted'>No model was used.</td></tr>"
-    verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern\" "
+    engine = h.get("engine") if isinstance(h.get("engine"), str) and re.fullmatch(r"[0-9a-f]{40}|v[\w.-]+", h["engine"]) else ""
+    verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"
+              f"{'@' + engine if engine else ''}\" "
               f"&& lantern verify . --report evidence.html{_trace_suffix(ev)}") if commit else "Commit your changes and regenerate the report to make it verifiable."
     memo = _memo(ev)
     verify_js = json.dumps(verify).replace("<", "\\u003c")   # the verify command inside the page's script
@@ -794,7 +816,7 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
 
 <section><h2>3 · Scorecard</h2>
 {f'''<div class="score"><span class="big">{E(rd["score"])}<span style="font-size:20px" class="muted">/100</span></span><span class="grade {rd["grade"] if rd.get("grade") in ("A", "B", "C", "D", "F") else ""}">{E(rd["grade"])}</span>
-<div class="muted">Deployment readiness for a {E(rd["shape"])}.<br>Checks that don't apply are skipped, not counted.</div></div>
+<div class="muted">Deployment readiness for a {E(rd["shape"])}.<br>Checks that don't apply are skipped, not counted.<br>Low findings don't lower the score; critical, high and medium ones do.</div></div>
 <table style="margin-top:12px">{cats}</table>''' if rd else '<p class="muted">Readiness was not computed.</p>'}
 <div class="kv" style="margin-top:14px"><div>Open findings now</div><div>{cnt(sc['now'])}</div>
 <div>At first analysis</div><div>{cnt(sc['before'])}{(' <span class="muted">(' + E(sc['baseline_date'] or '') + ')</span>') if sc.get('before') else ''}</div></div></section>
