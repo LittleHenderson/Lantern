@@ -25,8 +25,8 @@ if os.environ.get("LANTERN_NETGUARD_LOG"):
     def _next_sitecustomize():
         import importlib.util
         for _p in sys.path:
-            if not _p or os.path.abspath(_p) == _here:
-                continue
+            if not _p or os.path.abspath(_p) == _here or os.path.isfile(os.path.join(_p, "lantern_netguard.py")):
+                continue      # this folder, or a copy of it: its start-up file is this one, and would hand back here
             _f = os.path.join(_p, "sitecustomize.py")
             if os.path.isfile(_f):
                 _spec = importlib.util.spec_from_file_location("_lantern_next_sitecustomize", _f)

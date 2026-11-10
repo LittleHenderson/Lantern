@@ -50,6 +50,8 @@ jobs:
           name: dist
           path: built
       - name: Tests against the built wheel in a clean venv (the source package is moved away first)
+        env:
+          LANTERN_TESTS_COMPLETE: required   # a test skipped for a missing library fails the release (tests/conftest.py)
         run: |
           mv lantern "$RUNNER_TEMP/lantern-source-not-used"
           python -m venv "$RUNNER_TEMP/v"
@@ -57,7 +59,7 @@ jobs:
           whl="$(ls built/dist/*.whl)"
           pip install "${whl}[scan,dev]"
           python -c "import lantern, sys; print(lantern.__version__, lantern.__file__); sys.exit('site-packages' not in lantern.__file__)"
-          python -m pytest -q
+          python -m pytest -q -rs
 
   gateway-up:
     # The free allowance must answer before a build that points testers at it goes out.

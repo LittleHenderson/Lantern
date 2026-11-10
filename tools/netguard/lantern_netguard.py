@@ -8,7 +8,10 @@ Layers, each for what the others cannot see:
   2. the same hook in every Python child: `activate` puts this folder first on PYTHONPATH, and `sitecustomize.py`
      beside this file installs the hook when the child starts. Every process appends its attempts to one log file.
      A child in isolated mode (`python -I`) reads nothing from PYTHONPATH: a benchmark starts one through
-     `python_isolated`, which switches the hook on first.
+     `python_isolated`, which switches the hook on first. A child that root starts under another user must be able
+     to read this folder, or Python leaves it out of the path without a word: where others may not read it, root's
+     run puts a copy every user can read on the path instead (`guard_folder`), and leaves it there when it ends,
+     because Python leaves a folder that is gone out of the path just as quietly.
   3. a proxy on 127.0.0.1 for programs that are not Python (git, npm, curl): every proxy variable points at it. It
      writes down what was asked for and answers 403; a host a benchmark declared is passed through instead.
   4. a forwarding proxy this computer was already configured with (a company proxy, a container's own) is a way out
@@ -47,6 +50,12 @@ MARK = "LANTERN-NETGUARD-REFUSED"
 UNGUARDED, UNRECORDED = 97, 97    # a program ends with this when the guard cannot start in it, or cannot write down
                                   # what it refused
 HERE = os.path.dirname(os.path.abspath(__file__))
+GUARD_FILES = ("lantern_netguard.py", "sitecustomize.py")    # all a program needs to load the guard
+# Where a copy of the guard goes when root's programs need one that every user can read (`guard_folder`): the first
+# of these that is safe to load a program from. Named places, not the temporary folder the run's environment points
+# at: that one is its user's alone. /run first: only root can write there, and nothing clears it while the computer
+# is running (it starts empty at every boot).
+PUBLIC_PLACES = ("/run", "/tmp", "/var/tmp")
 NO_PROXY = "localhost,127.0.0.1,::1"
 PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 LOCAL_NAMES = frozenset({"", "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"})
@@ -70,6 +79,7 @@ class _State:
     attempts: list = []          # this process's own refused attempts, oldest first
     proxy = None                 # (listening socket, port) once the proxy runs
     upstream = None              # (host, port, authorization) of the forwarding proxy declared hosts are reached through
+    public: str | None = None    # the copy of the guard every user can read, once asked for ("" when there is none)
 
 
 _S = _State()
@@ -585,6 +595,142 @@ def describe(attempts: list) -> str:
     return "\n".join(f"  {n}x {kind} {where}   by: {who}" for (kind, where, who), n in seen.items())
 
 
+def _everyone_passes(folder: str) -> bool:
+    """Every user of this computer may pass through `folder` and through every folder above it."""
+    path = os.path.realpath(folder)
+    while True:
+        if not os.stat(path).st_mode & 0o001:
+            return False
+        parent = os.path.dirname(path)
+        if parent == path:
+            return True
+        path = parent
+
+
+def open_to_every_user(folder: str) -> bool:
+    """Whether a program under any user of this computer could load the guard from `folder`: everyone may read its
+    two files, read the folder, and pass through every folder above it. Read from the permission bits."""
+    if os.name != "posix":
+        return True
+    try:
+        if os.stat(folder).st_mode & 0o005 != 0o005 or \
+                not all(os.stat(os.path.join(folder, name)).st_mode & 0o004 for name in GUARD_FILES):
+            return False
+        return _everyone_passes(folder)
+    except OSError:
+        return False
+
+
+def holds_the_guard(folder: str) -> bool:
+    """A folder on the path that the guard would be loaded from: this one, or a copy of it."""
+    return os.path.abspath(folder) == HERE or os.path.isfile(os.path.join(folder, GUARD_FILES[0]))
+
+
+def _is_root() -> bool:
+    return os.name == "posix" and os.geteuid() == 0
+
+
+def _mine_alone(st, kind) -> bool:
+    """What `st` describes is of the kind asked for (a real folder or file, not a link to one), belongs to this user,
+    and nobody else may change it."""
+    return kind(st.st_mode) and st.st_uid == os.geteuid() and not st.st_mode & 0o022
+
+
+def _a_copy_to_trust(folder: str, files: dict) -> bool:
+    """`folder` can be loaded from by any program of any user, and holds what this folder holds: it is this user's
+    own, nobody else may change it or the guard's files in it, everybody may read them, and they are the same, byte
+    for byte. Nobody but this user can have put anything into such a folder."""
+    import stat
+    try:
+        st = os.lstat(folder)
+        if not _mine_alone(st, stat.S_ISDIR) or st.st_mode & 0o005 != 0o005:
+            return False
+        for name, ours in files.items():
+            st = os.lstat(os.path.join(folder, name))
+            if not _mine_alone(st, stat.S_ISREG) or not st.st_mode & 0o004:
+                return False
+            with open(os.path.join(folder, name), "rb") as f:
+                if f.read() != ours:
+                    return False
+        return True
+    except OSError:
+        return False
+
+
+def _copy_for_every_user() -> str:
+    """A copy of the guard's two files that every user of this computer can read and only this one can change, in the
+    first of PUBLIC_PLACES that is safe to load a program from: the place is root's or this user's own, and if others
+    may write there, nobody can rename or remove what is not theirs. Returns "" when this computer has no such place.
+
+    The copy is kept, under a name made from what is in it, and the next run uses it again. It does not go when this
+    program ends: a program of the run that is still going then would start its next program from a path whose first
+    folder is gone, and Python leaves a folder that is gone out of the path as quietly as one it cannot read. A copy
+    found under that name is used only if it can be trusted (`_a_copy_to_trust`); anything else there is left alone,
+    and this run gets a copy of its own beside it."""
+    import hashlib
+    import shutil
+    import stat
+    import tempfile
+    files = {}
+    for name in GUARD_FILES:
+        with open(os.path.join(HERE, name), "rb") as f:
+            files[name] = f.read()
+    what = hashlib.sha256(b"".join(name.encode("utf-8") + b"\0" + files[name] + b"\0" for name in GUARD_FILES))
+    for place in PUBLIC_PLACES:
+        new = ""
+        try:
+            st = os.stat(place)
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid not in (0, os.geteuid()) or \
+                    (st.st_mode & 0o022 and not st.st_mode & stat.S_ISVTX) or not _everyone_passes(place):
+                continue
+            kept = os.path.join(place, "lantern-netguard-" + what.hexdigest()[:20])
+            if _a_copy_to_trust(kept, files):
+                for path in (*(os.path.join(kept, name) for name in files), kept):
+                    try:
+                        os.utime(path)       # in use again: a system that clears old temporary files leaves it be
+                    except OSError:
+                        pass
+                return kept
+            new = tempfile.mkdtemp(prefix="lantern-netguard-new-", dir=place)
+            for name, ours in files.items():
+                with open(os.path.join(new, name), "wb") as f:
+                    f.write(ours)
+                os.chmod(os.path.join(new, name), 0o644)
+            os.chmod(new, 0o755)     # nosec B103 - a folder every user must be able to enter and read: what it is for
+            try:
+                os.rename(new, kept)         # in one step: no program finds half a copy under that name
+                return kept
+            except OSError:
+                if _a_copy_to_trust(kept, files):          # another run put the same copy there a moment ago
+                    shutil.rmtree(new, ignore_errors=True)
+                    return kept
+                return new                   # the name is taken by something that cannot be trusted: a copy beside it
+        except OSError:
+            if new:
+                shutil.rmtree(new, ignore_errors=True)
+            continue
+    return ""
+
+
+def guard_folder() -> str:
+    """The folder the programs of a run load the guard from: the first entry of their PYTHONPATH. This one, as a rule.
+
+    Root is the exception, where other users may not read this folder (a checkout under a home folder that others
+    cannot enter: CI's is one). Root can start a program under another user; Python leaves a folder it cannot read
+    out of the path without a word; that program would start with no guard in it and carry on. So there the programs
+    of the run load a copy that every user can read. Where this computer has no place for one, root is told."""
+    if not _is_root() or open_to_every_user(HERE):
+        return HERE
+    if _S.public is None:
+        _S.public = _copy_for_every_user()
+        if not _S.public:
+            sys.stderr.write(f"network guard: a program this run starts under another user could not read the guard "
+                             f"({HERE}), and this computer has no folder that every user can read for a copy of it "
+                             f"(looked at: {', '.join(PUBLIC_PLACES) or 'nothing'}): such a program would start "
+                             f"without the guard\n")
+    return _S.public or HERE
+
+
 def activate(log: str, allow=(), environ=None, forwarders=None) -> Guard:
     """Switch the guard on for this process and everything it starts. `allow` are the host names a benchmark declares
     it needs (a test declares none). `forwarders` is `proxy_variables()` as it was before anything was removed from
@@ -608,8 +754,8 @@ def activate(log: str, allow=(), environ=None, forwarders=None) -> Guard:
     env[LOG_ENV] = log
     env[ALLOW_ENV] = ",".join(allow)
     env[DENY_ENV] = ",".join(str(p) for p in deny)
-    paths = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and os.path.abspath(p) != HERE]
-    env["PYTHONPATH"] = os.pathsep.join([HERE, *paths])
+    paths = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and not holds_the_guard(p)]
+    env["PYTHONPATH"] = os.pathsep.join([guard_folder(), *paths])    # one folder with the guard, and it comes first
     port = start_proxy()
     ours = f"http://127.0.0.1:{port}"
     for name in [*PROXY_VARS, *(k for k in list(env) if k in found or k in proxy_variables({k: env[k]}))]:
@@ -682,7 +828,7 @@ def python_isolated(*arguments: str) -> list:
     packages or the current folder) inside a guarded run, with the guard in it. `-I` also keeps the start-up file
     beside this one from being loaded, so the program is started through this file, which switches the guard on first
     and then runs `-m MODULE ARGUMENT...` or `SCRIPT ARGUMENT...` as the program."""
-    return [sys.executable, "-I", os.path.join(HERE, "lantern_netguard.py"), "--inside", *arguments]
+    return [sys.executable, "-I", os.path.join(guard_folder(), GUARD_FILES[0]), "--inside", *arguments]
 
 
 def _inside(argv: list) -> int:
