@@ -35,7 +35,7 @@ async function appSmoke(url, out, image, expectText) {
     const p = await b.newPage({ viewport: vp });
     await outside.watch(p, errs, outside.FONTS);
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
-    p.on('console', m => { if (m.type() === 'error' && !(allow400 && /status of 400/.test(m.text()))) errs.push(`${name} console: ${m.text()}`); });
+    p.on('console', m => { if (m.type() === 'error' && !outside.refusedFont(m) && !(allow400 && /status of 400/.test(m.text()))) errs.push(`${name} console: ${m.text()}${outside.where(m)}`); });
     p.on('dialog', d => { errs.push(`${name}: a dialog opened: ${d.message()}`); d.dismiss(); });
     const api = (path, body) => p.evaluate(([path, body]) => fetch(path, body === undefined ? {} : {method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-Lantern-Token': TOKEN}, body: JSON.stringify(body)}).then(r => r.json()), [path, body]);
@@ -145,7 +145,7 @@ async function appSmoke(url, out, image, expectText) {
     try {
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
     p.on('dialog', d => { errs.push(`${name}: a dialog opened (script from the data ran): ${d.message()}`); d.dismiss(); });
-    p.on('console', m => { if (m.type() === 'error') errs.push(`${name} console: ${m.text()}`); });
+    p.on('console', m => { if (m.type() === 'error') errs.push(`${name} console: ${m.text()}${outside.where(m)}`); });
     const pwned = async where => {
       const n = await p.$$eval('[data-pwn]', els => els.length);
       if (n) errs.push(`${name} ${where}: ${n} element(s) from the data landed in the page as markup`);

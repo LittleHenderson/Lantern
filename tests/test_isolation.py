@@ -188,6 +188,45 @@ def test_an_attempt_outside_every_test_fails_the_run(tmp_path):
     assert forwarder.heard == []
 
 
+def test_work_a_test_leaves_going_ends_with_that_test(tmp_path):
+    """CI, 2026-11-10: tests/test_cloud_runs.py::test_limits_answer_429_with_a_sentence started a run and returned.
+    Its stand-in for the download was taken away with the test; the run, still going, then asked github.com for the
+    repository, and the test that was running by then failed for it. (Of 899 tests, 3 left a run going like this.)
+    The probe walks away from two runs the same way: both must end before the next test begins, each on the stand-in
+    of the test that started it."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+    if os.name != "posix":
+        pytest.skip("the cloud worker runs on Linux (its restricted process is POSIX)")
+    forwarder = Forwarder()
+    try:
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-rA", "-p", "no:cacheprovider",
+                            str(ROOT / "tests" / "probe_leftover_work.py")], cwd=ROOT,
+                           env=developer_env(tmp_path, forwarder.port), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=300)
+    finally:
+        forwarder.listener.close()
+    out = r.stdout + r.stderr
+    assert "2 passed" in r.stdout and r.returncode == 0, out[-6000:]
+    assert "tried to reach the network" not in out and forwarder.heard == [], out[-6000:]
+
+
+def test_work_that_never_ends_fails_one_test_and_not_every_test_after_it():
+    """What is still going when the time is up is named once and then forgotten (the test it belongs to fails)."""
+    import concurrent.futures
+    harness = sys.modules["conftest"]
+    assert harness._work == []                                  # nothing is carried from one test into the next
+    ended, stuck = concurrent.futures.Future(), concurrent.futures.Future()
+    ended.set_result(None)
+    harness._work.extend([(ended, "a run"), (stuck, "a run's explanations")])
+    try:
+        assert harness._finish_work(limit=0.05) == ["a run's explanations"]
+        assert harness._work == [] and harness._finish_work(limit=0.05) == []
+    finally:
+        stuck.cancel()
+        harness._work.clear()
+
+
 # ----------------------------------------------------------------------------- this run itself
 def test_this_run_is_isolated():
     from lantern import providers
@@ -415,5 +454,35 @@ def test_every_browser_a_check_starts_has_no_way_out_but_a_proxy_here_that_refus
         assert text.count("outside.launch(") == text.count("outside.close(") >= 1, name
         assert "b.close()" not in text, name                   # closing any other way would skip the count
     helper = (ROOT / "tools" / "outside.js").read_text(encoding="utf-8")
-    assert "proxy: { server: await proxy(), bypass: 'localhost,127.0.0.1' }" in helper
+    # Only this computer's own two addresses go round the proxy. For Chromium "<-loopback>" comes first: Playwright up
+    # to 1.48 (the version CI installs) writes it after the list when it is missing, where it sends this computer's
+    # own pages to the proxy (CI, 2026-11-10: the app got the proxy's 403; 1.63 on a developer's computer did not).
+    assert "proxy: { server: await proxy(), bypass: HOME[browserType.name()] || 'localhost,127.0.0.1' }" in helper
+    assert "const HOME = { chromium: '<-loopback>,localhost,127.0.0.1' };" in helper
     assert "socket.end('HTTP/1.1 403 Forbidden" in helper and "net.connect(" not in helper.split("if (require.main === module)")[0]
+
+
+def _console_handlers(text: str) -> list[str]:
+    """The lines of a browser check that decide what a line in a page's console means."""
+    return [line.strip() for line in text.splitlines() if re.search(r"\.on\('console',", line)]
+
+
+def test_what_ends_at_the_proxy_is_counted_only_where_it_is_known_and_fails_the_check_anywhere_else():
+    """CI, 2026-11-10, the first run with the proxy as every browser's only way out, on the website check: 39 tries
+    by WebKit for the website's font host that the watcher never saw ended at the proxy, and WebKit told the page so
+    in 17 console lines; 17 tries by Firefox did, with no console line, and Firefox asked its maker for a newer
+    Firefox twice. All of it is stopped at this computer and counted. Nothing else is let off: a console line about
+    any other address stays an error, a report (which may ask for nothing) gets no such allowance, and an address a
+    browser asks for that is not listed fails the check."""
+    assert _console_handlers("p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });\np.on('pageerror', e => 1);") \
+        == ["p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });"]
+    app, report = _console_handlers((ROOT / "tools" / "viewer_smoke.js").read_text(encoding="utf-8"))
+    (site,) = _console_handlers((ROOT / "tools" / "cloud_site_smoke.js").read_text(encoding="utf-8"))
+    assert "!outside.refusedFont(m)" in app and "!outside.refusedFont(m)" in site
+    assert "refusedFont" not in report and "if (m.type() === 'error') errs.push(" in report
+    for line in (app, report, site):
+        assert "${outside.where(m)}" in line                   # an error line says which address it is about
+    assert _console_handlers((ROOT / "tools" / "report_perf.js").read_text(encoding="utf-8")) == []
+    helper = (ROOT / "tools" / "outside.js").read_text(encoding="utf-8")
+    assert "const OWN = { firefox: ['aus5.mozilla.org'] };" in helper   # adding an address here is a decision
+    assert "if (!asked.mayTry.has(host) && !asked.own.has(host)) errs.push(" in helper

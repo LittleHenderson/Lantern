@@ -10,9 +10,16 @@ run, all from shared set-up steps, which pytest builds before any per-test fixtu
 An attempt fails the test it happened in, also when the code under test hides the error. A test that is there to see
 the refusal says so: `@pytest.mark.network_refused("why")`; tests/test_isolation.py lists those tests.
 
+A run or a set of explanations a test asks the cloud service for ends with that test: it is finished before the test's
+stand-ins are taken away (`_finish_work`). On 2026-11-10 CI caught one that was not: a test started a run and returned,
+its stand-in for the download went with it, and the run, still going, asked github.com for the repository while the
+next test ran, which was the one that failed.
+
 CI on Linux also runs the suite with no network at all (tools/netless.py) and sets LANTERN_TESTS_NETLESS=required,
 which stops the run when a route to the outside exists.
 """
+import concurrent.futures
+import functools
 import os
 import shutil
 import sys
@@ -37,6 +44,8 @@ _PHASES = {"setup": "its set-up", "call": "the test itself", "teardown": "its cl
 _homes = iter(range(1, 10 ** 9))
 _between: list = []                     # attempts that happened outside every test (while collecting, between tests)
 _seen_to = 0
+_work: list = []                        # (future, what it is) for work the cloud service was asked for and has not ended
+_WORK_LIMIT = 180.0                     # seconds such work may take to end once the test that asked for it is over
 
 
 def pytest_configure(config):
@@ -46,6 +55,40 @@ def pytest_configure(config):
     if os.environ.get("LANTERN_TESTS_NETLESS", "").strip().lower() == "required" and netguard.has_route_out():
         raise pytest.UsageError("LANTERN_TESTS_NETLESS=required, and this run has a route to the outside. Start it "
                                 "inside the netless runner: python tools/netless.py -- python -m pytest")
+
+
+def _keep_work() -> None:
+    """Have the cloud service's worker tell `_work` about every run and every set of explanations it is handed (they
+    run on its own threads, after the request that asked for them has been answered). Done once, as soon as a test
+    file has loaded the worker; this file never loads it itself."""
+    worker = sys.modules.get("lantern_cloud.worker")
+    if worker is None or "_kept_for_the_tests" in vars(worker.Worker):
+        return
+    for name, what in (("submit", "a run"), ("submit_explain", "a run's explanations")):
+        real = getattr(worker.Worker, name)
+
+        @functools.wraps(real)
+        def keep(self, *args, _real=real, _what=what, **kwargs):
+            future = _real(self, *args, **kwargs)
+            _work.append((future, _what))
+            return future
+        setattr(worker.Worker, name, keep)
+    worker.Worker._kept_for_the_tests = True
+
+
+def _finish_work(limit: float = _WORK_LIMIT) -> list:
+    """Wait until the work asked for so far has ended. Returns what is still going after `limit` seconds, which is
+    then forgotten: one piece of work that never ends fails one test, not every test after it."""
+    if not _work:
+        return []
+    _, going = concurrent.futures.wait([future for future, _ in _work], timeout=limit)
+    left = [what for future, what in _work if future in going]
+    _work.clear()
+    return left
+
+
+def pytest_collection_finish(session):
+    _keep_work()
 
 
 def _new_home(monkeypatch) -> str:
@@ -81,13 +124,17 @@ def network_attempts(request):
 
 
 def _watch(item, phase):
-    """Around one phase of one test: whatever tried to reach the network while it ran fails that phase."""
+    """Around one phase of one test: whatever tried to reach the network while it ran fails that phase. The clean-up
+    phase starts by finishing the cloud work the test asked for, so an attempt made by that work is the test's own."""
     global _seen_to
     start = GUARD.mark()
     if start > _seen_to:
         _between.extend(GUARD.since(_seen_to, start)[: 50])
     if phase == "setup":
         item.stash[_START] = start
+        _keep_work()
+    # Before anything of the test is taken away (pytest undoes its stand-ins inside this phase, after the `yield`).
+    left = _finish_work() if phase == "teardown" else []
     failure = None
     try:
         result = yield
@@ -101,10 +148,17 @@ def _watch(item, phase):
         problem = (f"This test tried to reach the network during {_PHASES[phase]}; tests may not reach the network.\n"
                    f"{netguard.describe(tried)}\n"
                    "Nothing left this computer: every attempt was refused. Give the test a stand-in for the outside "
-                   "service, or, if it is there to see the refusal, mark it @pytest.mark.network_refused(\"why\").")
+                   "service, or, if it is there to see the refusal, mark it @pytest.mark.network_refused(\"why\"). "
+                   "(If this test starts nothing that asks for that address, look at the tests before it: what one of "
+                   "them left running is counted where it asks.)")
     elif phase == "call" and expected is not None and failure is None and not GUARD.since(item.stash[_START], _seen_to):
         problem = ("This test is marked network_refused and did not try the network. Remove the mark, so that an "
                    "attempt would fail it like any other test.")
+    if left:
+        problem = (f"This test asked the cloud service for work that was still going {_WORK_LIMIT:.0f} seconds after "
+                   f"the test ended ({', '.join(left)}). A test waits for what it starts, or stops it: work that "
+                   "outlives its test meets the next test's stand-ins, or none at all."
+                   + (f"\n\n{problem}" if problem else ""))
     if problem and (failure is None or isinstance(failure, pytest.skip.Exception)):
         raise pytest.fail.Exception(problem, pytrace=False)      # skipping afterwards does not excuse an attempt
     if failure is not None:
