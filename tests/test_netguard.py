@@ -554,6 +554,12 @@ def test_the_netless_runner_says_what_it_needs():
 
 # ----------------------------------------------------------------------------- inside a benchmark
 BENCHMARK = """
+    def answer(host, port, *more, **kw):
+        # A name server's answer without a name server. A declared host is let through, and a real lookup of one
+        # would leave this computer; the guard is still asked first, the way the real function asks it.
+        sys.audit("socket.getaddrinfo", host, port, 0, 0, 0)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.10", port or 0))]
+    socket.getaddrinfo = answer
     os.environ["ANTHROPIC_API_KEY"] = "planted-1"
     os.environ["LANTERN_TOKEN"] = "planted-2"
     guard = ng.begin(allow=sys.argv[2].split(",") if sys.argv[2] else [], live=sys.argv[3] == "live")
