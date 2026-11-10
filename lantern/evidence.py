@@ -17,7 +17,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, scanresult
+from . import SCHEMA_VERSION, __version__, gitfacts, scanresult
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
@@ -30,25 +30,11 @@ NARRATIVES_FILE = "lantern-narratives.md"
 # ---------------------------------------------------------------------------- facts
 
 def git_info(repo: Path) -> dict:
-    git = shutil.which("git")
-    if not git:
-        return {"commit": None, "note": "git not installed"}
-
-    def run(*args):
-        try:
-            p = subprocess.run([git, "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
-            return p.stdout.strip() if p.returncode == 0 else None
-        except (OSError, subprocess.TimeoutExpired):
-            return None
-
-    commit = run("rev-parse", "HEAD")
-    if not commit:
-        return {"commit": None, "note": "not a git repository"}
-    dirty = run("status", "--porcelain", "--untracked-files=no")
-    remote = run("config", "--get", "remote.origin.url") or ""
-    remote = re.sub(r"//[^@/]+@", "//", remote)  # never echo credentials embedded in a remote URL
-    return {"commit": commit, "branch": run("rev-parse", "--abbrev-ref", "HEAD"), "dirty": bool(dirty),
-            "remote": remote or None, "committed_at": run("log", "-1", "--format=%cI")}
+    """The commit a folder is at, its branch, whether files differ from the commit, where `origin` is and when the
+    commit was made (`gitfacts.info`). Read without obeying the folder's own git settings: until 2026-11-10 this
+    asked git inside the folder, and `git status` ran a command planted in its `.git/config`. `note` says why
+    there is no commit, or that the files could not be compared (they then count as changed)."""
+    return gitfacts.info(repo)
 
 
 def engine_ref() -> str:
@@ -591,6 +577,9 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     commit = h.get("commit")
     commit_html = (f"<code>{E(commit[:12])}</code>" + (" <b class='warn'>with uncommitted changes</b>" if h.get("dirty") else "")
                    if commit else "<b class='warn'>not pinned: no git commit</b>")
+    note = h.get("note")    # why there is no commit, or why the files count as changed (`gitfacts`)
+    if isinstance(note, str) and note and note != gitfacts.NOT_ONE:
+        commit_html += f" <span class='muted'>({E(note[:300])})</span>"
 
     def cnt(d):
         return " · ".join(f"<span class='sev {k}'>{E(d.get(k, 0))} {k}</span>" for k in ("critical", "high", "medium", "low")) if d else "–"

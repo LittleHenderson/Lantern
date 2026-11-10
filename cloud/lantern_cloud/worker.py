@@ -36,7 +36,7 @@ from pathlib import Path
 
 import httpx
 
-from lantern import learn, remote, sandbox
+from lantern import gitfacts, learn, remote, sandbox
 
 from .ghapp import NoAccess
 from .settings import Settings
@@ -483,8 +483,11 @@ class Worker:
             paths.insert(0, str(hook))
         env.update({"PYTHONPATH": os.pathsep.join(paths), "LANTERN_HOME": str(tmp / "home"),
                     "LANTERN_OFFLINE": "0" if net or audits else "1", "LANTERN_CLOUD_RUN": "1", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
-                    "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": "*",
                     "LANTERN_SHARE_USAGE": "0"})
+        # Until 2026-11-10 the step was also told `safe.directory=*`, so that git, started in a folder that belongs
+        # to another user, would answer. No step starts git in the project's folder any more (`lantern.gitfacts`).
+        # Where the step runs as another user than the folder's owner (the service as root), git's own refusal
+        # there is a second wall should some code do it again; where both are one user, it is not.
         if audits:
             env["LANTERN_AUDITS_FROM"] = str(audits)
         if net:
@@ -533,12 +536,10 @@ def _scrub(text: str, roots: list[str]) -> str:
 
 
 def _commit(repo: Path) -> str | None:
-    try:
-        r = remote._git(["rev-parse", "HEAD"], cwd=repo, timeout=30)
-    except RuntimeError:
-        return None
-    sha = r.stdout.strip()
-    return sha if r.returncode == 0 and len(sha) in (40, 64) and all(c in "0123456789abcdef" for c in sha) else None
+    """The commit the code is at, read from the folder's `.git` by hand (`gitfacts.head_commit`). No program is
+    started: this runs in the service itself, outside the restricted step, and an uploaded folder brings its own
+    `.git`, whose settings git would obey."""
+    return gitfacts.head_commit(repo)
 
 
 def _summary(out: Path) -> dict:

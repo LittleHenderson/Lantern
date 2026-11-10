@@ -245,9 +245,14 @@ def has_files(dest: Path) -> bool:
 def missing_files(dest: Path) -> list[str] | None:
     """Files in the clone's index that are not in its working tree: what a checkout that stopped part-way left out
     (edited files are not missing, and are never touched). None when git cannot list them, which callers treat as
-    "not known to be complete" rather than "nothing missing"."""
-    r = _git(["ls-files", "--deleted", "-z"], cwd=dest)
-    return [p for p in r.stdout.split("\0") if p] if r.returncode == 0 else None
+    "not known to be complete" rather than "nothing missing".
+    Asked through `gitfacts.deleted`, which does not obey the folder's own git settings: `pipeline.analyze` asks
+    this of any folder that carries the clone mark, and anyone can put that mark, and a command for git to run
+    (`core.fsmonitor`), into a folder they hand over."""
+    if not shutil.which("git"):
+        raise RuntimeError("git is not installed. Install Git, or clone the repository yourself and add the folder.")
+    from . import gitfacts   # here, not above: gitfacts starts git through this module's `run_bounded`
+    return gitfacts.deleted(dest)
 
 
 MARK = "lantern-clone"   # a file in .git naming a folder Lantern cloned (git leaves unknown files in .git alone)
