@@ -1,0 +1,18 @@
+import os
+import zipfile
+
+
+def extract_upload(data_path: str, dest: str) -> list[str]:
+    """Every member's final path is checked to stay inside the destination before anything is written."""
+    written = []
+    base = os.path.realpath(dest)
+    with zipfile.ZipFile(data_path) as z:
+        for member in z.infolist():
+            target = os.path.realpath(os.path.join(base, member.filename))
+            if os.path.commonpath([base, target]) != base:
+                raise ValueError("archive member escapes the destination")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as out:
+                out.write(z.read(member))
+            written.append(target)
+    return written
