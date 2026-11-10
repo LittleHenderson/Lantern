@@ -42,6 +42,33 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   critical, so none of the vulnerable apps gets a green release, while the safe twins' false alarms stay at 3 of 17.
   The rules were written after reading these same apps' untraced calls, so a fresh set of apps would show a smaller
   gain.
+- A scanner that fails can no longer read as a clean result (2026-11-09, directive "Engineer Lantern into a stronger
+  full-stack release reviewer", stage 2). Bandit was run with `--exit-zero` and empty output was read as "no
+  findings"; gitleaks wrote its report to the terminal and any trouble silently fell back to Lantern's small built-in
+  pattern list while the record still said "ok"; pip-audit's and npm's empty or broken output counted as a clean
+  audit, and a package pip-audit could not look up was dropped without a word; one OSV detail lookup failing dropped
+  every finding of that audit. Every scanner now writes one record (`lantern/scanresult.py`): a state (ok, partial,
+  failed, timed out, not installed, skipped), the reason, the tool's version, exit code, what it covered, the folders it
+  was told to skip, and the files or packages it could not read; findings a tool did produce are kept when the rest of
+  its run failed. Each tool's real exit codes are read (Bandit and pip-audit exit 1 when they find something; npm
+  reports an error as JSON). The scanners that apply to a project and did not finish are listed in `security.json`,
+  `readiness.json` and `run.json` as `incomplete`, fail the new readiness check "Every security scanner finished"
+  (partial for a gap the run knew about, such as `--offline`), are named in the Evidence Report's memo, Provenance and
+  Limits, make the badge say "scan incomplete" (never green), show on the app's project cards and above the findings
+  in the report, and make `lantern analyze --fail-on` exit 1 (a deliberate `--offline` skip is listed, not failed).
+  Scanners run through one bounded runner that kills the whole process tree at the time limit. Tests:
+  `tests/test_scanners.py` (48) feed each adapter empty, broken and wrong-shaped output, a missing program, a timeout,
+  an unreadable file and a partial failure, and follow the states to the command line, the app, the stored files and
+  the readiness score.
+- The rest of what Lantern's report on itself got wrong (2026-11-09). "Allow-list for outgoing requests" counted a
+  list of the host names a server answers to (`ALLOWED_HOSTS`, lantern-cloud's settings) as a list of the places it
+  may call; only an allow-list in a file that makes the requests counts now. An app-wide login check was read into a
+  request hook that only counts visits (the 20 lines after it, which belonged to the next function); only the hook's
+  own body is read now, and a word in Lantern's own pattern lists no longer counts as an auth library. Sign-out
+  routes (`/signout`, `/sign-out`, `/log-out`) need no login. The Evidence Report's "verify it yourself" command
+  installed the newest Lantern, which can give another digest once the analysis changes; it now installs the exact
+  Lantern that made the report (the commit, written into the lantern-cloud image at deploy time, or the release tag).
+  The scorecard says that low findings don't lower the score, so 100/100 beside open low findings reads as intended.
 
 - Lantern's report on its own code told four things wrong (2026-11-09, found by checking the Evidence Report of run
   b51NcYcvaZzhuElb). Reports made on the website were titled "repo" for every project, because the code was read

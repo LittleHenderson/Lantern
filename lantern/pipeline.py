@@ -95,10 +95,12 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
         c = sec["counts"]
         log(f"scan    {c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low "
             f"({timings['scan']}s)")
-        off = [t["tool"] for t in sec.get("tools", []) if "lantern[scan]" in str(t.get("status", ""))]
-        if off:
-            log(f"off     {', '.join(off)} not installed; Lantern's own rules ran. "
-                f'For these too: pip install "lantern[scan]"')
+        # A scanner that did not finish, or did not cover everything, is said on the console and kept in run.json,
+        # the readiness file, the Evidence Report and the badge (scanresult.py), never folded into "no findings".
+        run_meta["incomplete"] = [{k: t.get(k) for k in ("tool", "state", "status", "why", "role")}
+                                  for t in sec.get("incomplete") or []]
+        for t in run_meta["incomplete"]:
+            log(f"incomplete {t['tool']}: {t['status']}")
         (out / "security.json").write_text(json.dumps(sec, indent=1), encoding="utf-8")
     g.save(out / "graph.json")
     from . import calls
@@ -112,7 +114,7 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     log(f"report  {path}")
     log(f"proof   {evidence(out, g, sec, rd, run_meta, privacy)}")
     return {"score": rd["score"], "grade": rd["grade"], "shape": rd["shape"],
-            "counts": (sec or {}).get("counts"), "report": str(path)}
+            "counts": (sec or {}).get("counts"), "incomplete": run_meta.get("incomplete") or [], "report": str(path)}
 
 
 def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str) -> Path:

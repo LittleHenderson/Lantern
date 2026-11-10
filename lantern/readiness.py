@@ -13,6 +13,7 @@ import tomllib
 from collections import Counter
 from pathlib import Path
 
+from . import scanresult
 from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
 from .graph import Graph
 from .protections import advise as advise_protections
@@ -283,6 +284,29 @@ def check_security(sec: dict | None) -> list[dict]:
                               if any(f['rank'] == rank for f in acc) else ""),
                           "" if not n else "Fix them (see the Findings tab), or record why the risk is acceptable "
                           "with `lantern accept ID --reason \"...\"`.", how="scanners + reachability"))
+    # The scanners themselves (scanresult.py): "no findings" means nothing when a scanner did not finish. A tool that
+    # failed or timed out fails this check; a gap the run knew about (offline, not installed, part of the project not
+    # covered) is partial; every applicable scanner finishing is a pass.
+    tools = [t for t in sec.get("tools") or [] if isinstance(t, dict)]
+    inc = scanresult.incomplete(tools)
+    broke = [t for t in inc if scanresult.state_of(t) in scanresult.BROKEN]
+    gaps = [t for t in inc if t not in broke]
+    ran = [str(t.get("tool")) for t in tools if scanresult.state_of(t) == "ok" and scanresult.applicable(t)]
+    if broke:
+        status = "fail"
+        ev = "did not finish: " + "; ".join(scanresult.words(t) for t in broke) + (
+            "; did not cover everything: " + "; ".join(scanresult.words(t) for t in gaps) if gaps else "")
+        fix = ("Run the check again. A scanner that keeps failing says why under Provenance (a missing program, a time "
+               "limit, output Lantern could not read); anything it would have found is missing until it finishes.")
+    elif gaps:
+        status = "partial"
+        ev = "did not cover everything: " + "; ".join(scanresult.words(t) for t in gaps)
+        fix = ("Install the missing scanner, run with the network on, or fix the files it could not read, so every "
+               "check that applies to this project runs to the end.")
+    else:
+        status, fix = "pass", ""
+        ev = f"{len(ran)} scanner{'s' if len(ran) != 1 else ''} finished: {', '.join(ran)}" if ran else "no scanner applied"
+    out.append(_check("sec-scanners", "Every security scanner finished", 5, status, ev, fix, how="scanner records"))
     return out
 
 
@@ -1097,6 +1121,8 @@ def assess(g: Graph, sec: dict | None, run_meta: dict | None = None) -> dict:
         "shape": shape, "stack": {k: v for k, v in stack.items() if k != "routes"},
         "advice": advice(shape, stack), "hotspots": hotspots(g),
         "protections": advise_protections(g, sec, repo, shape),
+        # scanners that apply to this project and did not finish or did not cover everything (scanresult.py)
+        "incomplete": scanresult.incomplete((sec or {}).get("tools")),
         "env_vars": sorted(env), "next_steps": todo[:8],
         "starter": starter_files(repo, shape, stack, env),
     }

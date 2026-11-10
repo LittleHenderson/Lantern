@@ -57,7 +57,8 @@ jobs:
           FLY_API_TOKEN: ${{ github.event.inputs.app == 'lantern-gateway' && secrets.FLY_GATEWAY_TOKEN || secrets.FLY_API_TOKEN }}
         run: |
           if [ "${{ github.event.inputs.app }}" = "lantern-cloud" ]; then
-            flyctl deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --remote-only -a lantern-cloud
+            flyctl deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --remote-only -a lantern-cloud \
+              --build-arg LANTERN_COMMIT="$(git rev-parse HEAD)"
           else
             # The same command as the laptop (docs/deploy.md): run from the gateway folder, so fly.toml and Dockerfile
             # are read from there. Given a folder argument, flyctl reads --config relative to that folder, not the repo.
