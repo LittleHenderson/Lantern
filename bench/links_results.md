@@ -2,7 +2,8 @@
 
 Last run: 2026-11-10, `bench/links.py` as it is in this commit, on one machine (Linux, 4 CPUs, as root), offline
 (`tools/netguard`: 0 attempts to reach anything). What the script does and what counts as a find is in its first
-lines.
+lines. Run it under the oldest Python Lantern supports as well as the newest: the first runs were under 3.13 only,
+and the one find that shows only under 3.11 was found by GitHub's tests, not here (below).
 
 232 files: every file of the 15 sample projects under `tests/fixtures` (190 files) and the 42 files of `EXTRA`, the
 files Lantern looks for by name that no sample holds. Each file in six states (taken away; a link out of the
@@ -16,6 +17,20 @@ itself), and each untouched project twice: 1424 runs of the whole analysis. `--j
 | main, the live code, before the link fix and before this stage (efa233a) | 25 | 15 | 129 | 2 | 0 | 1588 s |
 | The stage with the link fix merged in (004e573) | 17 | 3 | 29 | 0 | 0 | 657 s |
 | This change | 0 | 0 | 0 | 0 | 0 | 369 s |
+
+## All six states, Python 3.11.18 (run after GitHub's tests under 3.11 had failed)
+
+| Code | Read through | Tells | Held up | Stopped | Unstable | Time |
+|---|---:|---:|---:|---:|---:|---:|
+| The stage as first pushed (484cc30) | 0 | 1 | 0 | 0 | 0 | 197 s |
+| With the fix for it (62fe781) | 0 | 0 | 0 | 0 | 0 | 199 s |
+
+The 1: `iosapp/Journal/Info.plist`, `graph.json` and `security.json` differ between a link to an empty file and a
+link to nothing. `ios.find_apps` looked for `Info.plist` by its exact name (`rglob("Info.plist")`) and gave the app
+what it found as its settings file, read or not; before Python 3.12 such a look passes over a link with nothing at its
+end, and from 3.12 on it finds both. Under 3.12 and 3.13 the app was given the link in both cases, so the two
+results were the same and the sweep had nothing to see. A file `inside_repo` refuses is now no settings file of an
+app. `--jobs 3 --seconds 20`. main and the stage before this change (004e573) were not measured under 3.11.
 
 ## The state "a link to itself" under Python 3.12.3 (`--states loop`, 264 runs)
 
@@ -94,3 +109,7 @@ earlier in this stage ("what a dependency file says is checked before it is used
   ways.
 * The first measurements were made with five states under Python 3.13 only. The sixth state (a link to itself) and
   the run under Python 3.12 were added later the same day; under 3.13 alone the stop would not have shown.
+* The stage was pushed (484cc30) with the whole sweep run under 3.13 and one state under 3.12, and with the new
+  tests run under 3.13 (two of them under 3.12 too). GitHub's tests under Python 3.11 then failed: 1 failed, 1653
+  passed, 19 skipped, in both of its runs, on the settings file of the iPhone sample. The sweep under 3.11.18 was
+  run after that and shows the same one file and no other.

@@ -63,6 +63,8 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   state under Python 3.12.3, none under 3.13, which does not raise there. (On main, before the link fix, 230 of
   those 264 runs stopped, in `inside_repo` itself; the link fix took those away.) With this change: 0 read
   through, 0 tells, 0 held up, 0 stopped in 1424 runs under Python 3.13.18, and 0 stopped in the 264 under 3.12.3.
+  (Under Python 3.11.18 the whole sweep was run only after GitHub's run under 3.11 had failed: see "Found by
+  GitHub's run" below. There too it is now 0, 0, 0, 0 in 1424 runs.)
   Reading the code found one more of the second kind, which no sample could show: the Android signing-key finding
   (`LM-SIGNING-SECRET`) ranks higher when the key file is in the repository too, and a key file that was a link
   counted when something was at its other end. It asks `inside_repo` now, and a test holds it. And a test written
@@ -106,16 +108,17 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   it read the place the results were made for. For code that calls Lantern's functions:
   `pipeline.rebuild_outputs(out, repo)`, `plan_explain(out, repo, …)` and `explain(out, repo, provider, …)` take the
   project folder as their second argument.
-  Tests: `tests/test_project_files.py` (133 tests, each refusal beside a twin that must still be read: the
+  Tests: `tests/test_project_files.py` (138 tests, each refusal beside a twin that must still be read: the
   project's own file, a link that stays inside the project, the person's shortcut to the project, a plain result
   file). `test_no_file_is_opened_any_other_way` reads every module of `lantern/` and fails on an `open`, `os.open`,
   `read_text` or `read_bytes` outside the openers and a list of the places that open a file of Lantern's own, so a
-  reader added later is caught before any sweep is run. On the code before, 84 fail and 49 pass. Of the 84, 71 fail
+  reader added later is caught before any sweep is run. On the code before, 89 fail and 49 pass. Of the 89, 76 fail
   on what the code does (33 a reader still waiting on a pipe when the test's limit ran out, 1 a refusal that did
-  not come, 1 stopped with `RuntimeError: Symlink loop`, 36 a compared result) and 13 because a function or an
+  not come, 1 stopped with `RuntimeError: Symlink loop`, 41 a compared result) and 13 because a function or an
   argument of this change is not there yet. The 49 that pass: 33 of the 68 files looked for by name, whose reader
   asked `inside_repo` already; 11 tests of the checking tools themselves; 5 tests of what was right before. With
-  this change 133 pass.
+  this change 138 pass. (133 of the 138 were written and counted with the change; 5 came with what GitHub's run
+  found, below, and all 5 fail on the code before.)
   Mistakes planted in the changed lines, one at a time (84, in 18 of the 38 modules): 45 failed the new tests at
   once, 18 failed the older tests of their module, and 21 failed neither. For those 21, eight tests were added and
   three sharpened (the app's Explain button and its command drawer, `lantern explain --node`, the plan's three
@@ -129,6 +132,18 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   waited on a second pipe for good and had to be stopped. The limit can no longer be passed over
   (`links.limited`; a test plants the mistake three ways). The numbers above are from the corrected script; for
   the stage's own code it gave the same 49 lines as the first run.
+  Found by GitHub's run of this change under Python 3.11 (1 failed, 1653 passed, 19 skipped, twice; the
+  measurements above were made under 3.13, and under 3.12 for one state only): `ios.find_apps` looked for
+  `Info.plist` by its exact name and gave the app whatever it found as its settings file, read or not. Before
+  Python 3.12 such a look finds a link only when something is at its end, so under 3.11 the map and the findings
+  named `Journal/Info.plist` as the app's settings file when the outside path existed and the Xcode project when it
+  did not; under 3.12 and 3.13 the link was named in both cases, unread. The whole sweep, then run under Python
+  3.11.18 on that commit: that 1 tell and nothing else (0 read through, 0 held up, 0 stopped in 1424 runs). Now a
+  file `inside_repo` refuses is no settings file of an app (`Info.plist`, the entitlements files), on any Python,
+  and the Learn step that asks whether a file is there (`SECURITY.md`, `Dockerfile`) asks `inside_repo` as well:
+  it took a link with nothing at its end for the file from Python 3.12 on, and a link to any file outside the
+  project on every Python. Five tests; on the code before 5 fail under 3.13 and 3.12, and 4 under 3.11. With the
+  fix the sweep under 3.11.18 gives 0, 0, 0, 0, and the whole suite passes under 3.11.18 as it does under 3.13.18.
   Not covered: the sweep sees a read only when what the file holds changes a result file (the look for openers
   covers the rest by the way they open: it knows `open`, `os.open`, `read_text`, `read_bytes` and `.open`, not a
   library that is handed a path); gitleaks, which finds its files itself, was not measured (not installed where the

@@ -327,6 +327,29 @@ def test_an_iphone_app_is_not_given_a_settings_file_that_is_a_link_out(rel, name
     assert named(inside) == named(own) and inside.keys == own.keys
 
 
+@only_posix
+def test_a_learn_step_about_a_file_is_done_only_when_the_project_holds_the_file(tmp_path):
+    """The same question asked the same way: "is `SECURITY.md` there" was asked with a look for the exact name, which
+    finds a link whatever is at its end from Python 3.12 on and only a link with something at its end before."""
+    repo, out = tmp_path / "p", tmp_path / "out"
+    repo.mkdir()
+    (tmp_path / "outside.md").write_text("# Security\n", encoding="utf-8")
+    step = {"kind": "exists", "files": ["SECURITY.md"]}
+    assert learn.check(step, repo, out) == ("todo", "missing: SECURITY.md")
+    for at_its_end in (tmp_path / "outside.md", tmp_path / "nothing.md"):
+        os.symlink(at_its_end, repo / "SECURITY.md")
+        assert learn.check(step, repo, out) == ("todo", "missing: SECURITY.md")
+        (repo / "SECURITY.md").unlink()
+    # the twins: the project's own file, and a link that stays inside the project
+    (repo / "docs").mkdir()
+    (repo / "docs" / "security.md").write_text("# Security\n", encoding="utf-8")
+    os.symlink(repo / "docs" / "security.md", repo / "SECURITY.md")
+    assert learn.check(step, repo, out) == ("done", "files present")
+    (repo / "SECURITY.md").unlink()
+    (repo / "SECURITY.md").write_text("# Security\n", encoding="utf-8")
+    assert learn.check(step, repo, out) == ("done", "files present")
+
+
 def test_the_sweep_names_each_kind_of_find():
     """`bench/links.py` judges runs it did not make here: one file per kind of find, and one that is clean."""
     def run(rel, state, **more):

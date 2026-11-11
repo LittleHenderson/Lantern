@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 from . import results
-from .python_frontend import project_text
+from .python_frontend import inside_repo, project_text
 
 ROOT = Path(__file__).parent / "starters"
 MARKER = ".lantern-starter"
@@ -145,7 +145,9 @@ def check(cond: dict, repo: Path, out: Path) -> tuple[str, str]:
             return "unknown", "analyze the project first"
         return ("todo", "still to add: " + ", ".join(missing)) if missing else ("done", "in place")
     if kind == "exists":
-        missing = [f for f in cond["files"] if not any(Path(repo).glob(f))]
+        # a file the project holds (`inside_repo`): a look for a name alone finds a link whatever is at its end from
+        # Python 3.12 on, and only a link with something at its end before
+        missing = [f for f in cond["files"] if not any(inside_repo(p, Path(repo)) for p in Path(repo).glob(f))]
         return ("todo", "missing: " + ", ".join(missing)) if missing else ("done", "files present")
     if kind == "explained":
         ex = _load(out / "explanations.json")
