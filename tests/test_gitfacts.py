@@ -11,9 +11,11 @@ Three kinds of test, kept apart on purpose:
 * limits: what the new reading deliberately does not read, and says so.
 The planted commands only write a marker file.
 """
+import ctypes
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from lantern import case, evidence, gitfacts, remote
+from lantern import case, evidence, gitfacts, programs, remote, winowner
 from lantern.cli import main
 
 only_posix = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (symbolic links)")
@@ -30,9 +32,10 @@ WHEN = {"GIT_AUTHOR_DATE": "2026-11-01T10:00:00+0100", "GIT_COMMITTER_DATE": "20
 
 
 def git(*args, cwd, ok=True, env=None) -> str:
-    """git as the test itself uses it, on repositories the test made before anything was planted in them."""
-    # no background upkeep: since git 2.47 a commit can start `git maintenance --detach`, whose lock file then
-    # appears in .git/objects while the test compares the folder (CI, 2026-11-11)
+    """git as the test itself uses it, on repositories the test made before anything was planted in them. Its own
+    upkeep after a commit is off (`gc.auto` says the same to a git older than 2.29), so that nothing of the test's
+    making is still at work in a folder when the test looks at it: see
+    `test_git_as_these_tests_use_it_leaves_no_upkeep_going_in_the_folder`."""
     r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "maintenance.auto=false",
                         "-c", "gc.auto=0", *args], cwd=cwd,
                        env={**os.environ, **WHEN, **(env or {})}, capture_output=True, text=True, encoding="utf-8")
@@ -201,6 +204,20 @@ def test_only_settings_that_cannot_name_anything_reach_git(tmp_path, monkeypatch
         assert Path(cwd) == d
 
 
+def test_git_as_these_tests_use_it_leaves_no_upkeep_going_in_the_folder(tmp_path):
+    """After a commit git starts its own upkeep (`git maintenance run --auto`), and since git 2.47 that goes on in the
+    background when the commit has already come back, holding `.git/objects/maintenance.lock` for a moment. A test
+    that compares a folder before and after asking then sees a file go that Lantern never touched: on 2026-11-10 the
+    test below failed that way once on CI (git 2.56), on that lock file. So `git()` turns the upkeep off, and the
+    repositories these tests make are at rest when a test looks at them."""
+    d, trace = make(tmp_path), tmp_path / "trace"
+    write(d / "app.py", "print('again')\n")
+    git("commit", "-q", "-a", "-m", "two", cwd=d, env={"GIT_TRACE": str(trace)})        # git writes down what it starts
+    said = [line.split("trace:", 1)[-1].strip() for line in trace.read_text(encoding="utf-8").splitlines()]
+    assert any(line.startswith("built-in: git commit") for line in said), said
+    assert [line for line in said if re.search(r"\b(maintenance|gc)\b", line)] == [], "the commit started git's upkeep"
+
+
 def test_asking_writes_nothing_into_the_folder_and_leaves_nothing_behind(tmp_path, monkeypatch):
     d = make(tmp_path)
     touched(d / "app.py")
@@ -360,6 +377,377 @@ def test_a_submodule_entry_that_points_out_of_the_folder_is_not_looked_into(name
     assert (got["dirty"], got.get("note")) == (True, gitfacts.UNKNOWN) and nothing_of(other, got)
     assert asked and all(where == str(d) for where, _ in asked)     # git was never pointed at the other repository
     assert "status" not in [what for _, what in asked]              # nor asked to compare, which reads through the entry
+
+
+# ---------------------------------------------------------------------------- planted: a git folder that is not yours
+#
+# Found 2026-11-10, after the settings fix. Nothing in a git folder is obeyed any more, but a git folder in a folder
+# ABOVE the one asked about was read whoever it belonged to. On a shared computer another user can make `/tmp/.git`
+# or `C:\.git`, and every project beneath it with no git folder of its own was then reported with that user's
+# commit, branch and address, "no uncommitted changes" included. git itself refuses such a repository. Lantern now
+# keeps git's rule for every part of a repository that lies outside the folder asked about: it must be the current
+# user's, or the person must have named the repository in their own `safe.directory` list.
+
+SOMEBODY_ELSE = frozenset({"somebody else"})    # stands in for "who am I", where a test cannot give a folder away
+
+
+def not_yours() -> dict:
+    return {"commit": None, "note": gitfacts.NOT_YOURS}
+
+
+def planted_above(base: Path) -> tuple[Path, Path, dict]:
+    """A project with no git folder of its own, in a folder of a repository: what a `/tmp/.git` that another user
+    made is to every folder beneath it. Returns (the repository, the project, what git says of the repository)."""
+    shared = make(base, "shared", line="print('somebody else')")
+    git("remote", "add", "origin", "https://example.invalid/private/other.git", cwd=shared)
+    project = shared / "downloads" / "project"
+    write(project / "app.py", "print('mine')\n")
+    return shared, project, git_says(shared)
+
+
+def git_would_read(folder: Path) -> bool:
+    """Whether git itself answers in `folder` when it takes the repository for somebody else's. The variable is
+    git's own switch for its own tests of this rule: with it, the person's `safe.directory` list alone decides."""
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=folder, capture_output=True,
+                          env={**os.environ, "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}).returncode == 0
+
+
+def trust(*folders: str) -> None:
+    """The person's own list of repositories git may use although they are not theirs, in their own settings."""
+    home = Path(os.path.expanduser("~"))
+    git("config", "--global", "--unset-all", "safe.directory", cwd=home, ok=False)
+    for folder in folders:
+        git("config", "--global", "--add", "safe.directory", folder, cwd=home)
+
+
+def test_a_git_folder_above_that_is_somebody_elses_is_not_followed(tmp_path, monkeypatch):
+    shared, project, said = planted_above(tmp_path)
+    assert evidence.git_info(project) == said               # the safe twin: one's own repository above is followed
+    assert gitfacts.head_commit(project) == said["commit"]
+    monkeypatch.setattr(gitfacts, "_myself", lambda: SOMEBODY_ELSE)
+    for asked in (project, shared / "sub"):
+        got = evidence.git_info(asked)
+        assert got == not_yours() and nothing_of(shared, got), got
+        assert gitfacts.head_commit(asked) is None and gitfacts.find(asked) is None
+    assert not git_would_read(project)                      # git's own answer for such a repository
+    assert evidence.git_info(shared) == said                # the folder asked about is read, whoever owns it
+    assert gitfacts.deleted(shared) == []
+
+
+@pytest.mark.parametrize("whose", ["somebody else's", "not known"])
+@pytest.mark.parametrize("part", ["the git folder", "the folder it is in"])
+def test_each_part_outside_the_folder_asked_about_must_be_the_users(part, whose, tmp_path, monkeypatch):
+    """An owner that cannot be read (a disk that keeps none, a network folder) is nobody's."""
+    shared, project, said = planted_above(tmp_path)
+    real, it = gitfacts._owner, shared / ".git" if part == "the git folder" else shared
+    monkeypatch.setattr(gitfacts, "_owner", lambda p: (None if whose == "not known" else "somebody else")
+                        if Path(p) == it else real(p))
+    assert evidence.git_info(project) == not_yours()
+    assert evidence.git_info(shared) == said
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0, reason="needs root: it gives a folder to another user")
+def test_a_git_folder_above_that_another_user_really_owns_gets_gits_own_answer(tmp_path, monkeypatch):
+    """Real owners, and beside each of Lantern's answers the answer of git itself, with no switch."""
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    shared, project, said = planted_above(tmp_path)
+
+    def git_reads() -> bool:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True).returncode == 0
+
+    assert evidence.git_info(project) == said and git_reads()
+    os.lchown(shared / ".git", 65534, 65534)                # the git folder alone is another user's
+    got = evidence.git_info(project)
+    assert got == not_yours() and not git_reads()
+    assert gitfacts.head_commit(project) is None
+    os.lchown(shared / ".git", 0, 0)
+    os.lchown(shared, 65534, 65534)                         # the folder it is in is
+    assert evidence.git_info(project) == not_yours() and not git_reads()
+    monkeypatch.setenv("SUDO_UID", "65534")                 # root who came from that user through sudo: theirs is theirs
+    assert evidence.git_info(project) == said and git_reads()
+    monkeypatch.delenv("SUDO_UID")
+    assert evidence.git_info(project) == not_yours() and not git_reads()
+    trust(shared.as_posix())                                # the person's own word lifts it, for git and for Lantern
+    assert evidence.git_info(project) == said and git_reads()
+    trust()
+    for p in (shared, shared / ".git"):
+        os.lchown(p, 65534, 65534)
+    assert evidence.git_info(shared)["commit"] == said["commit"]        # asked about itself: read
+
+
+@pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (user numbers; Windows has its own tests below)")
+def test_who_the_current_user_is_follows_gits_rule(tmp_path, monkeypatch):
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    assert gitfacts._owner(tmp_path) == os.lstat(tmp_path).st_uid == os.geteuid()
+    assert gitfacts._owner(tmp_path / "nothing-here") is None
+    assert gitfacts._myself() == {os.geteuid()}
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("SUDO_UID", "1234")
+    assert gitfacts._myself() == {1000}                     # sudo's variable counts for root only
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    assert gitfacts._myself() == {0, 1234}                  # root: root's own, and the user sudo came from
+    for junk in ("", "12x", "-1", " 7", "+7", "0x10", "99999999999999999999", "\uff11\uff12"):
+        monkeypatch.setenv("SUDO_UID", junk)
+        assert gitfacts._myself() == {0}, junk
+
+
+def test_the_persons_own_list_of_repositories_to_trust_is_kept_as_git_keeps_it(tmp_path, monkeypatch):
+    """`safe.directory`: read by git itself, from the person's settings, in a place that is not the project's."""
+    home = Path(os.path.expanduser("~"))
+    shared, project, said = planted_above(home / "work")
+    monkeypatch.setattr(gitfacts, "_myself", lambda: SOMEBODY_ELSE)
+    plant(shared / ".git" / "config", "[safe]\n\tdirectory = *\n")          # the repository calling itself safe
+    assert evidence.git_info(project) == not_yours() and not git_would_read(project)
+    newer = tuple(int(n) for n in re.search(r"(\d+)\.(\d+)", git("--version", cwd=home)).groups()) >= (2, 46)
+    # Entries are written with the folder's real name, as a person types it. The temp folder of GitHub's Windows
+    # machines is spelled with a short name (`C:/Users/RUNNER~1/...`), and that spelling has its own lines below.
+    real = home.resolve()
+    at = shared.resolve().as_posix()
+    monkeypatch.chdir(home)                                 # so that "work/shared" below would name it from here
+    for listed, read, every_git in [
+            ([(real / "elsewhere").as_posix()], False, True),
+            ([at], True, True),
+            (["*"], True, True),
+            (["~/work/shared"], True, True),
+            ([at, ""], False, True),                        # an empty entry forgets the ones before it
+            ([at, "", at], True, True),
+            (["work/shared"], False, True),                 # not a whole path
+            ([(real / "work").as_posix() + "/*"], True, False),     # everything inside a folder: git since 2.46
+            ([at + "/*"], False, False),                    # ... which is what is inside it, not the folder itself
+    ]:
+        trust(*listed)
+        assert evidence.git_info(project) == (said if read else not_yours()), listed
+        if every_git or newer:
+            assert git_would_read(project) is read, f"git itself answers otherwise for {listed}"
+    # The same folders under another spelling of their name: the short name above, or a link. Lantern takes the
+    # person's entry for the folder it names, however it is spelled. git for Windows 2.56 does so for a whole path
+    # and not for `folder/*` (found by this test's first run on Windows: it leaves a short name in such an entry as
+    # written, and then the entry does not match), so git is not asked here.
+    spellings = [home] if home != real else []
+    if os.name == "posix":
+        os.symlink(real, tmp_path / "another-name")
+        spellings.append(tmp_path / "another-name")
+    for spelled in spellings:
+        for listed in ([(spelled / "work" / "shared").as_posix()], [(spelled / "work").as_posix() + "/*"]):
+            trust(*listed)
+            assert evidence.git_info(project) == said, listed
+        trust((spelled / "elsewhere").as_posix() + "/*")
+        assert evidence.git_info(project) == not_yours()
+    trust()
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")             # the person's word for one command, in its variables
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "safe.directory")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", at)
+    assert evidence.git_info(project) == said and git_would_read(project)
+    for name in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"):
+        monkeypatch.delenv(name)
+    # git's old variable that has `git config`, and no other command, read one file in place of all the others:
+    # git's rule does not look there, so a list in such a file is nobody's word
+    monkeypatch.setenv("GIT_CONFIG", str(write(home / "one-file", "[safe]\n\tdirectory = *\n")))
+    assert evidence.git_info(project) == not_yours() and not git_would_read(project)
+
+
+def test_what_lies_outside_the_folder_asked_about_must_be_yours(tmp_path, monkeypatch):
+    """A linked worktree keeps its git folder in the repository it was made from, a submodule in the repository
+    around it. Inside the folder asked about, that is read whoever owns it; outside it, git's rule holds."""
+    d = make(tmp_path)
+    linked = tmp_path / "linked"
+    git("worktree", "add", "-q", str(linked), "-b", "side", cwd=d)
+    sup, _lib = with_submodule(tmp_path)
+    inner = sup / "vendor" / "lib"
+    said = {p: git_says(p) for p in (d, linked, sup, inner)}
+    assert all(evidence.git_info(p) == answer for p, answer in said.items())           # the safe twins
+    monkeypatch.setattr(gitfacts, "_myself", lambda: SOMEBODY_ELSE)
+    assert evidence.git_info(d) == said[d]                  # all of it is inside the folder
+    assert evidence.git_info(linked) == not_yours()         # its git folder is in the other repository
+    assert evidence.git_info(sup) == said[sup]              # the submodule's git folder is inside `super`
+    write(inner / "app.py", "print('changed inside')\n")
+    assert evidence.git_info(sup)["dirty"] is True          # ... and is still looked into
+    git("checkout", "-q", "--", "app.py", cwd=inner)
+    assert evidence.git_info(inner) == not_yours()          # asked about by itself, its git folder is outside it
+    trust(".")                  # git since 2.46: "where I stand is the top of the repository", and no folder inside it
+    assert evidence.git_info(linked) == said[linked] and evidence.git_info(linked / "sub") == not_yours()
+    if tuple(int(n) for n in re.search(r"(\d+)\.(\d+)", git("--version", cwd=d)).groups()) >= (2, 46):
+        assert git_would_read(linked) and not git_would_read(linked / "sub")
+
+
+def test_a_git_folder_that_is_not_yours_is_named_on_the_evidence_page(tmp_path, monkeypatch, capsys):
+    _shared, project, _said = planted_above(tmp_path)
+    monkeypatch.setattr(gitfacts, "_myself", lambda: SOMEBODY_ELSE)
+    assert main(["analyze", str(project), "--no-scan"]) == 0
+    page = (project / ".lantern" / "evidence.html").read_text(encoding="utf-8")
+    assert "not pinned: no git commit" in page and "does not belong to you" in page
+
+
+# ---------------------------------------------------------------------------- who owns a folder, on Windows
+
+USER_SID, SYSTEM_SID = "S-1-5-21-1111-2222-3333-1001", "S-1-5-18"
+
+
+class Windows:
+    """Stands in for advapi32 and kernel32 as `lantern/winowner.py` calls them, on any system. SIDs, handles and
+    memory are plain numbers; everything handed out is kept in `out` until it is given back."""
+
+    def __init__(self, owners=None, admin=False, elevation=1, linked_admin=None, failing=()):
+        self.owners = owners or {}      # path -> the owner's SID, or Windows' error number
+        self.admin, self.elevation, self.linked_admin, self.failing = admin, elevation, linked_admin, set(failing)
+        self.out: dict[int, str] = {}
+        self.sids: dict[int, str] = {}
+        self.calls: list[str] = []
+        self._kept, self._next = [], 0x1000
+
+    def _hand(self, kind: str, sid: str | None = None) -> int:
+        self._next += 0x10
+        if sid is None:
+            self.out[self._next] = kind
+        else:
+            self.sids[self._next] = sid
+        return self._next
+
+    def GetNamedSecurityInfoW(self, path, kind, what, owner, group, dacl, sacl, descriptor):
+        self.calls.append("GetNamedSecurityInfoW")
+        assert (kind, what, group, dacl, sacl) == (winowner.FILE_OBJECT, winowner.OWNER, None, None, None)
+        answer = self.owners.get(path, 2)                   # 2: Windows finds no such file
+        if isinstance(answer, int):
+            owner._obj.value = self._hand("", USER_SID)     # a failed call may leave anything where its answer goes
+            return answer
+        descriptor._obj.value = self._hand("descriptor")
+        owner._obj.value = self._hand("", answer)           # lies inside the descriptor: not given back by itself
+        return 0
+
+    def ConvertSidToStringSidW(self, sid, text):
+        self.calls.append("ConvertSidToStringSidW")
+        assert "descriptor" in self.out.values() or "token" in self.out.values(), "the SID's memory was given back"
+        if "ConvertSidToStringSidW" in self.failing:
+            return 0
+        said = ctypes.create_unicode_buffer(self.sids[sid])
+        self._kept.append(said)
+        self.out[ctypes.addressof(said)] = "text"
+        text._obj.value = ctypes.addressof(said)
+        return 1
+
+    def ConvertStringSidToSidW(self, said, sid):
+        self.calls.append("ConvertStringSidToSidW")
+        number = self._hand("sid")
+        self.sids[number] = said
+        sid._obj.value = number
+        return 1
+
+    def GetCurrentProcess(self):
+        return 0xFFFFFFFFFFFFFFFF
+
+    def OpenProcessToken(self, process, access, token):
+        self.calls.append("OpenProcessToken")
+        assert (process, access) == (0xFFFFFFFFFFFFFFFF, winowner.TOKEN_QUERY)
+        if "OpenProcessToken" in self.failing:
+            return 0
+        token._obj.value = self._hand("token")
+        return 1
+
+    def GetTokenInformation(self, token, kind, room, length, size):
+        self.calls.append(f"GetTokenInformation {kind}")
+        assert self.out.get(token) == "token"
+        if kind == winowner.USER:
+            if "TokenUser" in self.failing:
+                return 0
+            if room is None or length < 44:
+                size._obj.value = 44                        # the room a TOKEN_USER needs
+                return 0
+            ctypes.cast(room, ctypes.POINTER(ctypes.c_void_p))[0] = self._hand("", USER_SID)
+            return 1
+        if kind == winowner.ELEVATION_TYPE:
+            room._obj.value = self.elevation
+            return 1
+        assert kind == winowner.LINKED_TOKEN and self.elevation == winowner.LIMITED
+        if self.linked_admin is None:
+            return 0
+        room._obj.value = self._hand("linked token")
+        return 1
+
+    def CheckTokenMembership(self, token, sid, member):
+        self.calls.append("CheckTokenMembership" + ("" if token is None else " (linked)"))
+        assert self.sids[sid] == winowner.ADMINISTRATORS and self.out.get(sid) == "sid"
+        assert token is None or self.out.get(token) == "linked token"
+        member._obj.value = int(bool(self.admin if token is None else self.linked_admin))
+        return 1
+
+    def CloseHandle(self, handle):
+        assert self.out.pop(handle) in ("token", "linked token")
+        return 1
+
+    def LocalFree(self, memory):
+        assert self.out.pop(memory) in ("descriptor", "text", "sid")
+        return None
+
+
+def test_the_owner_of_a_folder_is_asked_of_windows_and_everything_is_given_back():
+    w = Windows({r"C:\work\.git": USER_SID, r"C:\.git": SYSTEM_SID, r"C:\locked": 5})
+    assert winowner.owner(r"C:\work\.git", w) == USER_SID and winowner.owner(r"C:\.git", w) == SYSTEM_SID
+    assert winowner.owner(r"C:\locked", w) is None          # Windows refuses to say: nobody's
+    assert winowner.owner(r"C:\nothing-here", w) is None
+    assert w.out == {}, "memory Windows handed out was not given back"
+    cannot_write_it = Windows({r"C:\work\.git": USER_SID}, failing={"ConvertSidToStringSidW"})
+    assert winowner.owner(r"C:\work\.git", cannot_write_it) is None and cannot_write_it.out == {}
+    for network in (r"\\server\share\work\.git", "//server/share/work", r"\\?\UNC\server\share\work"):
+        asked = Windows({network: USER_SID})
+        assert winowner.owner(network, asked) is None and asked.calls == [], "a server was asked who owns a folder"
+    assert winowner.owner(r"\\?\C:\work\.git", Windows({r"\\?\C:\work\.git": USER_SID})) == USER_SID
+
+
+@pytest.mark.parametrize("how, mine, linked_asked", [
+    (dict(), {USER_SID}, False),                                                # an ordinary user
+    (dict(admin=True, elevation=2), {USER_SID, "S-1-5-32-544"}, False),         # an administrator, elevated
+    (dict(elevation=3, linked_admin=True), {USER_SID, "S-1-5-32-544"}, True),   # an administrator, not elevated
+    (dict(elevation=3, linked_admin=False), {USER_SID}, True),
+    (dict(elevation=3), {USER_SID}, False),                                     # no linked sign-in is handed out
+    (dict(admin=True, failing={"TokenUser"}), {"S-1-5-32-544"}, False),
+    (dict(failing={"OpenProcessToken"}), set(), False),                         # Windows does not say: nobody
+    (dict(failing={"ConvertSidToStringSidW"}), set(), False),
+])
+def test_whose_folders_are_the_current_users_on_windows(how, mine, linked_asked):
+    w = Windows(**how)
+    assert winowner.myself(w) == mine
+    assert w.out == {}, "a handle or memory Windows handed out was not given back"
+    assert ("CheckTokenMembership (linked)" in w.calls) is linked_asked
+
+
+only_windows = pytest.mark.skipif(os.name != "nt", reason="needs Windows itself (who owns a folder there)")
+
+
+@only_windows
+def test_on_windows_itself_what_the_user_makes_is_the_users(tmp_path):
+    made = tmp_path / "made-here"
+    made.mkdir()
+    owner, mine = gitfacts._owner(made), gitfacts._myself()
+    assert re.fullmatch(r"S-1-[0-9-]+", owner or ""), owner
+    assert owner in mine and mine, (owner, sorted(mine))
+    assert gitfacts._owner(tmp_path / "nothing-here") is None
+    assert gitfacts._owner(r"\\localhost\nothing\here") is None
+    system = gitfacts._owner(os.environ.get("SystemRoot", r"C:\Windows"))       # Windows' own folder is not the user's
+    assert re.fullmatch(r"S-1-[0-9-]+", system or "") and system not in mine, (system, sorted(mine))
+
+
+@only_windows
+def test_on_windows_itself_a_git_folder_above_with_another_owner_gets_gits_own_answer(tmp_path):
+    shared, project, said = planted_above(tmp_path)
+    dot = shared / ".git"
+    before = gitfacts._owner(dot)
+
+    def git_reads() -> bool:
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, capture_output=True).returncode == 0
+
+    assert evidence.git_info(project) == said and git_reads()
+    gave = subprocess.run(["icacls", str(dot), "/setowner", "*" + SYSTEM_SID], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+    if gave.returncode != 0:
+        pytest.skip(f"this sign-in may not give a folder to another owner: {(gave.stdout + gave.stderr).strip()[:200]}")
+    try:
+        assert gitfacts._owner(dot) == SYSTEM_SID
+        assert evidence.git_info(project) == not_yours() and not git_reads()
+        assert evidence.git_info(shared) == said            # asked about itself: read
+    finally:
+        subprocess.run(["icacls", str(dot), "/setowner", "*" + before], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    assert gitfacts._owner(dot) == before and evidence.git_info(project) == said and git_reads()
 
 
 # ---------------------------------------------------------------------------- what cannot be told is said
@@ -560,12 +948,33 @@ def test_the_persons_own_word_on_where_git_stops_looking_is_kept(tmp_path, monke
 def test_reading_the_commit_starts_no_program(tmp_path, monkeypatch):
     d = make(tmp_path)
     commit = git("rev-parse", "HEAD", cwd=d)
+    linked = tmp_path / "linked"
+    git("worktree", "add", "-q", str(linked), "-b", "side", cwd=d)
+    trust("*")
 
     def none(*a, **k):
         raise AssertionError("a program was started")
     monkeypatch.setattr(subprocess, "Popen", none)
     assert gitfacts.head_commit(d) == commit and gitfacts.head_commit(d / "sub") == commit
     assert gitfacts.head_commit(tmp_path) is None
+    assert gitfacts.head_commit(linked) == commit           # the user's own: nobody has to be asked
+    # a folder taken alone, the cloud service's way: git is not even asked for the person's list of repositories
+    monkeypatch.setattr(gitfacts, "_myself", lambda: SOMEBODY_ELSE)
+    assert gitfacts.head_commit(linked, alone=True) is None and gitfacts.head_commit(d, alone=True) == commit
+
+
+def test_a_folder_taken_alone_gets_nothing_from_outside_it(tmp_path):
+    """How the cloud service reads a run's commit, in the service itself and not in a restricted step: the answer
+    comes from inside the folder, or there is none."""
+    d = make(tmp_path)
+    linked = tmp_path / "linked"
+    git("worktree", "add", "-q", str(linked), "-b", "side", cwd=d)
+    commit = git("rev-parse", "HEAD", cwd=d)
+    assert gitfacts.head_commit(linked) == gitfacts.head_commit(d / "sub") == commit    # the everyday way: read
+    assert gitfacts.head_commit(d, alone=True) == commit      # the safe twin: all of this one is inside the folder
+    assert gitfacts.head_commit(d / "sub", alone=True) is None            # nothing from a folder above
+    assert gitfacts.head_commit(linked, alone=True) is None               # its git folder is in the other repository
+    assert gitfacts.find(linked, alone=True) is None
 
 
 # ---------------------------------------------------------------------------- the settings file, read as text
@@ -631,7 +1040,7 @@ def test_refs_kept_in_the_reftable_form_are_not_read(tmp_path):
 
 def test_without_git_nothing_is_claimed(tmp_path, monkeypatch):
     d = make(tmp_path)
-    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: None)
+    monkeypatch.setattr(programs, "find", lambda name, *a, **k: None)
     assert evidence.git_info(d) == {"commit": None, "note": "git not installed"}
 
 

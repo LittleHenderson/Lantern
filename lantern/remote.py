@@ -12,11 +12,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import stat
 import subprocess
 import sys
 from pathlib import Path
+
+from . import programs, removal, results
 
 HTTPS = re.compile(r"^https://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::(?P<port>\d{1,5}))?"
                    r"/(?P<owner>[\w.-]+)/(?P<name>[\w.-]+?)(?:\.git)?/?"
@@ -206,9 +206,9 @@ def _pattern(path: str) -> str:
 
 def skipped(folder: Path) -> dict | None:
     """What a Lantern clone left out to stay under the size cap: {files, mb, examples}, or None."""
-    try:
-        d = json.loads((Path(folder) / ".git" / SKIPPED).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    try:   # Lantern's own note, kept in a folder that may have come from anywhere: read only as a plain file
+        d = json.loads(results.plain(Path(folder) / ".git" / SKIPPED)[0] or "null")
+    except (ValueError, RecursionError):
         return None
     return d if isinstance(d, dict) and isinstance(d.get("files"), int) else None
 
@@ -229,21 +229,27 @@ def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900, a
     comes first.
     `auth`: a read-only GitHub token (Lantern cloud's "Connect GitHub"), handed to git as an HTTP header through
     environment variables only (never in the link, `.git/config` or the log)."""
+    dest = Path(dest)
+    # Whatever fails below, what the copy left is removed, so the folder must hold nothing of anyone's when it
+    # begins. Until 2026-11-10 this was only written above, not checked: a copy into a folder that held files was
+    # refused by git, and the folder was then deleted with everything in it.
+    if os.path.lexists(dest) and (dest.is_symlink() or not dest.is_dir() or any(dest.iterdir())):
+        raise RuntimeError(f"{dest} already exists and is not empty. Lantern copies a repository only into a new "
+                           "or empty folder.")
     args = (["clone", *NO_LINKS, "--depth", "1", "--single-branch", "--no-checkout"]
             + (["--branch", branch] if branch else []) + ["--", url, str(dest)])
     try:
         r = _git(args, cwd=None, timeout=timeout, **({"env": _auth_env(url, auth)} if auth else {}))
-    except RuntimeError:
-        if dest.is_dir():   # a clone stopped by the timeout can leave a partial folder behind
-            remove_tree(dest)
+    except RuntimeError as e:
+        left = _left_behind(dest)   # a clone stopped by the timeout can leave a partial folder behind
+        if left:
+            raise RuntimeError(str(e) + left) from None
         raise
     if r.returncode != 0:
-        if dest.is_dir():
-            remove_tree(dest)
         raise RuntimeError("could not clone it: " + _tail(r.stderr) +
-                           ". If the repository is private, clone it yourself and add the folder.")
+                           ". If the repository is private, clone it yourself and add the folder." + _left_behind(dest))
     _mark(dest)
-    _checkout(dest, timeout)
+    _checkout(dest, timeout, made=True)
 
 
 def has_files(dest: Path) -> bool:
@@ -258,7 +264,7 @@ def missing_files(dest: Path) -> list[str] | None:
     Asked through `gitfacts.deleted`, which does not obey the folder's own git settings: `pipeline.analyze` asks
     this of any folder that carries the clone mark, and anyone can put that mark, and a command for git to run
     (`core.fsmonitor`), into a folder they hand over."""
-    if not shutil.which("git"):
+    if not programs.find("git"):
         raise RuntimeError("git is not installed. Install Git, or clone the repository yourself and add the folder.")
     from . import gitfacts   # here, not above: gitfacts starts git through this module's `run_bounded`
     return gitfacts.deleted(dest)
@@ -301,10 +307,13 @@ def check_complete(dest: Path, what: str = "this clone has") -> None:
                            f"Remove {dest} and try again, or clone it yourself and add the folder.")
 
 
-def _checkout(dest: Path, timeout: int = 900) -> None:
+def _checkout(dest: Path, timeout: int = 900, made: bool = False) -> None:
     """Measure the files from the index, refuse above the cap, then check them out. Whatever fails, nothing is left
     behind: a folder holding only `.git` would otherwise pass as a finished clone and analyze as an empty project
-    (seen with a reserved Windows file name such as `aux.txt`, a path over MAX_PATH, or a full disk)."""
+    (seen with a reserved Windows file name such as `aux.txt`, a path over MAX_PATH, or a full disk).
+    Only a folder Lantern cloned is removed (`made`: by the call that is running; or `is_clone`). A repository
+    folder of the person's own that happens to have no files checked out stays as it is, and the error says why
+    the files could not be written."""
     cap = max_mb()
     files = tree_files(dest)
     size = sum(n for _, n in files) / 1_000_000
@@ -313,10 +322,10 @@ def _checkout(dest: Path, timeout: int = 900) -> None:
         bulk = [(p, n) for p, n in files if is_bulk(p, n) and "\n" not in p and "\r" not in p]
         code = size - sum(n for _, n in bulk) / 1_000_000
         if code > cap:
-            remove_tree(dest)
+            left = _left_behind(dest) if made or is_clone(dest) else ""
             raise RuntimeError(f"the repository's files add up to {size:,.1f} MB, and still {code:,.1f} MB without "
                                f"the pictures, videos, archives and other files Lantern does not read: above Lantern's "
-                               f"{cap} MB limit (LANTERN_CLONE_MAX_MB). Clone it yourself and add the folder.")
+                               f"{cap} MB limit (LANTERN_CLONE_MAX_MB). Clone it yourself and add the folder." + left)
         sparse = dest / ".git" / "info" / "sparse-checkout"
         sparse.parent.mkdir(parents=True, exist_ok=True)
         sparse.write_text("/*\n" + "".join(_pattern(p) + "\n" for p, _ in bulk), encoding="utf-8", newline="\n")
@@ -327,25 +336,27 @@ def _checkout(dest: Path, timeout: int = 900) -> None:
             "examples": [p for p, _ in biggest]}), encoding="utf-8")
     r = _git(["reset", "--hard", "--quiet"], cwd=dest, timeout=timeout)
     if r.returncode != 0:
-        remove_tree(dest)
+        left = _left_behind(dest) if made or is_clone(dest) else ""
         raise RuntimeError("could not check out the files: " + _tail(r.stderr) +
-                           ". Clone it yourself and add the folder.")
+                           ". Clone it yourself and add the folder." + left)
 
 
-def remove_tree(path: Path) -> None:
-    """Remove a clone. Git marks its object files read-only, which on Windows makes a plain rmtree fail halfway and
-    leave the folder behind; clearing the bit (on the file and its folder) and retrying is the standard recipe."""
-    def unlock(func, p, _exc):
-        for q in (p, os.path.dirname(p)):
-            try:
-                os.chmod(q, stat.S_IRWXU)
-            except OSError:
-                pass
-        func(p)
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=unlock)
-    else:
-        shutil.rmtree(path, onerror=unlock)
+def remove_tree(path: Path) -> str | None:
+    """Remove a clone with everything in it. None when nothing is left; otherwise why not, in one sentence
+    (`lantern.removal.remove`: read-only files and folders are no obstacle, which matters on Windows, where git's
+    object files are read-only; nothing is raised for what the system refused).
+
+    Only what is inside `path` is changed. Until 2026-11-10 a refused delete had the mode of the thing and of the
+    folder it is in set to owner-only, by name: for a `path` that was a link, the folder it pointed at and the
+    folder it lay in (a folder all users share, in the test), and the link stayed, without a word."""
+    return removal.remove(path)
+
+
+def _left_behind(dest: Path) -> str:
+    """Remove what a copy that failed left in `dest`. Empty when nothing is left; otherwise a sentence for the end
+    of the error, so that a folder that stayed is never passed over in silence."""
+    why = remove_tree(dest)
+    return f" What the failed copy left in {dest} could not be removed ({why}); remove that folder yourself." if why else ""
 
 
 def _auth_env(url: str, token: str) -> dict:
@@ -360,8 +371,11 @@ def _auth_env(url: str, token: str) -> dict:
 def _git(args: list[str], cwd: Path | None, timeout: int = 900, env: dict | None = None) -> subprocess.CompletedProcess:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_ASKPASS": "", "SSH_ASKPASS": "",
            **(env or {})}
+    git = programs.find("git")   # the person's own git, by its full path: never one in the current folder or the clone
+    if not git:
+        raise RuntimeError("git is not installed. Install Git, or clone the repository yourself and add the folder.")
     try:
-        return run_bounded(["git", *args], cwd=cwd, env=env, timeout=timeout)
+        return run_bounded([git, *args], cwd=cwd, env=env, timeout=timeout)
     except FileNotFoundError:
         raise RuntimeError("git is not installed. Install Git, or clone the repository yourself and add the folder.") from None
     except subprocess.TimeoutExpired:
@@ -373,7 +387,10 @@ def run_bounded(cmd: list[str], cwd: Path | None = None, env: dict | None = None
     """`subprocess.run(capture_output=True, text=True, timeout=...)`, except that the timeout bounds the call. git
     starts helpers (`git-remote-https`) that inherit its output pipes; `subprocess.run` kills only git, and then waits
     for the pipes to close, which a helper stuck on a silent server keeps open for minutes. The command runs in its
-    own process group and the whole group is killed (`taskkill /T` on Windows), then the pipes are dropped."""
+    own process group and the whole group is killed (`taskkill /T` on Windows), then the pipes are dropped.
+    The environment is `programs.env`: the helper, and what it starts, are not handed the current folder to look
+    for programs or Python files in."""
+    env = programs.env(env)
     kw: dict = {}
     if sys.platform == "win32":
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -404,7 +421,9 @@ def run_bounded(cmd: list[str], cwd: Path | None = None, env: dict | None = None
 def _kill_tree(proc: subprocess.Popen) -> None:
     if sys.platform == "win32":
         try:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=30)
+            taskkill = programs.find("taskkill") or os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                                                "System32", "taskkill.exe")
+            subprocess.run([taskkill, "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             pass
     else:

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from lantern import depaudit, evidence, pipeline, readiness, scanresult, security
+from lantern import depaudit, evidence, pipeline, programs, readiness, scanresult, security
 from lantern.cli import main as cli_main
 from lantern.engine import build_graph
 from lantern.scanresult import ToolRun
@@ -186,7 +186,7 @@ def test_bandit_really_runs_and_fills_the_record(tmp_path):
 
 
 def _gitleaks_present(monkeypatch):
-    monkeypatch.setattr(security.shutil, "which", lambda name: "/usr/bin/gitleaks" if name == "gitleaks" else None)
+    monkeypatch.setattr(programs, "find", lambda name: "/usr/bin/gitleaks" if name == "gitleaks" else None)
 
 
 def test_gitleaks_crash_falls_back_to_patterns_but_is_recorded_as_a_failure(tmp_path, monkeypatch):
@@ -241,7 +241,7 @@ def test_gitleaks_timeout_and_broken_report_are_failures(tmp_path, monkeypatch):
 
 def test_gitleaks_absent_is_written_down_beside_the_built_in_scan(tmp_path, monkeypatch):
     _write(tmp_path, {"config.py": "x = 1\n"})
-    monkeypatch.setattr(security.shutil, "which", lambda name: None)
+    monkeypatch.setattr(programs, "find", lambda name: None)
     f, infos = security.run_secrets(tmp_path)
     by = {i["tool"]: i for i in infos}
     assert by["gitleaks"]["state"] == "unavailable" and by["gitleaks"]["applicable"] is False
@@ -250,13 +250,13 @@ def test_gitleaks_absent_is_written_down_beside_the_built_in_scan(tmp_path, monk
 
 def test_built_in_secret_scan_counts_files_it_could_not_read(tmp_path, monkeypatch):
     _write(tmp_path, {"a.py": "x = 1\n", "b.py": "y = 2\n", ".env": "TOKEN=abc\n"})
-    monkeypatch.setattr(security.shutil, "which", lambda name: None)
+    monkeypatch.setattr(programs, "find", lambda name: None)
     real = security._read_text
 
-    def read(p: Path) -> str:
+    def read(p: Path, repo: Path) -> str:
         if p.name == "b.py":
             raise OSError(13, "Permission denied")
-        return real(p)
+        return real(p, repo)
     monkeypatch.setattr(security, "_read_text", read)
     f, infos = security.run_secrets(tmp_path)
     s = next(i for i in infos if i["tool"] == "lantern-secrets")
@@ -271,7 +271,7 @@ PIP_OK = {"dependencies": [{"name": "flask", "version": "2.0.1", "vulns": [{"id"
 
 def _pip_repo(tmp_path, monkeypatch):
     _write(tmp_path, {"requirements.txt": "flask==2.0.1\n"})
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     monkeypatch.setattr(depaudit, "_pkg_version", lambda n: "2.10.1")
 
 
@@ -301,17 +301,17 @@ def test_pip_audit_crash_timeout_missing_and_offline_states(tmp_path, monkeypatc
     assert info["state"] == "failed" and "could not resolve host" in info["why"] and info["exit_code"] == 2
     _fake_tool(monkeypatch, _run(None, "", "", timed_out=True))
     assert depaudit.run_pip_audit(tmp_path, no_network=False)[1]["state"] == "timeout"
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: None)
+    monkeypatch.setattr(programs, "find", lambda n: None)
     info = depaudit.run_pip_audit(tmp_path, no_network=False)[1]
     assert info["state"] == "unavailable" and info["applicable"] is True
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     info = depaudit.run_pip_audit(tmp_path, no_network=True)[1]
     assert info["state"] == "skipped" and info["why"] == "offline" and info["applicable"] is True
 
 
 def test_pip_audit_skipped_packages_make_the_run_partial_and_keep_findings(tmp_path, monkeypatch):
     _write(tmp_path, {"requirements.txt": "flask==2.0.1\nleftpad==1.0\n"})
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     data = {"dependencies": PIP_OK["dependencies"] + [{"name": "leftpad", "skip_reason": "Dependency not found on PyPI and could not be audited: leftpad (1.0)"}]}
     _fake_tool(monkeypatch, _run(1, json.dumps(data)))
     f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
@@ -327,7 +327,7 @@ NPM_OK = {"auditReportVersion": 2, "vulnerabilities": {"lodash": {"severity": "h
 
 def _npm_repo(tmp_path, monkeypatch):
     _write(tmp_path, {"package.json": "{}", "package-lock.json": "{}"})
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     monkeypatch.setattr(depaudit, "_npm_version", lambda npm: "10.9.9")
 
 
@@ -353,7 +353,7 @@ def test_npm_audit_bad_output_is_a_failure(tmp_path, monkeypatch, stdout, words)
 
 def test_npm_audit_one_of_two_lock_files_failing_is_partial_with_the_good_ones_findings(tmp_path, monkeypatch):
     _write(tmp_path, {"web/package.json": "{}", "web/package-lock.json": "{}", "api/package.json": "{}", "api/package-lock.json": "{}"})
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     monkeypatch.setattr(depaudit, "_npm_version", lambda npm: "10.9.9")
 
     def run_tool(cmd, *, timeout, cwd=None, env=None):

@@ -28,6 +28,7 @@ import ast
 import re
 from pathlib import Path
 
+from .python_frontend import project_text
 from .websec import segments
 
 # Whole lower-case words (websec.segments) that say a hash protects something.
@@ -86,11 +87,11 @@ class _PyFile:
         return cur
 
 
-def _py(path: Path, cache: dict) -> _PyFile | None:
+def _py(path: Path, cache: dict, repo) -> _PyFile | None:
     key = str(path)
     if key not in cache:
         try:
-            cache[key] = _PyFile(path.read_text(encoding="utf-8", errors="replace"))
+            cache[key] = _PyFile(project_text(path, repo))
         except (OSError, SyntaxError, ValueError, RecursionError):
             cache[key] = None
     return cache[key]
@@ -210,7 +211,7 @@ def _caller_lines(g, node_id: str, lines_for, py_cache: dict) -> list[tuple[str,
         src = g.nodes.get(e.src)
         if not src or not src.file:
             continue
-        pf = _py(Path(g.repo_root) / src.file, py_cache) if src.file.endswith(".py") else None
+        pf = _py(Path(g.repo_root) / src.file, py_cache, g.repo_root) if src.file.endswith(".py") else None
         text = lines_for(src.file)
         for ln in (e.lines or [])[:3]:
             w = _call_words(pf, ln, callee.name) if pf is not None and callee is not None else None
@@ -236,7 +237,7 @@ def evidence(g, file: str, line: int, node_id: str | None, lines_for, py_cache: 
     wrapper), the lines that call it are read too, unless the wrapper itself already names a security use."""
     found: list[tuple[str, str]] = []
     if file.endswith(".py"):
-        pf = _py(Path(g.repo_root) / file, py_cache)
+        pf = _py(Path(g.repo_root) / file, py_cache, g.repo_root)
         if pf is not None:
             found, fn, returned = _py_hash_context(pf, line)
             small = fn is not None and ((fn.end_lineno or fn.lineno) - fn.lineno) <= 12
@@ -352,7 +353,7 @@ def sql_splice(g, f: dict, py_cache: dict) -> dict | None:
     """For an SQL string built in Python: {fixed_only: bool, spliced: [{expr, fixed, why}], driver_params: bool}."""
     if f.get("rule") not in SQL_RULES or not (f.get("file") or "").endswith(".py") or not f.get("line"):
         return None
-    pf = _py(Path(g.repo_root) / f["file"], py_cache)
+    pf = _py(Path(g.repo_root) / f["file"], py_cache, g.repo_root)
     if pf is None:
         return None
     line = f["line"]

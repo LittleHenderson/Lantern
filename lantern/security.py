@@ -10,15 +10,13 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
-import sys
 from collections import deque
 from pathlib import Path
 
-from . import context, lanes
+from . import context, lanes, manifest, programs, results
 from .graph import Graph
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_text
 
 UNTRUSTED_ENTRY_KINDS = {"route", "cli", "main", "script"}
 
@@ -64,8 +62,8 @@ def _rel(repo: Path, name: str) -> str:
     return s[2:] if s.startswith("./") else s
 
 
-def _read_text(p: Path) -> str:
-    return p.read_text(encoding="utf-8", errors="replace")
+def _read_text(p: Path, repo: Path) -> str:
+    return project_text(p, repo)
 
 
 BANDIT_READS = (".py", ".pyw")
@@ -129,11 +127,22 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     if importlib.util.find_spec("bandit") is None:
         return [], scanresult.record("bandit", "unavailable", 'pip install "lantern[scan]"', applicable=applicable,
                                      version=None, **base)
-    cmd = [sys.executable, "-m", "bandit", "-r", str(repo), "-f", "json", "-q"]
-    if excl or left:
-        cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
-    run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
-    base |= {"version": _tool_version([sys.executable, "-m", "bandit", "--version"]), "exit_code": run.returncode,
+    # Two things a project must not choose (until 2026-11-10 it could). Which Python files the scanner loads:
+    # `python -m` looks in the current folder first, and Lantern is often started inside the project
+    # (`programs.python`). And what the scanner checks: Bandit takes settings from a `.bandit` file anywhere in the
+    # folder it scans (checks to skip, files to leave out, a file to write its report to), and with checks switched
+    # off that way the record below still said `ok`. Handed a settings file of Lantern's own, with nothing in it,
+    # Bandit looks for no other.
+    try:
+        with programs.settings("bandit.ini", "[bandit]\n") as ini:
+            cmd = programs.python("bandit", "-r", str(repo), "--ini", str(ini), "-f", "json", "-q")
+            if excl or left:
+                cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
+            run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
+    except OSError as exc:      # without its own settings file Bandit would look for the project's: it is not started
+        return [], scanresult.record("bandit", "failed", "Lantern's settings file for the scanner could not be written "
+                                     f"({exc.strerror or type(exc).__name__})", version=None, **base)
+    base |= {"version": _tool_version(programs.python("bandit", "--version")), "exit_code": run.returncode,
              "duration_ms": run.duration_ms}
     if run.timed_out:
         return [], scanresult.record("bandit", "timeout", f"after {BANDIT_TIMEOUT} s", **base)
@@ -184,8 +193,9 @@ def run_secrets(repo: Path) -> tuple[list[dict], list[dict]]:
     from . import scanresult
     records = []
     fallback = None
-    if shutil.which("gitleaks"):
-        found, rec = _run_gitleaks(repo)
+    gitleaks = programs.find("gitleaks")
+    if gitleaks:
+        found, rec = _run_gitleaks(repo, gitleaks)
         records.append(rec)
         if rec["state"] == "ok":
             return found, records
@@ -201,7 +211,7 @@ def run_secrets(repo: Path) -> tuple[list[dict], list[dict]]:
     return found, records
 
 
-def _run_gitleaks(repo: Path) -> tuple[list[dict], dict]:
+def _run_gitleaks(repo: Path, gitleaks: str) -> tuple[list[dict], dict]:
     """`gitleaks detect --no-git` writing its JSON report to a temp file (never stdout, where a warning could break
     the JSON). `--exit-code 0` makes leaks exit 0, so a non-zero code means gitleaks itself failed; a report file that
     is present and parses is the proof it finished."""
@@ -213,9 +223,9 @@ def _run_gitleaks(repo: Path) -> tuple[list[dict], dict]:
     report = Path(path)
     base: dict = {"role": "secrets in files"}
     try:
-        cmd = ["gitleaks", "detect", "--no-git", "-s", str(repo), "-f", "json", "-r", str(report), "--exit-code", "0"]
+        cmd = [gitleaks, "detect", "--no-git", "-s", str(repo), "-f", "json", "-r", str(report), "--exit-code", "0"]
         run = scanresult.run_tool(cmd, timeout=GITLEAKS_TIMEOUT)
-        base |= {"version": _tool_version(["gitleaks", "version"]), "exit_code": run.returncode,
+        base |= {"version": _tool_version([gitleaks, "version"]), "exit_code": run.returncode,
                  "duration_ms": run.duration_ms}
         if run.timed_out:
             return [], scanresult.record("gitleaks", "timeout", f"after {GITLEAKS_TIMEOUT} s", **base)
@@ -270,7 +280,7 @@ def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
             continue
         rel = p.relative_to(repo).as_posix()
         try:
-            text = _read_text(p)
+            text = _read_text(p, repo)
         except OSError as exc:
             errors.append(f"{rel}: {exc.strerror or exc}")
             continue
@@ -294,7 +304,8 @@ def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
 
 def _tool_version(cmd: list[str]) -> str | None:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+                             env=programs.env()).stdout
         m = re.search(r"\d+\.\d+(\.\d+)?", out)
         return m.group(0) if m else None
     except Exception:
@@ -459,7 +470,7 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         return False
     if f["file"] not in cache:
         try:
-            cache[f["file"]] = (Path(g.repo_root) / f["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
+            cache[f["file"]] = project_text(Path(g.repo_root) / f["file"], g.repo_root).splitlines()
         except OSError:
             cache[f["file"]] = []
     src = cache[f["file"]]
@@ -693,10 +704,12 @@ def load_accepted(repo: Path) -> dict[str, dict]:
     """Accepted risks live in the repo (committed), each with the builder's written reason."""
     p = repo / ACCEPTED_FILE
     try:
-        rows = json.loads(p.read_text(encoding="utf-8")).get("accepted", []) if p.exists() else []
-    except (OSError, json.JSONDecodeError, AttributeError):
+        data = manifest.parse_json(project_text(p, repo))
+    except OSError:   # not there, or not a file of the project (a link that leads out of it, a pipe): nothing is accepted
         return {}
-    return {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id") and reason_ok(r.get("reason"))}
+    # the file comes with the project: only a row with a finding's id and a written reason accepts anything
+    return {r["id"]: r for r in manifest.tables(manifest.table(data).get("accepted"))
+            if isinstance(r.get("id"), str) and r["id"] and reason_ok(r.get("reason"))}
 
 
 def reason_ok(reason) -> bool:
@@ -712,8 +725,9 @@ def reason_ok(reason) -> bool:
 def save_accepted(repo: Path, accepted: dict[str, dict]) -> Path:
     p = repo / ACCEPTED_FILE
     rows = sorted(accepted.values(), key=lambda r: r["id"])
-    p.write_text(json.dumps({"about": "Security findings the builder reviewed and accepted, with reasons. "
-                                      "Managed by `lantern accept`.", "accepted": rows}, indent=1) + "\n", encoding="utf-8")
+    results.write(p, json.dumps({"about": "Security findings the builder reviewed and accepted, with reasons. "
+                                          "Managed by `lantern accept`.", "accepted": rows}, indent=1) + "\n",
+                  where="the project folder")
     return p
 
 
@@ -731,7 +745,7 @@ def stable_ids(repo: Path, findings: list[dict]) -> None:
             continue
         if f["file"] not in lines:
             try:
-                lines[f["file"]] = (repo / f["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
+                lines[f["file"]] = project_text(repo / f["file"], repo).splitlines()
             except OSError:
                 lines[f["file"]] = []
         src = lines[f["file"]]
@@ -746,14 +760,13 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     (None: follow LANTERN_OFFLINE)."""
     repo = Path(g.repo_root)
     findings, tools = [], []
-    from . import scanresult
-    from .depaudit import run_composer_audit, run_gem_audit, run_maven_audit, run_npm_audit, run_pip_audit
+    from . import depaudit, scanresult
     # Bandit's absence is a gap only when there is Python to read
     f, info = run_bandit(repo, applicable="python" in (g.meta.get("languages") or {}))
     findings += f
     tools.append(info)
-    for fn in (run_pip_audit, run_npm_audit, run_maven_audit, run_composer_audit, run_gem_audit):
-        f, info = fn(repo, offline)
+    for tool, fn in depaudit.audits():      # each behind its own wall: one that raises is one `failed` record
+        f, info = depaudit.guarded(tool, fn, repo, offline)
         findings += f
         tools.append(info)
     f, records = run_secrets(repo)
@@ -792,7 +805,7 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     def lines_for(file: str) -> list[str]:
         if file not in lines_cache:
             try:
-                lines_cache[file] = (repo / file).read_text(encoding="utf-8", errors="replace").splitlines()
+                lines_cache[file] = project_text(repo / file, repo).splitlines()
             except OSError:
                 lines_cache[file] = []
         return lines_cache[file]
@@ -837,7 +850,7 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
         acc = accepted.get(f["id"])
         f["status"] = "accepted" if acc else "open"
         if acc:
-            f["accepted"] = {k: acc.get(k) for k in ("reason", "by", "date")}
+            f["accepted"] = {k: acc.get(k) if isinstance(acc.get(k), str) else None for k in ("reason", "by", "date")}
     # Scenarios (scenarios.py): a short story of one person meeting each finding, built from the facts above only.
     from .scenarios import attach as attach_scenarios
     attach_scenarios(findings, g)

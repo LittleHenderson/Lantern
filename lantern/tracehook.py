@@ -80,6 +80,13 @@ def main(argv: list[str]) -> None:
         raise SystemExit(2)
     out, repo = argv[0], argv[1]
     rest = argv[argv.index("--") + 1:]
+    if os.environ.get("LANTERN_SANDBOX_GUARD") == "required" and getattr(sys, "lantern_sandbox_guard", None) != "on":
+        # The test sandbox (lantern.sandbox) counts on its guard, a sitecustomize on PYTHONPATH that refuses writes
+        # and network connections, and it is not in this Python: Python leaves a folder it cannot read out of its
+        # path without a word. No test runs without it.
+        from lantern._jail import MARK, UNAVAILABLE
+        print(f"{MARK} guard", file=sys.stderr, flush=True)
+        raise SystemExit(UNAVAILABLE)
     atexit.register(_dump, out)
     sys.path.insert(0, os.path.realpath(repo))
     _install(repo)

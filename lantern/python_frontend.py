@@ -8,18 +8,18 @@ guessed. Phase 0 does not use a type checker; that is a planned upgrade (Pyright
 from __future__ import annotations
 
 import builtins
+import errno
 import hashlib
 import os
 import re
 import stat
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import tree_sitter_python as tsp
 from tree_sitter import Language, Node as TSNode, Parser
 
-from . import calls
+from . import calls, manifest
 from .graph import (CALLABLE, CALLS, CLASS, CONTAINS, IMPLEMENTS, INFERRED, MAY_CALL, MODULE,
                     POSSIBLE, RESOLVED, Graph, Node)
 
@@ -110,6 +110,29 @@ def _plain_way(p: Path, repo: Path) -> bool:
         if not stat.S_ISDIR(st.st_mode) or _reparse(st):
             return False
     return True
+
+
+def project_bytes(p, repo, limit: int | None = None) -> bytes:
+    """What a file of the project holds (the first `limit` bytes of it): the one way Lantern opens a file of the
+    project it analyses, with `project_text`. A path that is not such a file (`inside_repo`: a link that leads out of
+    the project, a file behind a folder that is such a link, a pipe, a device, a folder, a path that leaves the
+    project through `..` or begins at the top of the disk) is a file that is not there: FileNotFoundError, as for a
+    name nothing answers to, so a reader that passes a missing file over passes these over in the same way. Until
+    2026-11-10 only the readers that walk the project asked `inside_repo`; a file opened by its name (`package.json`,
+    `go.mod`, a notebook, a path taken from an earlier result) was read wherever the name led."""
+    if not inside_repo(p, repo):
+        raise FileNotFoundError(errno.ENOENT, "not a file of the project", os.fspath(p))
+    with open(p, "rb") as f:
+        return f.read() if limit is None else f.read(limit)
+
+
+def project_text(p, repo, limit: int | None = None) -> str:
+    """The text of a file of the project (see `project_bytes`), read as UTF-8 with anything else replaced; `limit`
+    is in characters."""
+    if not inside_repo(p, repo):
+        raise FileNotFoundError(errno.ENOENT, "not a file of the project", os.fspath(p))
+    with open(p, encoding="utf-8", errors="replace") as f:
+        return f.read() if limit is None else f.read(limit)
 
 
 def discover(repo: Path) -> list[tuple[Path, str]]:
@@ -761,7 +784,7 @@ _Visitor._def_only = _def_only  # type: ignore[attr-defined]
 
 
 def parse_module(path: Path, modname: str, repo: Path, parser: Parser) -> ModuleInfo:
-    src = path.read_bytes()
+    src = project_bytes(path, repo)
     tree = parser.parse(src)
     info = ModuleInfo(name=modname, path=path, rel=path.relative_to(repo).as_posix(),
                       is_package=path.name == "__init__.py", lines=src.count(b"\n") + 1)
@@ -1660,18 +1683,27 @@ def _scripts_from_config(repo: Path) -> dict[str, str]:
     """console-script name -> "module:function" from pyproject.toml / setup.cfg / setup.py."""
     out: dict[str, str] = {}
     pp = repo / "pyproject.toml"
-    if pp.exists():
+    if inside_repo(pp, repo):
         try:
-            data = tomllib.loads(pp.read_text(encoding="utf-8"))
-            out.update(data.get("project", {}).get("scripts", {}) or {})
-            out.update(data.get("tool", {}).get("poetry", {}).get("scripts", {}) or {})
-        except Exception:
-            pass
+            data = manifest.parse_toml(project_text(pp, repo))
+        except OSError:
+            data = {}
+        # the file comes with the project: only a name with a "module:function" beside it is a script (manifest.py);
+        # Poetry also writes one as a table, `app = { callable = "pkg.cli:main" }`
+        for scripts in (manifest.table(data.get("project")).get("scripts"),
+                        manifest.table(manifest.table(data.get("tool")).get("poetry")).get("scripts")):
+            for name, target in manifest.table(scripts).items():
+                target = target if isinstance(target, str) else manifest.text(manifest.table(target).get("callable"))
+                if target:
+                    out[name] = target
     for f in ("setup.cfg", "setup.py"):
         p = repo / f
-        if p.exists():
-            for m in re.finditer(r"([\w\-]+)\s*=\s*([\w\.]+:[\w\.]+)", p.read_text(encoding="utf-8", errors="replace")):
-                out.setdefault(m.group(1), m.group(2))
+        try:
+            text = project_text(p, repo)
+        except OSError:   # not there, or not a file of the project
+            continue
+        for m in re.finditer(r"([\w\-]+)\s*=\s*([\w\.]+:[\w\.]+)", text):
+            out.setdefault(m.group(1), m.group(2))
     return out
 
 
