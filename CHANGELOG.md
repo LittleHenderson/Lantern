@@ -5,6 +5,11 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- lantern-cloud: 300 runs per person per day is now what `cloud/fly.toml` says (the owner's choice of 2026-11-11;
+  the file said 50, his choice of 2026-11-04). The live service already ran with 300 through a setting kept on
+  Fly, which wins over the file, so nothing changes for anybody; the file, `docs/deploy.md` and the testing
+  checklist now say what is live. The limit for everyone together stays 1,000 a day.
+
 - Security: a link in a project that leads out of the project is no longer read or shown (2026-11-10; found during
   stage 7 of the 2026-11-09 directive, while measuring what Lantern does with each file of 16 sample projects when
   that file is a link). A project comes from anywhere, and a git repository can hold symbolic links to any path of the
