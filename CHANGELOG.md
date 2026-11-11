@@ -44,6 +44,54 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   is found, letter for letter, in no path but its own unless a folder was named for that purpose (`tool.p[y]z/`), and
   a file in such a folder is then left out of Bandit as one in `build/` or `vendor/` already is; a link put in place
   while an analysis runs (that takes another program of the same computer writing in the project at that moment).
+- The opt-in usage counts go to the gateway's own address and nowhere else, and Lantern says where they go
+  (2026-11-10; stage 7 of the 2026-11-09 directive, "validate ... the address used for optional usage reporting").
+  Sharing is off until the person turns it on; this is about what happened after they did.
+  **What was wrong** (the code before, 62fe781; found by reading the sender, then shown by tests against the
+  gateway's own code started on this computer; the live gateway was not asked). The sender posted to
+  `<gateway address>/v1/usage`, and the gateway address Lantern is set up with already ends in `/v1`
+  (`providers.gateway_url()`, `https://lantern-gateway.fly.dev/v1`): the counts went to `/v1/v1/usage`, a route the
+  gateway does not have, the answer was passed over, and nothing told the person. That line is in the 0.10.0 release
+  commit (072a1c5) and in every commit since, so with the address Lantern ships with no count arrived. The one test
+  of the sender put a stand-in in place of `urlopen` and handed over an address written without `/v1`, a form the
+  app and the command line never use, so it passed. Five more, each shown by a failing test. `send`, which says it
+  never raises, raised for a gateway address with a name and a password, a port that is not a number, a blank, a
+  line break or a control character (`http.client.InvalidURL`) and for an answer that is no web answer
+  (`http.client.BadStatusLine`); in the app that ends the thread that sends every six hours until the app is started
+  again, and at the command line it is a Python error when the command ends. A redirect (301, 302, 303) was followed
+  with a GET, and a 200 from the place it pointed at marked the day as sent. `LANTERN_NO_REAL_PROVIDERS`, the
+  person's switch for "nothing leaves this computer", was not asked: 13 of the new tests tried to reach another
+  computer on the code before (the tests' guard refused each). An `http://` address of another computer was taken,
+  so the install id would have crossed the network in clear. And no failure was ever said.
+  **Now.** `usage.destination(base)` gives the one address the counts are posted to for a gateway address, or the
+  reason none is sent, in fixed words that never repeat the address (it may hold a password): `https`, or `http` for
+  this computer only; a computer's name or number; no name or password; no `?` or `#` part; a port that is a number;
+  printable characters without blanks or a backslash, 2,000 at most. An address that ends in `/v1` gets `/usage`;
+  one written without it gets `/v1/usage`, as before. `usage.where(base)` adds the switch. `send` asks `where`,
+  follows no redirect (the place a redirect points at is never asked), never raises, stops at the first day the
+  gateway does not take, keeps what was not taken for the next try, and writes down how the last try ended
+  (`usage_last.json` in `LANTERN_HOME`: a day, a number and one of Lantern's own words, never text a server sent; a
+  note of another shape says nothing; turning sharing off removes it). `lantern usage --show` and `/api/usage`
+  (`where`, `why`, `text`) say `Sent to: <address>`, or `Not sent: <why>. The counts stay on this computer.`, and
+  `Last try 2026-11-10: not taken (the gateway answered 404). The counts stay on this computer and are tried again.`
+  Changed for the person: with sharing on, the counts now arrive. What is sent is unchanged (a random install id,
+  the version, the operating system's name and a count per feature; `lantern usage --show` prints it), and the days
+  that still wait on this computer go with the next try (days older than a week are dropped, as before). An
+  `http://` gateway address of another computer in `LANTERN_GATEWAY_URL` is no longer used for the counts.
+  Tests: `tests/test_usage_address.py` (63 tests against the gateway's own app and stand-in servers on 127.0.0.1;
+  23 addresses that are sent nothing beside 12 that are taken). On the code before 61 fail and 2 pass (an address
+  written without `/v1` arrives; nothing is tried while sharing is off): 44 on what the code does or says, in 6 of
+  them the sender raising, and 17 because `usage.destination` is not there yet. The older test of the sender
+  (`tests/test_usage.py`) now goes through a real address on 127.0.0.1 and fails on the code before too. Mistakes
+  planted in the changed lines of `lantern/usage.py`, one at a time (61; the tool can plant none in the 3 changed
+  lines of `lantern/server.py`): 59 failed the tests at once and 2 failed none (the text a sent day is remembered
+  by; the answer when there is no address at all). Two tests were added, and all 61 now fail a test.
+  Not covered: that no count arrived is read from the code and shown against the gateway's code on this computer,
+  not against the live gateway (its owner's page would show it); the app's Settings page says only that nothing is
+  sent, the reason is in `lantern usage --show` and in the route; an `https` address is taken as written (the name
+  is not looked up, and `LANTERN_GATEWAY_URL` is the person's own setting); the system's proxy settings are used as
+  before; what the gateway does with what it is sent (how much one sender may send, how large a request may be) is
+  the next part of this stage.
 - Security: a file of a project is opened only as a file of that project, a result file is read back only as a
   plain file, and a saved map is used for the folder the person named (2026-11-10; stage 7 of the 2026-11-09
   directive, "test path, link and ownership boundaries"; it goes on from the link fix above with the same

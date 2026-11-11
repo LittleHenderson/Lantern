@@ -880,9 +880,9 @@ class Handler(BaseHTTPRequestHandler):
                                "settings": s, "providers": app.provider_info(),
                                "default_model": {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODEL_NAME}})
         if path == "/api/usage":
-            from .providers import gateway_url
-            return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
-                               "features": sorted(usage.FEATURES), "text": usage.describe()})
+            to, why = usage.where()      # the address the counts are posted to, or why none is sent (fixed words)
+            return self._json({"enabled": usage.enabled(), "gateway": bool(to), "where": to, "why": why,
+                               "pending": usage.pending(), "features": sorted(usage.FEATURES), "text": usage.describe()})
         if path == "/api/packs":
             return self._json({"packs": packs_list(app, (q.get("project") or [""])[0],
                                                    all_projects=(q.get("all") or [""])[0] == "1")})

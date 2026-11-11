@@ -163,7 +163,7 @@ OWN_FILES = {
     ("depaudit.py", "precomputed"): "the file the cloud worker names in LANTERN_AUDITS_FROM",
     ("security.py", "_run_gitleaks"): "gitleaks' report in Lantern's own temporary folder",
     ("ask.py", "read_screenshot"): "a picture held in memory", ("cli.py", "cmd_login"): "a web page",
-    ("server.py", "serve"): "a web address",
+    ("server.py", "serve"): "a web address", ("usage.py", "_post"): "a web address",
 }
 
 

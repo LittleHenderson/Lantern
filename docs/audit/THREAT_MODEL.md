@@ -109,6 +109,13 @@ script in the app's origin can act as the user. That makes XSS in the viewers (T
   (`providers.check_destination`); every test and benchmark run sets it. Only `name==version` pairs reach pip-audit (index options in the repo are
   ignored), and `npm audit` gets `--registry` explicitly so a repo's `.npmrc` can't redirect it. Earlier note: `pip-audit` queries a
   vulnerability database when `requirements*.txt` exists (**document in UI**: currently only in Provenance).
+* Opt-in usage counts (`lantern/usage.py`; off until the person turns them on) go to one address, the gateway's
+  `/v1/usage` (`usage.destination`): `https`, or `http` on this computer only, no name or password in the address, no
+  redirect followed, nothing for another computer while `LANTERN_NO_REAL_PROVIDERS` is set, and never more than the
+  install id, the version, the operating system's name and a count per feature. `lantern usage --show` says where
+  they go, or why they do not. Until 2026-11-10 they were posted to an address the gateway does not have (none
+  arrived), a redirect was followed and its answer taken for the gateway's, and the switch was not asked. Tests:
+  `tests/test_usage_address.py`. Open: what the gateway does with what it is sent (stage 7, part 4).
 
 ### T6. Shared reports
 
