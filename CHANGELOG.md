@@ -247,10 +247,15 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   (`os.path.join` used for an address). The fourth finding was right, a demo tool's made-up client secrets written
   in the code, which are now made when it runs. Of the 117 findings of the 15 sample apps under `tests/fixtures`, the last
   round of rules changes one: the signing secret in the shop sample (`shop/auth.py`, line 5) is listed as
-  `LW-SECRET-INLINE` (medium) where Bandit's B105 (low) stood.
+  `LW-SECRET-INLINE` (medium) where Bandit's B105 (low) stood. Against the code before point 4 the 15 samples
+  list the same 117 findings but for two of the shop sample: that one, and the planted SQL injection
+  (`shop/repo.py`, line 15), which is critical where it was high, because the request's value is now followed to
+  it from the route through three files. `tools/audit.sh` expects 3 critical findings there and checks that path;
+  it had expected 2, was not run here while the stage was built, and failed on GitHub for the first commits of
+  this change.
   Measured on the held-out set (`bench/heldout/`: 14 apps the engine was not written on, definition
   `e6b10d91686f`, offline): documented problems found at medium or above went from 28 of 79 before this change to
-  54 (44 at the first measurement, 50 at the second, 54 at the third and at the fourth and last; 55 with the
+  54 (44 at the first measurement, 50 at the second, 54 at the third, the fourth and the fifth and last; 55 with the
   dependency audits on),
   and on the five public apps from 20 of 61 to 39 (target: 37). False alarms on the 17 safe-twin anchors went from 3
   to 0, a mapped path is on 46 of the 55 problems found, and no vulnerable app is given a green release (0 of 8, as
@@ -262,11 +267,16 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   by class, rule and line number only; the apps were not read. After it two findings on clean apps were read in
   the code to label them. The rules for the browser's own address and for key names came after that, from the
   large apps below and not from this set; the fourth measurement is the engine with them, and no number moved.
-  Every miss by name, the labels and all four measurements are in `bench/heldout/README.md`.
+  The fifth is the engine after the imports written from the top were read as the project's own (found with the
+  report's examples, not from this set): every app lists exactly what it listed at the fourth.
+  Every miss by name, the labels and all five measurements are in `bench/heldout/README.md`.
   Time and memory, on the ten large public apps of `tools/large_apps.py` with the code before this change and
-  with it (one run each, the same container, offline; `bench/large_apps_results.md`): 183.8 s for the ten before,
-  190.3 s after; Django, the largest, 99.0 s and 759 MB before, 103.9 s and 790 MB after. No file and no check
-  was left out. That run is also where the two false alarms above came from (the browser script of Hugo, the
+  with it (two runs a side, each alone, the same container, offline; `bench/large_apps_results.md`): 183.8 s and
+  173.4 s for the ten before, 190.3 s and 198.9 s after, so between 6.5 s and 25.5 s longer (3.54% to 14.71%);
+  Django, the largest, 99.0 s and 91.3 s before with 759 MB, 103.9 s and 107.5 s after with 790 and 786 MB. The
+  same code run twice differs by about ten seconds on the ten, so the cost is known only as that range; the
+  first write-up, made from one run a side, called a second or two noise, which was wrong. No file and no check
+  was left out. An earlier run of these apps is also where the two false alarms above came from (the browser script of Hugo, the
   key names of Django); on the final code Hugo lists what it listed before, and Django lists 20 new heuristic
   findings at medium on its own templates, 4 of them false alarms on a plain-text e-mail (see Not covered).
   Not covered (the whole list is in `CLAUDE.md` under Known gaps and in `docs/audit/CLAIMS.md`, S18 to S24): only

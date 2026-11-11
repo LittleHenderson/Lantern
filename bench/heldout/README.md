@@ -93,13 +93,13 @@ local (28 in all, as the row always said); the split was written down wrong. The
 ## After point 4 of the directive (measured 2026-11-11)
 
 Point 4 ("trace actual security problems across the whole app": a value followed across functions and files, a
-check that counts for what its code proves, who may reach a record) was measured on this definition four times
-while it was built, offline each time, as was the "before" of the same day. `after_point4.json` / `.md` is the fourth
+check that counts for what its code proves, who may reach a record) was measured on this definition five times
+while it was built, offline each time, as was the "before" of the same day. `after_point4.json` / `.md` is the fifth
 and last of them; `after_point4_audits.json` / `.md` is the same engine with the dependency audits on, as the frozen
-baseline ran. The third and the fourth gave the same findings on every app of the set (the third with the audits
-on: 55 of 79, the same as the fourth); the two result files differ in the engine's commit and the time only.
+baseline ran. The third, the fourth and the fifth gave the same findings on every app of the set (with the audits
+on: 55 of 79 each time); their result files differ in the engine's commit and the time only.
 
-| Measure | Baseline, with audits (bc7cf10) | Before point 4 (eb3666e) | First (ae08c23) | Second (744b01a) | Third (d8a7980) | Fourth (1c7f819) | Fourth, with audits | Target | Result |
+| Measure | Baseline, with audits (bc7cf10) | Before point 4 (eb3666e) | First (ae08c23) | Second (744b01a) | Third (d8a7980) | Fourth (1c7f819) and fifth (3e4687c) | Fourth and fifth, with audits | Target | Result |
 |---|---|---|---|---|---|---|---|---|---|
 | Documented problems found at medium or above, of 79 | 28 | 28 | 44 | 50 | 54 | 54 | 55 | | |
 | of the 61 public | 21 | 20 | 32 | 37 | 39 | 39 | 40 | at least 37 | met |
@@ -138,6 +138,13 @@ names where something is kept); both were fixed against examples of their own (`
 the changelog). The fourth measurement is that engine. It was preceded by the two looks above and by the reading
 for the two labels; nothing in the last change was written for an app of this set, and no number moved.
 
+It changed a last time after the fourth, again not from this set. Small examples written for the stage report
+showed that a record class a Python app loads with an import written from the top (`from app.models import Note`,
+the commonest way) was read as a library's, so who may reach the record was not asked (the changelog: "How a
+Python app loads its own files does not matter"). The fifth measurement is the engine with that corrected
+(3e4687c). Every app of the set lists exactly the findings it listed at the fourth, offline (627 findings in all)
+and with the audits on (1,197): the correction found nothing new here and raised no new false alarm.
+
 Where it still misses (24, and 1 found only as low):
 
 * `authz`, 8 of 11: `dvra-bola-order`, `dvra-bfla-role`, `ng-idor`, `ng-bfla`, `dvna-authz-admin`, `pg-admin-cookie`,
@@ -169,5 +176,5 @@ be 1 of 17.
 * `labels.json` · hand labels for findings on the clean public apps.
 * `run_heldout.py` · fetch, analyze, score, write `<out>.json` and `<out>.md`.
 * `baseline.json`, `baseline.md` · the frozen before.
-* `after_point4.json`, `after_point4.md` · the fourth and last measurement after point 4 (offline, like the before
+* `after_point4.json`, `after_point4.md` · the fifth and last measurement after point 4 (offline, like the before
   of the same day); `after_point4_audits.json`, `.md` · the same engine with the dependency audits on.

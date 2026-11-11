@@ -1,6 +1,6 @@
-# Held-out benchmark · after point 4, fourth measurement: 1c7f819, offline
+# Held-out benchmark · after point 4, fifth measurement: 3e4687c, offline
 
-Engine 1c7f819fff45cb9611377c6c5b0f164c091a4fe2 · definition e6b10d91686f · 2026-11-11 22:13 UTC · offline (no dependency audits)
+Engine 3e4687cab04219e1d12f093f0876013ba7ff6a3f · definition e6b10d91686f · 2026-11-11 23:14 UTC · offline (no dependency audits)
 
 | Measure | Count |
 |---|---:|
