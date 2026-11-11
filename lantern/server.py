@@ -21,7 +21,6 @@ import json
 import os
 import re
 import secrets
-import shutil
 import threading
 import time
 import traceback
@@ -1210,11 +1209,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def _agent_live(chosen) -> dict | None:
     """What the report needs to offer "Fix this for me": the chosen agent's name, when it is on this computer."""
-    from .agents import AGENTS
-    if chosen not in AGENTS:
+    from . import agents
+    if chosen not in agents.AGENTS:
         return None
-    name, prog, _ = AGENTS[chosen]
-    return {"id": chosen, "name": name} if shutil.which(prog) else None
+    name, prog, _ = agents.AGENTS[chosen]
+    return {"id": chosen, "name": name} if agents.find(prog) else None
 
 
 def agent_action(app, p: dict, repo: Path, out: Path, action: str, b: dict) -> tuple[dict, int]:

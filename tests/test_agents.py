@@ -41,8 +41,8 @@ def shop(tmp_path, monkeypatch):
     script.write_text(AGENT, encoding="utf-8")
     monkeypatch.setitem(agents.AGENTS, "claude",
                         ("Claude Code", "fake-claude", lambda prompt: [sys.executable, str(script), str(mode), prompt]))
-    which = shutil.which
-    monkeypatch.setattr(shutil, "which", lambda prog, *a, **k: sys.executable if prog == "fake-claude" else which(prog, *a, **k))
+    find = agents.find
+    monkeypatch.setattr(agents, "find", lambda prog: sys.executable if prog == "fake-claude" else find(prog))
     return repo, mode, tmp_path / "work"
 
 

@@ -24,7 +24,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import results
+from . import programs, results
 from .python_frontend import project_bytes
 
 # id -> (name, the program to look for, how its command is built). The prompt is always one argument.
@@ -44,7 +44,12 @@ FIXES_DIR = "lantern-fixes"
 
 def available() -> list[dict]:
     """The agents Lantern knows, and whether each one's program is on this computer."""
-    return [{"id": k, "name": v[0], "found": shutil.which(v[1]) is not None} for k, v in AGENTS.items()]
+    return [{"id": k, "name": v[0], "found": find(v[1]) is not None} for k, v in AGENTS.items()]
+
+
+def find(prog: str) -> str | None:
+    """Where the agent's program is: only in the folders PATH names in full, never the current folder."""
+    return programs.find(prog)
 
 
 def _work(work_root: Path | None) -> Path:
@@ -128,7 +133,8 @@ def run_fix(repo: Path, out: Path, fid: str, agent: str, privacy: str, log, *, r
     if agent not in AGENTS:
         raise ValueError("Pick a coding agent in Settings first.")
     name, prog, build = AGENTS[agent]
-    if shutil.which(prog) is None and runner is subprocess.run:
+    exe = find(prog)
+    if exe is None and runner is subprocess.run:
         raise ValueError(f"{name} is not installed on this computer, or Lantern can't find it.")
     f = _finding(out, fid)
     before_files = _files(repo)
@@ -142,9 +148,12 @@ def run_fix(repo: Path, out: Path, fid: str, agent: str, privacy: str, log, *, r
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / rel, dst)
     log(f"asking {name} to fix it there")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("LANTERN")}
+    env = programs.env({k: v for k, v in os.environ.items() if not k.startswith("LANTERN")})
+    cmd = build(_prompt(f))
+    if exe and cmd[0] == prog:
+        cmd[0] = exe   # started by its full path, so a program of that name in the copy is never the one run
     try:
-        res = runner(build(_prompt(f)), cwd=str(copy), env=env, stdin=subprocess.DEVNULL, capture_output=True,
+        res = runner(cmd, cwd=str(copy), env=env, stdin=subprocess.DEVNULL, capture_output=True,
                      text=True, encoding="utf-8", errors="replace", timeout=AGENT_MINUTES * 60)
     except subprocess.TimeoutExpired:
         raise ValueError(f"{name} did not finish within {AGENT_MINUTES} minutes. Nothing in your project changed.") from None
