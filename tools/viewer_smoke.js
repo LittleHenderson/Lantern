@@ -4,8 +4,10 @@
 // Works on any report (it clicks whatever is on screen).
 // Usage: node tools/viewer_smoke.js path/to/report.html /tmp/shot   (needs `npm i playwright`)
 // App mode: node tools/viewer_smoke.js --app 'http://127.0.0.1:8765/?token=…' OUT_PREFIX [--image shot.png --expect-text WORD]
+//                                        [--slow-tests 'python -m pytest -q tests/stop_check.py']
 //   drives a live `lantern serve` with one analyzed project: "Watch my tests run" (confirm and run in the sandbox,
-//   wait for the result), the terminal drawer (a Lantern command runs; a shell command is refused), a screenshot
+//   wait for the result; with --slow-tests, a test command of the project that would go on for minutes is started
+//   and ended with the "Stop the tests" button), the terminal drawer (a Lantern command runs; a shell command is refused), a screenshot
 //   dropped into Ask Lantern (read on this computer), and Settings → Analysis packs (one pack off, then on again).
 //   Fails on any JavaScript error or when one of those does not answer as it should. The phone pass loads the
 //   same screens.
@@ -26,7 +28,7 @@ async function until(p, fn, timeout) {
   }
 }
 
-async function appSmoke(url, out, image, expectText) {
+async function appSmoke(url, out, image, expectText, slowTests) {
   const b = await outside.launch(chromium);   // its only way out is a proxy on this computer that refuses
   const errs = [];
   let allow400 = false;   // the terminal's refusal answers 400 on purpose; Chromium logs that as a console error
@@ -83,6 +85,44 @@ async function appSmoke(url, out, image, expectText) {
         step(name, `sheet → ${toast.slice(0, 160)}`);
         if (!(await p.$('.toastin.ok'))) errs.push(`desk: the tests did not finish cleanly in the sandbox: ${toast.slice(0, 200)}`);
         await p.screenshot({ path: `${out}-${name}-tests-ran.png` });
+        if (slowTests) {
+          // 1b. tests that would go on for minutes are ended with the button, and the app says that they were
+          await p.click('#watchtests'); await p.waitForSelector('#shrun');
+          await p.fill('#testcmd', slowTests);
+          await p.click('#shrun');
+          await p.waitForSelector('[data-stop]', { timeout: 30000 });
+          await a11y.axe(p, `${name} tests running`, errs);
+          await p.screenshot({ path: `${out}-${name}-tests-running.png` });
+          const began = Date.now();
+          await p.click('[data-stop]');
+          const during = await p.evaluate(() => { const b = document.querySelector('[data-stop]'); return b ? `${b.textContent}${b.disabled ? ' (off)' : ''}` : 'already over'; });
+          await until(p, () => /You stopped the tests/.test(document.getElementById('toast').innerText), 90000);
+          const said = (await p.$eval('#toast', el => el.innerText)).replace(/\s+/g, ' ').trim();
+          step(name, `stop → button "${during}", then after ${((Date.now() - began) / 1000).toFixed(1)} s: ${said.slice(0, 120)}`);
+          if (!/^Stopping…|^already over/.test(during)) errs.push(`desk: the Stop button did not change when pressed (${during})`);
+          await p.screenshot({ path: `${out}-${name}-tests-stopped.png` });
+          // 1c. a run that could not end everything it started (the answer is a stand-in: the real case needs a
+          // process that cannot be ended): each message says so, none says beside it that everything was ended,
+          // and the words arrive as text
+          const planted = '1 process(es) this run started could not be ended <img src=x onerror=alert(1)>';
+          for (const [kind, result, never] of [
+            ['stopped', { cancelled: true }, /everything they started were ended/],   // the words of a stop that left nothing
+            ['time limit', { timed_out: true }, /and everything they started/],
+            ['ended', { returncode: 0, traced: true, observed: 3, recall: 1 }, null]]) {
+            await p.route('**/api/jobs/left-check', route => route.fulfill({ status: 200, contentType: 'application/json',
+              body: JSON.stringify({ id: 'left-check', status: 'done', log: [], result: { blocked: [], not_ended: [planted], ...result } }) }));
+            await p.evaluate(() => watchTrace('left-check', S.state.projects.find(x => x.id === S.project), 'x'));
+            await p.unroute('**/api/jobs/left-check');
+            const told = (await p.$eval('#toast', el => el.innerText)).replace(/\s+/g, ' ').trim();
+            const drawn = await p.evaluate(() => ({ img: document.querySelectorAll('#toast img').length, ok: document.querySelectorAll('#toast .toastin.ok').length }));
+            step(name, `not ended (${kind}) → ${told.slice(0, 150)}`);
+            if (!/may still be running on this computer: 1 process\(es\) this run started could not be ended <img/.test(told)) errs.push(`desk: a run that could not end everything (${kind}) does not say so: ${told.slice(0, 200)}`);
+            if (never && never.test(told)) errs.push(`desk: a run that could not end everything (${kind}) still says that it did: ${told.slice(0, 200)}`);
+            if (drawn.img || drawn.ok) errs.push(`desk: the message of a run that could not end everything (${kind}) is drawn wrong (${JSON.stringify(drawn)})`);
+          }
+          await a11y.axe(p, `${name} tests not ended`, errs);
+          await p.screenshot({ path: `${out}-${name}-tests-not-ended.png` });
+        }
         // 2. the terminal drawer: a Lantern command runs, a shell command is refused
         await p.click('#termbtn'); await p.waitForSelector('#tcmd');
         await p.fill('#tcmd', 'analyze --offline'); await p.press('#tcmd', 'Enter');
@@ -137,8 +177,8 @@ async function appSmoke(url, out, image, expectText) {
 (async () => {
   if (process.argv[2] === '--app') {
     const a = process.argv.slice(3), opt = k => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : null; };
-    if (!a[0] || !a[1]) { console.error('usage: node tools/viewer_smoke.js --app URL OUT_PREFIX [--image PNG --expect-text WORD]'); process.exit(2); }
-    return appSmoke(a[0], a[1], opt('--image'), opt('--expect-text'));
+    if (!a[0] || !a[1]) { console.error('usage: node tools/viewer_smoke.js --app URL OUT_PREFIX [--image PNG --expect-text WORD --slow-tests COMMAND]'); process.exit(2); }
+    return appSmoke(a[0], a[1], opt('--image'), opt('--expect-text'), opt('--slow-tests'));
   }
   const [file, out] = process.argv.slice(2);
   if (!file || !out) { console.error('usage: node tools/viewer_smoke.js REPORT.html OUT_PREFIX'); process.exit(2); }

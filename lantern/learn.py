@@ -12,6 +12,9 @@ import json
 import re
 from pathlib import Path
 
+from . import results
+from .python_frontend import inside_repo, project_text
+
 ROOT = Path(__file__).parent / "starters"
 MARKER = ".lantern-starter"
 ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
@@ -78,7 +81,7 @@ def starter_of(repo: Path) -> str | None:
     """The starter a folder was created from, if its marker names one we ship (the marker itself may be planted,
     so only a known id is accepted and nothing else is read from it)."""
     try:
-        sid = json.loads((Path(repo) / MARKER).read_text(encoding="utf-8")).get("starter")
+        sid = json.loads(project_text(Path(repo) / MARKER, repo, 4096)).get("starter")
     except (OSError, ValueError, AttributeError):
         return None
     return sid if isinstance(sid, str) and ID_RE.fullmatch(sid) and sid in ids() else None
@@ -93,9 +96,11 @@ def solution_text(sid: str, rel: str) -> str | None:
 # ---------------------------------------------------------------------------- progress
 
 def _load(p: Path):
+    """What a result file holds, or None. Only a plain file is read (`results.plain`), never a link or a pipe."""
+    text = results.plain(p)[0]
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return None if text is None else json.loads(text)
+    except (ValueError, RecursionError):
         return None
 
 
@@ -140,7 +145,9 @@ def check(cond: dict, repo: Path, out: Path) -> tuple[str, str]:
             return "unknown", "analyze the project first"
         return ("todo", "still to add: " + ", ".join(missing)) if missing else ("done", "in place")
     if kind == "exists":
-        missing = [f for f in cond["files"] if not any(Path(repo).glob(f))]
+        # a file the project holds (`inside_repo`): a look for a name alone finds a link whatever is at its end from
+        # Python 3.12 on, and only a link with something at its end before
+        missing = [f for f in cond["files"] if not any(inside_repo(p, Path(repo)) for p in Path(repo).glob(f))]
         return ("todo", "missing: " + ", ".join(missing)) if missing else ("done", "files present")
     if kind == "explained":
         ex = _load(out / "explanations.json")

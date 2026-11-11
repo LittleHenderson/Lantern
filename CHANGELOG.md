@@ -67,6 +67,663 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   is found, letter for letter, in no path but its own unless a folder was named for that purpose (`tool.p[y]z/`), and
   a file in such a folder is then left out of Bandit as one in `build/` or `vendor/` already is; a link put in place
   while an analysis runs (that takes another program of the same computer writing in the project at that moment).
+- Security: what anybody can send the gateway without signing in is bounded (2026-11-10; stage 7 of the 2026-11-09
+  directive, part 4: "verify abuse controls on sign-in and telemetry without breaking endpoints that are
+  intentionally anonymous"; gateway 0.2.6, which applies once that version is deployed). The gateway answers some
+  addresses for people who have not signed in: the health check, the sign-in pages, the owner's page (it asks for
+  the secret) and the app's opt-in usage reports.
+  **What was wrong** (the gateway's code before, 97c1677; its own app with stand-ins for the model and for GitHub,
+  nothing left the computer, the live gateway was not asked):
+  - a usage report whose body was a list, a number, a text, `null` or `true` was answered with an internal error
+    (HTTP 500, 5 of 5); so was a request for the model that was a list, a number, `null` or nested 3,000 deep (4 of
+    4) or whose `max_tokens` was a word, a list or `1e400` (3 of 3), and an admin secret with a letter outside ASCII;
+  - 32 MB sent by nobody to `/v1/usage`, `/v1/tokens` and `/v1/auth/signout` were taken whole (33,554,432 bytes
+    each) before the refusal: the size was looked at after the body had been read;
+  - 3,000 usage reports from one sender, each with a new install id, were all answered 200 and 3,001 installs were
+    kept, with whatever text was sent as the version and the operating system (`<b>hello</b> you`,
+    `see evil.example`), which the owner's page lists;
+  - 500 wrong admin secrets from one sender were each answered 403 at once: nothing slowed guessing;
+  - the token of a new sign-in waited for the app in the database file in clear, where the gateway's promise is
+    hashes only;
+  - one sign-in link used 200 more times made the gateway ask GitHub 200 times, and GitHub out of reach was
+    answered with an internal error (HTTP 500).
+  **What changed** (`gateway/lantern_gateway/limits.py` new, `app.py`, `auth.py`, `dashboard.py`):
+  - no request's body is read past the limit of its address (`LANTERN_MAX_BODY` for `/v1/chat/completions`, 4,000
+    bytes for every other address): one that says it is larger is refused before any of it is read, one that does
+    not say is cut off at the piece that crosses the limit (413 `too_large`);
+  - a body that is not a JSON object is answered 400 in the gateway's own words, and a `max_tokens` that is no
+    number counts as not given;
+  - usage reports: 300 an hour from one sender (`LANTERN_SENDER_PINGS_PER_HOUR`), 50 new installs a day from one
+    sender (`LANTERN_SENDER_INSTALLS_PER_DAY`), 1,000 new installs per UTC day for everyone together
+    (`LANTERN_INSTALLS_PER_DAY`); past a limit the answer is 429 with `Retry-After`, the app keeps its counts for
+    its next try, and an install the gateway already knows keeps being counted. A version is kept only when it is
+    shaped like one and an operating system only when it is Linux, Darwin or Windows (else nothing, or `other`);
+  - the owner's secret: after five wrong secrets in a minute from one sender, or 30 from everyone together, no
+    secret is looked at until that minute ends (429), and the owner's page says so in words ("Too many wrong secrets
+    in the last minute. Wait a minute, then try again."); a secret outside ASCII is a wrong secret (403);
+  - signing in: a link that comes back from GitHub or Google works once (a second use gets a page and the provider
+    is not asked), the provider is asked at most 10 times a minute for one sender and 120 for everyone together, two
+    links made in the same second differ, and a provider that cannot be reached or answers oddly gets a page (502);
+  - the token that waits for the app is stored sealed with the app's own code, of which the gateway keeps only a
+    hash; a row an earlier version left in clear is deleted at start-up and never handed out, so a person who is in
+    the middle of signing in at the moment of the deploy signs in again;
+  - who a sender is: the address the gateway's proxy wrote in the header named by `LANTERN_ADDRESS_HEADER` (Fly's
+    `Fly-Client-IP`), else the connection's address, IPv6 by its /64 network; kept in memory only, as a keyed hash
+    whose key exists only while the process runs. No address is written anywhere.
+  **Evidence.** The same probe after: 400 for the 9 shapes and the cap for the 3 sizes, 65,536 bytes taken of each
+  32 MB, 49 of the 3,000 reports answered 200 and 2,951 answered 429 with 50 installs kept and no text, 5 wrong
+  secrets answered 403 and 495 answered 429, a secret outside ASCII 403, no token in clear in the database file, 200
+  more uses of a link answered 400 with 0 requests to GitHub, GitHub out of reach a 502 page. In a real browser
+  (Chromium, a gateway on 127.0.0.1): five wrong secrets show "That secret was not accepted.", the sixth and then
+  the right one show the new sentence. `tests/test_gateway_limits.py`: 116 tests, each refusal beside the ordinary
+  use that must keep working; on the code before 81 fail (60 on what the gateway did, 21 because the setting, the
+  limiter, the document or the page's sentence they ask about was not there) and 35 pass. One test of
+  `tests/test_signin.py` changed (a link now carries a random part) and fails on the code before. Mistakes planted
+  in the changed lines of `limits.py`, `app.py` and `auth.py`, one at a time: on the tests as first written (99 of
+  them) 93 of 133 failed a test and 40 failed none; tests were added for 28 of the 40; on the tests as they stand
+  **121 of 133 fail a test and 12 fail none**. The 12: the length of the limiter's key and of the name it keeps of
+  a sender (2); a full table that clears ended minutes one sender earlier (1); a stand-in for a port that is never
+  read (1); two checks that two lengths are equal, which they are by construction (2); the housekeeping of the
+  table of used links at 50,000 entries, which 120 sign-ins a minute never reach (3); a comparison at the exact
+  same instant and a default far below any time (2); the length of a link's random part (1).
+  Also: CI's Linux test job prints the line `programs these tests started` (which npm the tests met) right after
+  the tests; it stood far up in the log, and the red run of 616b7dd came from a newer npm.
+  **Limits.** A caller with many addresses is many senders, which is why each limit that matters has a count for
+  everyone together beside it; such a caller can use those up, a minute at a time: the owner waits for their page
+  (nobody gets in), and people signing in see "Too many sign-ins in the last minute". The per-sender counts are as
+  good as the proxy's header: whether a caller can write its own `Fly-Client-IP` through Fly's proxy was not tried,
+  and Fly's documentation as read on 2026-11-10 does not say. `/v1/auth/<provider>/start` and `/v1/auth/claim` are
+  not limited. The counts are in memory and start empty when the gateway restarts (the cap on new installs for
+  everyone is read from the database). The server's log lines hold an app's sign-in code for the ten minutes it is
+  good. The owner's page was checked in Chromium only.
+- Lantern starts only the person's own programs, and a settings file in a project does not steer the Python scanner
+  (2026-11-10; stage 7 of the 2026-11-09 directive, execution safety: reading a project must not run it). Lantern
+  is often started inside the folder of the project it was asked to read (`cd project`, then `lantern analyze .`).
+  **What was wrong** (the code before, ce65f49; Bandit 1.9.4, Python 3.13.18; each shown by a failing test, offline,
+  on this computer). Bandit was started as `python -m bandit` in the person's current folder, and Python looks
+  there first for every module such a program loads: a project file named `bandit.py`, `logging.py`,
+  `argparse.py`, `tokenize.py` or `yaml.py` ran as a program, twice (the scan, and the question for the version),
+  and Lantern said only "incomplete bandit: error: empty output". Of 12 module names tried one at a time, 10 were
+  loaded; with `-P`, 0. That is claim A4 ("Lantern never runs the analyzed code") not holding for that way of
+  starting it. A `.bandit` file in the project (Bandit looks for one in the folder it scans when it is handed
+  none): with its checks switched off, every file left out, only another check asked for, a second settings file
+  named, or the file in a folder further down, the scan found nothing where there is a finding and Lantern's record
+  of it said `ok`; two such files, or one naming a file for the report, made the scan fail. And programs started by
+  their bare name (`git`, `gitleaks`, `pip-audit`, `docker`, `taskkill`) or found with `shutil.which` (`git`,
+  `npm`, `gitleaks`, `pip-audit`, `docker`, `tesseract`, `lantern`): on any system a PATH entry that is empty, `.`
+  or another relative path means the current folder (27 failing tests: nine ways Lantern starts a program, three
+  such entries), and Windows looks in the current folder before PATH, as `shutil.which` does there. A test run in
+  Docker ("Watch my tests run") started `docker` by its bare name and its clean-up (`docker rm`) in the person's
+  current folder; in the restricted process the runner of the tests (`npm`) could be a file of the project named
+  like it; and Docker asked for (`LANTERN_SANDBOX=docker`) and not installed ended in a Python error.
+  **Now.** `lantern/programs.py` is the one place a program is found and worded. `programs.find(name)` gives the
+  full path from the folders PATH names in full (on Windows with the endings Windows can start), or nothing;
+  `programs.python(module, ...)` starts a Python tool with `-P`, Python's own switch for "not the current folder";
+  `programs.env()` is the environment every helper is started with (`remote.run_bounded`): PATH and PYTHONPATH
+  without their relative entries, and on Windows the system's own switch (`NoDefaultCurrentDirectoryInExePath`),
+  which its shell obeys when `npm.cmd` starts `node`. Bandit is handed a settings file of Lantern's own (`--ini`,
+  with nothing in it; `programs.settings`), so it looks for none in the project; when that file cannot be written
+  the scanner is not started and the record says why, and a temp folder that cannot be cleared away afterwards
+  does not cost the scan.
+  The cloud worker's steps (`lantern.depaudit`, `lantern.archive`, `lantern.cli`) are started with `-P` as well;
+  they already ran in a folder whose names the service chose. In the sandbox the runner of a project's tests and
+  Docker are started by their full paths, Docker with the same environment; Docker asked for and not installed
+  means the tests are not run, said in Lantern's words (`Unavailable`).
+  Changed for the person: a `.bandit` file of their own no longer changes what Lantern's scan reports (to set a
+  finding aside, `lantern accept` keeps it listed with its reason), and a program that can be reached only through
+  a relative PATH entry counts as not installed.
+  Tests: `tests/test_programs.py` (72 tests; 3 need Windows and run in CI's Windows job) and one more in
+  `tests/test_server.py`. On the code before 56 of the 73 fail, 14 pass and 3 are skipped: 46 on what the code does
+  and 10 because a function of this change is not there yet. `test_no_program_is_started_any_other_way` reads every
+  module of `lantern/`, `cloud/lantern_cloud/` and `gateway/` and fails on `shutil.which`, on a program started by
+  its bare name and on `[sys.executable, "-m", …]` outside the two lines that start the project's own tests on
+  purpose. Mistakes planted in the changed lines, one at a time (the tool can plant none in the changed lines of
+  `cloud/lantern_cloud/worker.py`). First pass, with the tests and the test files as first chosen: 51 planted in
+  nine files, 32 failed a test at once and 19 failed none. Of the 19, 8 cannot fail a test (five change a time limit
+  by one second, three change `text=True` on a line that also names an encoding, which already means text), 2 fail
+  older tests in files that had not been named (`tests/test_links_out.py`, `tests/test_sandbox_safety.py`), 8 led to
+  tests (a settings folder that cannot be cleared away, the Windows branch that ends a process tree, the runner of a
+  test run in the sandbox) and 1 to a change of the code (Docker asked for and not installed). Final pass, on the
+  final code and tests: 53 planted in ten files, 44 fail a test, and the 9 that fail none are of those two kinds
+  (six time limits, three `text=True`).
+  Not covered: a folder PATH names in full is used as the person wrote it, also when it lies inside a project (a
+  project's virtual environment that the person switched on); Lantern started as `python -m lantern.cli` inside a
+  project, or with a relative entry in PYTHONPATH, has handed its own Python the current folder before any line of
+  Lantern runs (the `lantern` command does not); what gitleaks does with settings files in the folder it scans was
+  not measured (it is installed neither here nor in CI); the Windows rules are tried against Windows itself only by
+  the three tests of CI's Windows job; the project's own tests ("Watch my tests run", `lantern trace`) are the
+  project's code on purpose and run in the sandbox.
+- npm takes no settings from the project it audits, and reads nothing outside a folder of Lantern's own (2026-11-10;
+  stage 7 of the 2026-11-09 directive: path boundaries, lock files). `npm audit` takes settings from the folder it
+  is started in (`.npmrc`), and from a folder above whose `package.json` names that folder as a workspace. Lantern
+  started it in the project.
+  **What was wrong** (the code before, 033e30a; npm 10.9.9, node 22; the real npm against stand-in registries on
+  127.0.0.1, offline). Lantern named the registry itself (`--registry`), and that held: a `registry=` line in the
+  project was passed over. But with `offline=true` in the project's `.npmrc` npm asked nobody and found nothing, and
+  Lantern's record of the audit said `ok`. With `proxy=` and `https-proxy=` both of npm's requests went to the
+  address the project named (where nothing says "not through a proxy", as on a person's computer), and the record
+  said `ok`. With `strict-ssl=false`, or `cafile=` naming a file of the project, npm talked to a registry whose
+  certificate nobody vouches for. With `cache=` and `logs-dir=` npm wrote 21 files where the project said. A token
+  line (`//host/:_authToken=`) and `user-agent=` were sent as the project wrote them. `global=true`,
+  `location=global` and `workspace=<a name>` made the audit fail, and `fetch-timeout=1` did in 3 of 8 runs (each
+  said in the record). 16 other settings tried changed nothing (`node-options` and `script-shell` among them:
+  nothing of the project ran). And npm reads the `package.json` of every folder a lock file names on the computer:
+  with a lock file that names `../next-door`, the version written in that folder's `package.json`, outside the
+  project, was in the question npm sent to the registry; a workspace pattern such as `../*` in `package.json` made
+  it read the `package.json` of every folder beside the project, and so did the same pattern in the lock file's own
+  first entry, which npm takes in place of a `package.json` it cannot use.
+  **Now.** npm is started in a new folder of Lantern's own (`programs.folder`), on copies (`depaudit._npm_stage`):
+  `package.json`, `package-lock.json` and `npm-shrinkwrap.json` (npm up to 11 takes it before the lock file), and the
+  `package.json` of each folder the lock file names inside the project, at the place it has in the project. Each is
+  read as any dependency file is (a plain file of the project, 32 MB at most) and handed to npm as what Lantern read
+  in it, written out anew, never as the file's own text (`_npm_json`): two readers of one text can disagree (a name
+  that stands twice; JSON nested 200,000 deep, which Node reads and Python does not follow), and npm would then
+  follow what Lantern never saw. A file Lantern cannot read as JSON means npm is not started on that lock file. The
+  folders matter: npm finds a workspace package by its folder, and a copy of the two files alone asked about nothing
+  and said that nothing is known (measured before the fix was written). A folder named outside the project is not
+  copied, and the copy lies as many folders deep in Lantern's folder as any entry of the lock file holds `..`, so
+  nothing is where such an entry points. An entry counts as a link however it is marked (npm takes `1`, `"yes"` and
+  `[]` for the mark as it takes `true`), and what it points at counts as a path whatever it looks like (to npm
+  `https://x/../../../next-door` is the folder beside the project). What cannot be kept from npm that way means npm
+  is not started on that lock file, and the record names the file and the reason: a folder named by its full path;
+  one written in words a path and an address read differently (`%`, a control character, `~`: an older lock file's
+  `file:` version is read as an address); more than 16 levels up; more than 5,000 folders, or 64 MB of their
+  `package.json` files; a workspace pattern that leaves its folder (`..`, a full path, a backslash, braces that can
+  put either together), in `package.json` or in a lock file's own first entry. A folder's `package.json` that is no
+  file of the project (a link out of it, a pipe), that Lantern cannot read as JSON, or that asks for workspace
+  folders outside, is not copied and is named, and the audit's state is `partial`.
+  Changed for the person: a project's own `.npmrc` no longer counts for Lantern's audit (a private registry, a proxy
+  or a certificate set there); their own npm settings (`~/.npmrc`, `NPM_CONFIG_*`) count as before. A folder a lock
+  file names outside the analyzed folder is no longer read. A lock file in a folder that a `package.json` one folder
+  up names as a workspace is audited as that lock file (before, npm went up to that folder and the audit failed
+  there for want of a lock file). A project whose `package.json` or lock file is not valid JSON is not handed to
+  npm, and the record says which file (before, npm audited a project with a broken `package.json` from its lock file
+  alone, and said itself what was wrong with a broken lock file).
+  Tests: `tests/test_npm_settings.py` (145 tests; 23 start the real npm against stand-in registries on this computer
+  and are skipped where npm is not installed; 122 put a stand-in in npm's place and run everywhere, but for 6 that
+  need links and pipes or a path longer than Windows takes). On the code before 138 fail and 7 pass: 135 on what the
+  code does, 3 because a name of this change is not there yet. The 7 are twins (what must keep working) and the
+  `fetch-timeout=1` case, which the code before fails in 3 of 8 runs. Mistakes planted in the changed lines, one
+  at a time, on the final code and tests: 60 in two files (59 in `lantern/depaudit.py`, 1 in
+  `lantern/programs.py`), 58 fail a test and 2 fail none: the 64 MB limit written as 65 MB (the tests set a small
+  limit instead of writing 64 MB of files) and the longest line of the record written as 301 characters in place
+  of 300 (no line Lantern writes about npm gets that long). The first pass, on the fix and the tests as first
+  written: 55 planted, 38 failed a test at once, 17 failed none.
+  Kept in the record: the fix as first written (101 tests, all passing; the whole suite passing under Python 3.13
+  and 3.11, 1893 passed and 22 skipped each) still let the real npm read outside Lantern's folder in two crafted
+  cases. They were found while reading the planted mistakes that failed no test, and npm's own code. A lock file
+  nested deeper than Python follows was handed over as it was, unread, and npm followed it two folders up; and with
+  a `package.json` that is not JSON npm took the lock file's first entry with its workspace patterns. 48 tests were
+  written first (32 failed, two of them with the real npm), then the fix was changed. Nothing of the first form was
+  pushed.
+  Not covered: npm also looks in the folders above the one it is started in for a `package.json` that names it as a
+  workspace; above Lantern's folder those are the temp folder and the folders it lies in, which are the computer's
+  and not the project's. A name JavaScript
+  treats specially (`__proto__` as a key of the lock file, three ways) was tried in place: npm 10.9.9 follows none,
+  and Lantern has no rule for it. What gitleaks does with settings files in the folder it scans is still not
+  measured. A project with only an `npm-shrinkwrap.json` is not audited (Lantern looks for `package-lock.json`).
+  Where the lock file npm reads is left over from another `package.json` (it names libraries this one does not
+  ask for), npm asks about nothing and the record says `ok`, as npm itself does in the project.
+  Kept in the record: the first run of these tests on GitHub failed (616b7dd; under Python 3.11 on Linux, in both
+  of its runs: 4 failed, 1933 passed, 22 skipped). The fix was first measured with npm 10.9.9 alone, and four
+  tests said what that npm asks about; GitHub's Linux machines have a newer npm. Repeated here with npm 11.21.2
+  and 12.2.2: the same four fail, and under 12.2.2 a fifth; npm 10.8.2 behaves as 10.9.9. What changed is npm:
+  11 and 12 no longer ask about a project's own folders (a workspace package, a library that is a folder), and
+  12 no longer reads `npm-shrinkwrap.json`. In all four versions Lantern's copy is asked exactly what npm asks
+  when it is started in the project itself with the same words (7 projects each; the eighth is the project with
+  only an `npm-shrinkwrap.json`), so the code did not change. The five tests now compare with what the installed
+  npm asks in the project itself (`itself`) and allow only the answers measured; the last lines of a test run
+  name the npm it started (`programs these tests started: npm …`). All 145 pass against each of the four.
+- The opt-in usage counts go to the gateway's own address and nowhere else, and Lantern says where they go
+  (2026-11-10; stage 7 of the 2026-11-09 directive, "validate ... the address used for optional usage reporting").
+  Sharing is off until the person turns it on; this is about what happened after they did.
+  **What was wrong** (the code before, 62fe781; found by reading the sender, then shown by tests against the
+  gateway's own code started on this computer; the live gateway was not asked). The sender posted to
+  `<gateway address>/v1/usage`, and the gateway address Lantern is set up with already ends in `/v1`
+  (`providers.gateway_url()`, `https://lantern-gateway.fly.dev/v1`): the counts went to `/v1/v1/usage`, a route the
+  gateway does not have, the answer was passed over, and nothing told the person. That line is in the 0.10.0 release
+  commit (072a1c5) and in every commit since, so with the address Lantern ships with no count arrived. The one test
+  of the sender put a stand-in in place of `urlopen` and handed over an address written without `/v1`, a form the
+  app and the command line never use, so it passed. Five more, each shown by a failing test. `send`, which says it
+  never raises, raised for a gateway address with a name and a password, a port that is not a number, a blank, a
+  line break or a control character (`http.client.InvalidURL`) and for an answer that is no web answer
+  (`http.client.BadStatusLine`); in the app that ends the thread that sends every six hours until the app is started
+  again, and at the command line it is a Python error when the command ends. A redirect (301, 302, 303) was followed
+  with a GET, and a 200 from the place it pointed at marked the day as sent. `LANTERN_NO_REAL_PROVIDERS`, the
+  person's switch for "nothing leaves this computer", was not asked: 13 of the new tests tried to reach another
+  computer on the code before (the tests' guard refused each). An `http://` address of another computer was taken,
+  so the install id would have crossed the network in clear. And no failure was ever said.
+  **Now.** `usage.destination(base)` gives the one address the counts are posted to for a gateway address, or the
+  reason none is sent, in fixed words that never repeat the address (it may hold a password): `https`, or `http` for
+  this computer only; a computer's name or number; no name or password; no `?` or `#` part; a port that is a number;
+  printable characters without blanks or a backslash, 2,000 at most. An address that ends in `/v1` gets `/usage`;
+  one written without it gets `/v1/usage`, as before. `usage.where(base)` adds the switch. `send` asks `where`,
+  follows no redirect (the place a redirect points at is never asked), never raises, stops at the first day the
+  gateway does not take, keeps what was not taken for the next try, and writes down how the last try ended
+  (`usage_last.json` in `LANTERN_HOME`: a day, a number and one of Lantern's own words, never text a server sent; a
+  note of another shape says nothing; turning sharing off removes it). `lantern usage --show` and `/api/usage`
+  (`where`, `why`, `text`) say `Sent to: <address>`, or `Not sent: <why>. The counts stay on this computer.`, and
+  `Last try 2026-11-10: not taken (the gateway answered 404). The counts stay on this computer and are tried again.`
+  Changed for the person: with sharing on, the counts now arrive. What is sent is unchanged (a random install id,
+  the version, the operating system's name and a count per feature; `lantern usage --show` prints it), and the days
+  that still wait on this computer go with the next try (days older than a week are dropped, as before). An
+  `http://` gateway address of another computer in `LANTERN_GATEWAY_URL` is no longer used for the counts.
+  Tests: `tests/test_usage_address.py` (63 tests against the gateway's own app and stand-in servers on 127.0.0.1;
+  23 addresses that are sent nothing beside 12 that are taken). On the code before 61 fail and 2 pass (an address
+  written without `/v1` arrives; nothing is tried while sharing is off): 44 on what the code does or says, in 6 of
+  them the sender raising, and 17 because `usage.destination` is not there yet. The older test of the sender
+  (`tests/test_usage.py`) now goes through a real address on 127.0.0.1 and fails on the code before too. Mistakes
+  planted in the changed lines of `lantern/usage.py`, one at a time (61; the tool can plant none in the 3 changed
+  lines of `lantern/server.py`): 59 failed the tests at once and 2 failed none (the text a sent day is remembered
+  by; the answer when there is no address at all). Two tests were added, and all 61 now fail a test.
+  Kept in the record: on GitHub's Windows machines one of the two runs of 616b7dd failed in one of these tests
+  (1 failed, 1567 passed, 287 skipped; the other run passed, as every run before): a try against something that
+  answers, but not as a web server does, was described with another sentence than the test expects. The test's
+  stand-in read once, answered and closed; when part of the request is still on its way then, the system cuts
+  the connection and the caller may never see the answer. That is the cause as read from the test, not shown:
+  on Linux 300 tries of each of three ways of closing all gave the expected word. The stand-in now reads the
+  whole request and closes after the caller has, and the test's message says which word was noted.
+  Not covered: that no count arrived is read from the code and shown against the gateway's code on this computer,
+  not against the live gateway (its owner's page would show it); the app's Settings page says only that nothing is
+  sent, the reason is in `lantern usage --show` and in the route; an `https` address is taken as written (the name
+  is not looked up, and `LANTERN_GATEWAY_URL` is the person's own setting); the system's proxy settings are used as
+  before; what the gateway does with what it is sent (how much one sender may send, how large a request may be) is
+  the next part of this stage.
+- Security: a file of a project is opened only as a file of that project, a result file is read back only as a
+  plain file, and a saved map is used for the folder the person named (2026-11-10; stage 7 of the 2026-11-09
+  directive, "test path, link and ownership boundaries"; it goes on from the link fix above with the same
+  measurement). Three rules. What the code before did is measured on the stage with the link fix merged in.
+  **1. Files Lantern looks for by their name.** The link fix closed the source files, the notes file, the packs and
+  Bandit. Every other reader still opened its file with a plain read, wherever a link led. `bench/links.py` (new)
+  puts every file of the 15 sample projects, and of one more project made of the other files Lantern looks for by
+  name, in six states, one at a time (taken away; a link out of the project; the same link with an empty file at its
+  end; the same link with nothing at its end; a pipe; a link to itself), and runs the whole analysis on each: 232
+  files, 1424 runs. On the code before: 17 files were read through the link (`package.json`, `app.json`,
+  `go.mod`, `Cargo.toml`, `pubspec.yaml`, a `.csproj`, `build.gradle` and `build.gradle.kts`, `Info.plist`, the
+  entitlements file, `project.pbxproj`, the network security settings, a notebook: what they hold went into the map,
+  the findings and the readiness score), the results for 3 told whether the path a link named exists outside
+  the project (two Gradle files and `package-lock.json`), and a pipe held 29 runs up for good, at 10 lines of
+  the code in 8 modules. Under Python 3.11 and 3.12 a link to itself in the way of an import stopped the whole
+  analysis with a Python error (`RuntimeError: Symlink loop` from `Path.resolve()`): 28 of the 264 runs of that
+  state under Python 3.12.3, none under 3.13, which does not raise there. (On main, before the link fix, 230 of
+  those 264 runs stopped, in `inside_repo` itself; the link fix took those away.) With this change: 0 read
+  through, 0 tells, 0 held up, 0 stopped in 1424 runs under Python 3.13.18, and 0 stopped in the 264 under 3.12.3.
+  (Under Python 3.11.18 the whole sweep was run only after GitHub's run under 3.11 had failed: see "Found by
+  GitHub's run" below. There too it is now 0, 0, 0, 0 in 1424 runs.)
+  Reading the code found one more of the second kind, which no sample could show: the Android signing-key finding
+  (`LM-SIGNING-SECRET`) ranks higher when the key file is in the repository too, and a key file that was a link
+  counted when something was at its other end. It asks `inside_repo` now, and a test holds it. And a test written
+  for a planted mistake (below) showed one more of the first kind: a `setup.cfg` that was a link out of the project
+  was read, and the function it named as a script became an entry point. The samples' `setup.cfg` names none, so
+  the sweep could not show it; `project_text` had closed it already.
+  `python_frontend.project_text(p, repo[, limit])` and `project_bytes` are now the one way a file of a project is
+  opened. They ask `inside_repo` and raise FileNotFoundError for whatever it refuses, so every reader that passes a
+  missing file over passes these over too; the readers of 28 other modules of `lantern/` go through them (38
+  modules changed in all). Where a reader only asks whether a
+  file is there, it asks `inside_repo` in place of `exists()` or `is_file()` (`android.py`, and `sandbox.detect`,
+  which proposes the test command: ten names, the Gradle wrapper, the package manager's lock file, a linked `tests/`
+  folder). A path that cannot be followed is an import of nothing (`js_frontend._reached`). And an import of a file
+  that is a link to a project file with another kind of name (`helper.ts` → `kept.txt`) now leads to the link, which
+  is the module; before, on main too, the path was followed to its end first, no module was found there, and the
+  import was read as a library's.
+  **2. Result files read back.** `results.write` (below) made writing safe; reading back was still a plain
+  `read_text` in the commands about a finished run (`lantern report`, `evidence`, `verify`, `export`, the
+  connector's tools), the app's cards and pages, Ask Lantern and the Learn steps: a `.lantern/security.json` that a
+  project brought as a link was read wherever it led and shown as the project's findings, and a pipe there held the
+  command or the page up for good. `results.plain(p)` is now the one opener for a result file (never through a link,
+  never a pipe or a folder, at most 256 MB). `results.text` / `results.table` are the strict forms for the commands,
+  which end with result 2 and one sentence (`… security.json was not read: it is a link, and Lantern does not read
+  its results through a link. Remove it and analyze the project again.`); the app, Ask Lantern and the Learn steps go
+  on without the file. The record of calls that "Watch my tests run" reads is written inside the program under
+  test: it is read the same way, and only rows of the recorder's own shape are kept (`trace.well_formed`; before, a
+  row such as `{"pairs": [1]}` ended the run with a Python error). The note a clone keeps of what it left out
+  (`remote.skipped`) is read the same way.
+  **3. Which folder a saved map is about.** `graph.json` names the project folder it was made for (`repo_root`),
+  and `lantern report`, `lantern evidence` and `lantern explain` read each function's lines, and the notes file,
+  in the folder that file named. A project that brought its own `.lantern/graph.json` naming another folder had,
+  measured on the code before: a line of that folder's file in `report.html`; that folder's notes file in
+  `evidence.json`; and that line, not the project's own, in each of the 3 requests `lantern explain` sent to the
+  model. Now `Graph.load(path, repo)` takes the folder from its caller, every caller in `lantern/` hands over the
+  folder the person named, and each function's lines are opened with `project_text`, so a saved `file` that leads
+  out of the project has no lines. With this change: none of the three, and the project's own line is what is sent.
+  Changed for the person: a project file that is a link to a file outside the analyzed folder (a `tsconfig.json`
+  or `package.json` kept one folder up and linked into the folder that is analyzed) is no longer read; analyze the
+  folder that holds both. A results folder made for one place and used from another (the project was moved, or
+  `--out` names results of another copy) now reads the lines of the folder named on the command line, where before
+  it read the place the results were made for. For code that calls Lantern's functions:
+  `pipeline.rebuild_outputs(out, repo)`, `plan_explain(out, repo, …)` and `explain(out, repo, provider, …)` take the
+  project folder as their second argument.
+  Tests: `tests/test_project_files.py` (138 tests, each refusal beside a twin that must still be read: the
+  project's own file, a link that stays inside the project, the person's shortcut to the project, a plain result
+  file). `test_no_file_is_opened_any_other_way` reads every module of `lantern/` and fails on an `open`, `os.open`,
+  `read_text` or `read_bytes` outside the openers and a list of the places that open a file of Lantern's own, so a
+  reader added later is caught before any sweep is run. On the code before, 89 fail and 49 pass. Of the 89, 76 fail
+  on what the code does (33 a reader still waiting on a pipe when the test's limit ran out, 1 a refusal that did
+  not come, 1 stopped with `RuntimeError: Symlink loop`, 41 a compared result) and 13 because a function or an
+  argument of this change is not there yet. The 49 that pass: 33 of the 68 files looked for by name, whose reader
+  asked `inside_repo` already; 11 tests of the checking tools themselves; 5 tests of what was right before. With
+  this change 138 pass. (133 of the 138 were written and counted with the change; 5 came with what GitHub's run
+  found, below, and all 5 fail on the code before.)
+  Mistakes planted in the changed lines, one at a time (84, in 18 of the 38 modules): 45 failed the new tests at
+  once, 18 failed the older tests of their module, and 21 failed neither. For those 21, eight tests were added and
+  three sharpened (the app's Explain button and its command drawer, `lantern explain --node`, the plan's three
+  levels and forty functions, the Supabase check, a setup file's scripts, the Android signing key, an Android file
+  over the size limit, the test command, the words of a refused report); all 84 now fail a test. Thirteen of the
+  21 sat in older logic on a line that only gained the folder argument or moved, which no test had tried (which
+  functions the app's Explain plans, a setup file's scripts, the Supabase check); eight in lines this change
+  rewrote. The older tests tried were each module's own test file, not the whole suite.
+  Found while doing this, in the measuring script itself: its time limit was an ordinary error raised once, and a
+  reader that passes over whatever goes wrong with a file passed over the limit too. A sweep of main's code then
+  waited on a second pipe for good and had to be stopped. The limit can no longer be passed over
+  (`links.limited`; a test plants the mistake three ways). The numbers above are from the corrected script; for
+  the stage's own code it gave the same 49 lines as the first run.
+  Found by GitHub's run of this change under Python 3.11 (1 failed, 1653 passed, 19 skipped, twice; the
+  measurements above were made under 3.13, and under 3.12 for one state only): `ios.find_apps` looked for
+  `Info.plist` by its exact name and gave the app whatever it found as its settings file, read or not. Before
+  Python 3.12 such a look finds a link only when something is at its end, so under 3.11 the map and the findings
+  named `Journal/Info.plist` as the app's settings file when the outside path existed and the Xcode project when it
+  did not; under 3.12 and 3.13 the link was named in both cases, unread. The whole sweep, then run under Python
+  3.11.18 on that commit: that 1 tell and nothing else (0 read through, 0 held up, 0 stopped in 1424 runs). Now a
+  file `inside_repo` refuses is no settings file of an app (`Info.plist`, the entitlements files), on any Python,
+  and the Learn step that asks whether a file is there (`SECURITY.md`, `Dockerfile`) asks `inside_repo` as well:
+  it took a link with nothing at its end for the file from Python 3.12 on, and a link to any file outside the
+  project on every Python. Five tests; on the code before 5 fail under 3.13 and 3.12, and 4 under 3.11. With the
+  fix the sweep under 3.11.18 gives 0, 0, 0, 0, and the whole suite passes under 3.11.18 as it does under 3.13.18.
+  Not covered: the sweep sees a read only when what the file holds changes a result file (the look for openers
+  covers the rest by the way they open: it knows `open`, `os.open`, `read_text`, `read_bytes` and `.open`, not a
+  library that is handed a path); gitleaks, which finds its files itself, was not measured (not installed where the
+  sweep ran); a link put in place between Lantern's question and its open is read; whether a name is a folder is
+  still asked the plain way in places, and no file is read through it; every field of a result file other than the
+  project folder is still taken as Lantern's own when the file is a plain file of the right shape; rows of the right
+  shape in a test run's record are believed, so a test program can have a call between two functions of the map
+  marked as seen running, or added, that never happened; the sweep is POSIX only.
+- Security: Lantern's results are written into the results folder and nowhere else (2026-11-10; stage 7 of the
+  2026-11-09 directive, part 3). The results folder lies inside the analysed project by default
+  (`PATH/.lantern`), and a project comes from anywhere: a link somebody sent, a zip, a clone. Every result file
+  was written with a plain write, which follows a link and waits on a pipe. Measured on the code before: a
+  project that brought `.lantern/security.json` as a link to a file of the person's own had that file overwritten
+  with Lantern's results (the same for each of the nine files `lantern analyze` writes, for a record in the cache
+  of explanations and for `lantern-accepted.json`); one that brought `.lantern` itself as a link to a folder had
+  Lantern's files made in that folder, by the command line, the app and the connector alike; a pipe under a
+  result file's name held the run up for good; a folder there ended it with a Python error, after the whole
+  analysis. Now a result file is written into a new file beside its place and moved there in one step
+  (`results.write`, the one way every result file is written): a link at that place is replaced by Lantern's own
+  file and what it pointed at is left alone, a pipe is replaced the same way, and the run says what it met
+  (`note    security.json in the results folder was a link; Lantern put its own file in its place and left what
+  the link pointed at alone`). A results folder that is a link inside the project, or is reached through one
+  (`--out PROJECT/build/out` where `build` is a link), is refused in plain words before anything is analysed
+  (`results.folder`; the command ends with 2, the connector answers with the sentence, the app gives it as the
+  reason the check did not run and shows the project as not checked yet instead of reading results through the
+  link). A link outside the project is the person's own (results kept on another disk) and is followed as
+  before. A folder under a result file's name is said before the run starts. Two things that come with writing
+  this way: a result file is now whole or as it was (a write that stops half-way leaves the file of the run
+  before; before, the file was emptied first and filled afterwards), and a result file the person closed to
+  other users stays closed. A result file this user may not change (marked read-only) is not replaced: the run
+  says so before it starts (the older way stopped at such a file as well, with a Python error after the whole
+  analysis). The cache of explanations is not kept through a link, and reads only plain files.
+  `lantern export --sarif FILE` still writes a name outside the project as the person wrote it (a link of their
+  own, `/dev/stdout`); a link inside the project is replaced by the file. Changed for a person who made
+  `.lantern` a link themselves: that is refused too, and `--out FOLDER` names the other place instead.
+  `tests/test_results_folder.py` (49 tests, each refusal beside a safe twin; 3 of the 49 need Windows: a junction
+  as the results folder, a junction and a symbolic link under a result file's name; 1 needs a user who is not
+  root). On the code before, with the new names answering the older way, 38 of them fail (2 of the 38 only meet
+  a name that did not exist yet) and 7 pass: the six safe twins and the file that stays closed, which the older
+  way of writing did rightly. Not covered: a link put in place between Lantern's look at the folder and its
+  write (that takes another program of the same computer writing in the project at that moment); a run that is
+  killed in the middle of a write leaves a file named `.<name>.<16 letters and digits>.part` beside the result
+  file, which nothing reads.
+- Security: what a project's dependency files say is checked before it is used (2026-11-10; stage 7 of the
+  2026-11-09 directive, part 3). A lock file comes with the project, so it is as untrusted as the code. Until now
+  the names and versions in uv.lock, poetry.lock, pdm.lock and Pipfile.lock went unchecked into the file Lantern
+  hands to pip-audit. Measured on the code before: a "version" that goes on after a line end put lines of its own
+  into that file (`-r /etc/hostname`, `-e /etc`, another index address), Lantern's record said `ok`, and the real
+  pip-audit took the file with such a line and went on to its questions. One entry pip-audit cannot read (a version
+  such as `1.0-SNAPSHOT.final`) made it give up on every package, the vulnerable ones included. Entries Lantern
+  could not use were left out without a word: of a composer.lock with 4 entries 1 was checked and the other 3 were
+  named nowhere, of 4 gems in a Gemfile.lock 2 were checked. And a dependency file of an unexpected shape (a list
+  where a table belongs, a number where a name belongs) ended the whole analysis with a Python error, `--offline`
+  or not: 14 of the 14 shapes tried.
+  Now only a package name and a version of the form the ecosystem defines leave Lantern (`depaudit.PY_NAME`,
+  `PY_VERSION`, `MAVEN_NAME`, `MAVEN_VERSION`, `COMPOSER_NAME`, `COMPOSER_VERSION`, `GEM_LINE`; plain ASCII, with a
+  length limit). Whatever else an entry holds is counted and named in that audit's record (`not_read`, and
+  `errors` with the first 20, each one line of printable characters; the audit's state is then `partial`, so the
+  report, the badge and `--fail-on` treat the scan as incomplete), and the rest is still checked. What has no
+  released version to look up is counted as not checked (`unpinned`, with examples), as ranges already were: a
+  Composer library installed from a branch, a Pipfile.lock entry from a link or a folder, a lock entry with no
+  version, a Gradle catalog library with no version, a range or a variable. The Evidence Report's Limits say how
+  many, whatever state the audit ended in, and the readiness check for pinned versions names a part of a manifest
+  it could not check first. A dependency file is read only when it is a plain file of at most 32 MB (a pipe under
+  such a name, also under the composer.json or Gemfile beside a lock file, held the audit up for good), a
+  byte-order mark at its start is passed over (such a file was unreadable before), and an audit that raises
+  anything nobody foresaw becomes that audit's `failed` record (`depaudit.guarded`), in `lantern analyze` and in
+  the cloud's audit step alike.
+  Files as people have them change nothing: on 32 real lock files of public projects all 6,002 names and versions
+  are the same before and after. 33 entries in six of those files have no exact version (branches, catalog
+  libraries with no single version); they were dropped without a word before and are now counted as not checked.
+  The version pattern agrees with pip's own parser on 300,000 random strings. `tests/test_lockfiles.py` (55 tests;
+  with the real pip-audit only as its dry run, which asks nobody). Not changed: `npm audit` still reads
+  package-lock.json itself. An audit that is skipped (`--offline`, or its tool is not installed) names odd entries
+  only when nothing in those files could be used; where some entries are usable its record says that it was
+  skipped, and the odd ones are named by the next run that asks.
+- A project file of the wrong shape no longer stops the analysis (2026-11-10; the same stage). A manifest comes
+  with the project too. `"dependencies": "x"`, `paths = 5`, a list where a table belongs: each is valid JSON or
+  TOML, and each ended `lantern analyze` with a Python error, so one odd line in a project could keep it from
+  being checked at all. Measured with a new sweep (`bench/manifests.py`: every value in 21 kinds of project file
+  replaced, one at a time, by 21 other values, and the whole analysis run offline on each): on the code before,
+  839 of 11,652 variants stopped the analysis, at 50 lines of Lantern's code in 11 files (package.json 40 of 965,
+  tsconfig.json 113 of 502, app.json 19 of 730, pyproject.toml 98 of 1,861, Pipfile 24 of 344, a notebook 102 of
+  752, lantern-accepted.json 13 of 168, a project pack 69 of 672, uv.lock 56 of 385, Pipfile.lock 43 of 419,
+  composer.lock 19 of 522, the Gradle catalog 45 of 465, an earlier security.json 55 of 354, baseline.json 84 of
+  584, explanations.json 59 of 459; six kinds that are read as text, 0 of 2,470). Now: 0 of 11,652. An odd value
+  costs the one fact it would have given and nothing else (`lantern/manifest.py`): the other dependency section
+  of that package.json is still read, the other aliases of that tsconfig still lead to their files, the other
+  rows of `lantern-accepted.json` still count, the other cells of that notebook are still read. A project pack
+  with an odd part is skipped whole and named with the reason, as a pack with any other problem already was. An
+  odd dependency section of a manifest is named by the readiness check for pinned versions ("package.json: its
+  devDependencies are not a table, so the versions there were not checked"); any other odd part of a manifest (an
+  alias, a script, a notebook cell) is passed over without a line in the report.
+  The same for what an earlier run left in the results folder. A `security.json`, `baseline.json` or
+  `explanations.json` that was cut off (the computer was switched off while it was written), emptied, or changed
+  by hand ended every later `lantern analyze` of that folder, until somebody deleted the file. Now such a file is
+  passed over and the log says so in one sentence of fixed words, never text from the file
+  (`lantern/results.py`): without the earlier `security.json` the run does not say which findings were there
+  before; without `explanations.json` the report is written without a model's explanations; a `baseline.json`
+  that cannot be used is neither compared with nor replaced (it may be the only record of the first analysis: a
+  merge can leave it with conflict marks), the Evidence Report says in its Limits that it does not know what was
+  fixed, and `lantern evidence PATH --reset-baseline` starts a new one. Only a plain file is read back: not a
+  link, a folder, a pipe (which held the run up for good) or a file over 256 MB. The commands that are about a
+  finished run (`lantern report`, `evidence`, `explain`, `verify`, `export`, the connector's tools) still read
+  its files strictly: passing a damaged scan result over there would turn it into "no findings". The app, Ask
+  Lantern and the Learn tab read them with readers of their own, which are not changed here.
+  Also fixed on the way: a project pack whose route entry leaves `detail` out, a tsconfig alias that points at
+  the root folder, and a JSON manifest saved with a byte-order mark each stopped or blinded a reader.
+  `tests/test_manifests.py` (117 tests: the cases the sweep found, the top level of every file in four other
+  shapes, projects as they should be, which give every fact they gave before, and 47 that hand the reader of
+  earlier results one value of the wrong kind at a time). On the code before, 166 of the 172 new tests of both
+  entries fail (111 show the fault; 55 only meet a name that did not exist yet, the 47 just named among them)
+  and 6 pass: the three of projects and results as they should be, the top level of two files that stopped
+  nothing before either, and one that holds on to what "seen in the run before" already said rightly (a mistake
+  planted in those two lines went unnoticed by every older test). The sweep is not part of CI (about two
+  minutes); run it after changing how any of these files is read.
+- Security: a git folder that is not yours no longer puts its commit on your report (2026-11-10; stage 7 of the
+  2026-11-09 directive, part 3). Since the git-settings fix of the same day (further down) nothing in a git folder
+  is obeyed, but a git folder was still read whoever it belonged to, also when it was found in a folder above the
+  one analyzed. On a shared computer anybody can make one there: `/tmp/.git`, `C:\.git`, a `.git` in a shared
+  projects folder. Every project beneath it that has no git folder of its own was then reported with that user's
+  commit, branch and address, and with "no uncommitted changes": an Evidence Report that seemed to pin the code to
+  a commit somebody else chose. git itself refuses such a repository.
+  Measured on the code before (as root, git 2.43.0), with a real other owner: a project folder inside a repository
+  whose `.git` belonged to another user was reported with that repository's commit, its branch, its `origin`
+  address and no uncommitted changes, where git answers `fatal: detected dubious ownership`. A second fault was
+  found on the way, in the cloud service: where the folder the service works in lies inside a repository (a
+  developer's checkout, a demo started from one), an upload with no git folder of its own got that repository's
+  commit in the run's record and on its evidence page.
+  Now Lantern keeps git's own rule for everything of a repository that lies outside the folder you asked about: a
+  `.git` in a folder above and that folder, the place a `.git` file names, the folder a linked worktree shares.
+  Each must be yours (for root also the user `sudo` came from; on Windows also the Administrators' when you are one
+  of them, `lantern/winowner.py`), or you must have named the repository in git's `safe.directory` list. git itself
+  is asked for that list, in a git folder Lantern makes, so your own settings answer and never the project's. An
+  owner the system does not tell (an error, a network name on Windows, a disk that keeps none) counts as nobody's.
+  Otherwise the report says "not pinned: no git commit", and why. The folder you name yourself is read whoever owns
+  it, as before: you named it, and nothing in it is obeyed. The cloud service reads a run's commit only from a git
+  folder inside the run's own code, without starting a program, and tells every step to look no higher.
+  What changes for a repository of your own: nothing. What can change: a repository in a folder above the one you
+  analyze that is not yours (a shared checkout, one made by another account or through `sudo`, a folder mounted
+  into a container under another user) gives no commit until you name it
+  (`git config --global --add safe.directory <its folder>`), which is what git asks for there too. In one place
+  Lantern is stricter than git: on Windows git takes your home folder for yours even when the system owns it;
+  Lantern does not, so a repository kept in the home folder itself gives no commit to a folder beneath it for a
+  person who is not an administrator, until it is named the same way. In one place it follows your own word
+  further than git for Windows does: an entry of that list stands for the folder it names however the folder is
+  spelled (a link, a Windows short name such as `C:/Users/RUNNER~1/...`); git for Windows 2.56 takes it so for a
+  whole path and not for an entry that ends in `/*`.
+  Tests: 22 new ones in `tests/test_gitfacts.py` (66 in all) and 1 in `tests/test_cloud_runs.py`; one existing test
+  in each file was extended. On the code before, 20 of the 22 fail (10 show the older answer, 10 try functions that
+  code does not have) and 2 need Windows; the new cloud test and both extended tests fail as well. With the change,
+  here: 62 pass and 4 need Windows (2 a junction, 2 Windows itself), and all 34 of `tests/test_cloud_runs.py` pass.
+  Not covered by CI, and said in `docs/audit/CLAIMS.md` (A4f): the test with real other owners needs root; on
+  Windows the calls are tried against Windows itself by two tests only, and the path for an administrator who is
+  not elevated against a stand-in only.
+  GitHub's first run of this change on Windows failed: 1 failed, 1124 passed, 68 skipped. Both Windows-only tests
+  passed in it (the calls work against Windows itself, and a `.git` given to another owner with `icacls` got git's
+  own answer). The one failure was a line of a test that compared with git for a `safe.directory` entry spelled
+  with a short name, the difference described above; the test now writes its entries with the folder's real name
+  and keeps the other spelling as lines of its own.
+- The cloud service deletes only what it made, and a delete that fails is written down, said and tried again
+  (2026-11-10; stage 7 of the 2026-11-09 directive, part 2). Measured first, on the code as it was, in nine
+  situations, as root and as an ordinary user, on the Python the live image runs (3.12); both users gave the same
+  results. When the service started, it deleted everything it found in its work folder and its uploads folder: a
+  folder and a file that were not Lantern's, a person's folder that was only named like a run's, a `.zip` that was
+  no run's. A link in the work folder, named like a run's folder, had the folder it pointed at (read-only before)
+  set to owner-only, and the link stayed. A person who deleted a run while the disk refused deletes was answered
+  `{"deleted": "<id>"}`: the run's 8 result files stayed on the server, nothing was recorded, and neither a healthy
+  disk nor a restart removed them. The same 8 files stayed for good when the service was cut off between deleting
+  a run's record and its files. A retention pass that failed every hour told nobody: nothing in the owner's
+  statistics, nothing on the health page. A repository whose folders are nested 1,100 deep left its run "running"
+  for good, its owner was refused every new check ("You already have a run going"), and after a restart the service
+  did not start at all (RecursionError). On a person's computer, copying a repository into a folder that already
+  held files failed in git, and the folder was then deleted with the files in it; removing a clone whose path was a
+  link set the folder it pointed at, and the folder around it (shared by all users, in the test), to owner-only and
+  left the link.
+  Now there is one way to delete (`lantern/removal.py`): never through a link, nothing changed outside the thing,
+  any depth of folders with one folder held open at a time, and an answer that says what stayed and the system's
+  reason, with no name from inside. The cloud service has one place that deletes (`cloud/lantern_cloud/cleanup.py`).
+  It removes by name, never by a path it was handed, and only what the service made: a run's result folder, a work
+  folder that carries the mark file the service writes into each one it makes, a half-received upload, the upload
+  of a run that is over. Everything else in its three folders is left alone and counted for the owner. Each removal
+  is written down before it starts (table `leftovers`; for a deleted run, in the same transaction as the delete)
+  and the record goes when nothing is left, so a service cut off in the middle finishes at its next start. A
+  removal the system refuses keeps its record with the reason and is tried again at each start and every hour. The
+  person is told: deleting a run or an account answers `files: "removed"` or `"waiting"`, and the website says
+  "Deleted, with one thing still to do" when files wait. The owner is told: `/v1/admin/stats` has `cleanup` (how
+  many things wait and since when, the reasons, how the last pass ended, how many things in the folders are not
+  the service's; never a run id or a name), `/v1/health` says one word (`ok`; `behind` after 24 hours; `unknown`),
+  and the uptime check fails on any word but `ok`, which is a mail. A run is recorded as ended whatever its
+  tidy-up does, and nothing in the start-up sweeps or the hourly pass can keep the service from starting.
+  Explanations are saved so that "Nothing was changed" is true when a save fails: each rewritten page is written
+  beside its old one and put in its place only when all are written (before, with the disk refusing the third of
+  the four pages, the explanations and the report were already replaced while the message said that nothing was).
+  Three more defects were found on the way and fixed, each with a test written first. (1) The service took a run's
+  result files, and the explanations and their cache, out of the finished step's folder with copies that follow
+  links (`shutil.copyfile` after `is_file()`, `shutil.copytree`). The step runs with fewer rights than the service,
+  so a step that was taken over could leave a link and have the service read the link's target for it: in the
+  tests a file from outside the run landed in the run's results (as `graph.json`, as `report.html`, as
+  `explanations.json`, in the cache), where the run's owner can download it. Now only plain files are taken, each
+  reached from the step's folder held open, never by a path (`worker._take`, `_take_tree`, `_there`): a link, a
+  file that has a second name somewhere else (a hard link), a folder, a pipe, or the folder itself being a link
+  ends the run or the explanations with "Lantern's own step left something that is not a plain file where a result
+  belongs", and nothing of that step is kept. (2) Explanations stopped at the time limit said "The ones already
+  written are kept; click Explain again to go on" and threw them away with the work folder, so every new try paid
+  for the same explanations again from the person's allowance (in the test: 25 paid for, 0 kept). Now they are
+  kept with the run, and the next try asks for none of them again; when they cannot be kept the message no longer
+  says so. (3) One saved explanation that was cut short while it was written (the program was stopped, the disk
+  was full) stopped every later explain of that project with an error, in the cloud and in the app, until somebody
+  deleted the cache folder by hand. Now that one is asked for again and written anew (`explain.Cache.get`), and
+  the cloud keeps each cache file whole or not at all.
+  The same nine situations on the new code (root and an ordinary user, Python 3.12, the same results for both):
+  nothing that is not Lantern's was deleted or changed (situations 1, 2, 3, 7 and 8); the delete that could not
+  remove its files answered `files: "waiting"`, the statistics said "8 things in it could not be removed; the first
+  reason: no permission (PermissionError 13)", and after the restart 0 files were left (4); the failing retention
+  pass is in the statistics (`last_pass`: `ok` false, `RuntimeError`) (5); the repository nested 1,100 deep ended
+  `done` and left nothing, its owner's next check was accepted, and the service started again (6); the cut-off
+  delete was finished at the next start, 0 files left (9).
+  On a person's computer: `remote.fetch` refuses a folder that is not new or empty before anything is copied; a
+  failed checkout removes the folder only when Lantern cloned it (that very call, Lantern's mark, or Lantern's own
+  repos folder), so a repository folder of the person's with no files checked out stays; the error after a failed
+  clone ends with what could not be removed; a sandbox temp folder that could not be deleted is written down
+  (`LANTERN_HOME/leftovers.json`) and deleted when the next test run starts, only if it is still the same folder.
+  Changed answers (`docs/api.md`): `DELETE /v1/runs/{id}` and `DELETE /v1/me` gain `files`, `/v1/health` gains
+  `cleanup`, `/v1/admin/stats` gains `cleanup`. `docs/terms.md` gains one sentence saying the same to the person.
+  At the first deploy of this version: a work folder that a cut-off run of the older version left is no longer
+  deleted at start-up (it has no mark); `docs/deploy.md` ("Clean-up") says how to see and remove it, and what the
+  count `left_alone` means.
+  Tests: 89 new ones, each dangerous case with a safe twin: `tests/test_removal.py` (37),
+  `tests/test_cloud_cleanup.py` (39), 8 more in `tests/test_cloud_ai.py`, 3 in `tests/test_explain.py`, 2 in
+  `tests/test_uptime.py`. Run on the code from before this change: 70 failed and 3 passed (the 3 are checks of
+  ordinary cases that must keep working: a plain folder is removed, a failed copy into a new folder leaves
+  nothing, a service that says nothing about clean-up passes the uptime check). The other 16 were not run there:
+  14 try the new copying functions directly, which the older code does not have (the same defects are shown on
+  the older code by 11 tests that go through the service), 1 reads the website's new note, 1 is the safe twin of
+  the link tests. One older test was moved to where an older Lantern kept its clones
+  (`test_an_earlier_clone_without_files_is_checked_out`: its folder lay outside Lantern's repos folder with no
+  mark, which is now a folder of the person's and is kept). The browser check deletes a run whose files cannot be
+  removed and reads the note. Found and not fixed: the restricted step can still read whatever its user can read
+  (its second wall, Landlock, limits writing and the network, not reading), and the cloud image runs the service
+  and its steps as one user, so a step that was taken over could read another run's results and write them into
+  its own report (`docs/audit/THREAT_MODEL.md`, open risk 0). Taking only plain files closes the way through a
+  link, not this one. Also found, at the end of this part: a folder's own git settings were obeyed when Lantern
+  asked git about that folder. That has its own entry below ("Security: the git settings of a folder Lantern
+  reads are no longer obeyed"). Known limits:
+  `docs/audit/CLAIMS.md` (C2, C5, C8 to C13, L7) and CLAUDE.md's Known gaps.
+- A project's tests are not run without their sandbox, and nothing they start is left running (2026-11-10; stage 7
+  of the 2026-11-09 directive, part 1). Measured first, on the code as it was, with a planted test that starts
+  three programs (a plain child, one that moves to its own session, a daemon): all three were still running after
+  the tests had ended; two of the three after the time limit, while the log said "every process it started was
+  ended"; and all three, with the test command itself, after Lantern was killed. When the kernel refused the rules
+  that keep writes inside the sandbox's temp folder, the launcher printed "Landlock restrict error 7" and ran the
+  tests all the same. They also ran when the guard that refuses writes and network connections was not in their
+  Python, which is what happened for root with new files made owner-only (`umask 077`): a planted test sent a
+  network packet and nothing was refused. On Windows no answer of the calls that build the Job Object was looked
+  at (tried against a stand-in for Windows' own library: when Windows refuses to put the tests in the job they run
+  outside it without a word, and the job's handle stays open). Deleting the sandbox's folder changed the mode of a
+  folder outside it that the project's copy held a link to, and when the folder could not be deleted it set the
+  folder around it to owner-only (the system's temp folder, for every user, when Lantern is root). As an ordinary
+  user, a test that left a folder with every right taken off stopped the run with a `TypeError` and left the copy
+  of the project on disk.
+  Now the tests are not started when a restriction the sandbox counts on cannot be put in place (the kernel
+  refuses the Landlock rules, the no-new-privileges switch or the change to the unprivileged user; the guard is not
+  in the tests' Python; a Windows call that builds or fills the Job Object fails, each one checked and named with
+  its error number in the new `lantern/winjob.py`; the project cannot be copied; Docker could not start its
+  container). The check of the code goes on, and the results say that the tests were not run and why, in Lantern's
+  own words: `run.json` (`trace.ran` false, `trace.unavailable`), the score ("Tests pass" is left out, not failed),
+  the Evidence Report's Limits, and the app ("Your tests were not run."). A system that has fewer walls by design
+  (a Linux kernel with no Landlock, macOS, Windows) still runs tests with the walls it has, listed on the sheet.
+  Nothing a test run starts outlives it: on Linux the launcher stays as the command's supervisor and ends every
+  process beneath it (also one that moved to another session or became a daemon) when the tests end, at the time
+  limit, on a stop, when the app closes and when Lantern is killed; on Windows the Job Object does; with Docker
+  the container is removed and the answer read. The app has a **Stop the tests** button
+  (`POST /api/jobs/<id>/stop`); a stop changes no result (in the browser check the tests were ended 0.8 seconds
+  after the click). What could not be ended is said (`not_ended`, the log, the app's message), and nothing says
+  beside it that everything was. A test run stopped at the time limit reads "stopped at the time limit" in the
+  score, not "exited None". Deleting the sandbox's folder changes nothing outside it and the log names a folder
+  that is still there.
+  The cloud service's steps go through the same launcher: a step is ended with everything it started when the
+  service shuts down (the run then fails with "Lantern was shut down while this run was going. Start it again.")
+  and when the service's process is gone. One silent case was found there and fixed: as root with owner-only files
+  the analysis step ran without its guard (tried with a stand-in for that step which sends a packet to this
+  computer: the packet went out; now it is refused and the run ends `blocked`). These steps read a project and
+  never run it, so without Landlock or the guard they say so in the run's log and carry on.
+  Found by CI on this change itself, and fixed (same day): when the app was closed while a project's tests ran,
+  Lantern ended the tests and then left before the run had tidied up. Measured on that code: the copy of the
+  project stayed in the temp folder in 20 of 20 tries, without a word; on a busy computer the run's last log line
+  was lost in 4 of 25 (and the copy stayed in 25 of 25); and on CI a small program that prints its log was taken down as it left, in two of the
+  four Linux test jobs that finished ("Fatal Python error ... at interpreter shutdown"). Closing the app now waits until each run has logged
+  its last line and deleted its temp folder (0 of 20 left, 0 of 20 with a slow log, 0 of 25 on a busy computer),
+  and a run that was still copying the project when the app closed starts no test at all (before, such a run
+  was told nothing: it went on, and could start the tests while the program was leaving).
+  Tests: `tests/test_sandbox_safety.py` (new), six more in `tests/test_cloud_runs.py`, and the browser check now
+  presses the button. Not proven here: Windows itself (four tests that only CI's Windows job runs). Known limits
+  are in `docs/audit/CLAIMS.md` (A4d, A4e) and CLAUDE.md's Known gaps.
 - Security: the git settings of a folder Lantern reads are no longer obeyed (2026-11-10; found during stage 7 of
   the 2026-11-09 directive). `lantern analyze` asked git about the folder it was given: `git status` for
   uncommitted changes (`evidence.git_info`) and, for a folder that carries the mark of a Lantern clone,
@@ -104,7 +761,8 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   then count as changed). In the other direction: a repository that belongs to another user of the computer,
   which git itself refuses unless the person listed it (`safe.directory`), is now read, also from a folder above
   the one analyzed (before, no commit was reported for it). Nothing in it is obeyed; a rule of Lantern's own for
-  whose git folder may be read is not part of this change. The person's own git settings, in the home folder or
+  whose git folder may be read is not part of this change (it followed the same day: the first entry of this
+  section). The person's own git settings, in the home folder or
   the computer's, still apply.
   Tests: `tests/test_gitfacts.py`, 44 tests kept apart by kind: planted settings, pointers and variables that
   must not be obeyed (24); what cannot be told, which must be said (3); repositories as people have them, which
@@ -117,7 +775,6 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   and 2 need Windows; with the fix 42 pass and 2 need Windows. `tests/test_cloud_runs.py` has
   2 more (an upload with planted git settings; the service starts no program to read a commit): both failed
   before. One existing test of `tests/test_remote.py` now makes git fail for real instead of through a stand-in.
-
 - CI runs every test, and its log names each test it skips (2026-11-10). CI's test jobs installed neither PyJWT nor
   cryptography, so `tests/test_cloud_github.py` was skipped while it was imported: its 14 tests (a private
   repository is opened only for a person GitHub says may read it) counted as one skipped test, `pytest -q` named no

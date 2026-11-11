@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 
 from .graph import Graph
+from .python_frontend import project_text
 
 SKIP = re.compile(r"(^|/)(build|\.dart_tool|tests?|fixtures|example)/")
 OPENS = re.compile(r"\b(MaterialPageRoute|CupertinoPageRoute|PageRouteBuilder|GoRoute|ShellRoute|routes\s*:|home\s*:|"
@@ -38,7 +39,7 @@ def find_projects(repo: Path) -> list[str]:
         if SKIP.search(rel) or "/.symlinks/" in rel:
             continue
         try:
-            text = p.read_text(encoding="utf-8", errors="replace")[:200_000]
+            text = project_text(p, repo, 200_000)
         except OSError:
             continue
         if re.search(r"^\s*flutter\s*:\s*\n\s+sdk\s*:\s*flutter", text, re.M):
@@ -81,7 +82,7 @@ def add_entries(g: Graph, repo: str | Path) -> dict:
     def lines(file: str) -> list[str]:
         if file not in texts:
             try:
-                texts[file] = (repo / file).read_text(encoding="utf-8", errors="replace").splitlines()
+                texts[file] = project_text(repo / file, repo).splitlines()
             except OSError:
                 texts[file] = []
         return texts[file]
@@ -190,7 +191,7 @@ def scan(g: Graph) -> list[dict]:
     from .websec import _files
     repo = Path(g.repo_root)
     roots = (g.meta.get("flutter") or {}).get("roots")
-    files = [(p.relative_to(repo).as_posix(), p.read_text(encoding="utf-8", errors="replace"))
+    files = [(p.relative_to(repo).as_posix(), project_text(p, repo))
              for p in _files(repo, {".dart"})]
     if not roots:
         files = [(r, t) for r, t in files if "package:flutter/" in t]

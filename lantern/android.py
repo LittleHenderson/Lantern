@@ -47,6 +47,7 @@ from pathlib import Path
 from xml.parsers import expat
 
 from .graph import Graph
+from .python_frontend import inside_repo, project_text
 
 ANDROID_EXTS = {".java", ".kt"}
 MAX_XML = 2_000_000
@@ -155,11 +156,12 @@ class Module:
     xml: XEl
 
 
-def _read(p: Path) -> str:
+def _read(p: Path, repo) -> str:
+    """The text of a file of the project `repo`; nothing when it is none, cannot be read or is very large."""
     try:
-        if p.stat().st_size > MAX_XML:
+        if not inside_repo(p, repo) or p.stat().st_size > MAX_XML:
             return ""
-        return p.read_text(encoding="utf-8", errors="replace")
+        return project_text(p, repo)
     except OSError:
         return ""
 
@@ -191,15 +193,15 @@ def find_modules(repo: Path) -> list[Module]:
         if re.search(r"(^|/)src/(debug|test|androidTest)\w*/|(^|/)(tests?|fixtures)/", rel) or not MANIFEST_RE.search(rel):
             continue
         variant = re.search(r"(^|/)src/([^/]+)/AndroidManifest\.xml$", rel)
-        if variant and variant.group(2) != "main" and (repo / rel.replace(f"src/{variant.group(2)}/", "src/main/")).is_file():
+        if variant and variant.group(2) != "main" and inside_repo(repo / rel.replace(f"src/{variant.group(2)}/", "src/main/"), repo):
             continue          # a build variant's manifest (profile, release, a flavor) is merged into main's
-        xml = parse_xml(_read(p))
+        xml = parse_xml(_read(p, repo))
         if xml is None or xml.tag != "manifest":
             continue
         m = re.match(r"(.*?)(?:src/[^/]+/)?AndroidManifest\.xml$", rel)
         root = m.group(1) if m else ""
-        gradle = next((root + n for n in ("build.gradle.kts", "build.gradle") if (repo / (root + n)).is_file()), None)
-        gtext = _read(repo / gradle) if gradle else ""
+        gradle = next((root + n for n in ("build.gradle.kts", "build.gradle") if inside_repo(repo / (root + n), repo)), None)
+        gtext = _read(repo / gradle, repo) if gradle else ""
         package = xml.attrs.get("package") or ""
         if not package:
             gm = re.search(r"\bnamespace\s*=?\s*[\"']([\w.]+)[\"']", gtext) or \
@@ -286,7 +288,7 @@ def class_families(g: Graph) -> dict[str, str]:
             continue
         ids.setdefault(n.name, []).append(n.id)
         if n.file not in texts:
-            texts[n.file] = _read(root / n.file)
+            texts[n.file] = _read(root / n.file, root)
             for rx in (EXTENDS_JAVA, EXTENDS_KT):
                 for m in rx.finditer(texts[n.file]):
                     supers.setdefault(m.group(1), m.group(2).rsplit(".", 1)[-1])
@@ -464,7 +466,7 @@ def _system_action(action: str) -> bool:
 
 def manifest_findings(repo: Path, mod: Module, files: list[tuple[str, str]], g: Graph | None) -> list[dict]:
     out = []
-    mtext = _read(repo / mod.manifest)
+    mtext = _read(repo / mod.manifest, repo)
     rel = mod.manifest
     app = mod.app
     code = _module_code(repo, mod, files)
@@ -539,9 +541,9 @@ def network_config_findings(repo: Path, mod: Module, name: str) -> list[dict]:
     for res in ("src/main/res/xml/", "res/xml/"):
         rel = f"{mod.root}{res}{name}.xml"
         p = repo / rel
-        if not p.is_file():
+        if not inside_repo(p, repo):
             continue
-        text = _read(p)
+        text = _read(p, repo)
         x = parse_xml(text)
         if x is None:
             return out
@@ -633,8 +635,8 @@ def gradle_findings(repo: Path, mod: Module) -> list[dict]:
                          r"([^\"'\s]*\+|latest\.\w+)[\"']", t):
         out.append(_f("LM-DYNAMIC-VERSION", "A library version ends in + so each build can pull a different, untested "
                       "version", "LOW", rel, ln(m.start()), cwe=1104, rank="low", snippet=_line_text(t, ln(m.start()))))
-    keystore = any(p.suffix in (".jks", ".keystore") and "debug" not in p.name for p in (repo / mod.root).rglob("*")
-                   if p.is_file() and "build" not in p.relative_to(repo).parts)
+    keystore = any(inside_repo(p, repo) for p in (repo / mod.root).rglob("*")
+                   if p.suffix in (".jks", ".keystore") and "debug" not in p.name and "build" not in p.relative_to(repo).parts)
     # `storePassword "s3cret"` / `storePassword = "s3cret"`; not `keystoreProperties['storePassword']` (Flutter's
     # template reads the password from key.properties) and never across lines
     for m in re.finditer(r"(?<![\"'\w])(storePassword|keyPassword)[ \t]*(?:=[ \t]*|[ \t]+|\([ \t]*)[\"']([^\"'$\n]{4,})[\"']", t):
@@ -766,7 +768,7 @@ def scan(g: Graph) -> tuple[list[dict], dict | None]:
     from .websec import _files
     repo = Path(g.repo_root)
     mods = find_modules(repo)
-    files = [(p.relative_to(repo).as_posix(), _read(p)) for p in _files(repo, ANDROID_EXTS)]
+    files = [(p.relative_to(repo).as_posix(), _read(p, repo)) for p in _files(repo, ANDROID_EXTS)]
     if not mods:
         # Java/Kotlin with no manifest (a library or a server): only the code rules that are Android-specific apply,
         # and only when the code uses Android at all.

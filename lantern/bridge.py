@@ -34,7 +34,7 @@ def _routes(g: Graph) -> list[dict]:
     for n in g.nodes.values():
         if not n.entry or n.entry.get("kind") != "route":
             continue
-        detail = n.entry.get("detail", "")
+        detail = n.entry.get("detail") or ""
         verb, _, path = detail.partition(" ")
         if not path.startswith("/"):
             continue

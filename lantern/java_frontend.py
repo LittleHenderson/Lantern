@@ -37,7 +37,7 @@ import tree_sitter_java as tsjv
 from tree_sitter import Language, Node as TSNode, Parser
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_bytes
 
 JAVA = Language(tsjv.language())
 
@@ -754,7 +754,7 @@ def add_java(g: Graph, repo: str | Path) -> dict:
     for p in paths:
         rel = p.relative_to(repo).as_posix()
         try:
-            src = p.read_bytes()
+            src = project_bytes(p, repo)
         except OSError:
             continue
         if len(src) > 1_500_000:

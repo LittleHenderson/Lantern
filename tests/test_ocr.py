@@ -8,7 +8,7 @@ import pytest
 PIL = pytest.importorskip("PIL", reason="Pillow is part of the dev extras")
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
-from lantern import ask  # noqa: E402
+from lantern import ask, programs  # noqa: E402
 
 from test_server import srv  # noqa: F401,E402  (fixture)
 
@@ -57,7 +57,7 @@ def test_known_text_is_read(srv):  # noqa: F811
 
 def test_without_tesseract_says_how_to_install(srv, monkeypatch):  # noqa: F811
     base, _ = srv
-    monkeypatch.setattr(ask.shutil, "which", lambda name, *a, **k: None)
+    monkeypatch.setattr(programs, "find", lambda name, *a, **k: None)
     code, j = _post(base, _png())
     assert code == 200
     assert j["text"] is None and j["reason"] == "tesseract not installed" and j["how"] == ask.tesseract_how()
@@ -86,7 +86,7 @@ def test_image_goes_to_tesseract_through_a_pipe_not_a_file(monkeypatch, tmp_path
     def fake_run(cmd, input=None, **kw):
         seen["cmd"], seen["input"] = cmd, input
         return R()
-    monkeypatch.setattr(ask.shutil, "which", lambda name, *a, **k: "/usr/bin/tesseract")
+    monkeypatch.setattr(programs, "find", lambda name, *a, **k: "/usr/bin/tesseract")
     monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
     assert ask.ocr_image(Image.open(io.BytesIO(_png()))) == "hello\n"

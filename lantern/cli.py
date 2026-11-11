@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -33,14 +34,15 @@ from .graph import Graph
 
 
 def _out(repo: Path, out: str | None) -> Path:
-    d = Path(out) if out else repo / ".lantern"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """The results folder, made when it is not there. `results.Refused` when it is a link that came with the
+    project, or is reached through one: `main` says so and ends with 2."""
+    from . import results
+    return results.folder(repo, out)
 
 
 def _load(out: Path, name: str) -> dict | None:
-    p = out / name
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    from .pipeline import load
+    return load(out, name)
 
 
 def _split_cmd(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -91,7 +93,7 @@ def cmd_evidence(a) -> int:
     if a.reset_baseline and (out / "baseline.json").exists():
         (out / "baseline.json").unlink()
     from .pipeline import evidence
-    print(evidence(out, Graph.load(out / "graph.json"), _load(out, "security.json"), _load(out, "readiness.json"),
+    print(evidence(out, Graph.load(out / "graph.json", repo), _load(out, "security.json"), _load(out, "readiness.json"),
                    run_meta, run_meta.get("privacy", "full")))
     return 0
 
@@ -154,9 +156,20 @@ def cmd_export(a) -> int:
     if a.sarif == "-":
         print(text)
     else:
-        Path(a.sarif).write_text(text, encoding="utf-8")
+        _write_named(repo, Path(a.sarif), text)
         print(f"wrote   {a.sarif}  ({len(sec.get('findings', []))} findings)")
     return 0
+
+
+def _write_named(repo: Path, dest: Path, text: str) -> None:
+    """Write a file the person named on the command line. The name is theirs, so it is written as they wrote it
+    (a link of their own is followed, `/dev/stdout` works), with one exception: a link that lies inside the project
+    came with the project, and Lantern puts its own file in that link's place (`results.write`)."""
+    from . import results
+    if results.link_in_project(repo, dest):
+        results.write(dest, text, where="the project folder")
+    else:
+        dest.write_text(text, encoding="utf-8")
 
 
 def cmd_trace(a, trace_cmd: list[str]) -> int:
@@ -170,7 +183,7 @@ def cmd_trace(a, trace_cmd: list[str]) -> int:
     if not trace_cmd:
         print("give the command after --, e.g. lantern trace . -- python -m pytest -q", file=sys.stderr)
         return 2
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
     m = merge_trace(g, run_trace(repo, trace_cmd))
     print(json.dumps(m, indent=1))
     g.save(out / "graph.json")
@@ -188,7 +201,7 @@ def cmd_explain(a) -> int:
     if not (out / "graph.json").exists():
         print("run `lantern analyze` first", file=sys.stderr)
         return 2
-    plan = plan_explain(out, a.depth, a.max_nodes, a.node or None)
+    plan = plan_explain(out, repo, a.depth, a.max_nodes, a.node or None)
     print(f"plan    {len(plan['nodes'])} functions, about {plan['input_tokens']:,} input and "
           f"{plan['output_tokens']:,} output tokens. {plan['note']}")
     if a.estimate:
@@ -203,13 +216,13 @@ def cmd_explain(a) -> int:
     if not ensure_consent(provider, assume_yes=a.yes):
         print("Stopped: nothing was sent.", file=sys.stderr)
         return 3
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
 
     def progress(i, n, nid, rec):
         flag = "ok" if rec.get("validated") else ("ERR " + rec["error"][:80] if "error" in rec else "unvalidated")
         print(f"  [{i}/{n}] {g.nodes[nid].qualname}  {flag}", flush=True)
 
-    res = explain(out, provider, plan["nodes"], metaphor=a.metaphor, progress=progress)
+    res = explain(out, repo, provider, plan["nodes"], metaphor=a.metaphor, progress=progress)
     st = res["stats"]
     print(f"explain {st['validated']} validated ({st['first_try']} first try), {st['failed']} failed, "
           f"{st['cached']} from cache. Tokens: {st['usage']['input_tokens']:,} in, "
@@ -227,7 +240,7 @@ def cmd_report(a) -> int:
     from .report import write_report
     repo = Path(a.path).resolve()
     out = _out(repo, a.out)
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
     run_meta = _load(out, "run.json") or {}
     print(write_report(out, g, _load(out, "security.json"), _load(out, "explanations.json"),
                        a.privacy or run_meta.get("privacy", "full"), run_meta.get("timings"),
@@ -387,7 +400,26 @@ def cmd_login(a) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run one command. A place Lantern will not write to (`results.Refused`: a results folder that is a link which
+    came with the project, a folder under a result file's name) ends the command with 2 and the reason in plain
+    words; what a write met and replaced (a link, a pipe) and no run's log has said yet goes to stderr."""
+    from . import results
     argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return _main(argv)
+    except results.Refused as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    finally:
+        if argv[:1] not in (["mcp"], ["serve"]):
+            for line in results.said():
+                print(f"note    {line}", file=sys.stderr)
+
+
+def _main(argv: list[str]) -> int:
+    if os.environ.get("LANTERN_SANDBOX_GUARD") == "expected":   # a step of the cloud service: is its guard here?
+        from ._jail import say_if_guard_missing
+        say_if_guard_missing()
     if argv[:1] == ["mcp"]:   # its own small parser; stdout belongs to the protocol
         from .mcp_server import main as mcp_main
         return mcp_main(argv[1:])

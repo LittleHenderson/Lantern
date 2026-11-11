@@ -42,10 +42,11 @@ const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num = v => typeof v === 'number' ? v.toLocaleString() : esc(v);
 let SECRET = '';
+const WAIT = 'Too many wrong secrets in the last minute. Wait a minute, then try again.';
 async function load() {
   SECRET = $('#secret').value.trim(); $('#err').textContent = '';
   const r = await fetch('/v1/admin/stats?days=' + encodeURIComponent($('#days').value), {headers: {authorization: 'Bearer ' + SECRET}});
-  if (!r.ok) { $('#err').textContent = r.status === 403 ? 'That secret was not accepted.' : 'HTTP ' + r.status; return; }
+  if (!r.ok) { $('#err').textContent = r.status === 403 ? 'That secret was not accepted.' : r.status === 429 ? WAIT : 'HTTP ' + r.status; return; }
   draw(await r.json());
 }
 function tile(n, l, cls = '') { return `<div class="tile ${cls}"><div class="n">${num(n)}</div><div class="l">${esc(l)}</div></div>`; }
