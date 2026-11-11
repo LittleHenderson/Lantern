@@ -71,8 +71,9 @@ What can go wrong and what it looks like:
 ## Sign in with GitHub and Google (free allowance without minting tokens by hand)
 
 Once these are set, anyone can get their own allowance token by signing in at `https://lantern-gateway.fly.dev/v1/login`,
-with `lantern login --github` / `--google`, or from the app's Settings. One token per account; signing in again rotates
-the token and keeps the usage count. The gateway stores the provider's stable user id and, for GitHub, the login name;
+with `lantern login --github` / `--google`, or from the app's Settings. Each sign-in gets its own token and the
+account's other sign-ins keep working (up to 8 places, least recently used signed out first); all of them share one
+usage count. The gateway stores the provider's stable user id and, for GitHub, the login name;
 never an email address.
 
 **GitHub** (GitHub → Settings → Developer settings → OAuth Apps → New OAuth App):
@@ -155,9 +156,9 @@ that is not a written promise; to be sure, ask billing@fly.io. Free alternatives
 From the **repository root** (not `cloud/`: the image also packs the analysis engine):
 
 ```bash
-# 0. The gateway first, so it has /v1/whoami and the sign-in pages in the app's style (version 0.2.3).
+# 0. The gateway first, so it has /v1/whoami and the sign-in pages in the app's style (version 0.2.5).
 cd gateway && fly deploy --depot=false && cd ..
-curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.3"
+curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.5"
 
 # 1. Create the empty app (once). `fly orgs list` shows your organisation's short name.
 fly apps create lantern-cloud --org <your-org>
@@ -275,7 +276,9 @@ missing table at start-up and never delete columns, so an old version reads a ne
 version. It needs one repository secret, **`FLY_API_TOKEN`**: on any computer with `fly` signed in, run
 `fly tokens create deploy -a lantern-cloud` (a token that can deploy that one app and nothing else; make a second one
 for the gateway if you want both, or an org token), copy the output, and paste it under the repository's Settings →
-Secrets and variables → Actions → New repository secret. Without it the workflow stops at its first step and says so.
+Secrets and variables → Actions → New repository secret. The gateway is in another Fly organisation, so it reads its own secret,
+**`FLY_GATEWAY_TOKEN`** (`fly tokens create deploy -a lantern-gateway`, or the app's Tokens page on fly.io); the cloud
+keeps using `FLY_API_TOKEN`. Without it the workflow stops at its first step and says so.
 With it, the laptop is no longer the only place a fix can ship from, and the admin secret never leaves Fly's secret
 store (the workflow does not need it).
 

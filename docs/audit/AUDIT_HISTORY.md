@@ -194,3 +194,48 @@ scored 97/100 A, `tools/audit.sh` printed ALL PASS, and CI was green. Two notes,
 
 Still untested: rich in the benchmark, a clone that stalls after the handshake, more than four store writers, and Safari
 on macOS (Playwright's WebKit was used).
+
+## 2026-11-09 · own review of the call inventory and the new call resolution (directive stage 3)
+
+Not an outside audit. Before the pull request was opened, the change was reviewed by its author against one question:
+can a "library" or "built-in" label, a link, or a route now hide or misplace the project's own code? Three ways of
+looking: every link compared with main on 29 apps (the 15 sample apps in `tests/fixtures` and the 14 held-out apps of
+`bench/heldout`), a seeded random sample of 120 newly followed calls read against their source, and small repos
+written to break each new rule. Ten problems came out. Each got a test that failed first, then the fix. S1 to S9 were
+in the new code; S10 was already on main.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| S1 | A function stored as a property of another (`PostItem.Skeleton = function PostItemSkeleton () { return <Skeleton /> }`) was taken for a name in scope, so the bare `Skeleton` inside it pointed back at the function itself instead of the imported component (3 calls on the held-out app taxonomy) | medium | Fixed: a function stored as a property (`X.y = …`, `this.x = …`, `X.prototype.y = …`) is named after its owner (`JSDef.member`), is not a name in scope, and sees the names of the place it is written (`JSDef.lexical`). Test: `test_a_function_hung_on_another_is_not_a_local_name` |
+| S2 | A route handler or middleware reached through a value or a type Lantern worked out (`const notes = new Notes(db); app.get('/notes', notes.list)`), or wrapped by a helper, was linked as certain | low | Fixed: the link is `likely`, like a call written the same way; a handler named straight from a module stays `resolved`. Tests: `test_a_handler_reached_through_a_value_lantern_worked_out_is_likely_not_certain`, `test_a_wrapped_handler_is_linked_as_likely_not_certain` |
+| S3 | Routes written `router.route('/x').get(h).post(h)` were not read: no entry point and no link to the handler | low | Fixed. Tests: `test_routes_written_with_route_then_a_verb_are_routes`, `test_a_route_call_without_a_written_path_or_a_handler_is_not_a_route` |
+| S4 | A route line whose handler is made by a call (`router.get('/', swaggerUi.setup(spec))`, `r.post('/login', passport.authenticate('local'))`) was read as the app calling that address (main reads it so too), and with the new router prefixes the bridge linked it to another router's `GET /` route as an exact match (found on a held-out app) | medium | Fixed: on an Express app or router it is not an outgoing call (`is_router` in `add_js`); an HTTP client called the same way still is. The route itself is not listed, because there is no function to put it on (Known gaps). Test: `test_a_route_whose_handler_is_made_by_a_call_is_not_an_outgoing_http_call` |
+| S5 | Python: a name imported from a project file Lantern did not read (a relative import that finds no file) was labelled a library, and the new library rules built on it | medium | Fixed: the import names a project file (`ImportBinding.relative`, `Resolver.gone`, `Resolver.unread`); the inventory says `missing-module` and the new rules do not build on it. Test: `test_a_project_file_lantern_did_not_read_is_not_called_a_library` |
+| S6 | Python: a class with a base Lantern cannot identify (a library's star import, a computed base, a subscripted repo class, a class from a project file it did not read) still got "inherited from a library" labels through another base | medium | Fixed: no library claim (`Resolver._outside`); the call is unresolved with reason `unknown-base`. Tests: `test_a_class_with_a_base_lantern_cannot_identify_makes_no_library_claim`, `test_typing_markers_and_class_keywords_do_not_hide_a_library_base` |
+| S7 | A "library" or "built-in" label could hide the project's own function: one the project puts on a library's object (`schema.statics.paginate = function`, `res.fail = function`), a method of a project class a library hands back (`getRepository(User).findOne()`, `get_user_model().objects.create_member()`, `req.user.can()`), a method a sibling mixin gives a subclass, a property of the global object (`window.App.init()`), a function added to a built-in type. 2 calls on a held-out app were wrong this way (`Task.paginate`, `Project.paginate` in a test file of express-boilerplate) | medium | Fixed: the label is withheld (`JSResolver.may_be_own`, `own_names`, `global_doubt`; `Resolver.library_result(guard=)`, `_repo_attr`, `_sibling_gives`); the call is unresolved with reason `library-or-repo` or `global-property`, or keeps main's name-only guess. The price: 27 `self.client.*` calls on pygoat, probably labelled right before, went back to main's reading (14 unresolved, 13 name-only) because Lantern cannot tell them from the project's own. Tests: the ten from `test_a_function_the_project_puts_on_a_library_value_is_not_called_the_librarys` to `test_a_method_the_project_adds_to_a_built_in_type_is_seen_on_results_too` in `tests/test_express.py`, and the last four of `tests/test_calls.py` |
+| S8 | JS/TS: an import through a tsconfig `paths` alias that points at a project folder which is not in the repo (`"contentlayer/generated": ["./.contentlayer/generated"]`, generated code that is not committed) was labelled a library, and the new rules built on it (11 calls on taxonomy; found by the 120-call sample) | medium | Fixed: `SpecResolver.lost` and `JSResolver.unread`: the inventory says `missing-module` and nothing is built on the value. Not for a catch-all `*`, a target inside `node_modules`, or an alias covering a package the nearest `package.json` depends on (the first fix wrongly made `@acme/published`, a declared dependency under an `@acme/*` alias, a missing file; the test was extended before the second fix). Test: `test_a_path_alias_that_finds_no_file_names_a_project_file_not_a_library` |
+| S9 | A route whose handler is a library's function, or comes from a file that is not there, was marked as an entry point on a library node (main never marks one); its record said `external` for a missing file; and a middleware from a missing file was judged by its path, so `./auth/rate-limit` counted as a login check | medium | Fixed: a route is an entry only on a function of the repo; the record says `external` or `missing-module`; the login check reads the function's own name, what follows the last `.` and `/` (`websec.route_auth_sign`). Tests: `test_a_route_whose_handler_is_not_the_projects_own_code_is_not_put_on_a_library`, `test_a_middleware_lantern_cannot_read_is_judged_by_its_own_name_not_its_folder` |
+| S10 | Already on main: an import the TypeScript compiler finds through `baseUrl` alone (`import { load } from 'lib/data'` with `"baseUrl": "src"` and no `paths` entry) was read as a package, so the project's own function was drawn as a library call | medium | Fixed: a written `baseUrl` is tried last, after `paths` (`SpecResolver._aliases`); without one a bare name stays a package. It changed none of the held-out records. Tests: `test_an_import_found_through_baseurl_is_the_projects_own_file`, `test_without_baseurl_a_bare_name_is_a_package` |
+
+After the fixes, on the final code: 804 tests pass and 6 are skipped, none of them a test of this change (the machine
+has no Docker daemon: 4, no Tesseract: 1, and runs as root: 1; CI runs them). Lantern's audit of its own code gives
+the same findings with main's engine and with this one (0 critical, high or medium; 62 low), and Lantern's own
+inventory counts 23,683 calls, 7,873 of them not followed. Against main on the 29 apps: 3,753 links on main, 1,105
+new, 24 gone, 0 with a changed confidence or `via`. The 24 are 8 HTTP calls of express-boilerplate's tests that now
+reach their route (the `ext:HTTP` placeholder is replaced by the link), 3 route lines main read as outgoing calls
+(S4), and 13 links between the same two functions, one of which now has a more exact name (a function written inside
+an exported function, or stored on another function, is named after it: `js:routes/app::get_admin` is
+`js:routes/app::default.get_admin`). No entry point of main is lost on any of the 29 apps; the 14 of dvna carry the
+more exact name and their full path (`GET /admin` is `GET /app/admin`). The sample: 120 of 120 point at the right kind
+of thing (the project's own code, a library, or the language) and the 7 that link into the repo all reach the right
+function; 6 carry an imprecise library name (`req.flash` is named `express.Request.flash` although connect-flash adds
+it; a language method on a library value, such as `.catch` or `.map`, is counted as the library's), and 2 of those 6
+rested on the generated file of S8 and are now "not followed".
+
+Not covered by this review, and still worth trying: the runtime-trace precision benchmark (`bench/run_bench.py` on
+click, flask and rich) was not re-run, and no runtime trace stands behind any JavaScript label; the rules were written
+after reading the held-out apps' untraced calls, so the fall measured there (3,051 to 1,255 of 9,532 calls not
+followed) is an upper bound for other apps; the cases named under "Call-site inventory" in CLAUDE.md "Known gaps" (a
+plain object with functions handed to a library and read back, a class a library got by a string name, `res` decorated
+through a parameter with another name, a library class patched from Python, an everyday method name on a Python call
+result) can still carry a wrong library label.

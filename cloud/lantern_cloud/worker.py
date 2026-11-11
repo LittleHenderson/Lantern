@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -35,7 +36,7 @@ from pathlib import Path
 
 import httpx
 
-from lantern import learn, remote, sandbox
+from lantern import gitfacts, learn, remote, sandbox
 
 from .ghapp import NoAccess
 from .settings import Settings
@@ -95,6 +96,25 @@ HINTS = {NOT_PUBLIC: "upload", NO_ACCESS: "upload", GITHUB_ONLY: "upload", CONNE
 UPLOAD_PREFIX = "lantern:upload/"   # a run's "link" for an app uploaded as a .zip; the name is only a label
 
 
+def source_name(link: str) -> str:
+    """The folder name the run's code is read from. Reports name the project after its folder (the Evidence Report's
+    title, "what keeps <name> safe"), so a run of github.com/owner/shop is read from a folder called `shop`, not a
+    fixed `repo`. Only letters, digits, `.`, `_` and `-` are kept; anything else becomes `app`."""
+    name = ""
+    if is_upload(link):
+        name = link[len(UPLOAD_PREFIX):]
+    elif isinstance(link, str) and link.startswith(SAMPLE_PREFIX):
+        name = link[len(SAMPLE_PREFIX):]
+    else:
+        try:
+            name = remote.parse(link)["name"]
+        except (ValueError, TypeError, KeyError, AttributeError):
+            name = ""
+    name = re.sub(r"[^\w.-]+", "-", name.rsplit("/", 1)[-1])
+    name = re.sub(r"\.(git|zip)$", "", name, flags=re.I).strip(".-")[:80]
+    return name or "app"
+
+
 def is_upload(link: str) -> bool:
     return isinstance(link, str) and link.startswith(UPLOAD_PREFIX)
 
@@ -111,6 +131,7 @@ def sample_id(link: str) -> str | None:
 def get_source(link: str, dest: Path, log, access=None) -> Path:
     """Step 1: the code to read. A sample app is written from the starter templates inside the package (no network,
     nothing cloned); anything else is cloned and checked for missing files."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
     sid = sample_id(link)
     if sid:
         log(f"sample app {sid}: written from Lantern's built-in starter apps (nothing downloaded)")
@@ -270,7 +291,7 @@ class Worker:
             else:
                 stage("clone")
                 try:
-                    repo = get_source(r["link"], root / "repo", log, self.access(r))
+                    repo = get_source(r["link"], root / "src" / source_name(r["link"]), log, self.access(r))
                 except (RuntimeError, ValueError) as e:
                     raise RunFailed(_scrub(str(e), scrub)) from None
             commit = _commit(repo)
@@ -345,7 +366,8 @@ class Worker:
         tmp = root / "tmp"
         zipped = tmp / "upload.zip"
         shutil.move(str(src), zipped)
-        repo = tmp / "app"
+        (tmp / "src").mkdir()
+        repo = tmp / "src" / source_name(self.store.run(rid)["link"])
         rc, output, timed_out = self._jailed(rid, root, [sys.executable, "-m", "lantern.archive", str(zipped), str(repo),
                                                          "--max-mb", str(self.s.clone_max_mb)],
                                              cwd=tmp, net=False, log=log, timeout=min(self._left(start), 180))
@@ -379,7 +401,7 @@ class Worker:
                 raise RunFailed(UPLOAD_EXPLAIN)
             log("· Copying the repository again to read the code (nothing is run or installed)")
             try:
-                repo = get_source(r["link"], root / "repo", log, self.access(r))
+                repo = get_source(r["link"], root / "src" / source_name(r["link"]), log, self.access(r))
             except (RuntimeError, ValueError) as e:
                 raise RunFailed(_scrub(str(e), scrub)) from None
             now_at = _commit(repo)
@@ -461,8 +483,11 @@ class Worker:
             paths.insert(0, str(hook))
         env.update({"PYTHONPATH": os.pathsep.join(paths), "LANTERN_HOME": str(tmp / "home"),
                     "LANTERN_OFFLINE": "0" if net or audits else "1", "LANTERN_CLOUD_RUN": "1", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
-                    "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": "*",
                     "LANTERN_SHARE_USAGE": "0"})
+        # Until 2026-11-10 the step was also told `safe.directory=*`, so that git, started in a folder that belongs
+        # to another user, would answer. No step starts git in the project's folder any more (`lantern.gitfacts`).
+        # Where the step runs as another user than the folder's owner (the service as root), git's own refusal
+        # there is a second wall should some code do it again; where both are one user, it is not.
         if audits:
             env["LANTERN_AUDITS_FROM"] = str(audits)
         if net:
@@ -511,12 +536,10 @@ def _scrub(text: str, roots: list[str]) -> str:
 
 
 def _commit(repo: Path) -> str | None:
-    try:
-        r = remote._git(["rev-parse", "HEAD"], cwd=repo, timeout=30)
-    except RuntimeError:
-        return None
-    sha = r.stdout.strip()
-    return sha if r.returncode == 0 and len(sha) in (40, 64) and all(c in "0123456789abcdef" for c in sha) else None
+    """The commit the code is at, read from the folder's `.git` by hand (`gitfacts.head_commit`). No program is
+    started: this runs in the service itself, outside the restricted step, and an uploaded folder brings its own
+    `.git`, whose settings git would obey."""
+    return gitfacts.head_commit(repo)
 
 
 def _summary(out: Path) -> dict:

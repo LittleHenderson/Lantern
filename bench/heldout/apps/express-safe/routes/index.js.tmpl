@@ -1,0 +1,10 @@
+var auth = require('../core/auth')
+var handlers = require('../core/handlers')
+
+module.exports = function (router) {
+  router.get('/search', auth.required, handlers.search)
+  router.post('/ping', auth.required, handlers.ping)
+  router.get('/go', handlers.go)
+  router.delete('/items/:id', auth.required, handlers.remove)
+  return router
+}

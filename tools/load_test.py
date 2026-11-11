@@ -8,6 +8,9 @@ run, open the finished run's report through a view link, and read the shared ass
 status and time are recorded. The test fails (exit 1) when any answer is a 5xx or a connection error, or when the 95th
 percentile is slower than --p95-ms. One line of JSON with the numbers goes to stdout for the step summary.
 
+It only runs against a website on this computer (the demo above): any other address is refused before anything is
+sent, so it can never be pointed at the live service by mistake.
+
 This is readers only: starting runs needs the worker and a clone, and the daily caps (429 with a sentence) are covered by
 tests/test_cloud_runs.py. It runs on one machine against one process, so it says "the single-machine website copes with
 N people reading at once", not what the Fly machine does under the public internet.
@@ -21,7 +24,12 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "netguard"))
+import lantern_netguard as netguard  # noqa: E402  (tools/netguard: every benchmark starts isolated)
 
 
 def get(url: str, headers: dict | None = None, timeout: float = 30) -> tuple[int, float, int]:
@@ -56,12 +64,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--p95-ms", type=int, default=1500)
     a = ap.parse_args(argv)
     base = a.base.rstrip("/")
+    host = urllib.parse.urlsplit(base).hostname or ""
+    if not netguard.is_local(host):
+        print(f"the load test only runs against a website on this computer (tools/cloud_site_demo.py). {host or base} is "
+              "somewhere else, and this is never pointed at the live service. Nothing was sent.", file=sys.stderr)
+        return 2
+    guard = netguard.begin()                      # isolated (tools/netguard): nothing but this computer can be reached
     tok = open(a.token_file, encoding="utf-8").read().strip()
     auth = {"authorization": f"Bearer {tok}", "X-Lantern-Site": "1"}
     st, runs = 200, []
     code, _, _ = get(f"{base}/v1/health")
     if code != 200:
         print(f"the website is not answering at {base} (health {code})", file=sys.stderr)
+        netguard.end(guard)
         return 2
     req = urllib.request.Request(f"{base}/v1/runs", headers=auth)
     with urllib.request.urlopen(req, timeout=30) as r:  # nosec B310
@@ -117,7 +132,8 @@ def main(argv: list[str] | None = None) -> int:
     if not ok:
         print(f"LOAD TEST FAILED: {len(bad)} errors, p95 {p95 and round(p95)} ms (limit {a.p95_ms}); "
               f"first errors: {bad[:5]}", file=sys.stderr)
-    return 0 if ok else 1
+    refused = netguard.end(guard)
+    return 0 if ok and not refused else 1
 
 
 if __name__ == "__main__":

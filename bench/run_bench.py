@@ -2,6 +2,9 @@
 
     python bench/run_bench.py WORKDIR [--no-trace] [--only NAME]
 
+The run is isolated (tools/netguard): a temporary home folder, no keys or saved sign-ins, real model providers off,
+and the network refused except for the hosts in HOSTS below. What else was tried is listed at the end and fails the run.
+
 Accuracy method: run each repo's own test suite under the trace hook. For every function that
 actually executed, compare the static edges Lantern predicted against the calls that really
 happened.
@@ -20,9 +23,17 @@ import sys
 import time
 from pathlib import Path
 
+from lantern.depaudit import AUDIT_HOSTS
 from lantern.engine import build_graph  # Python + TypeScript + API bridge
 from lantern.security import scan
 from lantern.trace import merge_trace, run_trace
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "netguard"))
+import lantern_netguard as netguard  # noqa: E402  (tools/netguard: every benchmark starts isolated)
+
+# Everything this benchmark may reach: where the repositories below are cloned from, where the three it traces get
+# their packages installed from, and the dependency audit's addresses. Anything else is refused and fails the run.
+HOSTS = ("github.com", "pypi.org", "files.pythonhosted.org", *AUDIT_HOSTS)
 
 REPOS = [
     # name, git url, ref, install, test command (run from repo root)
@@ -85,12 +96,13 @@ def name_verified(g) -> str | None:
     return f"{ok}/{len(gen)}"
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("work")
     ap.add_argument("--no-trace", action="store_true")
     ap.add_argument("--only")
     a = ap.parse_args()
+    guard = netguard.begin(allow=HOSTS)
     work = Path(a.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -134,9 +146,10 @@ def main():
             row["trace"] = edge_metrics(g, data)
         rows.append(row)
         print(json.dumps(row, indent=1), flush=True)
-    (work / "bench_results.json").write_text(json.dumps(rows, indent=1))
+    (work / "bench_results.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
     print(f"wrote {work / 'bench_results.json'}")
+    return netguard.end(guard)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

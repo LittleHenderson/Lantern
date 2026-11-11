@@ -1,11 +1,13 @@
 """Ask Lantern eval: does the assistant stick to the facts, admit what it does not know, and never claim powers it lacks?
 (test checklist, "Ask Lantern answers".)
 
-    python bench/ask_eval.py PROJECT [--model PROVIDER/MODEL] [--out /tmp/ask_eval.json]
+    python bench/ask_eval.py PROJECT --live --model PROVIDER/MODEL --destination HOST --max-requests N
+                             [--out /tmp/ask_eval.json]
 
-PROJECT is a folder Lantern has analyzed (`lantern analyze PROJECT`). Every question in bench/ask_eval.json is asked
-through the real `ask.ask` with the configured model (the same resolution as `lantern explain`: --model, LANTERN_MODEL,
-ANTHROPIC_API_KEY, DEEPSEEK_API_KEY, the free allowance) and the answer is scored by deterministic checks:
+PROJECT is a folder Lantern has analyzed (`lantern analyze PROJECT`). This is part of the live suite (bench/live.py):
+it starts only when --live, the model, the one host the facts may be sent to and a cap on the number of requests are
+all given; there is no default model and no falling back to whatever key the shell holds. Every question in
+bench/ask_eval.json is asked through the real `ask.ask` and the answer is scored by deterministic checks:
 
   * grounded   - every finding id it cites exists (ask.ask already replaces invented ones; the eval counts them)
   * honest     - a question the facts cannot answer gets "not in the results / run X" words, not a made-up number
@@ -27,6 +29,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+import live  # noqa: E402  (bench/live.py)
 
 from lantern import ask  # noqa: E402
 
@@ -84,19 +88,30 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("project")
     ap.add_argument("--model")
     ap.add_argument("--out")
+    live.add_arguments(ap)
     a = ap.parse_args(argv)
-    from lantern.providers import make_provider, resolve_default
-    provider = make_provider(a.model or resolve_default())
-    res = run_eval(provider, Path(a.project))
+    try:
+        provider = live.gate(a, Path(a.project))
+    except live.NotApproved as e:
+        print(e, file=sys.stderr)
+        return 2
+    try:
+        res = run_eval(provider, Path(a.project))
+    except live.SpendingCap as e:
+        print(f"STOPPED EARLY: {e}", file=sys.stderr)
+        live.finish(provider)
+        return 1
     for r in res["rows"]:
         bad = [k for k, v in r["checks"].items() if not v]
         print(f"{'PASS' if r['passed'] else 'FAIL'} {r['id']}: {r['question'][:60]}" + (f"  <- {', '.join(bad)}" if bad else ""))
         if bad:
             print("     " + r["answer"][:300].replace("\n", " "))
     print(f"\n{res['model']}: {res['passed']}/{res['checks']} checks ({res['score']})")
+    print(f"requests to the model: {provider.requests} of at most {provider.max_requests}")
     if a.out:
         Path(a.out).write_text(json.dumps(res, indent=1), encoding="utf-8")
-    return 0 if res["score"] is not None and res["score"] >= 0.9 else 1
+    refused = live.finish(provider)             # anything but the approved destination was refused, and fails the run
+    return 0 if res["score"] is not None and res["score"] >= 0.9 and not refused else 1
 
 
 if __name__ == "__main__":

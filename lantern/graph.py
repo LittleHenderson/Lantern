@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -55,6 +56,9 @@ class Graph:
         self.nodes: dict[str, Node] = {}
         self._edges: dict[tuple[str, str, str], Edge] = {}
         self.unresolved: dict[str, int] = {}   # callee text -> count, for honesty metrics
+        self.unresolved_tests: dict[str, int] = {}   # the part of `unresolved` that sits in test files (Python)
+        self.builtin_calls = 0   # Python built-in calls (len, print, x.append on a list): counted, not drawn
+        self.sites: list[dict] = []   # the call-site inventory (calls.py): saved to calls.json, summarised in meta
         self.meta: dict = {}
 
     # ---- nodes ----
@@ -135,7 +139,11 @@ class Graph:
             "edges": [asdict(e) for e in self._edges.values()],
             # Only the 200 most common texts are kept, but the totals are the true counts.
             "unresolved": dict(sorted(self.unresolved.items(), key=lambda kv: -kv[1])[:200]),
-            "unresolved_totals": {"call_sites": sum(self.unresolved.values()), "distinct": len(self.unresolved)},
+            "unresolved_totals": {"call_sites": sum(self.unresolved.values()), "distinct": len(self.unresolved),
+                                  "builtin": self.builtin_calls,
+                                  "in_tests": sum(self.unresolved_tests.values()),
+                                  "kinds": unresolved_kinds({k: v - self.unresolved_tests.get(k, 0)
+                                                             for k, v in self.unresolved.items()})},
         }
 
     def save(self, path: str | Path) -> None:
@@ -154,6 +162,37 @@ class Graph:
         g.unresolved = d.get("unresolved", {})
         g._unresolved_totals = d.get("unresolved_totals")
         return g
+
+    def call_sites(self) -> dict:
+        """Every call site Lantern read, sorted by what it knows about the target. The same denominator for all:
+        a call site is one line in a caller that calls something (an edge with three call lines counts three)."""
+        out = {"resolved_internal": 0, "inferred_internal": 0, "several_possible_targets": 0, "name_only_guess": 0,
+               "known_external": 0, "builtin": self.builtin_calls}
+        for e in self.call_edges():
+            n = max(1, len(e.lines))
+            if e.dst.startswith("ext:"):
+                out["known_external"] += n
+            elif e.via in ("unique-method-name", "method-name"):
+                out["name_only_guess"] += n
+            elif e.confidence == POSSIBLE:
+                out["several_possible_targets"] += n
+            elif e.confidence == INFERRED:
+                out["inferred_internal"] += n
+            else:
+                out["resolved_internal"] += n
+        tot = getattr(self, "_unresolved_totals", None)
+        if tot is not None:   # a loaded graph keeps only the 200 most common texts: use the totals it saved, or none
+            out["builtin"] = tot.get("builtin", 0)
+            out["unresolved"] = tot.get("call_sites", sum(self.unresolved.values()))
+            out["unresolved_in_tests"] = tot.get("in_tests")
+            out["unresolved_kinds"] = tot.get("kinds")
+        else:
+            out["unresolved"] = sum(self.unresolved.values())
+            out["unresolved_in_tests"] = sum(self.unresolved_tests.values())
+            out["unresolved_kinds"] = unresolved_kinds({k: v - self.unresolved_tests.get(k, 0)
+                                                        for k, v in self.unresolved.items()})
+        out["total"] = sum(v for k, v in out.items() if k not in ("unresolved_in_tests", "unresolved_kinds"))
+        return out
 
     def stats(self) -> dict:
         kinds: dict[str, int] = {}
@@ -175,4 +214,32 @@ class Graph:
             "unresolved_call_sites": (getattr(self, "_unresolved_totals", None) or {}).get(
                 "call_sites", sum(self.unresolved.values())),
             "guessed_by_method_name": by_name,
+            "call_sites": self.call_sites(),
         }
+
+
+UNRESOLVED_KINDS = ("member of self or this", "method on a value of unknown type", "on another call's result",
+                    "dynamic (subscript, getattr, computed)", "name not found")
+
+
+def unresolved_kind(text: str) -> str:
+    """What an unresolved callee text looks like. The text alone says nothing about *why* (a builtin, a library,
+    code that is not in the repo), so the kinds describe the shape, not the cause."""
+    t = text.strip()
+    if re.search(r"\bgetattr\b|\[|^\(|\*\*|\beval\b", t):
+        return "dynamic (subscript, getattr, computed)"
+    if re.match(r"^(?:self|this|cls)\.|^super\(\)", t):
+        return "member of self or this"
+    if re.search(r"\)\s*\.", t):
+        return "on another call's result"
+    if "." in t or "::" in t or "->" in t:
+        return "method on a value of unknown type"
+    return "name not found"
+
+
+def unresolved_kinds(counts: dict[str, int]) -> dict[str, int]:
+    out = {k: 0 for k in UNRESOLVED_KINDS}
+    for text, n in counts.items():
+        if n > 0:
+            out[unresolved_kind(text)] += n
+    return out

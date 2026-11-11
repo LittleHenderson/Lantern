@@ -1,0 +1,55 @@
+"""The five regression examples an independent review found on 2026-11-09 (unsafe side).
+
+Each route starts with fixed text and then replaces it with the caller's input through a binding that a reader
+following only plain assignments misses: a `match` capture, `except ... as`, an inner function's `nonlocal`, a module
+value set through `global`. The query must stay a real SQL finding (high or critical), never "only fixed text".
+"""
+from fastapi import FastAPI
+
+from .db import conn
+
+app = FastAPI()
+
+
+@app.get("/rows-match")
+def rows_match(payload: dict):
+    order = "id"
+    match payload:
+        case {"order": order}:
+            pass
+    return conn.execute(f"SELECT * FROM items ORDER BY {order}")
+
+
+@app.get("/rows-except")
+def rows_except(text: str):
+    order = "id"
+    try:
+        int(text)
+    except ValueError as order:
+        pass
+    return conn.execute(f"SELECT * FROM items ORDER BY {order}")
+
+
+@app.get("/rows-nonlocal")
+def rows_nonlocal(text: str):
+    order = "id"
+
+    def replace():
+        nonlocal order
+        order = text
+
+    replace()
+    return conn.execute(f"SELECT * FROM items ORDER BY {order}")
+
+
+ORDER = "id"
+
+
+@app.get("/rows-global")
+def rows_global(text: str):
+    def replace():
+        global ORDER
+        ORDER = text
+
+    replace()
+    return conn.execute(f"SELECT * FROM items ORDER BY {ORDER}")

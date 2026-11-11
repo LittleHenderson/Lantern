@@ -1,0 +1,7 @@
+import sqlite3
+
+conn = sqlite3.connect(":memory:")
+
+
+def run(sql: str, params=()):
+    return conn.execute(sql, params).fetchall()
