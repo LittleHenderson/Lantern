@@ -11,7 +11,7 @@ Nothing from the analyzed repo is executed or trusted as configuration:
     installed version isn't known; they are counted and reported as not checked.
   * JavaScript: `npm audit --package-lock-only` reads package-lock.json (no install, no scripts). npm is started in
     a folder of Lantern's own, on copies laid out as the files lie in the project: package.json, the lock file,
-    npm-shrinkwrap.json when it is there (npm takes it before the lock file) and the package.json of each folder
+    npm-shrinkwrap.json when it is there (npm up to 11 takes it before the lock file) and the package.json of each folder
     of the project a lock file names (a workspace package, a `file:` library), each handed over as what Lantern
     read in it, written out anew (`_npm_json`). So npm reads no `.npmrc` of the project and no folder outside it
     (`_npm_stage`). Until 2026-11-10 npm ran in the project's folder. The
@@ -469,7 +469,7 @@ def _advisories(vulns: list[dict]) -> list[tuple[dict, list[str]]]:
 # ---------------------------------------------------------------------------- JavaScript
 
 NPM_AUDIT_TIMEOUT = 180
-NPM_READS = ("package.json", "package-lock.json", "npm-shrinkwrap.json")   # npm takes the last before the lock file
+NPM_READS = ("package.json", "package-lock.json", "npm-shrinkwrap.json")   # npm up to 11 takes the last before the lock file
 NPM_CLIMB = 16                          # how many `..` one entry of a lock file may hold
 NPM_LOCAL_MAX = 5000                    # how many folders of its own a lock file may name (workspace packages, `file:` libraries)
 NPM_LOCAL_BYTES = 64 * 1024 * 1024      # and what their package.json files may hold together
@@ -543,7 +543,7 @@ def _npm_stage(lock: Path, repo: Path, own: Path) -> tuple[Path | None, list[str
     left out and why), or (None, [why]) and npm is then not started on this lock file. Each line names its file.
 
     npm takes settings from the folder it is started in (`.npmrc`), so it is never started in the project. The copy
-    keeps the project's layout: `package.json`, `package-lock.json` and `npm-shrinkwrap.json` (npm prefers it) at the
+    keeps the project's layout: `package.json`, `package-lock.json` and `npm-shrinkwrap.json` (npm up to 11 prefers it) at the
     lock file's place, and the `package.json` of each folder the lock file names inside the project (npm reads it for
     every workspace package and `file:` library; without it a workspace package and all it needs are left out of the
     audit without a word). Every file is read the way any dependency file is (`_read`: a plain file of the project,

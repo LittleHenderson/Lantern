@@ -121,7 +121,7 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   it read the `package.json` of every folder beside the project, and so did the same pattern in the lock file's own
   first entry, which npm takes in place of a `package.json` it cannot use.
   **Now.** npm is started in a new folder of Lantern's own (`programs.folder`), on copies (`depaudit._npm_stage`):
-  `package.json`, `package-lock.json` and `npm-shrinkwrap.json` (npm takes it before the lock file), and the
+  `package.json`, `package-lock.json` and `npm-shrinkwrap.json` (npm up to 11 takes it before the lock file), and the
   `package.json` of each folder the lock file names inside the project, at the place it has in the project. Each is
   read as any dependency file is (a plain file of the project, 32 MB at most) and handed to npm as what Lantern read
   in it, written out anew, never as the file's own text (`_npm_json`): two readers of one text can disagree (a name
@@ -166,10 +166,22 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   pushed.
   Not covered: npm also looks in the folders above the one it is started in for a `package.json` that names it as a
   workspace; above Lantern's folder those are the temp folder and the folders it lies in, which are the computer's
-  and not the project's. Only npm 10.9.9 was measured here (CI's machines bring their own npm). A name JavaScript
+  and not the project's. A name JavaScript
   treats specially (`__proto__` as a key of the lock file, three ways) was tried in place: npm 10.9.9 follows none,
   and Lantern has no rule for it. What gitleaks does with settings files in the folder it scans is still not
-  measured.
+  measured. A project with only an `npm-shrinkwrap.json` is not audited (Lantern looks for `package-lock.json`).
+  Where the lock file npm reads is left over from another `package.json` (it names libraries this one does not
+  ask for), npm asks about nothing and the record says `ok`, as npm itself does in the project.
+  Kept in the record: the first run of these tests on GitHub failed (616b7dd; under Python 3.11 on Linux, in both
+  of its runs: 4 failed, 1933 passed, 22 skipped). The fix was first measured with npm 10.9.9 alone, and four
+  tests said what that npm asks about; GitHub's Linux machines have a newer npm. Repeated here with npm 11.21.2
+  and 12.2.2: the same four fail, and under 12.2.2 a fifth; npm 10.8.2 behaves as 10.9.9. What changed is npm:
+  11 and 12 no longer ask about a project's own folders (a workspace package, a library that is a folder), and
+  12 no longer reads `npm-shrinkwrap.json`. In all four versions Lantern's copy is asked exactly what npm asks
+  when it is started in the project itself with the same words (7 projects each; the eighth is the project with
+  only an `npm-shrinkwrap.json`), so the code did not change. The five tests now compare with what the installed
+  npm asks in the project itself (`itself`) and allow only the answers measured; the last lines of a test run
+  name the npm it started (`programs these tests started: npm …`). All 145 pass against each of the four.
 - The opt-in usage counts go to the gateway's own address and nowhere else, and Lantern says where they go
   (2026-11-10; stage 7 of the 2026-11-09 directive, "validate ... the address used for optional usage reporting").
   Sharing is off until the person turns it on; this is about what happened after they did.
@@ -212,6 +224,13 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   planted in the changed lines of `lantern/usage.py`, one at a time (61; the tool can plant none in the 3 changed
   lines of `lantern/server.py`): 59 failed the tests at once and 2 failed none (the text a sent day is remembered
   by; the answer when there is no address at all). Two tests were added, and all 61 now fail a test.
+  Kept in the record: on GitHub's Windows machines one of the two runs of 616b7dd failed in one of these tests
+  (1 failed, 1567 passed, 287 skipped; the other run passed, as every run before): a try against something that
+  answers, but not as a web server does, was described with another sentence than the test expects. The test's
+  stand-in read once, answered and closed; when part of the request is still on its way then, the system cuts
+  the connection and the caller may never see the answer. That is the cause as read from the test, not shown:
+  on Linux 300 tries of each of three ways of closing all gave the expected word. The stand-in now reads the
+  whole request and closes after the caller has, and the test's message says which word was noted.
   Not covered: that no count arrived is read from the code and shown against the gateway's code on this computer,
   not against the live gateway (its owner's page would show it); the app's Settings page says only that nothing is
   sent, the reason is in `lantern usage --show` and in the route; an `https` address is taken as written (the name

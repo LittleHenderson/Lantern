@@ -110,12 +110,31 @@ def stranger():
 
 @pytest.fixture
 def no_web_answer():
-    """Something listens at the address and answers, but not as a web server does."""
+    """Something listens at the address and answers, but not as a web server does. It reads the whole request first
+    and closes only after the caller has: a stand-in that answers and closes with part of the request still on its
+    way has the system cut the connection, and the caller may then never see the answer (until 2026-11-10 this one
+    read once and closed, and on Windows one run in two of GitHub's ended with another word for the try)."""
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
     srv.listen(5)
     srv.settimeout(0.2)
     stop = threading.Event()
+
+    def whole_request(c):
+        got = b""
+        while b"\r\n\r\n" not in got:
+            part = c.recv(65536)
+            if not part:
+                return
+            got += part
+        head, _, body = got.partition(b"\r\n\r\n")
+        length = [v for k, _, v in (line.partition(b":") for line in head.split(b"\r\n")[1:])
+                  if k.strip().lower() == b"content-length"]
+        while len(body) < int(length[0].strip() if length else 0):
+            part = c.recv(65536)
+            if not part:
+                return
+            body += part
 
     def serve():
         while not stop.is_set():
@@ -126,9 +145,12 @@ def no_web_answer():
             with c:
                 try:
                     c.settimeout(2)
-                    c.recv(65536)
+                    whole_request(c)
                     c.sendall(b"this is no web answer\r\n\r\n")
-                except OSError:
+                    c.shutdown(socket.SHUT_WR)
+                    while c.recv(65536):                # until the caller has closed
+                        pass
+                except (OSError, ValueError):
                     pass
     th = threading.Thread(target=serve, daemon=True)
     th.start()
@@ -347,7 +369,7 @@ def test_an_answer_that_is_no_web_answer_does_not_stop_lantern(home, no_web_answ
     monkeypatch.setenv("LANTERN_GATEWAY_URL", no_web_answer)
     _counted()
     assert _send() == 0
-    assert "not taken (the gateway gave no answer Lantern could read)" in usage.describe()
+    assert "not taken (the gateway gave no answer Lantern could read)" in usage.describe(), usage.last()
     assert len(usage.pending()) == 1
 
 

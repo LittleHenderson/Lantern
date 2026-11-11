@@ -157,6 +157,49 @@ class Registry:
         self.server.server_close()
 
 
+def said():
+    """Which npm these tests started, for the message of one that fails: what npm asks about changes with its version."""
+    return f"npm {depaudit._npm_version(programs.find('npm'))}"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _the_run_names_its_npm(request):
+    """The last lines of a test run name the npm these tests started (`tests/conftest.py`), also when all passed."""
+    npm = programs.find("npm")
+    if npm:
+        ran = getattr(request.config, "_lantern_ran_against", None)
+        if ran is None:
+            ran = request.config._lantern_ran_against = {}
+        ran["npm"] = depaudit._npm_version(npm) or "of a version it did not tell"
+    yield
+
+
+def itself(tmp_path, files, at="itself"):
+    """What the npm on this computer asks about, and finds, when it is started in a project itself, with the words
+    Lantern starts it with and a stand-in registry of its own: (the questions, the packages found). The project has no
+    settings file, so this is the answer Lantern's copy has to get, whichever npm is installed.
+
+    What npm asks about changes from one version to the next (measured 2026-11-10 with these projects): npm 10.8.2
+    and 10.9.9 ask about a project's own folders too (workspace packages, a library that is a folder), npm 11.21.2
+    and 12.2.2 do not, and 12.2.2 no longer reads npm-shrinkwrap.json. These tests were first written against 10.9.9
+    alone and said what that npm asks; GitHub's Linux machines have a newer one, and four of them failed there."""
+    repo = project(tmp_path, files, at=at)
+    r = Registry()
+    try:
+        run = scanresult.run_tool([programs.find("npm"), "audit", "--json", "--package-lock-only", "--omit=dev",
+                                   f"--registry={r.url}"], timeout=depaudit.NPM_AUDIT_TIMEOUT, cwd=repo,
+                                  env={**os.environ, "npm_config_audit_level": "info"})    # as depaudit.run_npm_audit
+        try:
+            found = json.loads(run.stdout or "null")
+        except ValueError:
+            found = None
+        found = found.get("vulnerabilities") if isinstance(found, dict) else None
+        assert isinstance(found, dict), (said(), run.returncode, (run.stdout or "")[:300], (run.stderr or "")[-300:])
+        return r.questions(), sorted(found)
+    finally:
+        r.close()
+
+
 @pytest.fixture
 def registry(monkeypatch):
     """The registry Lantern names to npm, for this test a stand-in on this computer."""
@@ -307,24 +350,33 @@ def test_the_projects_token_and_name_are_not_sent(tmp_path, registry):
 @needs_npm
 @pytest.mark.parametrize("settings", [None, "offline=true\n"])
 def test_the_packages_of_a_workspace_project_are_asked_about(tmp_path, registry, settings):
-    """npm finds a workspace package by its folder: a copy without those folders asks about nothing and says that
-    nothing is known."""
+    """npm finds a workspace package by its folder, so the copy holds those folders: npm is asked there what it asks
+    in the project itself, and that covers the libraries of every workspace package. (npm 10 asks about the workspace
+    packages themselves too, and with a copy that lacks their folders it asks about nothing and says that nothing is
+    known; npm 11 and 12 leave a project's own packages out of what they ask.)"""
     repo = project(tmp_path, WORKSPACES if settings is None else {**WORKSPACES, ".npmrc": settings})
     findings, info = depaudit.run_npm_audit(repo, False)
     assert info["state"] == "ok", info
-    assert registry.questions() == [{"left-pad": ["1.3.0"], "is-odd": ["2.0.0"], "a": ["1.0.0"], "b": ["2.0.0"]}]
-    assert sorted(f["package"] for f in findings) == ["is-odd", "left-pad"]
+    asked, found = itself(tmp_path, WORKSPACES)
+    theirs = {"left-pad": ["1.3.0"], "is-odd": ["2.0.0"]}
+    assert asked in ([{**theirs, "a": ["1.0.0"], "b": ["2.0.0"]}], [theirs]), said()     # npm 10; npm 11 and 12
+    assert registry.questions() == asked, said()
+    assert sorted(f["package"] for f in findings) == found == ["is-odd", "left-pad"], said()
 
 
 @needs_npm
 @pytest.mark.parametrize("on_disk", ["3.0.0", "3.1.0"])
 def test_a_library_in_a_folder_of_the_project_is_asked_about_as_it_is_there(tmp_path, registry, on_disk):
-    """npm reads such a folder's package.json and believes it before the lock file; the copy has to hold it."""
+    """npm 10 reads such a folder's package.json and believes it before the lock file, so the copy has to hold it:
+    npm is asked there what it asks in the project itself. (npm 11 and 12 do not ask about a library that is a folder
+    of the project; the libraries it brings are asked about by every npm.)"""
     files = {**LIBRARY, "lib/package.json": {**LIBRARY["lib/package.json"], "version": on_disk}}
     findings, info = depaudit.run_npm_audit(project(tmp_path, files), False)
     assert info["state"] == "ok", info
-    assert registry.questions() == [{"lib": [on_disk], "left-pad": ["1.3.0"]}]
-    assert [f["package"] for f in findings] == ["left-pad"]
+    asked, found = itself(tmp_path, files)
+    assert asked in ([{"lib": [on_disk], "left-pad": ["1.3.0"]}], [{"left-pad": ["1.3.0"]}]), said()   # npm 10; 11 and 12
+    assert registry.questions() == asked, said()
+    assert [f["package"] for f in findings] == found == ["left-pad"], said()
 
 
 @needs_npm
@@ -341,14 +393,23 @@ def test_a_folder_beside_the_project_is_not_read(tmp_path, registry, files):
 
 @needs_npm
 def test_the_lock_file_npm_prefers_is_the_one_audited(tmp_path, registry):
-    """Twin: npm takes npm-shrinkwrap.json before package-lock.json, in the project and so in the copy."""
+    """Twin: where a project has both npm-shrinkwrap.json and package-lock.json, npm decides which it reads (up to npm
+    11 the first, npm 12 the second), in the project and so in the copy, which holds both. Two projects, each with one
+    lock file that agrees with its package.json and one left over from another: whichever npm is installed reads the
+    agreeing one in exactly one of the two, and Lantern's copy gets the project's own answer in both."""
     root = {"name": "app", "version": "1.0.0", "dependencies": {"is-odd": "^2.0.0"}}
-    wrap = {"name": "app", "version": "1.0.0", "lockfileVersion": 3, "requires": True,
-            "packages": {"": root, "node_modules/is-odd": ODD}}
-    repo = project(tmp_path, {**PLAIN, "package.json": root, "npm-shrinkwrap.json": wrap})
-    findings, info = depaudit.run_npm_audit(repo, False)
-    assert info["state"] == "ok" and registry.questions() == [{"is-odd": ["2.0.0"]}]
-    assert [f["package"] for f in findings] == ["is-odd"]
+    agreeing = {"name": "app", "version": "1.0.0", "lockfileVersion": 3, "requires": True,
+                "packages": {"": root, "node_modules/is-odd": ODD}}
+    got = {}
+    for agrees, left_over in (("npm-shrinkwrap.json", "package-lock.json"), ("package-lock.json", "npm-shrinkwrap.json")):
+        files = {"package.json": root, agrees: agreeing, left_over: PLAIN["package-lock.json"]}
+        before = len(registry.questions())
+        findings, info = depaudit.run_npm_audit(project(tmp_path, files, at="project-" + agrees), False)
+        got[agrees] = itself(tmp_path, files, at="itself-" + agrees)
+        assert info["state"] == "ok", (agrees, info, said())
+        assert (registry.questions()[before:], [f["package"] for f in findings]) == got[agrees], (agrees, said())
+    read, passed_over = ([{"is-odd": ["2.0.0"]}], ["is-odd"]), ([], [])       # the left-over one names what nothing asks for
+    assert sorted(got.values(), key=repr) == sorted([read, passed_over], key=repr), (got, said())
 
 
 # ---------------------------------------------------------------------------- a stand-in for npm
