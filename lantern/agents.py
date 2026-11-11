@@ -24,6 +24,9 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import results
+from .python_frontend import project_bytes
+
 # id -> (name, the program to look for, how its command is built). The prompt is always one argument.
 AGENTS = {
     "claude": ("Claude Code", "claude", lambda prompt: ["claude", "-p", prompt, "--permission-mode", "acceptEdits"]),
@@ -63,7 +66,10 @@ def _files(root: Path) -> dict[str, str]:
             if p.is_symlink() or not p.is_file():
                 continue
             rel = p.relative_to(root).as_posix()
-            data = p.read_bytes()
+            try:
+                data = project_bytes(p, root)
+            except FileNotFoundError:
+                continue
             total += len(data)
             if len(got) >= MAX_FILES or total > MAX_BYTES:
                 raise ValueError("This project is too big to copy for a fix. Leave out build output and dependencies.")
@@ -82,10 +88,13 @@ def _prompt(f: dict) -> str:
 
 
 def _finding(out: Path, fid: str) -> dict:
+    text, _why = results.plain(out / "security.json")
     try:
-        sec = json.loads((out / "security.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raise ValueError("Analyze the project first.") from None
+        sec = json.loads(text) if text is not None else None
+    except json.JSONDecodeError:
+        sec = None
+    if not isinstance(sec, dict):
+        raise ValueError("Analyze the project first.")
     f = next((x for x in sec.get("findings") or [] if isinstance(x, dict) and x.get("id") == fid), None)
     if not f or f.get("status") != "open" or f.get("in_tests"):
         raise ValueError("That finding is not open any more. Analyze the project again.")
@@ -93,11 +102,14 @@ def _finding(out: Path, fid: str) -> dict:
 
 
 def _diff_text(a: Path | None, b: Path | None, rel: str) -> str:
-    def lines(p):
-        if p is None or not p.exists():
+    """The change to `rel` between the project folder `a` and the copy `b` (None: the file is not on that side)."""
+    def lines(root):
+        if root is None:
             return []
         try:
-            return p.read_text(encoding="utf-8").splitlines(keepends=True)
+            return project_bytes(root / rel, root).decode("utf-8").splitlines(keepends=True)
+        except FileNotFoundError:
+            return []
         except UnicodeDecodeError:
             return None
     la, lb = lines(a), lines(b)
@@ -161,7 +173,7 @@ def run_fix(repo: Path, out: Path, fid: str, agent: str, privacy: str, log, *, r
     else:
         status, verdict = "fixed", "Fixed: Lantern no longer finds the problem, and nothing new and serious appeared."
     files = [{"path": rel, "change": "added" if rel not in before_files else "deleted" if rel not in after_files else "changed",
-              "diff": _diff_text(repo / rel if rel in before_files else None, copy / rel if rel in after_files else None, rel)}
+              "diff": _diff_text(repo if rel in before_files else None, copy if rel in after_files else None, rel)}
              for rel in changed]
     manifest = {"repo": str(repo), "finding": fid, "agent": agent, "status": status,
                 "before": {rel: before_files.get(rel) for rel in changed},
@@ -185,13 +197,21 @@ def _fix_dir(fix_id: str, work_root: Path | None) -> Path:
 def apply_fix(repo: Path, fix_id: str, *, work_root: Path | None = None) -> dict:
     """Copy a checked fix into the project: only its changed files, and only if none of them changed meanwhile."""
     d = _fix_dir(fix_id, work_root)
-    m = json.loads((d / "fix.json").read_text(encoding="utf-8"))
+    text, _why = results.plain(d / "fix.json")
+    try:
+        m = json.loads(text) if text is not None else None
+    except json.JSONDecodeError:
+        m = None
+    if not isinstance(m, dict) or not isinstance(m.get("before"), dict) or not isinstance(m.get("after"), dict):
+        raise ValueError("That fix is gone. Ask the agent again.")
     if Path(m["repo"]).resolve() != repo.resolve():
         raise ValueError("That fix belongs to another project.")
     copy = d / repo.name
     for rel, h in m["before"].items():
-        p = repo / rel
-        now = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+        try:
+            now = hashlib.sha256(project_bytes(repo / rel, repo)).hexdigest()
+        except FileNotFoundError:
+            now = None
         if now != h:
             raise ValueError(f"{rel} changed since the agent made its copy, so Lantern won't overwrite it. "
                              "Ask the agent again.")
