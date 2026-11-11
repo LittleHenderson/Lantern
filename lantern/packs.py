@@ -34,7 +34,7 @@ import re
 from pathlib import Path
 
 from .graph import Graph
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_text
 
 BUILTIN_DIR = Path(__file__).parent / "packs"
 PROJECT_DIR = "lantern-packs"
@@ -80,9 +80,12 @@ def validate(pack: dict) -> list[str]:
         errs.append("`pack` must be a short lowercase name (letters, digits, dashes)")
     if "version" in pack and not isinstance(pack["version"], (str, int)):
         errs.append("`version` must be a string")
+    for k in ("about", "homepage"):
+        if k in pack and not isinstance(pack[k], str):
+            errs.append(f"`{k}` must be a string")
     req = pack.get("requires", {})
-    if not isinstance(req, dict) or any(not isinstance(req.get(k, []), list) for k in ("files", "text")):
-        errs.append("`requires` must be an object with optional `files` and `text` lists")
+    if not isinstance(req, dict) or any(not _words(req.get(k, [])) for k in ("files", "text")):
+        errs.append("`requires` must be an object with optional `files` and `text` lists of strings")
     rules, entries = pack.get("rules", []), pack.get("entries", [])
     if not isinstance(rules, list) or not isinstance(entries, list):
         return errs + ["`rules` and `entries` must be lists"]
@@ -101,7 +104,8 @@ def validate(pack: dict) -> list[str]:
             errs.append(f"{w}: `id` must look like LP-NAME (uppercase, starts with LP-)")
         elif rid in seen:
             errs.append(f"{w}: duplicate id {rid}")
-        seen.add(rid)
+        else:
+            seen.add(rid)
         if not isinstance(r.get("title"), str) or not 3 <= len(r["title"]) <= 160:
             errs.append(f"{w}: `title` is a short sentence")
         if r.get("severity") not in SEVERITIES:
@@ -112,6 +116,9 @@ def validate(pack: dict) -> list[str]:
             errs.append(f"{w}: `cwe` is a number")
         if "confidence" in r and r["confidence"] not in ("HIGH", "LOW"):
             errs.append(f"{w}: `confidence` is HIGH or LOW")
+        for k in ("fix", "more", "category"):
+            if k in r and not isinstance(r[k], str):
+                errs.append(f"{w}: `{k}` is a string")
         if "unless" in r:
             errs += _check_pattern(r["unless"], w + ".unless")
     for i, e in enumerate(entries):
@@ -128,6 +135,11 @@ def validate(pack: dict) -> list[str]:
         if "detail" in e and not isinstance(e["detail"], str):
             errs.append(f"{w}: `detail` is a string with {{n}} placeholders")
     return errs
+
+
+def _words(value) -> bool:
+    """A list of non-empty strings (an empty list too)."""
+    return isinstance(value, list) and all(isinstance(x, str) and x for x in value)
 
 
 def _check_pattern(pat, where: str) -> list[str]:
@@ -150,10 +162,11 @@ def _check_files(files, where: str) -> list[str]:
 
 # ---------------------------------------------------------------------------- loading
 
-def _read_pack(p: Path, source: str) -> tuple[dict | None, str | None]:
+def _read_pack(p: Path, source: str, repo: Path | None = None) -> tuple[dict | None, str | None]:
+    """A pack file. One that comes with a project is read as a file of that project and in no other way."""
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        data = json.loads(project_text(p, repo) if source == "project" else p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
         return None, f"not readable as JSON ({type(e).__name__})"
     errs = validate(data)
     if errs:
@@ -182,7 +195,7 @@ def load_all(repo: Path | None = None, builtin: bool = True,
         for p in sorted(d.glob("*.json")):
             if source == "project" and not inside_repo(p, repo):
                 continue
-            pk, err = _read_pack(p, source)
+            pk, err = _read_pack(p, source, repo)
             if err:
                 problems.append((f"{source} pack {p.name}", err))
                 continue
@@ -206,7 +219,7 @@ def _applies(pk: dict, repo: Path) -> bool:
         if not any(_files(repo, [pat])):
             return False
     for word in req.get("text", []):
-        if not any(word in _read(p) for p in _manifests(repo)):
+        if not any(word in _read(p, repo) for p in _manifests(repo)):
             return False
     return True
 
@@ -237,11 +250,12 @@ def _files(repo: Path, globs: list[str]):
             yield p
 
 
-def _read(p: Path) -> str:
+def _read(p: Path, repo) -> str:
+    """The text of a file of the project `repo`; nothing when it is none, cannot be read or is very large."""
     try:
         if p.stat().st_size > MAX_FILE:
             return ""
-        return p.read_text(encoding="utf-8", errors="replace")
+        return project_text(p, repo)
     except OSError:
         return ""
 
@@ -271,7 +285,7 @@ def scan_packs(repo: Path, packs: list[dict]) -> tuple[list[dict], list[dict]]:
                 if p.suffix.lower() not in TEXT_EXTS and p.suffix:
                     continue
                 rel = p.relative_to(repo).as_posix()
-                for ln, line in _lines(_read(p)):
+                for ln, line in _lines(_read(p, repo)):
                     if not rx.search(line) or (unless and unless.search(line)):
                         continue
                     s = line.lstrip()
@@ -329,14 +343,15 @@ def apply_entries(g: Graph, repo: Path, packs: list[dict]) -> dict:
             gi = int(e["handler"][1:-1])
             for p in _files(repo, e["files"]):
                 rel = p.relative_to(repo).as_posix()
-                for ln, line in _lines(_read(p)):
+                for ln, line in _lines(_read(p, repo)):
                     for m in rx.finditer(line):
                         if gi > (m.lastindex or 0) or not m.group(gi):
                             continue
                         detail = e.get("detail") or ""
                         for k in range(1, (m.lastindex or 0) + 1):
                             detail = detail.replace(f"{{{k}}}", m.group(k) or "")
-                        detail = re.sub(r"/{2,}", "/", detail).strip() or None
+                        # always words: every reader of an entry point takes its detail for text
+                        detail = re.sub(r"/{2,}", "/", detail).strip() or m.group(gi)
                         ids = _handler_nodes(g, m.group(gi), rel)
                         if not ids:
                             stats["unresolved"] += 1

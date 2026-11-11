@@ -798,11 +798,23 @@ async function watchTestsSheet(p) {
     try {
       const j = await api(`/api/projects/${p.id}/trace`, {method: 'POST', body: {command, confirm: true}});
       close();
-      S.toast = {pid: p.id, html: `<div class="toastin"><span class="pulse"></span>Running <code>${esc(command)}</code>… you can keep browsing; the Atlas updates when it finishes.</div>`};
+      S.toast = {pid: p.id, html: `<div class="toastin"><span class="pulse"></span><div>Running <code>${esc(command)}</code>… you can keep browsing; the Atlas updates when it finishes.</div><span class="spacer"></span>${j.can_stop ? `<button class="btn sm" data-stop="${esc(j.id)}">Stop the tests</button>` : ''}</div>`};
       renderProject(document.getElementById('view'));
       watchTrace(j.id, p, command);
     } catch (e) { el.querySelector('.sheet').insertAdjacentHTML('beforeend', note('err', esc(e.message))); }
   };
+}
+async function stopTests(p, id) {
+  // The message of a running test run is kept as HTML and drawn again on every visit to the project, so the button's
+  // state is changed there. The run itself ends in watchTrace, which then says "You stopped the tests." A stop
+  // ends the whole job and writes no result: what the project shows stays what the last finished check found.
+  const draw = stopping => {
+    if (!S.toast || S.toast.pid !== p.id) return;
+    S.toast.html = S.toast.html.replace(/<button class="btn sm" data-stop="[^"]*"[^>]*>[^<]*<\/button>/, `<button class="btn sm" data-stop="${esc(id)}"${stopping ? ' disabled' : ''}>${stopping ? 'Stopping…' : 'Stop the tests'}</button>`);
+    const t = S.project === p.id && document.querySelector('#toast'); if (t) t.innerHTML = S.toast.html;   // only on that project's own page
+  };
+  draw(true);
+  try { await api('/api/jobs/' + encodeURIComponent(id) + '/stop', {method: 'POST', body: {}}); } catch (e) { draw(false); }
 }
 async function watchTrace(jobId, p, command) {
   let j;
@@ -810,17 +822,26 @@ async function watchTrace(jobId, p, command) {
   const r = j.result || {};
   const tail = (j.log || []).slice(-6).join('\n');
   const blocked = Array.isArray(r.blocked) ? r.blocked : [];
-  if (blocked.length || r.timed_out) {
-    const why = r.timed_out ? 'They ran longer than 10 minutes, so the sandbox stopped them and everything they started.'
+  // What the tests started and Lantern could not end, in Lantern's own words. It is said whatever else happened, and
+  // no message beside it says that everything was ended.
+  const left = Array.isArray(r.not_ended) ? r.not_ended.filter(x => typeof x === 'string' && x) : [];
+  const leftNote = left.length ? ` <b>Not everything they started could be ended, so something of theirs may still be running on this computer:</b> ${esc(left.join('; '))}.` : '';
+  if (j.status !== 'error' && r.unavailable) {
+    S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests were not run.</b> The sandbox they run in could not be set up on this computer: ${esc(r.unavailable)}. Lantern does not run a project’s tests without it. Everything that only reads your code was checked as usual.</div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+  } else if (j.status !== 'error' && r.cancelled) {
+    S.toast = {pid: p.id, html: `<div class="toastin"><div><b>You stopped the tests.</b> ${left.length ? '' : 'They and everything they started were ended. '}Nothing was changed: your results are those of your last check.${leftNote}</div><span class="spacer"></span><button class="btn sm" data-retry>Run them again</button><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+  } else if (blocked.length || r.timed_out) {
+    const why = r.timed_out ? (left.length ? 'They ran longer than 10 minutes, so the sandbox stopped them.' : 'They ran longer than 10 minutes, so the sandbox stopped them and everything they started.')
       : 'The sandbox refused ' + blocked.map(b => b.kind === 'network' ? 'a network connection' : 'a write outside its temp folder').filter((x, i, a) => a.indexOf(x) === i).join(' and ') + '. Tests here cannot change your project or reach the internet.';
-    S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests were stopped by the sandbox.</b> ${esc(why)}<pre class="log" style="margin-top:8px;max-height:120px">${esc(blocked.map(b => b.what).join('\n') || tail)}</pre></div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+    S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests were stopped by the sandbox.</b> ${esc(why)}${leftNote}<pre class="log" style="margin-top:8px;max-height:120px">${esc(blocked.map(b => b.what).join('\n') || tail)}</pre></div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
   } else if (j.status === 'error' || (r.returncode !== undefined && r.returncode !== 0 && !r.observed)) {
     const code = r.returncode !== undefined ? r.returncode : '?';
     const likely = /No module named|ModuleNotFoundError/.test(tail + (j.error || '')) ? 'A package your tests import is not installed in the Python that runs Lantern.' : /not recognized|No such file|command not found/.test(tail + (j.error || '')) ? 'The command was not found. Is pytest installed?' : /collected 0 items|no tests ran/.test(tail) ? 'No tests were found by that command.' : 'Look at the last lines below.';
-    S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests didn’t finish, so nothing changed.</b> Exit code ${esc(code)}. ${esc(likely)}<pre class="log" style="margin-top:8px;max-height:120px">${esc(j.error || tail)}</pre></div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn sm" data-retry>Change the command</button><button class="btn ghost sm" data-dismiss>Skip</button></div>`};
+    S.toast = {pid: p.id, html: `<div class="toastin bad"><div><b>Your tests didn’t finish, so nothing changed.</b> Exit code ${esc(code)}. ${esc(likely)}${leftNote}<pre class="log" style="margin-top:8px;max-height:120px">${esc(j.error || tail)}</pre></div><span class="spacer"></span><button class="btn sm" data-retry>Try again</button><button class="btn sm" data-retry>Change the command</button><button class="btn ghost sm" data-dismiss>Skip</button></div>`};
   } else {
     const d = r.score_after != null && r.score_before != null ? r.score_after - r.score_before : null;
-    S.toast = {pid: p.id, html: r.traced === false ? `<div class="toastin ok">${icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}${r.backend ? ` in the ${r.backend === 'docker' ? 'Docker' : 'restricted'} sandbox` : ''}.</b> ${esc(r.note || 'Tests run; your map upgrades for Python only for now.')}</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>` : `<div class="toastin ok">${icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}.</b> ${esc(r.observed || 0)} call${r.observed === 1 ? '' : 's'} seen running${r.recall != null ? `, ${Math.round(r.recall * 100)}% of them already on the map` : ''}.${d == null ? '' : d > 0 ? ` Readiness up ${d}, now ${r.score_after}.` : ` Readiness unchanged at ${r.score_after}.`} The edges your tests went through are now solid in the Atlas.</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
+    const how = left.length ? 'bad' : 'ok';
+    S.toast = {pid: p.id, html: r.traced === false ? `<div class="toastin ${how}">${left.length ? '' : icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}${r.backend ? ` in the ${r.backend === 'docker' ? 'Docker' : 'restricted'} sandbox` : ''}.</b> ${esc(r.note || 'Tests run; your map upgrades for Python only for now.')}${leftNote}</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>` : `<div class="toastin ${how}">${left.length ? '' : icon('check')}<div><b>Tests ran${r.returncode === 0 ? '' : ` (exit ${esc(r.returncode)})`}.</b> ${esc(r.observed || 0)} call${r.observed === 1 ? '' : 's'} seen running${r.recall != null ? `, ${Math.round(r.recall * 100)}% of them already on the map` : ''}.${d == null ? '' : d > 0 ? ` Readiness up ${d}, now ${r.score_after}.` : ` Readiness unchanged at ${r.score_after}.`} The edges your tests went through are now solid in the Atlas.${leftNote}</div><span class="spacer"></span><button class="btn ghost sm" data-dismiss>Dismiss</button></div>`};
   }
   S.frame = null; await refresh();
 }
@@ -1099,7 +1120,7 @@ function drawProject(el) {
   el.querySelector('#back').onclick = () => go('home');
   const wt = el.querySelector('#watchtests'); if (wt) wt.onclick = () => watchTestsSheet(p);
   { const tb = el.querySelector('#termbtn'); if (tb) tb.onclick = () => termToggle(); }   // Advanced only (the ` key still opens it)
-  if (S.toast && S.toast.pid === p.id) { el.querySelector('#toast').innerHTML = S.toast.html; el.querySelector('#toast').onclick = e => { if (e.target.closest('[data-dismiss]')) { S.toast = null; el.querySelector('#toast').innerHTML = ''; } if (e.target.closest('[data-retry]')) watchTestsSheet(p); }; }
+  if (S.toast && S.toast.pid === p.id) { el.querySelector('#toast').innerHTML = S.toast.html; el.querySelector('#toast').onclick = e => { if (e.target.closest('[data-dismiss]')) { S.toast = null; el.querySelector('#toast').innerHTML = ''; } if (e.target.closest('[data-retry]')) watchTestsSheet(p); const stop = e.target.closest('[data-stop]'); if (stop && !stop.disabled) stopTests(p, stop.dataset.stop); }; }
   el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; S.reportTab = null; ASK.page = null; if (ASK.open) renderAsk(); renderProject(el); });
   const body = el.querySelector('#pbody');
   if (S.tab === 'guide') return renderGuide(body, p);

@@ -22,8 +22,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import results
 from .graph import Graph, Node
 from .providers import AllowanceExhausted, Provider, ProviderError
+from .python_frontend import project_text
 
 PROMPT_VERSION = "lens-v4"
 
@@ -147,7 +149,7 @@ def _term_in_code(term: str, code_lower: str) -> bool:
 
 def read_source(repo: Path, node: Node, max_lines: int = 160) -> str:
     try:
-        lines = (repo / node.file).read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = project_text(repo / node.file, repo).splitlines()
     except (OSError, TypeError):
         return ""
     start, end = (node.start_line or 1), (node.end_line or node.start_line or 1)
@@ -513,19 +515,30 @@ def estimate(g: Graph, nids: list[str], findings: list[dict]) -> dict:
 
 class Cache:
     def __init__(self, root: Path):
-        self.root = root
-        root.mkdir(parents=True, exist_ok=True)
+        """`results.Refused` when `root` is a link: the cache lies in the results folder, which may have come with
+        the project, and its files would be made wherever such a link points."""
+        self.root = results.inner(root, "its cache of explanations")
 
     def key(self, ctx: Context, model: str) -> str:
         raw = f"{ctx.node.fingerprint}|{ctx.hash()}|{model}|{PROMPT_VERSION}"
         return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
     def get(self, k: str) -> dict | None:
-        p = self.root / f"{k}.json"
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        """The record kept under `k`, or None when there is none, or when what is there is not a record: a file that
+        was cut short while it was written (the program was stopped, the disk was full) is asked for again and
+        written anew. Until 2026-11-10 one such file stopped every later explain of the project. Only a plain file
+        is read (`results.plain`): not a link, and not a pipe, which would hold the run up."""
+        text, _why = results.plain(self.root / f"{k}.json")
+        if text is None:
+            return None
+        try:
+            rec = json.loads(text)
+        except (ValueError, RecursionError):
+            return None
+        return rec if isinstance(rec, dict) else None
 
     def put(self, k: str, rec: dict) -> None:
-        (self.root / f"{k}.json").write_text(json.dumps(rec, indent=1), encoding="utf-8")
+        results.write(self.root / f"{k}.json", json.dumps(rec, indent=1), where="the cache of explanations")
 
 
 # --------------------------------------------------------------------------------------------
