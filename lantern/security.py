@@ -5,8 +5,10 @@ Models never create or close findings. They only explain them later (see explain
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -66,6 +68,55 @@ def _read_text(p: Path) -> str:
     return p.read_text(encoding="utf-8", errors="replace")
 
 
+BANDIT_READS = (".py", ".pyw")
+EXCLUSIONS_FIT = 24_000   # characters: Windows starts no program whose whole command line is longer than 32,767
+
+
+def _not_the_projects(repo: Path, skipped: list[str]) -> list[tuple[str, str]]:
+    """The Python files under the project that are not files of the project (`inside_repo`: a link that leads out of
+    it, a pipe, a link to nothing), each as (its name in the project, its path as Bandit will write it). Bandit finds
+    its files itself and opens whatever answers to a `.py` name; Lantern's own reader passed these by already."""
+    out = []
+    top = os.fspath(repo)
+    for dirpath, dirnames, filenames in os.walk(top):
+        if dirpath == top:
+            dirnames[:] = [d for d in dirnames if d not in skipped]
+        dirnames.sort()
+        for fn in sorted(filenames):
+            path = os.path.join(dirpath, fn)
+            if fn.lower().endswith(BANDIT_READS) and not inside_repo(Path(path), repo):
+                out.append((_under(repo, path), path))
+    return out
+
+
+def _under(repo: Path, name) -> str:
+    """Where a path lies under the project, by the text of the two paths (nothing is followed): `pkg/tool.py`."""
+    try:
+        return Path(os.path.relpath(os.path.abspath(str(name)), os.path.abspath(repo))).as_posix()
+    except ValueError:   # Windows: on another drive
+        return ""
+
+
+def _only(paths) -> list[str]:
+    """One Bandit exclusion for each path, as many as fit a command line, the ones that are no file at all first (a
+    pipe is what Bandit would wait on). Bandit leaves a file out when an exclusion fits its path as a pattern or is
+    found anywhere in it, so the plain path of `a.py` would take `a.pyw` and `a.py.old.py` with it: with its last
+    letter in brackets it is a pattern for that one file and is found in no other path. A path with a comma in it
+    cannot be written (`-x a,b` is two exclusions to Bandit) and is passed over here; `run_bandit` takes nothing
+    from a file that is not the project's whether Bandit opened it or not."""
+    out, room = [], EXCLUSIONS_FIT
+    for path in sorted(paths, key=os.path.isfile):
+        if "," in path:
+            continue
+        esc = glob.escape(path)
+        one = esc[:-1] + "[" + esc[-1] + "]"
+        room -= len(one) + 1
+        if room < 0:
+            break
+        out.append(one)
+    return out
+
+
 def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     """Bandit over the repo's Python. Exit 0 = ran, nothing found; exit 1 = ran, found something (no --exit-zero, so a
     crash cannot hide behind a zero); anything else is a failure. Files Bandit could not read make the run `partial`
@@ -73,13 +124,14 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     import importlib.util
     from . import scanresult
     excl = sorted(d for d in SKIP_DIRS if (repo / d).exists())
-    base: dict = {"role": "Python code patterns", "exclusions": excl}
+    left = _not_the_projects(repo, excl)
+    base: dict = {"role": "Python code patterns", "exclusions": excl + sorted(name for name, _ in left)}
     if importlib.util.find_spec("bandit") is None:
         return [], scanresult.record("bandit", "unavailable", 'pip install "lantern[scan]"', applicable=applicable,
                                      version=None, **base)
     cmd = [sys.executable, "-m", "bandit", "-r", str(repo), "-f", "json", "-q"]
-    if excl:
-        cmd += ["-x", ",".join(str(repo / d) for d in excl)]
+    if excl or left:
+        cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
     run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
     base |= {"version": _tool_version([sys.executable, "-m", "bandit", "--version"]), "exit_code": run.returncode,
              "duration_ms": run.duration_ms}
@@ -96,8 +148,13 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     if not isinstance(data.get("results"), list):
         return [], scanresult.record("bandit", "failed", "no results list in the output", **base)
     out = []
+    gone = {name for name, _ in left}
+
+    def ours(name) -> bool:   # whatever the exclusions above did: nothing is taken from a file that is not the project's
+        return _under(repo, name) not in gone
+
     for r in data["results"]:
-        if not isinstance(r, dict) or not r.get("test_id") or not r.get("filename"):
+        if not isinstance(r, dict) or not r.get("test_id") or not r.get("filename") or not ours(r["filename"]):
             continue
         rel = _rel(repo, r["filename"])
         out.append({
@@ -110,9 +167,9 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
             "snippet": str(r.get("code") or "").strip()[:400], "category": "code",
         })
     metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
-    files = sum(1 for k in metrics if k != "_totals")
+    files = sum(1 for k in metrics if k != "_totals" and ours(k))
     errors = [f"{_rel(repo, e.get('filename') or '?')}: {str(e.get('reason') or 'could not be read')[:160]}"
-              for e in (data.get("errors") or []) if isinstance(e, dict)]
+              for e in (data.get("errors") or []) if isinstance(e, dict) and (not e.get("filename") or ours(e["filename"]))]
     base |= {"scope": {"files": files}, "findings": len(out)}
     if errors:
         return out, scanresult.record("bandit", "partial", f"{len(errors)} file{'s' if len(errors) != 1 else ''} could "

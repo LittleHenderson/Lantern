@@ -21,6 +21,7 @@ from . import SCHEMA_VERSION, __version__, gitfacts, scanresult
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
+from .python_frontend import inside_repo
 from .security import ID_VERSION
 
 EVIDENCE_VERSION = 1
@@ -242,7 +243,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
     fixed, changed = compare_baseline(findings, baseline)
     narratives = None
     nf = repo / NARRATIVES_FILE
-    if nf.exists():
+    if inside_repo(nf, repo):   # the project's own file: until 2026-11-10 a link out of the project was shown too
         narratives = nf.read_text(encoding="utf-8", errors="replace")[:20000]
     entries = [{"kind": (n.entry or {}).get("kind"), "detail": (n.entry or {}).get("detail"), "name": n.qualname,
                 "file": n.file} for n in g.entry_points() if (n.entry or {}).get("kind") != "test"]
