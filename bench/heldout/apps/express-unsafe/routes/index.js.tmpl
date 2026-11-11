@@ -1,0 +1,11 @@
+var auth = require('../core/auth')
+var handlers = require('../core/handlers')
+
+module.exports = function (router) {
+  router.get('/search', auth.required, handlers.search)
+  router.post('/ping', auth.required, handlers.ping)
+  router.get('/go', handlers.go)
+  // every other route that changes data asks for a sign-in; this one forgot
+  router.delete('/items/:id', handlers.remove)
+  return router
+}

@@ -13,6 +13,7 @@
 const BROWSER = process.env.PW_BROWSER || 'chromium';
 const chromium = require('playwright')[BROWSER];
 const a11y = require('./a11y.js');
+const outside = require('./outside.js');   // no page under test reaches the internet
 
 // page.waitForFunction polls through eval in older Playwright, which the app's script-src policy (rightly) refuses;
 // poll with page.evaluate instead, which the policy allows.
@@ -26,14 +27,15 @@ async function until(p, fn, timeout) {
 }
 
 async function appSmoke(url, out, image, expectText) {
-  const b = await chromium.launch();
+  const b = await outside.launch(chromium);   // its only way out is a proxy on this computer that refuses
   const errs = [];
   let allow400 = false;   // the terminal's refusal answers 400 on purpose; Chromium logs that as a console error
   const step = (name, what) => console.log(`${name}: ${what}`);
   for (const [name, vp] of [['desk', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
     const p = await b.newPage({ viewport: vp });
+    await outside.watch(p, errs, outside.FONTS);
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
-    p.on('console', m => { if (m.type() === 'error' && !(allow400 && /status of 400/.test(m.text()))) errs.push(`${name} console: ${m.text()}`); });
+    p.on('console', m => { if (m.type() === 'error' && !outside.refusedFont(m) && !(allow400 && /status of 400/.test(m.text()))) errs.push(`${name} console: ${m.text()}${outside.where(m)}`); });
     p.on('dialog', d => { errs.push(`${name}: a dialog opened: ${d.message()}`); d.dismiss(); });
     const api = (path, body) => p.evaluate(([path, body]) => fetch(path, body === undefined ? {} : {method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-Lantern-Token': TOKEN}, body: JSON.stringify(body)}).then(r => r.json()), [path, body]);
@@ -127,9 +129,9 @@ async function appSmoke(url, out, image, expectText) {
     } catch (e) { errs.push(`${name}: the smoke test could not drive the app: ${e.message.split('\n')[0]}`); }
     await p.close();
   }
+  console.log(await outside.close(b, errs));   // closes the browser, then says what was asked of the outside
   console.log(errs.length ? errs.join('\n') : 'no JS errors');
   if (errs.length) process.exitCode = 1;
-  await b.close();
 }
 
 (async () => {
@@ -140,15 +142,16 @@ async function appSmoke(url, out, image, expectText) {
   }
   const [file, out] = process.argv.slice(2);
   if (!file || !out) { console.error('usage: node tools/viewer_smoke.js REPORT.html OUT_PREFIX'); process.exit(2); }
-  const b = await chromium.launch();
+  const b = await outside.launch(chromium);   // its only way out is a proxy on this computer that refuses
   const errs = [];
   for (const [name, vp] of [['desk', { width: 1440, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
     // the phone pass runs in dark mode, so both appearances get the accessibility checks
     const p = await b.newPage({ viewport: vp, colorScheme: name === 'phone' ? 'dark' : 'light' });
+    await outside.watch(p, errs);   // a report is one self-contained file: it asks the outside for nothing
     try {
     p.on('pageerror', e => errs.push(`${name}: ${e.message}`));
     p.on('dialog', d => { errs.push(`${name}: a dialog opened (script from the data ran): ${d.message()}`); d.dismiss(); });
-    p.on('console', m => { if (m.type() === 'error') errs.push(`${name} console: ${m.text()}`); });
+    p.on('console', m => { if (m.type() === 'error') errs.push(`${name} console: ${m.text()}${outside.where(m)}`); });
     const pwned = async where => {
       const n = await p.$$eval('[data-pwn]', els => els.length);
       if (n) errs.push(`${name} ${where}: ${n} element(s) from the data landed in the page as markup`);
@@ -279,7 +282,7 @@ async function appSmoke(url, out, image, expectText) {
     } catch (e) { errs.push(`${name}: the smoke test could not drive the page: ${e.message.split('\n')[0]}`); }
     await p.close();
   }
+  console.log(await outside.close(b, errs));   // closes the browser, then says what was asked of the outside
   console.log(errs.length ? errs.join('\n') : 'no JS errors');
   if (errs.length) process.exitCode = 1;
-  await b.close();
 })();

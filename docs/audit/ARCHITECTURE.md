@@ -35,6 +35,7 @@ lines and the server streams them to the browser.
 | Module | Responsibility | Key functions |
 |---|---|---|
 | `graph.py` | Node/Edge dataclasses, confidence ranks, JSON round-trip, stats | `Graph.add_edge` keeps the strongest confidence |
+| `calls.py` | Call-site inventory (Python and JS/TS): one record per call written in the code, keyed `file:line:col`, one outcome each, a reason for every unresolved one, groups written / handed / implicit, test code apart. The frontends call `record`; `engine.build_graph` ends with `finish` | `record`, `classify`, `why`, `finish`, `summarize`, `write` |
 | `python_frontend.py` | Python discovery, parsing, name and type resolution | `discover`, `inside_repo`, `build_graph`, `Resolver` |
 | `js_frontend.py` | TS/JS discovery, ES module resolution, React/Next/Express entry points | `add_js`, `Walker`, `SpecResolver`, `JSResolver` |
 | `java_frontend.py`, `kotlin_frontend.py` | Java and Kotlin parsing, packages/classes/methods, call resolution (`name`, `import`, `receiver-type`, `interface`, …), Spring routes | `add_java`, `add_kotlin`, `Linker` |
@@ -51,7 +52,8 @@ lines and the server streams them to the browser.
 | `android.py` | Android apps: manifest/network-config/Gradle reading (expat, entities refused), manifest entry points, `LM-*` rules, the `security.mobile` summary (permissions, components) | `find_modules`, `add_entries`, `scan` |
 | `websec.py` | Full-stack rules (public env secrets, Supabase, Firebase, CORS, missing auth, JS patterns) | `scan_web` |
 | `readiness.py` | Readiness checks, shape classifier, advisor, hotspots, starter files | `assess`, `Repo`, `check_*` |
-| `evidence.py` | Evidence Report, digest, badge, git facts | `build`, `digest_payload`, `render_html`, `git_info` |
+| `evidence.py` | Evidence Report, digest, badge, git facts (through `gitfacts.py`) | `build`, `digest_payload`, `render_html`, `git_info` |
+| `gitfacts.py` | What git knows about an analyzed folder (commit, branch, uncommitted changes, address, missing files), read without obeying the folder's own git settings: `.git` read by hand, never through a link or a pointer that does not name the folder back; git started only from a git folder Lantern makes, with a fixed list of harmless settings | `info`, `deleted`, `head_commit`, `find`, `head`, `settings` |
 | `explain.py` | Prompt, JSON parsing, anchor validation, scenario checks, selection, cache | `validate`, `check_scenarios`, `select_nodes`, `run` |
 | `scenarios.py` | A short story per finding (who, steps, what goes wrong, after the fix, basis) and a plain heading, both from the finding's own facts; no model | `for_finding`, `headline`, `kind_of`, `attach` |
 | `providers.py` | Anthropic, OpenAI-compatible presets, fixture stub | `make_provider` |
@@ -65,6 +67,7 @@ lines and the server streams them to the browser.
 | File | Contents |
 |---|---|
 | `graph.json` | `schema`, `repo_root`, `meta` (languages, files, lines, `http_calls`, `bridge` stats), `nodes[]` (`id`, `kind`, `qualname`, `file`, `start_line`, `end_line`, `fingerprint`, `signature`, `entry`), `edges[]` (`src`, `dst`, `kind`, `confidence`, `lines`, `via`, `detail`), `unresolved` |
+| `calls.json` | `summary` (for `written`, `handed`, `implicit`, `in_tests`: `total`, `outcomes`, `reasons`, `by_via`, `with_several_targets`, `lines_with_several_calls`; `languages`, `not_inventoried`), `outcomes` and `reasons` (the words for each code), `sites[]` (`at`, `file`, `line`, `col`, `callee`, `caller`, `lang`, `group`, `outcome`, `to`, `via`, `confidence`, `reason`, `why`, `test`; at most 250,000, `truncated` says when) |
 | `security.json` | `findings[]` (`id`, `tool`, `rule`, `title`, `tool_severity`, `tool_confidence`, `file`, `line`, `category`, `node`, `reachable`, `ui_path`, `rank`, `status`, `accepted`), `tools[]`, `counts` (open only, plus `in_tests`, `accepted`) |
 | `readiness.json` | `score`, `grade`, `categories[]` → `checks[]` (`id`, `status` pass/fail/partial/skip, `points`, `earned`, `evidence`, `fix`, `how`), `shape`, `stack`, `advice`, `hotspots`, `next_steps`, `starter` |
 | `explanations.json` | `metaphor`, `explanations{node_id → record}` (`lens1`, `lens2`, `lens3.pairs[]` with `anchor`, `scenario`, `findings` (each may carry `scenario`), `dropped_scenarios`, `validated`, `validation_errors`, `model`, `prompt_version`, `code_hash`), `stats` |

@@ -16,7 +16,11 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "netguard"))
+import lantern_netguard as netguard  # noqa: E402  (tools/netguard: every benchmark starts isolated)
 
 APPS = [
     # name, git url, ref, language the check is mostly about
@@ -35,7 +39,7 @@ APPS = [
 
 def clone(url: str, ref: str, dest: Path) -> None:
     subprocess.run(["git", "clone", "-q", "--depth", "1", "--branch", ref, url, str(dest)], check=True,
-                   timeout=900, env={"GIT_TERMINAL_PROMPT": "0", "PATH": "/usr/bin:/bin:/usr/local/bin"})
+                   timeout=900)                   # in the isolated run's environment: no sign-in, prompts off
 
 
 # The analysis runs in a child that reports its own peak memory on its last line of stderr (ru_maxrss is KB on Linux).
@@ -107,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     work = Path(a.work)
     work.mkdir(parents=True, exist_ok=True)
+    # isolated (tools/netguard): temporary home, no keys, and only the hosts the apps are cloned from can be reached
+    guard = netguard.begin(allow=sorted({urllib.parse.urlsplit(url).hostname for _n, url, _r, _w in APPS}))
     rows = []
     for name, url, ref, _what in APPS:
         if a.only and name != a.only:
@@ -125,7 +131,8 @@ def main(argv: list[str] | None = None) -> int:
     bad = [r for r in rows if r.get("status") != "ok"]
     for r in bad:
         print(f"FAIL {r['name']}: {r['status']}\n{r.get('tail', '')}", file=sys.stderr)
-    return 1 if bad else 0
+    refused = netguard.end(guard)
+    return 1 if bad or refused else 0
 
 
 if __name__ == "__main__":

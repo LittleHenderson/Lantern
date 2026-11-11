@@ -299,7 +299,11 @@ class App:
             path = f.get("ui_path")
             if top_page is None and isinstance(path, list) and path and isinstance(path[0], str) and path[0].startswith("js:") and "::" in path[0]:
                 top_page = path[0].rsplit("::", 1)[1].split(".")[0][:40]
+        # scanners that did not finish or did not cover everything (scanresult.py): the card says so
+        incomplete = [_str(t.get("tool")) for t in (sec.get("incomplete") or []) if isinstance(t, dict) and _str(t.get("tool"))
+                      ] if isinstance(sec.get("incomplete"), list) else []
         return {**p, "exists": Path(p["path"]).is_dir(), "has_report": (out / "report.html").exists(),
+                "incomplete": incomplete[:12],
                 "stack": " + ".join(frameworks) or " + ".join(languages) or None,
                 "languages": languages, "reachable_critical": reach_crit, "top_page": top_page,
                 "functions": _int(sec.get("total_callables")),
@@ -774,6 +778,10 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         if u.path in ("/manifest.webmanifest", "/sw.js", "/icon.svg"):
             return self._static(u.path[1:])
+        if u.path == "/guide":   # How to use Lantern: fixed content, no project data, so no sign-in needed
+            from .guide import page as guide_page
+            html, nonce = guide_page(__version__, "/")
+            return self._send(200, html, "text/html; charset=utf-8", {"Content-Security-Policy": _csp(nonce)})
         if u.path == "/":
             given = (q.get("token") or [""])[0]
             if given and _same(given, self.app.token):

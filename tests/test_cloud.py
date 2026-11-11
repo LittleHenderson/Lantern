@@ -97,18 +97,23 @@ def test_gateway_token_signs_in_and_only_the_account_is_stored(env):
     assert hashlib.sha256(tok.encode()).hexdigest().encode() not in raw
 
 
-def test_signed_in_account_follows_the_person_across_token_rotation(env):
+def test_signing_in_somewhere_else_keeps_the_website_signed_in(env):
     _, gw_app, cloud, _, s, _ = env
     store = gw_app.state.store
     t1 = store.sign_in("github:4242", "github:octo")
     assert cloud.get("/v1/me", headers=bearer(t1)).json()["label"] == "github:octo"
-    t2 = store.sign_in("github:4242", "github:octo")      # signing in again rotates the token
+    t2 = store.sign_in("github:4242", "github:octo")      # the same person signs in on the app or the gateway page
     assert cloud.get("/v1/me", headers=bearer(t2)).status_code == 200
     accounts = [r[0] for r in sqlite3.connect(s.db_path).execute("select account from users")]
     assert accounts == ["github:4242"]
-    # The old token is disabled at the gateway; once the cached answer expires it is refused here too.
+    # The website's earlier sign-in still works once the cached answer is gone: nobody signs in twice.
     cloud.app.state.identity.cache.clear()
-    assert cloud.get("/v1/me", headers=bearer(t1)).status_code == 401
+    assert cloud.get("/v1/me", headers=bearer(t1)).json()["label"] == "github:octo"
+    # Switching the account off at the gateway still signs out every place.
+    store.db.execute("update users set disabled = 1 where token_hash = ?", (store.user(t1)["hash"],))
+    store.db.commit()
+    cloud.app.state.identity.cache.clear()
+    assert cloud.get("/v1/me", headers=bearer(t1)).status_code == 401 and cloud.get("/v1/me", headers=bearer(t2)).status_code == 401
 
 
 def test_gateway_down_is_unavailable_not_signed_out(tmp_path):
@@ -250,3 +255,22 @@ def test_limit_messages_say_how_long_until_the_reset():
     assert until_midnight_utc(at) == "in 5 h 20 min (00:00 UTC)"
     assert until_midnight_utc(dt.datetime(2026, 11, 5, 23, 59, 30, tzinfo=dt.UTC)) == "in 1 min (00:00 UTC)"
     assert until_midnight_utc(dt.datetime(2026, 11, 5, 0, 0, 0, tzinfo=dt.UTC)) == "in 24 h 0 min (00:00 UTC)"
+
+
+def test_sign_out_everywhere_from_the_website(env):
+    _, gw_app, cloud, _, _, _ = env
+    store = gw_app.state.store
+    web, app_tok = store.sign_in("github:77", "github:seven"), store.sign_in("github:77", "github:seven")
+    cloud.cookies.set("lt", web)
+    site = {"x-lantern-site": "1"}
+    assert cloud.get("/v1/me").status_code == 200 and cloud.get("/v1/me", headers=bearer(app_tok)).status_code == 200
+    assert cloud.post("/v1/signout", json={"everywhere": True}).status_code == 403          # only from Lantern's page
+    r = cloud.post("/v1/signout", json={"everywhere": True}, headers=site)
+    assert r.status_code == 200 and r.json()["ended"] == 2
+    cloud.cookies.clear()
+    assert cloud.get("/v1/me", headers=bearer(app_tok)).status_code == 401                # the app is signed out too
+    # A plain sign-out ends only this browser's sign-in.
+    web, app_tok = store.sign_in("github:77", "github:seven"), store.sign_in("github:77", "github:seven")
+    cloud.cookies.set("lt", web)
+    assert cloud.post("/v1/signout", headers=site).json()["ended"] == 1
+    assert store.user(web) is None and cloud.get("/v1/me", headers=bearer(app_tok)).status_code == 200

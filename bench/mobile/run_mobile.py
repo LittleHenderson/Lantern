@@ -14,6 +14,8 @@ round's task 4, docs/tester-round.md). It exits 1 when a rule with at least five
 --min-precision: that rule is then the next thing to fix, or to relabel as heuristic.
 
 Nothing here is a unit test (network, minutes); tests/test_mobile_bench.py proves the scoring on the fixtures.
+The run is isolated (tools/netguard): a temporary home folder, no keys or saved sign-ins, real model providers off,
+and the network refused except for the hosts the apps are cloned from.
 """
 from __future__ import annotations
 
@@ -22,11 +24,14 @@ import json
 import subprocess
 import sys
 import time
+import urllib.parse
 from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "netguard"))
+import lantern_netguard as netguard  # noqa: E402  (tools/netguard: every benchmark starts isolated)
 LABELS = ("real", "false alarm", "cannot tell")
 
 
@@ -47,7 +52,12 @@ def load_labels(path: Path = HERE / "labels.json") -> dict[str, dict[str, dict]]
 
 def clone(url: str, ref: str | None, dest: Path) -> None:
     cmd = ["git", "clone", "-q", "--depth", "1"] + (["--branch", ref] if ref else []) + [url, str(dest)]
-    subprocess.run(cmd, check=True, timeout=900, env={"GIT_TERMINAL_PROMPT": "0", "PATH": "/usr/bin:/bin:/usr/local/bin"})
+    subprocess.run(cmd, check=True, timeout=900)     # in the isolated run's environment: no sign-in, prompts off
+
+
+def hosts(apps: list[dict]) -> list[str]:
+    """Where the apps are cloned from: everything this benchmark may reach."""
+    return sorted({urllib.parse.urlsplit(a["url"]).hostname for a in apps if a.get("url")} - {None})
 
 
 def commit_of(repo: Path) -> str | None:
@@ -171,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     work.mkdir(parents=True, exist_ok=True)
     labels = load_labels()
     apps = [x for x in load_apps() if not a.only or x["name"] == a.only]
+    guard = netguard.begin(allow=hosts(apps))
     done = []
     for app in apps:
         print(f"== {app['name']} ({app['platform']})", flush=True)
@@ -201,7 +212,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nPRECISION UNDER {a.min_precision:.0%}: {', '.join(bad)}")
     if failed:
         print(f"\nDID NOT FINISH: {', '.join(failed)}")
-    return 1 if bad or failed else 0
+    refused = netguard.end(guard)                 # anything but the apps' own hosts was refused, and fails the run
+    return 1 if bad or failed or refused else 0
 
 
 if __name__ == "__main__":

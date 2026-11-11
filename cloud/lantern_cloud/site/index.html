@@ -24,6 +24,11 @@
 @media (min-width:1181px){.ptable .r{min-width:1180px}}
 @media (max-width:1180px){.ptable .r{grid-template-columns:180px 132px 40px 40px 40px 44px 244px 112px minmax(150px,1fr)}.ptable .r > :nth-child(2),.ptable .r > :nth-child(9){display:none}.ptable .r > :nth-child(8){display:block}}
 @media (max-width:1000px){.ptable .r{grid-template-columns:minmax(140px,1fr) 120px 40px 40px 40px 44px 244px minmax(150px,auto)}.ptable .r > :nth-child(10){display:none}.ptable .r > :nth-child(9){display:none}}
+/* The note shown over the report frame while a big report is still arriving (frameWait). */
+#pbody{position:relative}
+.framewait{position:absolute;top:28px;left:50%;transform:translateX(-50%);display:flex;gap:12px;align-items:flex-start;max-width:min(440px,calc(100% - 32px));padding:14px 18px;border-radius:14px;background:var(--surface);border:1px solid var(--line);box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:2}
+.framewait .btn.busy{padding:0;border:0;background:none;min-height:0;margin-top:3px}
+.framewait p{margin:4px 0 0}
 .where{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
 .where .lw{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3px 2px;border-radius:6px;background:var(--surface-2);color:var(--faint);font:500 10.5px/1.15 var(--font);white-space:nowrap;cursor:help}
 .where .lw b{font:600 13px/1.2 var(--font);font-variant-numeric:tabular-nums}
@@ -87,6 +92,7 @@
 #stage{position:absolute;inset:0}
 #skipzone{position:absolute;left:0;right:0;top:0;bottom:44px;z-index:2;cursor:pointer}
 #introbar{position:absolute;top:18px;right:20px;z-index:3;display:flex;gap:8px;align-items:center}
+#introbar[hidden]{display:none}
 .pillbtn{height:36px;padding:0 14px;border-radius:99px;border:1px solid rgba(255,255,255,.18);background:rgba(14,14,16,.6);color:#BEBEC3;cursor:pointer;display:inline-flex;align-items:center;gap:8px;font:500 13px var(--font);white-space:nowrap;backdrop-filter:blur(6px)}
 .pillbtn:hover{color:#F3F3F1;border-color:rgba(255,255,255,.35)}
 .pillbtn svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
@@ -129,6 +135,7 @@
   <nav id="nav" class="nav" aria-label="Main">
     <button data-v="home" class="on" aria-label="My runs"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>My runs</span></button>
     <button data-v="help" aria-label="Help"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M10 14h.01"/></svg><span>Help</span></button>
+    <button data-v="guide" aria-label="How to use Lantern" title="How to use Lantern: short animated demos"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M8.5 8v4l3.5-2z"/></svg><span>How to use Lantern</span></button>
     <button data-v="settings" aria-label="Settings"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg><span>Settings</span></button>
   </nav>
   <div class="seg" id="viewmode" title="Simple: plain sentences and one next action. Advanced: every table and panel."><button data-m="simple">Simple</button><button data-m="advanced">Advanced</button></div>
@@ -252,6 +259,23 @@ async function loadMe() {
   try { S.me = await api('/v1/me'); }
   catch (e) { S.me = e.status === 401 ? null : S.me || null; if (e.status !== 401) S.meErr = e.message; }
 }
+// A sign-in finished in the GitHub/Google tab while this page was reloaded or its sheet closed: collect it quietly
+// (the one-time code waits in an HttpOnly cookie for 10 minutes), so nobody has to sign in a second time. Only asked
+// when this browser started a sign-in in the last 10 minutes (a note in local storage holds when it runs out).
+function signingMark(until) {
+  try { if (until) localStorage.setItem('lantern.signing', String(until)); else localStorage.removeItem('lantern.signing'); } catch (e) { /* storage off */ }
+}
+function signingSince() { try { return Number(localStorage.getItem('lantern.signing')) || 0; } catch (e) { return 0; } }
+async function pickUpSignIn() {
+  if (S.me) { signingMark(0); return false; }
+  if (S.signing || signingSince() < Date.now()) return false;
+  try {
+    const r = await api('/v1/signin/poll', {method: 'POST'});
+    if (r.signed_in) { signingMark(0); await afterSignIn(); return true; }
+  } catch (e) { signingMark(0); /* no sign-in waiting here */ }
+  return false;
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pickUpSignIn(); });
 async function loadSamples() { try { const d = await api('/v1/samples'); S.samples = Array.isArray(d.samples) ? d.samples : []; } catch (e) { S.samples = []; } }
 async function loadRuns() { if (!S.me) { S.runs = null; return; } try { S.runs = (await api('/v1/runs')).runs; } catch (e) { if (e.status === 401) { S.me = null; S.runs = null; } } }
 function drawAcct() {
@@ -293,6 +317,7 @@ async function startSignIn(provider, el) {
   const msg = el.querySelector('#signmsg');
   try {
     const r = await api('/v1/signin/start', {method: 'POST', body: {provider}});
+    signingMark(Date.now() + 10 * 60 * 1000);
     if (w) { w.opener = null; w.location.href = r.url; } else location.href = r.url;
   } catch (e) { if (w) w.close(); msg.innerHTML = note('err', esc(e.message)); return; }
   el.querySelector('#signbtns').innerHTML = `<div class="working"><span class="pulse"></span>Finish signing in on the ${provider === 'github' ? 'GitHub' : 'Google'} tab. This page notices by itself.</div><div class="indeterminate"></div>`;
@@ -302,7 +327,7 @@ async function startSignIn(provider, el) {
     if (Date.now() > until) { msg.innerHTML = note('warn', 'That took too long. Close this and sign in again.'); return; }
     try {
       const r = await api('/v1/signin/poll', {method: 'POST'});
-      if (r.signed_in) { S.signing = null; closeSheet(); await afterSignIn(); return; }
+      if (r.signed_in) { S.signing = null; signingMark(0); closeSheet(); await afterSignIn(); return; }
     } catch (e) { if (e.status !== 503) { msg.innerHTML = note('err', esc(e.message)); return; } }
     setTimeout(poll, 1500);
   };
@@ -318,7 +343,8 @@ async function accountSheet() {
     <p>Signed in with ${esc(via)}. You have used <b>${esc(me.runs_today)}</b> of today's ${esc(me.limits.runs_per_day)} checks.</p>
     <p class="muted small">Your results are private to this account and stay until you delete them. Nothing is shared unless you click Share on a run.</p>
     <div id="ailine"></div>
-    <div class="row" style="margin-top:18px"><button class="btn quiet" id="delme">${icon('trash')}Delete my account</button><span class="spacer"></span><button class="btn" id="tosettings">Settings</button><button class="btn primary" id="signout">Sign out</button></div>`);
+    <div class="row" style="margin-top:18px"><button class="btn quiet" id="delme">${icon('trash')}Delete my account</button><span class="spacer"></span><button class="btn" id="tosettings">Settings</button><button class="btn primary" id="signout">Sign out</button></div>
+    <div class="row" style="margin-top:10px"><span class="spacer"></span><button class="btn quiet sm" id="signoutall">Sign out everywhere</button></div>`);
   el.querySelector('#delme').onclick = deleteMeSheet;
   el.querySelector('#tosettings').onclick = () => { closeSheet(); go('settings'); };
   aiState(true).then(st => {
@@ -330,8 +356,24 @@ async function accountSheet() {
     if (off) off.onclick = async () => { try { AI.state = {...st, ...(await api('/v1/ai/consent', {method: 'POST', body: {agree: false}}))}; accountSheet(); } catch (e) { box.innerHTML = note('err', esc(e.message)); } };
   });
   el.querySelector('#signout').onclick = signOut;
+  el.querySelector('#signoutall').onclick = signOutAllSheet;
 }
 async function signOut() { try { await api('/v1/signout', {method: 'POST'}); } catch (e) {} S.me = null; S.runs = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render(); }
+// Every place this account is signed in (other computers and phones, the Lantern app, the terminal) is signed out.
+// Results and the allowance stay; each place signs in again when it is next used.
+function signOutAllSheet() {
+  const el = sheet(`<div class="sh"><h2>Sign out everywhere?</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>This signs your account out on every computer and phone, in the Lantern app and in the terminal, including here. Use it if you lost a device or a sign-in key was shown somewhere.</p>
+    <p class="muted small">Your results and your free allowance stay. Each place asks you to sign in again the next time.</p>
+    <div id="soamsg"></div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="soago">Sign out everywhere</button></div>`);
+  el.querySelector('#soago').onclick = async () => {
+    const b = el.querySelector('#soago'); b.disabled = true; b.textContent = 'Signing out…';
+    try { await api('/v1/signout', {method: 'POST', body: {everywhere: true}}); }
+    catch (e) { b.disabled = false; b.textContent = 'Sign out everywhere'; el.querySelector('#soamsg').innerHTML = note('err', esc(e.message)); return; }
+    S.me = null; S.runs = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render();
+  };
+}
 
 // ---- share, delete
 const SHARE_IC = '<svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.8-2.8a3 3 0 0 0-4.2-4.2l-1 1M11.5 8.5a3 3 0 0 0-4.2 0l-2.8 2.8a3 3 0 0 0 4.2 4.2l1-1"/></svg>';
@@ -672,6 +714,15 @@ function renderHomePro(el) {
   el.querySelectorAll('[data-pv]').forEach(b => b.onclick = () => { S.privacy = b.dataset.pv; render(); });
 }
 
+// While the report is on its way: a big project's report is one large page, and the frame stays empty until it has
+// arrived, so say so with a clock that counts (it still changes with animations off). The frame's load removes it.
+function frameWait() {
+  const t = new Date().toISOString();
+  setTimeout(() => { const w = document.querySelector('.framewait .slow'); if (w) w.hidden = false; }, 12000);
+  return `<div class="framewait" role="status"><span class="btn quiet busy" aria-hidden="true"></span><div><b>Opening the report</b> ${since(t, '·')}
+    <p class="muted small slow" hidden>Big projects have big reports. This one is still arriving; it opens by itself when it has.</p></div></div>`;
+}
+
 // ---- one run: live progress, then the report
 const RUN_TABS = {atlas: 'map', findings: 'findings', prot: 'prot', ready: 'ready'};
 async function viewLinks(r) {
@@ -772,8 +823,8 @@ async function renderReport(el, r) {
   if (S.runId !== r.id) return;
   const nt = el.querySelector('#newtab'); if (nt) nt.href = S.tab === 'evidence' ? links.evidence : links.report;
   if (S.tab === 'evidence') {
-    body.innerHTML = `<iframe title="Evidence Report"></iframe>`;
-    const f = body.querySelector('iframe'); f.onload = () => { try { themeOn(f.contentDocument); } catch (err) {} }; f.src = links.evidence;
+    body.innerHTML = `${frameWait()}<iframe title="Evidence Report"></iframe>`;
+    const f = body.querySelector('iframe'); f.onload = () => { body.querySelector('.framewait')?.remove(); try { themeOn(f.contentDocument); } catch (err) {} }; f.src = links.evidence;
     return;
   }
   const want = RUN_TABS[S.tab];
@@ -782,9 +833,9 @@ async function renderReport(el, r) {
     body.appendChild(old); try { old.contentDocument.querySelector(`#tabs [data-t="${want}"]`)?.click(); } catch (err) {}
     return;
   }
-  body.innerHTML = `<iframe title="Report" allow="fullscreen"></iframe>`;
+  body.innerHTML = `${frameWait()}<iframe title="Report" allow="fullscreen"></iframe>`;
   const fr = body.querySelector('iframe'); S.frame = {rid: r.id, el: fr};
-  fr.onload = () => { try { const d = fr.contentDocument; themeOn(d); d.body.classList.add('embed'); d.querySelector(`#tabs [data-t="${RUN_TABS[S.tab] || 'findings'}"]`)?.click(); } catch (err) {} };
+  fr.onload = () => { body.querySelector('.framewait')?.remove(); try { const d = fr.contentDocument; themeOn(d); d.body.classList.add('embed'); d.querySelector(`#tabs [data-t="${RUN_TABS[S.tab] || 'findings'}"]`)?.click(); } catch (err) {} };
   fr.src = links.report;
 }
 
@@ -918,6 +969,7 @@ async function askSend(text) {
       ASK.log.pop(); ASK.log.pop();
       if (e.type === 'consent_needed') { ASK.busy = false; AI.state = null; renderAsk(); return withConsent(() => askSend(text)); }
       ASK.log.push({role: 'me', text}); ASK.log.push({role: 'bot', text: 'I could not answer: ' + e.message});
+      if (e.status === 401) { S.me = null; AI.state = null; drawAcct(); ASK.busy = false; renderAsk(); return signInSheet(e.message); }
     }
     ASK.busy = false; renderAsk();
   };
@@ -995,7 +1047,7 @@ function renderSettings(el) {
       <div id="privmsg" class="hint"></div></div>
     <div class="card group"><h2>Plain-words explanations</h2><div id="aiset">${me ? '<div class="hint">Looking…</div>' : '<div class="hint">Sign in to use Explain in plain words and Ask Lantern.</div>'}</div></div>
     <div class="card group"><h2>Account</h2>${me
-      ? `<div class="alsorow"><div><b>${esc(name)}</b><div class="hint">Signed in with ${esc(via)}. ${esc(me.runs_today)} of today's ${esc(me.limits.runs_per_day)} checks used; the count starts again at midnight UTC.</div></div><button class="btn" id="setsignout">Sign out</button></div>
+      ? `<div class="alsorow"><div><b>${esc(name)}</b><div class="hint">Signed in with ${esc(via)}. ${esc(me.runs_today)} of today's ${esc(me.limits.runs_per_day)} checks used; the count starts again at midnight UTC.</div></div><div class="row"><button class="btn quiet" id="setsignoutall">Sign out everywhere</button><button class="btn" id="setsignout">Sign out</button></div></div>
         <div class="alsorow"><div><b>Delete my account</b><div class="hint">Deletes every run, report and share link Lantern keeps for you. Your GitHub or Google account is not touched.</div></div><button class="btn danger" id="setdelme">${icon('trash')}Delete</button></div>`
       : `<div class="alsorow"><div><b>Not signed in</b><div class="hint">Sign in with GitHub or Google to run checks and keep your results.</div></div><button class="btn primary" id="setsignin">Sign in</button></div>`}</div>
     <div class="card group"><h2>Also</h2>
@@ -1015,6 +1067,7 @@ function renderSettings(el) {
   el.querySelector('#sethelp').onclick = () => go('help');
   if (!me) { el.querySelector('#setsignin').onclick = () => signInSheet(); return; }
   el.querySelector('#setsignout').onclick = signOut;
+  el.querySelector('#setsignoutall').onclick = signOutAllSheet;
   el.querySelector('#setdelme').onclick = deleteMeSheet;
   aiState(true).then(st => {
     const box = el.querySelector('#aiset'); if (!box || S.view !== 'settings') return;
@@ -1032,7 +1085,7 @@ function renderSettings(el) {
 
 // ---- routing
 function go(view) { location.hash = view === 'help' ? '#/help' : view === 'settings' ? '#/settings' : '#/'; }
-document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); };
+document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v === 'guide') { location.href = '/guide'; return; } if (b) go(b.dataset.v); };
 // The logo is "Lantern home": from any other screen it goes to My runs; on My runs it plays the welcome again
 // (Skip, a click or Escape ends it), the same as opening the site fresh.
 document.getElementById('home').onclick = () => {
@@ -1077,7 +1130,7 @@ setInterval(() => {
 }, 3000);
 addEventListener('hashchange', () => { S.addMsg = null; route(); });
 addEventListener('resize', () => { const m = document.body.dataset.mode; drawViewMode(); if (document.body.dataset.mode !== m) render(); });
-(async () => { await Promise.all([loadMe(), loadSamples()]); await loadRuns(); route(); })();
+(async () => { await Promise.all([loadMe(), loadSamples()]); await loadRuns(); route(); pickUpSignIn(); })();
 </script>
 <script src="/react.production.min.js"></script>
 <script src="/react-dom.production.min.js"></script>
@@ -1091,7 +1144,8 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
 // The intro: the landing page's 20 seconds, on every visit to the home page (Skip, a click or Escape jumps to its end
 // card). Nothing is remembered. If the scripts above did not load, the overlay hides and the page shows.
 (function () {
-  const intro = document.getElementById('intro'), end = document.getElementById('introend'), skipzone = document.getElementById('skipzone');
+  const intro = document.getElementById('intro'), end = document.getElementById('introend'), skipzone = document.getElementById('skipzone'),
+        bar = document.getElementById('introbar');
   let state = intro.classList.contains('hidden') ? 'hidden' : 'playing', sound = false, root = null;
   const control = { current: null };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1101,7 +1155,8 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
     root.render(React.createElement(window.LanternIntro, { sound, control, onDone: showEnd }));
     return true;
   }
-  function resetEnd() { end.classList.remove('on'); end.hidden = true; skipzone.hidden = false; }
+  // Sound and Skip belong to the film only: once it ends (or is skipped) they go, and come back on a replay.
+  function resetEnd() { end.classList.remove('on'); end.hidden = true; skipzone.hidden = false; bar.hidden = false; }
   function play() {
     resetEnd();
     if (!mount()) { state = 'hidden'; intro.className = 'hidden'; return; }
@@ -1110,7 +1165,7 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
   }
   function showEnd() {
     if (state !== 'playing') return;
-    state = 'ended'; skipzone.hidden = true; end.hidden = false;
+    state = 'ended'; skipzone.hidden = true; bar.hidden = true; end.hidden = false;
     requestAnimationFrame(() => { end.classList.add('on'); document.getElementById('end-start').focus({ preventScroll: true }); });
   }
   function skip() {
@@ -1119,7 +1174,7 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
   }
   function finish() {
     if (state !== 'playing' && state !== 'ended') return;
-    state = 'fading'; intro.className = 'fading';
+    state = 'fading'; intro.className = 'fading'; bar.hidden = true;
     setTimeout(() => { if (state === 'fading') { state = 'hidden'; intro.className = 'hidden'; resetEnd(); } }, 950);
   }
   // Land on the home page's link box (with a short accent ring) or on the sample apps.
@@ -1135,11 +1190,12 @@ window.TWEAK_DEFAULTS = {"motionEditor": false, "captions": true};
     }, 60);
   }
   skipzone.onclick = skip;
-  document.getElementById('skipbtn').onclick = () => { if (state === 'ended') finish(); else skip(); };
+  document.getElementById('skipbtn').onclick = skip;
   document.getElementById('end-start').onclick = () => { finish(); land('box'); };
   document.getElementById('end-sample').onclick = () => { finish(); land('samples'); };
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && state === 'playing') { e.preventDefault(); skip(); }
+    else if (e.key === 'Escape' && state === 'ended') { e.preventDefault(); finish(); }
     else if ((e.key === 'Enter' || e.key === ' ') && state === 'ended' && !(e.target.closest && e.target.closest('#introbar, #end-sample'))) {
       e.preventDefault(); finish(); land('box');
     }

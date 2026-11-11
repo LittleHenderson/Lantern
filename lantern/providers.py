@@ -19,8 +19,10 @@ provider key) is stored in ~/.config/lantern/ by `lantern login`.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -110,6 +112,34 @@ class Provider:
         raise NotImplementedError
 
 
+NO_REAL_ENV = "LANTERN_NO_REAL_PROVIDERS"
+
+
+def real_providers_off() -> bool:
+    """LANTERN_NO_REAL_PROVIDERS=1: models on this computer only. The test suite and the benchmarks set it; anyone
+    can, to be sure no code leaves the machine whatever else is configured."""
+    return os.environ.get(NO_REAL_ENV, "").strip().lower() not in ("", "0", "false", "no")
+
+
+def on_this_computer(url: str) -> bool:
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def check_destination(url: str) -> None:
+    """Called before anything is sent to a model provider, the gateway or the allowance service, and before its name
+    is looked up: with real providers switched off, only an address on this computer is let through."""
+    if real_providers_off() and not on_this_computer(url):
+        host = urllib.parse.urlsplit(url).hostname or url
+        raise ProviderError(f"real model providers are switched off in this run ({NO_REAL_ENV} is set): "
+                            f"nothing was sent to {host}")
+
+
 def _post(url: str, headers: dict, body: dict, timeout: int = 120, retries: int = 3) -> dict:
     """POST JSON; returns the parsed body."""
     return _post_full(url, headers, body, timeout=timeout, retries=retries)[0]
@@ -120,6 +150,7 @@ def _post_full(url: str, headers: dict, body: dict, timeout: int = 120, retries:
     """POST JSON; returns (parsed body, response headers)."""
     if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
         raise ProviderError(f"refusing non-HTTP URL: {url}")
+    check_destination(url)
     data = json.dumps(body).encode()
     for attempt in range(retries):
         req = urllib.request.Request(url, data=data, headers={"content-type": "application/json", **headers})
@@ -233,6 +264,57 @@ class LanternHostedProvider(OpenAICompatProvider):
         return {k: h.get(f"x-lantern-remaining-{k}") for k in ("requests", "tokens")}
 
 
+UPSTREAM_WORDS = {
+    401: "refused Lantern's key (the key may have expired or been switched off)",
+    403: "refused Lantern's key (the key may have expired or been switched off)",
+    402: "says Lantern's account has run out of credit",
+    404: "does not know the model Lantern asked for",
+    429: "is busy and asked Lantern to slow down",
+}
+
+
+def why_failed(e: ProviderError) -> tuple[str, str]:
+    """(kind, plain words) for a failed call to the Lantern gateway, so a person reads the true reason instead of
+    "the model did not answer". Kinds: `signed_out` (the person signs in again), `ours` (Lantern's own setup needs
+    fixing; nothing the person can do), `busy` (try again shortly), `too_big` (ask a smaller question), `error`.
+    Only the gateway's own messages are read; it never passes on the model company's words."""
+    status = getattr(e, "status", None)
+    try:
+        err = json.loads(getattr(e, "body", "") or "{}").get("error") or {}
+        if not isinstance(err, dict):
+            err = {}
+    except (ValueError, AttributeError):
+        err = {}
+    kind, msg = str(err.get("type") or ""), str(err.get("message") or "")[:300]
+    if status is None:
+        return "busy", ("Lantern could not reach its model server (lantern-gateway). It may be restarting; "
+                        "try again in a minute.")
+    if status == 401:
+        return "signed_out", ("Your sign-in is no longer accepted by Lantern's model server (it was signed out, "
+                              "or replaced by signing in somewhere else). Sign in again here.")
+    if status == 413:
+        return "too_big", "The question and this check's results are too big for the free model. Ask about one finding."
+    if status == 503 and kind == "not_configured":
+        return "ours", "Lantern's model server has no model key set up. This needs fixing on Lantern's side, not yours."
+    if status == 502 and kind == "upstream_unreachable":
+        return "busy", "Lantern's model server could not reach the model company. Try again in a few minutes."
+    if status == 502 and kind == "upstream_error":
+        m = re.search(r"HTTP (\d{3})", msg)
+        code = int(m.group(1)) if m else 0
+        if code in UPSTREAM_WORDS:
+            who = "ours" if code != 429 else "busy"
+            tail = " This needs fixing on Lantern's side, not yours." if who == "ours" else " Try again in a minute."
+            return who, f"The model company {UPSTREAM_WORDS[code]} (HTTP {code}).{tail}"
+        if code >= 500:
+            return "busy", f"The model company is having problems right now (HTTP {code}). Try again in a few minutes."
+        return "ours", f"The model company turned down Lantern's request (HTTP {code or 'unknown'})."
+    if status == 429:
+        return "busy", "Lantern's model server is busy. Try again in a minute."
+    if status >= 500:
+        return "busy", f"Lantern's model server hit a problem (HTTP {status}). Try again in a few minutes."
+    return "error", f"Lantern's model server turned the question down (HTTP {status}{': ' + msg if msg else ''})."
+
+
 class FixtureProvider(Provider):
     """Offline provider: `respond(system, user) -> str`. Used by tests and demos."""
     name = "fixture"
@@ -293,6 +375,7 @@ def sign_in_claim(cli: str, url: str | None = None) -> str | None:
     req = urllib.request.Request(f"{url}/auth/claim?cli={urllib.parse.quote(cli)}")
     if urllib.parse.urlsplit(req.full_url).scheme not in ("http", "https"):
         raise ProviderError("refusing non-HTTP URL")
+    check_destination(req.full_url)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310: scheme checked above
             return str(json.loads(resp.read()).get("token") or "") or None
@@ -306,6 +389,8 @@ def sign_in_claim(cli: str, url: str | None = None) -> str | None:
 
 def sign_in_providers(url: str | None = None) -> list[str]:
     url = url or gateway_url()
+    if real_providers_off() and not on_this_computer(url or ""):
+        return []
     try:
         with urllib.request.urlopen(f"{url}/auth/providers", timeout=10) as resp:  # nosec B310: https gateway
             return [p for p in json.loads(resp.read()).get("providers", []) if p in ("github", "google")]
@@ -320,6 +405,7 @@ def allowance_status(token: str | None = None, url: str | None = None) -> dict:
     req = urllib.request.Request(f"{url}/allowance", headers={"authorization": f"Bearer {token}"})
     if urllib.parse.urlsplit(req.full_url).scheme not in ("http", "https"):
         raise ProviderError("refusing non-HTTP URL")
+    check_destination(req.full_url)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310: scheme checked above
             return json.loads(resp.read())

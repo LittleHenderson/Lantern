@@ -203,6 +203,17 @@ body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{bott
 #graph g[data-id]{cursor:pointer} #graph g[data-id]:hover rect.box{stroke:var(--accent-line)}
 #graph .glegend{position:absolute;left:12px;bottom:12px;display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);background:color-mix(in srgb, var(--surface) 88%, transparent);padding:6px 10px;border-radius:9px;border:1px solid var(--line)}
 #graph .glegend span{display:inline-flex;align-items:center;gap:6px} #graph .glegend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+#graph .glegend{max-width:calc(100% - 270px)} @media (max-width:700px){#graph .glegend{max-width:calc(100% - 24px)}}
+#graph .glegend b.ln{width:18px;height:2px;border-radius:2px;background:var(--faint);display:inline-block;position:relative}
+#graph .glegend b.ln::after{content:"";position:absolute;right:-1px;top:-3px;border:4px solid transparent;border-left:5px solid var(--faint);border-right:0}
+#graph .glegend b.ln.out{background:var(--accent);box-shadow:0 0 6px var(--accent)} #graph .glegend b.ln.out::after{border-left-color:var(--accent)}
+#graph .glegend b.ln.in{background:var(--ink);box-shadow:0 0 6px var(--ink)} #graph .glegend b.ln.in::after{border-left-color:var(--ink)}
+#graph .glegend .hint{font-style:italic}
+#graph .gglow{animation:gpulse 3.2s ease-in-out infinite} #graph .gglow.g2{animation-delay:-.4s}
+#graph .gflow{animation:gflow 2.6s linear infinite}
+@keyframes gpulse{0%,100%{opacity:.08}50%{opacity:.55}}
+@keyframes gflow{to{stroke-dashoffset:-24}}
+@media (prefers-reduced-motion: reduce){ #graph .gflow{display:none} #graph .gglow{opacity:.3} }
 .canvas .zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:4px;padding:3px;border-radius:9px;background:var(--surface);border:1px solid var(--line)}
 .canvas .zoom button{width:28px;height:26px;border-radius:6px;border:0;background:none;color:var(--ink-2);font:600 13px var(--font)} .canvas .zoom button:hover{background:var(--hover);color:var(--ink)}
 .toolbar .seg.mode button{font-size:12px}
@@ -467,7 +478,7 @@ input.search::placeholder{color:var(--faint)}
 .lenses button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
 .lens{border-radius:12px;padding:14px 16px;font-size:13.5px;line-height:1.6;color:var(--ink);border:1px solid}
 .lens.l1{background:var(--l1s);border-color:var(--l1)} .lens.l2{background:var(--l2s);border-color:var(--l2)} .lens.l3{background:var(--l3s);border-color:var(--l3)} .lens.l4{background:var(--l4s);border-color:var(--l4)}
-.scen ol{margin:6px 0 0;padding-left:20px} .scen li{margin:3px 0} .scen .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:10px} .scenbox{margin-top:10px} .scenbox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .scenbox .lens{margin-top:8px}
+.scen ol{margin:6px 0 0;padding-left:20px} .scen li{margin:3px 0} .scen .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:10px} .scenbox{margin-top:10px} .scenbox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .scenbox .lens{margin-top:8px} .casebox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .casebox ul{margin:4px 0 6px;padding-left:20px} .casebox li{margin:2px 0} .casebox .note>div{margin-top:6px}
 .scen .basis{font-size:12px;color:var(--muted);margin-top:10px}
 .lens dl{margin:6px 0 0} .lens dt{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-top:10px} .lens dd{margin:2px 0 0;color:var(--ink-2)}
 .lens .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:12px}
@@ -483,6 +494,8 @@ mark.p.on{background:var(--l3);color:var(--surface);border-radius:4px}
 .warn{display:flex;gap:8px;background:var(--warning-soft);color:var(--ink);font-size:12.5px;padding:10px 12px;border-radius:10px;margin:10px 0}
 .warn .ic{color:var(--warn-ink);margin-top:1px}
 .note{font-size:12.5px;color:var(--muted)}
+.scanwarn{margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--warning-soft);color:var(--ink);font-size:13.5px;line-height:1.5} .scanwarn b{color:var(--warn-ink)} .scanwarn .note{display:block;margin-top:2px}
+.kv b.timeout,.kv b.failed,.kv b.partial,.kv b.unavailable{color:var(--warn-ink)}
 .byline{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:10px}
 .unexplained{border:1px dashed var(--line-2);border-radius:12px;padding:14px 16px;color:var(--muted);font-size:13px}
 .unexplained .btn{margin-top:10px}
@@ -660,6 +673,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 // Every value from the data goes through esc() before it reaches innerHTML. Values used as CSS class names or as
 // lookup keys go through cls()/pick(), so only known words come out; numbers used in styles go through pct().
 const RANKS = ['critical', 'high', 'medium', 'low'], STATUSES = ['pass', 'fail', 'partial', 'skip'];
+const SCAN_STATES = ['ok', 'partial', 'failed', 'timeout', 'unavailable', 'skipped'];   // lantern/scanresult.py
 const CONFS = ['observed', 'resolved', 'inferred', 'possible'], GRADES = ['A', 'B', 'C', 'D', 'F'];
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'ANY', 'WS'];
 const cls = (v, set) => set.includes(v) ? v : '';
@@ -873,6 +887,12 @@ function renderChart() {
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--muted)"/></marker>
     <marker id="aho" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>`;
+  /* the chosen function's own lines are drawn last, on top, with a slow glow and dots that travel the way the call goes;
+     every other line steps back so they stand out. With reduced motion the glow stays lit and nothing moves. */
+  const touches = e => S.sel && (e.src === S.sel || e.dst === S.sel) && e.src in xy && e.dst in xy;
+  const lit = edges.some(touches);
+  const name = id => httpNodes[id] ? httpNodes[id].label : N[id] ? short(id.startsWith('ext:') ? id.slice(4) : N[id].qualname) : id;
+  let top = '';
   for (const e of edges) {
     if (!(e.src in xy) || !(e.dst in xy)) continue;
     const [x1, y1] = xy[e.src], [x2, y2] = xy[e.dst];
@@ -981,6 +1001,8 @@ function renderLanes() {
 // Columns: Pages · Components · HTTP · Routes · Data/system. Every reachable function from every entry point is
 // placed by what it is, not by depth, so the picture reads left to right like a request does. Functions that
 // nothing reaches are counted as "hidden", never guessed into a column.
+/* what each kind of line means, in plain words (the line's hover text and the legend) */
+const EDGE_WORDS = {observed: 'seen running under your tests', resolved: 'read from the code', inferred: 'likely: Lantern’s best guess', possible: 'possible: one of several things it could call'};
 function graphModel() {
   const cols = {pages: [], comps: [], http: [], routes: [], server: [], data: []};
   const seen = new Set(), httpNodes = {}, edges = [];
@@ -1030,8 +1052,15 @@ function renderGraph() {
   const maxFan = Math.max(1, ...Object.values(fanin));
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
     <defs><marker id="ga" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--faint)"/></marker>
-    <marker id="gao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker></defs>`;
+    <marker id="gao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--accent)"/></marker>
+    <marker id="gai" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="var(--ink)"/></marker></defs>`;
   present.forEach((k, ci) => { svg += `<text class="col" x="${24 + ci * (W + GX)}" y="22">${titles[k]}</text>`; });
+  /* the chosen function's own lines are drawn last, on top, with a slow glow and dots that travel the way the call goes;
+     every other line steps back so they stand out. With reduced motion the glow stays lit and nothing moves. */
+  const touches = e => S.sel && (e.src === S.sel || e.dst === S.sel) && e.src in xy && e.dst in xy;
+  const lit = edges.some(touches);
+  const name = id => httpNodes[id] ? httpNodes[id].label : N[id] ? short(id.startsWith('ext:') ? id.slice(4) : N[id].qualname) : id;
+  let top = '';
   for (const e of edges) {
     if (!(e.src in xy) || !(e.dst in xy)) continue;
     const [x1, y1] = xy[e.src], [x2, y2] = xy[e.dst];
@@ -1041,8 +1070,17 @@ function renderGraph() {
     const obs = e.confidence === 'observed';
     const dash = e.confidence === 'inferred' ? '5 4' : e.confidence === 'possible' ? '1.5 3.5' : '';
     const stroke = S.mode === 'confidence' ? confColor(e.confidence) : obs ? 'var(--accent)' : 'var(--faint)';
-    svg += `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${obs ? 2.2 : 1.3}" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#${obs ? 'gao' : 'ga'})" opacity="${S.mode === 'fanin' ? .5 : .9}"><title>${esc(e.confidence)}${e.via ? ' · ' + esc(e.via) : ''}</title></path>`;
+    const tip = `${esc(name(e.src))} can call ${esc(name(e.dst))} · ${esc(EDGE_WORDS[e.confidence] || e.confidence)}${e.via ? ` (${esc(e.via)})` : ''}`;
+    if (touches(e)) {
+      const way = e.src === S.sel ? 'out' : 'in', c = way === 'out' ? 'var(--accent)' : 'var(--ink)';
+      top += `<g class="glit ${way}" data-edge="${way}"><path class="gglow" d="${d}" fill="none" stroke="${c}" stroke-width="10" stroke-linecap="round" opacity=".18"/><path class="gglow g2" d="${d}" fill="none" stroke="${c}" stroke-width="5" stroke-linecap="round" opacity=".35"/>
+        <path d="${d}" fill="none" stroke="${c}" stroke-width="2.4" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#${way === 'out' ? 'gao' : 'gai'})"/><path class="gflow" d="${d}" fill="none" stroke="var(--surface)" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="1 23" opacity=".9"/><title>${tip}</title></g>`;
+      continue;
+    }
+    svg += `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${obs ? 2.2 : 1.3}" ${dash ? `stroke-dasharray="${dash}"` : ''} marker-end="url(#${obs ? 'gao' : 'ga'})" opacity="${lit ? .22 : S.mode === 'fanin' ? .5 : .9}"><title>${tip}</title></path>`;
   }
+  svg += top;
+  const near = new Set(); if (lit) for (const e of edges) if (touches(e)) near.add(e.src === S.sel ? e.dst : e.src);
   for (const id in xy) {
     const [x, y] = xy[id], k = colOf[id], n = N[id] || null, w = n ? worstRank(id) : null, on = S.sel === id;
     const isHttp = k === 'http';
@@ -1058,6 +1096,7 @@ function renderGraph() {
     if (S.mode === 'risk' && w) { fill = sevSoft(w); stroke = sevColor(w); sw = 1.5; }
     if (S.mode === 'confidence' && n) { stroke = confColor(inConf || 'resolved'); sw = 1.5; }
     if (S.mode === 'fanin' && fanin[id]) { const t = fanin[id] / maxFan; fill = `color-mix(in srgb, var(--accent) ${Math.round(8 + 42 * t)}%, var(--surface))`; }
+    if (near.has(id) && sw === 1) stroke = 'var(--accent-line)';
     if (on) { stroke = 'var(--accent)'; sw = 2; }
     svg += `<g data-id="${esc(id)}" data-http="${isHttp ? 1 : 0}"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="${isHttp ? 22 : 9}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>
       ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="13" fill="none" stroke="var(--accent-soft)" stroke-width="4"/>` : ''}
@@ -1065,10 +1104,12 @@ function renderGraph() {
       ${lang ? `<text class="lb" x="${x + W - 10}" y="${y + 15}" text-anchor="end">${lang}</text>` : ''}<title>${esc(isHttp ? httpNodes[id].label : n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
   }
   svg += '</svg>';
-  const legend = S.mode === 'risk'
+  const lines = `<span><b class="ln"></b>A → B: A can call B (read from the code)</span>` +
+    (lit ? `<span><b class="ln out"></b>what the chosen step calls</span><span><b class="ln in"></b>what calls it</span>` : `<span class="hint">click a box to light up its lines</span>`);
+  const legend = lines + (S.mode === 'risk'
     ? `<span><i style="background:var(--critical)"></i>critical</span><span><i style="background:var(--serious)"></i>high</span><span><i style="background:var(--warning)"></i>medium</span><span><i style="background:var(--accent)"></i>seen running</span><span>· ${hidden} hidden</span>`
     : S.mode === 'confidence' ? `<span><i style="background:var(--accent)"></i>seen running</span><span><i style="background:var(--ink)"></i>confirmed</span><span><i style="background:var(--muted)"></i>likely</span><span><i style="background:var(--faint)"></i>possible</span><span>· ${hidden} hidden</span>`
-    : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`;
+    : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`);
   return `<div id="graph" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Call graph. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows the whole app, F goes full screen.">${svg}</div><div class="glegend">${legend}</div>${zoomBar()}</div>`;
 }
 /* The graph is a camera over an endless canvas: the svg always fills the frame and its viewBox is what moves, so the
@@ -1575,6 +1616,54 @@ function entryGlyph(id) {
   const fs = SEC.findings.filter(f => f.status !== 'accepted' && ((f.reachable && f.reachable.entry === id) || (f.ui_path && f.ui_path[0] === id))); let w = null; for (const f of fs) if (!w || RANK[f.rank] < RANK[w.rank]) w = f;
   return laneGlyph(entryLanes(id), w ? hotLane(w) : null, w ? w.rank : null);
 }
+// A rank lowered by what the code around the line shows (context.py): the old rank and the reason, never hidden
+function ctxNote(f) {
+  if (!f.rank_note || !f.rank_before_context || !RANKS.includes(f.rank_before_context)) return '';
+  return `<div class="note ctxnote" style="margin-top:8px"><span class="tag" title="Lantern read the names around this line">context</span> Ranked <b>${esc(f.rank)}</b>, not ${esc(f.rank_before_context)}: ${esc(f.rank_note)}</div>`;
+}
+// A setting the browser can see (LW-PUBLIC-SECRET): four facts kept apart (context.public_secret_trust)
+const TRUST_WORDS = {'server-checks-it': 'Yes: server code checks it', 'server-reads-it': 'Server code reads the same setting, but Lantern did not see it compare what a request sends',
+  'not-seen-on-server': 'Not seen: no server code in this repository reads it', 'no-server-code': 'Unknown: the server is not in this repository'};
+function trustBox(f) {
+  const t = f.trust;
+  if (!t || !t.browser) return '';
+  const list = a => (Array.isArray(a) ? a : []).map(x => `<code>${esc(x)}</code>`).join(', ');
+  const ctl = (Array.isArray(t.other_controls) ? t.other_controls : []).map(c => `${esc(c.route)}: ${c.login_check ? esc(c.login_check) + ' login sign (' + esc(c.why) + ')' : 'no other login sign seen'}`).join('; ');
+  return `<div class="note trustbox" style="margin-top:8px"><b>What Lantern knows about this value</b>
+    <div>1. Visible in the browser: <b>yes</b> (<code>${esc(t.browser.where)}</code>${t.browser.sent_as ? `, sent as the <code>${esc(t.browser.sent_as)}</code> header` : ''}).</div>
+    <div>2. The server trusts it: <b>${esc(TRUST_WORDS[t.server_trusts] || 'unknown')}</b>${(t.server_checks || []).length ? ` at ${list(t.server_checks)}` : ''}${(t.routes || []).length ? ` on ${list(t.routes)}` : ''}.</div>
+    <div>3. A stranger can get in with it: <b>not determined</b>. Lantern reads code; it does not run the app or see production's settings.</div>
+    <div>4. Other server-side controls: ${ctl || 'none seen'}${(t.conditions || []).length ? `; the checking code depends on ${list(t.conditions)}` : ''}.</div>
+    ${(t.unknown || []).length ? `<div>Still unknown: ${(t.unknown).map(esc).join('; ')}.</div>` : ''}</div>`;
+}
+// The case for a finding (case.py): claim, evidence, conditions, severity, confidence, unknowns, status words
+const MET = {true: ['yes', 'Lantern saw this is so'], false: ['no', 'Lantern saw this is not so'], null: ['unknown', 'Lantern cannot check this']};
+function caseBox(f) {
+  const c = f.case;
+  if (!c || typeof c !== 'object' || !c.where) return '';
+  const arr = a => Array.isArray(a) ? a : [];
+  const m = v => MET[v === true ? 'true' : v === false ? 'false' : 'null'];
+  const w = c.where, sev = c.severity || {}, conf = c.confidence || {};
+  return `<details class="casebox" style="margin-top:8px"><summary>The case for this finding</summary><div class="note">
+    <div><b>Where:</b> <code>${esc(w.file)}${w.line ? ':' + esc(w.line) : ''}</code>${w.function ? ' in <code>' + esc(short(w.function)) + '</code>' : ''}${w.revision ? ` · revision <code>${esc(String(w.revision).slice(0, 12))}</code>` : ' · revision not known (not a git folder)'}${w.revision_note ? ` (${esc(w.revision_note)})` : ''}</div>
+    <div><b>Claim:</b> ${esc(c.claim)}</div>
+    <div><b>Evidence:</b><ul>${arr(c.evidence).map(e => `<li>${esc(e.fact)} <span class="muted">(${esc(e.from)})</span></li>`).join('')}</ul></div>
+    ${arr(c.conditions).length ? `<div><b>For this to hurt:</b><ul>${arr(c.conditions).map(x => `<li><span class="tag" title="${esc(m(x.met)[1])}">${esc(m(x.met)[0])}</span> ${esc(x.need)}${x.why ? ` <span class="muted">(${esc(x.why)})</span>` : ''}</li>`).join('')}</ul></div>` : ''}
+    ${c.impact ? `<div><b>Impact if it is real:</b> ${esc(c.impact)}</div>` : ''}
+    <div><b>Severity:</b> ${esc(sev.rank)}. ${esc(sev.why)}</div>
+    <div><b>Confidence:</b> ${esc(conf.level)} (${esc(conf.why)}). <span class="muted">${esc(conf.about)}.</span></div>
+    ${arr(c.unknown).length ? `<div><b>Not known:</b> ${arr(c.unknown).map(esc).join('; ')}.</div>` : ''}
+    <div><b>Status:</b><ul>${arr(c.status).map(x => `<li>${x.done === true ? '✓ done' : x.done === false ? '✗ not done' : '? no record'}: <b>${esc(x.word)}</b> <span class="muted">(${esc(x.why)})</span></li>`).join('')}</ul></div></div></details>`;
+}
+// Every call site Lantern read, one denominator (graph.call_sites): what it knows about each target
+function callSiteRows(c) {
+  const pct = n => c.total ? ` (${(100 * (+n || 0) / c.total).toFixed(1)}%)` : '';
+  const rows = [['Linked to code in the repo, certain', c.resolved_internal], ['Linked to code in the repo, likely (types inferred)', c.inferred_internal],
+    ['One of several possible targets', c.several_possible_targets], ['Guessed by method name alone', c.name_only_guess],
+    ['Known library or outside call', c.known_external], ['Python built-in (len, print, a list\'s append): counted, not drawn', c.builtin], ['Not traced', c.unresolved]].filter(([, v]) => v !== undefined);
+  const kinds = c.unresolved_kinds && typeof c.unresolved_kinds === 'object' ? Object.entries(c.unresolved_kinds).filter(([, v]) => +v > 0) : [];
+  return `<div>Every call site</div><div>${esc(c.total)} call sites, each counted once:<br>${rows.map(([k, v]) => `${esc(k)}: ${esc(v)}${pct(v)}`).join('<br>')}${+c.unresolved_in_tests ? `<br><span class="note">Of the not traced, ${esc(c.unresolved_in_tests)} are in test files.</span>` : ''}${kinds.length ? `<br><span class="note">Not traced in app code, by shape: ${kinds.map(([k, v]) => `${esc(k)} ${esc(v)}`).join(' · ')}. The shape does not say why: a builtin, a library, or code that is not in the repo.</span>` : ''}</div>`;
+}
 function findingCard(f) {
   const heur = f.tool_confidence === 'LOW' ? '<span class="tag" title="Pattern-based check; review before acting">heuristic</span>' : '';
   const ex = (EXP[f.node]?.findings || []).find(x => x.id === f.id);
@@ -1586,6 +1675,7 @@ function findingCard(f) {
     ${hotLane(f) ? `<div class="top" style="margin-top:8px;gap:10px">${laneGlyph(fLanes(f), hotLane(f), f.rank)}${onLane(f)}</div>` : ''}
     ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
     <h4>${esc(S.simple && f.headline ? f.headline : f.title)}</h4>${S.simple && f.headline ? `<div class="toolsays">${esc(f.tool)} says: “${esc(f.title)}”</div>` : ''}<p class="fdesc">${where}.${reach}${input}</p>
+    ${ctxNote(f)}${trustBox(f)}${caseBox(f)}
     ${pathsHtml(f)}
     ${findingScenario(f, ex) ? `<details class="scenbox"><summary>See it happen: a scenario</summary>${findingScenario(f, ex)}</details>` : ''}
     ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
@@ -1606,7 +1696,8 @@ function wireFindings(el) {
 const PAGE_HELP = {
   map: {t: 'What am I looking at?', p: ['This is a map of your app. On the left are the places a visitor (or a command) can start: pages, API routes, program starts.',
     'Pick one and the middle shows every step the code takes from there, like following a phone call through an office: who picks up, who they call next. Path lists the steps, Flowchart draws them, Graph shows the whole app at once.',
-    'Click any step to see what it does on the right. Colours mean: red or orange is a security finding inside that function; teal lines were seen running under your tests; dashed lines are Lantern’s best guess (“likely” or “possible”), never a certainty.']},
+    'Click any step to see what it does on the right. Colours mean: red or orange is a security finding inside that function; teal lines were seen running under your tests; dashed lines are Lantern’s best guess (“likely” or “possible”), never a certainty.',
+    'A line with an arrow from A to B means A can call B: Lantern read it from the code, so it is a road that exists, not proof that it was used. Only teal lines were actually seen running (under your tests). Click a box and its own lines glow: teal for what it calls, light for what calls it, with dots moving the way the call goes.']},
   findings: {t: 'What is a finding?', p: ['A finding is a specific line of your code that a scanner flagged as a security problem, with the file and line number.',
     'Lantern ranks each one by two questions: can a visitor reach it (is there a path from a page or route to that line)? and does it use something the visitor typed? Both yes = critical. That is what “reachable” and “uses input” mean.',
     'Start at the top. Each one shows the path a visitor would take to reach it, a plain-words explanation when a model has written one, and how to fix it. “Accept risk with a reason” is for when you have decided it is fine and want that written down.']},
@@ -1648,10 +1739,20 @@ function setMode(simple, save = true) {
   }
 }
 function wireMode(el) { el.querySelectorAll('[data-vm]').forEach(b => b.onclick = () => { setMode(b.dataset.vm === 'simple'); render(); }); wireHelp(el); }
+// A scanner that did not finish, did not cover everything or was skipped (security.json `incomplete`, lantern/scanresult.py):
+// said above the findings, because "no findings" from a tool that never ran is not a clean result.
+function scanNotice(about) {
+  const inc = arr(SEC.incomplete).filter(t => t && typeof t === 'object' && t.tool);
+  if (!inc.length) return '';
+  const word = t => { const s = String(t.state || ''); return s === 'timeout' || s === 'failed' ? 'did not finish' : s === 'partial' ? 'covered only part of your app' : s === 'unavailable' ? 'is not installed' : 'was skipped'; };
+  // the reason without the "error:" / "skipped:" prefix of the status sentence ("timed out after 600 s", "offline")
+  const reason = t => { if (t.state === 'unavailable') return String(t.why || ''); const s = String(t.status || ''), i = s.indexOf(':'); return i > 0 ? s.slice(i + 1).trim() : String(t.why || ''); };
+  return `<div class="scanwarn" role="status"><b>Scan incomplete.</b> ${inc.slice(0, 6).map(t => `<span>${esc(t.tool)} ${word(t)}${reason(t) ? ` (${esc(reason(t))})` : ''}.</span>`).join(' ')}${inc.length > 6 ? ` <span>And ${esc(inc.length - 6)} more.</span>` : ''} Anything those scanners would have found is missing from this ${about ? 'report' : 'list'}.${about ? '' : ' <span class="note">Details under About › Security tools.</span>'}</div>`;
+}
 function renderFindings() {
   const el = document.getElementById('center');
   const all = SEC.findings;
-  if (!all.length) { el.innerHTML = `<div class="empty">${ART}<b>No findings</b>None from the scanners that ran. See About for which tools ran.</div>`; return; }
+  if (!all.length) { el.innerHTML = `${scanNotice()}<div class="empty">${ART}<b>No findings</b>None from the scanners that ran. See About for which tools ran.</div>`; return; }
   // Counts are for the app itself, the same numbers as the summary, readiness and Ask Lantern: findings in test code
   // (test files and fixtures, often planted on purpose) are listed last and not counted.
   const app = all.filter(f => !f.in_tests), tests = all.filter(f => f.in_tests);
@@ -1661,7 +1762,7 @@ function renderFindings() {
   const TESTS_SHOWN = 200;
   if (S.simple) {
     const sevs = RANKS.filter(by);
-    el.innerHTML = `<div class="memo"><div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
+    el.innerHTML = `<div class="memo">${scanNotice()}<div class="toolbar"><div style="flex:1;min-width:0"><h2>Security findings</h2>
       <p class="lede">${countWord(open.length)} open in your app${tests.length ? ` (${esc(tests.length)} more in test code are listed at the end and not counted)` : ''}. ${ANDROID_APP ? 'Ranked by severity and by whether someone can reach them. A finding is critical only when a screen, a link or another app leads to it and it uses the data they send.' : 'Ranked by severity and by whether a visitor can reach them. A finding is critical only when a page leads to it and it uses what the visitor typed.'}</p></div>${modeSeg()}</div>
       <div class="countrow">${RANKS.map(r => `<span class="${cls(r, RANKS)}"><b>${by(r)}</b>${r}</span>`).join('')}<span><b>${acc}</b>accepted</span></div>${phoneCard()}
       <p class="note" style="margin:-8px 0 10px">Each finding says which part of your app it lives on; the filled dot on its card marks that part. Hover a name below to learn what each part does.</p>${laneStrip(null, new Set(), {legend: true})}
@@ -1681,7 +1782,7 @@ function renderFindings() {
   if (S.ftool) fs = fs.filter(f => f.tool === S.ftool);
   const tools = [...new Set(all.map(f => f.tool))];
   const fchip = (k, label, n) => `<button class="fchip ${k === 'all' ? '' : k} ${S.fsev === k ? 'on' : ''}" data-sev="${k}">${k === 'all' ? '' : '<i></i>'}${label} <b>${esc(n)}</b></button>`;
-  el.innerHTML = `<div class="toolbar"><h2>Security findings <span class="c">${esc(open.length)}</span></h2>${modeSeg()}<button class="btn" id="exportjson">Export JSON</button></div>${phoneCard()}
+  el.innerHTML = `${scanNotice()}<div class="toolbar"><h2>Security findings <span class="c">${esc(open.length)}</span></h2>${modeSeg()}<button class="btn" id="exportjson">Export JSON</button></div>${phoneCard()}
     <div class="filters">${fchip('all', 'All', app.length)}${RANKS.filter(r => app.some(f => f.rank === r)).map(r => fchip(r, r[0].toUpperCase() + r.slice(1), app.filter(f => f.rank === r).length)).join('')}${tests.length ? fchip('tests', 'In test code', tests.length) : ''}<span class="spacer"></span>
       <button class="fchip ${S.freach ? 'on' : ''}" id="freach">Reachable only</button><button class="fchip ${S.finput ? 'on' : ''}" id="finput">Uses input</button>
       <select id="ftool" class="fsel" aria-label="Tool"><option value="">Tool ▾</option>${tools.map(t => `<option value="${esc(t)}" ${S.ftool === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
@@ -1706,6 +1807,7 @@ function findingPanel(f) {
     <div class="meta">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${n ? ` · in ${esc(short(n.qualname))}` : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div>
     <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'no entry point leads here'}</div></div>
       <div><div class="k">Uses input</div><div class="v">${f.input ? 'Yes' : f.input === false ? 'No' : 'Unknown'}</div><div class="d">${f.input ? esc(f.input.via) : f.input === false ? 'nothing from the request reaches this line' : 'not tracked for this rule'}</div></div></div>
+    ${ctxNote(f)}${trustBox(f)}${caseBox(f)}
     ${f.ui_path || f.reachable ? `<div class="k2">Path from the app</div>${chainHtml('', f.ui_path || f.reachable.path)}` : ''}
     ${n ? srcBlock(n) : ''}
     ${f.status === 'accepted' ? `<div class="k2">Accepted</div><p>By ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</p>` : ''}
@@ -1844,7 +1946,7 @@ function renderReady() {
       <div class="strip5"><div><div class="k">Score</div><div class="v">${esc(R.score)}<small>of 100</small></div></div><div><div class="k">Grade</div><div class="v">${esc(R.grade)}<small>${R.grade === 'A' ? 'top grade' : `${R.grade === 'F' ? 'D at 60 · ' : ''}${R.grade <= 'C' ? '' : 'C at 70 · '}B at 80 · A at 90`.replace(/ · $/, '')}</small></div></div><div><div class="k">Hard failures</div><div class="v ${hard ? 'bad' : ''}">${hard}<small>reachable + input</small></div></div><div><div class="k">Heuristic warnings</div><div class="v">${heur}<small>not counted</small></div></div><div><div class="k">Routes seen running</div><div class="v">${seen ? Math.round(100 * seen[1] / Math.max(1, seen[2])) + '%' : '–'}<small>${tr ? 'traced test run' : 'tests not run'}</small></div></div></div>
       <div class="split wide"><section class="ctable"><div class="r h"><span>Category</span><span class="num">Weight</span><span>Score</span><span>Why</span><span>Fix</span></div>${cats}</section>
       <div><section class="card"><b>Starter files</b><div class="note" style="margin:4px 0 8px">Written next to your code, never over an existing file.</div>${files.map(([n, f]) => `<label class="chk2"><input type="checkbox" data-sf="${esc(n)}" checked> ${esc(n)}<span class="note"> · ${esc(f.why)}</span></label>`).join('') || '<div class="note">Nothing to write: the usual files are already here.</div>'}${files.length ? (LIVE ? `<button class="btn primary" id="writesel" style="margin-top:10px">Write ${files.length} files</button>` : `<pre class="cmdbox">lantern starter . --write ${files.map(([n]) => n.split('/').pop().replace(/^\./, '').split('.')[0].toLowerCase()).join(' ')}</pre>`) : ''}<div id="writemsg" class="note"></div></section>
-      <section class="card" style="margin-top:12px"><b>Rubric</b><div class="note" style="margin-top:4px">Weighted sum over ten categories; hard failures are findings that are reachable and use input, and they cap the grade. Heuristic rules (labelled) never count as hard failures. Checks that don't apply are skipped, not counted against you. Score and reasons are written to <code>.lantern/readiness.json</code>.</div></section>
+      <section class="card" style="margin-top:12px"><b>Rubric</b><div class="note" style="margin-top:4px">Weighted sum over ten categories; hard failures are findings that are reachable and use input, and they cap the grade. Heuristic rules (labelled) never count as hard failures. Checks that don't apply are skipped, not counted against you. Low findings don't lower the score; critical, high and medium ones do. Score and reasons are written to <code>.lantern/readiness.json</code>.</div></section>
       ${arr(R.advice).length ? `<section class="card" style="margin-top:12px"><b>Recommended deployment</b><div class="note" style="margin-top:4px">Read as a <b>${esc(R.shape)}</b>${arr((R.stack || {}).frameworks).length ? ' using ' + esc(R.stack.frameworks.join(', ')) : ''}.</div><ul class="ready-list">${arr(R.advice).map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
       ${arr(R.hotspots).length ? `<section class="card" style="margin-top:12px"><b>Hotspots</b><div class="note" style="margin-top:4px">Functions many others depend on.</div>${arr(R.hotspots).map(h => `<div class="good"><button class="linkbtn mono" data-id="${esc(h.node)}">${esc(short(h.name))}</button><span class="note">called from ${esc(h.callers)} places</span></div>`).join('')}</section>` : ''}
       </div></div>
@@ -1900,12 +2002,13 @@ function renderAbout() {
       <div>Call edges</div><div>${esc(st.call_edges)} (${esc(st.internal_call_edges)} inside the repo)</div>
       <div>Confidence</div><div>${Object.entries(st.confidence || {}).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(' · ')}</div>
       <div>Unresolved call sites</div><div>${esc(st.unresolved_call_sites)} (calls Lantern could not trace to a target; left out rather than guessed)</div>
+      ${st.call_sites ? callSiteRows(st.call_sites) : ''}
       <div>Analysis time</div><div>${DATA.timings ? Object.entries(DATA.timings).map(([k, v]) => `${esc(k)} ${esc(v)}s`).join(' · ') : '–'}</div>
     </div>
     ${Object.keys(LANGS).length ? `<h3>Languages</h3><div class="kv">${Object.entries(LANGS).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v.files)} files · ${esc(v.lines)} lines${v.components ? ` · ${esc(v.components)} components` : ''}</div>`).join('')}</div>` : ''}
     ${BR && BR.http_calls ? `<h3>Frontend → backend links</h3><div class="kv"><div>HTTP calls found</div><div>${esc(BR.http_calls)}</div><div>Linked to a route</div><div>${esc(BR.matched)} (${esc(BR.exact)} exact path, ${(+BR.suffix || 0) + (+BR['unknown-prefix'] || 0)} with a prefix added elsewhere${BR.ambiguous ? `, ${esc(BR.ambiguous)} ambiguous` : ''})</div><div>External services</div><div>${esc(BR.external)}</div><div>No route in this repo</div><div>${esc(BR.unmatched)}${arr(BR.unmatched_examples).length ? '<br><span class="note">' + arr(BR.unmatched_examples).slice(0, 8).map(esc).join('<br>') + '</span>' : ''}</div></div>` : ''}
     ${tr ? `<h3>Runtime trace</h3><div class="kv"><div>Calls seen running</div><div>${esc(tr.observed_edges)}</div><div>Also found statically</div><div>${esc(tr.static_found)} (recall ${esc(tr.recall)})</div><div>Only seen at runtime</div><div>${esc(tr.runtime_only)}</div></div>` : ''}
-    <h3>Security tools</h3><div class="kv">${arr(SEC.tools).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${esc(t.status)}</div>`).join('')}</div>
+    <h3>Security tools</h3>${scanNotice(true)}<div class="kv">${arr(SEC.tools).map(t => `<div>${esc(t.tool)}${t.version ? ' ' + esc(t.version) : ''}</div><div>${t.state && t.state !== 'ok' && t.state !== 'skipped' ? `<b class="${cls(t.state, SCAN_STATES)}">${esc(t.state)}</b> · ` : ''}${esc(t.status)}${arr(t.errors).length ? `<div class="note">${arr(t.errors).slice(0, 5).map(esc).join('<br>')}${arr(t.errors).length > 5 ? `<br>and ${esc(arr(t.errors).length - 5)} more` : ''}</div>` : ''}</div>`).join('')}</div>
     ${exStats ? `<h3>Explanations</h3><div class="kv"><div>Model</div><div>${esc(exStats.model)}</div><div>Metaphor world</div><div>${esc((DATA.explanations.metaphor || {}).world)}</div><div>Validated</div><div>${esc(exStats.validated)} of ${(+exStats.validated || 0) + (+exStats.failed || 0)} (${esc(exStats.first_try)} on first try)</div><div>Tokens</div><div>${esc((exStats.usage || {}).input_tokens)} in · ${esc((exStats.usage || {}).output_tokens)} out</div></div>` : ''}
     <h3>Line styles</h3><p>Solid bold: seen while the program ran. Solid: confirmed by name resolution. Dashed: likely, based on types Lantern could infer. Dotted: one of several possible targets.</p>
     <h3>What this report does not prove</h3><ul>

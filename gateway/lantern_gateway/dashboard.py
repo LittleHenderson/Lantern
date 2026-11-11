@@ -73,7 +73,7 @@ function draw(d) {
   <div class="card"><table><tr><th>Label</th><th class="num">Explanations</th><th class="num">Tokens</th></tr>
   ${a.top_users.map(u => `<tr><td>${esc(u.label)}</td><td class="num">${num(u.requests)}</td><td class="num">${num(u.tokens)}</td></tr>`).join('') || '<tr><td colspan=3 class="small">No usage yet.</td></tr>'}</table></div>
   <h2>Give someone a free allowance by hand</h2>
-  <p class="small">People can also sign in themselves at <code>/v1/login</code> (GitHub or Google) when those are configured; each account gets one token and signing in again rotates it without resetting the count.</p>
+  <p class="small">People can also sign in themselves at <code>/v1/login</code> (GitHub or Google) when those are configured; each sign-in gets its own token, earlier ones keep working, and they all share one count per account.</p>
   <div class="card"><label for="label">Label (who it's for, e.g. a GitHub name; only you see it)</label>
   <div class="row"><input id="label" placeholder="github:octocat"><button id="mint">Create token</button></div>
   <div id="minted" class="small" style="margin-top:8px"></div>

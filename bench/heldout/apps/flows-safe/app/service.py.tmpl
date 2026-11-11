@@ -1,0 +1,14 @@
+from . import db
+
+
+def list_items(order_clause: str):
+    return db.run("SELECT id, name FROM items " + order_clause)
+
+
+def find_by_name(name: str):
+    return db.run("SELECT id, name FROM items WHERE name = ?", (name,))
+
+
+def get_note(note_id: int, user_id: int):
+    # only the signed-in user's own note comes back
+    return db.run("SELECT id, owner_id, body FROM notes WHERE id = ? AND owner_id = ?", (note_id, user_id))
