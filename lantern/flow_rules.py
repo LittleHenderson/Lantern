@@ -196,6 +196,48 @@ DOM_SOURCES = re.compile(r"^(?:window\.|document\.|self\.|globalThis\.)?(locatio
                          r"URL|documentURI|referrer|name)$")
 DOM_SOURCE_HEADS = {"location", "window.location", "document.location", "document.URL", "document.documentURI",
                     "document.referrer", "window.name"}
+# In the browser the page's address is the page's own as far as its site goes: going to it again leaves the site
+# nowhere (`redirect:own`, as for the address a request was made to), and the scheme, host and port it was loaded
+# from are not text the link maker wrote. A part read out of it (the query, what follows the #) still is.
+PAGE_HEADS = frozenset({"location", "window.location", "document.location"})
+PAGE_ADDRESS = PAGE_HEADS | {"document.URL", "document.documentURI"}
+PAGE_SITE = {"protocol", "host", "hostname", "origin", "port"}
+PAGE_MARK = frozenset({"redirect:own"})
+PAGE_ORIGIN = "location.origin"
+
+
+def page_site(parts: list) -> int:
+    """How many leading parts of a text spell the page's own origin out: `location.protocol + '//' + location.host`
+    (3), with `':' + location.port` after the host name (5); 0 when they do not."""
+    def of(p, names):
+        head, _, name = p.data.rpartition(".") if p.kind == "ext" and isinstance(p.data, str) else ("", "", "")
+        return head if head in PAGE_HEADS and name in names and not p.taints else None
+    if len(parts) < 3 or not of(parts[0], ("protocol",)) or parts[1].kind != "const" or parts[1].data != "//" or \
+            not of(parts[2], ("host", "hostname")):
+        return 0
+    if len(parts) >= 5 and parts[3].kind == "const" and parts[3].data == ":" and of(parts[4], ("port",)):
+        return 5
+    return 3
+
+
+# A call that swaps fixed text for fixed text in an address gives the same address back, unless what it takes away
+# is the front of the address (a pattern that begins at the start, the scheme and site written out) and what it puts
+# there is no scheme: `url.replace(/^https?:\/\/[^/]+/, '')` leaves a path, and a path may begin with two slashes.
+FRONT_TEXT = re.compile(r"^(?:https?:|//)", re.I)
+SCHEME_TEXT = re.compile(r"^https?:", re.I)
+
+
+def front_off(pat, rep) -> bool:
+    """Whether `replace(pat, rep)` on an address may take its site off the front (`pat`, `rep`: what the engine
+    knows of each: a kind and the text)."""
+    if pat is None:
+        return False
+    text = pat.data if isinstance(pat.data, str) else None
+    front = text is not None and ((pat.kind == "regex" and text.lstrip("(?:").startswith("^")) or
+                                  (pat.kind == "const" and bool(FRONT_TEXT.match(text))))
+    if not front:
+        return False
+    return not (rep is not None and rep.kind == "const" and isinstance(rep.data, str) and SCHEME_TEXT.match(rep.data))
 # NestJS: `find(@Query('name') name: string)`; a pipe that parses makes the value a number or refuses the request
 PARAM_DECORATOR = re.compile(r"^@(Query|Param|Body|Headers|Req|Request|UploadedFile|UploadedFiles)\((.*)\)\s*$", re.S)
 PARSE_PIPE = re.compile(r"\bParse(Int|Float|Bool|UUID|Enum)Pipe\b")

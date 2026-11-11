@@ -700,6 +700,9 @@ PAGES = {
     "caught: the address it was made to, with its host replaced by what the request says":
         ("@app.route('/go')\ndef go():\n"
          "    return redirect(request.url.replace(request.host, request.args['to']))\n", ["redirect"]),
+    "caught: the site's written address taken off the front of the address the request was made to":
+        ("@app.route('/go')\ndef go():\n"
+         "    return redirect(request.url.replace('https://app.example.com', '', 1))\n", ["redirect"]),
     "caught: an object is rebuilt from what was sent":
         ("import base64\nimport pickle\n\n\n@app.route('/load', methods=['POST'])\ndef load():\n"
          "    return str(pickle.loads(base64.b64decode(request.data)))\n", ["deserialize"]),

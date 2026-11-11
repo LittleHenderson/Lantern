@@ -609,6 +609,12 @@ def concat(parts: list, glue: bool = False) -> Val:
         for p in parts[1:]:
             data += p.data if p.kind == "seq" else [p]
         return seq(data)
+    n = R.page_site(parts)
+    if n:       # in the browser: the page's own origin, spelt out
+        site = Val(kind="ext", data=R.PAGE_ORIGIN, prefix=R.OWN_EXACT)
+        if n == len(parts):
+            return site
+        parts = [site] + list(parts[n:])
     taints: tuple = ()
     fixed: frozenset | None = FIXED0
     text, prefix, open_, all_const = [], "", True, True
@@ -1934,6 +1940,8 @@ class Engine:
         if k == "call":
             return self.call(e, env, ctx)
         if k == "bin":
+            if e.name == "+" and e.a is not None and e.a.k == "bin" and e.a.name == "+":
+                return self.plus(e, env, ctx)
             a, b = self.eval(e.a, env, ctx), self.eval(e.b, env, ctx)
             if e.name == "+":
                 return self.built(ctx, env, e, concat([a, b], glue=True))
@@ -2031,6 +2039,25 @@ class Engine:
             return self.eval(e.items[0], env, ctx) if k == "assign" and e.items else UNKNOWN
         return UNKNOWN
 
+    def plus(self, e: N, env: Env, ctx: Ctx) -> Val:
+        """`a + b + c + d`: pair by pair as it always was, and the leading text read once more from all the parts in
+        the order written, as a template's is. After the first pair of `proto + '//' + host + path` nothing says
+        that a host is still to come, so pair by pair the start of such an address is lost."""
+        chain = []
+        while e is not None and e.k == "bin" and e.name == "+":
+            chain.append(e)
+            e = e.a
+        v = self.eval(e, env, ctx)
+        parts = [v]
+        for node in reversed(chain):
+            b = self.eval(node.b, env, ctx)
+            parts.append(b)
+            v = self.built(ctx, env, node, concat([v, b], glue=True))
+        if v.kind in ("const", "seq") or any(p.kind == "seq" for p in parts):
+            return v
+        whole = concat(parts, glue=True).prefix
+        return v if whole == v.prefix else v.but(prefix=whole)
+
     def built(self, ctx: Ctx, env: Env, e: N, v: Val) -> Val:
         """Text that reads like SQL and has a value in it: remembered, so a finding on this line can be told whether
         only fixed text ever reaches it. The step is for the person who reads the flow."""
@@ -2069,7 +2096,8 @@ class Engine:
             return Val(kind="self", data=env.fn.cls)
         if name in R.DOM_SOURCE_HEADS and mod.lang == "js":
             words = f"`{name}` is part of the page's address, which whoever made the link chose"
-            return Val((self.source(env.fn, env.fn.line, words, origin="dom"),), kind="ext", data=name)
+            mark = R.PAGE_MARK if name in R.PAGE_ADDRESS else FIXED0
+            return Val((self.source(env.fn, env.fn.line, words, mark, origin="dom"),), kind="ext", data=name)
         return Val(kind="ext", data=name)        # a name of the language or the environment: `open`, `parseInt`
 
     def modval(self, mod: Mod, name: str) -> Val:
@@ -2172,10 +2200,16 @@ class Engine:
                 return Val(kind="req", data=fn.lang)
             if data in R.IDENT_GLOBALS:
                 return Val((Taint("ident", name, R.ALL, (), None, FIXED0),), kind="ext", data=data)
+            if fn.lang == "js" and base.data in R.PAGE_HEADS:
+                if name in R.PAGE_SITE:     # where the page was loaded from: nothing of the link maker's
+                    return Val(kind="ext", data=data, prefix=R.OWN_EXACT if name == "origin" else None)
+                if name == "pathname" and base.taints:      # the link maker's text, and it begins with a slash
+                    return Val(base.taints, kind="ext", data=data, prefix="/")
             if not base.taints:
                 if fn.lang == "js" and data in R.DOM_SOURCE_HEADS:
                     words = f"`{data}` is part of the page's address, which whoever made the link chose"
-                    return Val((self.source(fn, e.line, words, origin="dom"),), kind="ext", data=data)
+                    mark = R.PAGE_MARK if data in R.PAGE_ADDRESS else FIXED0
+                    return Val((self.source(fn, e.line, words, mark, origin="dom"),), kind="ext", data=data)
                 return Val(kind="ext", data=data, lost=base.lost)
             head = base.data[:-2] if isinstance(base.data, str) and base.data.endswith("()") else None
             if head and R.HOST_OF.match(head):
@@ -3266,7 +3300,7 @@ class Engine:
         # request data read through a call: request.args.get("q"), req.get("host"), request.get_json()
         if recv is not None and recv.kind == "bag" and member not in R.MUTATORS:
             key = (e.items[0].a if e.items and e.items[0].k == "const" else None)
-            if member in R.KEEP_SUBJECT or (self.same_address(member, tainted_args) and
+            if member in R.KEEP_SUBJECT or (self.same_address(member, tainted_args, args) and
                                             any(t.safe & R.OWN_MARKS for t in recv.taints)):
                 return Val(recv.taints)     # `req.nextUrl.clone()`, `request.url.replace("http://", "https://")`
             self.page_calls.add(id(e))
@@ -3491,8 +3525,12 @@ class Engine:
                     return Val(tuple(t if t.kind == "ident" else
                                      with_step(t._replace(safe=norm(t.safe | {"xss"}, fn.lang)), step)
                                      for t in recv.taints), None, recv.sql, recv.html)
+                if fn.lang == "js" and member == "split" and not tainted_args and owned(recv):
+                    # the first piece still begins as the address did (`location.href.split('#')[0]`); any other
+                    # piece is a part of it
+                    return seq([Val(recv.taints), Val(disowned(recv.taints))])
                 taints = merge(recv.taints, every.taints) if member in R.ARG_METHODS else recv.taints
-                if not self.same_address(member, tainted_args):
+                if not self.same_address(member, tainted_args, args):
                     taints = disowned(taints)       # `url.href.split("next=")[1]`: a part, not the address
                 if cb_ret is not None and member in ("map", "flatMap", "then", "reduce"):
                     taints = merge(taints, cb_ret.taints)
@@ -3592,10 +3630,14 @@ class Engine:
         return p if isinstance(p, str) and (p.startswith(R.BASE) or R.host_fixed(p)) else None
 
     @staticmethod
-    def same_address(member: str | None, tainted_args: bool) -> bool:
+    def same_address(member: str | None, tainted_args: bool, args=()) -> bool:
         """Whether a call on an address gives the same address back (a copy, its text, its text with fixed text
-        swapped for fixed text) and not a part of it."""
-        return member in R.OWN_KEEP or (member in ("replace", "replaceAll") and not tainted_args)
+        swapped for fixed text) and not a part of it. A swap that takes the site off the front leaves a part."""
+        if member in R.OWN_KEEP:
+            return True
+        if member not in ("replace", "replaceAll") or tainted_args:
+            return False
+        return not R.front_off(args[0] if args else None, args[1] if len(args) > 1 else None)
 
     @staticmethod
     def address(fn: Fn, name: str, args: list, every: Val) -> Val:

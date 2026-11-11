@@ -921,6 +921,127 @@ def test_in_the_browser(tmp_path, case):
     assert _kinds(flows) == want, flows
 
 
+# The page's own address. The scheme, the host and the port a page was loaded from are not what whoever made the
+# link chose, and going to the page's own address again leaves the site nowhere. A part read out of the address is
+# still the link maker's text. (Written after two false alarms on a real app's own script; the caught ones beside
+# them are near-misses that already read right and are kept so.)
+ASKED_NEXT = "const next = new URLSearchParams(location.search).get('next')\n"
+BROWSER_OWN = {
+    "clean: the page's own scheme and host, a port and a path of the script's":
+        ("const port = 1313\nconst path = '/livereload'\n"
+         "window.location = location.protocol + '//' + location.hostname + ':' + port + path\n", []),
+    "clean: own scheme and host, a port out of the options, a path handed in":
+        ("function go (path, options) {\n"
+         "  window.location = location.protocol + '//' + location.hostname + ':' + options.overrideURL + path\n}\n", []),
+    "clean: the page's own origin and a written path":
+        ("window.location.href = window.location.origin + '/login'\n", []),
+    "clean: own origin, a written path, then a word out of the address":
+        (ASKED_NEXT + "location.href = location.origin + '/settings/' + next\n", []),
+    "clean: own origin, one slash, then a word out of the address (the origin is never empty)":
+        (ASKED_NEXT + "location.href = location.origin + '/' + next\n", []),
+    "clean: the page's own host put into the page as text":
+        ("document.getElementById('host').textContent = location.host\n", []),
+    "clean: the page's own host name put into the page as HTML":
+        ("document.getElementById('host').innerHTML = '<b>' + location.hostname + '</b>'\n", []),
+    "clean: document.location.origin and a written path":
+        ("window.location.assign(document.location.origin + '/home')\n", []),
+    "clean: own scheme and host in a template text":
+        ("window.location.href = `${location.protocol}//${location.host}/app/`\n", []),
+    "clean: the origin of the page's address read through URL":
+        ("const here = new URL(location.href)\nwindow.location.href = here.origin + '/login'\n", []),
+    "clean: own origin kept under a name":
+        ("const site = window.location.origin\nwindow.location.href = site + '/login'\n", []),
+    "clean: the same page again":
+        ("window.location.href = window.location.href\n", []),
+    "clean: the same page again, by the bare name":
+        ("window.location = location\n", []),
+    "clean: the same address with one parameter set through URL":
+        ("function page (n) {\n  const url = new URL(window.location.href)\n  url.searchParams.set('page', n)\n"
+         "  window.location.href = url.toString()\n}\n", []),
+    "clean: the same address as a URL object, handed over":
+        ("function page (n) {\n  const url = new URL(location.href)\n  url.searchParams.set('page', n)\n"
+         "  location.assign(url)\n}\n", []),
+    "clean: the same address and written text after it":
+        ("window.location.href = window.location.href + '&done=1'\n", []),
+    "clean: the same address without what follows the #":
+        ("location.replace(location.href.split('#')[0])\n", []),
+    "clean: the same address, http made https":
+        ("location.replace(location.href.replace('http:', 'https:'))\n", []),
+    "clean: the same address, what follows the # cut by a pattern":
+        ("window.location = location.href.replace(/#.*$/, '')\n", []),
+    "clean: own origin and the page's path, the query left out":
+        ("window.location = location.origin + location.pathname\n", []),
+    "clean: own origin, the page's path and a written query":
+        ("window.location.href = location.origin + location.pathname + '?tab=2'\n", []),
+    "clean: own scheme, host and the page's path":
+        ("window.location.href = location.protocol + '//' + location.host + location.pathname\n", []),
+    "clean: document.URL again":
+        ("window.location.href = document.URL\n", []),
+    "clean: own scheme and host kept under a name, then the page's path":
+        ("const base = location.protocol + '//' + location.host\nwindow.location.href = base + location.pathname\n",
+         []),
+    "clean: own scheme and host in a template text, then the page's path":
+        ("window.location.href = `${location.protocol}//${location.host}${location.pathname}`\n", []),
+    "clean: own scheme, host and port, one slash, then a word out of the address":
+        (ASKED_NEXT + "window.location.href = location.protocol + '//' + location.hostname + ':' + location.port + '/' + next\n",
+         []),
+    "clean: the same address, the scheme swapped by a pattern":
+        ("location.replace(location.href.replace(/^http:/, 'https:'))\n", []),
+    "caught: own scheme and host kept under a name, the address's text straight after":
+        (ASKED_NEXT + "const base = location.protocol + '//' + location.host\nwindow.location.href = base + next\n",
+         ["redirect"]),
+    "caught: own scheme and host name, then the address's text where the port stands":
+        (ASKED_NEXT + "window.location.href = location.protocol + '//' + location.hostname + ':' + next\n", ["redirect"]),
+    "caught: the site taken off the front of the address by a pattern":
+        ("window.location = location.href.replace(/^https?:\\/\\/[^/]+/, '')\n", ["redirect"]),
+    "caught: the site's written address taken off the front of the address":
+        ("window.location = location.href.replace('https://app.example.com', '')\n", ["redirect"]),
+    "caught: the address's text straight after the own origin":
+        (ASKED_NEXT + "window.location.href = location.origin + next\n", ["redirect"]),
+    "caught: only the scheme is the page's own":
+        (ASKED_NEXT + "window.location.href = location.protocol + '//' + next + '/start'\n", ["redirect"]),
+    "caught: own host, a dot, then the address's text":
+        (ASKED_NEXT + "window.location.href = 'https://' + location.hostname + '.' + next\n", ["redirect"]),
+    "caught: the address's text in front of the own host":
+        (ASKED_NEXT + "window.location.href = 'https://' + next + location.host + '/x'\n", ["redirect"]),
+    "caught: the whole address put into the page as HTML":
+        ("document.getElementById('at').innerHTML = 'You are at ' + location.href\n", ["xss"]),
+    "caught: the query put into the page as HTML":
+        ("document.getElementById('q').innerHTML = location.search\n", ["xss"]),
+    "caught: what follows the # is the next page":
+        ("window.location = location.hash.slice(1)\n", ["redirect"]),
+    "caught: the path alone is the next page (a path may begin with two slashes)":
+        ("window.location = window.location.pathname\n", ["redirect"]),
+    "caught: the path and a written query":
+        ("location.assign(location.pathname + '?tab=2')\n", ["redirect"]),
+    "caught: a piece cut out of the address by split":
+        ("window.location = location.href.split('next=')[1]\n", ["redirect"]),
+    "caught: the half of the address after the #":
+        ("window.location.href = location.href.split('#')[1]\n", ["redirect"]),
+    "caught: a piece cut out by substring":
+        ("const h = location.href\nwindow.location = h.substring(h.indexOf('url=') + 4)\n", ["redirect"]),
+    "caught: a piece found by a pattern":
+        ("const m = location.href.match(/[?&]to=([^&]+)/)\nif (m) window.location = decodeURIComponent(m[1])\n",
+         ["redirect"]),
+    "caught: a parameter read through URL":
+        ("const u = new URL(location.href)\nwindow.location.href = u.searchParams.get('next')\n", ["redirect"]),
+    "caught: the page that linked here is the next page":
+        ("window.location = document.referrer\n", ["redirect"]),
+    "caught: the address's own text put in front by replace":
+        (ASKED_NEXT + "window.location = location.href.replace(location.origin, next)\n", ["redirect"]),
+    "caught: the host of the address is set by hand":
+        (ASKED_NEXT + "const u = new URL(location.href)\nu.hostname = next\nwindow.location.href = u.toString()\n",
+         ["redirect"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(BROWSER_OWN))
+def test_the_pages_own_address_in_the_browser(tmp_path, case):
+    body, want = BROWSER_OWN[case]
+    flows = _flows(tmp_path, {"web/main.js": body})
+    assert _kinds(flows) == want, flows
+
+
 REACT = {
     "caught: a part of the address given to React as raw HTML":
         ("  return <div dangerouslySetInnerHTML={{ __html: params.get('msg') }} />\n", ["xss"]),

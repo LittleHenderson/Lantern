@@ -143,6 +143,19 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   the server's own either (`'https://' + normalize(host) + '/api/' + id` stays reported), whether it gets into the
   address through a field or an item of it, a call on it, `str()`, a branch, a second library call or a helper of
   the project that hands it back.
+  In the browser the page's own address is this site's. The scheme, the host and the port a page was loaded from
+  (`location.protocol`, `host`, `hostname`, `port`, `origin`) are not text whoever made the link wrote, and an
+  address that starts with them goes to this site once the host is closed (`location.origin + '/login'`;
+  `location.protocol + '//' + location.host + location.pathname`, which is read as the origin spelt out). Going to
+  the page's own address again leaves the site nowhere: `location.href` as it is, with text after it, with a
+  parameter set through `new URL(location.href)`, with fixed text swapped for fixed text, and without what follows
+  the `#` (`location.href.split('#')[0]`: the first piece still begins as the address did). Still reported: a
+  part read out of the address (the query, what follows the `#`, a later piece of a split, a parameter), the
+  address's text straight after the origin, the path alone as the next page (`location.pathname` may begin with
+  two slashes), the page that linked here, and the address put into the page as HTML. A swap that takes the site
+  off the front of an address (`url.replace(/^https?:\/\/[^/]+/, '')`) leaves a part of it, on the server too;
+  that read as the same address before and was missed. The leading text of `a + b + c + d` is read from all the
+  parts in the order written, as a template's is: pair by pair the start of `proto + '//' + host + path` was lost.
   A secret under a plain name is followed from the call that signs with it (`session({ secret: config.phrase })`,
   `jwt.sign(data, PHRASE)`, `app.secret_key = config.PHRASE`) to the line that gives the name its text, in that file
   or in the file of the project it was loaded from (at most 4 lines for one name). In Python a text given to a
@@ -151,6 +164,13 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   `JWT_SECRET_KEY`) a phrase counts as the secret too. A password's name is left to Bandit. A line `LW-SECRET-INLINE`
   lists is not listed again as Bandit's "possible hardcoded password" (B105, B106, B107), which ranked it low and
   repeated the text in its title; the Learn step "Take the secret key out of the code" counts either rule.
+  A name like `SESSION_KEY`, `COOKIE_KEY` or `TOKEN_KEY` says "signs" and "is kept under" alike, so its text
+  decides: one that reads like a name (`SESSION_KEY = "_auth_user_id"`, `TOKEN_KEY = 'auth_token'`,
+  `cookieKey: 'sid'`) is the key something is kept under and is not listed. The text that signs under such a name
+  is still found from the call that signs with it, and the name counts as before where its file hands it over as a
+  secret, a password or one of the keys that sign (`keys: [COOKIE_KEY]`). A search pattern under a name that ends
+  in `secret` (`LOOKS_FOR_SECRET = '(?P<name>secret|token)='`) is no secret either; Lantern's audit of itself
+  found that one, on a line of this change.
   A folder named `env` is left out only where it is a Python environment (`pyvenv.cfg`, conda's records, the
   programs that switch it on, its library folder: `python_frontend.is_environment`). Until now the name alone was
   enough: a project's own `config/env/` or `src/env/` was read by no reader of any language, its functions were not
@@ -180,8 +200,8 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   scanner list has a `lantern-flow` record (`docs/api.md`). Nothing was removed, and older result files open as
   before.
   Tests, each dangerous example beside safe twins and look-alikes, none copied from the held-out apps:
-  `tests/test_flow.py` (390), `tests/test_flow_js.py` (271), `tests/test_flow_authz.py` (580),
-  `tests/test_templates.py` (6), `tests/test_secret_inline.py` (84), `tests/test_ratelimit.py` (24),
+  `tests/test_flow.py` (391), `tests/test_flow_js.py` (319), `tests/test_flow_authz.py` (580),
+  `tests/test_templates.py` (6), `tests/test_secret_inline.py` (110), `tests/test_ratelimit.py` (24),
   `tests/test_env_folder.py` (11), and new tests in `tests/test_express.py` and `tests/test_fullstack.py` for
   Express `use`. The examples a rule was written for came before its code and failed first; examples added
   afterwards to pin down what already read right say so beside them. Older expectations that changed
@@ -192,8 +212,9 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   two ownership findings stand on the line of the record, not on the route's first line
   (`tests/test_flow_authz.py`), and `jwt.decode(token)` with no key no longer makes the login card read "in place"
   (`tests/test_protections.py`; the whole suite showed that the card and the new findings told two stories, and 14
-  examples were added there, 8 of which failed before the card was changed)). A name given twice at the top of a test file now fails the suite, as it does for
-  the product's own files (`tests/test_project_files.py`): a new constant in a test file had been replaced by an
+  examples were added there, 8 of which failed before the card was changed)). A name given twice at the top of a
+  test file now fails the suite, as it does for the product's own files (`tests/test_project_files.py`): a new
+  constant in a test file had been replaced by an
   older one further down, and the new test read the wrong text. Lantern's audit of itself: 0
   critical, 0 high, 0 medium, grade A. After the last round of rules it had failed with four findings at medium,
   and three of them were Lantern's mistakes, which real projects would have met too: its cloud client
@@ -201,12 +222,26 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   chooses where the server connects", and its share page, which makes a nonce with `secrets.token_urlsafe`, was
   asked whose record it shows. The rules above (the address that starts with a value of the server's own or
   names no host, a library call's result that is not the server's own, random text is no login) came from that:
-  133 examples in the four test files, 72 of which failed before. Looked at apart, of 22 everyday safe shapes of an outbound call (a setting and a path in their many
-  spellings, a client with a base address) the code before this round reported 20 and it now reports 1
+  133 examples in the four test files, 72 of which failed before. Looked at apart, of 22 everyday safe shapes of an
+  outbound call (a setting and a path in their many spellings, a client with a base address) the code before this
+  round reported 20 and it now reports 1
   (`os.path.join` used for an address). The fourth finding was right, a demo tool's made-up client secrets written
   in the code, which are now made when it runs. Of the 117 findings of the 15 sample apps under `tests/fixtures`, the last
   round of rules changes one: the signing secret in the shop sample (`shop/auth.py`, line 5) is listed as
   `LW-SECRET-INLINE` (medium) where Bandit's B105 (low) stood.
+  Measured on the held-out set (`bench/heldout/`: 14 apps the engine was not written on, definition
+  `e6b10d91686f`, offline): documented problems found at medium or above went from 28 of 79 before this change to
+  54 at the third measurement (44 at the first, 50 at the second; 55 with the dependency audits on),
+  and on the five public apps from 20 of 61 to 39 (target: 37). False alarms on the 17 safe-twin anchors went from 3
+  to 0, a mapped path is on 46 of the 55 problems found, and no vulnerable app is given a green release (0 of 8, as
+  before). Two targets are missed. One of the 26 `sql`, `shell`, `eval`, `deserialize` and `xxe` problems is still
+  not found (`pg-ssti`: a finding stands 13 lines above the documented line and nothing at it). And 2 of the 6 clean
+  apps are still refused a green release, each through one false alarm at high; one of the two is a finding of this
+  engine, on a value that has to equal a stored e-mail address before it reaches the page. Who may reach what is
+  the weakest class (3 of 11 found). The third number was preceded by two looks at which expectations were missed,
+  by class, rule and line number only; the apps were not read. Every miss by name, the labels and all three
+  measurements are in `bench/heldout/README.md`. The rules for the browser's own address and for key names
+  came after the third measurement; a fourth follows them.
   Not covered (the whole list is in `CLAUDE.md` under Known gaps and in `docs/audit/CLAIMS.md`, S18 to S21): only
   Python and JavaScript/TypeScript are followed. A value an object's own method reads back, or one kept in a
   database, a session or a file and read back later (stored XSS, second-order SQL), is not followed. A library call
@@ -218,7 +253,12 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   an address a visitor saved earlier, with a part of the request the engine does not know as request data
   (`request.remote_addr`), or with a library call's result for the request's text that was kept on an object and
   is read in a method, is not reported; a helper that takes the host as a parameter is reported whoever fills it,
-  a setting too.
+  a setting too. In the browser a helper that is handed the page's address and cuts it (`head(location.href)`
+  around `u.split('#')[0]`), a piece cut from its start with `slice` or `substring`, and the path alone as the
+  next page are reported; a `replace` whose pattern is built when the page runs (`new RegExp(...)`) is taken to
+  leave the site in place. A signing secret under a name like `SESSION_KEY` whose text reads like a name
+  (letters only), which no call Lantern knows is handed and which its file hands to nothing named for a secret,
+  is not listed.
   A login is taken on trust from a short list of token libraries; a value kept on the request and tested later
   (`req.user = jwt.decode(t)`, then `if (!req.user)`) still reads as a login, and a login made optional is seen
   only on the route itself. A record handed to a helper that removes it, one read with SQLAlchemy 2's

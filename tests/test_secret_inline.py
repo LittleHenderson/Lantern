@@ -56,6 +56,10 @@ JS = {
         ("passport.use(new JwtStrategy({ jwtFromRequest: fromHeader, secretOrKey: 'token-signing-text' }, verify))\n"
          "passport.use(new GitHubStrategy({ clientID: id, clientSecret: 'oauth-client-text' }, done))\n",
          [(1, "signing"), (2, "signing")]),
+    "clean: a pattern that looks for secrets, under a name that ends in secret":
+        ("const RE_SECRET = '(?:secret|token)\\\\s*[:=]'\nconst found = new RegExp(RE_SECRET).test(line)\n", []),
+    "caught: a secret with a bracket and a question mark in it":
+        ("const JWT_SECRET = 'made(?up)-text'\n", [(1, "signing")]),
     "caught: one word that is the same as its name, in small letters":
         ("app.use(session({ secret: 'secret' }))\n", [(1, "signing")]),
     "caught: a phrase of several words where the session is set up":
@@ -338,6 +342,11 @@ PY_FOLLOWED = {
         ({"config.py": "import os\n\nPHRASE = os.environ['PHRASE']\n",
           "app.py": "from flask import Flask\n\nimport config\n\napp = Flask(__name__)\napp.secret_key = config.PHRASE\n"},
          []),
+    "clean: a pattern that looks for secrets, under a name that ends in secret":
+        ({"rules.py": "import re\n\nHANDED_AS_SECRET = r\"(?<![\\w$])(?:\\w*[sS]ecret\\w*|keys|password)\\s*[:=]\"\n"
+                      "LOOKS_FOR_SECRET = '(?P<name>secret|token)='\nfound = re.search(HANDED_AS_SECRET, 'x')\n"}, []),
+    "caught: a signing text with a bracket and a question mark in it":
+        ({"settings.py": "JWT_SECRET = 'made(?up)-text'\n"}, [("settings.py", 1, "signing")]),
     "clean: a library's module":
         ({"app.py": "import jwt\nimport settings_lib\n\n\ndef token(user):\n"
                     "    return jwt.encode({'sub': user.id}, settings_lib.PHRASE, algorithm='HS256')\n"}, []),
@@ -347,6 +356,84 @@ PY_FOLLOWED = {
 @pytest.mark.parametrize("case", sorted(PY_FOLLOWED))
 def test_a_python_secret_by_its_own_name_or_followed_from_the_call_that_signs(tmp_path, case):
     files, want = PY_FOLLOWED[case]
+    assert _found(tmp_path, files) == want
+
+
+# A name like SESSION_KEY, COOKIE_KEY or TOKEN_KEY: the text that signs, or the name something is kept under (the
+# key of a session's entry, a cookie's name, the name a token has in the browser's store)? The text tells: one that
+# reads like a name is a name. The text that signs is still found from the call that signs with it, whatever it
+# reads like. (Written after four such lines of a large real app were listed as signing secrets.)
+KEPT_UNDER = {
+    "clean: the name a token is kept under in the browser's store":
+        ({"web/auth.js": "const TOKEN_KEY = 'auth_token'\n"
+                         "export function save (t) { localStorage.setItem(TOKEN_KEY, t) }\n"}, []),
+    "clean: the name of the session's cookie":
+        ({"server.js": "const SESSION_KEY = 'session'\nconst COOKIE_KEY = 'connect.sid'\n"}, []),
+    "clean: the same in camel case":
+        ({"web/store.js": "export const tokenKey = 'accessToken'\nconst sessionKey = 'user-session'\n"}, []),
+    "clean: in a settings object":
+        ({"config.js": "module.exports = { port: 3000, cookieKey: 'sid', tokenKey: 'access_token' }\n"}, []),
+    "clean: a setting with the cookie's name for when it is missing":
+        ({"server.js": "const name = process.env.COOKIE_KEY || 'sid'\n"}, []),
+    "clean: the keys a framework keeps who is signed in under":
+        ({"auth/__init__.py": 'SESSION_KEY = "_auth_user_id"\nBACKEND_SESSION_KEY = "_auth_user_backend"\n'
+                              'HASH_SESSION_KEY = "_auth_user_hash"\n',
+          "csrf.py": 'CSRF_SESSION_KEY = "_csrftoken"\n'}, []),
+    "clean: Python, the name a token is kept under":
+        ({"store.py": "TOKEN_KEY = 'access_token'\nSESSION_COOKIE_KEY = 'sid'\n"}, []),
+    "clean: Python, a setting read with the cookie's name for when it is missing":
+        ({"settings.py": "import os\n\nCOOKIE_KEY = os.environ.get('COOKIE_KEY', 'sid')\n"}, []),
+    "caught: a session key that signs, found from the call":
+        ({"server.js": "const SESSION_KEY = 'sessionsigningtext'\n"
+                       "app.use(session({ secret: SESSION_KEY, resave: false }))\n"}, [("server.js", 1, "signing")]),
+    "caught: a token key that signs, found from the call":
+        ({"auth.js": "const TOKEN_KEY = 'tokenkey'\nfunction sign (p) { return jwt.sign(p, TOKEN_KEY) }\n"},
+         [("auth.js", 1, "signing")]),
+    "caught: a cookie key that signs, found from the call":
+        ({"server.js": "const COOKIE_KEY = 'cookiekey'\napp.use(cookieParser(COOKIE_KEY))\n"},
+         [("server.js", 1, "signing")]),
+    "caught: a cookie key in the list of keys that sign the session's cookie":
+        ({"server.js": "const COOKIE_KEY = 'cookiesigningtext'\n"
+                       "app.use(cookieSession({ name: 'session', keys: [COOKIE_KEY] }))\n"},
+         [("server.js", 1, "signing")]),
+    "caught: a session key handed over as the password that seals the session":
+        ({"server.js": "const SESSION_KEY = 'sessionsigningtext'\n"
+                       "app.use(ironSession({ cookieName: 'sid', password: SESSION_KEY }))\n"},
+         [("server.js", 1, "signing")]),
+    "caught: Python, a session key handed to the middleware as its secret":
+        ({"main.py": "from starlette.middleware.sessions import SessionMiddleware\n\n"
+                     "SESSION_KEY = 'sessionsigningtext'\n"
+                     "app.add_middleware(SessionMiddleware, secret_key=SESSION_KEY)\n"}, [("main.py", 3, "signing")]),
+    "clean: the cookie's name handed to the session as its name":
+        ({"server.js": "const COOKIE_KEY = 'sid'\n"
+                       "app.use(session({ name: COOKIE_KEY, secret: process.env.SESSION_SECRET }))\n"}, []),
+    "clean: Python, the key who is signed in is kept under in the session":
+        ({"views.py": "SESSION_KEY = 'user_id'\n\n\ndef who(request):\n    return request.session[SESSION_KEY]\n"},
+         []),
+    "caught: a session key whose text reads like no name":
+        ({"server.js": "const SESSION_KEY = 'made up 4 words'\n"}, [("server.js", 1, "signing")]),
+    "caught: a token key with digits and signs in it":
+        ({"config.js": "module.exports = { tokenKey: 'k9$made-up-0text' }\n"}, [("config.js", 1, "signing")]),
+    "caught: names that say they sign, whatever the text reads like":
+        ({"config.js": "const JWT_KEY = 'tokenkey'\nconst SIGNING_KEY = 'signingkey'\n"
+                       "const SESSION_SECRET = 'sessiontext'\n"},
+         [("config.js", 1, "signing"), ("config.js", 2, "signing"), ("config.js", 3, "signing")]),
+    "caught: Python, a token key that signs, found from the call":
+        ({"auth.py": "import jwt\n\nTOKEN_KEY = 'tokenkey'\n\n\ndef token(u):\n"
+                     "    return jwt.encode({'sub': u}, TOKEN_KEY, algorithm='HS256')\n"}, [("auth.py", 3, "signing")]),
+    "caught: Python, a session key whose text reads like no name":
+        ({"settings.py": "SESSION_KEY = 'made up 4 words'\n"}, [("settings.py", 1, "signing")]),
+    "caught: Python, names that say they sign, whatever the text reads like":
+        ({"settings.py": "SECRET_KEY = 'secretkeytext'\nJWT_SECRET = 'jwttext'\nSIGNING_KEY = 'signingkey'\n"
+                         "HMAC_KEY = 'hmackey'\n"},
+         [("settings.py", 1, "signing"), ("settings.py", 2, "signing"), ("settings.py", 3, "signing"),
+          ("settings.py", 4, "signing")]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(KEPT_UNDER))
+def test_a_key_something_is_kept_under_is_not_the_text_that_signs(tmp_path, case):
+    files, want = KEPT_UNDER[case]
     assert _found(tmp_path, files) == want
 
 

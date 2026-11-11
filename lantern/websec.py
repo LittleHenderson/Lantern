@@ -1280,12 +1280,19 @@ def secret_name(name: str) -> str | None:
     return "password" if w[-1] in ("password", "passwd", "pwd", "pass") else None
 
 
+# text that is a search pattern: a group that says what it is (`(?:`, `(?<`, `(?P`) or a class of characters with
+# something of a pattern after it (`\w*`, `\s+`); a pattern that looks for secrets is kept under a name that says so
+PATTERN_TEXT = re.compile(r"\(\?[:<!=P]|\\[wsdbWSDB][+*?{\[\]()|\\]")
+
+
 def _no_secret(name: str, value: str, in_call: bool) -> bool:
     """A value that is not the secret itself: nothing, the name of a setting, a placeholder, a place (a path, an
-    address), a label that repeats the name, words for a person (`in_call`: the value stands in the call that
-    takes the secret, where a phrase is the secret)."""
+    address), a label that repeats the name, a search pattern, words for a person (`in_call`: the value stands in
+    the call that takes the secret, where a phrase is the secret)."""
     v = value.strip()
     if not v or re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", v) or v.startswith(("./", "../", "/", "~/", "-----BEGIN")):
+        return True
+    if PATTERN_TEXT.search(v):
         return True
     if re.search(r"^<.*>$|^\{\{.*\}\}$|\$\{|%s|^\*+$|^x{3,}$|^\.{3}$|://", v, re.I) or \
             re.search(r"\.(pem|key|crt|cer|p12|pfx|json|txt|env)$", v):
@@ -1294,6 +1301,23 @@ def _no_secret(name: str, value: str, in_call: bool) -> bool:
         return True
     # words for a person: begins with a capital and goes on, or ends like a sentence
     return not in_call and ((v[:1].isupper() and len(v.split()) >= 2) or v.endswith((".", "!", "?", ":")))
+
+
+# `SESSION_KEY = "_auth_user_id"`, `TOKEN_KEY = 'auth_token'`, `cookieKey: 'sid'`: the key a session's entry, a
+# cookie or a token is kept under. Such a name says "signs" and "is kept under" alike, so its text decides: one that
+# reads like a name (letters and `_ . : -` only) is a name. The text that signs under such a name is still found
+# from the call that signs with it (`_followed`), whatever it reads like, and such a name counts as before where
+# its file hands it over as a secret, a password or one of the keys that sign (`keys: [COOKIE_KEY]`).
+KEPT_WORDS = {"session", "cookie", "token"}
+KEPT_TEXT = re.compile(r"[A-Za-z_.:\-]{1,40}")
+HANDED_OVER = r"(?<![\w$])(?:\w*[sS]ecret\w*|keys|password|passphrase)\s*[:=]\s*\[?\s*(?:[\w$.]+\s*,\s*)*(?:[\w$]+\.)*"
+
+
+def _kept_under(name: str, value: str, text: str = "") -> bool:
+    w = _name_words(name)
+    if not (len(w) >= 2 and w[-1] == "key" and w[-2] in KEPT_WORDS and KEPT_TEXT.fullmatch(value.strip())):
+        return False
+    return not re.search(HANDED_OVER + re.escape(name) + r"(?![\w$])", text)
 
 
 def _str_value(m, first: int = 1) -> str:
@@ -1368,9 +1392,11 @@ def _secrets_in(text: str, js: bool, py: bool) -> dict[int, tuple[str, str, str]
                 d = PY_DEFAULT.match(src, m.end())
                 lit = string.match(src, m.end())
                 own = last[-1].lower() in PY_OWN_NAMES
-                if d and not _no_secret(last[-1], _str_value(d, 3), True):
+                if d and not _no_secret(last[-1], _str_value(d, 3), True) and \
+                        not _kept_under(last[-1], _str_value(d, 3), text):
                     add(i, "default", _str_value(d, 3), "LOW")
-                elif lit and PY_LIT_END.match(src, lit.end()) and not _no_secret(last[-1], _str_value(lit), own):
+                elif lit and PY_LIT_END.match(src, lit.end()) and not _no_secret(last[-1], _str_value(lit), own) \
+                        and not _kept_under(last[-1], _str_value(lit), text):
                     add(i, "signing", _str_value(lit), "MEDIUM" if own else "LOW")
             continue
         for m in SECRET_CAND.finditer(src):
@@ -1382,7 +1408,8 @@ def _secrets_in(text: str, js: bool, py: bool) -> dict[int, tuple[str, str, str]
             lit = string.match(src, m.end())
             if lit:
                 value = _str_value(lit)
-                if src[lit.end():].lstrip()[:1] == "+" or _no_secret(m.group("name"), value, in_call):
+                if src[lit.end():].lstrip()[:1] == "+" or _no_secret(m.group("name"), value, in_call) or \
+                        _kept_under(m.group("name"), value, text):
                     continue
                 if kind == "password":
                     if CONNECTION.search("\n".join(lines[max(0, i - 7):i + 6])):
@@ -1391,13 +1418,15 @@ def _secrets_in(text: str, js: bool, py: bool) -> dict[int, tuple[str, str, str]
                     add(i, "signing", value, "MEDIUM" if in_call else "LOW")
             elif kind == "signing":
                 d = JS_DEFAULT_HEAD.match(src, m.end())
-                if d and not _no_secret(m.group("name"), _str_value(d), True):
+                if d and not _no_secret(m.group("name"), _str_value(d), True) and \
+                        not _kept_under(m.group("name"), _str_value(d), text):
                     add(i, "default", _str_value(d), "LOW")
     # 3. a setting whose own name says it is a secret, read with text for when it is missing
     for m in (PY_DEFAULT if py else JS_ENV_DEFAULT).finditer(text) if (py or js) else ():
         setting = (m.group(1) or m.group(2) or "")
         value = _str_value(m, 3)
-        if secret_name(setting) == "signing" and not _no_secret(setting, value, True):
+        if secret_name(setting) == "signing" and not _no_secret(setting, value, True) and \
+                not _kept_under(setting, value, text):
             add(_line_of(text, m.start()), "default", value, "LOW")
     # 4. a database address with the password in it (not one on this computer: a host with a dot)
     for m in DB_ADDRESS.finditer(text):
