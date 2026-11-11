@@ -43,12 +43,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import tempfile
 import tomllib
 from pathlib import Path
 
-from . import scanresult
+from . import programs, scanresult
 from .python_frontend import SKIP_DIRS, inside_repo, project_text
 
 NPM_REGISTRY = "https://registry.npmjs.org/"
@@ -380,7 +379,8 @@ def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
         return [], scanresult.record("pip-audit", "skipped", "no exact versions to check (commit a lock file such as "
                                      "uv.lock or poetry.lock, or pin with ==)", applicable=False, files=files,
                                      unpinned=len(loose), **info)
-    if not shutil.which("pip-audit"):
+    pip_audit = programs.find("pip-audit")
+    if not pip_audit:
         return [], scanresult.record("pip-audit", "unavailable", 'pip install "lantern[scan]"', files=files, **info)
     if offline() if no_network is None else no_network:
         return [], scanresult.record("pip-audit", "skipped", "offline", applicable=True, files=files, **info)
@@ -389,7 +389,7 @@ def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     with tempfile.TemporaryDirectory() as td:
         req = Path(td) / "requirements.txt"
         req.write_text("".join(f"{n}=={v}\n" for n, (v, _) in sorted(pins.items())), encoding="utf-8")
-        cmd = ["pip-audit", "-r", str(req), "-f", "json", "--progress-spinner", "off", "--no-deps", "--disable-pip"]
+        cmd = [pip_audit, "-r", str(req), "-f", "json", "--progress-spinner", "off", "--no-deps", "--disable-pip"]
         run = scanresult.run_tool(cmd, timeout=PIP_AUDIT_TIMEOUT)
     info |= {"exit_code": run.returncode, "duration_ms": run.duration_ms}
     if run.timed_out:
@@ -483,7 +483,7 @@ def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
                                      "(commit your lock file)", applicable=False, **info)
     if offline() if no_network is None else no_network:
         return [], scanresult.record("npm-audit", "skipped", "offline", applicable=True, **info)
-    npm = shutil.which("npm")
+    npm = programs.find("npm")
     if not npm:
         return [], scanresult.record("npm-audit", "unavailable", "npm is not on this computer", **info)
     info["version"] = _npm_version(npm)

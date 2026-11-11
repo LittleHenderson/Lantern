@@ -60,7 +60,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import remote
+from . import programs, remote
 
 HEX = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _BOOL = {"true": "true", "yes": "true", "on": "true", "1": "true", "": "false",
@@ -323,7 +323,7 @@ def _trusted() -> list[str]:
     """The person's `safe.directory` list: the repositories they have told git to use although they are not their
     own. git itself is asked, inside a git folder made here, so the answer holds the person's settings, the
     computer's and those handed over for one command, with whatever they include, and nothing of a project."""
-    git = shutil.which("git")
+    git = programs.find("git")
     made = _own_folder(["[core]", "\trepositoryformatversion = 0", "\tbare = true"], "ref: refs/heads/none") \
         if git else None
     if made is None:
@@ -477,7 +477,7 @@ def _shadow(repo: Repo, commit: str | None):
     folder must be the git folder's own (no link on the way), or nothing is asked. Removed afterwards; it holds two
     small text files written here and nothing of the project."""
     cfg = settings(repo.common)
-    git = shutil.which("git")
+    git = programs.find("git")
     index, objects = repo.gitdir / "index", repo.common / "objects"
     made = None
     if git and _real_dir(repo.top) and _real_dir(objects) and (_own_file(index) or not os.path.lexists(index)):
@@ -571,7 +571,7 @@ def info(folder: Path | str) -> dict:
     """The commit a folder is at, its branch, whether files differ from the commit, the address of `origin`, and when
     the commit was made. `{"commit": None, "note": …}` when the folder is in no repository Lantern reads, or git is
     not installed. `dirty` is True, with a `note`, when git could not tell."""
-    if not shutil.which("git"):
+    if not programs.find("git"):
         return {"commit": None, "note": "git not installed"}
     repo, why = _locate(folder)
     if repo is None:

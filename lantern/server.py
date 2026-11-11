@@ -887,9 +887,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"packs": packs_list(app, (q.get("project") or [""])[0],
                                                    all_projects=(q.get("all") or [""])[0] == "1")})
         if path == "/api/connections":
-            import shutil
+            from . import programs
             from .mcp_server import connections
-            cmd = shutil.which("lantern") or "lantern"
+            cmd = programs.find("lantern") or "lantern"
             return self._json({"connections": connections(app.store), "now": int(time.time()),
                                "setup": {"claude_code": f"claude mcp add lantern -- {cmd} mcp",
                                          "json": {"mcpServers": {"lantern": {"command": cmd, "args": ["mcp"]}}}}})

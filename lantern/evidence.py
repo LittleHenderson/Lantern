@@ -13,11 +13,10 @@ import html
 import json
 import platform
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, gitfacts, results, scanresult
+from . import SCHEMA_VERSION, __version__, gitfacts, programs, results, scanresult
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
@@ -47,11 +46,11 @@ def engine_ref() -> str:
     if re.fullmatch(r"[0-9a-f]{40}", _build.COMMIT or ""):
         return _build.COMMIT
     root = Path(__file__).resolve().parent.parent
-    git = shutil.which("git")
+    git = programs.find("git")
     if git and (root / ".git").exists() and (root / "pyproject.toml").is_file():
         try:
             p = subprocess.run([git, "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=10)
+                               encoding="utf-8", errors="replace", timeout=10, env=programs.env())
             if p.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", p.stdout.strip()):
                 return p.stdout.strip()
         except (OSError, subprocess.TimeoutExpired):

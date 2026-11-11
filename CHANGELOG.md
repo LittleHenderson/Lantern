@@ -44,6 +44,63 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   is found, letter for letter, in no path but its own unless a folder was named for that purpose (`tool.p[y]z/`), and
   a file in such a folder is then left out of Bandit as one in `build/` or `vendor/` already is; a link put in place
   while an analysis runs (that takes another program of the same computer writing in the project at that moment).
+- Lantern starts only the person's own programs, and a settings file in a project does not steer the Python scanner
+  (2026-11-10; stage 7 of the 2026-11-09 directive, execution safety: reading a project must not run it). Lantern
+  is often started inside the folder of the project it was asked to read (`cd project`, then `lantern analyze .`).
+  **What was wrong** (the code before, ce65f49; Bandit 1.9.4, Python 3.13.18; each shown by a failing test, offline,
+  on this computer). Bandit was started as `python -m bandit` in the person's current folder, and Python looks
+  there first for every module such a program loads: a project file named `bandit.py`, `logging.py`,
+  `argparse.py`, `tokenize.py` or `yaml.py` ran as a program, twice (the scan, and the question for the version),
+  and Lantern said only "incomplete bandit: error: empty output". Of 12 module names tried one at a time, 10 were
+  loaded; with `-P`, 0. That is claim A4 ("Lantern never runs the analyzed code") not holding for that way of
+  starting it. A `.bandit` file in the project (Bandit looks for one in the folder it scans when it is handed
+  none): with its checks switched off, every file left out, only another check asked for, a second settings file
+  named, or the file in a folder further down, the scan found nothing where there is a finding and Lantern's record
+  of it said `ok`; two such files, or one naming a file for the report, made the scan fail. And programs started by
+  their bare name (`git`, `gitleaks`, `pip-audit`, `docker`, `taskkill`) or found with `shutil.which` (`git`,
+  `npm`, `gitleaks`, `pip-audit`, `docker`, `tesseract`, `lantern`): on any system a PATH entry that is empty, `.`
+  or another relative path means the current folder (27 failing tests: nine ways Lantern starts a program, three
+  such entries), and Windows looks in the current folder before PATH, as `shutil.which` does there. A test run in
+  Docker ("Watch my tests run") started `docker` by its bare name and its clean-up (`docker rm`) in the person's
+  current folder; in the restricted process the runner of the tests (`npm`) could be a file of the project named
+  like it; and Docker asked for (`LANTERN_SANDBOX=docker`) and not installed ended in a Python error.
+  **Now.** `lantern/programs.py` is the one place a program is found and worded. `programs.find(name)` gives the
+  full path from the folders PATH names in full (on Windows with the endings Windows can start), or nothing;
+  `programs.python(module, ...)` starts a Python tool with `-P`, Python's own switch for "not the current folder";
+  `programs.env()` is the environment every helper is started with (`remote.run_bounded`): PATH and PYTHONPATH
+  without their relative entries, and on Windows the system's own switch (`NoDefaultCurrentDirectoryInExePath`),
+  which its shell obeys when `npm.cmd` starts `node`. Bandit is handed a settings file of Lantern's own (`--ini`,
+  with nothing in it; `programs.settings`), so it looks for none in the project; when that file cannot be written
+  the scanner is not started and the record says why, and a temp folder that cannot be cleared away afterwards
+  does not cost the scan.
+  The cloud worker's steps (`lantern.depaudit`, `lantern.archive`, `lantern.cli`) are started with `-P` as well;
+  they already ran in a folder whose names the service chose. In the sandbox the runner of a project's tests and
+  Docker are started by their full paths, Docker with the same environment; Docker asked for and not installed
+  means the tests are not run, said in Lantern's words (`Unavailable`).
+  Changed for the person: a `.bandit` file of their own no longer changes what Lantern's scan reports (to set a
+  finding aside, `lantern accept` keeps it listed with its reason), and a program that can be reached only through
+  a relative PATH entry counts as not installed.
+  Tests: `tests/test_programs.py` (72 tests; 3 need Windows and run in CI's Windows job) and one more in
+  `tests/test_server.py`. On the code before 56 of the 73 fail, 14 pass and 3 are skipped: 46 on what the code does
+  and 10 because a function of this change is not there yet. `test_no_program_is_started_any_other_way` reads every
+  module of `lantern/`, `cloud/lantern_cloud/` and `gateway/` and fails on `shutil.which`, on a program started by
+  its bare name and on `[sys.executable, "-m", …]` outside the two lines that start the project's own tests on
+  purpose. Mistakes planted in the changed lines, one at a time (the tool can plant none in the changed lines of
+  `cloud/lantern_cloud/worker.py`). First pass, with the tests and the test files as first chosen: 51 planted in
+  nine files, 32 failed a test at once and 19 failed none. Of the 19, 8 cannot fail a test (five change a time limit
+  by one second, three change `text=True` on a line that also names an encoding, which already means text), 2 fail
+  older tests in files that had not been named (`tests/test_links_out.py`, `tests/test_sandbox_safety.py`), 8 led to
+  tests (a settings folder that cannot be cleared away, the Windows branch that ends a process tree, the runner of a
+  test run in the sandbox) and 1 to a change of the code (Docker asked for and not installed). Final pass, on the
+  final code and tests: 53 planted in ten files, 44 fail a test, and the 9 that fail none are of those two kinds
+  (six time limits, three `text=True`).
+  Not covered: a folder PATH names in full is used as the person wrote it, also when it lies inside a project (a
+  project's virtual environment that the person switched on); Lantern started as `python -m lantern.cli` inside a
+  project, or with a relative entry in PYTHONPATH, has handed its own Python the current folder before any line of
+  Lantern runs (the `lantern` command does not); what gitleaks does with settings files in the folder it scans was
+  not measured (it is installed neither here nor in CI); the Windows rules are tried against Windows itself only by
+  the three tests of CI's Windows job; the project's own tests ("Watch my tests run", `lantern trace`) are the
+  project's code on purpose and run in the sandbox.
 - The opt-in usage counts go to the gateway's own address and nowhere else, and Lantern says where they go
   (2026-11-10; stage 7 of the 2026-11-09 directive, "validate ... the address used for optional usage reporting").
   Sharing is off until the person turns it on; this is about what happened after they did.

@@ -13,7 +13,7 @@ import pytest
 
 from tests.test_server import srv  # noqa: F401 - fixture
 
-from lantern import depaudit, scanresult
+from lantern import depaudit, programs, scanresult
 from lantern.engine import build_graph
 from lantern.scanresult import ToolRun
 from lantern.security import scan
@@ -61,7 +61,7 @@ def test_pip_audit_and_npm_failing_are_status_lines(tmp_path, monkeypatch):
     (tmp_path / "requirements.txt").write_text("requests==2.0.0\n", encoding="utf-8")
     (tmp_path / "package.json").write_text('{"name": "x", "dependencies": {"lodash": "4.17.0"}}', encoding="utf-8")
     (tmp_path / "package-lock.json").write_text('{"name": "x", "lockfileVersion": 3, "packages": {}}', encoding="utf-8")
-    monkeypatch.setattr(depaudit.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(programs, "find", lambda name: f"/usr/bin/{name}")
     # the tool could not even start (scanresult.run_tool reports it instead of raising)
     monkeypatch.setattr(scanresult, "run_tool", lambda cmd, **k: ToolRun(None, error="OSError: the tool crashed"))
     findings, info = depaudit.run_pip_audit(tmp_path, False)
@@ -100,7 +100,7 @@ def test_the_whole_scan_finishes_with_the_network_down(tmp_path, monkeypatch):
         'package a;\npublic class App {\n  public void run(String q) throws Exception {\n'
         '    Runtime.getRuntime().exec("ls " + q);\n  }\n}\n', encoding="utf-8")
     monkeypatch.setattr(depaudit, "_osv_post", _down)
-    monkeypatch.setattr(depaudit.shutil, "which", lambda name: None)
+    monkeypatch.setattr(programs, "find", lambda name: None)
     g = build_graph(repo)
     sec = scan(g, offline=False)
     assert any(f["rule"] == "LV-EXEC-CONCAT" for f in sec["findings"]), [f["rule"] for f in sec["findings"]]

@@ -1,6 +1,6 @@
 import json
 
-from lantern import depaudit, scanresult
+from lantern import depaudit, programs, scanresult
 from lantern.scanresult import ToolRun
 from lantern.security import rank
 
@@ -36,7 +36,7 @@ def test_pip_audit_gets_only_name_version_pairs(tmp_path, monkeypatch):
         out = {"dependencies": [{"name": "flask", "version": "2.0.1", "vulns": [
             {"id": "PYSEC-1", "fix_versions": ["2.2.5"], "description": "bad"}]}]}
         return ToolRun(1, json.dumps(out), "")
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     monkeypatch.setattr(scanresult, "run_tool", fake_run)
     f, info = depaudit.run_pip_audit(tmp_path, no_network=False)
     assert seen["req"] == "flask==2.0.1\n" and info["status"] == "ok"
@@ -71,7 +71,7 @@ def test_npm_audit_findings_and_severity(tmp_path, monkeypatch):
         if cmd[1] == "--version":
             return ToolRun(0, "10.9.0\n", "")
         return ToolRun(1, json.dumps(report), "")
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/npm")
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/npm")
     monkeypatch.setattr(scanresult, "run_tool", fake_run)
     f, info = depaudit.run_npm_audit(tmp_path, no_network=False)
     audit_cmd = calls[-1][0]
@@ -101,7 +101,7 @@ def test_pip_audit_duplicate_and_aliased_advisories_merge(tmp_path, monkeypatch)
             {"id": "PYSEC-2026-1850", "aliases": ["GHSA-2jv5", "CVE-2024-24762"], "fix_versions": ["0.0.7"]},
         ]}]}
         return ToolRun(1, json.dumps(out), "")
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     monkeypatch.setattr(scanresult, "run_tool", fake_run)
     f, _ = depaudit.run_pip_audit(tmp_path, no_network=False)
     assert [x["rule"] for x in f] == ["PYSEC-2024-38", "PYSEC-2026-1851"]

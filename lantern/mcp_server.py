@@ -26,7 +26,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import __version__, pipeline, results, usage
+from . import __version__, pipeline, programs, results, usage
 from .graph import Graph
 from .python_frontend import project_text
 
@@ -681,8 +681,7 @@ def _jsonable(x):
 # ---------------------------------------------------------------------------- setup help
 
 def setup_text() -> str:
-    import shutil
-    cmd = shutil.which("lantern") or "lantern"
+    cmd = programs.find("lantern") or "lantern"
     cfg = json.dumps({"mcpServers": {"lantern": {"command": cmd, "args": ["mcp"]}}}, indent=2)
     return f"""Lantern as a connector. One server, every assistant that speaks MCP.
 

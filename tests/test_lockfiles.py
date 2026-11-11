@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from lantern import depaudit, evidence, scanresult
+from lantern import depaudit, evidence, programs, scanresult
 from lantern.cli import main
 from lantern.engine import build_graph
 from lantern.scanresult import ToolRun
@@ -326,7 +326,7 @@ def test_only_a_package_name_and_a_version_reach_pip_audit(lock, tmp_path, monke
         text = _toml_lock(entries)
     _write(tmp_path, {lock: text})
     seen: dict = {}
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     monkeypatch.setattr(scanresult, "run_tool", _reads_its_input(seen))
     _findings, info = depaudit.run_pip_audit(tmp_path, no_network=False)
     want = sorted(f"{depaudit._norm(n)}=={v}" for n, v in GOOD.items())
@@ -346,7 +346,7 @@ def test_one_entry_pip_audit_cannot_read_no_longer_hides_every_other_package(tmp
     """Read by pip-audit itself. Before: its reading of the file failed on the one entry, the audit's state was
     `failed`, and the package with a known vulnerability was not reported."""
     pytest.importorskip("pip_audit")
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     for lock, odd in (("uv.lock", ("inhouse", "1.0-SNAPSHOT.final")), ("poetry.lock", ("urllib3", "1.26.0\n-e /srv/x")),
                       ("requirements.txt", ("inhouse", "1.0-SNAPSHOT.final"))):
         entries = [("flask", "2.0.1"), odd, ("requests", "2.31.0")]
@@ -483,7 +483,7 @@ def test_a_catalog_library_with_no_single_version_is_counted_as_not_checked(tmp_
 
 def test_the_reason_of_a_partial_audit_counts_each_kind_in_plain_words(tmp_path, monkeypatch):
     """One, or several; entries that are no name and version, what the service could not answer for, or both."""
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
 
     def pip_audit(*skipped):
         deps = [{"name": "flask", "version": "1.0", "vulns": []}] + [{"name": n, "skip_reason": f"not found: {n}"} for n in skipped]
@@ -530,7 +530,7 @@ def test_the_first_five_of_what_has_no_exact_version_are_kept_as_examples(tmp_pa
     info = depaudit.run_composer_audit(php, False)[1]
     assert info["unpinned"] == 7 and info["unpinned_examples"] == [f"acme/fork{i} dev-main" for i in range(5)]
     py = _write(tmp_path / "py", {"requirements.txt": "flask==2.0.1\n" + "".join(f"pkg{i}>=1.0\n" for i in range(7))})
-    monkeypatch.setattr(depaudit.shutil, "which", lambda n: "/bin/" + n)
+    monkeypatch.setattr(programs, "find", lambda n: "/bin/" + n)
     monkeypatch.setattr(scanresult, "run_tool", lambda cmd, **kw: ToolRun(0, json.dumps({"dependencies": []}), ""))
     info = depaudit.run_pip_audit(py, False)[1]
     assert info["unpinned"] == 7 and info["unpinned_examples"] == [f"requirements.txt: pkg{i}>=1.0" for i in range(5)]

@@ -10,13 +10,11 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
-import sys
 from collections import deque
 from pathlib import Path
 
-from . import context, lanes, manifest, results
+from . import context, lanes, manifest, programs, results
 from .graph import Graph
 from .python_frontend import SKIP_DIRS, inside_repo, project_text
 
@@ -129,11 +127,22 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     if importlib.util.find_spec("bandit") is None:
         return [], scanresult.record("bandit", "unavailable", 'pip install "lantern[scan]"', applicable=applicable,
                                      version=None, **base)
-    cmd = [sys.executable, "-m", "bandit", "-r", str(repo), "-f", "json", "-q"]
-    if excl or left:
-        cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
-    run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
-    base |= {"version": _tool_version([sys.executable, "-m", "bandit", "--version"]), "exit_code": run.returncode,
+    # Two things a project must not choose (until 2026-11-10 it could). Which Python files the scanner loads:
+    # `python -m` looks in the current folder first, and Lantern is often started inside the project
+    # (`programs.python`). And what the scanner checks: Bandit takes settings from a `.bandit` file anywhere in the
+    # folder it scans (checks to skip, files to leave out, a file to write its report to), and with checks switched
+    # off that way the record below still said `ok`. Handed a settings file of Lantern's own, with nothing in it,
+    # Bandit looks for no other.
+    try:
+        with programs.settings("bandit.ini", "[bandit]\n") as ini:
+            cmd = programs.python("bandit", "-r", str(repo), "--ini", str(ini), "-f", "json", "-q")
+            if excl or left:
+                cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
+            run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
+    except OSError as exc:      # without its own settings file Bandit would look for the project's: it is not started
+        return [], scanresult.record("bandit", "failed", "Lantern's settings file for the scanner could not be written "
+                                     f"({exc.strerror or type(exc).__name__})", version=None, **base)
+    base |= {"version": _tool_version(programs.python("bandit", "--version")), "exit_code": run.returncode,
              "duration_ms": run.duration_ms}
     if run.timed_out:
         return [], scanresult.record("bandit", "timeout", f"after {BANDIT_TIMEOUT} s", **base)
@@ -184,8 +193,9 @@ def run_secrets(repo: Path) -> tuple[list[dict], list[dict]]:
     from . import scanresult
     records = []
     fallback = None
-    if shutil.which("gitleaks"):
-        found, rec = _run_gitleaks(repo)
+    gitleaks = programs.find("gitleaks")
+    if gitleaks:
+        found, rec = _run_gitleaks(repo, gitleaks)
         records.append(rec)
         if rec["state"] == "ok":
             return found, records
@@ -201,7 +211,7 @@ def run_secrets(repo: Path) -> tuple[list[dict], list[dict]]:
     return found, records
 
 
-def _run_gitleaks(repo: Path) -> tuple[list[dict], dict]:
+def _run_gitleaks(repo: Path, gitleaks: str) -> tuple[list[dict], dict]:
     """`gitleaks detect --no-git` writing its JSON report to a temp file (never stdout, where a warning could break
     the JSON). `--exit-code 0` makes leaks exit 0, so a non-zero code means gitleaks itself failed; a report file that
     is present and parses is the proof it finished."""
@@ -213,9 +223,9 @@ def _run_gitleaks(repo: Path) -> tuple[list[dict], dict]:
     report = Path(path)
     base: dict = {"role": "secrets in files"}
     try:
-        cmd = ["gitleaks", "detect", "--no-git", "-s", str(repo), "-f", "json", "-r", str(report), "--exit-code", "0"]
+        cmd = [gitleaks, "detect", "--no-git", "-s", str(repo), "-f", "json", "-r", str(report), "--exit-code", "0"]
         run = scanresult.run_tool(cmd, timeout=GITLEAKS_TIMEOUT)
-        base |= {"version": _tool_version(["gitleaks", "version"]), "exit_code": run.returncode,
+        base |= {"version": _tool_version([gitleaks, "version"]), "exit_code": run.returncode,
                  "duration_ms": run.duration_ms}
         if run.timed_out:
             return [], scanresult.record("gitleaks", "timeout", f"after {GITLEAKS_TIMEOUT} s", **base)
@@ -294,7 +304,8 @@ def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
 
 def _tool_version(cmd: list[str]) -> str | None:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+                             env=programs.env()).stdout
         m = re.search(r"\d+\.\d+(\.\d+)?", out)
         return m.group(0) if m else None
     except Exception:

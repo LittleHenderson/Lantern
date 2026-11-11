@@ -41,7 +41,7 @@ from pathlib import Path
 
 import httpx
 
-from lantern import _jail, gitfacts, learn, remote, removal, sandbox
+from lantern import _jail, gitfacts, learn, programs, remote, removal, sandbox
 
 from .cleanup import Cleanup
 from .ghapp import NoAccess
@@ -331,7 +331,7 @@ class Worker:
             if self.s.audits:
                 stage("audit")
                 audits = tmp / "audits.json"
-                self._jailed(rid, root, [sys.executable, "-m", "lantern.depaudit", str(repo), str(audits)],
+                self._jailed(rid, root, programs.python("lantern.depaudit", str(repo), str(audits)),
                              cwd=tmp, net=True, log=log, timeout=self._left(start))
                 if not audits.is_file():
                     log("the dependency audit did not finish; the report will say so")
@@ -421,8 +421,8 @@ class Worker:
         shutil.move(str(src), zipped)
         (tmp / "src").mkdir()
         repo = tmp / "src" / source_name(self.store.run(rid)["link"])
-        rc, output, timed_out = self._jailed(rid, root, [sys.executable, "-m", "lantern.archive", str(zipped), str(repo),
-                                                         "--max-mb", str(self.s.clone_max_mb)],
+        rc, output, timed_out = self._jailed(rid, root, programs.python("lantern.archive", str(zipped), str(repo),
+                                                                         "--max-mb", str(self.s.clone_max_mb)),
                                              cwd=tmp, net=False, log=log, timeout=min(self._left(start), 180))
         zipped.unlink(missing_ok=True)
         if timed_out:
@@ -476,8 +476,8 @@ class Worker:
             g["repo_root"] = str(repo)             # where `explain` reads each function's source
             (out / "graph.json").write_text(json.dumps(g), encoding="utf-8")
             log("· Writing plain-words explanations with the free allowance")
-            cmd = [sys.executable, "-m", "lantern.cli", "explain", str(repo), "--out", str(out), "--yes",
-                   "--model", "lantern/" + _model_name(), "--max-nodes", str(EXPLAIN_MAX)]
+            cmd = programs.python("lantern.cli", "explain", str(repo), "--out", str(out), "--yes",
+                                  "--model", "lantern/" + _model_name(), "--max-nodes", str(EXPLAIN_MAX))
             rc, output, timed_out = self._jailed(key, root, cmd, cwd=tmp, net=True, log=log, timeout=self._left(start),
                                                  extra={"LANTERN_TOKEN": token,
                                                         "LANTERN_GATEWAY_URL": self.s.gateway_url.rstrip("/")})
@@ -536,8 +536,8 @@ class Worker:
 
     @staticmethod
     def analyze_cmd(repo: Path, out: Path, privacy: str, offline: bool = True) -> list[str]:
-        return [sys.executable, "-m", "lantern.cli", "analyze", str(repo), "--out", str(out), "--privacy", privacy,
-                *(["--offline"] if offline else [])]
+        return programs.python("lantern.cli", "analyze", str(repo), "--out", str(out), "--privacy", privacy,
+                               *(["--offline"] if offline else []))
 
     def _left(self, start: float) -> float:
         left = self.s.job_timeout - (time.monotonic() - start)

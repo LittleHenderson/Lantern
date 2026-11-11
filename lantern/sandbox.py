@@ -55,7 +55,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import removal, results
+from . import programs, removal, results
 
 WALL_CLOCK = 600          # seconds; the directive's 10 minutes
 MARK = "LANTERN-SANDBOX-BLOCKED:"
@@ -198,10 +198,11 @@ def docker_ok() -> bool:
     if _DOCKER.get("t", 0) > time.time() - 60:
         return _DOCKER["ok"]
     ok = False
-    if shutil.which("docker"):
+    docker = programs.find("docker")
+    if docker:
         try:
-            r = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=8)
+            r = subprocess.run([docker, "info", "--format", "{{.ServerVersion}}"], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=8, env=programs.env())
             ok = r.returncode == 0 and bool(r.stdout.strip())
         except (OSError, subprocess.TimeoutExpired):
             ok = False
@@ -801,7 +802,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         env["LANTERN_SANDBOX_GUARD"] = "required"   # lantern.tracehook runs no test without the guard above
         cmd = [sys.executable, "-m", "lantern.tracehook", str(out_json), str(app), "--", *_python_argv(words)]
     else:
-        exe = shutil.which(words[0], path=env.get("PATH")) or (str(app / words[0]) if words[0].startswith("./") else words[0])
+        exe = programs.find(words[0], env.get("PATH")) or (str(app / words[0]) if words[0].startswith("./") else words[0])
         cmd = [exe, *words[1:]]
     cwd = app / cwd_rel if cwd_rel else app
     if os.name == "posix":
@@ -862,7 +863,10 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel=None)
         _others_may_read(hook)
     name = "lantern-sbx-" + uuid.uuid4().hex[:12]
     pkg = Path(__file__).resolve().parent
-    args = ["docker", "run", "--rm", "--name", name, "--network", "none", "--cpus", "2", "--memory", "2g",
+    docker = programs.find("docker")     # by its full path, from a folder PATH names in full
+    if not docker:
+        raise Unavailable("Docker is not installed (no docker program in the folders PATH names)")
+    args = [docker, "run", "--rm", "--name", name, "--network", "none", "--cpus", "2", "--memory", "2g",
             "--pids-limit", "512", "--user", f"{uid}:{gid}", "--read-only", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,size=1g,mode=1777",  # nosec B108: the container's own tmpfs
             "-v", f"{repo}:/app:ro", "-v", f"{out}:/out:rw", "-v", f"{hook}:/opt/hook:ro",
@@ -898,15 +902,15 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel=None)
         """The docker program was only the container's client: the container goes with this. None when it is gone,
         else the words for it (until 2026-11-10 the answer was not looked at)."""
         try:
-            r = subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=30)
+            r = subprocess.run([docker, "rm", "-f", name], capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=30, env=programs.env())
         except (OSError, subprocess.SubprocessError) as e:
             return f"its Docker container {name} may still be running: docker rm could not be run ({type(e).__name__})"
         if r.returncode != 0 and "No such container" not in (r.stderr or ""):
             return f"its Docker container {name} may still be running: docker rm ended with {r.returncode}"
         return None
     left: list[str] = []
-    rc, output, timed_out = _stream(args + [img, *cmd], root, {k: v for k, v in os.environ.items()}, timeout, log,
+    rc, output, timed_out = _stream(args + [img, *cmd], root, programs.env(), timeout, log,
                                     cancel=cancel, also=remove, left=left)
     why = _unavailable(rc, output)
     if why:

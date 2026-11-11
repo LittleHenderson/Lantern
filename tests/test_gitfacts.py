@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from lantern import case, evidence, gitfacts, remote, winowner
+from lantern import case, evidence, gitfacts, programs, remote, winowner
 from lantern.cli import main
 
 only_posix = pytest.mark.skipif(os.name != "posix", reason="needs a POSIX system (symbolic links)")
@@ -1040,7 +1040,7 @@ def test_refs_kept_in_the_reftable_form_are_not_read(tmp_path):
 
 def test_without_git_nothing_is_claimed(tmp_path, monkeypatch):
     d = make(tmp_path)
-    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: None)
+    monkeypatch.setattr(programs, "find", lambda name, *a, **k: None)
     assert evidence.git_info(d) == {"commit": None, "note": "git not installed"}
 
 

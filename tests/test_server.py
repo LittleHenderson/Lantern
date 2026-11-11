@@ -314,6 +314,20 @@ def test_connections_list_assistants_by_name(srv):
     assert len(d["connections"][0]["name"]) == 80 and d["connections"][0]["calls"] == 0
 
 
+def test_the_command_for_an_assistant_is_lantern_by_its_full_path(srv, monkeypatch):
+    """Found in a folder PATH names in full (`programs.find`, never the current folder); where it is not found, the
+    bare word, for the person to complete."""
+    from lantern import programs
+    base, _ = srv
+    monkeypatch.setattr(programs, "find", lambda name, path=None: "/own/bin/" + name)
+    code, d = call(base, "/api/connections")
+    assert code == 200 and d["setup"]["json"]["mcpServers"]["lantern"]["command"] == "/own/bin/lantern"
+    assert d["setup"]["claude_code"] == "claude mcp add lantern -- /own/bin/lantern mcp"
+    monkeypatch.setattr(programs, "find", lambda name, path=None: None)
+    code, d = call(base, "/api/connections")
+    assert code == 200 and d["setup"]["json"]["mcpServers"]["lantern"]["command"] == "lantern"
+
+
 def test_watch_tests_accepts_only_test_runners(tmp_path):
     """'Watch my tests run' runs the command the user confirmed, so it must never become 'run anything'."""
     from lantern.sandbox import check_command

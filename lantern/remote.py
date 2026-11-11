@@ -12,12 +12,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from . import removal, results
+from . import programs, removal, results
 
 HTTPS = re.compile(r"^https://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::(?P<port>\d{1,5}))?"
                    r"/(?P<owner>[\w.-]+)/(?P<name>[\w.-]+?)(?:\.git)?/?"
@@ -265,7 +264,7 @@ def missing_files(dest: Path) -> list[str] | None:
     Asked through `gitfacts.deleted`, which does not obey the folder's own git settings: `pipeline.analyze` asks
     this of any folder that carries the clone mark, and anyone can put that mark, and a command for git to run
     (`core.fsmonitor`), into a folder they hand over."""
-    if not shutil.which("git"):
+    if not programs.find("git"):
         raise RuntimeError("git is not installed. Install Git, or clone the repository yourself and add the folder.")
     from . import gitfacts   # here, not above: gitfacts starts git through this module's `run_bounded`
     return gitfacts.deleted(dest)
@@ -372,8 +371,11 @@ def _auth_env(url: str, token: str) -> dict:
 def _git(args: list[str], cwd: Path | None, timeout: int = 900, env: dict | None = None) -> subprocess.CompletedProcess:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "GIT_ASKPASS": "", "SSH_ASKPASS": "",
            **(env or {})}
+    git = programs.find("git")   # the person's own git, by its full path: never one in the current folder or the clone
+    if not git:
+        raise RuntimeError("git is not installed. Install Git, or clone the repository yourself and add the folder.")
     try:
-        return run_bounded(["git", *args], cwd=cwd, env=env, timeout=timeout)
+        return run_bounded([git, *args], cwd=cwd, env=env, timeout=timeout)
     except FileNotFoundError:
         raise RuntimeError("git is not installed. Install Git, or clone the repository yourself and add the folder.") from None
     except subprocess.TimeoutExpired:
@@ -385,7 +387,10 @@ def run_bounded(cmd: list[str], cwd: Path | None = None, env: dict | None = None
     """`subprocess.run(capture_output=True, text=True, timeout=...)`, except that the timeout bounds the call. git
     starts helpers (`git-remote-https`) that inherit its output pipes; `subprocess.run` kills only git, and then waits
     for the pipes to close, which a helper stuck on a silent server keeps open for minutes. The command runs in its
-    own process group and the whole group is killed (`taskkill /T` on Windows), then the pipes are dropped."""
+    own process group and the whole group is killed (`taskkill /T` on Windows), then the pipes are dropped.
+    The environment is `programs.env`: the helper, and what it starts, are not handed the current folder to look
+    for programs or Python files in."""
+    env = programs.env(env)
     kw: dict = {}
     if sys.platform == "win32":
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -416,7 +421,9 @@ def run_bounded(cmd: list[str], cwd: Path | None = None, env: dict | None = None
 def _kill_tree(proc: subprocess.Popen) -> None:
     if sys.platform == "win32":
         try:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=30)
+            taskkill = programs.find("taskkill") or os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                                                "System32", "taskkill.exe")
+            subprocess.run([taskkill, "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             pass
     else:
