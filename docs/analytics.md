@@ -36,6 +36,15 @@ Lantern follows no redirect with the counts. A try the gateway did not take leav
 try, and `lantern usage --show` says how the last try ended (`Last try 2026-11-10: not taken (the gateway answered
 404). …`). The words are Lantern's own; text a server sent is never shown.
 
+What the gateway does with a report (gateway 0.2.6; `gateway/README.md`, "What anybody can send"): it keeps the
+install id, the day and a count for each feature it knows; a version only when it is shaped like one, and an
+operating system only when it is Linux, Darwin or Windows (anything else is kept as nothing, or as `other`), so no
+free text reaches the owner's page. One network may send 300 reports an hour and add 50 new installs a day, and
+everyone together may add 1,000 new installs a day. Past a limit the gateway answers 429 and the app keeps its
+counts for its next try (`Last try …: not taken (the gateway answered 429). …`). Until that version, any text sent
+as the version or the operating system was kept and listed on the owner's page, and nothing limited how many
+installs one sender could add.
+
 Until 2026-11-10 the counts were posted to an address the gateway does not have (`/v1/v1/usage`), so with the
 address Lantern ships with none arrived. That is read from the code and shown by a test against the gateway's code
 on one computer; the live gateway was not asked. App numbers on the owner's page from before that fix are therefore

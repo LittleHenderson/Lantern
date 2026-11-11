@@ -118,7 +118,7 @@ script in the app's origin can act as the user. That makes XSS in the viewers (T
   install id, the version, the operating system's name and a count per feature. `lantern usage --show` says where
   they go, or why they do not. Until 2026-11-10 they were posted to an address the gateway does not have (none
   arrived), a redirect was followed and its answer taken for the gateway's, and the switch was not asked. Tests:
-  `tests/test_usage_address.py`. Open: what the gateway does with what it is sent (stage 7, part 4).
+  `tests/test_usage_address.py`. What the gateway does with what it is sent: T8.
 
 ### T6. Shared reports
 
@@ -148,6 +148,24 @@ Strangers paste links to repositories Lantern has never seen, on a server Lanter
 | A crafted image crashes or exhausts the server through Ask Lantern's screenshot reader | Signed-in only; 8 MB body cap checked before reading; PNG/JPEG/WebP only; the pixel count checked before decoding (40 M); Tesseract through a pipe with a 60 s timeout; two at a time; the image is never written to disk or kept | `app.ask_screenshot`, `ask.read_screenshot` | Mitigated, tested (`test_ask_reads_a_screenshots_text_like_the_app`). Residual: Pillow and Tesseract parse untrusted images in the service process (not the sandbox); keep both updated |
 | One person exhausts the service | One active run per person, runs per day per person and for everyone, clone size cap, 10-minute wall clock | `settings.py`, `worker.py` | Mitigated, tested |
 
+### T8. The gateway: callers who have not signed in (`gateway/lantern_gateway/`)
+
+The gateway holds the owner's model keys and answers some addresses for anybody: the health check, the sign-in
+pages, the owner's page (it asks for the secret) and the app's opt-in usage reports. Gateway 0.2.6
+(`limits.py`); measured against the gateway's own code with stand-ins for the model and GitHub, never against the
+live gateway.
+
+| Attack | Mitigation | Where | Status |
+|---|---|---|---|
+| A very large body from nobody is read whole | No body is read past the limit of its address (`LANTERN_MAX_BODY` for the model route, 4,000 bytes elsewhere): a declared size over it is refused before reading, an undeclared one at the piece that crosses it (413) | `limits.BodyCap` | Mitigated, tested in the app and on a real connection (before: 32 MB taken whole on three addresses) |
+| A body of another shape makes the gateway fail | A body that is not a JSON object, or nested deeper than Python follows, is answered 400 in the gateway's words; a `max_tokens` that is no number is the cap | `_table`, `_size` | Mitigated, tested (before: HTTP 500 for 12 shapes) |
+| Invented installs or free text fill the owner's numbers | Reports per sender per hour, new installs per sender per day and for everyone per UTC day; a version only in the shape of one, an operating system only from three names | `usage`, `Store.record_usage`, `USAGE_VERSION`, `USAGE_SYSTEMS` | Bounded, tested. A caller with many addresses can still add installs up to the day's cap for everyone (1,000 by default) |
+| The owner's secret is guessed | Five wrong secrets a minute per sender, 30 for everyone together, then no secret is looked at until the minute ends; compared as bytes in constant time | `admin` | Slowed, tested. The cost: callers from many addresses can keep the owner waiting for their page |
+| A copy of the database holds a working token | The token that waits for the app is sealed with the app's own code; the gateway keeps a hash of the code; a row in clear from an earlier version is deleted at start-up, never handed out; everything else is hashes | `_seal`, `_open`, `Store.park`, `Store.claim` | Mitigated, tested. Someone who has the server's log lines of those ten minutes (they hold the code) and the file can open it |
+| A sign-in link is used again and again so that the gateway asks GitHub or Google each time | A link works once; the provider is asked at most 10 times a minute for one sender and 120 for everyone together | `first_use`, `auth_callback` | Mitigated, tested (before: 200 uses, 200 requests to GitHub) |
+| The provider is down or answers with something else | The person gets a page (502), not an internal error | `auth.exchange` | Mitigated, tested |
+| The limits themselves keep a record of who called | A sender is kept as a keyed hash, in memory only, with a key that exists only while the process runs; at most 20,000 per kind | `limits.Limiter` | Tested (`test_no_address_is_kept`, `test_the_table_of_senders_cannot_grow_without_end`) |
+
 ## Known open risks, ranked
 
 0. A restricted step of the cloud service may read what the service's own user may read (T7): its walls stop writes and the network, not reads. Nothing known runs a stranger's code inside a step since 2026-11-10 (`lantern/gitfacts.py`), but the next such hole would again reach other people's stored results. A step under a user of its own, or results it cannot see, would close that. Measured 2026-11-10 with a stand-in value, service and step as one ordinary user: with Landlock on (ABI 7) the step is refused the service's own environment (`/proc/<pid>/environ`; Landlock keeps a process from looking into one outside its walls), and a program of that user with no Landlock reads it. So on a kernel without Landlock such a hole would also reach the service's secrets. Every step says which it had in the run's log (`sandbox: Landlock on (ABI n…)`, or `sandbox: Landlock kernel has no Landlock`).
@@ -157,3 +175,6 @@ Strangers paste links to repositories Lantern has never seen, on a server Lanter
 4. Provider error text may surface in job logs; check it never includes the key (T4).
 5. `--host` beyond localhost serves plain HTTP (T2).
 6. No signature on the Evidence Report, only a digest (stated in the report).
+7. The gateway's limits on callers who have not signed in count senders by address (T8): a caller with many
+   addresses can use up the counts for everyone for a minute at a time (the owner's page, signing in), and whether
+   a caller can name its own address through Fly's proxy was not tried.

@@ -42,8 +42,12 @@ The user runs `lantern login --token lt_...`. Next step for a public launch: iss
 | `LANTERN_DAILY_REQUESTS` | 120 | Per user per UTC day |
 | `LANTERN_GLOBAL_DAILY_USD` | 10 | Total spend per UTC day; the allowance pauses for everyone when reached |
 | `LANTERN_SIGNUPS_PER_DAY` | 200 | New accounts per UTC day, everyone together; past it a first sign-in gets a 429 page ("try again tomorrow"), existing accounts keep working. 0 = no cap |
+| `LANTERN_INSTALLS_PER_DAY` | 1000 | New installs the opt-in usage reports may add per UTC day, everyone together; past it a report from an install the gateway does not know yet is answered 429 until 00:00 UTC (the app keeps its counts and tries again), installs it knows keep being counted. 0 = no cap |
+| `LANTERN_SENDER_INSTALLS_PER_DAY` | 50 | New installs one sender may add in a day. 0 = no limit |
+| `LANTERN_SENDER_PINGS_PER_HOUR` | 300 | Usage reports one sender may send in an hour. 0 = no limit |
+| `LANTERN_ADDRESS_HEADER` | fly-client-ip | The header the proxy in front of the gateway writes the caller's address in (Fly: `Fly-Client-IP`). Set it to nothing where there is no such proxy: the address of the connection is used then. See "What anybody can send" |
 | `LANTERN_MAX_TOKENS` | 3000 | Cap on `max_tokens` per request |
-| `LANTERN_MAX_BODY` | 250000 | Max request body in bytes |
+| `LANTERN_MAX_BODY` | 250000 | Max request body in bytes for `/v1/chat/completions`; every other address reads 4,000 bytes at most |
 | `LANTERN_PRIMARY` | anthropic | Which provider answers first: `anthropic` or `deepseek`; the other is the fallback |
 | `ANTHROPIC_API_KEY`, `LANTERN_ANTHROPIC_MODEL` | –, claude-haiku-5-5 | Anthropic key and model |
 | `LANTERN_ANTHROPIC_USD_PER_M_INPUT` / `_OUTPUT` | 0.10 / 0.50 | Haiku 5.5 standard rates (prompts under 100k tokens) |
@@ -81,11 +85,60 @@ many times each feature was used that day. The gateway accepts only the feature 
 drops everything else, so no project name, file name or code can arrive through this channel even from a
 modified client. `lantern usage --show` prints exactly what the next ping contains.
 
+Of a report the gateway keeps the install id, the day, a count per known feature, a version only when it is shaped
+like one (`0.10.0`, `1.2.3rc1`; anything else is kept as nothing) and an operating system only when it is `Linux`,
+`Darwin` or `Windows` (anything else is kept as `other`). A body that is not a JSON object is answered 400.
+
+## What anybody can send
+
+Some addresses answer people who have not signed in: the health check, the sign-in pages, the owner's page (it asks
+for the secret) and the app's usage reports. What such a caller can make the gateway do is bounded
+(`lantern_gateway/limits.py`; tests in `tests/test_gateway_limits.py`):
+
+* **Size.** No request's body is read past the limit of its address: `LANTERN_MAX_BODY` for `/v1/chat/completions`,
+  4,000 bytes everywhere else. A body that says it is larger is refused before any of it is read; one that does not
+  say is cut off at the piece that crosses the limit. The answer is 413 `too_large`.
+* **Shape.** A body for `/v1/usage` or `/v1/chat/completions` that is not a JSON object is answered 400 in the
+  gateway's own words. A `max_tokens` that is not a number counts as not given.
+* **Usage reports.** One sender may send `LANTERN_SENDER_PINGS_PER_HOUR` reports an hour and add
+  `LANTERN_SENDER_INSTALLS_PER_DAY` new installs a day; everyone together may add `LANTERN_INSTALLS_PER_DAY` new
+  installs per UTC day. Past a limit the answer is 429 with `Retry-After`, nothing of the report is kept (past the
+  hourly limit it is not even read), and the app keeps its counts for its next try. An install the gateway already knows keeps being counted when the cap
+  for everyone is reached.
+* **The owner's secret.** After five wrong secrets in a minute from one sender, or 30 from everyone together, no
+  secret is looked at until that minute ends, the right one included (429). The owner's page says "Too many wrong
+  secrets in the last minute. Wait a minute, then try again." The right secret is never counted.
+* **Signing in.** A link that comes back from GitHub or Google works once: a second use gets a page ("This sign-in
+  link was already used. Go back and start again.") and the provider is not asked again. The gateway asks a provider
+  at most 10 times a minute for one sender and 120 times a minute for everyone together; past that a page says "Too
+  many sign-ins in the last minute. Wait a minute, then load this page again." and the link is not used up. A
+  provider that cannot be reached, or that answers with something that is no answer, gets a page too (502).
+* **The token that waits for the app.** After a sign-in the new token waits up to ten minutes for the app that
+  started it. It waits sealed with that app's own code, of which the gateway keeps only a hash, so the database file
+  and its copies hold no token in clear. A row an earlier version left in clear is deleted when the gateway starts
+  and is never handed out: a person who was in the middle of signing in at that moment signs in again.
+
+Who a sender is: the address the proxy in front of the gateway wrote in `LANTERN_ADDRESS_HEADER`, else the address
+of the connection. An IPv6 address counts as its /64 network. The counts are kept in memory only, under a keyed
+hash whose key exists only while the process runs: no address is written anywhere, and the counts start empty when
+the gateway starts (the cap on new installs for everyone is read from the database, so it survives a restart).
+
+What these limits cannot do. A caller with many addresses is many senders, which is why each limit that matters
+has a count for everyone together beside it. Such a caller can use those counts up: the owner then waits out the
+minute for their page (nobody gets in meanwhile), and people signing in see the "too many sign-ins" page until the
+minute ends. `/v1/auth/<provider>/start` and `/v1/auth/claim` are not limited (neither asks a provider, and the app
+asks the second every few seconds while a person signs in). The per-sender counts are as good as the header:
+whether a caller can write its own `Fly-Client-IP` through Fly's proxy was not tried, and Fly's documentation as
+read on 2026-11-10 does not say. With `LANTERN_ADDRESS_HEADER` set to nothing behind a proxy, every caller that
+comes through the proxy is one sender. The server's own log lines hold the address a request asked for, which for a
+sign-in includes the app's code for the minutes it is good.
+
 ## What it stores
 
 Token hashes, request and token counts, daily spend, and the usage counts above (install id, version, OS,
-feature counts per day). Never request or response bodies; nothing about anyone's code. Upstream error bodies
-are never passed back to clients.
+feature counts per day). Never request or response bodies; nothing about anyone's code; no address of a caller.
+Upstream error bodies are never passed back to clients. A sign-in's token that waits for the app is stored sealed
+(above) for ten minutes at most.
 
 Kept for 90 days (`LANTERN_RETENTION_DAYS`): a token hash and its account mapping are deleted 90 days after the
 token's last request or sign-in (a hash replaced by a re-sign-in, 90 days after that sign-in), and per-day rows

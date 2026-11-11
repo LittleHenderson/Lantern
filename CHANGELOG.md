@@ -44,6 +44,75 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   is found, letter for letter, in no path but its own unless a folder was named for that purpose (`tool.p[y]z/`), and
   a file in such a folder is then left out of Bandit as one in `build/` or `vendor/` already is; a link put in place
   while an analysis runs (that takes another program of the same computer writing in the project at that moment).
+- Security: what anybody can send the gateway without signing in is bounded (2026-11-10; stage 7 of the 2026-11-09
+  directive, part 4: "verify abuse controls on sign-in and telemetry without breaking endpoints that are
+  intentionally anonymous"; gateway 0.2.6, which applies once that version is deployed). The gateway answers some
+  addresses for people who have not signed in: the health check, the sign-in pages, the owner's page (it asks for
+  the secret) and the app's opt-in usage reports.
+  **What was wrong** (the gateway's code before, 97c1677; its own app with stand-ins for the model and for GitHub,
+  nothing left the computer, the live gateway was not asked):
+  - a usage report whose body was a list, a number, a text, `null` or `true` was answered with an internal error
+    (HTTP 500, 5 of 5); so was a request for the model that was a list, a number, `null` or nested 3,000 deep (4 of
+    4) or whose `max_tokens` was a word, a list or `1e400` (3 of 3), and an admin secret with a letter outside ASCII;
+  - 32 MB sent by nobody to `/v1/usage`, `/v1/tokens` and `/v1/auth/signout` were taken whole (33,554,432 bytes
+    each) before the refusal: the size was looked at after the body had been read;
+  - 3,000 usage reports from one sender, each with a new install id, were all answered 200 and 3,001 installs were
+    kept, with whatever text was sent as the version and the operating system (`<b>hello</b> you`,
+    `see evil.example`), which the owner's page lists;
+  - 500 wrong admin secrets from one sender were each answered 403 at once: nothing slowed guessing;
+  - the token of a new sign-in waited for the app in the database file in clear, where the gateway's promise is
+    hashes only;
+  - one sign-in link used 200 more times made the gateway ask GitHub 200 times, and GitHub out of reach was
+    answered with an internal error (HTTP 500).
+  **What changed** (`gateway/lantern_gateway/limits.py` new, `app.py`, `auth.py`, `dashboard.py`):
+  - no request's body is read past the limit of its address (`LANTERN_MAX_BODY` for `/v1/chat/completions`, 4,000
+    bytes for every other address): one that says it is larger is refused before any of it is read, one that does
+    not say is cut off at the piece that crosses the limit (413 `too_large`);
+  - a body that is not a JSON object is answered 400 in the gateway's own words, and a `max_tokens` that is no
+    number counts as not given;
+  - usage reports: 300 an hour from one sender (`LANTERN_SENDER_PINGS_PER_HOUR`), 50 new installs a day from one
+    sender (`LANTERN_SENDER_INSTALLS_PER_DAY`), 1,000 new installs per UTC day for everyone together
+    (`LANTERN_INSTALLS_PER_DAY`); past a limit the answer is 429 with `Retry-After`, the app keeps its counts for
+    its next try, and an install the gateway already knows keeps being counted. A version is kept only when it is
+    shaped like one and an operating system only when it is Linux, Darwin or Windows (else nothing, or `other`);
+  - the owner's secret: after five wrong secrets in a minute from one sender, or 30 from everyone together, no
+    secret is looked at until that minute ends (429), and the owner's page says so in words ("Too many wrong secrets
+    in the last minute. Wait a minute, then try again."); a secret outside ASCII is a wrong secret (403);
+  - signing in: a link that comes back from GitHub or Google works once (a second use gets a page and the provider
+    is not asked), the provider is asked at most 10 times a minute for one sender and 120 for everyone together, two
+    links made in the same second differ, and a provider that cannot be reached or answers oddly gets a page (502);
+  - the token that waits for the app is stored sealed with the app's own code, of which the gateway keeps only a
+    hash; a row an earlier version left in clear is deleted at start-up and never handed out, so a person who is in
+    the middle of signing in at the moment of the deploy signs in again;
+  - who a sender is: the address the gateway's proxy wrote in the header named by `LANTERN_ADDRESS_HEADER` (Fly's
+    `Fly-Client-IP`), else the connection's address, IPv6 by its /64 network; kept in memory only, as a keyed hash
+    whose key exists only while the process runs. No address is written anywhere.
+  **Evidence.** The same probe after: 400 for the 9 shapes and the cap for the 3 sizes, 65,536 bytes taken of each
+  32 MB, 49 of the 3,000 reports answered 200 and 2,951 answered 429 with 50 installs kept and no text, 5 wrong
+  secrets answered 403 and 495 answered 429, a secret outside ASCII 403, no token in clear in the database file, 200
+  more uses of a link answered 400 with 0 requests to GitHub, GitHub out of reach a 502 page. In a real browser
+  (Chromium, a gateway on 127.0.0.1): five wrong secrets show "That secret was not accepted.", the sixth and then
+  the right one show the new sentence. `tests/test_gateway_limits.py`: 116 tests, each refusal beside the ordinary
+  use that must keep working; on the code before 81 fail (60 on what the gateway did, 21 because the setting, the
+  limiter, the document or the page's sentence they ask about was not there) and 35 pass. One test of
+  `tests/test_signin.py` changed (a link now carries a random part) and fails on the code before. Mistakes planted
+  in the changed lines of `limits.py`, `app.py` and `auth.py`, one at a time: on the tests as first written (99 of
+  them) 93 of 133 failed a test and 40 failed none; tests were added for 28 of the 40; on the tests as they stand
+  **121 of 133 fail a test and 12 fail none**. The 12: the length of the limiter's key and of the name it keeps of
+  a sender (2); a full table that clears ended minutes one sender earlier (1); a stand-in for a port that is never
+  read (1); two checks that two lengths are equal, which they are by construction (2); the housekeeping of the
+  table of used links at 50,000 entries, which 120 sign-ins a minute never reach (3); a comparison at the exact
+  same instant and a default far below any time (2); the length of a link's random part (1).
+  Also: CI's Linux test job prints the line `programs these tests started` (which npm the tests met) right after
+  the tests; it stood far up in the log, and the red run of 616b7dd came from a newer npm.
+  **Limits.** A caller with many addresses is many senders, which is why each limit that matters has a count for
+  everyone together beside it; such a caller can use those up, a minute at a time: the owner waits for their page
+  (nobody gets in), and people signing in see "Too many sign-ins in the last minute". The per-sender counts are as
+  good as the proxy's header: whether a caller can write its own `Fly-Client-IP` through Fly's proxy was not tried,
+  and Fly's documentation as read on 2026-11-10 does not say. `/v1/auth/<provider>/start` and `/v1/auth/claim` are
+  not limited. The counts are in memory and start empty when the gateway restarts (the cap on new installs for
+  everyone is read from the database). The server's log lines hold an app's sign-in code for the ten minutes it is
+  good. The owner's page was checked in Chromium only.
 - Lantern starts only the person's own programs, and a settings file in a project does not steer the Python scanner
   (2026-11-10; stage 7 of the 2026-11-09 directive, execution safety: reading a project must not run it). Lantern
   is often started inside the folder of the project it was asked to read (`cd project`, then `lantern analyze .`).
