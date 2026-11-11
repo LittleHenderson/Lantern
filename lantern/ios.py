@@ -26,6 +26,7 @@ from pathlib import Path
 
 from .android import XEl, _read, parse_xml
 from .graph import Graph
+from .python_frontend import inside_repo
 
 SKIP = re.compile(r"(^|/)(Pods|Carthage|DerivedData|build|\.build|SourcePackages|node_modules|tests?|fixtures|"
                   r"[^/]*Tests|[^/]*UITests)/")
@@ -157,6 +158,11 @@ def find_apps(repo: Path) -> list[App]:
         rel = pl.relative_to(repo).as_posix()
         if SKIP.search(rel) or ".xcodeproj/" in rel or ".framework/" in rel or ".bundle/" in rel:
             continue
+        if not inside_repo(pl, repo):
+            # A link out of the project, or a pipe, is no settings file of the app: it is not read, so it is not named
+            # either. (Before Python 3.12 a look for an exact name finds a link only when something is at its end;
+            # naming what was found made the results tell whether a path outside the project exists.)
+            continue
         root_el = _parse_plist(_read(pl, repo))
         d = plist_dict(_top_dict(root_el))
         root = next((r for r in sorted(apps, key=len, reverse=True) if rel.startswith(r)), None)
@@ -174,7 +180,7 @@ def find_apps(repo: Path) -> list[App]:
                 app.bundle_id = _text(bid[0])
     for ent in sorted(repo.rglob("*.entitlements")):
         rel = ent.relative_to(repo).as_posix()
-        if SKIP.search(rel):
+        if SKIP.search(rel) or not inside_repo(ent, repo):
             continue
         root = next((r for r in sorted(apps, key=len, reverse=True) if rel.startswith(r)), None)
         if root is not None:

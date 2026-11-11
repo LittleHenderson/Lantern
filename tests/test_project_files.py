@@ -293,6 +293,40 @@ def test_the_comparison_can_see_a_read(sample, rel, tmp_path, monkeypatch):
     assert sweep.says(here / "out", str(here)) != whole
 
 
+IPHONE = [("Journal/Info.plist", lambda app: app.plist), ("Journal/Journal.entitlements", lambda app: app.entitlements)]
+
+
+@only_posix
+@pytest.mark.parametrize("rel, named", IPHONE, ids=["Info.plist", "entitlements"])
+@pytest.mark.parametrize("at_its_end", ["the file", "nothing"])
+def test_an_iphone_app_is_not_given_a_settings_file_that_is_a_link_out(rel, named, at_its_end, tmp_path):
+    """Found by GitHub's run under Python 3.11, which the measurements under 3.13 and 3.12 could not show: there a
+    look for a file by its exact name (`rglob("Info.plist")`) passes over a link with nothing at its end and finds a
+    link with a file at its end, where 3.12 and 3.13 find both. The app was then given the link as its settings file,
+    unread, so under 3.11 the results told whether the outside path exists. A file the project does not hold is no
+    settings file of the app, on any Python."""
+    from lantern import ios
+    repo = tmp_path / "p" / "iosapp"
+    repo.parent.mkdir()
+    sweep.make(FIXTURES, "iosapp", repo)
+    (own,) = ios.find_apps(repo)
+    assert named(own) in (rel, [rel]) and own.keys                 # the twin: the project's own file is the app's
+    outside = tmp_path / "outside"
+    if at_its_end == "the file":
+        shutil.copyfile(repo / rel, outside)
+    (repo / rel).unlink()
+    os.symlink(outside, repo / rel)
+    (app,) = ios.find_apps(repo)
+    assert named(app) in (None, [])
+    assert (app.root, app.pbxproj) == (own.root, own.pbxproj)       # the app is still found, from its Xcode project
+    # and the other twin: the same link kept inside the project is the project's file
+    (repo / rel).unlink()
+    shutil.copyfile(FIXTURES / "iosapp" / rel, repo / "kept.txt")
+    os.symlink(repo / "kept.txt", repo / rel)
+    (inside,) = ios.find_apps(repo)
+    assert named(inside) == named(own) and inside.keys == own.keys
+
+
 def test_the_sweep_names_each_kind_of_find():
     """`bench/links.py` judges runs it did not make here: one file per kind of find, and one that is clean."""
     def run(rel, state, **more):
