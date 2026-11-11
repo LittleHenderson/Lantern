@@ -8,7 +8,9 @@ primary_region = 'sjc'
 [env]
   LANTERN_GATEWAY_URL = 'https://lantern-gateway.fly.dev/v1'
   LANTERN_PUBLIC_URL = 'https://lantern-cloud.fly.dev'
-  LANTERN_CLOUD_RUNS_PER_DAY = '50'
+  # 300 runs per person per day: the owner's choice of 2026-11-11 (50 from 2026-11-04 until then). The live
+  # service already ran with 300 through a setting kept on Fly; this line makes the file say the same.
+  LANTERN_CLOUD_RUNS_PER_DAY = '300'
   LANTERN_CLOUD_GLOBAL_RUNS_PER_DAY = '1000'
   LANTERN_CLOUD_CONCURRENT_JOBS = '2'
   # Only code counts: a bigger repository is checked without the pictures, videos, archives and model files Lantern

@@ -420,7 +420,7 @@ allowance; the money spent per run and per day watched with an alert. *Scenario:
 accounts and spends the month's allowance in a night. ✅ The gateway now caps new accounts per UTC day
 (`LANTERN_SIGNUPS_PER_DAY`, 200; a 429 page says "try again tomorrow", existing accounts keep signing in; the admin
 stats show `accounts_new_today`; `tests/test_signin.py`); the global daily dollar cap already bounds the worst night.
-lantern-cloud's 50 runs per person and 1,000 per day stand. Still open: an alert when a day's spend or sign-ups jump.
+lantern-cloud's 300 runs per person (the owner's choice of 2026-11-11; 50 until then) and 1,000 per day stand. Still open: an alert when a day's spend or sign-ups jump.
 
 **Do the tests catch bugs? ("mutation testing").** A tool makes small deliberate mistakes in the code and checks that
 some test fails each time. A test suite can be large and still miss things; this measures that. ✅ `tools/mutation.py`
