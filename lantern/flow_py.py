@@ -78,6 +78,8 @@ class _Reader:
                 if cls is None:
                     mod.names.setdefault(s.name, None)
                     mod.bases[s.name] = [t for t in (_src(b) for b in s.bases) if t]
+                    mod.fields[s.name] = {x.target.id: _src(x.annotation) for x in s.body
+                                          if isinstance(x, ast.AnnAssign) and isinstance(x.target, ast.Name)}
                 for d in s.decorator_list:
                     out.append(N("expr", d.lineno, a=self.expr(d)))
                 self.top_block(s.body, s.name)      # a class body's own statements are not followed

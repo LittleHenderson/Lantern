@@ -847,3 +847,180 @@ def test_a_method_the_project_adds_to_a_built_in_type_is_seen_on_results_too(tmp
     s = _one(g, "Array.from(items).last")
     assert (s["outcome"], s["reason"]) == ("unresolved", "library-or-repo"), s
     assert _one(g, "Array.from(items).indexOf")["outcome"] == "builtin"
+
+
+# ------------------------------------------------------------- middleware put on the app or a router with `use`
+# Express runs middleware in the order it was put on: what `app.use(mw)` names runs before every route put on the app
+# after that line, and not before the ones above it.
+
+def _mw(g, detail):
+    """What `use` put in front of a route, outermost first (a route's own middleware stays in `middleware`)."""
+    n = next(n for n in g.nodes.values() if n.entry and n.entry.get("detail") == detail)
+    return [u["id"].split("::")[-1] for u in n.entry.get("use") or ()]
+
+
+USE_HEAD = ("const express = require('express')\nconst app = express()\n"
+            "function requireLogin (req, res, next) {\n  if (!req.session.userId) return res.status(401).end()\n"
+            "  next()\n}\n"
+            "function audit (req, res, next) {\n  next()\n}\n")
+
+
+def test_middleware_put_on_the_app_runs_before_the_routes_after_it_only(tmp_path):
+    g = _g(tmp_path, {"server.js": USE_HEAD +
+                      "app.get('/health', (req, res) => res.send('ok'))\n"
+                      "app.use(requireLogin)\n"
+                      "app.get('/notes', (req, res) => res.json([]))\n"
+                      "app.use('/admin', audit)\n"
+                      "app.get('/admin/users', (req, res) => res.json([]))\n"
+                      "app.get('/administrators', (req, res) => res.json([]))\n"})
+    assert _mw(g, "GET /health") == []
+    assert _mw(g, "GET /notes") == ["requireLogin"]
+    assert _mw(g, "GET /admin/users") == ["requireLogin", "audit"]
+    assert _mw(g, "GET /administrators") == ["requireLogin"]            # `/admin` is a whole part of a path
+    users = next(n for n in g.nodes.values() if n.entry and n.entry.get("detail") == "GET /admin/users")
+    assert users.entry["use"] == [{"id": "js:server::requireLogin", "file": "server.js", "line": 11},
+                                  {"id": "js:server::audit", "file": "server.js", "line": 13}]   # where it was put on
+    assert "middleware" not in users.entry                              # that list is the route's own, as before
+
+
+def test_middleware_put_on_a_router_or_on_its_mount_runs_before_that_routers_routes(tmp_path):
+    files = {"server.js": USE_HEAD +
+             "app.use('/open', require('./routes/open'))\n"
+             "app.use(audit)\n"
+             "app.use('/api', requireLogin, require('./routes/api'))\n"
+             "app.use('/more', require('./routes/more'))\n",
+             "routes/open.js": "const router = require('express').Router()\n"
+                               "router.get('/ping', (req, res) => res.send('ok'))\nmodule.exports = router\n",
+             "routes/api.js": "const router = require('express').Router()\n"
+                              "router.get('/notes', (req, res) => res.json([]))\nmodule.exports = router\n",
+             "routes/more.js": "const router = require('express').Router()\nconst { check } = require('../lib/check')\n"
+                               "router.get('/first', (req, res) => res.json([]))\nrouter.use(check)\n"
+                               "router.get('/second', (req, res) => res.json([]))\nmodule.exports = router\n",
+             "lib/check.js": "exports.check = function (req, res, next) { next() }\n"}
+    g = _g(tmp_path, files)
+    assert _mw(g, "GET /open/ping") == []                               # mounted above every `use`
+    assert _mw(g, "GET /api/notes") == ["audit", "requireLogin"]
+    assert _mw(g, "GET /more/first") == ["audit"]
+    assert _mw(g, "GET /more/second") == ["audit", "check"]
+
+
+def test_a_library_put_on_the_app_is_listed_by_its_own_name_and_is_no_login(tmp_path):
+    from lantern.websec import call_adjacency, route_auth_sign
+    g = _g(tmp_path, {"package.json": '{"dependencies": {"express": "4.19.2", "express-session": "1.18.0", '
+                                      '"passport": "0.7.0"}}',
+                      "server.js": "const express = require('express')\nconst session = require('express-session')\n"
+                                   "const passport = require('passport')\nconst app = express()\n"
+                                   "app.use(express.json())\napp.use(session({ secret: process.env.S }))\n"
+                                   "app.post('/notes', (req, res) => res.json({}))\n"
+                                   "app.use(passport.authenticate('jwt', { session: false }))\n"
+                                   "app.post('/orders', (req, res) => res.json({}))\n"})
+    adj = call_adjacency(g)
+    by = {n.entry["detail"]: n for n in g.nodes.values() if n.entry and n.entry.get("kind") == "route"}
+    assert route_auth_sign(g, by["POST /notes"], adj) is None           # a session is not a login check
+    assert [u["id"] for u in by["POST /notes"].entry["use"]] == ["ext:express.json", "ext:express-session"]
+    assert route_auth_sign(g, by["POST /orders"], adj) == \
+        "middleware `authenticate` put on before this route (server.js:8)"
+
+
+def test_the_inventory_of_calls_is_the_same_with_and_without_the_new_reading(tmp_path):
+    # the list of what runs before a route is all that changes: no call site, no outcome and no edge is added for it
+    g = _g(tmp_path, {"server.js": USE_HEAD + "app.use(requireLogin)\napp.get('/notes', (req, res) => res.json([]))\n"})
+    handed = [(s["callee"], s["outcome"]) for s in g.sites if s["group"] == "handed"]
+    assert handed == [("requireLogin", "likely")], handed                # the one `use` handed it, as before
+    # the map and the inventory of this app, as the code before the new reading gave them
+    assert sorted((e.src, e.dst, e.via or "", e.confidence) for e in g.edges) == [
+        ("js:server", "ext:express", "import", "resolved"),
+        ("js:server", "ext:express().use", "library-value", "inferred"),
+        ("js:server", "js:server::audit", "", "resolved"),
+        ("js:server", "js:server::get_notes", "", "resolved"),
+        ("js:server", "js:server::requireLogin", "", "resolved"),
+        ("js:server", "js:server::requireLogin", "callback", "inferred"),
+        ("js:server::audit", "ext:express.next", "express-param", "inferred"),
+        ("js:server::get_notes", "ext:express.Response.json", "express-param", "inferred"),
+        ("js:server::requireLogin", "ext:express.Response.status", "express-param", "inferred"),
+        ("js:server::requireLogin", "ext:express.Response.status().end", "library-result", "inferred"),
+        ("js:server::requireLogin", "ext:express.next", "express-param", "inferred")]
+    assert sorted((s["callee"], s["outcome"], s["group"]) for s in g.sites) == [
+        ("app.get", "external", "written"), ("app.use", "external", "written"), ("express", "external", "written"),
+        ("next", "external", "written"), ("next", "external", "written"), ("require", "builtin", "written"),
+        ("requireLogin", "likely", "handed"), ("res.json", "external", "written"),
+        ("res.status", "external", "written"), ("res.status(401).end", "external", "written")]
+    assert sorted(g.nodes) == [
+        "ext:express", "ext:express().use", "ext:express.Response.json", "ext:express.Response.status",
+        "ext:express.Response.status().end", "ext:express.next", "js:server", "js:server::audit",
+        "js:server::get_notes", "js:server::requireLogin"]
+    assert (g.meta["calls"]["written"]["total"], g.meta["calls"]["handed"]["total"]) == (9, 1)
+
+
+def test_what_is_not_a_check_before_a_route_is_not_listed_as_one(tmp_path):
+    from lantern.websec import call_adjacency, route_auth_sign
+    files = {"package.json": '{"dependencies": {"express": "4.19.2", "passport": "0.7.0", "auth-routes": "1.0.0"}}',
+             "server.js": USE_HEAD +
+             "const passport = require('passport')\nconst config = require('./config')\n"
+             "const authRoutes = require('auth-routes')\nconst { makeAuthRouter } = require('./lib/authRouter')\n"
+             "const lost = require('./lib/authGone')\n"
+             "function authFailed (err, req, res, next) {\n  res.status(500).end()\n}\n"
+             "function setUp () {\n  app.use(requireLogin)\n}\n"
+             "app.use(authRoutes)\n"                                    # a library's router, named for what it serves
+             "app.use('/auth', makeAuthRouter(app))\n"                  # the project's own function that makes a router
+             "app.use(lost)\n"                                          # from a file that is not there
+             "app.use(authFailed)\n"                                    # four parameters: runs when a route failed
+             "app.use(passport.session())\n"
+             "app.use(passport.authenticate('session'))\n"              # reads who is signed in, turns nobody away
+             "app.use(['/a', '/b'], requireLogin)\n"                    # for paths Lantern does not read
+             "app.use(config.base, requireLogin)\n"
+             "app.use((req, res, next) => next())\n"
+             "app.post('/auth/notes', (req, res) => res.json({}))\n"
+             "app.post('/a', (req, res) => res.json({}))\n",
+             "config.js": "module.exports = { base: process.env.BASE }\n",
+             "lib/authRouter.js": "const express = require('express')\n"
+                                  "exports.makeAuthRouter = function (app) {\n  const r = express.Router()\n"
+                                  "  r.post('/login', (req, res) => res.json({}))\n  return r\n}\n"}
+    g = _g(tmp_path, files)
+    adj = call_adjacency(g)
+    by = {n.entry["detail"]: n for n in g.nodes.values() if n.entry and n.entry.get("kind") == "route"}
+    for detail in ("POST /auth/notes", "POST /a"):
+        assert [u["id"] for u in by[detail].entry.get("use") or ()] == ["ext:passport.session"], detail
+        assert route_auth_sign(g, by[detail], adj) is None, detail
+
+
+def test_the_order_of_use_is_read_only_where_the_code_shows_it(tmp_path):
+    files = {"server.js": USE_HEAD +
+             "const notes = require('./routes/notes')\nconst both = require('./routes/both')\n"
+             "function later () {\n  app.use(audit)\n}\n"
+             "app.use('/v1', both)\n"
+             "app.use(requireLogin)\n"
+             "app.use('/v2', audit, both)\n"
+             "app.use('/notes', notes, audit)\n"                        # `audit` stands behind the router
+             "app.get('/notes/all', audit, (req, res) => res.json([]))\n"
+             "module.exports = function (other) {\n  other.use(requireLogin)\n"
+             "  other.get('/inside', (req, res) => res.json([]))\n}\n",
+             "routes/notes.js": "const router = require('express').Router()\n"
+                                "router.get('/', (req, res) => res.json([]))\nmodule.exports = router\n",
+             "routes/both.js": "const router = require('express').Router()\n"
+                               "router.get('/x', (req, res) => res.json([]))\nmodule.exports = router\n"}
+    g = _g(tmp_path, files)
+    assert _mw(g, "GET /notes") == ["requireLogin"]                     # not what follows the router in its mount
+    assert _mw(g, "GET /notes/all") == ["requireLogin", "audit"]        # a later route under that path gets it
+    own = next(n for n in g.nodes.values() if n.entry and n.entry.get("detail") == "GET /notes/all")
+    assert own.entry["middleware"] == ["js:server::audit"]              # the route's own list is as it was
+    assert _mw(g, "GET /x") == []                                       # mounted twice: only what stands before both
+    assert _mw(g, "GET /inside") == ["requireLogin"]                    # put on and used in one function
+
+
+def test_a_router_loaded_into_a_name_and_mounted_by_that_name_gets_its_prefix(tmp_path):
+    # until 2026-11-11 only a router required in place (`app.use('/notes', require('./routes/notes'))`) or brought
+    # in with `import` got it: `const notes = require(...)` declares the name, and the declaration was read first
+    files = {"server.js": "const express = require('express')\nconst app = express()\n"
+                          "const notes = require('./routes/notes')\nconst helper = require('./lib/helper')\n"
+                          "app.use('/notes', notes)\n"
+                          "function other () {\n  const notes = express.Router()\n"
+                          "  notes.get('/inner', (req, res) => res.end())\n  return notes\n}\n"
+                          "app.use('/x', other())\napp.use('/h', helper)\n",
+             "routes/notes.js": "const router = require('express').Router()\n"
+                                "router.get('/list', (req, res) => res.json([]))\nmodule.exports = router\n",
+             "lib/helper.js": "module.exports = function (req, res, next) { next() }\n"}
+    g = _g(tmp_path, files)
+    details = sorted(n.entry["detail"] for n in g.nodes.values() if n.entry and n.entry.get("kind") == "route")
+    # a name declared again inside a function is that function's own router, not the file's
+    assert details == ["GET /notes/list", "GET /x/inner"], details

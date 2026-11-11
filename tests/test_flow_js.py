@@ -176,6 +176,68 @@ def test_pages(tmp_path, case):
         assert (flows[0]["file"], flows[0]["line"]) == ("server.js", 15), flows
 
 
+# A page escaped by hand, or sent as something that is no page. 2026-11-11: the first measurement on the held-out set
+# showed a false alarm on a safe page. The held-out app was not read; 29 shapes were written here instead, and the
+# engine was wrong on these two kinds, each kept beside its near-misses.
+ESC = ("function esc (s) {\n  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')"
+       ".replace(/\"/g, '&quot;')\n}\n")
+ESC_MAP = ("const ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }\n"
+           "function esc (s) {\n  return String(s).replace(/[&<>\"]/g, (c) => ENTITIES[c])\n}\n")
+HELLO = _route("  res.send('<h1>Hello ' + esc(req.query.name) + '</h1>')\n")
+BY_HAND = {
+    "clean: the project's own escape, which replaces every <":
+        (ESC + HELLO, []),
+    "clean: the same escape, with a table of what each character becomes":
+        (ESC_MAP + HELLO, []),
+    "clean: the own escape inside the text of a template literal":
+        (ESC + _route("  res.send(`<h1>Hello ${esc(req.query.name)}</h1>`)\n"), []),
+    "clean: every < is taken out":
+        (_route("  res.send('<h1>Hello ' + req.query.name.replace(/[<>]/g, '') + '</h1>')\n"), []),
+    "caught: an escape that replaces the first < only":       # replace with a text, not a pattern: once
+        ("function esc (s) {\n  return String(s).replace('<', '&lt;')\n}\n" + HELLO, ["xss"]),
+    "caught: a pattern without g replaces the first < only":
+        ("function esc (s) {\n  return String(s).replace(/</, '&lt;')\n}\n" + HELLO, ["xss"]),
+    "caught: an escape that forgets <":
+        ("function esc (s) {\n  return String(s).replace(/&/g, '&amp;').replace(/\"/g, '&quot;')\n}\n" + HELLO,
+         ["xss"]),
+    "caught: an escape that puts a tag where < was":
+        ("function esc (s) {\n  return String(s).replace(/</g, '<b>')\n}\n" + HELLO, ["xss"]),
+    "caught: the table gives < back":
+        ("const ENTITIES = { '&': '&amp;', '<': '<' }\n"
+         "function esc (s) {\n  return String(s).replace(/[&<]/g, (c) => ENTITIES[c])\n}\n" + HELLO, ["xss"]),
+    "caught: every < but the ones in the value's first line":       # a pattern that does not stand for < alone
+        ("function esc (s) {\n  return String(s).replace(/\\n.*</g, '&lt;')\n}\n" + HELLO, ["xss"]),
+    "caught: escaped for a page by hand, then put into a query":
+        (ESC + _route("  pool.query(\"SELECT * FROM users WHERE name = '\" + esc(req.query.name) + \"'\", "
+                      "(e, rows) => res.json(rows))\n"), ["sql"]),
+    "clean: sent as plain text":
+        (_route("  res.type('text/plain').send('Hello ' + req.query.name)\n"), []),
+    "clean: the kind of answer is set to plain text first":
+        (_route("  res.set('Content-Type', 'text/plain')\n  res.send('Hello ' + req.query.name)\n"), []),
+    "clean: JSON written by hand, with its kind set":
+        (_route("  res.setHeader('Content-Type', 'application/json')\n"
+                "  res.end(JSON.stringify({ name: req.query.name }))\n"), []),
+    "clean: plain text, after the status":
+        (_route("  res.status(200).type('txt').send('Hello ' + req.query.name)\n"), []),
+    "caught: the kind of answer is set to a page":
+        (_route("  res.type('html').send('<h1>Hello ' + req.query.name + '</h1>')\n"), ["xss"]),
+    "caught: plain text on one way only":
+        (_route("  if (req.query.plain) res.type('text/plain')\n  res.send('Hello ' + req.query.name)\n"), ["xss"]),
+    "caught: the kind is set after the text was sent":
+        (_route("  res.send('Hello ' + req.query.name)\n  res.type('text/plain')\n"), ["xss"]),
+    "caught: plain text was set, then a page":
+        (_route("  res.type('text/plain')\n  res.type('html')\n  res.send('<p>' + req.query.name + '</p>')\n"),
+         ["xss"]),
+    "caught: another header is set to plain text":
+        (_route("  res.set('X-Kind', 'text/plain')\n  res.send('Hello ' + req.query.name)\n"), ["xss"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(BY_HAND))
+def test_a_page_escaped_by_hand_or_sent_as_plain_text(tmp_path, case):
+    _check(tmp_path, BY_HAND, case)
+
+
 # ------------------------------------------------------------- redirects
 
 REDIRECT = {
@@ -268,6 +330,36 @@ SSRF = {
     "caught: the name is looked up and nothing is asked about the address":
         (NET + _later("  const { address } = await dns.lookup(new URL(req.query.url).hostname)\n"
                       "  console.log(address)\n" + FETCH), ["ssrf"]),
+    # the list guard in the shapes people write it (2026-11-11, see tests/test_flow.py)
+    "clean: the answer is kept in a variable and asked afterwards":
+        (_later("  const ok = HOSTS.has(new URL(req.query.url).hostname)\n"
+                "  if (!ok) return res.status(400).end()\n" + FETCH), []),
+    "caught: the answer kept in the variable is about another value":
+        (_later("  const ok = HOSTS.has(new URL(req.query.other).hostname)\n"
+                "  if (!ok) return res.status(400).end()\n" + FETCH), ["ssrf"]),
+    "caught: the answer is asked the wrong way round":
+        (_later("  const ok = HOSTS.has(new URL(req.query.url).hostname)\n"
+                "  if (ok) return res.status(400).end()\n" + FETCH), ["ssrf"]),
+    "clean: the host is lower-cased first, with an empty text when there is none":
+        (_later("  const host = (new URL(req.query.url).hostname || '').toLowerCase()\n"
+                "  if (!HOSTS.has(host)) return res.status(400).end()\n" + FETCH), []),
+    "clean: the host must end with the site's own name, dot first":
+        (_later("  const host = new URL(req.query.url).hostname\n"
+                "  if (!host.endsWith('.example.com')) return res.status(400).end()\n" + FETCH), []),
+    "caught: the host must end with the name, with no dot before it":
+        (_later("  const host = new URL(req.query.url).hostname\n"
+                "  if (!host.endsWith('example.com')) return res.status(400).end()\n" + FETCH), ["ssrf"]),
+    "caught: the whole address must end with the name":
+        (_later("  if (!req.query.url.endsWith('.example.com')) return res.status(400).end()\n" + FETCH), ["ssrf"]),
+    "clean: a fixed site, the value only in the path after it":
+        (_later("  const r = await fetch(new URL(`/v1/items/${req.query.id}`, 'https://api.example.com'))\n"
+                "  res.json(await r.json())\n"), []),
+    "caught: a fixed site, but the value may be a whole address":
+        (_later("  const r = await fetch(new URL(req.query.path, 'https://api.example.com'))\n"
+                "  res.json(await r.json())\n"), ["ssrf"]),
+    "caught: a fixed path on a site the request names":
+        (_later("  const r = await fetch(new URL('/v1/items', req.query.site))\n"
+                "  res.json(await r.json())\n"), ["ssrf"]),
 }
 
 
@@ -419,6 +511,223 @@ def test_the_same_route_with_a_placeholder_is_clean(tmp_path):
     assert _flows(tmp_path, files) == []
 
 
+# ------------------------------------------------------------- a page template that prints a value without escaping
+
+def _page(root, body, template, name="views/profile.ejs"):
+    flows = _flows(root, {"server.js": HEAD + "app.set('view engine', 'ejs')\n" + _route(body), name: template})
+    return [(f["class"], f["file"], f["line"]) for f in flows]
+
+
+NAME = "  res.render('profile', { name: req.query.name, bio: 'none yet' })\n"
+PRINTED = {
+    "caught: the page prints the value without escaping":
+        (NAME, "<h1><%- name %></h1>\n", [("xss", "views/profile.ejs", 1)]),
+    "clean: the page prints it escaped":
+        (NAME, "<h1><%= name %></h1>\n", []),
+    "clean: the page prints another of its values without escaping, one the code set":
+        (NAME, "<h1><%= name %></h1>\n<p><%- bio %></p>\n", []),
+    "clean: escaped for a page in the route, then printed as it is":
+        ("  res.render('profile', { name: escapeHtml(req.query.name) })\n", "<h1><%- name %></h1>\n", []),
+    "clean: a number made from the request":
+        ("  res.render('profile', { name: parseInt(req.query.name, 10) })\n", "<h1><%- name %></h1>\n", []),
+    "caught: a member of an object the route hands in":
+        ("  const user = { name: req.query.name, id: 7 }\n  res.render('profile', { user })\n",
+         "<h1>\n<%- user.name %>\n</h1>\n", [("xss", "views/profile.ejs", 2)]),
+    "caught: each item of a list the request sent":
+        ("  res.render('profile', { tags: req.query.tags })\n",
+         "<% tags.forEach(function (tag) { %>\n<li><%- tag %></li>\n<% }) %>\n", [("xss", "views/profile.ejs", 2)]),
+    "caught: everything the request sent is the page's values":
+        ("  res.render('profile', req.query)\n", "<h1><%- name %></h1>\n", [("xss", "views/profile.ejs", 1)]),
+    "clean: the page of that name prints nothing raw; another page does":
+        (NAME, "<h1><%= name %></h1>\n", []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(PRINTED))
+def test_a_page_template_that_prints_a_value_without_escaping(tmp_path, case):
+    body, template, want = PRINTED[case]
+    extra = {"views/other.ejs": "<%- name %>\n"} if "another page does" in case else {}
+    _write(tmp_path, extra)
+    assert _page(tmp_path, body, template) == want
+
+
+def test_other_template_languages_and_a_page_in_a_folder(tmp_path):
+    files = {"server.js": HEAD + _route("  res.render('users/card', { name: req.query.name })\n", url="/a")
+             + _route("  res.render('note', { text: req.query.text })\n", url="/b"),
+             "views/users/card.hbs": "<div>\n  {{{name}}}\n</div>\n", "views/note.pug": "p= text\np!= text\n"}
+    flows = _flows(tmp_path, files)
+    assert [(f["class"], f["file"], f["line"]) for f in flows] == [("xss", "views/note.pug", 2),
+                                                                    ("xss", "views/users/card.hbs", 2)]
+    steps = [s["what"] for s in flows[1]["steps"]]
+    assert any("views/users/card.hbs" in s and "`name`" in s for s in steps), steps
+
+
+# ------------------------------------------------------------- text saved as a template
+
+VIEWS = "const VIEWS = path.join(__dirname, 'views')\n"
+SAVED = {
+    "caught: the text is written into a file of the views folder, which is then rendered":
+        (_route("  fs.writeFileSync(path.join(__dirname, 'views', 'note.ejs'), req.body.text)\n"
+                "  res.render('note')\n", "post"), ["eval"]),
+    "caught: the views folder is named at the top of the file":
+        (VIEWS + _route("  fs.writeFile(path.join(VIEWS, 'note.ejs'), '<p>' + req.body.text + '</p>', () => "
+                        "res.render('note'))\n", "post"), ["eval"]),
+    "caught: escaped for a page, then written into the template file":
+        (VIEWS + _route("  fs.writeFileSync(path.join(VIEWS, 'note.ejs'), escapeHtml(req.body.text))\n"
+                        "  res.render('note')\n", "post"), ["eval"]),
+    "clean: the text is written into a data folder":
+        (_route("  fs.writeFileSync(path.join(BASE, 'note.txt'), req.body.text)\n  res.end()\n", "post"), []),
+    "clean: fixed text is written into the views folder":
+        (VIEWS + _route("  fs.writeFileSync(path.join(VIEWS, 'note.ejs'), '<p>nothing yet</p>')\n"
+                        "  res.render('note', { text: req.body.text })\n", "post"), []),
+    "clean: a data file kept beside the views":
+        (VIEWS + _route("  fs.writeFileSync(path.join(VIEWS, 'note.json'), JSON.stringify({ text: req.body.text }))\n"
+                        "  res.end()\n", "post"), []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SAVED))
+def test_text_saved_as_a_template(tmp_path, case):
+    _check(tmp_path, SAVED, case)
+
+
+# ------------------------------------------------------------- a value put into an object and read back out
+
+JS_GLUED = "  pool.query(`SELECT * FROM items WHERE name = '${{{x}}}'`, (e, rows) => res.json(rows))\n"
+JS_APART = "  pool.query('SELECT * FROM items WHERE name = ?', [{x}], (e, rows) => res.json(rows))\n"
+KEEPS = ("class Search {\n  constructor (term, table = 'items') {\n    this.term = term\n    this.table = table\n"
+         "    this.size = term.length\n  }\n}\n")
+OLD_STYLE = "function Search (term) {\n  this.term = term\n  this.table = 'items'\n}\n"
+OBJECTS = {
+    "caught: a constructor keeps the value":
+        (KEEPS + _route("  const s = new Search(req.query.q)\n" + JS_GLUED.format(x="s.term")), ["sql"]),
+    "clean: the kept value is handed to the driver apart":
+        (KEEPS + _route("  const s = new Search(req.query.q)\n" + JS_APART.format(x="s.term")), []),
+    "clean: another field of the same object, which the code set":
+        (KEEPS + _route("  const s = new Search(req.query.q)\n" + JS_GLUED.format(x="s.table")), []),
+    "clean: a field that holds only the value's length":
+        (KEEPS + _route("  const s = new Search(req.query.q)\n" + JS_GLUED.format(x="s.size")), []),
+    "caught: the field the request did set":
+        (KEEPS + _route("  const s = new Search('x', req.query.table)\n" + JS_GLUED.format(x="s.table")), ["sql"]),
+    "caught: the parent's constructor keeps the value":
+        (KEEPS + "class Paged extends Search {\n  constructor (term, page) {\n    super(term)\n"
+         "    this.page = page\n  }\n}\n"
+         + _route("  const s = new Paged(req.query.q, 1)\n" + JS_GLUED.format(x="s.term")), ["sql"]),
+    "caught: a function used as a constructor keeps the value":
+        (OLD_STYLE + _route("  const s = new Search(req.query.q)\n" + JS_GLUED.format(x="s.term")), ["sql"]),
+    "clean: the other field of an object made by a function used as a constructor":
+        (OLD_STYLE + _route("  const s = new Search(req.query.q)\n" + JS_GLUED.format(x="s.table")), []),
+    "caught: a class with no constructor of its own, handed the value":
+        ("const { Model } = require('objection')\n\nclass Search extends Model {}\n"
+         + _route("  const s = new Search(req.query.q)\n" + JS_GLUED.format(x="s.term")), ["sql"]),
+    "clean: an object made of the code's own values":
+        (KEEPS + _route("  const s = new Search('all')\n  if (!req.query.q) return res.end()\n"
+                        + JS_GLUED.format(x="s.term")), []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(OBJECTS))
+def test_a_value_put_into_an_object_is_read_back_out_of_it(tmp_path, case):
+    _check(tmp_path, OBJECTS, case)
+
+
+# ------------------------------------------------------------- a redirect that stays on this site (Next.js middleware)
+# The address a request was made to names this site: `new URL('/login', req.url)` and `req.nextUrl.clone()` with
+# another path go nowhere else. What is read out of that address (a parameter, the path) is still the caller's text.
+
+def _mw(body):
+    return ("import { NextResponse } from 'next/server'\nimport type { NextRequest } from 'next/server'\n\n"
+            "export function middleware (req: NextRequest) {\n  const session = req.cookies.get('session')\n"
+            + body + "  return NextResponse.next()\n}\n\nexport const config = { matcher: ['/dashboard/:path*'] }\n")
+
+
+NEXT_PARAM = "  const next = req.nextUrl.searchParams.get('next')\n"
+SAME_SITE = {
+    "clean: a fixed path on this site":
+        ("  if (!session) return NextResponse.redirect(new URL('/login', req.url))\n", []),
+    "clean: a fixed path, and where the person came from as a parameter":
+        ("  if (!session) {\n    return NextResponse.redirect("
+         "new URL(`/login?from=${encodeURIComponent(req.nextUrl.pathname)}`, req.url))\n  }\n", []),
+    "clean: where the person came from, built in two steps":
+        ("  if (!session) {\n    let from = req.nextUrl.pathname\n    if (req.nextUrl.search) from += req.nextUrl.search\n"
+         "    return NextResponse.redirect(new URL(`/login?from=${encodeURIComponent(from)}`, req.url))\n  }\n", []),
+    "clean: the request's own address with another path":
+        ("  if (!session) {\n    const url = req.nextUrl.clone()\n    url.pathname = '/login'\n"
+         "    return NextResponse.redirect(url)\n  }\n", []),
+    "clean: the request's own address, another path and a parameter set on it":
+        ("  if (!session) {\n    const url = req.nextUrl.clone()\n    url.pathname = '/login'\n"
+         "    url.searchParams.set('from', req.nextUrl.pathname)\n    return NextResponse.redirect(url)\n  }\n", []),
+    "clean: the request's own address, its path and its query set from the request":
+        ("  if (!session) {\n    const url = req.nextUrl.clone()\n    url.pathname = '/login'\n"
+         "    url.search = `?from=${req.nextUrl.pathname}`\n    return NextResponse.redirect(url)\n  }\n", []),
+    "clean: the address parsed again, with another path":
+        ("  if (!session) {\n    const url = new URL(req.url)\n    url.pathname = '/login'\n"
+         "    return NextResponse.redirect(url)\n  }\n", []),
+    "clean: a login address on this site, with a parameter set on it":
+        ("  if (!session) {\n    const loginUrl = new URL('/login', req.url)\n"
+         "    loginUrl.searchParams.set('from', req.nextUrl.pathname)\n    return NextResponse.redirect(loginUrl)\n"
+         "  }\n", []),
+    "clean: a fixed path on the request's own origin":
+        ("  if (!session) return NextResponse.redirect(new URL('/login', req.nextUrl.origin))\n", []),
+    "clean: the request's own origin and a fixed path, glued":
+        ("  if (!session) return NextResponse.redirect(`${req.nextUrl.origin}/login`)\n", []),
+    "clean: the request's own origin, a fixed path, then a value":
+        ("  if (!session) {\n    return NextResponse.redirect("
+         "`${req.nextUrl.origin}/login?from=${req.nextUrl.pathname}`)\n  }\n", []),
+    "clean: origin and path taken out of the request's own address by name":
+        ("  const { origin, pathname } = req.nextUrl\n"
+         "  if (!session) return NextResponse.redirect(new URL(`/login?from=${pathname}`, origin))\n", []),
+    "clean: the origin of the address parsed again":
+        ("  const { origin } = new URL(req.url)\n"
+         "  if (!session) return NextResponse.redirect(`${origin}/login`)\n", []),
+    "clean: a fixed path on a fixed site":
+        ("  if (!session) return NextResponse.redirect(new URL('/login', 'https://app.example.com'))\n", []),
+    "clean: a fixed path on the site named in the settings":
+        ("  if (!session) return NextResponse.redirect(new URL('/login', process.env.NEXT_PUBLIC_APP_URL))\n", []),
+    "caught: the request says where to go":
+        (NEXT_PARAM + "  if (session && next) return NextResponse.redirect(next)\n", ["redirect"]),
+    "caught: the request says where, read against this site (a whole address wins over the site)":
+        (NEXT_PARAM + "  if (session && next) return NextResponse.redirect(new URL(next, req.url))\n", ["redirect"]),
+    "caught: the same with a default":
+        ("  const next = req.nextUrl.searchParams.get('next') ?? '/'\n"
+         "  if (session) return NextResponse.redirect(new URL(next, req.url))\n", ["redirect"]),
+    "caught: one slash and the value (two slashes name another site)":
+        (NEXT_PARAM + "  if (session) return NextResponse.redirect(new URL('/' + next, req.url))\n", ["redirect"]),
+    "caught: a fixed path on a site the request names":
+        ("  const site = req.nextUrl.searchParams.get('site')\n"
+         "  if (session) return NextResponse.redirect(new URL('/login', site))\n", ["redirect"]),
+    "caught: the request's own address, then its host is set from the request":
+        ("  const url = req.nextUrl.clone()\n  url.host = req.nextUrl.searchParams.get('h')\n"
+         "  if (session) return NextResponse.redirect(url)\n", ["redirect"]),
+    "caught: the address parsed again, then its host is set from the request":
+        ("  const url = new URL(req.url)\n  url.hostname = req.nextUrl.searchParams.get('h')\n"
+         "  if (session) return NextResponse.redirect(url)\n", ["redirect"]),
+    "caught: the request's own address, then the whole of it is set from the request":
+        ("  const url = req.nextUrl.clone()\n  url.href = req.nextUrl.searchParams.get('next')\n"
+         "  if (session) return NextResponse.redirect(url)\n", ["redirect"]),
+    "caught: the request's own origin with the value glued straight after it":
+        (NEXT_PARAM + "  if (session && next) return NextResponse.redirect(`${req.nextUrl.origin}${next}`)\n",
+         ["redirect"]),
+    "caught: a parameter read out of the request's own address":
+        ("  const url = req.nextUrl.clone()\n"
+         "  if (session) return NextResponse.redirect(url.searchParams.get('next'))\n", ["redirect"]),
+    "caught: a parameter read out of the address parsed again, taken by name":
+        ("  const { searchParams } = new URL(req.url)\n"
+         "  if (session) return NextResponse.redirect(searchParams.get('next'))\n", ["redirect"]),
+    "caught: the parameters taken out of the request's own address by name":
+        ("  const { searchParams } = req.nextUrl\n"
+         "  if (session) return NextResponse.redirect(searchParams.get('next'))\n", ["redirect"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SAME_SITE))
+def test_a_redirect_that_stays_on_this_site(tmp_path, case):
+    body, want = SAME_SITE[case]
+    flows = _flows(tmp_path, {"middleware.ts": _mw(body),
+                              "app/page.tsx": "export default function Page () {\n  return <main>Hi</main>\n}\n"})
+    assert _kinds(flows) == want, flows
+
+
 # ------------------------------------------------------------- TypeScript, a NestJS controller
 
 NEST_HEAD = ("import { Controller, Get, Param, ParseIntPipe, Query } from '@nestjs/common'\n"
@@ -548,3 +857,61 @@ def test_fixed_text_from_every_caller_lowers_a_finding_and_a_near_miss_does_not(
     assert f["rank"] == want, (f["rank"], f.get("rank_note"), f.get("input"))
     if want == "low":
         assert "fixed text" in f["rank_note"] and f["input"] is False, f
+
+
+# ------------------------------------------------------------- a raw place in a page template, in the findings
+# The template's own line is the finding (LW-XSS-RAW, a heuristic), and what Lantern knows about the value decides
+# the rank: followed from the request, not followed to where it comes from, or fixed text wherever the page is shown.
+
+def _raw(fs):
+    return [(f["rule"], f["file"], f["line"], f["tool_confidence"], f["rank"], bool(f.get("flow"))) for f in fs
+            if f["rule"] in ("LW-XSS-RAW", "LT-XSS")]
+
+
+def _shown(body, template):
+    return {"server.js": HEAD + "app.set('view engine', 'ejs')\n" + _route(body), "views/profile.ejs": template}
+
+
+# line 14 is `app.set(...)`, 15 the route, 16 its first line
+FROM_DB = ("  pool.query('SELECT bio FROM users WHERE id = 7', (err, rows) => {\n"
+           "    res.render('profile', { bio: rows[0].bio })\n  })\n")
+RAW_BIO = "<h1>Profile</h1>\n<p><%- bio %></p>\n"
+RAW_PLACES = {
+    "request data is followed into it: one finding with the way there, ranked as request data":
+        ("  res.render('profile', { bio: req.query.bio })\n", RAW_BIO,
+         [("LW-XSS-RAW", "views/profile.ejs", 2, "LOW", "high", True)], "route code reaches it"),
+    "a value Lantern cannot follow to where it comes from: a heuristic finding, medium":
+        (FROM_DB, RAW_BIO, [("LW-XSS-RAW", "views/profile.ejs", 2, "LOW", "medium", False)], "server.js:17"),
+    "the route hands the page no value under that name: medium":
+        ("  res.render('profile', { title: 'Profile' })\n", RAW_BIO,
+         [("LW-XSS-RAW", "views/profile.ejs", 2, "LOW", "medium", False)], "server.js:16"),
+    "no place in the code shows the page: medium, and the reason says so":
+        ("  res.send('ok')\n", RAW_BIO, [("LW-XSS-RAW", "views/profile.ejs", 2, "LOW", "medium", False)],
+         "no place in the code that shows this page"),
+    "fixed text in the one place that shows the page: listed, ranked low":
+        ("  res.render('profile', { bio: 'none yet' })\n", RAW_BIO,
+         [("LW-XSS-RAW", "views/profile.ejs", 2, "LOW", "low", False)], "(`server.js:16`)"),
+    "escaped for a page in the route before it is handed over: listed, ranked low":
+        ("  res.render('profile', { bio: escapeHtml(req.query.bio) })\n", RAW_BIO,
+         [("LW-XSS-RAW", "views/profile.ejs", 2, "LOW", "low", False)], "(`server.js:16`)"),
+    "fixed text in one place and a database value in another: medium":
+        ("  if (req.query.demo) return res.render('profile', { bio: 'none yet' })\n" + FROM_DB, RAW_BIO,
+         [("LW-XSS-RAW", "views/profile.ejs", 2, "LOW", "medium", False)], "server.js:18"),
+    "the escaped twin: nothing":
+        (FROM_DB, "<h1>Profile</h1>\n<p><%= bio %></p>\n", [], ""),
+    "an include, a layout slot and fixed text: nothing":
+        (FROM_DB, "<%- include('head') %>\n<%- body %>\n<%- '<br>' %>\n<p><%= bio %></p>\n", [], ""),
+}
+
+
+@pytest.mark.parametrize("case", sorted(RAW_PLACES))
+def test_a_template_that_prints_a_value_raw_is_ranked_by_what_is_known_of_the_value(tmp_path, case):
+    body, template, want, why = RAW_PLACES[case]
+    fs = _scan(tmp_path, _shown(body, template))
+    assert _raw(fs) == want, [(f["rule"], f["file"], f["line"], f["rank"]) for f in fs]
+    for f in fs:
+        if f["rule"] == "LW-XSS-RAW":
+            from lantern.security import rank_reason
+            assert why in rank_reason(f), rank_reason(f)
+            assert f["cwe"] == 79 and "without escaping" in f["title"], f
+            assert not f.get("flow") or (f["input"]["flow"] and f["flow"]["sink"]["file"] == "views/profile.ejs"), f

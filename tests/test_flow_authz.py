@@ -301,6 +301,69 @@ def test_express_a_record_reached_by_its_id(tmp_path, case):
     assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
 
 
+# A login put on with `use`: on the app, on a path, on a router or on its mount. It counts for the routes written
+# after it, and for nothing else.
+READ = "  res.json(await Order.findById(req.params.id))\n"
+OWNS = ("async function ownsOrder (req, res, next) {\n"
+        "  const order = await Order.findById(req.params.id)\n"
+        "  if (!order || order.user !== req.session.userId) return res.status(404).end()\n"
+        "  next()\n}\n")
+JS_GUARD = ("exports.requireLogin = function (req, res, next) {\n"
+            "  if (!req.session.userId) return res.status(401).end()\n  next()\n}\n")
+JS_ROUTER = ("const router = require('express').Router()\nconst { Order } = require('../models')\n"
+             "const { requireLogin } = require('../lib/guard')\n")
+ROUTER_READ = "router.get('/orders/:id', async (req, res) => {\n" + READ + "})\nmodule.exports = router\n"
+JS_USE = {
+    "caught: the login is put on the app before the route":
+        ({"server.js": JS + "app.use(requireLogin)\n" + _js(READ, mw="")}, ["LT-AUTHZ-OWNER"]),
+    "clean: it is put on the app after the route, so nobody is signed in there (another finding's business)":
+        ({"server.js": JS + _js(READ, mw="") + "app.use(requireLogin)\n"}, []),
+    "caught: it is put on the path the route is under":
+        ({"server.js": JS + "app.use('/orders', requireLogin)\n" + _js(READ, mw="")}, ["LT-AUTHZ-OWNER"]),
+    "clean: it is put on another path":
+        ({"server.js": JS + "app.use('/orderly', requireLogin)\n" + _js(READ, mw="")}, []),
+    "caught: it is put on the router the route is on":
+        ({"server.js": JS + "app.use('/api', require('./routes/orders'))\n", "lib/guard.js": JS_GUARD,
+          "routes/orders.js": JS_ROUTER + "router.use(requireLogin)\n" + ROUTER_READ}, ["LT-AUTHZ-OWNER"]),
+    "caught: it stands before the router in its mount":
+        ({"server.js": JS + "app.use('/api', requireLogin, require('./routes/orders'))\n", "lib/guard.js": JS_GUARD,
+          "routes/orders.js": JS_ROUTER + ROUTER_READ}, ["LT-AUTHZ-OWNER"]),
+    "caught: it is put on the app before a router loaded into a name is mounted":
+        ({"server.js": JS + "const orders = require('./routes/orders')\napp.use(requireLogin)\n"
+                            "app.use('/api', orders)\n", "lib/guard.js": JS_GUARD,
+          "routes/orders.js": JS_ROUTER + ROUTER_READ}, ["LT-AUTHZ-OWNER"]),
+    "clean: it is put on the app after the router is mounted":
+        ({"server.js": JS + "const orders = require('./routes/orders')\napp.use('/api', orders)\n"
+                            "app.use(requireLogin)\n", "lib/guard.js": JS_GUARD,
+          "routes/orders.js": JS_ROUTER + ROUTER_READ}, []),
+    "clean: a middleware put on the path compares the owner":
+        ({"server.js": JS + OWNS + "app.use(requireLogin)\napp.use('/orders/:id', ownsOrder)\n" + _js(READ, mw="")},
+         []),
+    "caught: a middleware named ownsOrder put on the path compares nothing":
+        ({"server.js": JS + "function ownsOrder (req, res, next) {\n  next()\n}\n"
+                            "app.use(requireLogin)\napp.use('/orders/:id', ownsOrder)\n" + _js(READ, mw="")},
+         ["LT-AUTHZ-OWNER"]),
+    "clean: only a session library is put on the app, which signs nobody in":
+        ({"server.js": JS + "const session = require('express-session')\n"
+                            "app.use(session({ secret: process.env.SESSION_SECRET }))\n" + _js(READ, mw="")}, []),
+    "caught: an admin path under a login put on the app asks for no admin":
+        ({"server.js": JS + "app.use(requireLogin)\n"
+                            + _js("  res.json(await User.find())\n", mw="", path="/admin/users")}, ["LT-AUTHZ-ROLE"]),
+    "clean: the admin check is put on the admin path":
+        ({"server.js": JS + "function requireAdmin (req, res, next) {\n"
+                            "  if (req.session.role !== 'admin') return res.status(403).end()\n  next()\n}\n"
+                            "app.use(requireLogin)\napp.use('/admin', requireAdmin)\n"
+                            + _js("  res.json(await User.find())\n", mw="", path="/admin/users")}, []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(JS_USE))
+def test_express_a_login_put_on_with_use(tmp_path, case):
+    files, want = JS_USE[case]
+    fs = _scan(tmp_path, {"models.js": JS_MODELS, **files}, project={"package.json": PACKAGE})
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
 JS_ROLE = {
     "caught: an admin route that only asks whether someone is signed in":
         (_js("  res.json(await User.find())\n", path="/admin/users"), ["LT-AUTHZ-ROLE"]),
@@ -878,3 +941,406 @@ def test_flask_signing_in_with_a_session(tmp_path):
             "    user = User.query.filter_by(name=username).first_or_404()\n    return jsonify(id=user.id)\n")
     fs = _scan(tmp_path, {"app/main.py": FLASK + body}, project=FLASK_PROJECT)
     assert _authz(fs) == ["LT-AUTHZ-OWNER"], [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+# ------------------------------------------------------------- nobody has to be signed in, and a record is changed
+# A route with no login at all was LW-AUTH-MISSING's only when a frontend in the project calls it. A record changed or
+# removed there by an id from the request is anybody's to change whoever calls the route, so it is the same finding.
+def _open(fs):
+    return sorted((f["rule"], f["line"]) for f in fs if f["rule"] == "LW-AUTH-MISSING" or f["rule"].startswith("LT-AUTHZ"))
+
+
+JS_AT = JS.count("\n") + 1          # the line of a route written right after the head
+JS_ANON = {
+    "caught: an order removed by its id, and nobody has to be signed in":
+        (_js("  await Order.deleteOne({ _id: req.params.id })\n  res.status(204).end()\n", mw="", verb="delete"),
+         [("LW-AUTH-MISSING", JS_AT)]),
+    "caught: the same for a change":
+        (_js("  await Order.updateOne({ _id: req.params.id }, { item: req.body.item })\n  res.end()\n", mw="",
+             verb="put"), [("LW-AUTH-MISSING", JS_AT)]),
+    "caught: a link that removes (GET), which no verb gives away":
+        (_js("  await Order.deleteOne({ _id: req.params.id })\n  res.redirect('/orders')\n", mw="",
+             path="/orders/:id/remove"), [("LW-AUTH-MISSING", JS_AT)]),
+    "caught: through SQL":
+        (_js("  await pool.query('DELETE FROM orders WHERE id = ?', [req.params.id])\n  res.end()\n", mw="",
+             verb="delete"), [("LW-AUTH-MISSING", JS_AT)]),
+    "clean: an order read by its id with nobody signed in may be a public page":
+        (_js(READ, mw=""), []),
+    "clean: a new record is nobody's yet (a contact form)":
+        (_js("  await Order.create({ item: req.body.item })\n  res.status(201).end()\n", mw="", verb="post",
+             path="/orders"), []),
+    "clean: picked by a secret link, not by an id":
+        (_js("  await Order.deleteOne({ shareToken: req.params.token })\n  res.end()\n", mw="", verb="delete",
+             path="/shares/:token"), []),
+    "clean: a path made to be called without a login":
+        (_js("  await Order.updateOne({ _id: req.body.id }, { paid: true })\n  res.end()\n", mw="", verb="post",
+             path="/webhook/orders"), []),
+    "clean of this finding: somebody is signed in, so it is the owner that is missing":
+        (_js("  await Order.deleteOne({ _id: req.params.id })\n  res.status(204).end()\n", verb="delete"),
+         [("LT-AUTHZ-OWNER", JS_AT)]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(JS_ANON))
+def test_express_a_record_changed_with_nobody_signed_in(tmp_path, case):
+    body, want = JS_ANON[case]
+    fs = _scan(tmp_path, {"server.js": JS + body, "models.js": JS_MODELS}, project={"package.json": PACKAGE})
+    assert _open(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+PY_AT = FASTAPI.count("\n") + 2     # the `def` line of a route written right after the head
+ANON_SIG = "order_id: int, db=Depends(get_db)"
+PY_ANON = {     # the finding is where the route begins (its decorator), as for a route the frontend calls
+    "caught: an order removed by its id, and nobody has to be signed in":
+        (_route("    db.execute('DELETE FROM orders WHERE id = ?', (order_id,))\n    return {'ok': True}\n",
+                sig=ANON_SIG, verb="delete"), [("LW-AUTH-MISSING", PY_AT - 1)]),
+    "caught: the same for a change":
+        (_route("    db.execute('UPDATE orders SET paid = 1 WHERE id = ?', (order_id,))\n    return {'ok': True}\n",
+                sig=ANON_SIG, verb="post"), [("LW-AUTH-MISSING", PY_AT - 1)]),
+    "clean: read by its id with nobody signed in":
+        (_route(f"    return db.execute('{ONE}', (order_id,)).fetchone()\n", sig=ANON_SIG), []),
+    "clean: a new row":
+        (_route("    db.execute('INSERT INTO orders (item) VALUES (?)', (item,))\n    return {'ok': True}\n",
+                sig="item: str, db=Depends(get_db)", verb="post", path="/orders"), []),
+    "clean of this finding: somebody is signed in":
+        (_route("    db.execute('DELETE FROM orders WHERE id = ?', (order_id,))\n    return {'ok': True}\n",
+                verb="delete"), [("LT-AUTHZ-OWNER", PY_AT)]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(PY_ANON))
+def test_a_record_changed_with_nobody_signed_in(tmp_path, case):
+    body, want = PY_ANON[case]
+    fs = _scan(tmp_path, {"app/main.py": FASTAPI + body})
+    assert _open(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+def test_a_route_the_frontend_calls_and_that_changes_a_record_gets_one_finding(tmp_path):
+    fs = _scan(tmp_path, {
+        "server.js": JS + _js("  await Order.deleteOne({ _id: req.params.id })\n  res.status(204).end()\n", mw="",
+                              verb="delete") + "app.listen(3000)\n",
+        "models.js": JS_MODELS,
+        "web/app.js": "export async function remove(id) { await fetch('/orders/' + id, {method: 'DELETE'}) }\n"},
+        project={"package.json": PACKAGE})
+    got = [f for f in fs if f["rule"] == "LW-AUTH-MISSING"]
+    assert [(f["file"], f["line"]) for f in got] == [("server.js", JS_AT)]
+    assert got[0]["title"] == "DELETE /orders/:id changes data, is called by the app, and no login check was found"
+
+
+def test_the_finding_for_an_open_route_says_which_record_and_ranks_medium(tmp_path):
+    fs = _scan(tmp_path, {"server.js": JS + _js("  await Order.deleteOne({ _id: req.params.id })\n"
+                                                "  res.status(204).end()\n", mw="", verb="delete"),
+                          "models.js": JS_MODELS}, project={"package.json": PACKAGE})
+    (f,) = [f for f in fs if f["rule"] == "LW-AUTH-MISSING"]
+    assert f["title"] == ("DELETE /orders/:id changes or removes a record picked by an id from the request, and no "
+                          "login check was found")
+    assert (f["tool_confidence"], f["rank"], f["cwe"]) == ("LOW", "medium", 306)
+    assert f["flow"]["sink"] == {"file": "server.js", "line": JS_AT + 1,
+                                 "what": "Order.deleteOne()"}, f["flow"]["sink"]
+    assert f["flow"]["source"]["what"] == "`id` in `req.params` is what the request sent"
+    assert "If this route is meant to be open to everyone" in f["more_info"]
+
+
+# ------------------------------------------------------------- what a visitor may do, decided on what the visitor sends
+# `admin=true` in a cookie, `X-Role: admin` in a header, `?admin=1`: the visitor writes those. A route that decides on
+# one, with no role of the signed-in person asked anywhere, lets anybody say they are an admin.
+LIST = "  res.json(await User.find())\n"
+NO = "return res.status(403).end()\n"
+JS_CLIENT = {
+    "caught: a cookie that says admin":
+        (_js(f"  if (req.cookies.admin !== 'true') {NO}" + LIST, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: a cookie that names the role":
+        (_js(f"  if (req.cookies.role !== 'admin') {NO}" + LIST, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: a header":
+        (_js(f"  if (req.headers['x-admin'] !== '1') {NO}" + LIST, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: kept under a name first":
+        (_js(f"  const isAdmin = req.cookies.isAdmin === 'true'\n  if (!isAdmin) {NO}" + LIST, path="/reports"),
+         ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: only asked whether it is there":
+        (_js(f"  if (!req.cookies.isAdmin) {NO}" + LIST, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: written in the address":
+        (_js(f"  if (req.query.admin !== '1') {NO}" + LIST, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: a cookie that names the person, compared with the word admin":
+        (_js(f"  if (req.cookies.user !== 'admin') {NO}" + LIST, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: asked by a helper":
+        ("function isAdmin (req) {\n  return req.cookies.admin === 'true'\n}\n" +
+         _js(f"  if (!isAdmin(req)) {NO}" + LIST, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: asked by a middleware handed to the route":
+        (f"function adminOnly (req, res, next) {{\n  if (req.cookies.admin !== 'true') {NO}  next()\n}}\n" +
+         _js(LIST, mw="requireLogin, adminOnly, ", path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught once: on an admin path it is this finding, not the one for a path where nothing is asked":
+        (_js(f"  if (req.cookies.admin !== 'true') {NO}" + LIST, path="/admin/users"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: also where nobody has to be signed in":
+        (_js(f"  if (req.cookies.admin !== 'true') {NO}" + LIST, mw="", path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "clean: the role is the session's":
+        (_js(f"  if (req.session.role !== 'admin') {NO}" + LIST, path="/reports"), []),
+    "clean: a cookie the server signed":
+        (_js(f"  if (req.signedCookies.role !== 'admin') {NO}" + LIST, path="/reports"), []),
+    "clean: a token the server checks first":
+        ("const jwt = require('jsonwebtoken')\n" +
+         _js("  const claims = jwt.verify(req.cookies.token, process.env.JWT_SECRET)\n"
+             f"  if (claims.role !== 'admin') {NO}" + LIST, path="/reports"), []),
+    "clean: a role in the address picks which list is shown":
+        (_js("  res.json(await User.find({ role: req.query.role }))\n", path="/people"), []),
+    "clean: a role in the address, in a condition, is still a filter":
+        (_js("  const list = req.query.role === 'admin' ? await User.find({ role: 'admin' }) : await User.find()\n"
+             "  res.json(list)\n", path="/people"), []),
+    "clean: the signed-in person's role is asked as well":
+        (_js(f"  if (req.session.role !== 'admin') {NO}  if (req.cookies.admin === 'compact') return res.json([])\n"
+             + LIST, path="/reports"), []),
+    "clean: a secret the caller must know is not a claim":
+        (_js(f"  if (req.headers['x-api-key'] !== process.env.REPORTS_KEY) {NO}" + LIST, path="/reports"), []),
+    "clean: a cookie that keeps a choice of the screen":
+        (_js("  if (req.cookies.theme === 'dark') res.set('X-Theme', 'dark')\n"
+             "  if (req.cookies.tab === 'admin') res.set('X-Tab', 'admin')\n" + LIST, path="/people"), []),
+    "caught: looked up in a list of roles":
+        (_js(f"  if (!['admin', 'staff'].includes(req.cookies.role)) {NO}" + LIST, path="/reports"),
+         ["LT-AUTHZ-CLIENT-ROLE"]),
+    "clean: looked up in a list of screens":
+        (_js("  if (!['grid', 'list'].includes(req.cookies.view)) return res.status(400).end()\n" + LIST,
+             path="/people"), []),
+    "caught: a header read with req.get":
+        (_js(f"  if (req.get('X-Admin') !== 'yes') {NO}" + LIST, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: taken out of the cookies by name":
+        (_js(f"  const {{ admin }} = req.cookies\n  if (admin !== 'true') {NO}" + LIST, path="/reports"),
+         ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: the role cookie under another spelling":
+        (_js(f"  if (req.cookies.userRole !== 'ADMIN') {NO}" + LIST, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: decided in one expression":
+        (_js("  const list = req.cookies.isAdmin === 'true' ? await User.find() : []\n  res.json(list)\n",
+             path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: written in the body, and the request is turned away without it":
+        (_js(f"  if (!req.body.admin) {NO}" + LIST, path="/reports", verb="post"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: written in the address, and the other branch turns the request away":
+        (_js("  if (req.query.admin === '1') {\n  " + LIST + "  } else {\n    res.status(403).end()\n  }\n",
+             path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "clean: the address says admin and the request is turned away for it":
+        (_js(f"  if (req.query.admin) {NO}" + LIST, path="/reports"), []),
+    "clean: a word in the address picks a filter":
+        (_js("  let q = {}\n  if (req.query.admin === '1') q = { admin: true }\n  res.json(await User.find(q))\n",
+             path="/people"), []),
+    "clean: a cookie named admin compared with a secret of the server's":
+        (_js(f"  if (req.cookies.admin !== process.env.ADMIN_COOKIE) {NO}" + LIST, path="/reports"), []),
+    "clean: whether any cookie came at all":
+        (_js("  if (!req.cookies) return res.status(400).end()\n" + LIST, path="/people"), []),
+    "clean: a role in the body that the sign-up page refuses":
+        (_js("  if (req.body.role === 'admin') return res.status(403).end()\n"
+             "  res.json(await User.create({ name: req.body.name }))\n", path="/people", verb="post", mw=""), []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(JS_CLIENT))
+def test_express_a_visitor_who_says_they_are_an_admin(tmp_path, case):
+    body, want = JS_CLIENT[case]
+    fs = _scan(tmp_path, {"server.js": JS + body, "models.js": JS_MODELS}, project={"package.json": PACKAGE})
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+NAMES = "    return jsonify([u.name for u in User.query.all()])\n"
+FLASK_CLIENT = {
+    "caught: a cookie that says admin":
+        ("@app.get('/reports')\n@login_required\ndef reports():\n"
+         "    if request.cookies.get('admin') != '1':\n        abort(403)\n" + NAMES, ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: a header that names the role":
+        ("@app.get('/reports')\n@login_required\ndef reports():\n"
+         "    if request.headers.get('X-Role') != 'admin':\n        abort(403)\n" + NAMES, ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: written in the address, and only asked whether it is there":
+        ("@app.get('/reports')\n@login_required\ndef reports():\n"
+         "    if not request.args.get('admin'):\n        abort(403)\n" + NAMES, ["LT-AUTHZ-CLIENT-ROLE"]),
+    "clean: the session says it":
+        ("from flask import session\n\n\n@app.get('/reports')\n@login_required\ndef reports():\n"
+         "    if session.get('role') != 'admin':\n        abort(403)\n" + NAMES, []),
+    "clean: the signed-in person is asked":
+        ("@app.get('/reports')\n@login_required\ndef reports():\n"
+         "    if not current_user.is_admin:\n        abort(403)\n" + NAMES, []),
+    "clean: a page number in the address":
+        ("@app.get('/reports')\n@login_required\ndef reports():\n"
+         "    if not request.args.get('page'):\n        abort(400)\n" + NAMES, []),
+    "caught: not among the roles in a tuple":
+        ("@app.get('/reports')\n@login_required\ndef reports():\n"
+         "    if request.cookies.get('role') not in ('admin', 'staff'):\n        abort(403)\n" + NAMES,
+         ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: asked by a decorator of the project's own":
+        ("from functools import wraps\n\n\ndef admin_cookie(view):\n    @wraps(view)\n    def inner(*a, **kw):\n"
+         "        if request.cookies.get('admin') != '1':\n            abort(403)\n        return view(*a, **kw)\n"
+         "    return inner\n\n\n@app.get('/reports')\n@login_required\n@admin_cookie\ndef reports():\n" + NAMES,
+         ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: asked in a hook that runs before every route":
+        ("@app.before_request\ndef gate():\n    if request.path.startswith('/reports') and "
+         "request.headers.get('X-Admin') != '1':\n        abort(403)\n\n\n"
+         "@app.get('/reports')\n@login_required\ndef reports():\n" + NAMES, ["LT-AUTHZ-CLIENT-ROLE"]),
+    "clean: a cookie compared with a setting of the app":
+        ("@app.get('/reports')\n@login_required\ndef reports():\n"
+         "    if request.cookies.get('admin') != app.config['ADMIN_COOKIE']:\n        abort(403)\n" + NAMES, []),
+    "clean: a word in the address picks a filter":
+        ("@app.get('/reports')\n@login_required\ndef reports():\n"
+         "    q = User.query\n    if request.args.get('admin'):\n        q = q.filter_by(admin=True)\n"
+         "    return jsonify([u.name for u in q.all()])\n", []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FLASK_CLIENT))
+def test_flask_a_visitor_who_says_they_are_an_admin(tmp_path, case):
+    body, want = FLASK_CLIENT[case]
+    fs = _scan(tmp_path, {"app/main.py": FLASK + body}, project=FLASK_PROJECT)
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+EVERYONE = "    return db.execute('SELECT id, email FROM users').fetchall()\n"
+SIGNED = "user=Depends(get_current_user), db=Depends(get_db)"
+FASTAPI_CLIENT = {
+    "caught: a cookie handed in as a parameter":
+        ("from fastapi import Cookie\n\n\n" + _route(
+            "    if is_admin != '1':\n        raise HTTPException(403)\n" + EVERYONE,
+            sig="is_admin: str = Cookie('0'), " + SIGNED, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: a header handed in as a parameter":
+        (_route("    if x_role != 'admin':\n        raise HTTPException(403)\n" + EVERYONE,
+                sig="x_role: str = Header(None), " + SIGNED, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "caught: a yes or no in the address":
+        (_route("    if not admin:\n        raise HTTPException(403)\n" + EVERYONE,
+                sig="admin: bool = False, " + SIGNED, path="/reports"), ["LT-AUTHZ-CLIENT-ROLE"]),
+    "clean: the signed-in person is asked":
+        (_route("    if not user['is_admin']:\n        raise HTTPException(403)\n" + EVERYONE, sig=SIGNED,
+                path="/reports"), []),
+    "clean: a yes or no in the address that picks what is listed":
+        (_route("    if active:\n        return db.execute('SELECT id FROM users WHERE active = 1').fetchall()\n"
+                + EVERYONE, sig="active: bool = False, " + SIGNED, path="/people"), []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FASTAPI_CLIENT))
+def test_fastapi_a_visitor_who_says_they_are_an_admin(tmp_path, case):
+    body, want = FASTAPI_CLIENT[case]
+    fs = _scan(tmp_path, {"app/main.py": FASTAPI + body})
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+def test_the_finding_names_the_value_the_visitor_sends_and_where_it_is_read(tmp_path):
+    body = (f"function adminOnly (req, res, next) {{\n  if (req.cookies.admin !== 'true') {NO}  next()\n}}\n" +
+            _js(LIST, mw="requireLogin, adminOnly, ", path="/reports") +
+            _js(LIST, mw="requireLogin, adminOnly, ", path="/exports"))
+    fs = _scan(tmp_path, {"server.js": JS + body, "models.js": JS_MODELS}, project={"package.json": PACKAGE})
+    (f,) = [f for f in fs if f["rule"] == "LT-AUTHZ-CLIENT-ROLE"]          # one place, two routes: one finding
+    assert (f["file"], f["line"]) == ("server.js", JS_AT + 1)               # where the cookie is read
+    assert f["title"] == ("GET /exports and 1 more route decide what the caller may do from a cookie the caller "
+                          "sends (`admin`)"), f["title"]
+    assert (f["tool_confidence"], f["rank"], f["cwe"], f["tool"]) == ("LOW", "medium", 807, "lantern-flow")
+    assert f["headline"] == "A visitor can say they are an admin"
+    assert "GET /reports" in f["more_info"] and "GET /exports" in f["more_info"]
+
+
+# ------------------------------------------------------------- the id of a record inside a body described by a class
+PICK = "from pydantic import BaseModel\n\n\nclass Pick(BaseModel):\n    order_id: int\n    note: str = ''\n\n\n"
+SHOW = dict(sig="pick: Pick, user=Depends(get_current_user), db=Depends(get_db)", verb="post", path="/orders/show")
+BODY_CLASS = {
+    "caught: the order's id is a field of the body":
+        (PICK + _route(f"    return db.execute('{ONE}', (pick.order_id,)).fetchone()\n", **SHOW), ["LT-AUTHZ-OWNER"]),
+    "clean: the query asks for the caller's own order":
+        (PICK + _route(f"    return db.execute('{MINE}', (pick.order_id, user['id'])).fetchone()\n", **SHOW), []),
+    "clean: a note in the body picks no one's record":
+        (PICK + _route("    return db.execute('SELECT * FROM orders WHERE note = ?', (pick.note,)).fetchall()\n",
+                       **SHOW), []),
+    "caught: the parameter is named req":
+        (PICK + _route(f"    return db.execute('{ONE}', (req.order_id,)).fetchone()\n",
+                       **dict(SHOW, sig="req: Pick, user=Depends(get_current_user), db=Depends(get_db)")),
+         ["LT-AUTHZ-OWNER"]),
+    "caught: a base class of the project's own in between":
+        ("from pydantic import BaseModel\n\n\nclass Strict(BaseModel):\n    pass\n\n\nclass Pick(Strict):\n"
+         "    order_id: int\n\n\n" + _route(f"    return db.execute('{ONE}', (pick.order_id,)).fetchone()\n", **SHOW),
+         ["LT-AUTHZ-OWNER"]),
+    "caught: the order is removed by the id in the body":
+        (PICK + _route("    db.execute('DELETE FROM orders WHERE id = ?', (pick.order_id,))\n    return {'ok': True}\n",
+                       **SHOW), ["LT-AUTHZ-OWNER"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(BODY_CLASS))
+def test_a_record_picked_by_an_id_in_a_body_class(tmp_path, case):
+    body, want = BODY_CLASS[case]
+    fs = _scan(tmp_path, {"app/main.py": FASTAPI + body})
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+def test_a_body_class_kept_in_another_file(tmp_path):
+    fs = _scan(tmp_path, {"app/schemas.py": PICK,
+                          "app/main.py": FASTAPI + "from . import schemas\nfrom .schemas import Pick\n\n\n" + _route(
+                              f"    return db.execute('{ONE}', (pick.order_id,)).fetchone()\n", **SHOW) + "\n\n" + _route(
+                              f"    return db.execute('{ONE}', (pick.order_id,)).fetchone()\n",
+                              **dict(SHOW, sig="pick: schemas.Pick, user=Depends(get_current_user), db=Depends(get_db)",
+                                     path="/orders/peek")).replace("def handle", "def peek")})
+    assert _authz(fs) == ["LT-AUTHZ-OWNER", "LT-AUTHZ-OWNER"], [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+# ------------------------------------------------------------- a helper that changes a record and only then checks
+# What a route asked before a record is changed or removed is what counts; that holds inside a function the route
+# calls as it does in the route's own lines.
+GONE = "    db.execute('DELETE FROM orders WHERE id = ?', (oid,))\n    db.commit()\n"
+READ_ROW = f"    row = db.execute('{ONE}', (oid,)).fetchone()\n"
+NOT_MINE = "    if row is None or row['user_id'] != user['id']:\n        raise HTTPException(403)\n"
+CALLS = _route("    remove(db, order_id, user)\n    return {'ok': True}\n", verb="delete")
+LATE = {
+    "caught: the helper removes the order and only then compares its owner":
+        ("def remove(db, oid, user):\n" + READ_ROW + GONE + NOT_MINE + "\n\n" + CALLS, ["LT-AUTHZ-OWNER"]),
+    "clean: the helper compares the owner, then removes the order":
+        ("def remove(db, oid, user):\n" + READ_ROW + NOT_MINE + GONE + "\n\n" + CALLS, []),
+    "caught: two helpers deep, the inner one removes and the outer one compares afterwards":
+        ("def drop(db, oid):\n" + GONE + "\n\ndef remove(db, oid, user):\n" + READ_ROW + "    drop(db, oid)\n" +
+         NOT_MINE + "\n\n" + CALLS, ["LT-AUTHZ-OWNER"]),
+    "clean: two helpers deep, the outer one compares first":
+        ("def drop(db, oid):\n" + GONE + "\n\ndef remove(db, oid, user):\n" + READ_ROW + NOT_MINE +
+         "    drop(db, oid)\n\n\n" + CALLS, []),
+    "caught: the route compares only after the helper has removed the order":
+        ("def drop(db, oid):\n" + GONE + "\n\n" + _route(
+            f"    row = db.execute('{ONE}', (order_id,)).fetchone()\n    drop(db, order_id)\n"
+            "    if row is None or row['user_id'] != user['id']:\n        raise HTTPException(403)\n"
+            "    return {'ok': True}\n", verb="delete"), ["LT-AUTHZ-OWNER"]),
+    "clean: the route compares, then the helper removes":
+        ("def drop(db, oid):\n" + GONE + "\n\n" + _route(
+            f"    row = db.execute('{ONE}', (order_id,)).fetchone()\n"
+            "    if row is None or row['user_id'] != user['id']:\n        raise HTTPException(403)\n"
+            "    drop(db, order_id)\n    return {'ok': True}\n", verb="delete"), []),
+    "caught: one helper checks, but it is called after the one that removes":
+        ("def drop(db, oid):\n" + GONE + "\n\ndef mine(db, oid, user):\n" + READ_ROW + NOT_MINE + "\n\n" + _route(
+            "    drop(db, order_id)\n    mine(db, order_id, user)\n    return {'ok': True}\n", verb="delete"),
+         ["LT-AUTHZ-OWNER"]),
+    "clean: the helper that checks is called first":
+        ("def drop(db, oid):\n" + GONE + "\n\ndef mine(db, oid, user):\n" + READ_ROW + NOT_MINE + "\n\n" + _route(
+            "    mine(db, order_id, user)\n    drop(db, order_id)\n    return {'ok': True}\n", verb="delete"), []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(LATE))
+def test_what_was_asked_before_a_helper_changed_the_record(tmp_path, case):
+    body, want = LATE[case]
+    fs = _scan(tmp_path, {"app/main.py": FASTAPI + body})
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+JS_GONE = "  await Order.deleteOne({ _id: id })\n"
+JS_NOT_MINE = "  if (!order || String(order.user) !== String(user.id)) throw new Error('not yours')\n"
+JS_CALLS = _js("  await remove(req.params.id, req.user)\n  res.status(204).end()\n", verb="delete")
+JS_LATE = {
+    "caught: the helper removes the order and only then compares its owner":
+        ("async function remove (id, user) {\n  const order = await Order.findById(id)\n" + JS_GONE + JS_NOT_MINE +
+         "}\n" + JS_CALLS, ["LT-AUTHZ-OWNER"]),
+    "clean: the helper compares the owner, then removes the order":
+        ("async function remove (id, user) {\n  const order = await Order.findById(id)\n" + JS_NOT_MINE + JS_GONE +
+         "}\n" + JS_CALLS, []),
+    "caught: the helper reads the request itself, removes, then compares":
+        ("async function remove (req) {\n  const order = await Order.findById(req.params.id)\n"
+         "  await Order.deleteOne({ _id: req.params.id })\n"
+         "  if (!order || order.user !== req.session.userId) throw new Error('not yours')\n}\n" +
+         _js("  await remove(req)\n  res.status(204).end()\n", verb="delete"), ["LT-AUTHZ-OWNER"]),
+    "clean: the helper reads the request itself, compares, then removes":
+        ("async function remove (req) {\n  const order = await Order.findById(req.params.id)\n"
+         "  if (!order || order.user !== req.session.userId) throw new Error('not yours')\n"
+         "  await Order.deleteOne({ _id: req.params.id })\n}\n" +
+         _js("  await remove(req)\n  res.status(204).end()\n", verb="delete"), []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(JS_LATE))
+def test_express_what_was_asked_before_a_helper_changed_the_record(tmp_path, case):
+    body, want = JS_LATE[case]
+    fs = _scan(tmp_path, {"server.js": JS + body, "models.js": JS_MODELS}, project={"package.json": PACKAGE})
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]

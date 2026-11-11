@@ -679,7 +679,7 @@ def rank_reason(f: dict) -> str:
     if f.get("in_tests") and f.get("category") == "code":
         return "Test code: your users do not run it, so it is ranked low and counted apart."
     if f.get("fixed_rank"):
-        return f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it."
+        return f.get("fixed_why") or f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it."
     sev = f.get("tool_severity")
     reach = f.get("reachable")
     untrusted = reach and reach["kind"] in UNTRUSTED_ENTRY_KINDS

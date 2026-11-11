@@ -217,6 +217,17 @@ def build(f: dict, g: Graph) -> dict:
                                     "the functions it calls that Lantern read"))
             unknown.append("a check that covers the whole app from a place Lantern does not connect to this route "
                            "(a proxy, middleware added for every route) may still ask for an admin")
+        elif kind == "client-role":
+            c = f.get("claim") or {}
+            conditions.append(_cond("Whoever sends the request writes the value the route decides on", True,
+                                    f"it is read from {c.get('sent_as') or 'the request'}: {c.get('what') or 'not kept'}"))
+            conditions.append(_cond("Nothing asks what the signed-in person may do", True,
+                                    "no role or permission of the signed-in person is asked on these routes, in what "
+                                    "runs before them, or in the functions they call that Lantern read"))
+            conditions.append(_cond("The decision gives something only some people may have", None,
+                                    "taken from the value's name; Lantern does not know what the branch protects"))
+            unknown.append("a proxy in front of the app may write this value itself and remove the visitor's own, "
+                           "and a value may be signed and checked in code Lantern did not connect to this line")
         elif kind == "mass-assign":
             conditions.append(_cond("The record has a field a visitor must not set", None,
                                     "Lantern does not read which fields the record has"))

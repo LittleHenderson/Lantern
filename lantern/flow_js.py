@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 
 from .flow import Fn, Mod, N, P
+from .flow_rules import Pattern
 
 FUNCS = {"arrow_function", "function_expression", "function", "generator_function"}
 FUNC_DECLS = {"function_declaration", "generator_function_declaration"}
@@ -246,6 +247,13 @@ class _Reader:
 
     def klass(self, n, name: str) -> None:
         self.mod.names.setdefault(name, None)
+        for h in n.named_children:              # class Paged extends Search
+            if h.type == "class_heritage":
+                x = h
+                while x is not None and x.type not in ("identifier", "member_expression"):
+                    x = next((c for c in x.named_children if c.type != "type_arguments"), None)
+                if x is not None:
+                    self.mod.bases[name] = [self.text(x)]
         body = n.child_by_field_name("body")
         for c in (body.named_children if body is not None else ()):
             if c.type == "method_definition":
@@ -579,7 +587,9 @@ class _Reader:
             pat, flags = n.child_by_field_name("pattern"), n.child_by_field_name("flags")
             if flags is not None and "m" in self.text(flags):      # with /m, ^ and $ bound a line, not the value
                 return N("unk", ln, items=[])
-            return N("regex", ln, a=self.text(pat))
+            text = Pattern(self.text(pat))
+            text.flags = self.text(flags) if flags is not None else ""
+            return N("regex", ln, a=text)
         if t == "member_expression":
             return N("attr", ln, a=self.expr(n.child_by_field_name("object"), cls),
                      name=self.text(n.child_by_field_name("property")).lstrip("#"))

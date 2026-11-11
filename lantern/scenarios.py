@@ -116,6 +116,12 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
              "not that they are an admin.",
              "The route first asks whether the signed-in person is an admin, and answers \"not allowed\" "
              "otherwise."),
+    "client-role": (None,
+                    "The server takes their word for it. It reads that value from the request, finds what it was "
+                    "looking for, and does what it only does for an admin. Nothing they wrote was checked against "
+                    "who they are.",
+                    "What a person may do is read from the server's own record of who is signed in (the session, a "
+                    "token the server checks, the database), never from a value the request carries in the open."),
     "mass-assign": ('"is_admin": true',
                     "The server writes every field it was sent onto the record, including ones your form never "
                     "offered. They can make themselves an admin, or change a price, a balance or an owner.",
@@ -306,7 +312,7 @@ RULE_KIND = {
     "LT-SQL": "sql", "LT-SHELL": "shell", "LT-EVAL": "eval", "LT-XSS": "xss", "LT-DESERIALIZE": "deserialize",
     "LT-PATH": "path", "LT-SSRF": "ssrf", "LT-REDIRECT": "redirect", "LT-NOSQL": "nosql", "LT-XXE": "xxe",
     "LT-POLLUTION": "pollution", "LT-AUTHZ-OWNER": "owner", "LT-AUTHZ-ROLE": "role",
-    "LT-AUTHZ-MASS-ASSIGN": "mass-assign",
+    "LT-AUTHZ-MASS-ASSIGN": "mass-assign", "LT-AUTHZ-CLIENT-ROLE": "client-role",
     "LM-EXPORTED": "android-exported", "LM-BACKUP": "android-backup", "LM-DEBUGGABLE": "android-debuggable",
     "LM-RELEASE-DEBUGGABLE": "android-debuggable", "LM-LOG-SENSITIVE": "android-log", "LM-CLEARTEXT": "cleartext",
     "LM-CLEARTEXT-URL": "cleartext", "LM-USER-CERTS": "tls-off", "LM-TLS-OFF": "tls-off",
@@ -378,7 +384,8 @@ CWE_KIND = {78: "shell", 77: "shell", 89: "sql", 79: "xss", 94: "eval", 95: "eva
             327: "weak-hash", 328: "weak-hash", 916: "weak-hash", 295: "tls-off", 798: "secret", 259: "secret",
             306: "auth", 862: "auth", 942: "cors", 346: "cors", 770: "wallet", 489: "debug", 215: "debug",
             922: "token-storage", 242: "unsafe", 703: "assert", 22: "path", 918: "ssrf", 601: "redirect",
-            943: "nosql", 611: "xxe", 1321: "pollution", 639: "owner", 285: "role", 915: "mass-assign"}
+            943: "nosql", 611: "xxe", 1321: "pollution", 639: "owner", 285: "role", 915: "mass-assign",
+            807: "client-role"}
 
 # Kinds where what the person types is the whole point (the rest are about who can reach it or what leaks).
 TYPED = {"shell", "sql", "xss", "eval", "model-to-tool", "prompt", "path", "ssrf", "redirect", "nosql", "xxe",
@@ -553,6 +560,13 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                              "request is read (" + str(f["flow"]["source"]["what"]) + ")")
         elif kind == "role":
             steps.append("They are signed in with an ordinary account, not an admin's.")
+        elif kind == "client-role":
+            c = f.get("claim") or {}
+            steps.append("They are not an admin. Before the request leaves their computer they change "
+                         f"{c.get('sent_as') or 'a value it carries'} so that it says they are one. A browser's own "
+                         "tools can do that; no password is needed.")
+            if c.get("what"):
+                basis.append("the value the route decides on is read from the request (" + str(c["what"]) + ")")
         if typed and kind in TYPED:
             if f.get("input"):
                 if _from_another_app(route, rkind) and route.startswith("LINK "):
@@ -655,6 +669,7 @@ FIXED_HEADLINES = {
     "subprocess-note": "This file starts other programs (a note, not a problem)",
     "owner": "A signed-in person may be able to reach other people's records",
     "role": "An admin route may not ask for an admin",
+    "client-role": "A visitor can say they are an admin",
 }
 
 

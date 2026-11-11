@@ -116,11 +116,18 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
 
 * Node: `id`, `kind` (`module`|`class`|`callable`|`external`), `name`, `qualname`, `file`, `start_line`, `end_line`,
   `parent`, `signature`, `docstring`, `decorators`, `entry` (null or `{"kind": "page"|"route"|"main"|"cli"|"script"|"test",
-  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?, "middleware"?: [node ids]}`
+  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?, "middleware"?: [node ids],
+  "use"?: [{"id", "file", "line"}]}`
   (`middleware`: an Express route's own middleware, in order, e.g. `router.delete('/x', requireLogin, h)`: node ids,
   or the `ext:` name of a library's function or of one imported from a file that is not in the repo
   (`ext:./mw/guards.requireLogin`, for which no node exists); the login check reads each one's own name, what
-  follows the last `.` and `/`. An entry is only ever on a function of the repo: a route whose handler is a
+  follows the last `.` and `/`. `use`: the middleware Express runs before the route because it was put on the app or
+  on a router with `use` (`app.use(requireLogin)`, `app.use('/admin', requireAdmin)`, `router.use(mw)`,
+  `app.use('/api', mw, router)`), outermost first, each with the place it was put on; only what the code shows comes
+  first is listed: written on an earlier line of the same file and function as the route or as the router's mount, on
+  a path that covers the route's, and in front of every mount of a router that is mounted more than once. A router, an
+  error handler (four parameters), a class and Passport's reading of the session are no such middleware. No edge and
+  no call site is added for it; the login check and the flow step read it. An entry is only ever on a function of the repo: a route whose handler is a
   library's function, or comes from a file that is not there, marks no node); an HTML page with script inside it is
   a `page` entry whose `detail` is the file path, and its functions are `js:<path>.html::<name>` with the page's own
   line numbers), `lane` (the stack strip stop the
@@ -296,12 +303,32 @@ tool made on the same line), `not_followed_further` (calls where a value that st
 to code Lantern does not read)`}`; `partial` when a file could not be read, a function could not be followed or the
 time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
 `LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
-(22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and three about
+(22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and four about
 who may reach what, always `tool_confidence: LOW` and rank `medium`: `LT-AUTHZ-OWNER` (639: a route with a login
-reaches a record by an id from the request, and nothing compares the record's owner with who is signed in; `line` is
-the route's own line, `flow.sink` the look-up), `LT-AUTHZ-ROLE` (285: an admin route with a login where nothing asks
-for an admin; no `flow`) and `LT-AUTHZ-MASS-ASSIGN` (915: everything the request sent is written onto a stored
-record). A route with no sign of a login gets none of the three: that is `LW-AUTH-MISSING`'s business.
+reaches a record by an id from the request, and nothing compares the record's owner with who is signed in; for a
+record that is changed or removed only what was asked before the change counts, also when the change is made by a
+helper; `line` is the route's own line, `flow.sink` the look-up), `LT-AUTHZ-ROLE` (285: an admin route with a login
+where nothing asks for an admin; no `flow`), `LT-AUTHZ-MASS-ASSIGN` (915: everything the request sent is written
+onto a stored record) and `LT-AUTHZ-CLIENT-ROLE` (807: a route decides what the caller may do on a value the caller
+writes, a cookie, a header, a word in the address or the body named like a role or an admin flag, and nothing on the
+route asks for a role the server keeps; one finding per place the value is read, `line` is that line, `claim` names
+the value and the routes; no `flow`; made with or without a login on the route). A route with no sign of a login
+gets none of the first three. `LW-AUTH-MISSING` says so instead: `lantern-web` makes it for a route the project's
+own frontend calls, and the flow step makes it (`tool: "lantern-flow"`, with a `flow` to the record) for any other
+route that changes or removes a record picked by an id from the request; a route made to be open (sign-in, a
+webhook) gets none, and a route gets the finding once.
+
+Two rules of `lantern-web` rest on the same step. `LW-XSS-RAW` (79, `tool_confidence: LOW`): a place in a page
+template that prints a value without escaping it (EJS `<%- x %>`, Handlebars and Mustache `{{{x}}}` / `{{& x}}`, Pug
+`!{x}` / `!=`, Jinja, Django, Nunjucks and Twig `|safe`, `|raw`, `{% autoescape off %}`; `lantern/templates.py`).
+Its rank is what Lantern knows of the value: request data followed from a route into that place has the `flow` and
+ranks like any flow into a page (`medium` when a step of the flow is only a likely link); when every place Lantern found that shows the page hands it fixed text, a number or
+a value made safe for a page, the rank is `low`; anything else is `medium`; `fixed_why` says which in a sentence.
+`LW-SECRET-INLINE` (798): a secret written in JS/TS, Python or a JSON settings file, one finding per line, rank
+`medium`, `secret_kind` `signing` (the text that signs sessions or login tokens), `default` (a signing secret that
+falls back to text in the code when the setting is missing), `password` (the password of an account the app
+connects with) or `address` (a database address that carries its password); the `snippet` has `[redacted]` in the
+secret's place and no field repeats the text.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -329,7 +356,7 @@ page), `<Component> screen · <Component>` or `· /<expo router path>` (React Na
 <fn>` (route). Readiness `shape` is `"Flutter app"` or `"React Native app"` for these.
 
 Finding: `id` (stable across moves: tool, rule, file and the flagged line's text), `tool` (`bandit`, `pip-audit`,
-`npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
+`lantern-flow`, `npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
 (`LOW` = show "heuristic"), `file`, `line`, `cwe`, `more_info`, `snippet`, `category`, `in_tests`, `node`,
 `reachable` (null or `{"entry", "kind", "path": [node ids]}`), `reachable_from_tests_only`, `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`; when a flow was followed to the line,
@@ -340,7 +367,11 @@ kind of problem on the same line: `{"class"` (`sql`, `shell`, `eval`, `deseriali
 `"severity"`, `"source": {file, line, what}`, `"sink": {file, line, what}`, `"steps": [{file, line, what}]` (from the
 request to the sensitive action, in order; `what` is a sentence with code names between backticks), `"others"` (up to
 five other starting points that reach the same line), `"count"}`; the viewer's box "How the value gets there" lists
-the steps, every value escaped), `rank` (`critical`|`high`|`medium`|`low`),
+the steps, every value escaped), `claim` (`LT-AUTHZ-CLIENT-ROLE` only: `{"name"` (the cookie, header or field as
+the code reads it), `"sent_as"` (`a cookie`, `a header`, `the address`, `the request's body`), `"what"` (a sentence:
+where the value arrives), `"routes"` (the routes that decide on it)`}`), `secret_kind` (`LW-SECRET-INLINE` only),
+`fixed_why` (optional, on a rule Lantern gives one rank whatever reaches it: the sentence shown as the reason for
+the rank, `case.severity.why`), `rank` (`critical`|`high`|`medium`|`low`),
 `context` (optional, `context.py`, read from names around the line: `{"hash": {"purpose": "security"|"non-security"|"unknown", "why", "password", "reads"}}`
 for weak-hash rules, `{"sql": {"fixed_only", "spliced": [{"expr", "fixed", "why"}], "driver_params", "reads"}}` for Python SQL,
 `{"fixed": {"class": "sql"|"shell", "function", "calls": [{"from", "file", "line"}], "count"}}` when a tool flagged a query or a command, no flow

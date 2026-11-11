@@ -9,7 +9,12 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
   LW-CORS-ANY        CORS allows every origin (worse with credentials)
   LW-DB-OPEN         Firebase/Firestore rules that let anyone read or write
   LW-NO-RLS          Supabase table created without row-level security
-  LW-AUTH-MISSING    route that changes data, called by the UI, with no login check found
+  LW-AUTH-MISSING    route that changes data, called by the UI, with no login check found (flowscan.py makes the
+                     same finding for a route nothing calls that changes or removes a record picked by an id)
+  LW-XSS-RAW         a place in a page template that prints a value without escaping it (templates.py; ranked by
+                     what the flow step knows of the value)
+  LW-SECRET-INLINE   a signing secret, its fallback for a missing setting, an account's password or a database
+                     address with its password, written in JS/TS, Python or a JSON settings file
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
   LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
@@ -937,6 +942,10 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
         name = _func_name(g, mid).split("(")[0].rsplit(".", 1)[-1].rsplit("/", 1)[-1]
         if auth_word(name, True):
             return f"middleware `{name}`"
+    for u in (n.entry or {}).get("use") or ():   # Express: app.use(requireLogin) written before the route
+        name = _func_name(g, u["id"]).split("(")[0].rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+        if auth_word(name, True):
+            return f"middleware `{name}` put on before this route ({u['file']}:{u['line']})"
     seen, frontier = {n.id}, [n.id]
     for _ in range(depth):
         nxt = []
@@ -1031,9 +1040,250 @@ def missing_auth(g: Graph) -> list[dict]:
     return out
 
 
+# ------------------------------------------------------------- a secret written in the code (LW-SECRET-INLINE)
+# The text that signs sessions and login tokens, the password of an account the app connects with, a database address
+# that carries its password: written out in JS/TS, Python or a JSON settings file. Read from the text with patterns
+# (the name a value is given, the call it is handed to), so a heuristic; keys of a known format are the key patterns'
+# business (`security.SECRET_PATTERNS`, gitleaks), and a line they list is not listed again here.
+SECRET_JSON = re.compile(r"(^|/)config/[^/]+\.json$|(^|/)(config|default|production|development|settings|secrets?)"
+                         r"\.json$")
+SECRET_NOT_CODE = re.compile(r"(^|/)(locales?|i18n|lang|langs|languages|translations?|messages|fixtures|__mocks__|"
+                             r"mocks?|stories|docs?|examples?)/|\.d\.ts$|\.stories\.[jt]sx?$", re.I)
+JS_STR = r"""(?:'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\$\n]|\\.)*)`)"""
+PY_STR = r"""(?:[bBrRuU]{0,2}(?:'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"))"""
+JS_SETTING = (r"(?:process\.env(?:\.\w+|\[\s*[\"']\w+[\"']\s*\])|import\.meta\.env\.\w+|Deno\.env\.get\([^()]*\)|"
+              r"[\w$.]*[cC]onfig[\w$.]*\.get\([^()]*\))")
+JS_DEFAULT = re.compile(JS_SETTING + r"\s*(?:\|\||\?\?)\s*" + JS_STR + r"\s*[,;)}\]]?\s*$")
+JS_DEFAULT_HEAD = re.compile(JS_SETTING + r"\s*(?:\|\||\?\?)\s*" + JS_STR)
+JS_ENV_DEFAULT = re.compile(r"process\.env(?:\.(\w+)|\[\s*[\"'](\w+)[\"']\s*\])\s*(?:\|\||\?\?)\s*" + JS_STR)
+PY_DEFAULT = re.compile(r"(?:os\.environ\.get|os\.getenv|environ\.get|getenv)\(\s*" + PY_STR + r"\s*,\s*" + PY_STR
+                        + r"\s*\)")
+SECRET_CAND = re.compile(r"""(?<![\w$])(?:\[\s*)?(?P<q>["']?)(?P<name>[A-Za-z_$][\w$\-]*)(?P=q)(?:\s*\])?\s*\??"""
+                         r"""(?:\s*:\s*string\s*(?==))?\s*[:=](?![=>])\s*""")
+PY_SECRET_NAME = re.compile(r"(?<![\w.])(?P<name>[A-Za-z_][\w.]*(?:\[\s*[\"'][\w\-]+[\"']\s*\])?)\s*=(?!=)\s*")
+SECRET_WORTH_A_LOOK = re.compile(r"secret|key|pass|pwd", re.I)
+SECRET_FILE_WORTH_A_LOOK = re.compile(r"secret|key|pass|pwd|jwt|cookieParser|hmac|Serializer|Signer|://", re.I)
+KEY_WORDS = {"private", "signing", "sign", "encryption", "hmac", "jwt", "session", "cookie", "token", "master"}
+JS_KEY_CALLS = [(re.compile(r"(?<![\w$.])(?:jwt|jsonwebtoken|JWT|jsonWebToken)\s*\.\s*(?:sign|verify)\s*\("), 1),
+                (re.compile(r"(?<![\w$.])cookieParser\s*\("), 0),
+                (re.compile(r"(?<![\w$])createHmac\s*\("), 1)]
+PY_KEY_CALLS = [(re.compile(r"(?<![\w.])jwt\.(?:encode|decode)\s*\("), 1),
+                (re.compile(r"(?<![\w.])hmac\.new\s*\("), 0),
+                (re.compile(r"(?<![\w.])(?:URLSafeTimedSerializer|URLSafeSerializer|TimestampSigner|Signer|"
+                            r"TimedSerializer)\s*\("), 0)]
+# the call a secret is handed to, a few lines up: there a phrase of several words is a secret too, not a message
+SIGNING_CALL = re.compile(r"(?:[sS]ession\w*|[jJ]wt\w*|JWT|\w*Strategy|NextAuth|[cC]ookie\w*)\s*\(")
+CONNECTION = re.compile(r"(?<![\w$])(?:host|hostname|server|database|dialect|service|connectionString)\s*:|"
+                        r"createConnection|createPool|createTransport|\bnew\s+(?:Pool|Client|Sequelize)\b|"
+                        r"(?<![\w$])auth\s*:\s*\{")
+DB_ADDRESS = re.compile(r"""["'`](?:mongodb(?:\+srv)?|postgres(?:ql)?(?:\+\w+)?|mysql(?:\+\w+)?|mariadb|rediss?|"""
+                        r"""amqps?|mssql)://([^:'"`@/\s${}]+):([^@'"`\s]+)@([^/'"`\s:?]+)""")
+NOT_A_PASSWORD = re.compile(r"[${}<>%]|^(password|passwd|pass|pwd|secret|x{3,}|\*+)$", re.I)
+SECRET_TITLES = {
+    "signing": "A signing secret is written in the code: anyone who can read the code can forge a session or a login "
+               "token; read it from a setting kept outside the code",
+    "default": "A signing secret falls back to text written in the code when the setting is missing, and the app then "
+               "runs with a secret anyone can read; stop with an error instead",
+    "password": "The password of an account the app connects with is written in the code; read it from a setting "
+                "kept outside the code",
+    "address": "A database address that carries its password is written in the code; read it from a setting kept "
+               "outside the code",
+}
+
+
+def _name_words(name: str) -> list[str]:
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", s)
+    return [w.lower() for w in re.split(r"[\s_\-$.]+", s) if w]
+
+
+def secret_name(name: str) -> str | None:
+    """`signing` for a name whose last words say it is a secret or a key that signs (`cookieSecret`, `JWT_SECRET_KEY`,
+    `secretOrKey`, `privateKey`), `password` for one that ends in a word for a password, None for any other
+    (`secretName`, `SECRET_HEADER`, `passwordField`, `apiKey`: the name or place of a secret, or a public key)."""
+    w = _name_words(name)
+    if not w:
+        return None
+    if w[-1] == "secret" or w[-2:] == ["secret", "key"] or w[-3:] in (["secret", "or", "key"],
+                                                                      ["secret", "access", "key"]):
+        return "signing"
+    if len(w) >= 2 and w[-1] == "key" and w[-2] in KEY_WORDS:
+        return "signing"
+    return "password" if w[-1] in ("password", "passwd", "pwd", "pass") else None
+
+
+def _no_secret(name: str, value: str, in_call: bool) -> bool:
+    """A value that is not the secret itself: nothing, the name of a setting, a placeholder, a place (a path, an
+    address), a label that repeats the name, words for a person (`in_call`: the value stands in the call that
+    takes the secret, where a phrase is the secret)."""
+    v = value.strip()
+    if not v or re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", v) or v.startswith(("./", "../", "/", "~/", "-----BEGIN")):
+        return True
+    if re.search(r"^<.*>$|^\{\{.*\}\}$|\$\{|%s|^\*+$|^x{3,}$|^\.{3}$|://", v, re.I) or \
+            re.search(r"\.(pem|key|crt|cer|p12|pfx|json|txt|env)$", v):
+        return True
+    if v[:1].isupper() and v.lower().replace("-", " ").split() == _name_words(name):
+        return True
+    # words for a person: begins with a capital and goes on, or ends like a sentence
+    return not in_call and ((v[:1].isupper() and len(v.split()) >= 2) or v.endswith((".", "!", "?", ":")))
+
+
+def _str_value(m, first: int = 1) -> str:
+    return next((g for g in m.groups()[first - 1:] if g is not None), "")
+
+
+def _args_at(text: str, start: int, limit: int = 4000) -> list[tuple[int, str]]:
+    """(offset, text) of each argument of the call whose opening parenthesis is just before `start`; nothing when the
+    call does not close within `limit` characters."""
+    out, depth, i, begin, n = [], 0, start, start, min(len(text), start + limit)
+    while i < n:
+        c = text[i]
+        if c in "'\"`":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if text[j] == "\\" else 1
+            i = j
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                out.append((begin, text[begin:i]))
+                return out
+            depth -= 1
+        elif c == "," and depth == 0:
+            out.append((begin, text[begin:i]))
+            begin = i + 1
+        i += 1
+    return []
+
+
+def _secrets_in(text: str, js: bool, py: bool) -> dict[int, tuple[str, str, str]]:
+    """{line: (kind, the text itself, confidence)} for one file."""
+    from .security import SECRET_PATTERNS
+    lines = text.splitlines()
+    found: dict[int, tuple[str, str, str]] = {}
+    comment = "#" if py else ("//", "*", "/*")
+
+    def add(ln: int, kind: str, value: str, conf: str) -> None:
+        src = lines[ln - 1] if 0 < ln <= len(lines) else ""
+        if src.lstrip().startswith(comment) or ln in found:
+            return
+        if any(rx.search(src) for _n, rx in SECRET_PATTERNS) or JWT_RE.search(src):
+            return                                          # a key of a known format: listed by its own rule
+        found[ln] = (kind, value, conf)
+
+    string = re.compile(PY_STR if py else JS_STR)
+    whole = re.compile(r"\s*" + string.pattern + r"\s*$")
+    # 1. the call a secret is handed to, with the text written in its place
+    for rx, at in (PY_KEY_CALLS if py else JS_KEY_CALLS if js else ()):
+        for m in rx.finditer(text):
+            args = _args_at(text, m.end())
+            if len(args) <= at:
+                continue
+            off, arg = args[at]
+            ln = _line_of(text, off + len(arg) - len(arg.lstrip()))
+            lit = whole.match(arg)
+            dflt = (PY_DEFAULT.fullmatch(arg.strip()) if py else JS_DEFAULT.fullmatch(arg.strip()))
+            if lit and not _no_secret("secret", _str_value(lit), True):
+                add(ln, "signing", _str_value(lit), "MEDIUM")
+            elif dflt and not _no_secret("secret", _str_value(dflt, 3 if py else 1), True):
+                add(ln, "default", _str_value(dflt, 3 if py else 1), "LOW")
+    # 2. a value given a name that says it is a secret
+    for i, src in enumerate(lines, 1):
+        if not SECRET_WORTH_A_LOOK.search(src):
+            continue
+        if py:      # a plain `NAME = "text"` is Bandit's (B105); only the default for a missing setting is new
+            for m in PY_SECRET_NAME.finditer(src):
+                d = PY_DEFAULT.match(src, m.end())
+                last = re.findall(r"[A-Za-z_]\w*", m.group("name"))
+                if d and last and secret_name(last[-1]) == "signing" and \
+                        not _no_secret(last[-1], _str_value(d, 3), True):
+                    add(i, "default", _str_value(d, 3), "LOW")
+            continue
+        for m in SECRET_CAND.finditer(src):
+            kind = secret_name(m.group("name"))
+            if kind is None:
+                continue
+            around = "\n".join(lines[max(0, i - 7):i - 1]) + "\n" + src[:m.start()]
+            in_call = bool(SIGNING_CALL.search(around))
+            lit = string.match(src, m.end())
+            if lit:
+                value = _str_value(lit)
+                if src[lit.end():].lstrip()[:1] == "+" or _no_secret(m.group("name"), value, in_call):
+                    continue
+                if kind == "password":
+                    if CONNECTION.search("\n".join(lines[max(0, i - 7):i + 6])):
+                        add(i, "password", value, "LOW")
+                else:
+                    add(i, "signing", value, "MEDIUM" if in_call else "LOW")
+            elif kind == "signing":
+                d = JS_DEFAULT_HEAD.match(src, m.end())
+                if d and not _no_secret(m.group("name"), _str_value(d), True):
+                    add(i, "default", _str_value(d), "LOW")
+    # 3. a setting whose own name says it is a secret, read with text for when it is missing
+    for m in (PY_DEFAULT if py else JS_ENV_DEFAULT).finditer(text) if (py or js) else ():
+        setting = (m.group(1) or m.group(2) or "")
+        value = _str_value(m, 3)
+        if secret_name(setting) == "signing" and not _no_secret(setting, value, True):
+            add(_line_of(text, m.start()), "default", value, "LOW")
+    # 4. a database address with the password in it (not one on this computer: a host with a dot)
+    for m in DB_ADDRESS.finditer(text):
+        if "." in m.group(3) and not m.group(3).startswith("127.") and not NOT_A_PASSWORD.search(m.group(2)):
+            add(_line_of(text, m.start()), "address", m.group(2), "MEDIUM")
+    return found
+
+
+def _redacted(src: str, value: str) -> str:
+    """The line with the secret's text taken out: where it stands as a whole string, or between `:` and `@` in an
+    address; the whole line is withheld when neither is found."""
+    out = re.sub(r"(['\"`])" + re.escape(value) + r"\1", r"\1[redacted]\1", src)
+    if out == src:
+        out = src.replace(":" + value + "@", ":[redacted]@")
+    return out.strip() if out != src else "[redacted]"
+
+
+def inline_secrets(repo: Path) -> list[dict]:
+    """LW-SECRET-INLINE: one finding per line, ranked medium, the text itself never repeated in the finding."""
+    out = []
+    for p in _files(repo, JS_EXTS | {".py", ".json"}):
+        rel = p.relative_to(repo).as_posix()
+        if (p.suffix == ".json" and not SECRET_JSON.search(rel)) or SECRET_NOT_CODE.search(rel):
+            continue
+        text = _read(p, repo)
+        if not SECRET_FILE_WORTH_A_LOOK.search(text):
+            continue
+        lines = text.splitlines()
+        for ln, (kind, value, conf) in sorted(_secrets_in(text, p.suffix in JS_EXTS, p.suffix == ".py").items()):
+            f = _finding("LW-SECRET-INLINE", SECRET_TITLES[kind], "HIGH" if kind == "signing" else "MEDIUM", rel, ln,
+                         conf=conf, cwe=798, snippet=_redacted(lines[ln - 1], value), fixed_rank="medium")
+            f["secret_kind"] = kind
+            out.append(f)
+    return out
+
+
+def template_rules(repo: Path) -> list[dict]:
+    """A page template that prints a value without escaping it (LW-XSS-RAW): EJS `<%- x %>`, Handlebars `{{{x}}}`,
+    Pug `!{x}` / `!=`, Jinja, Django, Nunjucks and Twig `{{ x|safe }}` (`lantern/templates.py`). A pattern match on
+    the template's text, so `tool_confidence` LOW and ranked medium whatever reaches it; `flowscan.run` then ranks
+    each place by what the code that shows the page hands it (request data followed there, fixed text, not known)."""
+    from . import templates
+    out = []
+    for rel, raws in templates.index(repo).items():
+        seen = set()
+        for r in raws:
+            if r.line in seen:
+                continue
+            seen.add(r.line)
+            way = r.way.strip("`")
+            out.append(_finding("LW-XSS-RAW", f"Prints a value into the page without escaping it ({way}); let the "
+                                "template escape it unless the app made that HTML itself", "MEDIUM", rel, r.line,
+                                conf="LOW", cwe=79, snippet=r.shown, fixed_rank="medium"))
+    return out
+
+
 def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
-    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
+    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + template_rules(repo) + inline_secrets(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]

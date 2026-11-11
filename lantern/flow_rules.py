@@ -70,6 +70,31 @@ def local_path(prefix) -> bool:
     return isinstance(prefix, str) and len(prefix) > 1 and prefix[0] == "/" and prefix[1] not in "/\\"
 
 
+# ---- the address a request was made to (a redirect to it, or to another path under it, stays on this site)
+# Marks on a value's origin: "redirect:own" = this is that address, its origin or its host; "redirect:base" = it is
+# that address when a page address is read against it (`new URL('/login', req.url)`; Express's `req.url` is a path
+# only, and a path may begin with two slashes). A part read out of the address (a parameter, the path) loses both.
+OWN_MARKS = frozenset({"redirect:own", "redirect:base"})
+OWN_ATTRS = {"origin", "href", "host", "hostname", "protocol", "port", "scheme", "netloc"}
+OWN_KEEP = {"clone", "toString", "toJSON", "valueOf", "strip", "rstrip", "lstrip", "trim", "trimEnd", "lower",
+            "toLowerCase", "casefold"}                  # calls that give the same address back
+PY_OWN = {"url", "base_url", "url_root"}                 # of a Python request: the whole address, host first
+URL_HOST_SET = {"host", "hostname", "href", "port", "protocol", "username", "password"}
+OWN = "\x00own"                    # leading text of a value that starts with this site's own origin
+OWN_EXACT = OWN + "\x00"           # ... and is nothing but that origin: the text glued after it goes on
+
+
+def own_site(prefix) -> bool:
+    """Leading text that is this site's own origin with the host closed: by a slash, a `?` or a `#`."""
+    return isinstance(prefix, str) and prefix.startswith(OWN) and prefix[len(OWN):len(OWN) + 1] in ("/", "?", "#")
+
+
+def stays(prefix) -> bool:
+    """Leading text that says where a redirect goes, whatever follows: a site written in the code, a path on this
+    site, or this site's own origin."""
+    return host_fixed(prefix) or local_path(prefix) or own_site(prefix)
+
+
 # ---------------------------------------------------------------------------------------------- request data
 # Attributes of a request object that hold what the caller sent. `user`, `session`, `app`, `method` are not here.
 PY_INPUT = {"args", "form", "values", "json", "data", "files", "cookies", "headers", "GET", "POST", "FILES", "COOKIES",
@@ -216,7 +241,9 @@ SHELL_PROGRAM = re.compile(r"^(subprocess\.(run|call|check_call|check_output|Pop
                            r"execa|execa\.(execa|execaSync|sync)|cross-spawn|cross-spawn\.(sync|spawn))$")
 EVAL_CALL = re.compile(r"^(eval|exec|compile|__import__|importlib\.import_module|flask\.render_template_string|"
                        r"flask\.templating\.render_template_string|jinja2\.Template|jinja2\.Environment\(\)\.from_string|"
-                       r"jinja2\b.*\.from_string|django\.template\.Template|django\.template\.engines\b.*\.from_string|"
+                       r"jinja2\b(?!\.sandbox\b)(?!.*Sandboxed).*\.from_string|flask\b.*\.jinja_env\.from_string|"
+                       r"django\.template\.Template|django\.template\.engines\b.*\.from_string|"
+                       r"django\.template\.(engine\.)?Engine\b.*\.from_string|django\.template\.base\.Template|"
                        r"mako\.template\.Template|tornado\.template\.Template|"
                        r"Function|new Function|vm\.(runInContext|runInNewContext|runInThisContext|compileFunction|"
                        r"Script)|vm2\b.*\.run|ejs\.(render|compile)|pug\.(render|compile)|"
@@ -253,6 +280,23 @@ PATH_MEMBERS = {"read_text", "read_bytes", "write_text", "write_bytes", "unlink"
                 "download", "sendfile", "createReadStream", "createWriteStream", "readFileSync", "writeFileSync",
                 "readFile", "writeFile", "unlinkSync"}
 PATHLIB_MEMBERS = {"open", "touch", "mkdir", "rename", "replace", "glob", "rglob", "exists", "is_file", "stat"}
+# ---- a page rendered from a template file (`lantern/templates.py` reads what the file prints without escaping)
+RENDER_CALL = re.compile(r"^(flask\.render_template|flask\.templating\.render_template|quart\.render_template|"
+                         r"django\.shortcuts\.render|django\.template\.loader\.render_to_string|"
+                         r"django\.template\.response\.TemplateResponse|"
+                         r"express\.Response\b.*\.render|.*\.TemplateResponse|bottle\.(template|jinja2_template)|"
+                         r"aiohttp_jinja2\.render_template|sanic_jinja2\b.*\.render)$")
+# ---- text saved as a template: a file written into the folder the template engine reads its templates from
+OPEN_CALL = re.compile(r"^(open|io\.open|codecs\.open)$")
+FILE_WRITE = re.compile(r"^(fs|fs/promises|fs-extra|node:fs|node:fs/promises|graceful-fs|fs\.promises)\."
+                        r"(writeFile|writeFileSync|appendFile|appendFileSync|outputFile|outputFileSync)$")
+TEMPLATE_DIR = {"py": re.compile(r"(^|[/\\])(templates?|jinja2?)([/\\]|$)", re.I),
+                "js": re.compile(r"(^|[/\\])(templates?|views)([/\\]|$)", re.I)}
+TEMPLATE_DIR_NAME = {"py": re.compile(r"^templates?$|templates?_?(dir|folder|path|root|base)", re.I),
+                     "js": re.compile(r"^(templates?|views)$|(templates?|views?)_?(dir|folder|path|root|base)", re.I)}
+FILE_EXT = re.compile(r"\.([A-Za-z0-9]{1,10})$")
+TEMPLATE_EXT = {"html", "htm", "xhtml", "jinja", "jinja2", "j2", "tpl", "tmpl", "ejs", "pug", "jade", "hbs",
+                "handlebars", "mustache", "njk", "liquid", "twig", "txt", "xml", "svg", "mako", "eta", "vue"}
 UPLOAD_SAVE = {"save", "mv", "saveAs", "save_to", "transferTo"}
 TAR_EXTRACT = re.compile(r"^tarfile\b.*\.(extractall|extract)$|^shutil\.unpack_archive$")
 SSRF_CALL = re.compile(
@@ -274,6 +318,42 @@ XSS_CALL = re.compile(r"^(django\.http\.(HttpResponse|response\.HttpResponse)|dj
                       r"prepend|after|before)|\$\(\)\.(html|append|prepend|after|before))$")
 XSS_NOT_HTML = re.compile(r"json|text/plain|octet|csv|xml|javascript", re.I)
 XSS_ASSIGN = {"innerHTML", "outerHTML", "srcdoc"}
+# calls on an answer that say what kind of thing it is: `res.type("text/plain")`, `res.set("Content-Type", ...)`
+TYPE_SETTERS = {"type", "contentType", "set", "header", "setHeader", "append", "writeHead"}
+PLAIN_KINDS = {"json", "txt", "text", "plain", "csv", "bin"}        # Express's short names: `res.type("txt")`
+NOT_A_PAGE = re.compile(r"json|text/plain|octet|csv|javascript|^(image|audio|video|font)/(?!svg)|/pdf$|/zip$", re.I)
+
+
+class Pattern(str):
+    """The text of a pattern, with the flags it was written with (`g`: everywhere, not the first match only)."""
+    flags = ""
+
+
+def not_a_page(kind) -> bool | None:
+    """What a content type says: True, a browser does not read it as a page; False, it is one; None, nothing."""
+    if not isinstance(kind, str):
+        return None
+    k = kind.strip().lower()
+    if "html" in k or "svg" in k or "xml" in k:      # SVG and XML can carry script when opened as the page itself
+        return False
+    return True if NOT_A_PAGE.search(k) or k.lstrip(".") in PLAIN_KINDS else None
+
+
+def covers_lt(pattern: str) -> bool:
+    """Whether a pattern stands for `<` by itself, wherever it is in the value: `<`, `[&<>"]`, `<|>`. A pattern
+    that needs something beside the `<` (`\\n.*<`, `<script`) leaves other `<` in place."""
+    p = pattern
+    m = re.fullmatch(r"\((?:\?:)?(.*)\)", p)
+    if m and "(" not in m.group(1) and ")" not in m.group(1):
+        p = m.group(1)
+    if re.fullmatch(r"\[(?!\^)(?:[^\]\\]|\\.)*\]", p):
+        return "<" in p
+    if any(c in p for c in "[]()"):
+        return False
+    return any(part in ("<", "\\<", "\\x3c", "\\x3C", "\\u003c", "\\u003C") for part in p.split("|"))
+
+
+CONSTRUCTORS = {"__init__", "constructor"}
 RESPONSE_NAMES = {"res", "response", "reply", "resp"}
 RESPONSE_SEND = {"send", "write", "end"}
 REDIRECT_CALL = re.compile(r"^(flask\.redirect|werkzeug\.utils\.redirect|django\.shortcuts\.redirect|"
@@ -306,7 +386,7 @@ SAME_PROBLEM = {
     "eval": re.compile(r"^(B102|B307|LJ-EVAL|B701|B702|B703)"),
     "deserialize": re.compile(r"^(B301|B302|B403|B506|B614|LJ-DESERIAL)"),
     "xxe": re.compile(r"^(B31[3-9]|B320|B40[5-9]|B410)"),
-    "xss": re.compile(r"^(LJ-XSS|B308|B703)"),
+    "xss": re.compile(r"^(LJ-XSS|B308|B703|LW-XSS-RAW)"),
     "path": re.compile(r"^(B202)"),
     "ssrf": re.compile(r"^(B310|LW-SSRF)"),
 }
@@ -332,6 +412,8 @@ IP_ALLOW_ATTRS = {"is_global"}              # true: out on the internet
 IP_INSIDE_CALL = re.compile(r"^(ip\.isPrivate|private-ip(\.default)?|is-private-ip|ipaddr(\.js)?\.isPrivate)$")
 IP_OUTSIDE_CALL = re.compile(r"^(ip\.isPublic|is-public-ip)$")
 BLOCK_LIST = re.compile(r"(^|\.)BlockList\(\)$")          # Node's net.BlockList: `.check(address)` true = on the list
+# `.example.com`: a dot, then a name of two labels or more. `.com` alone is every site under it
+OWN_SUFFIX = re.compile(r"^\.[a-z0-9-]+(\.[a-z0-9-]+)+$", re.I)
 KEEP_SUBJECT = {"strip", "lower", "upper", "trim", "toLowerCase", "toUpperCase", "lstrip", "rstrip", "casefold",
                 "toString", "decode", "encode", "trimStart", "trimEnd", "normalize", "title"}
 EXITS = re.compile(r"(^|\.)(abort|exit|_exit|quit|fail|bail|die|reject|notFound|redirect_to_login|throwError)$|"
@@ -440,15 +522,17 @@ def pattern_classes(pat, full: bool) -> frozenset:
 # Heuristics, each finding `tool_confidence: LOW`. "record" and "assign" are kinds of action like the ones above, but
 # no check on the value makes them safe (a number is still someone else's order number), so they are not in ALL.
 AUTHZ = ("record", "assign")
-RULE.update({"record": "LT-AUTHZ-OWNER", "assign": "LT-AUTHZ-MASS-ASSIGN", "role": "LT-AUTHZ-ROLE"})
-SEVERITY.update({"record": "MEDIUM", "assign": "MEDIUM", "role": "MEDIUM"})
-FIXED_RANK.update({"record": "medium", "assign": "medium", "role": "medium"})
-CWE.update({"record": 639, "assign": 915, "role": 285})
+RULE.update({"record": "LT-AUTHZ-OWNER", "assign": "LT-AUTHZ-MASS-ASSIGN", "role": "LT-AUTHZ-ROLE",
+             "client": "LT-AUTHZ-CLIENT-ROLE"})
+SEVERITY.update({"record": "MEDIUM", "assign": "MEDIUM", "role": "MEDIUM", "client": "MEDIUM"})
+FIXED_RANK.update({"record": "medium", "assign": "medium", "role": "medium", "client": "medium"})
+CWE.update({"record": 639, "assign": 915, "role": 285, "client": 807})
 TITLE.update({
     "record": "reaches a record by an id from the request, and nothing compares the record's owner with who is "
               "signed in",
     "assign": "Everything the request sent is written onto a stored record, whatever fields it names",
     "role": "is an admin route, and nothing asks whether the signed-in person is an admin",
+    "client": "what the caller may do from {place} the caller sends (`{name}`)",
 })
 ACTION.update({
     "record": "chooses which record is read or changed",
@@ -526,6 +610,31 @@ AUTHZ_RAISES = re.compile(r"^(authorize|authorise|ensure|require|assert|check|ve
 ROLE_NAME = re.compile(r"admin|superuser|staff|role|permission|authoriz|authoris|scope|acl|rbac|abilit|privilege|"
                        r"owner|owns|polic|(^|[._])can([A-Z_.(]|$)|user_passes_test", re.I)
 ADMIN_PATH = re.compile(r"(^|[/ ])(admin|administrator|superuser|backoffice|back-office)(/|$|[?#.])", re.I)
+# ---- what a visitor may do, decided on a value the visitor writes (LT-AUTHZ-CLIENT-ROLE)
+# The parts of a request a browser sends along by itself: its owner reads and writes them at will. A cookie the server
+# signed (`signedCookies`), the session and a part of the path are not among them.
+CLAIM_HEAD = {"cookies", "COOKIES", "headers", "META"}
+# The parts a page or a form fills in. A value there is counted only under a name that can mean nothing else, and only
+# where the request is turned away without it (`?role=admin` on a list of people is a filter).
+CLAIM_BODY = {"query", "args", "GET", "query_params", "param", "body", "json", "form", "POST", "values"}
+CLAIM_PLACE = {"cookies": "a cookie", "COOKIES": "a cookie", "headers": "a header", "META": "a header",
+               "body": "the request's body", "json": "the request's body", "form": "the request's body",
+               "POST": "the request's body", "values": "the request's body"}       # anything else: the address
+# A name that says "this caller is an admin" (after `X-` and `HTTP_` are taken off and `-` is read as `_`).
+CLIENT_FLAG = re.compile(r"^(is_?)?(admin|administrator|superuser|super_?admin|staff|moderator|root|sudo)$", re.I)
+# A name that says which role the caller has: a claim when it is compared with fixed text that names a role.
+CLIENT_ROLE = re.compile(r"^(user_?)?(role|roles)$|^(user_?type|account_?type|access_?level|privilege|privileges|"
+                         r"permission|permissions|perms|scope|scopes|groups)$", re.I)
+# A name that says who the caller is: a claim when it is compared with exactly a word for an admin.
+CLIENT_PERSON = re.compile(r"^(user|username|user_?name|login|account|level|group|type)$", re.I)
+CLIENT_WORD = re.compile(r"^(admin|administrator|superuser|super_?admin|root|staff|moderator)$", re.I)
+NOT_CLAIMED = {"", "0", "false", "no", "off", "null", "none", "undefined"}     # fixed text that says "not one"
+COMPARED = "cmp"        # on a value that went through a comparison: what the comparison asked has been read off it
+# A branch that turns the request away, by what it answers with or calls.
+REFUSAL = re.compile(r"forbidden|denied|not allowed|unauthori[sz]ed|not authori[sz]ed|admins? only|no access", re.I)
+REFUSAL_CALL = re.compile(r"^(abort|redirect|deny|reject|fail)$|forbidden|unauthori[sz]ed|"
+                          r"permission_?denied|httpexception|notfound", re.I)
+REFUSAL_CODES = {401, 403, 404, "401", "403", "404"}
 # Database text that reads, changes or removes rows that exist (an INSERT makes a new one: nobody else's record)
 RECORD_SQL = re.compile(r"^\W*(select|update|delete|with|replace)\b", re.I)
 SQL_WHERE = re.compile(r"\bwhere\b", re.I)
@@ -566,6 +675,8 @@ OVERLAY_CALL = re.compile(r"^(Object\.assign|lodash\.(assign|assignIn|extend|mer
 # A class a stored record is made from (its bases as written). pydantic's BaseModel checks what it is given: not one.
 MODEL_BASE = re.compile(r"(^|\.)(Model|Base|DeclarativeBase|SQLModel|Document|DynamicDocument|EmbeddedDocument|"
                         r"BaseDocument|Entity|ActiveRecord)$")
+# A class that describes what a request's body must hold (pydantic): a route parameter of such a class is the body.
+BODY_BASE = re.compile(r"(^|\.)(BaseModel|SQLModel|BaseSchema|RootModel)$")
 MODEL_PATH = re.compile(r"(^|[./])(models?|entit(y|ies)|schemas?|db|database)([./]|$)", re.I)
 NOT_RECORD_CLASS = re.compile(r"^(Error|TypeError|RangeError|Date|URL|URLSearchParams|Map|Set|Promise|Buffer|FormData|"
                               r"Headers|Request|Response|Array|Object|RegExp|Blob|File|Event|CustomEvent|Proxy|"

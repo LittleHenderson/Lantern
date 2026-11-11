@@ -5,6 +5,91 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Security: a value that arrives with a request is followed across functions and files to where it does something
+  sensitive, a check counts for what its code proves, and who may reach a record is asked (2026-11-11; point 4 of the
+  2026-11-09 directive, "Trace actual security problems across the whole app"; Python and JavaScript/TypeScript, the
+  other languages keep the one-function reading). Until now "uses input" was read inside one function, in the order
+  the lines are written. A route that hands the request's text to a helper, which hands it to a service, which
+  builds the query, was listed (when a pattern matched the query) with no sign that a visitor chooses the text; a
+  function called `validate`, or `html.escape` in front of a query, was not told from a real check; and a
+  rate-limiting library that was only installed read as a protection "in place".
+  Follow the data (`lantern/flow.py`, `flow_py.py`, `flow_js.py`, `flow_rules.py`, `flowscan.py`): both readers put
+  a file into one small language, so the engine is written once, and nothing of the project is run. A value carries
+  where it came from, for each kind of action whether it was made safe for that action (`html.escape` is safe for a
+  page and for nothing else, `int()` for everything), its leading fixed text (`"https://api.example.com/" + name`
+  does not choose the host) and whether the text reads like SQL. Every function gets a summary (which parameters
+  reach its return value, which reach a sensitive action in it or below it, what its checks prove), callees before
+  callers. A check narrows a value only in the branch that passed it and only before the action; what it proves is
+  read from its code (a look-up in a list the request did not write, a pattern that bounds the whole value, a
+  resolved path that starts with the folder, a host on a list), so a function is a validator for what its body
+  proves, whatever it is called. What a constructor keeps is on the object and read back out of it, field by field;
+  a request body that FastAPI hands over as an object of a class of the project is the request's, field by field.
+  Flows become findings `LT-SQL`, `LT-SHELL`, `LT-EVAL`, `LT-DESERIALIZE`, `LT-XXE`, `LT-PATH`, `LT-SSRF`, `LT-XSS`,
+  `LT-REDIRECT`, `LT-NOSQL` and `LT-POLLUTION`, each with every step (file, line, a sentence); a flow that ends on a
+  line another tool flagged for the same kind of problem is attached to that finding instead, so one problem is one
+  finding. The report shows the steps in a box "How the value gets there", every value escaped. A query or a command
+  no flow reaches, where every call Lantern found hands the function fixed text, is ranked low with that reason, and
+  only when the engine read every file.
+  Pages and templates (`lantern/templates.py`): a place in a page template that prints a value without escaping it
+  is a finding of its own, `LW-XSS-RAW`, at the template's line (EJS `<%- x %>`, Handlebars and Mustache `{{{x}}}`,
+  Pug `!{x}`, Jinja, Django, Nunjucks and Twig `|safe`), ranked by what Lantern knows of the value: request data
+  followed from a route into that place ranks like any flow into a page, fixed text or an escaped value wherever the
+  page is shown ranks low, anything else is medium, and the reason is said in a sentence. Text of the request that
+  is run as a template (`Template(text)`, `from_string(text)`, or written into a file of the templates folder that
+  is then shown) is `LT-EVAL`: escaping it for a page changes nothing about that. A page escaped by hand, a page
+  sent as plain text and a redirect built on the request's own address (`new URL('/login', req.url)`) are not
+  reported.
+  Who may reach what, heuristics that say so (`tool_confidence: LOW`, ranked medium): a record reached by an id from
+  the request on a route with a login where nothing compares the record with who is signed in (`LT-AUTHZ-OWNER`;
+  for a record that is changed or removed only what was asked before the change counts, also when a helper makes
+  the change and checks afterwards); an admin path that never asks for an admin (`LT-AUTHZ-ROLE`); everything the
+  request sent written onto a stored record (`LT-AUTHZ-MASS-ASSIGN`); and a route that decides what the caller may
+  do on a value the caller writes, a cookie, a header or a word in the address or the body named like a role or an
+  admin flag (`LT-AUTHZ-CLIENT-ROLE`, new: `Cookie: is_admin=1` makes anybody an admin). A route with no login that
+  changes or removes a record picked by an id from the request gets `LW-AUTH-MISSING` with the way to the record,
+  also when nothing in the project's own frontend calls it (before, only routes the frontend calls were asked).
+  Express middleware put on with `use` (`app.use(requireLogin)`, `app.use('/admin', requireAdmin)`,
+  `router.use(mw)`, `app.use('/api', mw, router)`) now counts for the routes written after it and only for those
+  (`entry["use"]`); the login check and the flow step read it. A page that signs a person in is not reported for
+  looking them up by the name they typed, and a function that makes a token is not a sign that somebody is signed
+  in.
+  A secret written in the code (`LW-SECRET-INLINE`): the text that signs sessions or login tokens, such a secret's
+  fallback for when the setting is missing (`process.env.SESSION_SECRET || 'keyboard cat'`), the password of an
+  account the app connects with, a database address that carries its password; in JS/TS, Python and JSON settings
+  files, ranked medium, and the finding never repeats the text. Keys of a known format stay with the key patterns
+  and gitleaks; a line they list is not listed twice.
+  A library being installed is not a protection (`lantern/ratelimit.py`): "Rate limiting" reads "in place" only
+  when the code shows a limit that covers the routes in question, "check" for an app-wide limit the code does not
+  show covers them or for the project's own limiter in which nothing counts, else "add", naming the library that is
+  installed and put to work nowhere. `LA-WALLET-DRAIN` reads the same way.
+  Changed for the person: findings of a project that was analyzed before can differ. New findings `LT-*`,
+  `LW-XSS-RAW`, `LW-SECRET-INLINE`, and `LW-AUTH-MISSING` on routes the frontend does not call. A finding request
+  data was followed to starts from the graver of the tool's severity and the flow's kind, so a query built from
+  request data can rank higher than before; a query or command only fixed text reaches ranks low. A route behind
+  `app.use(requireLogin)` no longer gets `LW-AUTH-MISSING` and no longer counts under "route auth" as open. A
+  router loaded with `require` into a name and mounted by that name now has its prefix in its routes' addresses
+  (`/api/notes`, before `/notes`), so links between frontend and backend that matched by the end of the path can
+  now match exactly. "Rate limiting" turns from "in place" to "add" or "check" where the library is only
+  installed, and `LA-WALLET-DRAIN` can appear there. The reason beside a rank that a rule fixes is now the rule's
+  own sentence where it has one (`fixed_why`). Result files: `security.json` findings may carry `flow`, `claim`,
+  `secret_kind`, `fixed_why`; a route's `entry` in `graph.json` may carry `use`; the scanner list has a
+  `lantern-flow` record (`docs/api.md`). Nothing was removed, and older result files open as before.
+  Tests, written before the code they ask for, each dangerous example beside safe twins and look-alikes, none copied
+  from the held-out apps: `tests/test_flow.py` (217), `tests/test_flow_js.py` (182), `tests/test_flow_authz.py`
+  (220), `tests/test_templates.py` (6), `tests/test_secret_inline.py` (53), `tests/test_ratelimit.py` (24), and new
+  tests in `tests/test_express.py` and `tests/test_fullstack.py` for Express `use`. Older expectations that changed
+  are rewritten with the reason beside each (`tests/test_security.py`, `test_context.py`, `test_case.py`,
+  `test_scenarios.py`, `test_readiness.py`, `test_mcp.py`, `test_protections.py`). Lantern's audit of itself: 0
+  critical, 0 high, 0 medium, grade A; the findings of the 15 sample apps under `tests/fixtures` are the same with
+  and without the last round of rules.
+  Not covered (the whole list is in `CLAUDE.md` under Known gaps and in `docs/audit/CLAIMS.md`, S18 to S21): only
+  Python and JavaScript/TypeScript are followed. A value an object's own method reads back, or one kept in a
+  database, a session or a file and read back later (stored XSS, second-order SQL), is not followed. A library call
+  passes a value on only when `flow_rules.PROPAGATORS` names it. The who-may-reach-what rules, the template rule and
+  the secret rule read names and shapes and say so (heuristic): a shared record read by its id is reported like a
+  personal one, a guard on a class and Express `use` in another file than the routes are not applied, a secret under
+  a neutral name is not listed. A check made outside the code (a proxy, the database's own row rules) is not seen.
+
 - lantern-cloud: 300 runs per person per day is now what `cloud/fly.toml` says (the owner's choice of 2026-11-11;
   the file said 50, his choice of 2026-11-04). The live service already ran with 300 through a setting kept on
   Fly, which wins over the file, so nothing changes for anybody; the file, `docs/deploy.md` and the testing

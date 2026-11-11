@@ -209,6 +209,29 @@ def test_no_file_is_opened_any_other_way():
     assert not gone, f"OWN_FILES names places that open nothing any more: {gone}"
 
 
+def test_no_name_is_given_twice_at_the_top_of_a_module():
+    """A second `def` or assignment under a name a module already has replaces the first for every caller above it,
+    and nothing says so: on 2026-11-11 a new helper in `websec.py` took the name of one the login check calls, and
+    only that check's own tests showed it. A constant set in an `if`/`try` is not counted, only the module's own
+    top level."""
+    twice = []
+    for folder in ("lantern", "cloud/lantern_cloud", "gateway/lantern_gateway"):
+        for path in sorted((ROOT / folder).glob("*.py")):
+            seen: dict[str, int] = {}
+            for node in ast.parse(path.read_text(encoding="utf-8")).body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    names = [node.name]
+                elif isinstance(node, ast.Assign):
+                    names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+                else:
+                    names = []
+                for name in names:
+                    if name in seen and name != "_":
+                        twice.append(f"{folder}/{path.name}: {name} (lines {seen[name]} and {node.lineno})")
+                    seen[name] = node.lineno
+    assert not twice, twice
+
+
 def test_the_look_for_openers_sees_each_way_of_opening():
     code = ("def a(p):\n    return open(p).read()\n"
             "def b(p):\n    return p.read_text(encoding='utf-8')\n"
