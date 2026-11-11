@@ -77,30 +77,35 @@ def main() -> None:
             store.db.commit()
         store.update_run(rid, **f)
 
-    out = Path(s.results_dir) / "done1"
+    out = Path(s.results_dir) / "done1-demo-00000"
     subprocess.run([sys.executable, "-m", "lantern.cli", "analyze", str(ROOT / "tests" / "fixtures" / "shop"), "--out", str(out),
                     "--offline", "--privacy", "structure"], check=True, capture_output=True, text=True, encoding="utf-8",
                    env={**os.environ, "LANTERN_OFFLINE": "1"})
     from lantern.pipeline import explain, plan_explain
-    ex = explain(out, FixtureProvider(explain_answer), plan_explain(out)["nodes"])
+    shop = ROOT / "tests" / "fixtures" / "shop"
+    ex = explain(out, shop, FixtureProvider(explain_answer), plan_explain(out, shop)["nodes"])
     exps = ex["explanations"]
     explained = {"functions": len(exps), "validated": sum(1 for v in exps.values() if v.get("validated")),
                  "failed": ex["stats"].get("failed") or 0, "stopped": None}
     summary = _summary(out)
     if a.poison:   # what a planted result file could hold, if the worker did not clean it
         summary = {"score": bad, "grade": bad, "shape": bad, "counts": {"critical": bad, "high": 1}, "files": bad}
-    add("done1", "https://github.com/octo/shop" + (f"/tree/{bad}" if bad else ""), "done", started=now(), finished=now(),
+    add("done1-demo-00000", "https://github.com/octo/shop" + (f"/tree/{bad}" if bad else ""), "done", started=now(), finished=now(),
         stage="finished", summary=summary, commit_sha="9cc6c88" + bad, log_tail="done" + bad,
         explain_status="done", explain_summary=explained)
-    add("going1", "https://gitlab.com/maya/notes-api", "running", started=now(), stage=STAGES["analyze"] + bad,
+    add("going1-demo-0000", "https://gitlab.com/maya/notes-api", "running", started=now(), stage=STAGES["analyze"] + bad,
         log_tail="· " + STAGES["clone"] + "\n· " + STAGES["analyze"] + "\nreading 12 files" + bad)
-    add("failed1", "https://codeberg.org/sam/blog", "error", started=now(), finished=now(), stage="finished",
+    add("failed1-demo-000", "https://codeberg.org/sam/blog", "error", started=now(), finished=now(), stage="finished",
         error="could not clone it: not found" + bad, log_tail="could not clone" + bad)
+    # Where this run's results folder would be there is a plain file, which is not something Lantern made there and
+    # so not something it removes: deleting the run answers "files": "waiting", and the website has to say so
+    # (tools/cloud_site_smoke.js). Run names here have the shape real ones have (16 characters).
+    (Path(s.results_dir) / "failed1-demo-000").write_text("not a results folder\n", encoding="utf-8")
     Path(a.token_file).write_text(token, encoding="utf-8")
     # a second account with nothing still going, so the smoke can delete a whole account (the first one is refused:
-    # its check "going1" is still running)
+    # its check "going1-demo-0000" is still running)
     token2 = gw.state.store.sign_in("github:2", "github:sam")
-    add("failed2", "https://codeberg.org/sam/blog", "error", account="github:2", started=now(), finished=now(),
+    add("failed2-demo-000", "https://codeberg.org/sam/blog", "error", account="github:2", started=now(), finished=now(),
         stage="finished", error="could not clone it: not found" + bad, log_tail="could not clone" + bad)
     Path(a.token_file + ".2").write_text(token2, encoding="utf-8")
     print(json.dumps({"ready": f"http://127.0.0.1:{a.port}/", "work": str(base)}), flush=True)

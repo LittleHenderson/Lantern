@@ -97,7 +97,7 @@ def test_delete_a_run_removes_its_results_and_its_link(done_run):
     assert folder.is_dir()
     other = gw.sign_in("github:2", "github:b")
     assert cloud.delete(f"/v1/runs/{rid}", headers=bearer(other)).status_code == 404     # not theirs
-    assert cloud.delete(f"/v1/runs/{rid}", headers=bearer(tok)).json() == {"deleted": rid}
+    assert cloud.delete(f"/v1/runs/{rid}", headers=bearer(tok)).json() == {"deleted": rid, "files": "removed"}
     assert not folder.exists()
     assert cloud.get(f"/v1/runs/{rid}", headers=bearer(tok)).status_code == 404
     assert stranger(cloud).get(path(url)).status_code == 404
@@ -132,7 +132,7 @@ def test_delete_me_forgets_everything(done_run):
     other = gw.sign_in("github:2", "github:b")
     cloud.get("/v1/me", headers=bearer(other))
     r = cloud.delete("/v1/me", headers=bearer(tok))
-    assert r.json() == {"deleted": True, "runs": 1}
+    assert r.json() == {"deleted": True, "runs": 1, "files": "removed"}
     assert not (Path(s.results_dir) / rid).exists() and stranger(cloud).get(path(url)).status_code == 404
     db = sqlite3.connect(s.db_path)
     assert db.execute("select count(*) from runs where account = 'github:1'").fetchone()[0] == 0

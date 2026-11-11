@@ -9,8 +9,21 @@ Nothing from the analyzed repo is executed or trusted as configuration:
     requirements*.txt, and `==` pins in pyproject.toml. Only `name==version` pairs reach pip-audit, in a temporary
     file, so index URLs or options in the repo's files are ignored. Ranges (`>=1.2`) can't be checked, because the
     installed version isn't known; they are counted and reported as not checked.
-  * JavaScript: `npm audit --package-lock-only` reads package-lock.json (no install, no scripts). The registry is
-    passed explicitly so a repo's .npmrc can't redirect the query.
+  * JavaScript: `npm audit --package-lock-only` reads package-lock.json (no install, no scripts). npm is started in
+    a folder of Lantern's own, on copies laid out as the files lie in the project: package.json, the lock file,
+    npm-shrinkwrap.json when it is there (npm up to 11 takes it before the lock file) and the package.json of each folder
+    of the project a lock file names (a workspace package, a `file:` library), each handed over as what Lantern
+    read in it, written out anew (`_npm_json`). So npm reads no `.npmrc` of the project and no folder outside it
+    (`_npm_stage`). Until 2026-11-10 npm ran in the project's folder. The
+    registry was passed explicitly, but a `.npmrc` there could still switch the audit off (`offline=true`: nothing
+    found, nobody asked, and the record said `ok`), send the question through a proxy of the project's choosing,
+    switch the check of the registry's certificate off, make npm write its cache where the project said, and make
+    the audit fail; and a lock file or a workspace pattern that named a folder beside the project had npm read
+    that folder's package.json. npm is not started where Lantern cannot read one of the files as JSON, on a lock
+    file that names a folder by its full path, in words a path and an address read differently, or more than
+    `NPM_CLIMB` levels up, nor where package.json, or the lock file's own first entry, asks for workspace folders
+    outside its own folder: the record names the file and says why (`partial` when another lock file was
+    audited, `failed` when none was).
   * Gradle and Maven (Android apps, Java/Kotlin servers): `group:name:version` read from build.gradle(.kts), the
     version catalog gradle/libs.versions.toml and pom.xml (with its own <properties>), shipped dependencies only (no
     test configurations), asked of the OSV database (api.osv.dev, ecosystem Maven) as plain name/version pairs.
@@ -22,6 +35,20 @@ Nothing from the analyzed repo is executed or trusted as configuration:
   * Ruby: every gem in Gemfile.lock's `specs` with its exact version, asked of OSV (ecosystem RubyGems), except gems the
     Gemfile lists only in `group :development`/`:test` blocks. Nothing runs Bundler. The finding points at the
     Gemfile's `gem "name"` line, or at the gem's line in Gemfile.lock when another gem pulled it in.
+
+A dependency file comes with the project, so what it says is checked before it is used (2026-11-10, `Odd`):
+  * Only a package name and a version of the form the ecosystem defines leave Lantern: for pip-audit's input file
+    `PY_NAME` and `PY_VERSION` (PEP 508 names, PEP 440 versions, plain ASCII), for OSV `MAVEN_NAME`, `COMPOSER_NAME`
+    and the gem pattern. Until that date a lock file's "version" could add lines of its own to pip-audit's input,
+    and one entry pip-audit cannot read (`1.0-SNAPSHOT.final`) made it give up on every package.
+  * An entry that is anything else, a file that is not valid TOML or JSON, and a file whose shape is not a lock
+    file's (a list where a table belongs) are named in the audit's record: `not_read` (how many), `errors` (the
+    first `Odd.KEEP`, each one line of printable ASCII), state `partial`. The rest is still checked. Until that
+    date such a file ended the whole analysis with a Python error, or was passed over without a word.
+  * What has no released version to look up (a Composer library installed from a branch, a Pipfile.lock entry from
+    a link or a folder, a Gradle library whose name holds a variable) is counted in `unpinned`, as ranges are.
+  * `guarded` is the wall behind all of it: an audit that raises anything nobody foresaw becomes that audit's
+    `failed` record, in the cloud's audit step (`run_all`) and in `security.scan` alike.
 """
 
 from __future__ import annotations
@@ -29,13 +56,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import tempfile
 import tomllib
 from pathlib import Path
 
-from . import scanresult
-from .python_frontend import SKIP_DIRS, inside_repo
+from . import manifest, programs, scanresult
+from .python_frontend import SKIP_DIRS, inside_repo, project_text
 
 NPM_REGISTRY = "https://registry.npmjs.org/"
 TEST_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|fixtures|examples?)/")
@@ -49,6 +75,120 @@ OSV_API = "https://api.osv.dev/v1"
 # (python tools/netguard/lantern_netguard.py --allow <these> -- lantern analyze ...) loses nothing.
 AUDIT_HOSTS = ("pypi.org", "registry.npmjs.org", "api.osv.dev")
 NPM_SEVERITY = {"critical": "HIGH", "high": "HIGH", "moderate": "MEDIUM", "low": "LOW", "info": "LOW"}
+
+# What may leave Lantern as a package name and a version. Plain ASCII, nothing a line of a requirements file or a
+# query could be extended with, and no longer than any real one.
+PY_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._\-]{0,98}[A-Za-z0-9])?")                       # PEP 508
+PY_VERSION = re.compile(r"(?=.{1,100}\Z)v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*"                     # PEP 440, appendix B
+                        r"(?:[-_.]?(?:alpha|beta|preview|pre|rc|a|b|c)[-_.]?[0-9]*)?"
+                        r"(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?(?:[-_.]?dev[-_.]?[0-9]*)?"
+                        r"(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?", re.I | re.A)
+MAVEN_NAME = re.compile(r"[A-Za-z0-9_.\-]{1,200}:[A-Za-z0-9_.\-]{1,200}")                      # group:artifact
+COMPOSER_NAME = re.compile(r"(?=.{3,200}\Z)[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+")                # vendor/package
+COMPOSER_VERSION = re.compile(r"(?=.{1,100}\Z)v?[0-9]+(?:\.[0-9]+)*(?:[-.+][A-Za-z0-9_.+\-]+)?")
+COMPOSER_BRANCH = re.compile(r"[\x21-\x7e]{1,100}")                                            # dev-main, 2.x-dev
+GEM_LINE = re.compile(r"    ([A-Za-z0-9][A-Za-z0-9_.\-]{0,199}) \(([0-9][A-Za-z0-9_.]{0,99})(?:-[a-z][A-Za-z0-9_.\-]*)?\)\s*")
+NOT_THE_PROJECTS = "a link that does not lead to a file of the project, so it was not read"
+MAX_FILE = 32 * 1024 * 1024             # a dependency file larger than this is not read (the largest real ones: a few MB)
+
+
+def _shown(value, limit: int = 60) -> str:
+    """What a project's file says, as it may be kept in a record and shown on a console and in the report: for text,
+    one line of printable ASCII in quotes (anything else as an escape), cut short; for anything else, what it is."""
+    if isinstance(value, str):
+        text = value[:limit + 1].encode("unicode_escape").decode("ascii")
+        return '"' + (text if len(value) <= limit and len(text) <= limit else text[:limit] + "...") + '"'
+    return {dict: "a table", list: "a list", bool: "true or false", int: "a number", float: "a number",
+            type(None): "nothing"}.get(type(value), "not text")
+
+
+def _plain(text, limit: int = 200) -> str:
+    """`text` as one line of printable ASCII, cut short: a file's name or a line of it, for a record. Every other
+    character becomes an escape; what is printable ASCII already stays as it is."""
+    return re.sub(r"[^\x20-\x7e]", lambda m: m.group().encode("unicode_escape").decode("ascii"), str(text)[:limit])[:limit]
+
+
+def _short(rel: str) -> str:
+    """A file's name for a line of the record: of a long path the end is kept (the file's own name), so what is said
+    of the file still fits on the line."""
+    return rel if len(rel) <= 100 else "..." + rel[-97:]
+
+
+class Odd:
+    """What in a project's dependency files is not a package name and a version, or not a dependency file at all:
+    counted, and the first `KEEP` named in plain words, for the audit's record. A file named here counts as one of
+    the project's dependency files even when nothing in it could be read."""
+    KEEP = 20
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.lines: list[str] = []
+        self.files: set[str] = set()
+
+    def add(self, rel: str, what: str) -> None:
+        self.count += 1
+        self.files.add(rel)
+        if len(self.lines) < self.KEEP:
+            self.lines.append(_plain(f"{_short(rel)}: {what}"))
+
+    def fields(self) -> dict:
+        """What the record says of them: nothing at all when there are none."""
+        return {"not_read": self.count, "errors": list(self.lines)} if self.count else {}
+
+    def why(self, also: str = "") -> str:
+        """The record's reason: these, and `also` (what the audit itself could not finish) when there is any."""
+        n = self.count
+        said = (f"{n} part{'s' if n != 1 else ''} of the dependency files could not be read as a package name and "
+                "version") if n else ""
+        return "; ".join(x for x in (said, also) if x)
+
+
+def _read(p: Path, rel: str, odd: Odd, repo: Path) -> str | None:
+    """The text of a dependency file of the project, or None with the reason kept in `odd`: only a plain file of a
+    size a real one has is read (a pipe or a device under such a name would hold the analysis up for good), and only
+    one that lies in the project (a link that leads out of it names somebody else's libraries, and Lantern would ask
+    the audit services about them)."""
+    try:
+        if not inside_repo(p, repo):   # said in the same words whatever the link leads to, a file or nothing at all
+            odd.add(rel, NOT_THE_PROJECTS if os.path.islink(p) else "not a plain file, so it was not read")
+            return None
+        if os.stat(p).st_size > MAX_FILE:
+            odd.add(rel, f"larger than {MAX_FILE // (1024 * 1024)} MB, so it was not read")
+            return None
+        return project_text(p, repo).removeprefix("\ufeff")   # the mark some editors put first
+    except OSError as exc:
+        odd.add(rel, f"could not be read ({type(exc).__name__})")
+        return None
+
+
+def _quiet(p: Path, repo: Path) -> str:
+    """The text of a file that only says where a library is written (composer.json, Gemfile): "" when it is not
+    there or cannot be read, which costs a line number and nothing else."""
+    return _read(p, p.name, Odd(), repo) or ""
+
+
+def _toml(text: str | None, rel: str, odd: Odd) -> dict | None:
+    """The table a TOML file holds, or None with the reason kept in `odd` (`text` None: `_read` has said why)."""
+    if text is None:
+        return None
+    try:
+        return tomllib.loads(text)
+    except (tomllib.TOMLDecodeError, RecursionError) as exc:
+        at = re.search(r"at line (\d+)", str(exc))
+        odd.add(rel, "not valid TOML" + (f" (line {at.group(1)})" if at else "") + ", so it was not read")
+        return None
+
+
+def _json(text: str | None, rel: str, odd: Odd):
+    """(True, the value a JSON file holds) or (False, None) with the reason kept in `odd`."""
+    if text is None:
+        return False, None
+    try:
+        return True, json.loads(text)
+    except (ValueError, RecursionError) as exc:
+        odd.add(rel, "not valid JSON" + (f" (line {exc.lineno})" if isinstance(exc, json.JSONDecodeError) else "")
+                + ", so it was not read")
+        return False, None
 
 
 def _pkg_version(name: str) -> str | None:
@@ -75,15 +215,29 @@ def precomputed(tool: str) -> tuple[list[dict], dict] | None:
     return [f for f in d["findings"] if isinstance(f, dict)], d["info"]
 
 
+def audits() -> tuple:
+    """Every audit as (tool, function), looked up when asked, so a test's stand-in for one of them is the one run."""
+    return (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit), ("maven-audit", run_maven_audit),
+            ("composer-audit", run_composer_audit), ("gem-audit", run_gem_audit))
+
+
+def guarded(tool: str, fn, repo: Path, no_network: bool | None) -> tuple[list[dict], dict]:
+    """One audit with a wall behind it: whatever it raises that nobody foresaw (a registry down, odd output, a
+    dependency file of a shape no reader expected) becomes that audit's `failed` record, and the others still run.
+    The error's own words are left out: they can hold text of the project's files."""
+    try:
+        return fn(repo, no_network)
+    except Exception as exc:  # noqa: BLE001 - one audit's surprise must not drop the others, or the whole analysis
+        asked = not (offline() if no_network is None else no_network)
+        return [], scanresult.record(tool, "failed", f"{type(exc).__name__} "
+                                     + ("(network needed?)" if asked else "(while reading the project's dependency files)"))
+
+
 def run_all(repo: Path) -> dict:
     """All audits with the network on, as {tool: {findings, info}} (what LANTERN_AUDITS_FROM reads)."""
     out = {}
-    for tool, fn in (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit), ("maven-audit", run_maven_audit),
-                     ("composer-audit", run_composer_audit), ("gem-audit", run_gem_audit)):
-        try:
-            f, info = fn(repo, False)
-        except Exception as exc:  # noqa: BLE001 - one audit's surprise (a registry down, odd output) must not drop the others
-            f, info = [], scanresult.record(tool, "failed", f"{type(exc).__name__} (network needed?)")
+    for tool, fn in audits():
+        f, info = guarded(tool, fn, repo, False)
         out[tool] = {"findings": f, "info": info}
     return out
 
@@ -93,7 +247,9 @@ def offline() -> bool:
 
 
 def _project_files(repo: Path, names: tuple[str, ...] | None = None, pattern: re.Pattern | None = None) -> list[Path]:
-    """Files in the project itself: not vendored, not in tests or sample apps, not symlinked out of the repo."""
+    """The names in the project itself that are dependency files: not vendored, not in tests or sample apps. A name
+    is listed whatever answers to it (a link that leads out of the project, a pipe), so that the audit's record can
+    say it was not read: `_read` is the one way such a file is opened, and it opens a file of the project only."""
     out = []
     for dirpath, dirnames, filenames in os.walk(repo):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d != "node_modules"]
@@ -101,7 +257,7 @@ def _project_files(repo: Path, names: tuple[str, ...] | None = None, pattern: re
             if (names and fn in names) or (pattern and pattern.search(fn)):
                 p = Path(dirpath) / fn
                 rel = p.relative_to(repo).as_posix()
-                if not TEST_DIR_RE.search(rel) and inside_repo(p, repo):
+                if not TEST_DIR_RE.search(rel):
                     out.append(p)
     return sorted(out)
 
@@ -112,71 +268,110 @@ def _norm(name: str) -> str:
 
 # ---------------------------------------------------------------------------- Python
 
-def python_pins(repo: Path) -> tuple[dict[str, tuple[str, str]], list[str], list[str]]:
-    """{normalized name: (version, file it came from)}, the unpinned requirement texts, and the files read."""
+def python_pins(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str, str]], list[str], list[str]]:
+    """{normalized name: (version, file it came from)}, the unpinned requirement texts, and the files read. What is
+    no package name and version, and what could not be read, goes to `odd`."""
+    odd = odd if odd is not None else Odd()
     pins: dict[str, tuple[str, str]] = {}
     loose: list[str] = []
     files: list[str] = []
 
-    def add(name, version, rel):
-        if name and version:
-            pins.setdefault(_norm(name), (str(version), rel))
+    def add(name, version, rel: str, where: str) -> None:
+        if not isinstance(name, str) or not PY_NAME.fullmatch(name):
+            odd.add(rel, f"{where}: {_shown(name)} is not a package name")
+        elif not isinstance(version, str) or not PY_VERSION.fullmatch(version):
+            odd.add(rel, f"{name}: {_shown(version)} is not a version")
+        else:
+            pins.setdefault(_norm(name), (version, rel))
 
     for p in _project_files(repo, names=("uv.lock", "poetry.lock", "pdm.lock")):
         rel = p.relative_to(repo).as_posix()
-        try:
-            data = tomllib.loads(p.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, tomllib.TOMLDecodeError):
-            continue
         files.append(rel)
-        for pkg in data.get("package") or []:
+        data = _toml(_read(p, rel, odd, repo), rel, odd)
+        packages = data.get("package") if data is not None else None
+        if packages is None:
+            continue
+        if not isinstance(packages, list):
+            odd.add(rel, f"its packages are {_shown(packages)}, not a list")
+            continue
+        for i, pkg in enumerate(packages, 1):
+            if not isinstance(pkg, dict):
+                odd.add(rel, f"entry {i} is {_shown(pkg)}, not a package")
+                continue
             src = pkg.get("source") or {}
             if isinstance(src, dict) and (src.get("editable") or src.get("virtual") or src.get("directory")):
                 continue   # the project itself, not a published package
-            add(pkg.get("name"), pkg.get("version"), rel)
+            name = pkg.get("name")
+            if "version" not in pkg and isinstance(name, str) and PY_NAME.fullmatch(name):
+                loose.append(f"{rel}: {name} (no version written)")
+                continue
+            add(name, pkg.get("version"), rel, f"entry {i}")
     for p in _project_files(repo, names=("Pipfile.lock",)):
         rel = p.relative_to(repo).as_posix()
-        try:
-            data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, json.JSONDecodeError):
-            continue
         files.append(rel)
-        for name, spec in (data.get("default") or {}).items():
-            v = (spec or {}).get("version", "") if isinstance(spec, dict) else ""
-            add(name, v.lstrip("="), rel)
+        ok, data = _json(_read(p, rel, odd, repo), rel, odd)
+        if not ok:
+            continue
+        default = data.get("default") if isinstance(data, dict) else None
+        if not isinstance(data, dict) or not isinstance(default, (dict, type(None))):
+            odd.add(rel, f"its {'default packages are' if isinstance(data, dict) else 'content is'} "
+                         f"{_shown(default if isinstance(data, dict) else data)}, not a table")
+            continue
+        for name, spec in (default or {}).items():
+            if not isinstance(spec, dict):
+                odd.add(rel, f"{_shown(name)} is {_shown(spec)}, not a package")
+            elif spec.get("version") is None and PY_NAME.fullmatch(name):
+                loose.append(f"{rel}: {name} (from a link or a folder: no released version)")
+            else:
+                v = spec.get("version")
+                add(name, v[2:] if isinstance(v, str) and v.startswith("==") else v, rel, "default")
     for p in _project_files(repo, pattern=re.compile(r"^requirements[^/]*\.txt$")):
         rel = p.relative_to(repo).as_posix()
         files.append(rel)
-        for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        for ln in (_read(p, rel, odd, repo) or "").splitlines():
             s = ln.split(" #")[0].strip()
             if not s or s.startswith(("#", "-")):
                 continue
             m = PIN_RE.match(s.split("--hash")[0].strip().rstrip("\\").strip())
             if m:
-                add(m.group(1), m.group(3), rel)
+                add(m.group(1), m.group(3), rel, "a line")
             else:
-                loose.append(f"{rel}: {s[:60]}")
+                loose.append(f"{rel}: {_plain(s, 60)}")
     for p in _project_files(repo, names=("pyproject.toml",)):
         rel = p.relative_to(repo).as_posix()
-        try:
-            data = tomllib.loads(p.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, tomllib.TOMLDecodeError):
+        data = _toml(_read(p, rel, odd, repo), rel, odd)
+        if data is None:
             continue
-        deps = list((data.get("project") or {}).get("dependencies") or [])
-        poetry = ((data.get("tool") or {}).get("poetry") or {}).get("dependencies") or {}
-        deps += [k + ("==" + v if isinstance(v, str) and re.match(r"^\d", v) else "")
-                 for k, v in poetry.items() if k.lower() != "python"]
+        deps: list = []
+        project, tool = data.get("project"), data.get("tool")
+        if not isinstance(project, (dict, type(None))):
+            odd.add(rel, f"its [project] is {_shown(project)}, not a table")
+        elif not isinstance((project or {}).get("dependencies"), (list, type(None))):
+            odd.add(rel, f"its dependencies are {_shown(project['dependencies'])}, not a list")
+        else:
+            deps += (project or {}).get("dependencies") or []
+        poetry = tool.get("poetry") if isinstance(tool, dict) else None
+        named = poetry.get("dependencies") if isinstance(poetry, dict) else None
+        if not isinstance(tool, (dict, type(None))) or not isinstance(poetry, (dict, type(None))) \
+                or not isinstance(named, (dict, type(None))):
+            odd.add(rel, "its [tool.poetry] dependencies are not a table")
+        else:
+            deps += [k + ("==" + v if isinstance(v, str) and re.match(r"^\d", v) else "")
+                     for k, v in (named or {}).items() if k.lower() != "python"]
         if deps:
             files.append(rel)
         for d in deps:
-            m = PIN_RE.match(str(d))
+            if not isinstance(d, str):
+                odd.add(rel, f"a dependency is {_shown(d)}, not text")
+                continue
+            m = PIN_RE.match(d)
             if m:
-                add(m.group(1), m.group(3), rel)
-            elif _norm(re.split(r"[\s<>=!~\[;(@]", str(d), maxsplit=1)[0]) not in pins:
-                loose.append(f"{rel}: {str(d)[:60]}")
+                add(m.group(1), m.group(3), rel, "a dependency")
+            elif _norm(re.split(r"[\s<>=!~\[;(@]", d, maxsplit=1)[0]) not in pins:
+                loose.append(f"{rel}: {_plain(d, 60)}")
     # a range in pyproject is fine when a lock file pins the same package
     loose = [x for x in loose if _norm(re.split(r"[\s<>=!~\[;(@]", x.split(": ", 1)[1], maxsplit=1)[0]) not in pins]
-    return pins, loose, sorted(set(files))
+    return pins, loose, sorted(set(files) | odd.files)
 
 
 PIP_AUDIT_TIMEOUT = 300
@@ -184,21 +379,27 @@ PIP_AUDIT_TIMEOUT = 300
 
 def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
     """pip-audit over the exact versions found in the repo. Exit 0 = ran, nothing known; exit 1 = ran, found
-    vulnerabilities; anything else is a failure. A package pip-audit could not look up (`skip_reason`) makes the run
-    `partial` and is listed; the findings for the others are kept."""
+    vulnerabilities; anything else is a failure. A package pip-audit could not look up (`skip_reason`), and an entry
+    of the project's files that is no package name and version (`Odd`), make the run `partial` and are listed; the
+    findings for the others are kept."""
     from .security import _fid
     pre = precomputed("pip-audit")
     if pre is not None:
         return pre
     info: dict = {"role": "known-vulnerable Python packages", "version": _pkg_version("pip-audit")}
-    pins, loose, files = python_pins(repo)
+    odd = Odd()
+    pins, loose, files = python_pins(repo, odd)
     if not files:
         return [], scanresult.record("pip-audit", "skipped", "no Python dependency files", **info)
+    if not pins and odd.count:      # nothing in these files can be asked about, so nobody is asked, and that is said
+        return [], scanresult.record("pip-audit", "partial", odd.why(), files=files, unpinned=len(loose),
+                                     **odd.fields(), **info)
     if not pins:
         return [], scanresult.record("pip-audit", "skipped", "no exact versions to check (commit a lock file such as "
                                      "uv.lock or poetry.lock, or pin with ==)", applicable=False, files=files,
                                      unpinned=len(loose), **info)
-    if not shutil.which("pip-audit"):
+    pip_audit = programs.find("pip-audit")
+    if not pip_audit:
         return [], scanresult.record("pip-audit", "unavailable", 'pip install "lantern[scan]"', files=files, **info)
     if offline() if no_network is None else no_network:
         return [], scanresult.record("pip-audit", "skipped", "offline", applicable=True, files=files, **info)
@@ -207,7 +408,7 @@ def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     with tempfile.TemporaryDirectory() as td:
         req = Path(td) / "requirements.txt"
         req.write_text("".join(f"{n}=={v}\n" for n, (v, _) in sorted(pins.items())), encoding="utf-8")
-        cmd = ["pip-audit", "-r", str(req), "-f", "json", "--progress-spinner", "off", "--no-deps", "--disable-pip"]
+        cmd = [pip_audit, "-r", str(req), "-f", "json", "--progress-spinner", "off", "--no-deps", "--disable-pip"]
         run = scanresult.run_tool(cmd, timeout=PIP_AUDIT_TIMEOUT)
     info |= {"exit_code": run.returncode, "duration_ms": run.duration_ms}
     if run.timed_out:
@@ -243,9 +444,10 @@ def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
                 "snippet": (v.get("description") or "")[:400], "category": "dependency", "package": name,
             })
     info["findings"] = len(out)
-    if errors:
-        return out, scanresult.record("pip-audit", "partial", f"{len(errors)} package{'s' if len(errors) != 1 else ''} "
-                                      "could not be checked", errors=errors, **info)
+    if errors or odd.count:
+        also = f"{len(errors)} package{'s' if len(errors) != 1 else ''} could not be checked" if errors else ""
+        return out, scanresult.record("pip-audit", "partial", odd.why(also), **(info | odd.fields()
+                                                                               | {"errors": odd.lines + errors}))
     return out, scanresult.record("pip-audit", "ok", **info)
 
 
@@ -267,11 +469,165 @@ def _advisories(vulns: list[dict]) -> list[tuple[dict, list[str]]]:
 # ---------------------------------------------------------------------------- JavaScript
 
 NPM_AUDIT_TIMEOUT = 180
+NPM_READS = ("package.json", "package-lock.json", "npm-shrinkwrap.json")   # npm up to 11 takes the last before the lock file
+NPM_CLIMB = 16                          # how many `..` one entry of a lock file may hold
+NPM_LOCAL_MAX = 5000                    # how many folders of its own a lock file may name (workspace packages, `file:` libraries)
+NPM_LOCAL_BYTES = 64 * 1024 * 1024      # and what their package.json files may hold together
+NPM_LINE = 300                          # a line of the record about npm: longer than any of them gets
+NOT_STARTED = "so npm was not started on it"
+NPM_FULL = re.compile(r"/|[A-Za-z][:|]")                        # how a full path starts, as a path and as an address
+NPM_TWICE = re.compile(r"[%\x00-\x1f\x7f]")                     # read one way in a path and another in an address
+NPM_ELSEWHERE = re.compile(r"(?!file:)[a-z][a-z0-9+.\-]+:", re.I)   # https:, git+ssh:, github:, npm: are no folders
+NPM_BRACES = re.compile(r"\.[{},]|[{},]\.|[{,]/|[{,][,}]")      # braces that can put `..` or a leading `/` together
 
 
 def _npm_version(npm: str) -> str | None:
     run = scanresult.run_tool([npm, "--version"], timeout=30)
     return (run.stdout or "").strip()[:20] or None
+
+
+def _npm_json(p: Path, rel: str, odd: Odd, repo: Path) -> tuple | None:
+    """A JSON file npm is to read, as (what it holds, the same written out anew), or None with the reason kept in
+    `odd`. npm is handed what Lantern read, never a file's own text: two readers of one text can disagree (a name
+    that stands twice, JSON nested deeper than Python follows and Node reads), and npm would then follow what
+    Lantern never saw."""
+    ok, value = _json(_read(p, rel, odd, repo), rel, odd)
+    if not ok:
+        return None
+    try:
+        return value, json.dumps(value, allow_nan=False)
+    except (ValueError, RecursionError):        # NaN, a number too large: JSON for Python, not for npm
+        odd.add(rel, "not valid JSON, so it was not read")
+        return None
+
+
+def _npm_places(lock: dict) -> list[str]:
+    """What in a lock file may name a folder on this computer: every key of `packages` and what an entry marked as
+    a link points at (a workspace package, a `file:` library; npm takes anything but false, 0, "" and nothing for
+    the mark, and joins what the entry points at to its folder as a path, whatever it looks like), and from the
+    older `dependencies` list each `version`, `from` and `resolved` that is not an address somewhere else (npm
+    reads `file:…` and a bare path there as a folder)."""
+    out: list[str] = []
+    for key, entry in manifest.table(lock.get("packages")).items():
+        entry = manifest.table(entry)
+        out.append(key)
+        if entry.get("link") not in (None, False) and isinstance(entry.get("resolved"), str):
+            out.append(entry["resolved"])
+    todo = [manifest.table(lock.get("dependencies"))]
+    while todo:
+        for entry in todo.pop().values():
+            entry = manifest.table(entry)
+            out += [entry[k] for k in ("version", "from", "resolved")
+                    if isinstance(entry.get(k), str) and not NPM_ELSEWHERE.match(entry[k])]
+            if entry.get("dependencies"):
+                todo.append(manifest.table(entry["dependencies"]))
+    return list(dict.fromkeys(re.sub(r"^file:", "", p, flags=re.I) for p in out if p))
+
+
+def _npm_wanders(package) -> str | None:
+    """The first workspace pattern of what a `package.json` holds that may lead npm out of the folder the file lies
+    in (npm reads the `package.json` of every folder such a pattern finds): one with `..`, a full path, a backslash,
+    or braces that can put either together. None when there is none."""
+    asked = manifest.table(package).get("workspaces")
+    if isinstance(asked, dict):
+        asked = asked.get("packages")
+    for pattern in [asked] if isinstance(asked, str) else manifest.texts(asked):
+        p = pattern.lstrip("!")
+        if ".." in p or "\\" in p or ":" in p or p.startswith("/") or NPM_BRACES.search(p):
+            return pattern
+    return None
+
+
+def _npm_stage(lock: Path, repo: Path, own: Path) -> tuple[Path | None, list[str]]:
+    """What npm is to read, as copies in `own`, a folder of Lantern's own: (the folder to start npm in, what was
+    left out and why), or (None, [why]) and npm is then not started on this lock file. Each line names its file.
+
+    npm takes settings from the folder it is started in (`.npmrc`), so it is never started in the project. The copy
+    keeps the project's layout: `package.json`, `package-lock.json` and `npm-shrinkwrap.json` (npm up to 11 prefers it) at the
+    lock file's place, and the `package.json` of each folder the lock file names inside the project (npm reads it for
+    every workspace package and `file:` library; without it a workspace package and all it needs are left out of the
+    audit without a word). Every file is read the way any dependency file is (`_read`: a plain file of the project,
+    of a size a real one has) and handed over as what Lantern read in it, written out anew (`_npm_json`); one that
+    Lantern cannot read is not handed over.
+
+    npm reads nothing outside `own`. A folder the lock file names outside the project is not copied, and the copy
+    lies as many folders deep in `own` as any entry of the lock file holds `..`, so nothing is where such an entry
+    points. What cannot be kept in that way is refused: a folder named by its full path, by words a path and an
+    address read differently (`%`, a control character, `~`), more than `NPM_CLIMB` levels up, and a workspace
+    pattern that leaves its folder (`_npm_wanders`), in `package.json` or in a lock file's own first entry, which
+    npm takes in its place when it cannot use that file."""
+    here = lock.parent
+    base = list(here.relative_to(repo).parts)
+    rel = "/".join([*base, lock.name])
+
+    def refused(why: str) -> tuple[None, list[str]]:
+        return None, [_plain(f"{_short(rel)}: {why}, {NOT_STARTED}", NPM_LINE)]
+
+    odd = Odd()
+    read = {name: _npm_json(here / name, name, odd, repo) for name in NPM_READS
+            if name != "npm-shrinkwrap.json" or os.path.lexists(here / name)}
+    if odd.count:
+        return None, [_plain(f"{_short(rel)}: npm was not started on it ({odd.lines[0]})", NPM_LINE)]
+    spots: dict[tuple[str, ...], None] = {}     # the folders inside the project npm reads a package.json in
+    climb = 0
+    for name, (value, _) in read.items():
+        first = value if name == "package.json" else manifest.table(manifest.table(value).get("packages")).get("")
+        wanders = _npm_wanders(first)
+        if wanders is not None:
+            who = "" if name == lock.name else f"its {name} "
+            return refused(f"{who}asks for workspace folders outside its own folder ({_shown(wanders)})")
+        for place in [] if name == "package.json" else _npm_places(manifest.table(value)):
+            way = place.replace("\\", "/")
+            steps = way.split("/")
+            if NPM_FULL.match(way):
+                return refused(f"names a folder by its full path ({_shown(place)})")
+            if NPM_TWICE.search(way) or "~" in steps:
+                return refused(f"names a folder in words that programs read in different ways ({_shown(place)})")
+            climb = max(climb, way.count(".."))
+            parts, out = list(base), False
+            for step in steps:
+                if step == "..":
+                    out = out or not parts
+                    parts = parts[:-1]
+                elif step not in ("", "."):
+                    parts.append(step)
+            if not out and parts != base and "node_modules" not in parts:
+                spots[tuple(parts)] = None
+    if climb > NPM_CLIMB:
+        return refused(f"names a folder {climb} levels up")
+    top = own.joinpath(*["above"] * climb, "project")
+    where = top.joinpath(*base)
+    where.mkdir(parents=True)
+    for name, (_, text) in read.items():
+        (where / name).write_text(text, encoding="utf-8")
+    left: list[str] = []
+    copied, room = 0, NPM_LOCAL_BYTES
+    for parts in spots:
+        try:
+            source, to = repo.joinpath(*parts, "package.json"), top.joinpath(*parts, "package.json")
+            if repo not in source.parents or top not in to.parents or not os.path.lexists(source):
+                continue                    # a name that is no folder of the project here; npm finds none there either
+            one, name = Odd(), "/".join([*parts, "package.json"])
+            got = _npm_json(source, name, one, repo)
+            if got is None:                 # a link that leads out of the project, a pipe, no JSON: said, and not copied
+                left.append(one.lines[0])
+                continue
+            wanders = _npm_wanders(got[0])
+            if wanders is not None:
+                left.append(_plain(f"{_short(name)}: asks for workspace folders outside its own folder "
+                                   f"({_shown(wanders)}), so npm was not given it", NPM_LINE))
+                continue
+            copied, room = copied + 1, room - len(got[1])
+            if copied > NPM_LOCAL_MAX:
+                return refused(f"names more than {NPM_LOCAL_MAX} folders of its own")
+            if room < 0:
+                return refused("the package.json files of the folders it names hold more than "
+                               f"{NPM_LOCAL_BYTES // (1024 * 1024)} MB together")
+            to.parent.mkdir(parents=True, exist_ok=True)
+            to.write_text(got[1], encoding="utf-8")
+        except ValueError:                  # a name no file can have (a NUL in it): there is none
+            continue
+    return where, left
 
 
 def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
@@ -283,12 +639,14 @@ def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     if pre is not None:
         return pre
     info: dict = {"role": "known-vulnerable npm packages (production dependencies)"}
-    manifests = _project_files(repo, names=("package.json",))
+    manifests = [m for m in _project_files(repo, names=("package.json",)) if inside_repo(m, repo)]   # npm reads it itself
     if not manifests:
         return [], scanresult.record("npm-audit", "skipped", "no package.json", **info)
-    locks = [m.parent / "package-lock.json" for m in manifests if (m.parent / "package-lock.json").is_file()]
+    # npm reads the lock file itself: one that is a link out of the project counts as none (npm would send the
+    # names in somebody else's file to the registry)
+    locks = [m.parent / "package-lock.json" for m in manifests if inside_repo(m.parent / "package-lock.json", repo)]
     other = [m.parent.relative_to(repo).as_posix() or "." for m in manifests
-             if not (m.parent / "package-lock.json").is_file()]
+             if not inside_repo(m.parent / "package-lock.json", repo)]
     if not locks:
         if any((m.parent / x).is_file() for m in manifests for x in ("pnpm-lock.yaml", "yarn.lock", "bun.lock")):
             # the project's exact versions exist but Lantern cannot read them yet: a gap on Lantern's side
@@ -298,7 +656,7 @@ def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
                                      "(commit your lock file)", applicable=False, **info)
     if offline() if no_network is None else no_network:
         return [], scanresult.record("npm-audit", "skipped", "offline", applicable=True, **info)
-    npm = shutil.which("npm")
+    npm = programs.find("npm")
     if not npm:
         return [], scanresult.record("npm-audit", "unavailable", "npm is not on this computer", **info)
     info["version"] = _npm_version(npm)
@@ -308,8 +666,18 @@ def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     for lock in locks:
         rel = lock.relative_to(repo).as_posix()
         cmd = [npm, "audit", "--json", "--package-lock-only", "--omit=dev", f"--registry={NPM_REGISTRY}"]
-        run = scanresult.run_tool(cmd, timeout=NPM_AUDIT_TIMEOUT, cwd=lock.parent,
-                                  env={**os.environ, "npm_config_audit_level": "info"})
+        run = None
+        try:
+            with programs.folder() as own:      # never in the project: npm would take its `.npmrc` for settings
+                where, left = _npm_stage(lock, repo, own)
+                if where is not None:
+                    run = scanresult.run_tool(cmd, timeout=NPM_AUDIT_TIMEOUT, cwd=where,
+                                              env={**os.environ, "npm_config_audit_level": "info"})
+        except OSError as exc:
+            left = [f"{rel}: a folder of Lantern's own for npm could not be made ({type(exc).__name__}), {NOT_STARTED}"]
+        errors += left
+        if run is None:
+            continue
         codes[rel] = run.returncode
         duration += run.duration_ms
         if run.timed_out:
@@ -380,28 +748,31 @@ GRADLE_DEP = re.compile(r"^\s*(implementation|api|compile|runtimeOnly|compileOnl
                         r"(?<!androidTestImplementation)(?<!debugImplementation)\s*\(?\s*(?:platform\()?"
                         r"[\"']([\w.\-]+):([\w.\-]+):([^\"'@\s]+)[\"']", re.M)
 GRADLE_VAR = re.compile(r"^\s*(?:ext\.)?(?:val\s+|def\s+)?(\w+)\s*=\s*[\"']([\w.\-]+)[\"']", re.M)
-EXACT = re.compile(r"^[0-9][\w.\-]*$")
+MAVEN_VERSION = re.compile(r"[0-9][A-Za-z0-9_.\-]{0,99}")     # one version: no `+`, no range, no variable
 OSV_SEVERITY = {"CRITICAL": "critical", "HIGH": "high", "MODERATE": "moderate", "MEDIUM": "moderate", "LOW": "low"}
 
 
-def maven_coords(repo: Path) -> tuple[dict[str, tuple[str, str, int]], list[str], list[str]]:
-    """{"group:name": (version, file, line)}, versions not checked ("group:name:1.+"), files read."""
+def maven_coords(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str, str, int]], list[str], list[str]]:
+    """{"group:name": (version, file, line)}, the libraries with no exact name and version to look up
+    ("group:name:1.+", a name that holds a variable), files read. What is no library at all, and what could not be
+    read, goes to `odd`."""
+    odd = odd if odd is not None else Odd()
     pins: dict[str, tuple[str, str, int]] = {}
     loose: list[str] = []
     files: list[str] = []
 
     def add(coord: str, ver: str, rel: str, line: int):
-        if EXACT.match(ver) and "+" not in ver:
+        if MAVEN_NAME.fullmatch(coord) and MAVEN_VERSION.fullmatch(ver):
             pins.setdefault(coord, (ver, rel, line))
         else:
-            loose.append(f"{coord}:{ver}")
+            loose.append(_plain(f"{coord}:{ver}", 120))
 
     for p in _project_files(repo, names=GRADLE_FILES):
         rel = p.relative_to(repo).as_posix()
-        try:
-            text = p.read_text(encoding="utf-8", errors="replace")[:2_000_000]
-        except OSError:
+        text = _read(p, rel, odd, repo)
+        if text is None:
             continue
+        text = text[:2_000_000]
         found = False
         vars_ = dict(GRADLE_VAR.findall(text))
         for m in GRADLE_DEP.finditer(text):
@@ -415,38 +786,61 @@ def maven_coords(repo: Path) -> tuple[dict[str, tuple[str, str, int]], list[str]
             files.append(rel)
     for p in _project_files(repo, names=("libs.versions.toml",)):
         rel = p.relative_to(repo).as_posix()
-        try:
-            cat = tomllib.loads(p.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, tomllib.TOMLDecodeError):
+        text = _read(p, rel, odd, repo)
+        cat = _toml(text, rel, odd)
+        if cat is None:
             continue
-        versions = {k: v for k, v in (cat.get("versions") or {}).items() if isinstance(v, str)}
-        text = p.read_text(encoding="utf-8", errors="replace")
-        for key, lib in (cat.get("libraries") or {}).items():
-            if isinstance(lib, str):
+        files.append(rel)
+        versions, libraries = cat.get("versions"), cat.get("libraries")
+        if not isinstance(versions, (dict, type(None))):
+            odd.add(rel, f"its versions are {_shown(versions)}, not a table")
+            versions = None
+        if not isinstance(libraries, (dict, type(None))):
+            odd.add(rel, f"its libraries are {_shown(libraries)}, not a table")
+            continue
+        for key, lib in (libraries or {}).items():
+            where = f"library {_shown(key, 40)}"
+            if isinstance(lib, str):                        # "group:name:version"
                 parts = lib.split(":")
-                if len(parts) == 3:
-                    coord, ver = f"{parts[0]}:{parts[1]}", parts[2]
-                else:
+                if len(parts) not in (2, 3):
+                    odd.add(rel, f"{where} is {_shown(lib)}, not group:name:version")
                     continue
+                coord, ver = ":".join(parts[:2]), (parts[2] if len(parts) == 3 else None)
             elif isinstance(lib, dict):
-                coord = lib.get("module") or (f"{lib.get('group')}:{lib.get('name')}" if lib.get("group") else None)
-                v = lib.get("version")
-                ver = versions.get(v.get("ref")) if isinstance(v, dict) else v
-                if not coord or not isinstance(ver, str):
+                coord = lib.get("module")
+                if coord is None:
+                    group, name = lib.get("group"), lib.get("name")
+                    coord = f"{group}:{name}" if isinstance(group, str) and isinstance(name, str) else \
+                        (name if isinstance(group, str) else group)
+                if not isinstance(coord, str):
+                    odd.add(rel, f"{where} has {_shown(coord)} where its group and name belong")
+                    continue
+                ver = lib.get("version")
+                if isinstance(ver, dict) and "ref" in ver:  # the name of an entry of [versions]
+                    ref = ver["ref"]
+                    if not isinstance(ref, str):
+                        odd.add(rel, f"{where} names its version with {_shown(ref)}, not with a name")
+                        continue
+                    ver = (versions or {}).get(ref)
+                if not isinstance(ver, (str, dict, type(None))):    # a table here is strictly / require / prefer
+                    odd.add(rel, f"{where} has {_shown(ver)} where its version belongs")
                     continue
             else:
+                odd.add(rel, f"{where} is {_shown(lib)}, not a library")
                 continue
             if "test" in key.lower() or "junit" in coord or "espresso" in coord:
                 continue
+            if ver is None or isinstance(ver, dict):        # no one version: it comes from a place Lantern does not read
+                loose.append(_plain(f"{coord} ({'a range of versions' if isinstance(ver, dict) else 'no version written'})", 120))
+                continue
             pos = text.find(key)
             add(coord, ver, rel, text.count("\n", 0, pos) + 1 if pos >= 0 else 1)
-        files.append(rel)
     for p in _project_files(repo, names=("pom.xml",)):
         rel = p.relative_to(repo).as_posix()
-        try:
-            text = p.read_text(encoding="utf-8", errors="replace")[:2_000_000]
-        except OSError:
+        text = _read(p, rel, odd, repo)
+        if text is None:
             continue
+        text = text[:2_000_000]
         pm_ = re.search(r"<properties>(.*?)</properties>", text, re.S)
         props = dict(re.findall(r"<([\w.\-]+)>\s*([\w.\-]+)\s*</\1>", pm_.group(1))) if pm_ else {}
         found = False
@@ -466,7 +860,7 @@ def maven_coords(repo: Path) -> tuple[dict[str, tuple[str, str, int]], list[str]
             add(f"{g.group(1)}:{a.group(1)}", ver, rel, text.count("\n", 0, m.start()) + 1)
         if found:
             files.append(rel)
-    return pins, loose, files
+    return pins, loose, files + sorted(odd.files - set(files))
 
 
 def _osv_post(path: str, body: dict, timeout: float = 60) -> dict:
@@ -514,18 +908,22 @@ def _osv_failure(exc: Exception) -> tuple[str, str]:
     return "failed", f"{type(exc).__name__}: {str(exc)[:120]} (network needed?)"
 
 
-def _osv_audit(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int]], info: dict) -> tuple[list[dict], dict]:
-    """Run one OSV-backed audit and write its record: `ok`, `partial` (a vulnerability's details could not be fetched;
-    the finding is kept with a generic title), `failed` or `timeout`."""
+def _osv_audit(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int]], info: dict,
+               odd: Odd | None = None) -> tuple[list[dict], dict]:
+    """Run one OSV-backed audit and write its record: `ok`, `partial` (a vulnerability's details could not be fetched,
+    and the finding is kept with a generic title; or an entry of the project's files was no name and version, `odd`),
+    `failed` or `timeout`. Nobody is asked when there is nothing to ask about."""
+    odd = odd if odd is not None else Odd()
     try:
-        out, errors = _osv_findings(tool, ecosystem, pins)
+        out, errors = _osv_findings(tool, ecosystem, pins) if pins else ([], [])
     except (OSError, ValueError) as exc:
         state, why = _osv_failure(exc)
         return [], scanresult.record(tool, state, why, **info)
     info["findings"] = len(out)
-    if errors:
-        return out, scanresult.record(tool, "partial", f"{len(errors)} vulnerability detail{'s' if len(errors) != 1 else ''}"
-                                      " could not be fetched", errors=errors, **info)
+    if errors or odd.count:
+        also = f"{len(errors)} vulnerability detail{'s' if len(errors) != 1 else ''} could not be fetched" if errors else ""
+        return out, scanresult.record(tool, "partial", odd.why(also), **(info | odd.fields()
+                                                                        | {"errors": odd.lines + errors}))
     return out, scanresult.record(tool, "ok", **info)
 
 
@@ -534,9 +932,13 @@ def run_maven_audit(repo: Path, no_network: bool | None = None) -> tuple[list[di
     if pre is not None:
         return pre
     info: dict = {"role": "known-vulnerable Gradle/Maven libraries (OSV database)", "version": "osv-v1"}
-    pins, loose, files = maven_coords(repo)
+    odd = Odd()
+    pins, loose, files = maven_coords(repo, odd)
     if not files:
         return [], scanresult.record("maven-audit", "skipped", "no Gradle or Maven files", **info)
+    if not pins and odd.count:
+        return [], scanresult.record("maven-audit", "partial", odd.why(), files=files, unpinned=len(loose),
+                                     **odd.fields(), **info)
     if not pins:
         return [], scanresult.record("maven-audit", "skipped", "no exact versions to check", applicable=False, files=files,
                                      unpinned=len(loose), **info)
@@ -544,7 +946,7 @@ def run_maven_audit(repo: Path, no_network: bool | None = None) -> tuple[list[di
         return [], scanresult.record("maven-audit", "skipped", "offline", applicable=True, files=files, **info)
     return _osv_audit("maven-audit", "Maven", pins, info | {"files": files, "scope": {"files": files, "packages": len(pins)},
                                                            "checked": len(pins), "unpinned": len(loose),
-                                                           "unpinned_examples": loose[:5]})
+                                                           "unpinned_examples": loose[:5]}, odd)
 
 
 def _osv_findings(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int]]) -> tuple[list[dict], list[str]]:
@@ -610,30 +1012,46 @@ def _osv_findings(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int
 
 # ---------------------------------------------------------------------------- PHP (Composer, OSV)
 
-def composer_pins(repo: Path) -> tuple[dict[str, tuple[str, str, int]], list[str]]:
+def composer_pins(repo: Path, odd: Odd | None = None,
+                  loose: list[str] | None = None) -> tuple[dict[str, tuple[str, str, int]], list[str]]:
     """Exact versions from every composer.lock (shipped `packages`, not `packages-dev`): name → (version, file, line).
-    The line is where composer.json asks for the library when it does (a direct library), else its place in the lock."""
+    The line is where composer.json asks for the library when it does (a direct library), else its place in the lock.
+    A library installed from a branch (`dev-main`, `2.x-dev`) has no released version to look up and goes to `loose`
+    as "name version"; what is no name and version, and what could not be read, goes to `odd`."""
+    odd = odd if odd is not None else Odd()
+    loose = loose if loose is not None else []
     pins: dict[str, tuple[str, str, int]] = {}
     files = []
     for lock in _project_files(repo, names=("composer.lock",)):
         rel = lock.relative_to(repo).as_posix()
-        try:
-            text = lock.read_text(encoding="utf-8", errors="replace")
-            data = json.loads(text)
-        except (OSError, ValueError):
-            continue
         files.append(rel)
+        text = _read(lock, rel, odd, repo)
+        ok, data = _json(text, rel, odd)
+        if not ok:
+            continue
+        packages = data.get("packages") if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            odd.add(rel, f"its content is {_shown(data)}, not a table")
+            continue
+        if not isinstance(packages, (list, type(None))):
+            odd.add(rel, f"its packages are {_shown(packages)}, not a list")
+            continue
         cj = lock.with_name("composer.json")
         cj_rel = cj.relative_to(repo).as_posix()
-        try:
-            cj_text = cj.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            cj_text = ""
-        for pkg in data.get("packages") or []:
+        cj_text = _quiet(cj, repo)
+        for i, pkg in enumerate(packages or [], 1):
             if not isinstance(pkg, dict):
+                odd.add(rel, f"entry {i} is {_shown(pkg)}, not a package")
                 continue
-            name, ver = str(pkg.get("name") or ""), str(pkg.get("version") or "")
-            if not re.fullmatch(r"[\w.-]+/[\w.-]+", name) or not re.fullmatch(r"v?\d+(\.\d+)*([-.+][\w.]+)?", ver):
+            name, ver = pkg.get("name"), pkg.get("version")
+            if not isinstance(name, str) or not COMPOSER_NAME.fullmatch(name):
+                odd.add(rel, f"entry {i}: {_shown(name)} is not a package name")
+                continue
+            if isinstance(ver, str) and (ver.startswith("dev-") or ver.endswith("-dev")) and COMPOSER_BRANCH.fullmatch(ver):
+                loose.append(f"{name} {ver}")
+                continue
+            if not isinstance(ver, str) or not COMPOSER_VERSION.fullmatch(ver):
+                odd.add(rel, f"{name}: {_shown(ver)} is not a version")
                 continue
             m = re.search(r'"' + re.escape(name) + r'"\s*:', cj_text)
             if m:
@@ -650,13 +1068,18 @@ def run_composer_audit(repo: Path, no_network: bool | None = None) -> tuple[list
     if pre is not None:
         return pre
     info: dict = {"role": "known-vulnerable PHP libraries (composer.lock, OSV database)", "version": "osv-v1"}
-    pins, files = composer_pins(repo)
+    odd, loose = Odd(), []
+    pins, files = composer_pins(repo, odd, loose)
     if not files:
         return [], scanresult.record("composer-audit", "skipped", "no composer.lock", **info)
+    if loose:                           # said only when there are any, so a record without them is as it always was
+        info |= {"unpinned": len(loose), "unpinned_examples": loose[:5]}
+    if not pins and odd.count:
+        return [], scanresult.record("composer-audit", "partial", odd.why(), files=files, **odd.fields(), **info)
     if offline() if no_network is None else no_network:
         return [], scanresult.record("composer-audit", "skipped", "offline", applicable=True, files=files, **info)
     return _osv_audit("composer-audit", "Packagist", pins, info | {"files": files, "scope": {"files": files, "packages": len(pins)},
-                                                                  "checked": len(pins)})
+                                                                  "checked": len(pins)}, odd)
 
 
 # ---------------------------------------------------------------------------- Ruby (Bundler, OSV)
@@ -691,23 +1114,20 @@ def _gemfile_dev_only(text: str) -> tuple[dict[str, int], set[str]]:
     return lines, dev - shipped
 
 
-def gem_pins(repo: Path) -> tuple[dict[str, tuple[str, str, int]], list[str]]:
-    """Exact versions from every Gemfile.lock: name → (version, file, line)."""
+def gem_pins(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str, str, int]], list[str]]:
+    """Exact versions from every Gemfile.lock: name → (version, file, line). A gem's own line under `specs:` (four
+    spaces, then its name) that is no name and version goes to `odd`, and so does a lock file that cannot be read."""
+    odd = odd if odd is not None else Odd()
     pins: dict[str, tuple[str, str, int]] = {}
     files = []
     for lock in _project_files(repo, names=("Gemfile.lock",)):
         rel = lock.relative_to(repo).as_posix()
-        try:
-            text = lock.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
         files.append(rel)
+        text = _read(lock, rel, odd, repo)
+        if text is None:
+            continue
         gf = lock.with_name("Gemfile")
-        try:
-            gtext = gf.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            gtext = ""
-        glines, dev_only = _gemfile_dev_only(gtext)
+        glines, dev_only = _gemfile_dev_only(_quiet(gf, repo))
         in_specs = False
         for i, raw in enumerate(text.splitlines(), 1):
             if re.match(r"^\S", raw):
@@ -716,8 +1136,13 @@ def gem_pins(repo: Path) -> tuple[dict[str, tuple[str, str, int]], list[str]]:
             if raw.strip() == "specs:":
                 in_specs = True
                 continue
-            m = re.match(r"^    ([A-Za-z0-9][\w.-]*) \((\d[\w.]*)(?:-[a-z][\w-]*)?\)\s*$", raw) if in_specs else None
-            if not m or m.group(1) in dev_only:
+            if not in_specs or not re.match(r" {4}\S", raw):
+                continue                    # deeper lines say what a gem needs, not what is installed
+            m = GEM_LINE.fullmatch(raw)
+            if not m:
+                odd.add(rel, f"line {i}: {_shown(raw.strip())} is not a gem name and version")
+                continue
+            if m.group(1) in dev_only:
                 continue
             where = (gf.relative_to(repo).as_posix(), glines[m.group(1)]) if m.group(1) in glines else (rel, i)
             pins.setdefault(m.group(1), (m.group(2), *where))
@@ -729,13 +1154,16 @@ def run_gem_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     if pre is not None:
         return pre
     info: dict = {"role": "known-vulnerable Ruby gems (Gemfile.lock, OSV database)", "version": "osv-v1"}
-    pins, files = gem_pins(repo)
+    odd = Odd()
+    pins, files = gem_pins(repo, odd)
     if not files:
         return [], scanresult.record("gem-audit", "skipped", "no Gemfile.lock", **info)
+    if not pins and odd.count:
+        return [], scanresult.record("gem-audit", "partial", odd.why(), files=files, **odd.fields(), **info)
     if offline() if no_network is None else no_network:
         return [], scanresult.record("gem-audit", "skipped", "offline", applicable=True, files=files, **info)
     return _osv_audit("gem-audit", "RubyGems", pins, info | {"files": files, "scope": {"files": files, "packages": len(pins)},
-                                                            "checked": len(pins)})
+                                                            "checked": len(pins)}, odd)
 
 
 if __name__ == "__main__":   # python -m lantern.depaudit REPO OUT.json  (the cloud service's audit step)

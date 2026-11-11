@@ -95,7 +95,7 @@ Honest list, screen by screen. "Verify" means I believe it is partly there and y
 
 **Terminal drawer (5a)** — built; Lantern commands only; ids/paths as links: verify. Phone bottom sheet at 46%: not built as designed.
 
-**Watch my tests run (8f)** — sheet, rewards, success toast and failure toast (exit code, last lines, Try again / Change the command / Skip) exist. Runs in the sandbox (`lantern/sandbox.py`); the sheet names the backend and its limits. JavaScript, Go, Rust and Java tests run but only Python calls are recorded yet ("Tests run; your map upgrades for Python only for now").
+**Watch my tests run (8f)** — sheet, rewards, success toast and failure toast (exit code, last lines, Try again / Change the command / Skip) exist. Not in the mockups (added 2026-11-10, plain styling): a "Stop the tests" button on the running message, and the messages "You stopped the tests." and "Your tests were not run." (the sandbox could not be set up). Runs in the sandbox (`lantern/sandbox.py`); the sheet names the backend and its limits. JavaScript, Go, Rust and Java tests run but only Python calls are recorded yet ("Tests run; your map upgrades for Python only for now").
 
 **States (turn 8)** — first run, running, zero findings, bad path, no model exist; verify each against the board's copy.
 

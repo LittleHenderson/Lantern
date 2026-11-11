@@ -26,9 +26,9 @@ import tree_sitter_javascript as tsj
 import tree_sitter_typescript as tst
 from tree_sitter import Language, Node as TSNode, Parser
 
-from . import calls
+from . import calls, manifest
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_bytes, project_text
 
 LANGS = {
     ".ts": Language(tst.language_typescript()),
@@ -1301,17 +1301,34 @@ def _normalize_http(raw: str, method: str, scope: str, line: int, ui) -> HttpCal
 # Module resolution (relative paths, tsconfig paths, @/ alias)
 # --------------------------------------------------------------------------------------------
 
-def _load_jsonc(p: Path) -> dict:
+def _load_jsonc(p: Path, repo: Path) -> dict:
+    """The table a tsconfig/jsconfig of the project holds (comments and trailing commas allowed); an empty one when
+    the file is not the project's, cannot be read, is not valid, or holds something else than a table."""
     try:
-        txt = p.read_text(encoding="utf-8", errors="replace")
+        txt = project_text(p, repo)
     except OSError:
         return {}
     txt = re.sub(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/', lambda m: m.group(1) or "", txt, flags=re.S)
     txt = re.sub(r",(\s*[}\]])", r"\1", txt)
+    return manifest.table(manifest.parse_json(txt))
+
+
+def _reached(p: Path) -> Path | None:
+    """Where the path `p` leads once every link on it is followed, or None when it leads nowhere: links that name
+    each other (`a.ts -> b.ts -> a.ts`). Python 3.11 and 3.12 raise for such a loop, and until 2026-11-10 an import
+    that mentioned one stopped the whole analysis there."""
     try:
-        return json.loads(txt)
-    except json.JSONDecodeError:
-        return {}
+        return p.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _whole(base: Path, rel: str) -> Path | None:
+    """`rel` under `base` as a whole path, or None when what the file says there cannot be a path at all."""
+    try:
+        return (base / rel).resolve()
+    except (ValueError, OSError, RuntimeError):
+        return None
 
 
 class SpecResolver:
@@ -1332,12 +1349,15 @@ class SpecResolver:
             found: list[tuple[str, list[Path]]] = []
             bases: list[tuple[str, list[Path]]] = []
             for c in cands:
-                if not c.exists():
+                if not inside_repo(c, self.repo):   # also a link that leads out of the project: as if it were not there
                     continue
-                co = _load_jsonc(c).get("compilerOptions", {}) or {}
-                base = (c.parent / co.get("baseUrl", ".")).resolve()
-                for pat, targets in (co.get("paths") or {}).items():
-                    found.append((pat, [(base / t).resolve() for t in targets]))
+                # the file comes with the project: what is not the shape a tsconfig has is passed over (manifest.py)
+                co = manifest.table(_load_jsonc(c, self.repo).get("compilerOptions"))
+                base = _whole(c.parent, manifest.text(co.get("baseUrl"), "."))
+                if base is None:
+                    continue
+                for pat, targets in manifest.table(co.get("paths")).items():
+                    found.append((pat, [t for t in (_whole(base, x) for x in manifest.texts(targets)) if t is not None]))
                 if isinstance(co.get("baseUrl"), str) and ("*", [base / "*"]) not in bases:
                     bases.append(("*", [base / "*"]))
             if found or (cur / "package.json").exists() or cur == self.repo or cur == cur.parent:
@@ -1349,15 +1369,19 @@ class SpecResolver:
             cur = cur.parent
 
     def _try(self, base: Path) -> str | None:
-        cands = [base] + [base.with_name(base.name + e) for e in RESOLVE_EXTS] + \
-                [base / ("index" + e) for e in RESOLVE_EXTS]
+        # an alias may name the root folder (`"@/*": ["/"]`), which has no name to put an ending on
+        named = [base.with_name(base.name + e) for e in RESOLVE_EXTS] if base.name else []
+        cands = [base] + named + [base / ("index" + e) for e in RESOLVE_EXTS]
         for c in cands:
-            try:
-                rel = c.resolve().relative_to(self.repo).as_posix()
-            except ValueError:
-                continue
-            if rel in self.files:
-                return self.files[rel]
+            # as the file is reached, then as its path is written: a file that is a link kept inside the project
+            # is read under the name it has there (`inside_repo`), and an import of that name means that file
+            for whole in (_reached(c), Path(os.path.normpath(c))):
+                try:
+                    rel = whole.relative_to(self.repo).as_posix()
+                except (ValueError, AttributeError):
+                    continue
+                if rel in self.files:
+                    return self.files[rel]
         return None
 
     def resolve(self, spec: str, from_file: Path) -> str | None:
@@ -1415,19 +1439,19 @@ def discover(repo: Path) -> list[Path]:
                     and not fn.startswith(("vite.config", "next.config", "tailwind.config", "postcss.config",
                                            "eslint.config", "jest.config", "vitest.config", "playwright.config",
                                            "webpack.config", "babel.config", "rollup.config")) \
-                    and not built_bundle(p):
+                    and not built_bundle(p, repo):
                 out.append(p)
     return out
 
 
-def built_bundle(p: Path) -> bool:
+def built_bundle(p: Path, repo: Path | None = None) -> bool:
     """A file a build tool wrote (a Vite/webpack bundle or minified script, whatever its name): a few very long
     lines. Its functions are the libraries' code squeezed together, so mapping it adds thousands of one-letter
     nodes and copies whole lines of it into the report (one 1.3 MB bundle made a 360 MB report)."""
     try:
         if p.stat().st_size < 50_000:
             return False
-        data = p.read_bytes()
+        data = project_bytes(p, p.parent if repo is None else repo)
     except OSError:
         return False
     lines = data.count(b"\n") + 1
@@ -1460,12 +1484,12 @@ def _nearest_package(path: Path, repo: Path, cache: dict) -> dict:
         if cur in cache:
             return cache[cur]
         pj = cur / "package.json"
-        if pj.exists():
+        if inside_repo(pj, repo):   # a package.json that is a link out of the project is passed by, as if not there
             try:
-                data = json.loads(pj.read_text(encoding="utf-8", errors="replace"))
-            except json.JSONDecodeError:
+                data = manifest.table(manifest.parse_json(project_text(pj, repo)))
+            except OSError:
                 data = {}
-            deps = {**(data.get("dependencies") or {}), **(data.get("devDependencies") or {})}
+            deps = {**manifest.table(data.get("dependencies")), **manifest.table(data.get("devDependencies"))}
             info = {"dir": cur, "deps": set(deps)}
             cache[cur] = info
             return info
@@ -2068,7 +2092,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     for p in paths:
         rel = p.relative_to(repo).as_posix()
         try:
-            src = p.read_bytes()
+            src = project_bytes(p, repo)
         except OSError:
             continue
         if len(src) > 1_500_000:
