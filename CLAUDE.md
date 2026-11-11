@@ -359,7 +359,9 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   processor, a view model built elsewhere) and client-side templates (Angular, Vue, JSX) are not followed; such a
   place is still listed (`LW-XSS-RAW`, medium) with "not followed to where it comes from". A raw place whose value is
   the app's own HTML (rendered Markdown that was cleaned, a widget's markup) is listed too: the rule cannot tell,
-  and says so. What a constructor keeps is read back where the object's field is read from outside
+  and says so. The values of a plain-text e-mail template inside `{% autoescape off %}` are listed as well (4 lines
+  in Django's own `registration/password_reset_email.html`, `bench/large_apps_results.md`): an e-mail's text is not
+  told from a page (a false alarm, kept for point 6). What a constructor keeps is read back where the object's field is read from outside
   (`Search(q).term`); a field read inside another method of the same object (`self.term` in `run()`) is still not
   followed (the first point of this list). A request body class is taken by its base's name (`BaseModel`,
   `SQLModel`, `RootModel`, `BaseSchema`): a field written as a number, a date or a UUID carries no text

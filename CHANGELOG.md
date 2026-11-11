@@ -231,7 +231,8 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   `LW-SECRET-INLINE` (medium) where Bandit's B105 (low) stood.
   Measured on the held-out set (`bench/heldout/`: 14 apps the engine was not written on, definition
   `e6b10d91686f`, offline): documented problems found at medium or above went from 28 of 79 before this change to
-  54 at the third measurement (44 at the first, 50 at the second; 55 with the dependency audits on),
+  54 (44 at the first measurement, 50 at the second, 54 at the third and at the fourth and last; 55 with the
+  dependency audits on),
   and on the five public apps from 20 of 61 to 39 (target: 37). False alarms on the 17 safe-twin anchors went from 3
   to 0, a mapped path is on 46 of the 55 problems found, and no vulnerable app is given a green release (0 of 8, as
   before). Two targets are missed. One of the 26 `sql`, `shell`, `eval`, `deserialize` and `xxe` problems is still
@@ -239,11 +240,20 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   apps are still refused a green release, each through one false alarm at high; one of the two is a finding of this
   engine, on a value that has to equal a stored e-mail address before it reaches the page. Who may reach what is
   the weakest class (3 of 11 found). The third number was preceded by two looks at which expectations were missed,
-  by class, rule and line number only; the apps were not read. Every miss by name, the labels and all three
-  measurements are in `bench/heldout/README.md`. The rules for the browser's own address and for key names
-  came after the third measurement; a fourth follows them.
+  by class, rule and line number only; the apps were not read. After it two findings on clean apps were read in
+  the code to label them. The rules for the browser's own address and for key names came after that, from the
+  large apps below and not from this set; the fourth measurement is the engine with them, and no number moved.
+  Every miss by name, the labels and all four measurements are in `bench/heldout/README.md`.
+  Time and memory, on the ten large public apps of `tools/large_apps.py` with the code before this change and
+  with it (one run each, the same container, offline; `bench/large_apps_results.md`): 183.8 s for the ten before,
+  190.3 s after; Django, the largest, 99.0 s and 759 MB before, 103.9 s and 790 MB after. No file and no check
+  was left out. That run is also where the two false alarms above came from (the browser script of Hugo, the
+  key names of Django); on the final code Hugo lists what it listed before, and Django lists 20 new heuristic
+  findings at medium on its own templates, 4 of them false alarms on a plain-text e-mail (see Not covered).
   Not covered (the whole list is in `CLAUDE.md` under Known gaps and in `docs/audit/CLAIMS.md`, S18 to S21): only
-  Python and JavaScript/TypeScript are followed. A value an object's own method reads back, or one kept in a
+  Python and JavaScript/TypeScript are followed. The values of a plain-text e-mail template inside
+  `{% autoescape off %}` are listed as page output that is not escaped (4 such lines in Django's own
+  `password_reset_email.html`): an e-mail's text is not told from a page. A value an object's own method reads back, or one kept in a
   database, a session or a file and read back later (stored XSS, second-order SQL), is not followed. A library call
   passes a value on only when `flow_rules.PROPAGATORS` names it. The who-may-reach-what rules, the template rule and
   the secret rule read names and shapes and say so (heuristic): a shared record read by its id is reported like a

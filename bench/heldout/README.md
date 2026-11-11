@@ -93,27 +93,28 @@ local (28 in all, as the row always said); the split was written down wrong. The
 ## After point 4 of the directive (measured 2026-11-11)
 
 Point 4 ("trace actual security problems across the whole app": a value followed across functions and files, a
-check that counts for what its code proves, who may reach a record) was measured on this definition three times
-while it was built, offline each time, as was the "before" of the same day. `after_point4.json` / `.md` is the third
+check that counts for what its code proves, who may reach a record) was measured on this definition four times
+while it was built, offline each time, as was the "before" of the same day. `after_point4.json` / `.md` is the fourth
 and last of them; `after_point4_audits.json` / `.md` is the same engine with the dependency audits on, as the frozen
-baseline ran.
+baseline ran. The third and the fourth gave the same findings on every app of the set (the third with the audits
+on: 55 of 79, the same as the fourth); the two result files differ in the engine's commit and the time only.
 
-| Measure | Baseline, with audits (bc7cf10) | Before point 4 (eb3666e) | First (ae08c23) | Second (744b01a) | Third (d8a7980) | Third, with audits | Target | Result |
-|---|---|---|---|---|---|---|---|---|
-| Documented problems found at medium or above, of 79 | 28 | 28 | 44 | 50 | 54 | 55 | | |
-| of the 61 public | 21 | 20 | 32 | 37 | 39 | 40 | at least 37 | met |
-| of the 18 local | 7 | 8 | 12 | 13 | 15 | 15 | | |
-| of the 26 `sql`, `shell`, `eval`, `deserialize`, `xxe` ones | 19 | 20 | 25 | 25 | 25 | 25 | 26 | missed: one `eval` (`pg-ssti`) |
-| Found only as low | 2 | 1 | 1 | 1 | 1 | 1 | | |
-| Missed | 49 | 50 | 34 | 28 | 24 | 23 | | |
-| False alarms on the 17 safe-twin anchors | 3 | 3 | 3 | 2 | 0 | 0 | no more than 3, none on a fixed `sql`/`shell` value | met |
-| Vulnerable apps given a green release, of 8 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | met |
-| Clean apps not given a green release, of 6 | 3 | 3 | 3 | 3 | 2 | 2 | 0 | missed: fastapi-template, taxonomy |
-| Medium+ findings on clean apps (labelled false alarm) | 11 (9) | 11 (9) | 13 (6) | 12 (6) | 10 (7) | 10 (7) | every one labelled | met: 7 false alarm, 3 intended, none unlabelled |
-| Found problems with a mapped path | 21 of 30 | 25 of 29 | 40 of 45 | 43 of 51 | 46 of 55 | 46 of 56 | at least 70% | met |
-| Resolution checks, of 3 | 1 | 3 | 3 | 3 | 3 | 3 | every one | met (the row above says "4 of 4": the definition holds 3) |
-| Protection checks, of 3 | 2 | 2 | 3 | 3 | 3 | 3 | 3 | met |
-| Unresolved call sites: nodegoat, dvna, goof, express-boilerplate | 233/246, 202/206, 154/160, 397/506 | 116/330, 66/240, 36/184, 72/956 | the same | the same | the same | the same | under half on each | met (since point 3) |
+| Measure | Baseline, with audits (bc7cf10) | Before point 4 (eb3666e) | First (ae08c23) | Second (744b01a) | Third (d8a7980) | Fourth (1c7f819) | Fourth, with audits | Target | Result |
+|---|---|---|---|---|---|---|---|---|---|
+| Documented problems found at medium or above, of 79 | 28 | 28 | 44 | 50 | 54 | 54 | 55 | | |
+| of the 61 public | 21 | 20 | 32 | 37 | 39 | 39 | 40 | at least 37 | met |
+| of the 18 local | 7 | 8 | 12 | 13 | 15 | 15 | 15 | | |
+| of the 26 `sql`, `shell`, `eval`, `deserialize`, `xxe` ones | 19 | 20 | 25 | 25 | 25 | 25 | 25 | 26 | missed: one `eval` (`pg-ssti`) |
+| Found only as low | 2 | 1 | 1 | 1 | 1 | 1 | 1 | | |
+| Missed | 49 | 50 | 34 | 28 | 24 | 24 | 23 | | |
+| False alarms on the 17 safe-twin anchors | 3 | 3 | 3 | 2 | 0 | 0 | 0 | no more than 3, none on a fixed `sql`/`shell` value | met |
+| Vulnerable apps given a green release, of 8 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | met |
+| Clean apps not given a green release, of 6 | 3 | 3 | 3 | 3 | 2 | 2 | 2 | 0 | missed: fastapi-template, taxonomy |
+| Medium+ findings on clean apps (labelled false alarm) | 11 (9) | 11 (9) | 13 (6) | 12 (6) | 10 (7) | 10 (7) | 10 (7) | every one labelled | met: 7 false alarm, 3 intended, none unlabelled |
+| Found problems with a mapped path | 21 of 30 | 25 of 29 | 40 of 45 | 43 of 51 | 46 of 55 | 46 of 55 | 46 of 56 | at least 70% | met |
+| Resolution checks, of 3 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | every one | met (the row above says "4 of 4": the definition holds 3) |
+| Protection checks, of 3 | 2 | 2 | 3 | 3 | 3 | 3 | 3 | 3 | met |
+| Unresolved call sites: nodegoat, dvna, goof, express-boilerplate | 233/246, 202/206, 154/160, 397/506 | 116/330, 66/240, 36/184, 72/956 | the same | the same | the same | the same | the same | under half on each | met (since point 3) |
 
 By class, found at medium or above before point 4 and at the third measurement, of the expected: `auth` 3 and 3 of
 5, `authz` 0 and 3 of 11, `config` 0 and 0 of 4 (1 only as low), `csrf` 1 and 1 of 2, `dependency` 0 and 0 of 2 (not
@@ -127,7 +128,15 @@ rank and line number only, and every rule that followed was written against exam
 the changelog), none of them copied from the set. So the third number was preceded by two looks at which
 expectations were missed, and it is not the number a first look at an unseen set would give; the first measurement
 (44 of 79) is the one no look preceded. After the third measurement the two findings on clean apps that had no
-label were read in the code and labelled, and the engine was not changed after that.
+label were read in the code and labelled (in fastapi-template the route and the helper that makes its page, in
+express-safe the route, its handler, its login check and the twin's entry in `cases.json`).
+
+The engine did change once more after that, and not from this set. The ten large public apps of
+`tools/large_apps.py`, analysed before and after point 4 for time and memory, showed two false alarms of the new
+rules (a browser script that sends the visitor to the page's own site, and a name like `SESSION_KEY` that only
+names where something is kept); both were fixed against examples of their own (`bench/large_apps_results.md`,
+the changelog). The fourth measurement is that engine. It was preceded by the two looks above and by the reading
+for the two labels; nothing in the last change was written for an app of this set, and no number moved.
 
 Where it still misses (24, and 1 found only as low):
 
@@ -160,5 +169,5 @@ be 1 of 17.
 * `labels.json` · hand labels for findings on the clean public apps.
 * `run_heldout.py` · fetch, analyze, score, write `<out>.json` and `<out>.md`.
 * `baseline.json`, `baseline.md` · the frozen before.
-* `after_point4.json`, `after_point4.md` · the third measurement after point 4 (offline, like the before of the
-  same day); `after_point4_audits.json`, `.md` · the same engine with the dependency audits on.
+* `after_point4.json`, `after_point4.md` · the fourth and last measurement after point 4 (offline, like the before
+  of the same day); `after_point4_audits.json`, `.md` · the same engine with the dependency audits on.
