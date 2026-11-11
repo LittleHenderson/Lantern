@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import sys
 from pathlib import Path
 
+from . import programs, results
 from .lanes import LANE_WORDS  # the four stack stops: Browser, Frontend, Server, Data
 
 SYSTEM = """You are Lantern's assistant inside the Lantern app. Lantern maps an app's code (every path from a
@@ -129,9 +129,11 @@ def _plain(text: str) -> str:
 
 
 def _load(p: Path):
+    """What a result file holds, or None. Only a plain file is read (`results.plain`), never a link or a pipe."""
+    text = results.plain(p)[0]
     try:
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
-    except (OSError, ValueError):
+        return None if text is None else json.loads(text)
+    except (ValueError, RecursionError):
         return None
 
 
@@ -159,12 +161,13 @@ def ocr_image(img) -> str:
     (`tesseract stdin stdout`), so it is never written to disk."""
     import io
     import subprocess
-    exe = shutil.which("tesseract")
+    exe = programs.find("tesseract")
     if not exe:
         raise FileNotFoundError("tesseract")
     buf = io.BytesIO()
     img.convert("RGB").save(buf, format="PNG")
-    r = subprocess.run([exe, "stdin", "stdout"], input=buf.getvalue(), capture_output=True, timeout=60)
+    r = subprocess.run([exe, "stdin", "stdout"], input=buf.getvalue(), capture_output=True, timeout=60,
+                       env=programs.env())
     if r.returncode != 0:
         raise RuntimeError(r.stderr.decode("utf-8", "replace").strip()[:120] or f"exit {r.returncode}")
     return r.stdout.decode("utf-8", "replace")

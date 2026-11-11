@@ -84,31 +84,47 @@ def test_admin_stats_and_dashboard_need_the_secret(gw):
     assert tok.startswith("lt_")
 
 
-def test_app_sends_pending_pings_to_the_gateway(home, gw, monkeypatch):
+@pytest.fixture
+def gw_address(gw):
+    """The gateway of `gw` behind a real address on this computer: each request is handed to it as it came, path
+    included, and its answer goes back. (Until 2026-11-10 this test replaced `urlopen` and handed over the body
+    alone, so it could not see that the path Lantern posted to was not one the gateway has.)"""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    seen = []
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("content-length") or 0))
+            r = gw.post(self.path, content=body, headers={"content-type": "application/json"})
+            if r.status_code == 200:
+                seen.append(json.loads(body))
+            self.send_response(r.status_code)
+            self.send_header("content-length", str(len(r.content)))
+            self.end_headers()
+            self.wfile.write(r.content)
+
+        def log_message(self, *a):
+            pass
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}", seen
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_app_sends_pending_pings_to_the_gateway(home, gw_address):
+    address, sent = gw_address
     usage.set_enabled(True)
     usage.record("analyze")
-    sent = []
-
-    class FakeResp:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    def fake_urlopen(req, timeout=0):
-        sent.append(json.loads(req.data))
-        r = gw.post("/v1/usage", json=json.loads(req.data))
-        assert r.status_code == 200
-        return FakeResp()
-    monkeypatch.setattr(usage.urllib.request, "urlopen", fake_urlopen)
-    assert usage.send("https://gateway.test") == 1
+    assert usage.send(address) == 1
     assert sent[0]["features"] == {"analyze": 1}
-    assert usage.send("https://gateway.test") == 0        # already sent; nothing new
+    assert usage.send(address) == 0                        # already sent; nothing new
     usage.record("explain")
-    assert usage.send("https://gateway.test") == 1        # the day's counts changed: sent again, gateway keeps the max
+    assert usage.send(address) == 1                        # the day's counts changed: sent again, gateway keeps the max
+    assert usage.send(address + "/v1") == 0                # the address as Lantern is set up with it: the same place
+    usage.record("accept")
+    assert usage.send(address + "/v1") == 1 and sent[-1]["features"] == {"analyze": 1, "explain": 1, "accept": 1}
     assert usage.send("") == 0                             # no gateway configured: nothing leaves
 
 

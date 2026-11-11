@@ -423,11 +423,20 @@ function deleteSheet(r) {
     <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Cancel</button><button class="btn danger" id="dodel">${icon('trash')}Delete</button></div>`);
   el.querySelector('#dodel').onclick = async () => {
     try {
-      await api('/v1/runs/' + encodeURIComponent(r.id), {method: 'DELETE'});
+      const done = await api('/v1/runs/' + encodeURIComponent(r.id), {method: 'DELETE'});
       S.runs = (S.runs || []).filter(x => x.id !== r.id); delete S.links[r.id]; if (S.run && S.run.id === r.id) S.run = null; S.frame = null;
       closeSheet(); if (S.view === 'run') go('home'); else render();
+      if (done && done.files === 'waiting') filesWaitSheet('This check');
     } catch (e) { el.querySelector('#delmsg').innerHTML = note('err', esc(e.message)); }
   };
+}
+// A delete answers "files": "removed" or "waiting". "waiting": the check (or the account) is gone and nobody can open
+// it, but the server could not remove its files from its disk yet. It has written that down and tries again by
+// itself. The person is told so, in place of a sheet that closes as if nothing were left.
+function filesWaitSheet(what) {
+  sheet(`<div class="sh"><h2>Deleted, with one thing still to do</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <div id="fileswait">${note('warn', `${esc(what)} is deleted: nobody can open it any more, and its share links are off. Lantern's server could not remove its files from its own disk yet. It has written that down and tries again by itself; the owner of the server is told when that takes more than a day.`)}</div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn primary" data-close>OK</button></div>`);
 }
 function deleteMeSheet() {
   const n = (S.runs || []).length;
@@ -440,8 +449,10 @@ function deleteMeSheet() {
   const sure = el.querySelector('#sure'), go2 = el.querySelector('#dodel');
   sure.onchange = () => { go2.disabled = !sure.checked; };
   go2.onclick = async () => {
-    try { await api('/v1/me', {method: 'DELETE'}); S.me = null; S.runs = null; S.links = {}; S.run = null; closeSheet(); go('home'); render(); }
-    catch (e) { el.querySelector('#delmsg').innerHTML = note('err', esc(e.message)); }
+    try {
+      const done = await api('/v1/me', {method: 'DELETE'}); S.me = null; S.runs = null; S.links = {}; S.run = null; closeSheet(); go('home'); render();
+      if (done && done.files === 'waiting') filesWaitSheet('Your account');
+    } catch (e) { el.querySelector('#delmsg').innerHTML = note('err', esc(e.message)); }
   };
 }
 

@@ -26,8 +26,9 @@ import time
 import traceback
 from pathlib import Path
 
-from . import __version__, pipeline, usage
+from . import __version__, pipeline, programs, results, usage
 from .graph import Graph
+from .python_frontend import project_text
 
 PROTOCOL_VERSION = "2025-06-18"
 MAX_LIST = 60           # findings or paths in one answer; the rest is counted
@@ -218,7 +219,7 @@ def tool_findings(P: Projects, args: dict) -> dict:
     repo = P.resolve(args.get("project"))
     out = _out(repo)
     sec, exp = _load(out, "security.json"), _load(out, "explanations.json")
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
     fs = sec.get("findings") or []
     fid = (args.get("id") or "").strip()
     if fid:
@@ -262,7 +263,7 @@ def tool_findings(P: Projects, args: dict) -> dict:
 def tool_paths(P: Projects, args: dict) -> dict:
     repo = P.resolve(args.get("project"))
     out = _out(repo)
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
     target = str(args.get("target") or "").strip()
     if not target:
         raise ValueError("give target: a function name, qualified name, node id, or file:line")
@@ -313,7 +314,7 @@ def tool_paths(P: Projects, args: dict) -> dict:
 def tool_explain(P: Projects, args: dict) -> dict:
     repo = P.resolve(args.get("project"))
     out = _out(repo)
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
     ids = find_node(g, str(args.get("target") or ""))
     if not ids:
         raise ValueError(f"nothing in {repo.name} matches {args.get('target')!r}")
@@ -325,7 +326,7 @@ def tool_explain(P: Projects, args: dict) -> dict:
     src = None
     if n.file and n.start_line:
         try:
-            text = (repo / n.file).read_text(encoding="utf-8", errors="replace").splitlines()
+            text = project_text(repo / n.file, repo).splitlines()
             src = "\n".join(text[n.start_line - 1:(n.end_line or n.start_line)])[:4000]
         except OSError:
             src = None
@@ -625,7 +626,7 @@ class Server:
                 r = TOOL_INDEX[name][0](self.P, args if isinstance(args, dict) else {})
                 return self._ok(mid, {"content": [{"type": "text", "text": r["text"]}],
                                       "structuredContent": _jsonable(r["data"]), "isError": False})
-            except ValueError as e:
+            except (ValueError, results.Refused) as e:   # a wrong argument, a place Lantern will not write to
                 return self._ok(mid, {"content": [{"type": "text", "text": str(e)}], "isError": True})
             except Exception as e:  # noqa: BLE001: the assistant gets a message, the server stays up
                 return self._ok(mid, {"content": [{"type": "text", "text": f"Lantern error: {type(e).__name__}: {e}\n"
@@ -680,8 +681,7 @@ def _jsonable(x):
 # ---------------------------------------------------------------------------- setup help
 
 def setup_text() -> str:
-    import shutil
-    cmd = shutil.which("lantern") or "lantern"
+    cmd = programs.find("lantern") or "lantern"
     cfg = json.dumps({"mcpServers": {"lantern": {"command": cmd, "args": ["mcp"]}}}, indent=2)
     return f"""Lantern as a connector. One server, every assistant that speaks MCP.
 

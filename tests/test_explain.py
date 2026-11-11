@@ -145,6 +145,27 @@ def test_run_end_to_end_with_cache(gs, tmp_path):
     assert len(p2.calls) == 1  # only the metaphor call
 
 
+@pytest.mark.parametrize("left", ["", '{"lens1": {"summary": "half a rec', "[1, 2]"],
+                         ids=["empty", "cut short", "not a record"])
+def test_a_damaged_cache_entry_is_asked_for_again(gs, tmp_path, left):
+    """A cache file that was cut short while it was written (the program was stopped, the disk was full), or that is
+    not a record at all, is not an explanation. Until 2026-11-10 it stopped every later `explain` of the project with
+    an error, until somebody deleted the cache folder by hand. Now that one function is asked for again and its file
+    written anew. The safe twin is in the same run: the entry that is whole is used, with no second request."""
+    g, findings = gs
+    nids = ["py:shop.repo.UserRepo.get", "py:shop.auth.Session.login"]
+    assert run(g, FixtureProvider(responder), findings, tmp_path, nids)["stats"]["generated"] == 2
+    files = sorted(tmp_path.glob("*.json"))
+    assert len(files) == 2
+    whole = files[1].read_bytes()
+    files[0].write_text(left, encoding="utf-8")
+    p = FixtureProvider(responder)
+    out = run(g, p, findings, tmp_path, nids)
+    assert (out["stats"]["validated"], out["stats"]["cached"], out["stats"]["generated"]) == (2, 1, 1)
+    assert len(p.calls) == 2                       # the setting, and the one function whose entry was damaged
+    assert isinstance(json.loads(files[0].read_text(encoding="utf-8")), dict) and files[1].read_bytes() == whole
+
+
 def test_retry_fixes_invalid_answer(gs, tmp_path):
     g, findings = gs
     state = {"n": 0}

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_bytes
 
 MAX_BYTES = 1_500_000
 SKIP_SWIFT = {"Pods", "Carthage", "DerivedData", ".build", "SourcePackages"}
@@ -501,7 +501,7 @@ def add_swift(g: Graph, repo: str | Path) -> dict:
     total = 0
     for p in paths:
         try:
-            src = p.read_bytes()
+            src = project_bytes(p, repo)
         except OSError:
             continue
         if len(src) > MAX_BYTES:

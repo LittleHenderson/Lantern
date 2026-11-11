@@ -27,6 +27,8 @@ import json
 import re
 from pathlib import Path
 
+from . import results
+
 INVENTORIED = ("python", "typescript/javascript")
 GROUPS = ("written", "handed", "implicit")
 OUTCOMES = ("resolved", "likely", "possible", "name-only", "external", "builtin", "unresolved")
@@ -190,7 +192,7 @@ def write(path: Path, g) -> Path:
             "outcomes": OUTCOME_WORDS, "reasons": REASONS, "sites": sites[:MAX_SITES]}
     if len(sites) > MAX_SITES:
         data["truncated"] = {"kept": MAX_SITES, "total": len(sites)}
-    path.write_text(json.dumps(data, indent=0), encoding="utf-8")
+    results.write(path, json.dumps(data, indent=0))
     return path
 
 

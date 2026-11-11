@@ -312,6 +312,9 @@ def pytest_terminal_summary(terminalreporter):
                                     "and these were. The run fails for it:")
         for where, why in _skipped:
             terminalreporter.write_line(f"  {where}{'' if '::' in where else ' (the whole file)'}: {why}")
+    ran = getattr(terminalreporter.config, "_lantern_ran_against", None)      # a test file says what it started
+    if ran:
+        terminalreporter.write_line("programs these tests started: " + "; ".join(f"{k} {v}" for k, v in sorted(ran.items())))
     if _rules():
         terminalreporter.write_line("rules of this run: " + "; ".join(_rules()))
 

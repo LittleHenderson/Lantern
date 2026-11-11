@@ -13,16 +13,16 @@ import html
 import json
 import platform
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, gitfacts, scanresult
+from . import SCHEMA_VERSION, __version__, gitfacts, programs, results, scanresult
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
-from .python_frontend import inside_repo
+from .python_frontend import inside_repo, project_text
 from .security import ID_VERSION
+from .trace import counted
 
 EVIDENCE_VERSION = 1
 NARRATIVES_FILE = "lantern-narratives.md"
@@ -46,11 +46,11 @@ def engine_ref() -> str:
     if re.fullmatch(r"[0-9a-f]{40}", _build.COMMIT or ""):
         return _build.COMMIT
     root = Path(__file__).resolve().parent.parent
-    git = shutil.which("git")
+    git = programs.find("git")
     if git and (root / ".git").exists() and (root / "pyproject.toml").is_file():
         try:
             p = subprocess.run([git, "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=10)
+                               encoding="utf-8", errors="replace", timeout=10, env=programs.env())
             if p.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", p.stdout.strip()):
                 return p.stdout.strip()
         except (OSError, subprocess.TimeoutExpired):
@@ -80,7 +80,9 @@ def tool_versions(sec: dict | None) -> list[dict]:
 
 def run_options(sec: dict | None, run_meta: dict | None) -> dict:
     """How the results were made, so `lantern verify` can make them the same way."""
-    return {"scan": sec is not None, "trace": ((run_meta or {}).get("trace") or {}).get("command"),
+    tr = (run_meta or {}).get("trace")
+    # tests that were asked for and not run left nothing in the results: no trace to repeat
+    return {"scan": sec is not None, "trace": tr.get("command") if counted(tr) else None,
             "offline": bool((run_meta or {}).get("offline"))}
 
 
@@ -164,7 +166,8 @@ def incomplete_lines(tools: list[dict]) -> list[str]:
     return out
 
 
-def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy: str, exp: dict | None) -> list[str]:
+def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy: str, exp: dict | None,
+           baseline_unread: str | None = None) -> list[str]:
     st = g.stats()
     out = [
         "Business-logic flaws. Scanners and graph checks find known patterns; they can't tell whether your "
@@ -178,9 +181,14 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "type was unknown. They are marked likely or possible, never confirmed, and can point at the "
                    "wrong function.")
     tr = run_meta.get("trace")
-    if tr:
+    if counted(tr):
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "
                    "running are marked observed; everything else is static.")
+    elif isinstance(tr, dict) and tr.get("ran") is False:
+        why = tr.get("unavailable")
+        out.append("Runtime behavior. The project's tests were asked for and were not run, because the sandbox they "
+                   "run in could not be set up" + (f" ({why[:300]})" if isinstance(why, str) and why else "")
+                   + ". Every edge is from static analysis.")
     else:
         out.append("Runtime behavior. No code was run for this report, so every edge is from static analysis and "
                    "tests were not executed.")
@@ -191,13 +199,24 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
     tools = [t for t in (sec or {}).get("tools", []) if isinstance(t, dict)]
     out += incomplete_lines(tools)
     for t in tools:
-        if t.get("tool") == "pip-audit" and t.get("unpinned"):
-            out.append(f"{t['unpinned']} Python requirement(s) give a range, not an exact version, so they were not "
-                       "checked for known vulnerabilities. A lock file fixes this.")
-        if t.get("tool") == "maven-audit" and t.get("status") == "ok":
+        n = t.get("unpinned")           # the record may be one read back from disk: only a count is taken for a count
+        n = n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+        tool, were = t.get("tool"), "they were" if n != 1 else "it was"
+        if tool == "pip-audit" and n:
+            out.append(f"{n} Python requirement{'s name' if n != 1 else ' names'} no exact released version (a range, "
+                       f"or a package installed from a link or a folder), so {were} not checked for known "
+                       "vulnerabilities. For a range, a lock file fixes this.")
+        if tool == "maven-audit" and (t.get("status") == "ok" or (t.get("state") == "partial" and t.get("checked"))):
             out.append("Gradle/Maven libraries were checked as written in the build files; the libraries they pull in "
-                       "were not" + (f", and {t['unpinned']} written without an exact version were not checked either"
-                                     if t.get("unpinned") else "") + ".")
+                       "were not.")
+        if tool == "maven-audit" and n:
+            out.append(f"{n} Gradle/Maven librar{'ies are' if n != 1 else 'y is'} written without an exact name and "
+                       "version (no version, a range, a `+`, or a variable Lantern cannot fill in), so "
+                       f"{were} not checked for known vulnerabilities.")
+        if tool == "composer-audit" and n:
+            out.append(f"{n} PHP librar{'ies' if n != 1 else 'y'} in composer.lock {'are' if n != 1 else 'is'} "
+                       f"installed from a branch, not a released version, so {were} not checked for known "
+                       "vulnerabilities.")
     if any(f.get("category") == "dependency" for f in (sec or {}).get("findings", [])) or any(
             t.get("tool") in AUDIT_TOOLS and t.get("status") == "ok" for t in (sec or {}).get("tools", [])):
         out.append("Dependency findings come from live vulnerability databases, so a re-check can find new ones "
@@ -216,6 +235,11 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "which model wrote them.")
     if privacy != "full":
         out.append("Source code was left out of this report (structure-only privacy).")
+    if baseline_unread:     # `results.earlier`: fixed words, never text from the file
+        out.append("What was fixed since the first analysis. The file that records the first analysis "
+                   f"(baseline.json in the results folder) could not be used: {str(baseline_unread)[:300]}. It was "
+                   "left as it is, and this report compares with nothing. `lantern evidence PATH --reset-baseline` "
+                   "starts a new record from today's findings.")
     left = run_meta.get("skipped") if isinstance(run_meta.get("skipped"), dict) else None
     if left and isinstance(left.get("files"), int):
         ex = [str(x)[:120] for x in (left.get("examples") or []) if isinstance(x, str)][:3]
@@ -234,7 +258,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
 # ---------------------------------------------------------------------------- build
 
 def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_meta: dict | None,
-          baseline: dict | None, privacy: str = "full") -> dict:
+          baseline: dict | None, privacy: str = "full", baseline_unread: str | None = None) -> dict:
     repo = Path(g.repo_root)
     run_meta = run_meta or {}
     gi = git_info(repo)
@@ -244,7 +268,10 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
     narratives = None
     nf = repo / NARRATIVES_FILE
     if inside_repo(nf, repo):   # the project's own file: until 2026-11-10 a link out of the project was shown too
-        narratives = nf.read_text(encoding="utf-8", errors="replace")[:20000]
+        try:
+            narratives = project_text(nf, repo, 20000)
+        except OSError:   # it cannot be read: the report is made without it
+            narratives = None
     entries = [{"kind": (n.entry or {}).get("kind"), "detail": (n.entry or {}).get("detail"), "name": n.qualname,
                 "file": n.file} for n in g.entry_points() if (n.entry or {}).get("kind") != "test"]
     models = []
@@ -252,7 +279,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         s = exp["stats"]
         models.append({"model": s.get("model"), "task": "Three-Lens explanations", "validated": s.get("validated"),
                        "failed": s.get("failed"), "prompt_version": next(
-                           (r.get("prompt_version") for r in exp.get("explanations", {}).values()), None)})
+                           (r.get("prompt_version") for r in (exp.get("explanations") or {}).values()), None)})
     payload = digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False), run_options(sec, run_meta))
     return {
         "evidence_version": EVIDENCE_VERSION,
@@ -295,21 +322,27 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
                                  f"readiness checks v{(rd or {}).get('version', '-')}", f"graph schema {SCHEMA_VERSION}"]
                        + [f"analysis pack {t['tool'].split(':', 1)[1]} v{t.get('version', '-')} ({t.get('status', '')})"
                           for t in (sec or {}).get("tools", []) if str(t.get("tool", "")).startswith("lantern-pack:")]},
-        "limits": limits(g, sec, rd, run_meta, privacy, exp),
+        "limits": limits(g, sec, rd, run_meta, privacy, exp, baseline_unread),
         "digest": digest(payload), "payload": payload,
     }
 
 
 def read_digest(report: Path) -> tuple[str | None, dict | None]:
-    """The digest named in an evidence.html or evidence.json, and the payload when the .json is beside it."""
-    m = re.search(r"sha256:[0-9a-f]{64}", report.read_text(encoding="utf-8", errors="replace"))
+    """The digest named in an evidence.html or evidence.json, and the payload when the .json is beside it. Both
+    are read only as plain files (`results.plain`): a report that is a link, a pipe or not there is
+    `results.Refused`, in words for the person; a .json beside it that is not a plain file is passed over."""
+    text, why = results.plain(report)
+    if text is None:
+        raise results.Refused(f"{report} was not read: {why or 'it is not there'}.")
+    m = re.search(r"sha256:[0-9a-f]{64}", text)
     want = m.group(0) if m else None
     old = None
     jp = report if report.suffix == ".json" else report.with_suffix(".json")
-    if jp.exists():
+    beside = text if jp == report else results.plain(jp)[0]
+    if beside is not None:
         try:
-            old = json.loads(jp.read_text(encoding="utf-8")).get("payload") or {}
-        except (OSError, json.JSONDecodeError, AttributeError):
+            old = json.loads(beside).get("payload") or {}
+        except (ValueError, RecursionError, AttributeError):
             old = None
     return want, old
 
@@ -861,10 +894,10 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
 
 def write(out_dir: Path, ev: dict) -> dict[str, Path]:
     paths = {"html": out_dir / "evidence.html", "json": out_dir / "evidence.json"}
-    paths["html"].write_text(render_html(ev), encoding="utf-8")
-    paths["json"].write_text(json.dumps(ev, indent=1), encoding="utf-8")
+    results.write(paths["html"], render_html(ev))
+    results.write(paths["json"], json.dumps(ev, indent=1))
     rd = ev["scorecard"]["readiness"]
     if rd:
         paths["badge"] = out_dir / "badge.svg"
-        paths["badge"].write_text(badge_svg(rd["score"], rd["grade"], ev), encoding="utf-8")
+        results.write(paths["badge"], badge_svg(rd["score"], rd["grade"], ev))
     return paths

@@ -95,9 +95,9 @@ strangers (the code it analyzes may be hostile on purpose).
 - Lantern: ✅ `test_archive.py` (lying sizes, escaping names, links), `test_android.py::test_hostile_manifests_are_refused_quietly`, `test_ios.py::test_hostile_plists_are_refused_quietly`, `test_remote.py` (link tricks, big repos), `test_ocr.py` (oversize images), `test_fullstack.py::test_login_check_reads_hostile_code_in_bounded_time`.
 
 **2.4 Running someone else's tests safely ("sandbox")**
-- What it checks: when Lantern runs an app's own tests, they cannot write outside a temp folder, reach the network, or read secrets.
-- Scenario: a cloned repo's "test" tries to upload `~/.ssh` to a server; it is blocked and the run is labelled blocked.
-- Lantern: ✅ `test_sandbox.py::test_planted_tests_cannot_write_reach_the_network_or_read_secrets`, plus the wall-clock kill test.
+- What it checks: when Lantern runs an app's own tests, they cannot write outside a temp folder, reach the network, or read secrets; they are not run at all when the sandbox cannot be set up; and nothing they start is left running.
+- Scenario: a cloned repo's "test" tries to upload `~/.ssh` to a server; it is blocked and the run is labelled blocked. Another starts a hidden program that should keep running after the tests; it is ended with them, also when you press Stop or close Lantern.
+- Lantern: ✅ `test_sandbox.py::test_planted_tests_cannot_write_reach_the_network_or_read_secrets`, plus the wall-clock kill test; `test_sandbox_safety.py` (the tests are refused when the kernel, the guard or the Windows job cannot be set up; a child, a child in its own session and a daemon are gone after a normal end, the wall clock, Stop, the program leaving and the program being killed). Windows itself is tried only by four tests of CI's Windows job.
 
 **2.5 Secrets never in the code**
 - What it checks: no API key or password is committed to the repository or shipped to users.
@@ -136,7 +136,7 @@ strangers (the code it analyzes may be hostile on purpose).
 **3.2 Everything slow has a time limit**
 - What it checks: clones, test runs, screenshot reading and model calls stop after a set time instead of hanging forever.
 - Scenario: a git server stops answering mid-clone; the run fails after 900 s with a clear message instead of spinning all night.
-- Lantern: ✅ `test_remote.py::test_the_timeout_bounds_the_call_when_a_child_keeps_the_pipes`, `test_sandbox.py::test_runaway_tests_are_killed_at_the_wall_clock`.
+- Lantern: ✅ `test_remote.py::test_the_timeout_bounds_the_call_when_a_child_keeps_the_pipes`, `test_sandbox.py::test_runaway_tests_are_killed_at_the_wall_clock`, `test_sandbox_safety.py::test_nothing_a_test_started_is_left_at_the_wall_clock`.
 
 **3.3 Big apps are refused or handled, not crashed**
 - What it checks: an app too large for the machine is refused before it fills the disk or memory.

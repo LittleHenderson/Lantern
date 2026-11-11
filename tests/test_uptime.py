@@ -90,3 +90,40 @@ def test_an_old_live_engine_is_behind(capsys):
 def test_version_order():
     assert uptime.vtuple("v0.10.0") > uptime.vtuple("0.9.9") and uptime.vtuple("0.10.0") == uptime.vtuple("0.10.0")
     assert uptime.vtuple("0.11.0rc1") > uptime.vtuple("0.10.0")
+
+
+def test_clean_up_that_is_behind_fails_the_check(capsys):
+    """lantern-cloud's health says one word about its own clean-up (stage 7): files of deleted runs that have waited
+    for more than a day to be removed are an email to the owner, not a line nobody reads."""
+    c, cu = serve({"ok": True, "service": "lantern-cloud", "version": "0.1.0", "engine": "0.10.0", "cleanup": "behind"})
+    try:
+        assert uptime.main(["--cloud", cu]) == 1
+        got = capsys.readouterr()
+        assert "| lantern-cloud clean-up |" in got.out and "| OWED |" in got.out and "/v1/admin/stats" in got.out
+        assert "FAIL lantern-cloud clean-up" in got.err
+    finally:
+        c.shutdown()
+    c, cu = serve({"ok": True, "service": "lantern-cloud", "version": "0.1.0", "cleanup": "unknown"})
+    try:
+        assert uptime.main(["--cloud", cu]) == 1
+        assert "| UNKNOWN |" in capsys.readouterr().out
+    finally:
+        c.shutdown()
+
+
+def test_clean_up_that_is_up_to_date_or_not_mentioned_passes(capsys):
+    """The safe twins: "ok", and a live service from before the word existed (the check runs from the newest code
+    against whatever is deployed)."""
+    for body in ({"ok": True, "service": "lantern-cloud", "version": "0.1.0", "cleanup": "ok"},
+                 {"ok": True, "service": "lantern-cloud", "version": "0.1.0"}):
+        c, cu = serve(body)
+        try:
+            assert uptime.main(["--cloud", cu]) == 0
+            assert "clean-up" not in capsys.readouterr().out
+        finally:
+            c.shutdown()
+    g, gu = serve({"ok": True, "version": "0.2.5", "cleanup": "behind"})     # only lantern-cloud says this word
+    try:
+        assert uptime.main(["--gateway", gu]) == 0
+    finally:
+        g.shutdown()

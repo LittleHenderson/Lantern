@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, learn, pipeline, remote, usage
+from . import __version__, learn, pipeline, remote, results, usage
 from .packs import PACK_NAME
 from .providers import DEFAULT_MODEL_NAME, DEFAULT_PROVIDER, PRESETS
 from .readiness import SHAPES
@@ -242,18 +242,22 @@ class Store:
 class Jobs:
     def __init__(self):
         self.jobs: dict[str, dict] = {}
+        self.stops: dict[str, threading.Event] = {}   # beside the jobs, which are sent to the page as they are
         self.lock = threading.Lock()
 
     def busy(self, pid: str) -> dict | None:
         return next((j for j in self.jobs.values() if j["project"] == pid and j["status"] == "running"), None)
 
-    def start(self, pid: str, kind: str, fn) -> dict:
+    def start(self, pid: str, kind: str, fn, stop: threading.Event | None = None) -> dict:
+        """`stop`: the event `fn` watches. A job that has one can be stopped by the person (`can_stop`, `stop()`)."""
         with self.lock:
             if self.busy(pid):
                 raise RuntimeError("a run is already in progress for this project")
             job = {"id": uuid.uuid4().hex[:12], "project": pid, "kind": kind, "status": "running",
-                   "log": [], "result": None, "error": None, "started": time.time()}
+                   "log": [], "result": None, "error": None, "started": time.time(), "can_stop": stop is not None}
             self.jobs[job["id"]] = job
+            if stop is not None:
+                self.stops[job["id"]] = stop
 
         def log(line):
             job["log"].append(str(line))
@@ -271,6 +275,20 @@ class Jobs:
         threading.Thread(target=work, daemon=True).start()
         return job
 
+    def stop(self, jid: str) -> dict | None:
+        """Ask a running job to stop (a test run: the tests and everything they started are ended). None when there
+        is no such job; ValueError when it is not one that can be stopped."""
+        job = self.jobs.get(jid)
+        if job is None:
+            return None
+        event = self.stops.get(jid)
+        if event is None:
+            raise ValueError("this job cannot be stopped part-way; it ends by itself")
+        if job["status"] == "running":
+            job["stopping"] = True
+            event.set()
+        return job
+
 
 class App:
     def __init__(self, store: Store, token: str, port: int):
@@ -282,10 +300,11 @@ class App:
 
     def summary(self, p: dict) -> dict:
         out = Path(p["path"]) / ".lantern"
-        rd = _load(out / "readiness.json") or {}
-        sec = _load(out / "security.json") or {}
-        run = _load(out / "run.json") or {}
-        ex = _load(out / "explanations.json") or {}
+        # A results folder that is a link which came with the project is not Lantern's: nothing is read through it,
+        # the card shows the project as not checked yet, and a check says why it will not write there (`self.out`).
+        linked = results.link_in_project(p["path"], out)
+        rd, sec, run, ex = ({} if linked else _load(out / name) or {}
+                            for name in ("readiness.json", "security.json", "run.json", "explanations.json"))
         busy = self.jobs.busy(p["id"])
         # These files sit in the analyzed folder, which may come from anyone: keep only the expected types.
         counts = sec.get("counts") if isinstance(sec.get("counts"), dict) else None
@@ -305,7 +324,7 @@ class App:
         # scanners that did not finish or did not cover everything (scanresult.py): the card says so
         incomplete = [_str(t.get("tool")) for t in (sec.get("incomplete") or []) if isinstance(t, dict) and _str(t.get("tool"))
                       ] if isinstance(sec.get("incomplete"), list) else []
-        return {**p, "exists": Path(p["path"]).is_dir(), "has_report": (out / "report.html").exists(),
+        return {**p, "exists": Path(p["path"]).is_dir(), "has_report": not linked and (out / "report.html").exists(),
                 "incomplete": incomplete[:12],
                 "stack": " + ".join(frameworks) or " + ".join(languages) or None,
                 "languages": languages, "reachable_critical": reach_crit, "top_page": top_page,
@@ -315,7 +334,7 @@ class App:
                 "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
                 "finished_at": _str(run.get("finished_at")),
                 "explained": len(ex.get("explanations") or {}), "job": busy and busy["id"],
-                "starter": learn.starter_of(Path(p["path"])), "stale": self._stale(out)}
+                "starter": learn.starter_of(Path(p["path"])), "stale": None if linked else self._stale(out)}
 
     def _stale(self, out: Path) -> str | None:
         """'packs' when analysis packs were turned on or off after this report was made (the card says
@@ -343,8 +362,9 @@ class App:
             except Exception:
                 if not remote.has_files(dest):   # nothing was cloned (a failed clone removes itself): forget the project
                     self.store.remove_project(p["id"])
-                    if dest.is_dir():
-                        remote.remove_tree(dest)
+                    left = remote.remove_tree(dest)
+                    if left:
+                        log(f"the folder the failed clone left could not be removed: {dest} ({left})")
                 raise
             return pipeline.analyze(dest, self.out(p), privacy, log=log)
 
@@ -496,8 +516,15 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
         app.store.confirm_test(p["id"], " ".join(cmd))   # typed in full by the user: that is the confirmation
         det = sandbox.detect(repo)
         test_cwd = det.get("cwd", "") if det.get("language") == language else ""
-        return {"job": app.jobs.start(p["id"], "trace", lambda log: pipeline.analyze(
-            repo, out, privacy_default, trace_cmd=cmd, log=log, sandbox=True, test_cwd=test_cwd))}
+        stop = threading.Event()
+
+        def work(log):
+            try:
+                return pipeline.analyze(repo, out, privacy_default, trace_cmd=cmd, log=log, sandbox=True,
+                                        test_cwd=test_cwd, cancel=stop)
+            except pipeline.Stopped as e:   # asked to (POST /api/jobs/<id>/stop): not an error, and nothing changed
+                return {"cancelled": True, "not_ended": e.not_ended[:10]}
+        return {"job": app.jobs.start(p["id"], "trace", work, stop=stop)}
     a = _terminal_parser(verb).parse_args(args)
     if a.out is not None and _inside(repo, a.out, "--out") != out.resolve():
         raise TerminalRefused("--out is always this project's .lantern/ folder")
@@ -513,9 +540,9 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
         provider = app.make_provider()
 
         def work(log):
-            ids = a.node or pipeline.plan_explain(out, a.depth, a.max_nodes)["nodes"]
+            ids = a.node or pipeline.plan_explain(out, repo, a.depth, a.max_nodes)["nodes"]
             log(f"explaining {len(ids)} function(s) with {provider.label}")
-            res = pipeline.explain(out, provider, ids, fresh=a.fresh and bool(a.node), progress=lambda i, n, nid, rec: log(
+            res = pipeline.explain(out, repo, provider, ids, fresh=a.fresh and bool(a.node), progress=lambda i, n, nid, rec: log(
                 f"[{i}/{n}] {nid.split(':', 1)[-1]}  {'ok' if rec.get('validated') else 'rejected'}"))
             return {"stats": res["stats"]}
         return {"job": app.jobs.start(p["id"], "explain", work)}
@@ -527,8 +554,8 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
             if a.privacy:
                 run = _load(out / "run.json") or {}
                 run["privacy"] = a.privacy
-                (out / "run.json").write_text(json.dumps(run, indent=1), encoding="utf-8")
-            path = pipeline.rebuild_outputs(out)
+                results.write(out / "run.json", json.dumps(run, indent=1))
+            path = pipeline.rebuild_outputs(out, repo)
             log(f"report  {path}")
             return {"report": str(path)}
         return {"job": app.jobs.start(p["id"], "report", work)}
@@ -665,9 +692,13 @@ def _str(v):
 
 
 def _load(p: Path):
+    """What a result file holds, or None when there is none or it cannot be used. Only a plain file is read
+    (`results.plain`): the results folder lies in the project, and a link there would be read wherever it leads, a
+    pipe would hold the page up for good."""
+    text = results.plain(p)[0]
     try:
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
-    except (OSError, json.JSONDecodeError):
+        return None if text is None else json.loads(text)
+    except (ValueError, RecursionError):
         return None
 
 
@@ -867,16 +898,16 @@ class Handler(BaseHTTPRequestHandler):
             from . import agents
             return self._json({"agents": agents.available(), "chosen": app.store.settings().get("agent") or ""})
         if path == "/api/usage":
-            from .providers import gateway_url
-            return self._json({"enabled": usage.enabled(), "gateway": bool(gateway_url()), "pending": usage.pending(),
-                               "features": sorted(usage.FEATURES), "text": usage.describe()})
+            to, why = usage.where()      # the address the counts are posted to, or why none is sent (fixed words)
+            return self._json({"enabled": usage.enabled(), "gateway": bool(to), "where": to, "why": why,
+                               "pending": usage.pending(), "features": sorted(usage.FEATURES), "text": usage.describe()})
         if path == "/api/packs":
             return self._json({"packs": packs_list(app, (q.get("project") or [""])[0],
                                                    all_projects=(q.get("all") or [""])[0] == "1")})
         if path == "/api/connections":
-            import shutil
+            from . import programs
             from .mcp_server import connections
-            cmd = shutil.which("lantern") or "lantern"
+            cmd = programs.find("lantern") or "lantern"
             return self._json({"connections": connections(app.store), "now": int(time.time()),
                                "setup": {"claude_code": f"claude mcp add lantern -- {cmd} mcp",
                                          "json": {"mcpServers": {"lantern": {"command": cmd, "args": ["mcp"]}}}}})
@@ -939,7 +970,7 @@ class Handler(BaseHTTPRequestHandler):
             p = app.store.project(m.group(1)) or {}
             if not p or not (Path(p["path"]) / ".lantern/graph.json").exists():
                 return self._err(404, "analyze the project first")
-            plan = pipeline.plan_explain(app.out(p), int((q.get("depth") or ["3"])[0]),
+            plan = pipeline.plan_explain(app.out(p), Path(p["path"]), int((q.get("depth") or ["3"])[0]),
                                          int((q.get("limit") or ["40"])[0]))
             plan["nodes"] = len(plan["nodes"])
             return self._json(plan)
@@ -960,6 +991,10 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------ write routes
     def _post(self, method: str, path: str, b: dict):
         app = self.app
+        m = re.fullmatch(r"/api/jobs/(\w+)/stop", path)
+        if m and method == "POST":
+            job = app.jobs.stop(m.group(1))   # ValueError (400) for a job that cannot be stopped part-way
+            return self._json(job) if job else self._err(404, "no such job")
         if path == "/api/projects" and method == "POST":
             raw = str(b.get("path") or "").strip()
             if not raw:
@@ -1089,17 +1124,31 @@ class Handler(BaseHTTPRequestHandler):
             before = _load(out / "readiness.json") or {}
             before_score = _int(before.get("score"))
 
+            stop = threading.Event()   # set by POST /api/jobs/<id>/stop: the tests and all they started are ended
+
             def work(log):
-                res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log, sandbox=True, test_cwd=test_cwd)
+                try:
+                    res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log, sandbox=True,
+                                           test_cwd=test_cwd, cancel=stop)
+                except pipeline.Stopped as e:
+                    # The person pressed Stop. Not an error: the job ends `done`, no result file was written, and
+                    # the results are those of the last check that finished.
+                    return {"cancelled": True, "ran": True, "unavailable": None, "returncode": None, "observed": 0,
+                            "recall": None, "timed_out": False, "blocked": [], "not_ended": e.not_ended[:10],
+                            "note": None, "score_before": before_score, "score_after": before_score, "summary": None}
                 run = _load(out / "run.json") or {}
                 tr = run.get("trace") or {}
                 after = _load(out / "readiness.json") or {}
                 return {"returncode": tr.get("returncode"), "observed": tr.get("observed_edges"), "recall": tr.get("recall"),
                         "backend": tr.get("backend"), "language": tr.get("language"), "traced": tr.get("traced"),
                         "timed_out": tr.get("timed_out"), "blocked": tr.get("blocked") or [],
+                        # the sandbox could not be set up, so the tests were not run (the reason, in Lantern's words)
+                        "ran": tr.get("ran") is not False, "unavailable": tr.get("unavailable"), "cancelled": False,
+                        # what the tests started and Lantern could not end, in its own words (empty: nothing is left)
+                        "not_ended": [str(x)[:300] for x in (tr.get("not_ended") or [])][:10],
                         "note": None if tr.get("traced") else sandbox.JS_NOTE,
                         "score_before": before_score, "score_after": _int(after.get("score")), "summary": res}
-            return self._json(app.jobs.start(p["id"], "trace", work), 202)
+            return self._json(app.jobs.start(p["id"], "trace", work, stop=stop), 202)
         if action == "explain":
             usage.record("explain_one" if b.get("nodes") else "explain")
             provider = app.make_provider()
@@ -1110,7 +1159,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("analyze the project first")
 
             def work(log):
-                ids = nodes or pipeline.plan_explain(out, int(b.get("depth") or 3), int(b.get("limit") or 40))["nodes"]
+                ids = nodes or pipeline.plan_explain(out, repo, int(b.get("depth") or 3), int(b.get("limit") or 40))["nodes"]
                 log(f"explaining {len(ids)} function(s) with {provider.label}")
 
                 def progress(i, n, nid, rec):
@@ -1118,7 +1167,7 @@ class Handler(BaseHTTPRequestHandler):
                                                               else "rejected by the anchor check")
                     log(f"[{i}/{n}] {nid.split(':', 1)[-1]}  {flag}")
 
-                res = pipeline.explain(out, provider, ids, progress=progress, fresh=bool(b.get("fresh")) and bool(nodes))
+                res = pipeline.explain(out, repo, provider, ids, progress=progress, fresh=bool(b.get("fresh")) and bool(nodes))
                 st = res["stats"]
                 log(f"done: {st['validated']} validated, {st['failed']} failed, {st['cached']} from cache; "
                     f"{st['usage']['input_tokens']:,} tokens in, {st['usage']['output_tokens']:,} out")
@@ -1295,5 +1344,7 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
     except KeyboardInterrupt:
         print("\nstopped")
     finally:
+        from . import sandbox
+        sandbox.stop_all()   # tests that are running, and everything they started, end with the app
         httpd.server_close()
     return 0
