@@ -168,7 +168,7 @@ async function until(p, fn, timeout) {
       if (!/#\/join\/[A-Za-z0-9_-]{20,}$/.test(inv)) errs.push(`${tag}: the invite link looks wrong (${inv})`);
       await p.screenshot({ path: `${out}-${tag}-invite.png` });
       await p.click('#invdone');
-      await p.click('#addrun'); await p.click('.sheet [data-add="done1"]'); await p.waitForSelector('.apps [data-open="done1"]');
+      await p.click('#addrun'); await p.click('.sheet [data-add="done1-demo-00000"]'); await p.waitForSelector('.apps [data-open="done1-demo-00000"]');
       await p.screenshot({ path: `${out}-${tag}-team.png`, fullPage: true });
       const ctxT = await b.newContext({ viewport, colorScheme: scheme });
       await outside.watch(ctxT, errs, outside.FONTS);
@@ -178,7 +178,7 @@ async function until(p, fn, timeout) {
       if (/join\/[A-Za-z0-9_-]{20,}/.test(await t.evaluate(() => location.href))) errs.push(`${tag}: the invite's secret stayed in the address bar`);
       await a11y.axe(t, `${tag} join`, errs);
       await t.click('#dojoin'); await t.waitForSelector('.person + .person');
-      await t.click('[data-open="done1"]');
+      await t.click('[data-open="done1-demo-00000"]');
       await until(t, () => { try { return !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('#tabs'); } catch (e) { return false; } }, 20000);
       if (await t.$('#share') || await t.$('.sub [data-del]')) errs.push(`${tag}: a teammate can share or delete someone else's report`);
       await ctxT.close();
