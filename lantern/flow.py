@@ -89,7 +89,7 @@ class Fn:
 
 class Mod:
     __slots__ = ("file", "lang", "imports", "consts", "gwrites", "fns", "top", "names", "frameworks", "cvals",
-                 "dotted", "bases", "fields")
+                 "dotted", "bases", "fields", "stars")
 
     def __init__(self, file, lang):
         self.file, self.lang = file, lang
@@ -104,6 +104,7 @@ class Mod:
         self.dotted = None
         self.bases: dict[str, list] = {}       # a class of the file -> its bases as written
         self.fields: dict[str, dict] = {}      # a class of the file -> its fields written with a type: name -> type
+        self.stars: list[str] = []             # `from <this> import *`, as written (`.models`, `app.models`), in order
 
 
 # ------------------------------------------------------------------------------------------------ values
@@ -959,6 +960,134 @@ class Result:
 
 
 # ------------------------------------------------------------------------------------------------ the engine
+class PyFiles(dict):
+    """Every Python file of the project by its dotted name (True for a package's `__init__`), and, worked out once,
+    the files whose name ends with a given path of two parts or more (Django's own code is 2,800 files, and each
+    import asks)."""
+
+    def ending(self, parts: tuple) -> list:
+        if not hasattr(self, "_tails"):
+            self._tails: dict[str, list] = {}
+            for k in self:
+                p = k.split(".")
+                for i in range(1, len(p) - 1):
+                    self._tails.setdefault(".".join(p[i:]), []).append(k)
+        return self._tails.get(".".join(parts), [])
+
+
+def own_module(parts: tuple, pkg: list, known: dict, stdlib=frozenset(), beside=None) -> tuple | None:
+    """The file of the project that an import path written from the top names (`app.models`, a flat project's
+    `models`), seen from a file whose package is `pkg`. It is looked for under each folder above that file that
+    Python can start an import from, the nearest first: the repository's root, and a folder that is no package. A
+    package's own files are reached through the package's name or with a dot, so `celery` inside a package is the
+    library, not `celery.py` beside it; but an app started from inside its folder does find the file beside it by
+    its bare name, and `beside(file)` says whether that file holds the name the import asks it for (`from models
+    import Note` beside a `models.py` that writes `Note`). Failing that, a path of two parts or more names the one
+    file of the project whose name ends with it, unless it starts with a name of the standard library. A single name
+    the standard library has is the standard library's."""
+    if len(parts) == 1 and parts[0] in stdlib:
+        return None
+    for j in range(len(pkg), -1, -1):
+        t = tuple(pkg[:j]) + parts
+        if ".".join(t) not in known:
+            continue
+        if not j or not known.get(".".join(pkg[:j])) or (j == len(pkg) and beside is not None and beside(t)):
+            return t
+    if len(parts) > 1 and parts[0] not in stdlib:
+        tail = "." + ".".join(parts)
+        hits = known.ending(parts) if isinstance(known, PyFiles) else [k for k in known if k.endswith(tail)]
+        if len(hits) == 1:
+            return tuple(hits[0].split("."))
+    return None
+
+
+def mod_pkg(mod: Mod) -> list:
+    """The package a Python file is in, as the parts of its dotted name (`app/main.py` → `["app"]`)."""
+    own = mod.dotted.split(".") if mod.dotted else []
+    return own if mod.file.endswith("__init__.py") else own[:-1]
+
+
+def dot_form(pkg: list, t: tuple) -> str:
+    """A name of the project written from the top (`app.models.Note`, as parts), in the form a relative import in a
+    file of package `pkg` has: `.models.Note`."""
+    c = 0       # how many folders that package and the name share, leaving the name a last part
+    while c < min(len(pkg), len(t) - 1) and pkg[c] == t[c]:
+        c += 1
+    return "." * (len(pkg) - c + 1) + ".".join(t[c:])
+
+
+def own_dotted(mod: Mod, d: str, known: dict, stdlib=frozenset(), read=None) -> str:
+    """An import's origin as written, or, when it is written from the top and names a file of the project
+    (`app.models.Note`, a flat project's `models.Note`, `models`), in the form a relative import has
+    (`.models.Note`). The engine tells the project's own names from a library's by that leading dot. `known`: every
+    Python file's dotted name, True for a package's `__init__`; `read`: the files that were read, by that name."""
+    if not d or d.startswith("."):
+        return d
+    pkg = mod_pkg(mod)
+
+    def writes(name):       # whether the file beside is where this name is written: a function, a class, a variable
+        def beside(t):
+            m = (read or {}).get(".".join(t))
+            return m is not None and (name in m.names or name in m.consts or name in m.bases)
+        return beside
+
+    parts = d.split(".")
+    for n in range(len(parts), 0, -1):
+        t = own_module(tuple(parts[:n]), pkg, known, stdlib, writes(parts[n]) if n < len(parts) else None)
+        if t is not None and ".".join(t) != mod.dotted:
+            return dot_form(pkg, t + tuple(parts[n:]))
+    return d
+
+
+def star_names(m: Mod) -> list | None:
+    """The names `from <this file> import *` brings: those of `__all__` when it is written once, as a list of text;
+    else every name of the file without a leading underscore. None when `__all__` is built another way."""
+    said = m.consts.get("__all__")
+    if said is None:
+        return [n for n in (*m.names, *m.consts, *m.bases, *m.imports) if not n.startswith("_") and "." not in n]
+    items = said[0].items or () if len(said) == 1 and said[0].k == "seq" else None
+    if items is None or not all(x.k == "const" and isinstance(x.a, str) for x in items):
+        return None
+    return [x.a for x in items]
+
+
+def own_imports(mod: Mod, known: dict, stdlib=frozenset(), read=None, done=None, depth: int = 0) -> None:
+    """Every import of this file that names a file of the project gets the form a relative import has
+    (`own_dotted`): until 2026-11-11 a record class loaded the commonest way (`from app.models import Note`) was a
+    library's value, and nothing about who may reach the record was asked. A star import of a file of the project
+    brings the names Python would bring (`star_names`), the last star import first; a name this file writes or
+    imports itself is kept, and a star import Lantern cannot read (a library's, an `__all__` that is built, the
+    twentieth file in a row that passes a star on) may bring any name, so the star imports before it bring nothing."""
+    done = set() if done is None else done
+    if mod.file in done:
+        return
+    done.add(mod.file)
+    read = read or {}
+    for local, d in list(mod.imports.items()):
+        mod.imports[local] = own_dotted(mod, d, known, stdlib, read)
+    pkg = mod_pkg(mod)
+    bound = {*mod.imports, *mod.names, *mod.consts, *mod.bases}
+    for base in reversed(mod.stars):
+        src = read.get(Engine.absolute(mod, own_dotted(mod, base, known, stdlib, read)))
+        if src is None or src is mod or depth >= 20:
+            break
+        own_imports(src, known, stdlib, read, done, depth + 1)       # what that file brings in, first
+        names = star_names(src)
+        if names is None:
+            break
+        for name in names:
+            if name in bound:
+                continue
+            bound.add(name)
+            d = src.imports.get(name)
+            if d is None:
+                mod.imports[name] = dot_form(pkg, tuple(src.dotted.split(".")) + (name,))
+            elif d.startswith("."):
+                mod.imports[name] = dot_form(pkg, tuple(Engine.absolute(src, d).split(".")))
+            else:
+                mod.imports[name] = d
+
+
 class Engine:
     def __init__(self, g):
         self.g = g
@@ -1014,6 +1143,8 @@ class Engine:
         self.sent: dict = {}               # a request value's key (file, line, words) -> (its name, the part it is in)
         self.wide: dict = {}               # file -> [(name, key)]: what runs before every route of a router there
         self.py_mods: dict[str, Mod] = {}
+        self._own = None                   # what `own_dotted` needs, once the Python files are read
+        self._own_said: dict = {}          # (file, an import's origin as written) -> what `own_dotted` said
         self.errors: list[str] = []
         self.stats = {"files": 0, "functions": 0, "skipped_files": 0, "stopped": 0, "passes": 0}
         self._fixed_memo: dict = {}
@@ -1021,9 +1152,12 @@ class Engine:
     # ---- loading
     def load(self) -> None:
         from . import flow_py
-        from .python_frontend import TEST_FILE_RE, discover, project_text
+        from .python_frontend import STDLIB, TEST_FILE_RE, discover, project_text
         root = self.repo.resolve()
-        for p, dotted in discover(self.repo):
+        found = list(discover(self.repo))
+        known = PyFiles((dotted, p.name == "__init__.py") for p, dotted in found)
+        mods: list[Mod] = []
+        for p, dotted in found:
             rel = p.relative_to(root).as_posix()
             if TEST_FILE_RE.search(rel):
                 continue
@@ -1036,7 +1170,13 @@ class Engine:
                 self.stats["skipped_files"] += 1
                 continue
             mod.dotted = dotted
+            mods.append(mod)
+        read = {mod.dotted: mod for mod in mods}
+        done: set = set()
+        for mod in mods:      # every file first: an import is read against what the other files hold
+            own_imports(mod, known, STDLIB, read, done)
             self.add(mod)
+        self._own = (known, STDLIB, read)
         try:
             from . import flow_js
         except ImportError:      # the JavaScript reader comes in its own step
@@ -1787,6 +1927,11 @@ class Engine:
             return False
         if k == "import":
             for name, dotted in (s.kw or {}).items():
+                if env.fn.lang == "py" and self._own is not None:      # an import inside a function, as at the top
+                    at = (env.fn.file, dotted)
+                    if at not in self._own_said:
+                        self._own_said[at] = own_dotted(env.fn.mod, dotted, *self._own)
+                    dotted = self._own_said[at]
                 env.vars[name] = Val(kind="req", data=env.fn.lang) if dotted in R.REQUEST_GLOBALS else \
                     Val(kind="ext", data=dotted)
             return False

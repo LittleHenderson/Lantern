@@ -238,6 +238,189 @@ def test_flask_login_and_a_record_by_its_id(tmp_path, case):
     assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
 
 
+# How an app loads its record classes must not matter (found 2026-11-11 while writing the stage report: every Flask
+# example above says `from .models import ...`, and with `from app.models import Note`, the commonest way, nothing was
+# reported). The same four routes in six layouts; a class that comes from a library stays a library's.
+NOTE_MODELS = ("from flask_sqlalchemy import SQLAlchemy\n\ndb = SQLAlchemy()\n\n\n"
+               "class Note(db.Model):\n    id = db.Column(db.Integer, primary_key=True)\n"
+               "    user_id = db.Column(db.Integer)\n    text = db.Column(db.String)\n")
+FLASK_DEPS = '[project]\nname="a"\nversion="0"\ndependencies=["flask", "flask-login"]\n'
+# layout: (the file with the routes, how it loads the class, the class as written, the other files)
+LOADED = {
+    "a relative import": ("app/main.py", "from .models import Note, db", "Note",
+                          {"pyproject.toml": FLASK_DEPS, "app/__init__.py": "", "app/models.py": NOTE_MODELS}),
+    "the package by its name": ("app/main.py", "from app.models import Note, db", "Note",
+                                {"pyproject.toml": FLASK_DEPS, "app/__init__.py": "", "app/models.py": NOTE_MODELS}),
+    "the models file as a module of the package": ("app/main.py", "from app import models\nfrom app.models import db",
+                                                   "models.Note", {"pyproject.toml": FLASK_DEPS, "app/__init__.py": "",
+                                                                   "app/models.py": NOTE_MODELS}),
+    "a flat project": ("app.py", "from models import Note, db", "Note",
+                       {"pyproject.toml": FLASK_DEPS, "models.py": NOTE_MODELS}),
+    "a flat project, the file as a module": ("app.py", "import models\nfrom models import db", "models.Note",
+                                             {"pyproject.toml": FLASK_DEPS, "models.py": NOTE_MODELS}),
+    "the app in a folder below the repository's": ("backend/app/main.py", "from app.models import Note, db", "Note",
+                                                   {"backend/pyproject.toml": FLASK_DEPS, "backend/app/__init__.py": "",
+                                                    "backend/app/models.py": NOTE_MODELS}),
+    # started from inside its folder (`cd app && flask run`), an app finds the file beside it by its bare name, also
+    # when the folder holds an `__init__.py`
+    "the file beside, by its bare name, in a folder that is a package": (
+        "app/main.py", "from models import Note, db", "Note",
+        {"pyproject.toml": FLASK_DEPS, "app/__init__.py": "", "app/models.py": NOTE_MODELS}),
+    # `from .models import *` brings what Python would bring
+    "everything the models file holds, with a star": (
+        "app/main.py", "from .models import *", "Note",
+        {"pyproject.toml": FLASK_DEPS, "app/__init__.py": "", "app/models.py": NOTE_MODELS}),
+    "everything the models file holds, with a star, the package by its name": (
+        "app/main.py", "from app.models import *", "Note",
+        {"pyproject.toml": FLASK_DEPS, "app/__init__.py": "", "app/models.py": NOTE_MODELS}),
+    "a flat project, with a star": ("app.py", "from models import *", "Note",
+                                    {"pyproject.toml": FLASK_DEPS, "models.py": NOTE_MODELS}),
+    "with a star, through a second file that brings it with a star": (
+        "app/main.py", "from .store import *", "Note",
+        {"pyproject.toml": FLASK_DEPS, "app/__init__.py": "", "app/models.py": NOTE_MODELS,
+         "app/store.py": "from .models import *\n"}),
+}
+NOTE_HEAD = ("from flask import Flask, abort, jsonify, request\nfrom flask_login import current_user, login_required\n\n"
+             "{load}\n\napp = Flask(__name__)\n\n\n")
+NOTE_ROUTES = {
+    "caught: the note is read by its id alone":
+        ("@app.get('/notes/<int:note_id>')\n@login_required\ndef read_note(note_id):\n"
+         "    note = {N}.query.get_or_404(note_id)\n    return jsonify(text=note.text)\n", ["LT-AUTHZ-OWNER"]),
+    "caught: the note is removed by its id alone":
+        ("@app.delete('/notes/<int:note_id>')\n@login_required\ndef remove_note(note_id):\n"
+         "    note = {N}.query.get_or_404(note_id)\n    db.session.delete(note)\n    db.session.commit()\n"
+         "    return jsonify(ok=True)\n", ["LT-AUTHZ-OWNER"]),
+    "clean: the owner is compared before the note is removed":
+        ("@app.delete('/notes/<int:note_id>')\n@login_required\ndef remove_note(note_id):\n"
+         "    note = {N}.query.get_or_404(note_id)\n    if note.user_id != current_user.id:\n        abort(403)\n"
+         "    db.session.delete(note)\n    db.session.commit()\n    return jsonify(ok=True)\n", []),
+    "caught: everything the request sent is written onto the caller's own note":
+        ("@app.post('/notes/<int:note_id>')\n@login_required\ndef change_note(note_id):\n"
+         "    {N}.query.filter_by(id=note_id, user_id=current_user.id).update(request.json)\n"
+         "    db.session.commit()\n    return jsonify(ok=True)\n", ["LT-AUTHZ-MASS-ASSIGN"]),
+}
+
+
+@pytest.mark.parametrize("layout", sorted(LOADED))
+@pytest.mark.parametrize("case", sorted(NOTE_ROUTES))
+def test_how_the_record_class_is_loaded_does_not_matter(tmp_path, layout, case):
+    main, load, cls, others = LOADED[layout]
+    body, want = NOTE_ROUTES[case]
+    fs = _scan(tmp_path, {main: NOTE_HEAD.replace("{load}", load) + body.replace("{N}", cls)}, project=others)
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+LIBRARY_CLASS = {
+    "clean: a class a library hands over, read the same way":
+        ("from flask import Flask, jsonify\nfrom flask_login import login_required\n\nfrom shoplib.models import Note\n\n"
+         "app = Flask(__name__)\n\n\n@app.get('/notes/<int:note_id>')\n@login_required\ndef read_note(note_id):\n"
+         "    note = Note.query.get_or_404(note_id)\n    return jsonify(text=note.text)\n", []),
+    "clean: a library named like a file of the project that lies somewhere else":
+        ("from flask import Flask, jsonify\nfrom flask_login import login_required\n\nfrom inventory import Note\n\n"
+         "app = Flask(__name__)\n\n\n@app.get('/notes/<int:note_id>')\n@login_required\ndef read_note(note_id):\n"
+         "    note = Note.query.get_or_404(note_id)\n    return jsonify(text=note.text)\n", []),
+    # `app/shoplib.py` is the project's settings for that library (as `proj/celery.py` is for Celery): it holds no `Note`
+    "clean: a library named like the file beside, which holds no such class":
+        ("from flask import Flask, jsonify\nfrom flask_login import login_required\n\nfrom shoplib import Note\n\n"
+         "app = Flask(__name__)\n\n\n@app.get('/notes/<int:note_id>')\n@login_required\ndef read_note(note_id):\n"
+         "    note = Note.query.get_or_404(note_id)\n    return jsonify(text=note.text)\n", []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(LIBRARY_CLASS))
+def test_a_class_from_a_library_is_not_the_projects_record(tmp_path, case):
+    body, want = LIBRARY_CLASS[case]
+    others = {"pyproject.toml": FLASK_DEPS, "app/__init__.py": "", "tools/__init__.py": "",
+              "tools/inventory.py": NOTE_MODELS,
+              "app/shoplib.py": "from shoplib import Shop\n\nshop = Shop('notes')\n"}
+    fs = _scan(tmp_path, {"app/main.py": body}, project=others)
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+# A star import brings the names Python would bring, and no others; an import written inside the function that uses
+# the class is read like one at the top of the file.
+STAR_READ = ("@app.get('/notes/<int:note_id>')\n@login_required\ndef read_note(note_id):\n{inside}"
+             "    note = Note.query.get_or_404(note_id)\n{check}    return jsonify(text=note.text)\n")
+STAR_CHECK = "    if note.user_id != current_user.id:\n        abort(403)\n"
+STAR_FILES = {"pyproject.toml": FLASK_DEPS, "app/__init__.py": "", "app/models.py": NOTE_MODELS}
+# case: (the import at the top, the import inside the function, the owner check, files that differ, what is reported)
+STAR_AND_INSIDE = {
+    "caught: the file says what a star brings, and the class is on that list":
+        ("from .models import *", "", "", {"app/models.py": '__all__ = ["db", "Note"]\n\n' + NOTE_MODELS},
+         ["LT-AUTHZ-OWNER"]),
+    "clean: the file says what a star brings, the class is not on that list, and the name is a library's":
+        ("from shoplib.models import Note\nfrom .models import *", "", "",
+         {"app/models.py": '__all__ = ["db"]\n\n' + NOTE_MODELS}, []),
+    "clean: a name written by hand after the star is the one that counts":
+        ("from .models import *\nfrom shoplib.models import Note", "", "", {}, []),
+    "clean: a star import of a library, and the class is the library's":
+        ("from shoplib.models import *", "", "", {}, []),
+    "clean: with a star, and the owner is compared":
+        ("from .models import *", "", STAR_CHECK, {}, []),
+    "clean: a later star import of a library may bring that name too, so Lantern does not say whose it is":
+        ("from .models import *\nfrom shoplib.models import *", "", "", {}, []),
+    "caught: the import is inside the function, the package by its name":
+        ("", "    from app.models import Note\n", "", {}, ["LT-AUTHZ-OWNER"]),
+    "caught: the import is inside the function, with a dot":
+        ("", "    from .models import Note\n", "", {}, ["LT-AUTHZ-OWNER"]),
+    "clean: the import is inside the function, and the owner is compared":
+        ("", "    from app.models import Note\n", STAR_CHECK, {}, []),
+    "clean: the import is inside the function, and the class is a library's":
+        ("", "    from shoplib.models import Note\n", "", {}, []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(STAR_AND_INSIDE))
+def test_a_star_import_and_an_import_inside_the_function(tmp_path, case):
+    top, inside, check, files, want = STAR_AND_INSIDE[case]
+    body = NOTE_HEAD.replace("{load}", top) + STAR_READ.replace("{inside}", inside).replace("{check}", check)
+    fs = _scan(tmp_path, {"app/main.py": body}, project={**STAR_FILES, **files})
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+def test_an_import_inside_the_function_in_a_flat_project(tmp_path):
+    body = NOTE_HEAD.replace("{load}", "") + STAR_READ.replace("{inside}", "    from models import Note\n")
+    fs = _scan(tmp_path, {"app.py": body.replace("{check}", "")},
+               project={"pyproject.toml": FLASK_DEPS, "models.py": NOTE_MODELS})
+    assert _authz(fs) == ["LT-AUTHZ-OWNER"], [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+# Which file of the project an import written from the top names. `known`: every Python file's dotted name, True for
+# a package's `__init__`.
+APP = {"app": True, "app.main": False, "app.models": False}
+OWN_MODULE = {
+    "the package by its name": (("app", "models"), ["app"], APP, ("app", "models")),
+    "a flat project": (("models",), [], {"app": False, "models": False}, ("models",)),
+    "the folder below the repository's is where imports start": (
+        ("app", "models"), ["backend", "app"],
+        {"backend.app": True, "backend.app.main": False, "backend.app.models": False}, ("backend", "app", "models")),
+    "the nearest folder first": (("utils",), ["scripts"],
+                                 {"scripts.tool": False, "scripts.utils": False, "utils": False}, ("scripts", "utils")),
+    "a package's own file is not reached by its bare name: that name is the library's": (
+        ("celery",), ["proj"], {"proj": True, "proj.celery": False, "proj.tasks": False}, None),
+    "a single name the standard library has": (("logging",), [], {"logging": False, "app": False}, None),
+    "a longer path that starts with a name of the standard library is never found by its ending": (
+        ("email", "utils"), ["app"], {**APP, "app.email": True, "app.email.utils": False}, None),
+    "a project's own package named like a module of the standard library, written in full": (
+        ("calendar", "models"), ["calendar"], {"calendar": True, "calendar.models": False, "calendar.views": False},
+        ("calendar", "models")),
+    "from a test file: the one file of the project whose name ends with the path": (
+        ("notes", "models"), ["tests"], {"tests.test_notes": False, "src.notes": True, "src.notes.models": False},
+        ("src", "notes", "models")),
+    "two files end with the path: neither": (
+        ("core", "models"), ["tests"], {"tests.test_x": False, "a.core.models": False, "b.core.models": False}, None),
+}
+
+
+@pytest.mark.parametrize("case", sorted(OWN_MODULE))
+def test_which_file_of_the_project_an_import_from_the_top_names(case):
+    import sys
+
+    from lantern import flow
+    parts, pkg, known, want = OWN_MODULE[case]
+    assert flow.own_module(parts, pkg, known, frozenset(sys.stdlib_module_names)) == want
+
+
 # ------------------------------------------------------------- JavaScript: Express
 
 PACKAGE = '{"dependencies": {"express": "4.19.2", "mysql2": "3.9.7", "mongoose": "8.4.0", "lodash": "4.17.21"}}'

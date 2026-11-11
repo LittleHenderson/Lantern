@@ -44,12 +44,16 @@ budget "self-audit: no open critical/high/medium" 300 lantern analyze . --out "$
 
 step "sample apps"
 budget "shop (React + FastAPI) analyzes" 60 lantern analyze tests/fixtures/shop --out "$W/shop"
-check "shop: 2 critical findings, shell path from /admin" "$PY" - "$W/shop" <<'EOF'
+check "shop: 3 critical findings, the SQL one followed from the request, shell path from /admin" "$PY" - "$W/shop" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
-assert s["counts"]["critical"] == 2, s["counts"]
+# 3 since 2026-11-11 (directive point 4), 2 before: the planted SQL injection in shop/repo.py was high while request
+# data was followed inside one function only; it is followed from the route through three files now (critical)
+assert s["counts"]["critical"] == 3, s["counts"]
 b602 = next(f for f in s["findings"] if f["rule"] == "B602")
 assert b602["ui_path"] and b602["ui_path"][0].endswith("Admin::Admin"), b602["ui_path"]
+b608 = next(f for f in s["findings"] if f["rule"] == "B608")
+assert b608["rank"] == "critical" and b608["flow"]["source"]["file"] == "shop/app.py", (b608["rank"], b608.get("flow"))
 EOF
 budget "androidapp (Android) analyzes" 60 lantern analyze tests/fixtures/androidapp --out "$W/aa"
 check "androidapp: a deep link reaching rawQuery is critical, screens are on the phone" "$PY" - "$W/aa" <<'EOF'

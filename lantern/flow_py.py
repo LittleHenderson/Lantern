@@ -87,6 +87,8 @@ class _Reader:
             if cls is not None:
                 continue
             if isinstance(s, (ast.Import, ast.ImportFrom)):
+                if isinstance(s, ast.ImportFrom) and any(a.name == "*" for a in s.names):
+                    mod.stars.append("." * (s.level or 0) + (s.module or ""))
                 for local, dotted in self.imports(s):
                     mod.imports[local] = dotted
                     for head, fw in FRAMEWORKS:

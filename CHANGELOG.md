@@ -109,6 +109,25 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   line). A route that does ask whose the record is, but only after it changed the record, ran a command, removed a
   file or told another service to change something for it, is reported as that (`late`): "not allowed" after the
   thing was done is no check.
+  How a Python app loads its own files does not matter. The engine told the project's own names from a library's
+  by the dot a relative import starts with (`from .models import Note`). A record class loaded any other way was
+  read as a library's value, "a library that is no database", and nothing about who may reach the record was
+  asked: `from app.models import Note` (the commonest way), a flat project's `from models import Note` and
+  `import models`, an app in a folder below the repository's, the file beside by its bare name in a folder that
+  is a package (an app started from inside its folder), a star import (`from .models import *`), and an import
+  from the top written inside the function that uses the class. Each of these is now read as the relative import
+  it stands for (`flow.own_imports`, `own_dotted`, `own_module`). A star import of a file of the project brings
+  what Python would bring: the names in `__all__` when it is written once as a list of text, else every name
+  without a leading underscore, also through a second file that passes them on with a star (`star_names`). A name
+  stays a library's where it may be one: a single name the standard library has; a longer path that starts with
+  one, unless that file is there in full; the file beside in a package that does not write the name asked of it
+  (`from celery import shared_task` beside `proj/celery.py`); a path two files of the project end with; and every
+  name of a star import once a later star import is one Lantern cannot read. Found on 2026-11-11 with the stage
+  report's own examples, not from the held-out set: every Flask example of the tests until then said
+  `from .models import ...`. Of 68 new examples (the same four routes in eleven layouts; star imports and imports
+  inside a function, each beside safe twins; three library look-alikes; ten on which file an import names) 43
+  failed on the code before. Data that is followed to a query, a command or an outbound call was already followed
+  through such imports (the map resolves the calls), and the 117 findings of the 15 sample apps are unchanged.
   Pages made in the code: a template written in the code is read like a template file
   (`render_template_string('<p>{{ bio|safe }}</p>', bio=bio)`; jinja2's own `Template(text)`, which escapes nothing
   unless it is told to), and text a helper builds is a page where a route returns it (a library's answer, `jsonify`,
@@ -200,7 +219,7 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   scanner list has a `lantern-flow` record (`docs/api.md`). Nothing was removed, and older result files open as
   before.
   Tests, each dangerous example beside safe twins and look-alikes, none copied from the held-out apps:
-  `tests/test_flow.py` (391), `tests/test_flow_js.py` (319), `tests/test_flow_authz.py` (580),
+  `tests/test_flow.py` (391), `tests/test_flow_js.py` (319), `tests/test_flow_authz.py` (648),
   `tests/test_templates.py` (6), `tests/test_secret_inline.py` (110), `tests/test_ratelimit.py` (24),
   `tests/test_env_folder.py` (11), and new tests in `tests/test_express.py` and `tests/test_fullstack.py` for
   Express `use`. The examples a rule was written for came before its code and failed first; examples added
@@ -250,7 +269,7 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   was left out. That run is also where the two false alarms above came from (the browser script of Hugo, the
   key names of Django); on the final code Hugo lists what it listed before, and Django lists 20 new heuristic
   findings at medium on its own templates, 4 of them false alarms on a plain-text e-mail (see Not covered).
-  Not covered (the whole list is in `CLAUDE.md` under Known gaps and in `docs/audit/CLAIMS.md`, S18 to S21): only
+  Not covered (the whole list is in `CLAUDE.md` under Known gaps and in `docs/audit/CLAIMS.md`, S18 to S24): only
   Python and JavaScript/TypeScript are followed. The values of a plain-text e-mail template inside
   `{% autoescape off %}` are listed as page output that is not escaped (4 such lines in Django's own
   `password_reset_email.html`): an e-mail's text is not told from a page. A value an object's own method reads back, or one kept in a
@@ -273,6 +292,13 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   (`req.user = jwt.decode(t)`, then `if (!req.user)`) still reads as a login, and a login made optional is seen
   only on the route itself. A record handed to a helper that removes it, one read with SQLAlchemy 2's
   `session.execute(select(...))`, and a field saved by a `commit()` in another function are not counted as changed.
+  In a folder that is a package, the file beside used as a module by its bare name (`import models`, then
+  `models.Note`), a star import of it by its bare name (`from models import *`) and a name it only passes on are
+  still read as a library's, and so is what a star import brings when `__all__` is built or added to, or when an
+  import of the same name is written before the star: the who-may-reach rules ask nothing there. Another tool's
+  finding on a query (Bandit's B608) whose request value passed a real check (a fixed list, asked in the route or
+  in a helper) keeps that tool's rank and still says the request sets the value: the engine reports nothing of its
+  own there, and does not lower the other finding (kept for point 6).
 
 - lantern-cloud: 300 runs per person per day is now what `cloud/fly.toml` says (the owner's choice of 2026-11-11;
   the file said 50, his choice of 2026-11-04). The live service already ran with 300 through a setting kept on
