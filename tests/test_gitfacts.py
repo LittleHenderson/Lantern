@@ -31,7 +31,10 @@ WHEN = {"GIT_AUTHOR_DATE": "2026-11-01T10:00:00+0100", "GIT_COMMITTER_DATE": "20
 
 def git(*args, cwd, ok=True, env=None) -> str:
     """git as the test itself uses it, on repositories the test made before anything was planted in them."""
-    r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=cwd,
+    # no background upkeep: since git 2.47 a commit can start `git maintenance --detach`, whose lock file then
+    # appears in .git/objects while the test compares the folder (CI, 2026-11-11)
+    r = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "maintenance.auto=false",
+                        "-c", "gc.auto=0", *args], cwd=cwd,
                        env={**os.environ, **WHEN, **(env or {})}, capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0 or not ok, (args, r.stderr)
     return r.stdout.strip()
