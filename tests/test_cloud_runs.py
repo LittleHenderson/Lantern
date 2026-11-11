@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from lantern import remote  # noqa: E402
 from lantern_cloud import worker as worker_mod  # noqa: E402
 from lantern_cloud.app import create_app  # noqa: E402
+from lantern_cloud.cleanup import MARK  # noqa: E402
 from lantern_cloud.settings import Settings  # noqa: E402
 from lantern_cloud.store import Store  # noqa: E402
 from lantern_gateway.app import Settings as GwSettings  # noqa: E402
@@ -87,6 +88,40 @@ def make(tmp_path, **kw):
 
 def bearer(t):
     return {"authorization": f"Bearer {t}"}
+
+
+def left_by_a_step(monkeypatch, word: str, where: str, target: Path, how: str = "link"):
+    """What a step that was taken over could leave for the service to pick up. After the restricted step whose
+    command holds `word` has ended (the step itself runs as it always does), `where` in its temp folder
+    ("out/graph.json", "out/cache", "out") is a link to `target`, or, with how="second name", a second name of the
+    file `target` (a hard link). Returns the real `_jailed`, for a safe twin."""
+    real = worker_mod.Worker._jailed
+
+    def and_then(self, rid, root, cmd, **kw):
+        got = real(self, rid, root, cmd, **kw)
+        if word in cmd:
+            at = root / "tmp" / where
+            if at.is_dir() and not at.is_symlink():
+                shutil.rmtree(at)
+            elif os.path.lexists(at):
+                os.unlink(at)
+            at.parent.mkdir(parents=True, exist_ok=True)
+            (os.link if how == "second name" else os.symlink)(target, at)
+        return got
+    monkeypatch.setattr(worker_mod.Worker, "_jailed", and_then)
+    return real
+
+
+def holds(folder: Path, text: str) -> list[str]:
+    """The files under `folder` that hold `text`, and every link under it (a link has no place in a results
+    folder), each as a path from `folder`."""
+    found = []
+    for dirpath, dirs, files in os.walk(folder):
+        for f in dirs + files:
+            q = Path(dirpath) / f
+            if q.is_symlink() or (q.is_file() and text.encode() in q.read_bytes()):
+                found.append(q.relative_to(folder).as_posix())
+    return sorted(found)
 
 
 def wait(cloud, tok, rid, timeout=120):
@@ -298,9 +333,10 @@ def test_restart_requeues_waiting_runs_and_reports_cut_off_ones(tmp_path, clone_
     a = st.create_run("github:1", LINK, "github.com", "structure", per_day=9, global_per_day=9, per_user_active=9)
     b = st.create_run("github:1", LINK, "github.com", "structure", per_day=9, global_per_day=9, per_user_active=9)
     st.update_run(a, status="running")
-    leftover = Path(s.work_dir) / "run-crashed"
+    leftover = Path(s.work_dir) / "run-crashed0"       # as the worker makes it: its mark is inside
     leftover.mkdir(parents=True)
     (leftover / "file").write_text("x", encoding="utf-8")
+    (leftover / MARK).write_text("made by lantern-cloud for one run\n", encoding="utf-8")
     w = worker_mod.Worker(s, st)
     assert not leftover.exists()                       # a crashed run's temp folder is removed at start-up
     assert st.run(a)["status"] == "error" and "restarted" in st.run(a)["error"]
@@ -448,12 +484,52 @@ def test_an_upload_that_brings_git_settings_has_none_of_them_run(tmp_path, monke
 def test_the_service_itself_starts_no_program_to_read_a_commit(tmp_path, monkeypatch):
     """`_commit` runs in the service, outside the restricted step, on a folder somebody uploaded."""
     app, commit = _app_with_git_settings(tmp_path, PLANTED_IN_GIT)
+    kept_elsewhere = tmp_path / "plain"         # a folder whose git folder is in another place of the computer
+    kept_elsewhere.mkdir()
+    (kept_elsewhere / "a.txt").write_text("a\n", encoding="utf-8")
+    git("init", "-q", "-b", "main", cwd=kept_elsewhere)
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", "-A", cwd=kept_elsewhere)
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "x", cwd=kept_elsewhere)
+    linked = tmp_path / "linked"
+    git("worktree", "add", "-q", str(linked), "-b", "side", cwd=kept_elsewhere)
 
     def none(*a, **k):
         raise AssertionError("a program was started")
     monkeypatch.setattr(subprocess, "Popen", none)
     assert worker_mod._commit(app) == commit
     assert worker_mod._commit(tmp_path / "nothing-here") is None
+    (app / "inside").mkdir()        # only the folder's own `.git` says where a run's code is at, never one above it
+    assert worker_mod._commit(app / "inside") is None
+    assert worker_mod._commit(kept_elsewhere) is not None       # the safe twin: all of it is in the folder
+    assert worker_mod._commit(linked) is None                   # ... and nothing is read from outside a run's code
+
+
+def test_a_run_takes_no_commit_from_a_git_folder_above_its_code(tmp_path):
+    """The folder the service works in may lie inside a repository: a developer's checkout, a demo started from one,
+    a `.git` somebody left in the temp folder of a shared computer. Until 2026-11-10 an upload with no git folder of
+    its own was then given that repository's commit, in the run's record and on its evidence page, where it read
+    as "this code is commit X, with no uncommitted changes"."""
+    cloud, gw, s = make(tmp_path)
+    above = Path(s.work_dir)
+    git("init", "-q", "-b", "main", cwd=above)
+    (above / "readme.txt").write_text("not the uploaded app\n", encoding="utf-8")
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "add", "readme.txt", cwd=above)
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "the service's own", cwd=above)
+    theirs = subprocess.run(["git", "rev-parse", "HEAD"], cwd=above, capture_output=True, text=True, check=True,
+                            encoding="utf-8").stdout.strip()
+    app = tmp_path / "plain-app"
+    app.mkdir()
+    (app / "app.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    tok = gw.sign_in("github:1", "github:octo")
+    r = cloud.post("/v1/uploads?name=app", content=_zip_of(app, top="app"), headers=bearer(tok))
+    assert r.status_code == 202, r.text
+    done = wait(cloud, tok, r.json()["id"])
+    assert done["status"] == "done", done
+    res = Path(s.results_dir) / done["id"]
+    head = json.loads((res / "evidence.json").read_text(encoding="utf-8"))["header"]
+    assert done["commit"] is None, "the run was given the commit of a repository above its code"
+    assert (head["commit"], head.get("note")) == (None, "not a git repository"), head
+    assert holds(res, theirs) == [] and theirs[:12] not in done["log_tail"]
 
 
 def test_bad_uploads_are_refused(tmp_path):
@@ -479,16 +555,19 @@ def test_a_restart_keeps_only_the_uploads_of_waiting_runs(tmp_path):
                  results_dir=str(tmp_path / "results"), work_dir=workdir(tmp_path), audits=False)
     store = Store(s.db_path)
     rid = store.create_run("github:1", "lantern:upload/shop", "upload", "structure", per_day=10, global_per_day=10,
-                           per_user_active=1)
+                           per_user_active=2)
+    over = store.create_run("github:1", "lantern:upload/shop", "upload", "structure", per_day=10, global_per_day=10,
+                            per_user_active=2)
+    store.update_run(over, status="error")
     up = Path(s.uploads())
     up.mkdir(parents=True, exist_ok=True)
     (up / f"{rid}.zip").write_bytes(b"PK")             # its run is still queued: kept for it
-    (up / "gone.zip").write_bytes(b"PK")               # its run was deleted
-    (up / ".part-abc").write_bytes(b"PK")              # cut off while it was being received
+    (up / f"{over}.zip").write_bytes(b"PK")            # its run is over
+    (up / ".part-0123456789abcdef").write_bytes(b"PK")   # cut off while it was being received
     w = worker_mod.Worker(s, store)
     w.pool.shutdown(wait=False, cancel_futures=True)   # only the start-up sweep is tested here
-    assert {p.name for p in up.iterdir()} <= {f"{rid}.zip"}
-    assert not (up / "gone.zip").exists() and not (up / ".part-abc").exists()
+    assert {p.name for p in up.iterdir()} <= {f"{rid}.zip"}      # (the waiting run may have taken its upload by now)
+    # (what is in that folder and is not Lantern's own is left alone: tests/test_cloud_cleanup.py)
 
 
 def test_the_audit_step_failing_still_gives_a_finished_run(tmp_path, clone_from, monkeypatch):
@@ -528,3 +607,96 @@ def test_the_code_is_read_from_a_folder_named_after_the_repository():
     assert s("lantern:upload/my app.zip") == "my-app"
     for bad in ("lantern:upload/..", "lantern:upload/", "not a link", None):
         assert s(bad) == "app"
+
+
+# ---------------------------------------------------------------------------- stage 7: stopping, and the guard
+def _lines(cloud, rid) -> list[str]:
+    return cloud.app.state.worker.logs.since(rid, 0)[0]
+
+
+def test_shutting_the_service_down_ends_the_step_a_run_is_in_with_everything_it_started(tmp_path, clone_from, monkeypatch):
+    """Before, `shutdown` only kept waiting runs from starting: the step that was running went on to its end, and
+    the processes it had started (here a child, one in a session of its own, a daemon) stayed after it."""
+    from test_sandbox_safety import LEAVES, _started, _still_there
+    monkeypatch.setattr(worker_mod.Worker, "analyze_cmd",
+                        staticmethod(lambda repo, out, privacy, offline=True: [sys.executable, "-c", LEAVES]))
+    cloud, gw, s = make(tmp_path)
+    tok = gw.sign_in("github:1", "github:octo")
+    rid = cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"]
+    end, pids = time.time() + 120, []
+    while not pids and time.time() < end:
+        pids = _started(_lines(cloud, rid))
+        time.sleep(0.1)
+    try:
+        assert len(pids) == 3, _lines(cloud, rid)
+        t = time.time()
+        cloud.app.state.worker.shutdown()
+        done = wait(cloud, tok, rid, timeout=60)
+        assert done["status"] == "error" and done["error"] == worker_mod.SHUT_DOWN, done
+        assert time.time() - t < 30
+        assert _still_there(pids) == [], "a process the step started outlived the service's shutdown"
+        assert list(Path(s.work_dir).iterdir()) == [] and not (Path(s.results_dir) / rid).exists()
+    finally:
+        for pid in pids:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+
+
+def test_a_step_is_not_started_once_the_service_is_stopping(tmp_path, clone_from):
+    cloud, gw, s = make(tmp_path)
+    worker = cloud.app.state.worker
+    worker.stopping.set()                      # as `shutdown` does, with the pool left open so the run is taken up
+    tok = gw.sign_in("github:1", "github:octo")
+    done = wait(cloud, tok, cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"])
+    assert done["status"] == "error" and done["error"] == worker_mod.SHUT_DOWN
+    assert not any("sandbox: Landlock" in x for x in _lines(cloud, done["id"])), "a step was started"
+    assert list(Path(s.work_dir).iterdir()) == []
+
+
+def test_the_service_stops_its_worker_when_it_is_shut_down(tmp_path):
+    cloud, _gw, _s = make(tmp_path)
+    worker = cloud.app.state.worker
+    with cloud:                                # start-up and shutdown, as the server that runs the service does them
+        assert cloud.get("/v1/health").status_code == 200 and not worker.stopping.is_set()
+    assert worker.stopping.is_set()
+
+
+@pytest.mark.parametrize("guard", ["missing", "there"])
+def test_a_reading_step_whose_guard_did_not_load_says_so_and_goes_on(guard, tmp_path, clone_from, monkeypatch):
+    """The cloud's steps read a project and run none of it, so they carry on without the guard. Before, nothing
+    said that it was not there."""
+    from lantern import _jail, sandbox
+    if guard == "missing":
+        monkeypatch.setattr(sandbox, "SITECUSTOMIZE", "# a guard that did not load\n")
+    cloud, gw, s = make(tmp_path)
+    tok = gw.sign_in("github:1", "github:octo")
+    done = wait(cloud, tok, cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"])
+    assert done["status"] == "done", done
+    said = [x for x in _lines(cloud, done["id"]) if x == _jail.GUARD_MISSING]
+    assert len(said) == (1 if guard == "missing" else 0), _lines(cloud, done["id"])
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="needs root (the steps then run as another user)")
+def test_as_root_with_files_made_owner_only_a_step_still_has_its_guard(tmp_path, clone_from, monkeypatch):
+    """Where root's files are made owner-only (umask 077), the user the steps run as could not read the guard's
+    folder; Python left it out of its path without a word and the step ran with no guard."""
+    script = ("import socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
+              "s.sendto(b'x', ('127.0.0.1', 9))\nprint('PACKET-SENT', flush=True)\n")
+    monkeypatch.setattr(worker_mod.Worker, "analyze_cmd", staticmethod(lambda repo, out, privacy, offline=True: [sys.executable, "-c", script]))
+    cloud, gw, s = make(tmp_path)
+    tok = gw.sign_in("github:1", "github:octo")
+    old = os.umask(0o077)
+    try:
+        done = wait(cloud, tok, cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).json()["id"])
+    finally:
+        os.umask(old)
+    lines = _lines(cloud, done["id"])
+    assert done["status"] == "blocked" and "network sendto" in done["error"], (done, lines)
+    assert not any("PACKET-SENT" in x for x in lines) and _jail_guard_missing() not in lines
+
+
+def _jail_guard_missing() -> str:
+    from lantern import _jail
+    return _jail.GUARD_MISSING

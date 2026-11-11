@@ -41,7 +41,7 @@ def test_pages_are_rebuilt_from_old_results(project):
     assert "Evidence Report" in body
     # `lantern report` (rebuild the pages from the stored data with this version's templates) works on them too
     from lantern.pipeline import rebuild_outputs
-    rebuilt = rebuild_outputs(out)
+    rebuilt = rebuild_outputs(out, project)
     assert Path(rebuilt).exists()
     code, body, _, _ = result_page(out, "report.html", None)
     assert code == 200 and "lantern-data" in body

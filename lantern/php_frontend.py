@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_bytes, project_text
 
 MAX_BYTES = 1_500_000
 SKIP = re.compile(r"(^|/)(vendor|storage|cache|node_modules|wp-admin|wp-includes)/|\.blade\.php$|\.min\.php$", re.I)
@@ -880,7 +880,7 @@ def add_php(g: Graph, repo: str | Path) -> dict:
     total = 0
     for p in paths:
         try:
-            src = p.read_bytes()
+            src = project_bytes(p, repo)
         except OSError:
             continue
         if len(src) > MAX_BYTES:
@@ -1036,8 +1036,10 @@ def add_php(g: Graph, repo: str | Path) -> dict:
         if f.is_test and cls is not None and (fn.name.startswith("test") or re.search(r"#\[Test\]|@test\b", fn.attrs)):
             node.entry = {"kind": "test", "detail": fn.file}
         elif cls is not None and fn.name == "handle" and any(s.split(".")[-1] == "Command" for s in cls.supers):
-            m = re.search(r"\$signature\s*=\s*['\"]([^\s'\"]+)", (repo / fn.file).read_text(
-                encoding="utf-8", errors="replace"))
+            try:
+                m = re.search(r"\$signature\s*=\s*['\"]([^\s'\"]+)", project_text(repo / fn.file, repo))
+            except OSError:   # the file went away since it was read
+                m = None
             node.entry = {"kind": "main", "detail": f"command php artisan {m.group(1) if m else cls.short}"}
 
     g.meta.setdefault("http_calls", []).extend(link.http)

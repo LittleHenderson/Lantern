@@ -119,6 +119,19 @@ def test_planted_tests_cannot_write_reach_the_network_or_read_secrets(backend, p
 
 
 def _alive(pid: int) -> bool:
+    if sys.platform == "win32":   # asked of Windows itself (os.kill would end the process there)
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype, k32.OpenProcess.argtypes = ctypes.c_void_p, [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        k32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = k32.OpenProcess(0x1000, 0, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_uint32(0)
+        ok = k32.GetExitCodeProcess(handle, ctypes.byref(code))
+        k32.CloseHandle(handle)
+        return bool(ok) and code.value == 259      # STILL_ACTIVE
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -144,7 +157,7 @@ def test_runaway_tests_are_killed_at_the_wall_clock(backend, tmp_path):
         "    time.sleep(300)\n", encoding="utf-8")
     r = sandbox.run(repo, ["python", "-m", "pytest", "-q", "-s"], log=lambda m: None, backend=backend, timeout=6)
     assert r["timed_out"] and r["returncode"] is None
-    if backend == "subprocess" and os.name == "posix":
+    if backend == "subprocess":   # Windows too, since 2026-11-10 (the Job Object)
         pid = next(int(x.split()[1]) for x in r["output_tail"].splitlines() if x.startswith("GRANDCHILD"))
         assert not _alive(pid), "a process the tests started survived the wall clock"
     if backend == "docker":
@@ -156,10 +169,10 @@ def test_temp_copy_is_read_only_and_removed(tmp_path, monkeypatch):
     seen = {}
     real = sandbox._stream
 
-    def spy(cmd, cwd, env, timeout, log, job=None):
+    def spy(cmd, cwd, env, timeout, log, **more):
         seen["cwd"], seen["env"] = Path(cwd), env
         seen["writable"] = os.access(cwd, os.W_OK) if os.name == "posix" and os.geteuid() != 0 else False
-        return real(cmd, cwd, env, timeout, log, job)
+        return real(cmd, cwd, env, timeout, log, **more)
     monkeypatch.setattr(sandbox, "_stream", spy)
     monkeypatch.setenv("LANTERN_TEST_SECRET", "s3cret")
     repo = tmp_path / "shop"

@@ -24,6 +24,7 @@ import re
 from pathlib import Path
 
 from .graph import Graph
+from .python_frontend import project_text
 
 SKIP = re.compile(r"(^|/)(bin|obj|packages|\.vs|node_modules)/")
 PROJECT_SKIP = re.compile(r"(^|/)(bin|obj|packages|\.vs|node_modules|tests?|fixtures)/")   # samples inside a repo
@@ -40,7 +41,7 @@ def find_projects(repo: Path) -> list[str]:
         if PROJECT_SKIP.search(rel):
             continue
         try:
-            text = p.read_text(encoding="utf-8", errors="replace")[:200_000]
+            text = project_text(p, repo, 200_000)
         except OSError:
             continue
         if re.search(r"<UseMaui>\s*true\s*</UseMaui>", text, re.I) or \
@@ -90,7 +91,7 @@ def add_entries(g: Graph, repo: str | Path) -> dict:
     def lines(file: str) -> list[str]:
         if file not in texts:
             try:
-                texts[file] = (repo / file).read_text(encoding="utf-8", errors="replace").splitlines()
+                texts[file] = project_text(repo / file, repo).splitlines()
             except OSError:
                 texts[file] = []
         return texts[file]
@@ -229,8 +230,8 @@ def scan(g: Graph) -> list[dict]:
     from .websec import _files
     repo = Path(g.repo_root)
     roots = (g.meta.get("maui") or {}).get("roots") or []
-    files = [(p.relative_to(repo).as_posix(), p.read_text(encoding="utf-8", errors="replace"))
+    files = [(p.relative_to(repo).as_posix(), project_text(p, repo))
              for p in _files(repo, {".cs", ".cshtml", ".razor"})]
-    files += [(p.relative_to(repo).as_posix(), p.read_text(encoding="utf-8", errors="replace"))
+    files += [(p.relative_to(repo).as_posix(), project_text(p, repo))
               for p in _files(repo, {".json"}) if re.match(r"appsettings[\w.]*\.json$", p.name)]
     return code_findings(files, roots)

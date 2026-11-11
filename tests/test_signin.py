@@ -165,7 +165,9 @@ def test_bad_state_bad_code_and_unconfigured_provider(gw, tmp_path):
 
 def test_state_round_trip_and_expiry():
     st = auth.sign_state("s3cret", "github", CLI)
-    assert auth.read_state("s3cret", st) == {"t": auth.read_state("s3cret", st)["t"], "p": "github", "c": CLI}
+    read = auth.read_state("s3cret", st)
+    assert read == {"t": read["t"], "p": "github", "c": CLI, "n": read["n"]}
+    assert len(read["n"]) >= 12 and auth.sign_state("s3cret", "github", CLI) != st      # no two links are the same text
     assert auth.read_state("other", st) is None
     # Tamper with a byte in the middle of the signature (the last base64 character carries only a few bits, so
     # replacing it can decode to the same bytes once in a while).

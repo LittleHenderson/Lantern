@@ -8,6 +8,7 @@ person's token, the report is rebuilt, and the copy is deleted. Nothing reaches 
 import json
 import os
 import re
+import shutil
 import sqlite3
 import threading
 import time
@@ -22,7 +23,8 @@ if os.name != "posix":
     pytest.skip("the cloud worker runs on Linux (its restricted process is POSIX)", allow_module_level=True)
 
 from test_allowance_flow import free_port, good_answer  # noqa: E402
-from test_cloud_runs import LINK, SOURCE_LINE, bearer, clone_from, origin, wait, workdir  # noqa: E402,F401
+from test_cloud_runs import (LINK, SOURCE_LINE, bearer, clone_from, holds, left_by_a_step, origin,  # noqa: E402,F401
+                             wait, workdir)
 from fastapi.testclient import TestClient  # noqa: E402
 from lantern_cloud import worker as worker_mod  # noqa: E402
 from lantern_cloud.app import create_app  # noqa: E402
@@ -31,6 +33,7 @@ from lantern_gateway.app import Settings as GwSettings  # noqa: E402
 from lantern_gateway.app import create_app as create_gateway  # noqa: E402
 
 INVENTED = "deadbeef0000"
+SECRET = "KEPT-FROM-EVERY-RUN-7351"
 
 
 def fake_model(sent):
@@ -148,6 +151,143 @@ def test_explain_a_finished_run_with_the_allowance(env):
     n = len(sent)
     cloud.post(f"/v1/runs/{rid}/explain", headers=bearer(tok))
     assert wait_explain(cloud, tok, rid)["explain"]["status"] == "done" and len(sent) == n
+
+
+def test_explanations_that_cannot_be_saved_change_nothing(env, monkeypatch):
+    """The rewritten pages are put in place only when every one of them has been written: a save that fails half-way
+    leaves the explanations, the report and the evidence page as they were, and nothing half-written beside them.
+    Until 2026-11-10 the first two files were already replaced when the third could not be written, and the person
+    was told "Nothing was changed"."""
+    cloud, tok, s, sent, _ = env
+    rid = done_run(cloud, tok)
+    res = Path(s.results_dir) / rid
+
+    def pages():
+        return {n: (res / n).read_bytes() if (res / n).is_file() else None for n in worker_mod.EXPLAINED_FILES}
+    before = pages()
+    assert before["report.html"] and before["evidence.html"]
+    cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(tok))
+    real, real_obj = shutil.copyfile, shutil.copyfileobj
+
+    def third_page(dst) -> bool:                                               # the third of the four pages
+        return Path(str(dst)).parent == res and "evidence.html" in Path(str(dst)).name
+
+    def full_disk(src, dst, *a, **kw):
+        if third_page(dst):
+            raise OSError(28, "No space left on device")
+        return real(src, dst, *a, **kw)
+
+    def full_disk_obj(src, to, *a, **kw):          # the same disk, for a page written through an open file
+        if third_page(getattr(to, "name", "")):
+            raise OSError(28, "No space left on device")
+        return real_obj(src, to, *a, **kw)
+    monkeypatch.setattr(shutil, "copyfile", full_disk)
+    monkeypatch.setattr(shutil, "copyfileobj", full_disk_obj)
+    cloud.post(f"/v1/runs/{rid}/explain", headers=bearer(tok))
+    ex = wait_explain(cloud, tok, rid)["explain"]
+    assert ex["status"] == "error" and "Nothing was changed" in ex["error"], ex
+    assert pages() == before, "a page was replaced although the save failed"
+    assert [p.name for p in res.iterdir() if p.name.endswith(".new")] == []
+    # the safe twin: with the disk well again, the same click writes them all
+    monkeypatch.setattr(shutil, "copyfile", real)
+    monkeypatch.setattr(shutil, "copyfileobj", real_obj)
+    cloud.post(f"/v1/runs/{rid}/explain", headers=bearer(tok))
+    assert wait_explain(cloud, tok, rid)["explain"]["status"] == "done"
+    after = pages()
+    assert after["explanations.json"] and after["report.html"] != before["report.html"]
+    assert [p.name for p in res.iterdir() if p.name.endswith(".new")] == []
+
+
+@pytest.mark.parametrize("where,what,how", [("out/cache/planted.json", "planted.json", "link"),
+                                            ("out/report.html", "report.html", "link"),
+                                            ("out/explanations.json", "explanations.json", "second name"),
+                                            ("out/cache", "cache", "link"),
+                                            ("out", "", "link")],
+                         ids=["a link in the cache", "a page is a link", "a page has a second name",
+                              "the cache folder is a link", "the whole folder is a link"])
+def test_explanations_never_bring_a_linked_file_into_the_results(env, monkeypatch, tmp_path, where, what, how):
+    """The step that writes explanations has the network and fewer rights than the service. Only plain files of its
+    own folder are taken: a link it leaves, among the pages or in the cache folder, is never followed, and a file
+    with a second name somewhere else is not read. Until 2026-11-10 the file a link pointed at was copied into the
+    run's results."""
+    cloud, tok, s, sent, _ = env
+    rid = done_run(cloud, tok)
+    res = Path(s.results_dir) / rid
+    before = {n: (res / n).read_bytes() if (res / n).is_file() else None for n in worker_mod.EXPLAINED_FILES}
+    other = tmp_path / "elsewhere"
+    (other / "cache").mkdir(parents=True)
+    for name in (*worker_mod.EXPLAINED_FILES, "planted.json", "cache/0123456789abcdef01234567.json"):
+        (other / name).write_text(json.dumps({"stats": {}, "explanations": {}, "secret": SECRET}), encoding="utf-8")
+    real = left_by_a_step(monkeypatch, "explain", where, other / what if what else other, how)
+    cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(tok))
+    cloud.post(f"/v1/runs/{rid}/explain", headers=bearer(tok))
+    ex = wait_explain(cloud, tok, rid)["explain"]
+    assert holds(res, SECRET) == [], "a file outside the run is in its results"
+    assert ex["status"] == "error" and "not a plain file" in ex["error"] and "nothing was changed" in ex["error"], ex
+    assert {n: (res / n).read_bytes() if (res / n).is_file() else None for n in worker_mod.EXPLAINED_FILES} == before
+    assert not (res / "cache").exists() and [q.name for q in res.iterdir() if q.name.endswith(".new")] == []
+    if where == "out/report.html":       # the safe twin: the same click without the link writes the explanations
+        monkeypatch.setattr(worker_mod.Worker, "_jailed", real)
+        cloud.post(f"/v1/runs/{rid}/explain", headers=bearer(tok))
+        assert wait_explain(cloud, tok, rid)["explain"]["status"] == "done"
+        assert (res / "explanations.json").is_file() and list((res / "cache").glob("*.json"))
+
+
+def test_explanations_stopped_at_the_time_limit_keep_what_was_written(env, monkeypatch):
+    """The message at the time limit says "The ones already written are kept; click Explain again to go on". They
+    are: each explanation is saved as it is written, and those files are kept with the run, so the next try does not
+    pay for them again. Until 2026-11-10 they were thrown away with the work folder while the message said so, and
+    every new try paid for the same explanations again."""
+    cloud, tok, s, sent, _ = env
+    rid = done_run(cloud, tok)
+    res = Path(s.results_dir) / rid
+    before = {n: (res / n).read_bytes() if (res / n).is_file() else None for n in worker_mod.EXPLAINED_FILES}
+    real = worker_mod.Worker._jailed
+
+    def out_of_time(self, key, root, cmd, **kw):
+        rc, output, _ = real(self, key, root, cmd, **kw)                        # the step writes what it writes,
+        for name in worker_mod.EXPLAINED_FILES:                                 # but for its pages,
+            (root / "tmp" / "out" / name).unlink(missing_ok=True)
+        return None, output, True                                               # when it is stopped at the time limit
+    monkeypatch.setattr(worker_mod.Worker, "_jailed", out_of_time)
+    cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(tok))
+    cloud.post(f"/v1/runs/{rid}/explain", headers=bearer(tok))
+    ex = wait_explain(cloud, tok, rid)["explain"]
+    assert ex["status"] == "error" and "was stopped" in ex["error"] and "already written are kept" in ex["error"], ex
+    kept = sorted(q.name for q in (res / "cache").glob("*.json"))
+    paid = len([b for b in sent if not b["messages"][0]["content"].startswith("Pick ONE")])
+    assert kept and len(kept) == paid, (kept, paid)
+    assert {n: (res / n).read_bytes() if (res / n).is_file() else None for n in worker_mod.EXPLAINED_FILES} == before
+    # the next try goes on from there: no explanation that was kept is asked for (and paid for) again
+    monkeypatch.setattr(worker_mod.Worker, "_jailed", real)
+    cloud.post(f"/v1/runs/{rid}/explain", headers=bearer(tok))
+    ex = wait_explain(cloud, tok, rid)["explain"]
+    assert ex["status"] == "done" and ex["summary"]["validated"] == len(kept), ex
+    assert len([b for b in sent if not b["messages"][0]["content"].startswith("Pick ONE")]) == paid
+
+
+def test_at_the_time_limit_a_planted_link_is_not_followed_either(env, monkeypatch, tmp_path):
+    """Stopped at the time limit with a link in the cache folder: nothing of that folder is kept, and the message
+    does not say that anything was."""
+    cloud, tok, s, sent, _ = env
+    rid = done_run(cloud, tok)
+    res = Path(s.results_dir) / rid
+    secret = tmp_path / "not-a-result.json"
+    secret.write_text(json.dumps({"secret": SECRET}), encoding="utf-8")
+
+    def out_of_time(self, key, root, cmd, **kw):
+        cache = root / "tmp" / "out" / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "0123456789abcdef01234567.json").write_text('{"written": "before the time limit"}', encoding="utf-8")
+        os.symlink(secret, cache / "planted.json")
+        return None, "", True
+    monkeypatch.setattr(worker_mod.Worker, "_jailed", out_of_time)
+    cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(tok))
+    cloud.post(f"/v1/runs/{rid}/explain", headers=bearer(tok))
+    ex = wait_explain(cloud, tok, rid)["explain"]
+    assert ex["status"] == "error" and "was stopped" in ex["error"] and "kept" not in ex["error"], ex
+    assert holds(res, SECRET) == [] and not (res / "cache").exists()
+    assert list(Path(s.work_dir).iterdir()) == []
 
 
 def test_explain_refuses_when_the_repository_moved_on(env, monkeypatch):

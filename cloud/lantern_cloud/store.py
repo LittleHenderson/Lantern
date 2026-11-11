@@ -1,4 +1,5 @@
-"""SQLite store for cloud mode: accounts (provider id + label), runs, per-day counters, and team workspaces.
+"""SQLite store for cloud mode: accounts (provider id + label), runs, per-day counters, team workspaces, and what
+is still to be removed from the disk (`leftovers`: a kind and a name, written in the same step as the delete that owes it).
 
 Never stored: tokens (not even hashes; the gateway owns those), emails, request bodies, repository contents.
 A workspace invite is a one-time link: only a hash of its secret is kept, and it stops working after 7 days or
@@ -47,6 +48,13 @@ create index if not exists members_by_account on members (account);
 create table if not exists invites (
   hash text primary key,             -- sha256 of the link's secret; the secret itself is never stored
   workspace text not null, created text not null, expires text not null);
+create table if not exists leftovers (
+  kind text not null,                -- results | work | upload: which of the service's three folders
+  name text not null,                -- one name inside that folder (a run id, a run's work folder, an upload); never a path
+  noted text not null,               -- when it was first written down as still to be removed
+  tried integer default 0, last_tried text,
+  why text,                          -- the reason the last try gave, in Lantern's own words (no file names)
+  primary key (kind, name));
 """
 INVITE_DAYS = 7
 ROLES = ("owner", "member")
@@ -136,15 +144,20 @@ class Store:
     def run_ids(self, account: str) -> list[str]:
         return [r[0] for r in self._all("select id from runs where account = ?", (account,))]
 
+    def all_run_ids(self) -> set[str]:
+        return {r[0] for r in self._all("select id from runs")}
+
     def delete_user(self, account: str) -> list[str]:
         """Forget an account: its user row, runs, counters and workspace places. Workspaces it owns are closed (the
         other members' runs go back to being theirs alone). Returns the run ids so the caller removes their result
-        folders."""
+        folders; each is written down as still to be removed in this same step (see `delete_run`)."""
         with self.lock:
             ids = self.run_ids(account)
             for (wid,) in self.db.execute("select id from workspaces where owner = ?", (account,)).fetchall():
                 self._close_workspace(wid)
             self.db.execute("delete from members where account = ?", (account,))
+            for rid in ids:
+                self._owe("results", rid)
             self.db.execute("delete from runs where account = ?", (account,))
             self.db.execute("delete from daily where account = ?", (account,))
             self.db.execute("delete from users where account = ?", (account,))
@@ -260,9 +273,45 @@ class Store:
         return self._run_dict(row) if row else None
 
     def delete_run(self, rid: str) -> None:
+        """Forget a run. In the same step its result files are written down as still to be removed, so a service
+        that is cut off between the two, or whose disk refuses, finishes the delete later (`cleanup.Cleanup`)."""
         with self.lock:
             self.db.execute("delete from runs where id = ?", (rid,))
+            self._owe("results", rid)
             self.db.commit()
+
+    # ---- what is still to be removed from the disk ----
+    def _owe(self, kind: str, name: str) -> None:
+        self.db.execute("insert into leftovers (kind, name, noted) values (?, ?, ?) on conflict(kind, name) do nothing",
+                        (kind, name, now()))
+
+    def note_leftover(self, kind: str, name: str) -> None:
+        """Write down that `name` in the folder for `kind` is still to be removed. The first time stands."""
+        with self.lock:
+            self._owe(kind, name)
+            self.db.commit()
+
+    def leftover_failed(self, kind: str, name: str, why: str) -> None:
+        with self.lock:
+            self.db.execute("update leftovers set tried = tried + 1, last_tried = ?, why = ? where kind = ? and name = ?",
+                            (now(), str(why)[:300], kind, name))
+            self.db.commit()
+
+    def forget_leftover(self, kind: str, name: str) -> None:
+        with self.lock:
+            self.db.execute("delete from leftovers where kind = ? and name = ?", (kind, name))
+            self.db.commit()
+
+    def leftovers(self) -> list[dict]:
+        rows = self._all("select kind, name, noted, tried, last_tried, why from leftovers order by noted, kind, name")
+        return [dict(zip(("kind", "name", "noted", "tried", "last_tried", "why"), r)) for r in rows]
+
+    def oldest_leftover(self) -> str | None:
+        return self._one("select min(noted) from leftovers")[0]
+
+    def oldest_finished(self) -> str | None:
+        """When the longest-finished run that is still listed ended (for "is the retention pass behind")."""
+        return self._one("select min(coalesce(finished, created)) from runs where status in (?, ?, ?)", FINISHED)[0]
 
     def expired(self, days: int) -> list[str]:
         """Finished runs older than `days` (0 = none: results are kept until the person deletes them)."""

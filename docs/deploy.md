@@ -66,6 +66,10 @@ What can go wrong and what it looks like:
 | A secret saved on the website shows "Staged" | Fly saved it without restarting the app | click **Deploy Secrets** on that page, or `fly secrets deploy` |
 | Explanations return "allowance paused" | The global daily dollar cap was reached | wait for 00:00 UTC, or raise `LANTERN_GLOBAL_DAILY_USD` |
 | Dashboard says "That secret was not accepted" | Wrong admin secret | `fly ssh console -C "printenv LANTERN_ADMIN_SECRET"` |
+| Dashboard says "Too many wrong secrets in the last minute" | Five wrong secrets from your network in this minute, or 30 from everyone together; until the minute ends no secret is looked at, the right one included | wait a minute, then enter the secret once. If it keeps coming back without you typing anything wrong, somebody else is guessing: they cannot get in, and `fly logs` shows the `403` and `429` lines for `/v1/admin/stats` |
+| A person signing in sees "This sign-in link was already used" | The page that came back from GitHub or Google was loaded a second time (Back, reload) | they start the sign-in again from Lantern |
+| A person signing in sees "Too many sign-ins in the last minute" | More than 10 sign-ins came back from their network in a minute, or 120 from everyone together | they wait a minute and load that page again (the link is still good) |
+| The app's "Share anonymous usage counts" says "not taken (the gateway answered 429)" | A limit on usage reports was reached (per network per hour, new installs per network per day, new installs for everyone per day) | nothing: the app keeps its counts and tries again. To raise a limit: `LANTERN_SENDER_PINGS_PER_HOUR`, `LANTERN_SENDER_INSTALLS_PER_DAY`, `LANTERN_INSTALLS_PER_DAY` (`gateway/README.md`) |
 | Counters reset after a deploy | Volume not mounted | `fly volumes list` should show `lantern_data` attached |
 
 ## Sign in with GitHub and Google (free allowance without minting tokens by hand)
@@ -111,11 +115,15 @@ here; `fly secrets list` shows names only. **Bold** marks a value that is unset 
 | Per-user daily requests | 120 per UTC day (`LANTERN_DAILY_REQUESTS`) | `gateway/fly.toml:13`, default `app.py:83` |
 | Global daily dollar cap | $10 per UTC day, then HTTP 503 until 00:00 UTC (`LANTERN_GLOBAL_DAILY_USD`) | `gateway/fly.toml:16`, default `app.py:85`, check `app.py:601` |
 | Output tokens per request | 3,000 max (`LANTERN_MAX_TOKENS`, **not set in fly.toml**) | `app.py:86` |
-| Request body | 250,000 bytes max (`LANTERN_MAX_BODY`, **not set in fly.toml**) | `app.py:87` |
+| Request body | 250,000 bytes max for `/v1/chat/completions` (`LANTERN_MAX_BODY`, **not set in fly.toml**); 4,000 bytes for every other address. Since gateway 0.2.6 nothing past the limit is read (413) | `Settings.max_body_bytes`, `limits.SMALL_BODY`, `limits.BodyCap` |
+| Usage reports (no sign-in) | Since gateway 0.2.6: 300 reports per sender per hour (`LANTERN_SENDER_PINGS_PER_HOUR`), 50 new installs per sender per day (`LANTERN_SENDER_INSTALLS_PER_DAY`), 1,000 new installs per UTC day for everyone together (`LANTERN_INSTALLS_PER_DAY`); **none set in fly.toml**, so the code defaults apply; 0 switches a limit off. Past one: 429 with `Retry-After` | `Settings`, `usage` in `app.py`, `Store.record_usage` |
+| Wrong admin secrets | Since gateway 0.2.6: 5 a minute per sender, 30 a minute for everyone together, then 429 until the minute ends (fixed in the code, no variable) | `Settings.admin_wrong_per_minute`, `admin` in `app.py` |
+| Sign-ins coming back from GitHub or Google | Since gateway 0.2.6: a link works once; the provider is asked at most 10 times a minute per sender and 120 a minute for everyone together (fixed in the code, no variable) | `auth_callback`, `first_use` in `app.py` |
+| Who a sender is | The address in the header named by `LANTERN_ADDRESS_HEADER` (default `fly-client-ip`, which Fly's proxy sets; **not set in fly.toml**), else the connection's address; IPv6 by /64. Kept in memory under a keyed hash, never written | `limits.sender`, `limits.Limiter` |
 | Model order | Anthropic `claude-haiku-5-5` first, DeepSeek `deepseek-flash` when Anthropic fails; `LANTERN_PRIMARY=deepseek` swaps them (**not set**, so Anthropic first) | `app.py:58`, `:61`, `:67`, `Settings.order()` `:112` |
 | Token hash retention | 90 days (`LANTERN_RETENTION_DAYS`, **not set in fly.toml**, so the code default applies). The SHA-256 of a token in `users` is deleted 90 days after its last request or sign-in, together with the account mapping in `accounts` that points at it; a hash disabled by a re-sign-in is deleted 90 days after that re-sign-in | default `app.py:90`, `Store.prune` `:248`, `users` `:141` |
 | Per-day counters | 90 days: rows in `daily`, `spend`, `models` and `usage` dated more than 90 days ago, and `installs` not seen for 90 days, are deleted. Pruning runs at start-up and on the first request of each UTC day. `LANTERN_RETENTION_DAYS=0` keeps everything | `Store.prune` `:248`, `daily` `:144` |
-| Unclaimed sign-in tokens | the plain token waits in `pending` for one claim, deleted after 10 minutes | `app.py:204` |
+| Unclaimed sign-in tokens | the token waits in `pending` for one claim, deleted after 10 minutes. Since gateway 0.2.6 it waits sealed with the app's own code (the gateway keeps a hash of that code), and a row left in clear by an earlier version is deleted at start-up; until then the plain token waited there | `_seal`, `Store.park`, `Store.claim` in `app.py` |
 
 `GET /v1/health` is public and returns `{ok, version, model, configured, primary, fallback}`: no counters, users or
 spend. CI (`gateway` job in `ci.yml`) and the release workflow (`gateway-up`) curl it and print it to the job summary.
@@ -126,6 +134,12 @@ account in use keeps its counters, and signing in again within 90 days still car
 to the running gateway only after `fly deploy`; the first prune runs when the new version starts, and
 `/v1/health` then reports `"version": "0.2.0"` (or later). Version 0.2.1 adds `GET /v1/whoami`, which the cloud
 service below uses to recognise a signed-in person; deploy it before the cloud service.
+
+Version 0.2.6 adds the limits on what anybody can send without signing in (`gateway/README.md`, "What anybody can
+send"). They apply only once that version is deployed: `/v1/health` then says `"version": "0.2.6"`. At that
+deploy a person who is in the middle of signing in signs in again (the token that waited for their app was kept in
+clear by the version before and is deleted, not handed out), and the counts of the limits start empty at every
+restart. Nothing needs setting: the four new variables have defaults.
 
 ## Cloud service on Fly.io (cloud mode)
 
@@ -156,9 +170,9 @@ that is not a written promise; to be sure, ask billing@fly.io. Free alternatives
 From the **repository root** (not `cloud/`: the image also packs the analysis engine):
 
 ```bash
-# 0. The gateway first, so it has /v1/whoami and the sign-in pages in the app's style (version 0.2.5).
+# 0. The gateway first, so it has /v1/whoami and the sign-in pages in the app's style (version 0.2.5 or later).
 cd gateway && fly deploy --depot=false && cd ..
-curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.5"
+curl https://lantern-gateway.fly.dev/v1/health          # -> "version": "0.2.6" (0.2.5 before the limits of 0.2.6)
 
 # 1. Create the empty app (once). `fly orgs list` shows your organisation's short name.
 fly apps create lantern-cloud --org <your-org>
@@ -196,13 +210,13 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 | `LANTERN_CLONE_MAX_MB` | 500 | A repository whose code is larger than this is refused before its files are written. Above it, the pictures, video, sound, fonts, archives, compiled programs, model weights and datasets Lantern never reads are left out first (`remote.BULK_EXT`, and files over 20 MB of a type Lantern does not read), and the Evidence report's Limits says so. Each run holds its download and its files on the volume, so keep the volume at least 6 × this (two runs at once): the deploy workflow extends it to 3 GB |
 | `LANTERN_CLOUD_JOB_SECONDS` | 1200 | Wall clock per run; the analysis is stopped after it |
 | `LANTERN_CLOUD_IDLE_MINUTES` | 0 (10 in `cloud/fly.toml`) | Minutes with no visitor and no run before the service stops itself; 0 = never |
-| `LANTERN_CLOUD_RETENTION_DAYS` | 0 | 0 = results kept until the person deletes them (Delete on a run, or Delete my account); a number N deletes finished runs older than N days, checked every hour |
+| `LANTERN_CLOUD_RETENTION_DAYS` | 0 | 0 = results kept until the person deletes them (Delete on a run, or Delete my account); a number N deletes finished runs older than N days, checked every hour by the clean-up pass ("Clean-up" below; a pass that failed is tried again five minutes later and shown in the owner's statistics) |
 | `LANTERN_CLOUD_VIEW_MINUTES` | 60 | How long a "open my report" link works |
 | `LANTERN_CLOUD_VIEW_SECRET` | derived from the admin secret | Signs those links; set it only to make all open links stop working at once (`fly secrets set`) |
 | `LANTERN_CLOUD_HOSTS` | (empty) | Comma-separated clone hosts; empty = every public forge Lantern knows |
 | `LANTERN_GATEWAY_URL` | `https://lantern-gateway.fly.dev/v1` | Where sign-ins are checked |
-| `LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS`, `LANTERN_CLOUD_WORK` | on the volume | Run list (SQLite), result folders, temp folders of runs in progress (emptied after each run and at start-up) |
-| `LANTERN_CLOUD_UPLOADS` | `<LANTERN_CLOUD_WORK>-uploads` (on the volume) | Uploaded .zip files waiting for their run to start; each is moved into its run's temp folder when the run starts, and anything not waiting for a queued run is removed at start-up |
+| `LANTERN_CLOUD_DB`, `LANTERN_CLOUD_RESULTS`, `LANTERN_CLOUD_WORK` | on the volume | Run list (SQLite), result folders, temp folders of runs in progress. Each run's temp folder is removed when the run ends, and the ones cut-off runs left are removed at start-up. The service removes only the folders it made there (each carries its mark file `.lantern-work`); anything else in these folders is left alone and counted ("Clean-up" below). Until 2026-11-10 start-up deleted everything in the work folder, whatever it was |
+| `LANTERN_CLOUD_UPLOADS` | `<LANTERN_CLOUD_WORK>-uploads` (on the volume) | Uploaded .zip files waiting for their run to start; each is moved into its run's temp folder when the run starts. At start-up half-received uploads and the uploads of runs that are over are removed; a waiting run's upload stays, and so does anything that is not an upload of the service's (counted, "Clean-up" below) |
 
 Explanations and Ask Lantern (milestone 6) need no new setting or secret: they go to the same gateway the
 sign-in uses, with each person's own allowance token, and only after that person agrees on the website. The gateway's
@@ -221,16 +235,53 @@ repository's files.
 | Health check fails right after deploy | Volume not created, so the database can't be written | step 2, then `fly deploy` again |
 | The first request after a quiet spell takes a few seconds | The service was asleep (normal, it saves money) | nothing |
 | A large repository's run ends with an error about memory | 1 GB is not enough for it | `fly scale memory 2048 -a lantern-cloud` (doubles the running cost) |
+| The uptime mail says `lantern-cloud clean-up` is `OWED` | Files the service should have removed (a deleted run's results, a run's temp folder) have been waiting for more than a day, or runs past the retention time are still there | "Clean-up" below: read the reason in the owner's statistics first |
+| After deleting a run the website says "Deleted, with one thing still to do" | The run is gone for everyone, but the server could not remove its files from its disk yet. It has written that down and tries again at every start and every hour | Nothing, unless the uptime mail above arrives a day later |
 
 ### Watching the live services (uptime, and "is the live version behind?")
 
 `.github/workflows/uptime.yml` asks both services for `/v1/health` every 30 minutes (`tools/uptime.py`). A run fails,
 and GitHub emails the repository owner, when either service is down, answers without `"ok": true`, takes more than
-5 seconds, or when lantern-cloud's engine version is older than the latest GitHub release (the live service is behind;
-redeploy, below). The health pages are public and show versions and limits only, so the check needs no secret.
+5 seconds, when lantern-cloud's engine version is older than the latest GitHub release (the live service is behind;
+redeploy, below), or when lantern-cloud's health page says its clean-up is behind ("Clean-up" below). The health pages are public and show versions and limits only, so the check needs no secret.
 `python tools/uptime.py --cloud https://lantern-cloud.fly.dev --gateway https://lantern-gateway.fly.dev` runs the same
 check by hand. Fly's own status page is https://status.flyio.net/. To get the mails, keep "Actions: send notifications
 for failed workflows" on in your GitHub notification settings (it is on by default for the repository owner).
+
+### Clean-up: what the service removes by itself, and what it leaves to you
+
+The service deletes only what it made: a run's temp folder when the run ends, the results of a run when its owner
+deletes it (or the retention time is over), a half-received upload, the upload of a run that is over. When the disk
+refuses, nothing is lost track of: the service writes down what it still has to remove, tells the person, and tries
+again every time it starts and every hour while it is awake. (The live service sleeps when nobody uses it, and the
+uptime check wakes it every 30 minutes, so "again" is at least that often.)
+
+What it knows is in the owner's statistics, `GET /v1/admin/stats` with the admin secret, under `cleanup`:
+
+| Field | Meaning | What to do |
+|---|---|---|
+| `waiting`, `by_kind`, `oldest` | How many things are still to be removed, of which kind (`results`, `work`, `upload`), and since when the oldest has been waiting | Nothing while `behind` is false |
+| `reasons` | Why, one sentence each with the system's reason (five at most; no file names), for example "it could not be removed; the reason: the disk is read-only (OSError 30)" or "3 things in it could not be removed; the first reason: no permission (PermissionError 13)" | A read-only disk or a disk error: look at the volume (`fly volumes list -a lantern-cloud`, `fly ssh console -a lantern-cloud -C "df -h /home/app/data"`). "it belongs to another user" or "it is a link": something other than the service wrote into its folders; look at what it is before removing it by hand |
+| `behind` | True when something has been waiting for 24 hours or more, or runs more than a day past the retention time are still there. The health page then says `"cleanup": "behind"` and the uptime check fails, which mails you | Fix the cause above; the next pass removes what is waiting and the word goes back to `ok` by itself |
+| `last_pass` | When the last pass ended, whether it went through (`ok`), the kind of error if not, and how many things it removed | `ok: false` twice in a row with the same error is worth a look at `fly logs -a lantern-cloud` |
+| `left_alone` | How many things in the work folder, the uploads folder and the results folder are **not** the service's own. It never deletes these | See below |
+| `refused` | Deletes that were refused since the start because the name was not one the service gives, or the thing was in use | Should stay 0; anything else is a bug to report |
+
+`left_alone` is normally `{work: 0, uploads: 0, results: 0}`. Two cases are known where it is not, and both are safe
+to clean by hand **while no run is going** (My runs shows none running; or right after a deploy):
+
+* `work` above 0 after the first deploy of this version: a temp folder that a run of the older version left when it
+  was cut off (the older version put no mark in its folders, so the service cannot know such a folder for its own).
+  `fly ssh console -a lantern-cloud -C "ls -la /home/app/data/work"` shows them; a folder named `run-…` or
+  `explain-…` there with no run going is such a leftover:
+  `fly ssh console -a lantern-cloud -C "rm -rf /home/app/data/work/run-XXXXXXXX"` (the exact name, one at a time).
+* `results` above 0: a results folder that no run points at. Until 2026-11-10 a delete whose files could not be
+  removed left them there with no record. `ls /home/app/data/results` lists one folder per run; the statistics do not
+  name the orphans (they never name a run), so compare with the run list in the database before removing anything, or
+  leave them: nobody can open them, they only take space.
+
+Never point `LANTERN_CLOUD_WORK`, `LANTERN_CLOUD_UPLOADS` or `LANTERN_CLOUD_RESULTS` at a folder other programs use.
+The service no longer deletes what it finds there, but it still counts on these folders being its own.
 
 ### Backups and a way back (rollback)
 

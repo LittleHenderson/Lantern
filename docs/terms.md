@@ -33,6 +33,9 @@ same.
 * The results (the report, the evidence page, the findings) stay in your account until you delete them, with the
   bin icon on a run or **Delete my account**. There is no other retention: nothing is kept after you delete it except
   ordinary server logs for up to 30 days, which hold request times and sizes, never code.
+* If the server cannot remove a file at the moment it should (a disk fault, for example), it does not pretend: what
+  you deleted can no longer be opened by anyone from that moment, the page tells you that its files are still to be
+  removed, and the server tries again by itself until they are gone.
 * Nothing is shared unless you press **Share** on a run; a share link is a long random address, and turning sharing off
   makes it stop working.
 * We store your account id from GitHub or Google and its public name, never your email or password, and the counts

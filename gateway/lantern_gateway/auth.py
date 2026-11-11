@@ -24,6 +24,7 @@ import html
 import json
 import os
 import re
+import secrets
 import time
 import urllib.parse
 
@@ -51,7 +52,10 @@ CLI_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 
 
 def sign_state(secret: str, provider: str, cli: str) -> str:
-    payload = json.dumps({"t": int(time.time()), "p": provider, "c": cli}, separators=(",", ":")).encode()
+    """A sign-in link's `state`: when it was made, for which provider and which app, and a random part, so that no
+    two links are the same text (a link is good once, and two people starting in the same second must not share one)."""
+    payload = json.dumps({"t": int(time.time()), "p": provider, "c": cli, "n": secrets.token_urlsafe(9)},
+                         separators=(",", ":")).encode()
     mac = hmac.new(secret.encode(), payload, hashlib.sha256).digest()[:16]
     return base64.urlsafe_b64encode(payload + mac).decode().rstrip("=")
 
@@ -81,7 +85,16 @@ def authorize_url(provider: str, client_id: str, redirect_uri: str, state: str) 
 
 async def exchange(provider: str, client_id: str, client_secret: str, code: str, redirect_uri: str,
                    transport: httpx.AsyncBaseTransport | None = None) -> tuple[str, str] | None:
-    """(account id, label) for the signed-in user, or None when the provider refused."""
+    """(account id, label) for the signed-in user, or None when the provider refused, could not be reached, or
+    answered with something that is not the table it promises."""
+    try:
+        return await _exchange(provider, client_id, client_secret, code, redirect_uri, transport)
+    except (httpx.HTTPError, AttributeError, TypeError):
+        return None
+
+
+async def _exchange(provider: str, client_id: str, client_secret: str, code: str, redirect_uri: str,
+                    transport: httpx.AsyncBaseTransport | None = None) -> tuple[str, str] | None:
     p = PROVIDERS[provider]
     async with httpx.AsyncClient(transport=transport, timeout=20) as client:
         r = await client.post(p["token"], data={"client_id": client_id, "client_secret": client_secret, "code": code,

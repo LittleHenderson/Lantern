@@ -16,6 +16,7 @@ Run:  LANTERN_ADMIN_SECRET=... uvicorn lantern_cloud.app:create_app --factory --
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gzip
 import hashlib
 import hmac
@@ -28,10 +29,12 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from lantern import learn
 
 from . import __version__
+from .cleanup import Cleanup
 from .identity import GatewayUnavailable, Identity
 from .idle import IdleExit
 from .settings import Settings
@@ -98,18 +101,15 @@ SHARE_GONE = _note_page("This link is off", "Its owner stopped sharing this repo
 SHAREABLE = {"report.html", "evidence.html", "badge.svg"}     # a shared run shows its pages, not its raw data files
 
 
-def remove_results(results_dir: str, rid: str) -> None:
-    import shutil
-    if rid and "/" not in rid and "\\" not in rid and rid not in (".", ".."):
-        shutil.rmtree(Path(results_dir) / rid, ignore_errors=True)
-
-
-def sweep(store, results_dir: str, days: int) -> list[str]:
-    """Delete finished runs older than `days` and their results (0 = keep until the person deletes them)."""
+def sweep(store, results_dir: str, days: int, cleanup: Cleanup | None = None) -> list[str]:
+    """Delete finished runs older than `days` and their results (0 = keep until the person deletes them). Result
+    files that cannot be removed are written down in the same step as the run's row goes, and tried again by every
+    later pass (`cleanup.Cleanup`); until 2026-11-10 they stayed on the disk and nothing said so."""
+    cleanup = cleanup or Cleanup(store, results_dir)
     gone = store.expired(days)
     for rid in gone:
         store.delete_run(rid)
-        remove_results(results_dir, rid)
+        cleanup.discard("results", rid)
     return gone
 
 
@@ -175,21 +175,29 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     ident = Identity(s.gateway_url, s.identity_ttl, transport=transport)
     worker = Worker(s, store) if start_worker else None
     gh = s.github_app()     # Connect GitHub (private repositories), or None
-    app = FastAPI(title="Lantern cloud", docs_url=None, redoc_url=None, openapi_url=None)
+    # Everything the service deletes goes through one place, which writes down what it could not remove and tries
+    # again: at start, then every hour (`cleanup.py`). The pass also removes runs past the retention time, when the
+    # owner has set one; `sweep` is looked up when the pass runs.
+    cleanup = worker.cleanup if worker is not None else Cleanup(store, s.results_dir, s.work_dir, s.uploads())
+    cleanup.days = s.retention_days
+    cleanup.retention = lambda: sweep(store, s.results_dir, cleanup.days, cleanup)
+    upkeep_over = threading.Event()
+    threading.Thread(target=cleanup.run_forever, args=(upkeep_over,), name="lantern-upkeep", daemon=True).start()
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        upkeep_over.set()
+        if worker is not None:   # the service is stopping: no new run starts, and the step each run is in is
+            worker.shutdown()    # ended with everything it started; the run's record then says why it stopped
+
+    app = FastAPI(title="Lantern cloud", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store, app.state.settings, app.state.identity, app.state.worker = store, s, ident, worker
+    app.state.cleanup = cleanup
     provider_for = provider_for or (lambda token: hosted(token, s.gateway_url))
     idle = IdleExit(s.idle_minutes, busy=lambda: store.busy() > 0)
     app.state.idle = idle
     idle.start()
-    if s.retention_days > 0:
-        def _retention():
-            while True:
-                try:
-                    sweep(store, s.results_dir, s.retention_days)
-                except Exception:  # noqa: BLE001: the next pass tries again
-                    pass
-                time.sleep(3600)
-        threading.Thread(target=_retention, name="lantern-retention", daemon=True).start()
 
     @app.middleware("http")
     async def _seen(request: Request, call_next):
@@ -236,11 +244,21 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         # Public: Lantern's built-in starter apps, which a signed-in person can check with one click.
         return {"samples": [{k: c.get(k) for k in ("id", "title", "stack", "level", "summary")} for c in learn.catalog()]}
 
+    def cleanup_word() -> str:
+        """One word for the public health page: "behind" once something has been waiting to be removed for a day, or
+        a run is still listed a day after the retention time (the uptime check then fails, which is an email to the
+        owner); "ok" otherwise. A service that has just started is given two seconds to finish its first pass."""
+        try:
+            cleanup.first.wait(2.0)
+            return "behind" if cleanup.behind() else "ok"
+        except Exception:  # noqa: BLE001 - the health page answers whatever happens
+            return "unknown"
+
     @app.get("/v1/health")
     def health():
         # Public: versions and limits only, never counters, accounts or links.
         return {"ok": True, "service": "lantern-cloud", "version": __version__, "engine": _engine_version(),
-                "limits": s.limits(), "hosts": s.hosts() or "all"}
+                "limits": s.limits(), "hosts": s.hosts() or "all", "cleanup": cleanup_word()}
 
     @app.get("/v1/me")
     async def me(request: Request):
@@ -333,7 +351,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 raise HTTPException(429, str(e)) from None
             part.replace(worker.upload_path(rid))
         finally:
-            part.unlink(missing_ok=True)
+            cleanup.discard("upload", part.name)   # nothing is there when the run took it; written down when it stays
         worker.submit(rid)
         return run_view(store.run(rid))
 
@@ -475,9 +493,11 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             raise HTTPException(409, "This check is still going. Delete it once it has finished.")
         if r.get("explain_status") in ACTIVE_EXPLAIN:
             raise HTTPException(409, "Lantern is still writing this check's explanations. Delete it once they are done.")
-        store.delete_run(r["id"])
-        remove_results(s.results_dir, r["id"])
-        return {"deleted": r["id"]}
+        store.delete_run(r["id"])     # the row, and in the same step the note that its files are still to be removed
+        gone = await run_in_threadpool(cleanup.discard, "results", r["id"])
+        # "waiting": nobody can open the run any more, but its files could not be removed from the disk yet. That
+        # is written down, tried again by every pass, and told to the owner. (Until 2026-11-10: "deleted", always.)
+        return {"deleted": r["id"], "files": "removed" if gone else "waiting"}
 
     @app.delete("/v1/me")
     async def delete_me(request: Request):
@@ -487,9 +507,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if store.busy(who["account"]):
             raise HTTPException(409, "A check is still going. Delete your account once it has finished.")
         ids = store.delete_user(who["account"])
-        for rid in ids:
-            remove_results(s.results_dir, rid)
-        resp = JSONResponse({"deleted": True, "runs": len(ids)})
+        gone = await run_in_threadpool(lambda: [cleanup.discard("results", rid) for rid in ids])
+        resp = JSONResponse({"deleted": True, "runs": len(ids), "files": "removed" if all(gone) else "waiting"})
         resp.delete_cookie(SESSION_COOKIE, path="/")
         return resp
 
@@ -856,6 +875,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     @app.get("/v1/admin/stats")
     def admin_stats(authorization: str | None = Header(default=None)):
         admin(authorization)
-        return store.stats()
+        # "cleanup": what is still to be removed (counts and reasons, never a run id or a path), what in the
+        # service's folders is not its own and was left alone, and how the last pass went.
+        return {**store.stats(), "cleanup": cleanup.state()}
 
     return app
