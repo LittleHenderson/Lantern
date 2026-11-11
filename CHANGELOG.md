@@ -101,6 +101,75 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   not measured (it is installed neither here nor in CI); the Windows rules are tried against Windows itself only by
   the three tests of CI's Windows job; the project's own tests ("Watch my tests run", `lantern trace`) are the
   project's code on purpose and run in the sandbox.
+- npm takes no settings from the project it audits, and reads nothing outside a folder of Lantern's own (2026-11-10;
+  stage 7 of the 2026-11-09 directive: path boundaries, lock files). `npm audit` takes settings from the folder it
+  is started in (`.npmrc`), and from a folder above whose `package.json` names that folder as a workspace. Lantern
+  started it in the project.
+  **What was wrong** (the code before, 033e30a; npm 10.9.9, node 22; the real npm against stand-in registries on
+  127.0.0.1, offline). Lantern named the registry itself (`--registry`), and that held: a `registry=` line in the
+  project was passed over. But with `offline=true` in the project's `.npmrc` npm asked nobody and found nothing, and
+  Lantern's record of the audit said `ok`. With `proxy=` and `https-proxy=` both of npm's requests went to the
+  address the project named (where nothing says "not through a proxy", as on a person's computer), and the record
+  said `ok`. With `strict-ssl=false`, or `cafile=` naming a file of the project, npm talked to a registry whose
+  certificate nobody vouches for. With `cache=` and `logs-dir=` npm wrote 21 files where the project said. A token
+  line (`//host/:_authToken=`) and `user-agent=` were sent as the project wrote them. `global=true`,
+  `location=global` and `workspace=<a name>` made the audit fail, and `fetch-timeout=1` did in 3 of 8 runs (each
+  said in the record). 16 other settings tried changed nothing (`node-options` and `script-shell` among them:
+  nothing of the project ran). And npm reads the `package.json` of every folder a lock file names on the computer:
+  with a lock file that names `../next-door`, the version written in that folder's `package.json`, outside the
+  project, was in the question npm sent to the registry; a workspace pattern such as `../*` in `package.json` made
+  it read the `package.json` of every folder beside the project, and so did the same pattern in the lock file's own
+  first entry, which npm takes in place of a `package.json` it cannot use.
+  **Now.** npm is started in a new folder of Lantern's own (`programs.folder`), on copies (`depaudit._npm_stage`):
+  `package.json`, `package-lock.json` and `npm-shrinkwrap.json` (npm takes it before the lock file), and the
+  `package.json` of each folder the lock file names inside the project, at the place it has in the project. Each is
+  read as any dependency file is (a plain file of the project, 32 MB at most) and handed to npm as what Lantern read
+  in it, written out anew, never as the file's own text (`_npm_json`): two readers of one text can disagree (a name
+  that stands twice; JSON nested 200,000 deep, which Node reads and Python does not follow), and npm would then
+  follow what Lantern never saw. A file Lantern cannot read as JSON means npm is not started on that lock file. The
+  folders matter: npm finds a workspace package by its folder, and a copy of the two files alone asked about nothing
+  and said that nothing is known (measured before the fix was written). A folder named outside the project is not
+  copied, and the copy lies as many folders deep in Lantern's folder as any entry of the lock file holds `..`, so
+  nothing is where such an entry points. An entry counts as a link however it is marked (npm takes `1`, `"yes"` and
+  `[]` for the mark as it takes `true`), and what it points at counts as a path whatever it looks like (to npm
+  `https://x/../../../next-door` is the folder beside the project). What cannot be kept from npm that way means npm
+  is not started on that lock file, and the record names the file and the reason: a folder named by its full path;
+  one written in words a path and an address read differently (`%`, a control character, `~`: an older lock file's
+  `file:` version is read as an address); more than 16 levels up; more than 5,000 folders, or 64 MB of their
+  `package.json` files; a workspace pattern that leaves its folder (`..`, a full path, a backslash, braces that can
+  put either together), in `package.json` or in a lock file's own first entry. A folder's `package.json` that is no
+  file of the project (a link out of it, a pipe), that Lantern cannot read as JSON, or that asks for workspace
+  folders outside, is not copied and is named, and the audit's state is `partial`.
+  Changed for the person: a project's own `.npmrc` no longer counts for Lantern's audit (a private registry, a proxy
+  or a certificate set there); their own npm settings (`~/.npmrc`, `NPM_CONFIG_*`) count as before. A folder a lock
+  file names outside the analyzed folder is no longer read. A lock file in a folder that a `package.json` one folder
+  up names as a workspace is audited as that lock file (before, npm went up to that folder and the audit failed
+  there for want of a lock file). A project whose `package.json` or lock file is not valid JSON is not handed to
+  npm, and the record says which file (before, npm audited a project with a broken `package.json` from its lock file
+  alone, and said itself what was wrong with a broken lock file).
+  Tests: `tests/test_npm_settings.py` (145 tests; 23 start the real npm against stand-in registries on this computer
+  and are skipped where npm is not installed; 122 put a stand-in in npm's place and run everywhere, but for 6 that
+  need links and pipes or a path longer than Windows takes). On the code before 138 fail and 7 pass: 135 on what the
+  code does, 3 because a name of this change is not there yet. The 7 are twins (what must keep working) and the
+  `fetch-timeout=1` case, which the code before fails in 3 of 8 runs. Mistakes planted in the changed lines, one
+  at a time, on the final code and tests: 60 in two files (59 in `lantern/depaudit.py`, 1 in
+  `lantern/programs.py`), 58 fail a test and 2 fail none: the 64 MB limit written as 65 MB (the tests set a small
+  limit instead of writing 64 MB of files) and the longest line of the record written as 301 characters in place
+  of 300 (no line Lantern writes about npm gets that long). The first pass, on the fix and the tests as first
+  written: 55 planted, 38 failed a test at once, 17 failed none.
+  Kept in the record: the fix as first written (101 tests, all passing; the whole suite passing under Python 3.13
+  and 3.11, 1893 passed and 22 skipped each) still let the real npm read outside Lantern's folder in two crafted
+  cases. They were found while reading the planted mistakes that failed no test, and npm's own code. A lock file
+  nested deeper than Python follows was handed over as it was, unread, and npm followed it two folders up; and with
+  a `package.json` that is not JSON npm took the lock file's first entry with its workspace patterns. 48 tests were
+  written first (32 failed, two of them with the real npm), then the fix was changed. Nothing of the first form was
+  pushed.
+  Not covered: npm also looks in the folders above the one it is started in for a `package.json` that names it as a
+  workspace; above Lantern's folder those are the temp folder and the folders it lies in, which are the computer's
+  and not the project's. Only npm 10.9.9 was measured here (CI's machines bring their own npm). A name JavaScript
+  treats specially (`__proto__` as a key of the lock file, three ways) was tried in place: npm 10.9.9 follows none,
+  and Lantern has no rule for it. What gitleaks does with settings files in the folder it scans is still not
+  measured.
 - The opt-in usage counts go to the gateway's own address and nowhere else, and Lantern says where they go
   (2026-11-10; stage 7 of the 2026-11-09 directive, "validate ... the address used for optional usage reporting").
   Sharing is off until the person turns it on; this is about what happened after they did.

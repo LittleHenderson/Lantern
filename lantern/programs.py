@@ -16,7 +16,9 @@ environment a helper is started with (`remote.run_bounded` uses it for every one
 relative entries, and on Windows the system's own switch against looking in the current folder, which its shell
 obeys when a `.cmd` (npm) starts `node` by its bare name. Nothing else of the person's environment is changed.
 `settings(name, text)` is a settings file of Lantern's own for a tool that would otherwise look for one in the
-folder it scans (Bandit and a project's `.bandit`).
+folder it scans (Bandit and a project's `.bandit`). `folder()` is a folder of Lantern's own for a tool that takes
+settings from the folder it is started in (npm and a project's `.npmrc`): the tool is started there, on copies
+of the files it is to read.
 
 Not covered: a folder PATH names in full is the person's own setting and is used as written, also when it lies inside
 a project (a project's own virtual environment that the person switched on); and Lantern itself is started by Python
@@ -107,3 +109,14 @@ def settings(name: str, text: str):
         path = Path(own) / name
         path.write_text(text, encoding="utf-8")
         yield path
+
+
+@contextlib.contextmanager
+def folder():
+    """A folder of Lantern's own, for the time a tool runs: new and empty, in the temp folder, for this user only,
+    and gone afterwards with what was put in it. A tool that takes settings from the folder it is started in is
+    started here, on copies of the files it is to read, so it finds no settings file of a project. OSError when the
+    folder cannot be made: the caller then does not start the tool. A folder that cannot be cleared away
+    afterwards is left where it is, without a word."""
+    with tempfile.TemporaryDirectory(prefix="lantern-own-", ignore_cleanup_errors=True) as own:
+        yield Path(own)
