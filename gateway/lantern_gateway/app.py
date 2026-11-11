@@ -12,6 +12,9 @@ Guarantees, in order of importance:
      size, chat messages only. The gateway can't be used as a general-purpose free LLM.
   4. No code is stored: only token hashes, counts, and costs. Request and response bodies are never
      logged or written to disk.
+  5. What anybody can send without signing in is bounded (limits.py): no body is read past the limit of its path,
+     the opt-in usage reports are counted per sender and for everyone together, wrong admin secrets and sign-ins
+     a sender has the gateway ask a provider about are counted per minute. A sender's address is never kept.
 
 Run:  ANTHROPIC_API_KEY=... DEEPSEEK_API_KEY=... LANTERN_ADMIN_SECRET=... uvicorn lantern_gateway.app:create_app --factory
 Claude Haiku 5.5 (Anthropic) answers first; DeepSeek answers when Anthropic fails. LANTERN_PRIMARY=deepseek swaps them.
@@ -24,7 +27,9 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -35,7 +40,7 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import __version__
+from . import __version__, limits
 
 log = logging.getLogger("lantern.gateway")
 
@@ -89,6 +94,20 @@ class Settings:
     # New accounts per UTC day, everyone together: one person making many GitHub/Google accounts to multiply the free
     # allowance is slowed to this many a day (an existing account signing in again is never counted). 0 = no cap.
     signups_per_day: int = field(default_factory=lambda: _env_int("LANTERN_SIGNUPS_PER_DAY", 200))
+    # What anybody can send without signing in (limits.py). The opt-in usage reports: new installs per UTC day for
+    # everyone together, new installs per sender per day, reports per sender per hour. 0 = no limit.
+    installs_per_day: int = field(default_factory=lambda: _env_int("LANTERN_INSTALLS_PER_DAY", 1000))
+    sender_installs_per_day: int = field(default_factory=lambda: _env_int("LANTERN_SENDER_INSTALLS_PER_DAY", 50))
+    sender_pings_per_hour: int = field(default_factory=lambda: _env_int("LANTERN_SENDER_PINGS_PER_HOUR", 300))
+    # Wrong admin secrets a minute, and sign-ins a minute the gateway asks a provider about: from one sender, and
+    # from everyone together.
+    admin_wrong_per_minute: int = 5
+    admin_wrong_per_minute_all: int = 30
+    sender_signins_per_minute: int = 10
+    signins_per_minute_all: int = 120
+    # The header the proxy in front of the gateway writes the caller's address in (Fly: Fly-Client-IP). "" where
+    # there is no such proxy: a header the caller writes itself must not name it.
+    address_header: str = field(default_factory=lambda: os.environ.get("LANTERN_ADDRESS_HEADER", "fly-client-ip"))
     max_tokens_cap: int = field(default_factory=lambda: _env_int("LANTERN_MAX_TOKENS", 3000))
     max_body_bytes: int = field(default_factory=lambda: _env_int("LANTERN_MAX_BODY", 250_000))
     # Token hashes not used (or signed in with) for this many days, and per-day counters older than this, are
@@ -132,8 +151,44 @@ USAGE_FEATURES = frozenset({
     "serve", "learn", "trace", "mcp_call", "mcp_connect", "evidence", "report_open", "settings_save"})
 
 
+# What a usage report may say of the app besides its counts: a version that reads as one, a system the app runs on.
+# Anything else is not kept as written: the owner's page shows these, and anybody can send a report.
+USAGE_VERSION = re.compile(r"[0-9]{1,4}(\.[0-9]{1,4}){1,3}((a|b|rc|\.dev|\.post)[0-9]{1,4})?")
+USAGE_SYSTEMS = frozenset({"Linux", "Darwin", "Windows"})
+PARKED = 600             # seconds a token waits for the app that started the sign-in
+SEALED = "s1:"
+
+
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _pad(cli: str, n: int) -> bytes:
+    return hashlib.shake_256(b"lantern parked token\0" + cli.encode()).digest(n)
+
+
+def _seal(cli: str, token: str) -> str:
+    """A token as it waits in the database for the app that started the sign-in: readable only with that app's own
+    code (`cli`), of which the gateway keeps a hash and nothing else. The promise is hashes only, and a token nobody
+    collected would otherwise sit in the database file, and in every copy of it, in clear."""
+    raw = token.encode()
+    return SEALED + bytes(a ^ b for a, b in zip(raw, _pad(cli, len(raw)), strict=True)).hex()
+
+
+def _open(cli: str, sealed: str) -> str | None:
+    if not sealed.startswith(SEALED):
+        return None                       # a row the version before left in clear: never handed out
+    try:
+        raw = bytes.fromhex(sealed[len(SEALED):])
+        return bytes(a ^ b for a, b in zip(raw, _pad(cli, len(raw)), strict=True)).decode()
+    except ValueError:
+        return None
+
+
+def seconds_to_midnight_utc(now: dt.datetime | None = None) -> int:
+    now = now or dt.datetime.now(dt.UTC)
+    nxt = (now + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, int((nxt - now).total_seconds()))
 
 
 def until_midnight_utc(now: dt.datetime | None = None) -> str:
@@ -153,6 +208,10 @@ class SignupsPaused(Exception):
     def __init__(self, today: int):
         super().__init__(f"{today} new accounts today")
         self.today = today
+
+
+class InstallsPaused(Exception):
+    """Today's cap on new installs in the usage reports is reached; installs seen before keep being counted."""
 
 
 class Store:
@@ -190,6 +249,8 @@ class Store:
         # anchor = 1: a counter row made by `sign_in` that no token is (its sessions point at it).
         if "anchor" not in cols:
             self.db.execute("alter table users add column anchor integer default 0")
+        # A parked token the version before left in clear, and any that waited too long, do not stay.
+        self.db.execute("delete from pending where token not like ? or created < ?", (SEALED + "%", time.time() - PARKED))
         self.db.commit()
         self.pruned_day = ""
 
@@ -293,20 +354,22 @@ class Store:
         return n
 
     def park(self, cli: str, token: str) -> None:
+        """Keep a new sign-in's token for the app that started it, sealed with the app's own code (`_seal`)."""
         with self.lock:
-            self.db.execute("delete from pending where created < ?", (time.time() - 600,))
+            self.db.execute("delete from pending where created < ?", (time.time() - PARKED,))
             self.db.execute("insert or replace into pending (cli_hash, token, created) values (?, ?, ?)",
-                            (_hash(cli), token, time.time()))
+                            (_hash(cli), _seal(cli, token), time.time()))
             self.db.commit()
 
     def claim(self, cli: str) -> str | None:
+        """The token parked for this code: once, within ten minutes. Every question, whoever asks, also clears
+        away the tokens nobody collected in time."""
         with self.lock:
-            row = self.db.execute("select token, created from pending where cli_hash = ?", (_hash(cli),)).fetchone()
-            if not row:
-                return None
+            self.db.execute("delete from pending where created < ?", (time.time() - PARKED,))
+            row = self.db.execute("select token from pending where cli_hash = ?", (_hash(cli),)).fetchone()
             self.db.execute("delete from pending where cli_hash = ?", (_hash(cli),))
             self.db.commit()
-        return row[0] if time.time() - row[1] <= 600 else None
+        return _open(cli, row[0]) if row else None
 
     def user(self, token: str) -> dict | None:
         """The counter row behind a token: a sign-in's session leads to its account's anchor; a token minted by
@@ -386,6 +449,7 @@ class Store:
             out["models"] = q("delete from models where day < ?", (cut,)).rowcount
             out["usage"] = q("delete from usage where day < ?", (cut,)).rowcount
             out["installs"] = q("delete from installs where last_seen < ?", (cut,)).rowcount
+            q("delete from pending where created < ?", (time.time() - PARKED,))
             self.db.commit()
             self.pruned_day = today
         return out
@@ -396,9 +460,20 @@ class Store:
             self.prune(today, days)
 
     # ---- opt-in usage pings from the app (counts per feature per day; no code, no paths, no names) ----
-    def record_usage(self, install: str, day: str, version: str, os_name: str, features: dict[str, int]) -> None:
+    def knows_install(self, install: str) -> bool:
+        with self.lock:
+            return self.db.execute("select 1 from installs where install = ?", (install,)).fetchone() is not None
+
+    def record_usage(self, install: str, day: str, version: str, os_name: str, features: dict[str, int],
+                     max_new_per_day: int = 0) -> None:
+        """With `max_new_per_day`, an install not seen before, past that many new ones today (UTC, everyone
+        together), raises InstallsPaused and nothing is kept: anybody can send a report, and each new id is a row."""
         now = dt.datetime.now(dt.UTC).isoformat()
         with self.lock:
+            if max_new_per_day > 0 and self.db.execute("select 1 from installs where install = ?", (install,)).fetchone() is None:
+                n = self.db.execute("select count(*) from installs where substr(first_seen, 1, 10) = ?", (now[:10],)).fetchone()[0]
+                if n >= max_new_per_day:
+                    raise InstallsPaused()
             self.db.execute("insert into installs (install, first_seen, last_seen, version, os) values (?, ?, ?, ?, ?) "
                             "on conflict(install) do update set last_seen = excluded.last_seen, "
                             "version = excluded.version, os = excluded.os", (install, now, now, version, os_name))
@@ -537,8 +612,25 @@ def _retryable(err) -> bool:
     return err == "unreachable" or err in (401, 402, 403, 429) or (isinstance(err, int) and err >= 500)
 
 
-def _err(status: int, kind: str, message: str, **extra) -> JSONResponse:
-    return JSONResponse({"error": {"type": kind, "message": message, **extra}}, status_code=status)
+def _err(status: int, kind: str, message: str, headers: dict | None = None, **extra) -> JSONResponse:
+    return JSONResponse({"error": {"type": kind, "message": message, **extra}}, status_code=status, headers=headers)
+
+
+def _table(raw: bytes) -> dict | None:
+    """A request's body as a JSON object, or None: not JSON, nested deeper than Python follows, or JSON of another
+    shape (a list, a number, a text). Each of those was an internal error (HTTP 500) before."""
+    try:
+        body = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _size(asked, cap: int) -> int:
+    """`max_tokens` as the client asked, from 1 to the cap; the cap when it asked for nothing or for no number."""
+    if isinstance(asked, bool) or not isinstance(asked, (int, float)) or not math.isfinite(asked) or not asked:
+        return cap
+    return max(1, min(int(asked), cap))
 
 
 def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
@@ -546,6 +638,20 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     store = Store(s.db_path, s.free_requests)
     app = FastAPI(title="Lantern gateway", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store, app.state.settings = store, s
+    limiter = app.state.limiter = limits.Limiter()
+
+    def body_limit(path: str) -> tuple[int, str]:
+        if path == "/v1/chat/completions":
+            return s.max_body_bytes, "Request is larger than the free allowance accepts."
+        return limits.SMALL_BODY, "usage ping too large" if path == "/v1/usage" else "Request body too large."
+
+    app.add_middleware(limits.BodyCap, limit_for=body_limit)
+
+    def who(request: Request) -> str:
+        return limits.sender(request.scope, s.address_header)
+
+    def slow_down(seconds: int) -> dict:
+        return {"Retry-After": str(seconds), "Cache-Control": "no-store"}
 
     def today() -> str:
         return dt.datetime.now(dt.UTC).date().isoformat()
@@ -576,15 +682,24 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                 "primary": order[0]["name"] if order else None,
                 "fallback": order[1]["model"] if len(order) > 1 else None}
 
-    def admin(authorization: str | None) -> None:
+    def admin(authorization: str | None, request: Request) -> None:
+        """The owner's secret. Wrong ones are counted per minute, for the sender and for everyone together; past
+        either count no secret is looked at until the minute ends, the right one included, so guessing is slowed to
+        those counts. (Senders from many addresses can keep the owner waiting that way; they cannot get in.)"""
+        sender = who(request)
+        if limiter.full("admin", sender, s.admin_wrong_per_minute, 60) or \
+                limiter.full("admin-all", "", s.admin_wrong_per_minute_all, 60):
+            raise HTTPException(429, "too many wrong admin secrets; try again in a minute", headers=slow_down(limiter.wait(60)))
         if not s.admin_secret or not authorization or not hmac.compare_digest(
-                authorization.removeprefix("Bearer ").strip(), s.admin_secret):
+                authorization.removeprefix("Bearer ").strip().encode(), s.admin_secret.encode()):
+            limiter.take("admin", sender, s.admin_wrong_per_minute, 60)
+            limiter.take("admin-all", "", s.admin_wrong_per_minute_all, 60)
             raise HTTPException(403, "admin only")
 
     @app.post("/v1/tokens")
-    def mint(payload: dict, authorization: str | None = Header(default=None)):
+    def mint(payload: dict, request: Request, authorization: str | None = Header(default=None)):
         """Admin only: create a user token. Returned once; only its hash is stored."""
-        admin(authorization)
+        admin(authorization, request)
         return {"token": store.mint(str(payload.get("label", ""))), "limits": {
             "requests": s.free_requests, "tokens": s.free_tokens, "per_day": s.daily_requests}}
 
@@ -612,8 +727,25 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return RedirectResponse(oauth.authorize_url(provider, cid, f"{s.public_url}/v1/auth/{provider}/callback", state),
                                 status_code=302, headers={"Cache-Control": "no-store"})
 
+    used: dict[str, float] = {}       # sign-in links already used: a hash of each, until the link would have run out
+
+    def first_use(state: str) -> bool:
+        """A sign-in link is good once. Without this, one link could be sent back any number of times for ten
+        minutes, and each time the gateway asked the provider with its own secret."""
+        now, key = time.time(), _hash(state)
+        if len(used) >= 50_000:
+            for k in [k for k, until in used.items() if until < now]:
+                del used[k]
+            if len(used) >= 50_000:
+                used.clear()
+        if used.get(key, 0) > now:
+            return False
+        used[key] = now + oauth.STATE_TTL
+        return True
+
     @app.get("/v1/auth/{provider}/callback")
-    async def auth_callback(provider: str, code: str | None = None, state: str | None = None, error: str | None = None):
+    async def auth_callback(request: Request, provider: str, code: str | None = None, state: str | None = None,
+                            error: str | None = None):
         if not s.oauth(provider) or not s.state_secret:
             raise HTTPException(404, "that sign-in is not configured")
         st = oauth.read_state(s.state_secret, state or "")
@@ -622,11 +754,22 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                 status_code=400, headers=page_headers)
         if error or not code:
             return HTMLResponse(oauth.error_page("Sign-in was cancelled or refused by the provider."), status_code=400, headers=page_headers)
+        sender = who(request)
+        if limiter.full("signin", sender, s.sender_signins_per_minute, 60) or \
+                limiter.full("signin-all", "", s.signins_per_minute_all, 60):
+            # Not counted against the link: the person can load this page again when the minute has ended.
+            return HTMLResponse(oauth.error_page("Too many sign-ins in the last minute. Wait a minute, then load this page again."),
+                                status_code=429, headers={**page_headers, **slow_down(limiter.wait(60))})
+        if not first_use(state or ""):
+            return HTMLResponse(oauth.error_page("This sign-in link was already used. Go back and start again."),
+                                status_code=400, headers=page_headers)
+        limiter.take("signin", sender, s.sender_signins_per_minute, 60)
+        limiter.take("signin-all", "", s.signins_per_minute_all, 60)
         cid, sec = s.oauth(provider)
-        who = await oauth.exchange(provider, cid, sec, code, f"{s.public_url}/v1/auth/{provider}/callback", transport)
-        if who is None:
+        signed = await oauth.exchange(provider, cid, sec, code, f"{s.public_url}/v1/auth/{provider}/callback", transport)
+        if signed is None:
             return HTMLResponse(oauth.error_page("The provider did not confirm the sign-in. Try again."), status_code=502, headers=page_headers)
-        account, label = who
+        account, label = signed
         try:
             token = store.sign_in(account, label, s.signups_per_day)
         except SignupsPaused:
@@ -651,9 +794,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                             headers={"Cache-Control": "no-store"})
 
     @app.get("/v1/admin/stats")
-    def admin_stats(authorization: str | None = Header(default=None), days: int = 30):
+    def admin_stats(request: Request, authorization: str | None = Header(default=None), days: int = 30):
         """Admin only: the numbers behind the dashboard. Aggregates, never bodies or code."""
-        admin(authorization)
+        admin(authorization, request)
         return {**store.stats(today(), max(1, min(int(days), 365))), "global_daily_usd": s.global_daily_usd,
                 "limits": {"requests": s.free_requests, "tokens": s.free_tokens, "per_day": s.daily_requests}}
 
@@ -670,15 +813,15 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     async def usage(request: Request):
         """Opt-in usage ping from the Lantern app: a random install id, the app version and OS, and how many
         times each feature was used that day. Nothing else is accepted; unknown fields are dropped."""
-        raw = await request.body()
-        if len(raw) > 4000:
-            return _err(413, "too_large", "usage ping too large")
-        try:
-            body = json.loads(raw)
-        except ValueError:
-            return _err(400, "bad_request", "Body must be JSON.")
+        sender = who(request)
+        if s.sender_pings_per_hour > 0 and not limiter.take("ping", sender, s.sender_pings_per_hour, 3600):
+            return _err(429, "rate_limited", "Too many usage reports from this network in the last hour.",
+                        headers=slow_down(limiter.wait(3600)))
+        body = _table(await request.body())          # limits.BodyCap has stopped anything over 4,000 bytes
+        if body is None:
+            return _err(400, "bad_request", "Body must be a JSON object.")
         install = str(body.get("install") or "")
-        if not isinstance(body, dict) or len(install) != 32 or any(c not in "0123456789abcdef" for c in install):
+        if len(install) != 32 or any(c not in "0123456789abcdef" for c in install):
             return _err(400, "bad_request", "install must be 32 hex characters")
         day = str(body.get("day") or today())
         try:
@@ -694,8 +837,21 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         for k, v in list(feats.items())[:40]:
             if isinstance(k, str) and k in USAGE_FEATURES and isinstance(v, int) and not isinstance(v, bool) and v > 0:
                 clean[k] = min(v, 100_000)
+        version, system = body.get("version"), body.get("os")
+        version = version if isinstance(version, str) and USAGE_VERSION.fullmatch(version) else ""
+        system = system if isinstance(system, str) and system in USAGE_SYSTEMS else "other"
         store.prune_daily(today(), s.retention_days)
-        store.record_usage(install, d.isoformat(), str(body.get("version") or "")[:20], str(body.get("os") or "")[:20], clean)
+        new = not store.knows_install(install)
+        if new and s.sender_installs_per_day > 0 and limiter.full("install", sender, s.sender_installs_per_day, 86400):
+            return _err(429, "rate_limited", "Too many new installs from this network today.",
+                        headers=slow_down(limiter.wait(86400)))
+        try:
+            store.record_usage(install, d.isoformat(), version, system, clean, s.installs_per_day)
+        except InstallsPaused:
+            return _err(429, "rate_limited", "The gateway has taken as many new installs today as it accepts. "
+                        f"It starts again {until_midnight_utc()}.", headers=slow_down(seconds_to_midnight_utc()))
+        if new:
+            limiter.take("install", sender, s.sender_installs_per_day, 86400)
         return {"ok": True, "recorded": sorted(clean)}
 
     @app.get("/v1/allowance")
@@ -725,13 +881,9 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
     async def chat(request: Request, authorization: str | None = Header(default=None)):
         u = auth(authorization)
         day = today()
-        raw = await request.body()
-        if len(raw) > s.max_body_bytes:
-            return _err(413, "too_large", "Request is larger than the free allowance accepts.")
-        try:
-            body = json.loads(raw)
-        except ValueError:
-            return _err(400, "bad_request", "Body must be JSON.")
+        body = _table(await request.body())          # limits.BodyCap has stopped anything over max_body_bytes
+        if body is None:
+            return _err(400, "bad_request", "Body must be a JSON object.")
         r = remaining(u, day)
         if r["requests"] <= 0 or r["tokens"] <= 0:
             return _err(402, "quota_exceeded",
@@ -753,7 +905,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             return _err(400, "bad_request", "Only plain chat messages are accepted.")
         # Narrow the request to what Lantern needs; ignore everything else the client sent.
         out = {"messages": [{"role": m["role"], "content": m["content"]} for m in msgs],
-               "max_tokens": max(1, min(int(body.get("max_tokens") or s.max_tokens_cap), s.max_tokens_cap))}
+               "max_tokens": _size(body.get("max_tokens"), s.max_tokens_cap)}
         if isinstance(body.get("response_format"), dict) and body["response_format"].get("type") == "json_object":
             out["response_format"] = {"type": "json_object"}
         data, err, used = None, None, None

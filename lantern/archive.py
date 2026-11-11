@@ -129,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("dest")
     ap.add_argument("--max-mb", type=int, default=200)
     a = ap.parse_args(argv)
+    from ._jail import say_if_guard_missing
+    say_if_guard_missing()
     try:
         n = unpack(Path(a.src), Path(a.dest), a.max_mb << 20)
     except Refused as e:

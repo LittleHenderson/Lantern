@@ -6,6 +6,10 @@ Used by .github/workflows/uptime.yml every 30 minutes (a failed run is the alert
 after a deploy. Each service must answer /v1/health with 200 and {"ok": true} within --slow-s seconds. With
 --expect-engine, lantern-cloud's "engine" (the Lantern version inside its image) must not be older than that version
 (the latest release): when it is, the live service is behind and needs a redeploy (docs/deploy.md).
+lantern-cloud's health also says one word about its own clean-up: "behind" means that files of deleted runs have been
+waiting to be removed for more than a day, or that runs past the retention time are still there. That fails this check
+too, so the owner gets the email; the counts and reasons are in the service's /v1/admin/stats under "cleanup"
+(docs/deploy.md). A service that says nothing about clean-up (a version from before 2026-11-10) passes.
 """
 from __future__ import annotations
 
@@ -65,6 +69,15 @@ def main(argv: list[str] | None = None) -> int:
             if vtuple(live) < vtuple(a.expect_engine):
                 rows.append(("lantern-cloud engine", url, "BEHIND", f"live {live}, latest release {a.expect_engine}: redeploy (docs/deploy.md)"))
                 bad.append(f"lantern-cloud runs engine {live}, the latest release is {a.expect_engine}: redeploy")
+        if name == "lantern-cloud" and ok and body.get("cleanup") not in (None, "ok"):
+            word = str(body.get("cleanup"))[:40]
+            if word == "behind":
+                why = ("files that should be gone have been waiting to be removed for more than a day; "
+                       "the counts and reasons are in /v1/admin/stats under \"cleanup\" (docs/deploy.md)")
+            else:
+                why = f"the service could not say whether its clean-up is up to date (it said {word!r}); look at its logs"
+            rows.append(("lantern-cloud clean-up", url, "OWED" if word == "behind" else "UNKNOWN", why))
+            bad.append(f"lantern-cloud clean-up: {why}")
     md = "| service | url | status | detail |\n|---|---|---|---|\n" + "\n".join(f"| {n} | {u} | {s} | {w} |" for n, u, s, w in rows)
     print(md)
     if a.summary:

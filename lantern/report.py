@@ -9,8 +9,9 @@ import json
 import re
 from pathlib import Path
 
-from . import __version__
+from . import __version__, results
 from .graph import Graph
+from .python_frontend import project_text
 
 TEMPLATE = Path(__file__).parent / "viewer" / "report.html"
 
@@ -31,7 +32,7 @@ def collect_sources(g: Graph, max_lines: int = 200) -> dict[str, str]:
         lines = cache.get(n.file)
         if lines is None:
             try:
-                lines = (repo / n.file).read_text(encoding="utf-8", errors="replace").splitlines()
+                lines = project_text(repo / n.file, repo).splitlines()
             except OSError:
                 lines = []
             cache[n.file] = lines
@@ -61,7 +62,7 @@ def write_report(out_dir: Path, g: Graph, security: dict | None, explanations: d
             f["snippet"] = "[omitted: structure-only privacy level]"
     path = out_dir / "report.html"
     # newline="\n": the content policy hashes the script bytes, so a CRLF rewrite on Windows would block it
-    path.write_text(render(bundle), encoding="utf-8", newline="\n")
+    results.write(path, render(bundle), newline="\n")
     return path
 
 
@@ -110,8 +111,11 @@ def render(bundle: dict, live: dict | None = None, nonce: str | None = None) -> 
 
 def read_bundle(path: Path) -> dict:
     """Pull the data back out of a written report.html. The file may have been edited or planted by anyone,
-    so only the data comes back (parsed as JSON); the page itself is always rebuilt from our template."""
-    text = path.read_text(encoding="utf-8", errors="replace")
+    so only the data comes back (parsed as JSON); the page itself is always rebuilt from our template. Only a
+    plain file is read (`results.plain`): not a link, and not a pipe, which would hold the page up for good."""
+    text, why = results.plain(path)
+    if text is None:
+        raise ValueError(f"this report.html was not read: {why or 'it is not there'}; analyze again")
     i = text.find(DATA_OPEN)
     j = text.find("</script>", i)
     if i < 0 or j < 0:

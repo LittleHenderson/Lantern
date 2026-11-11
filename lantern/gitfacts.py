@@ -29,11 +29,23 @@ an index or an objects folder that is a link, a submodule whose own git folder i
 index points out of the folder, submodules nested more than five deep. A filter that only the repository's own
 settings define (`git lfs install --local`) is not run, so a file it would have cleaned can count as changed once
 its time stamp differs from the index. A submodule the repository's settings tell git to ignore is looked into all
-the same. Whose git folder it is, is not looked at: git refuses a repository that another user of the computer owns
-(unless the person listed it, `safe.directory`), because it would obey that user's settings; Lantern obeys none of
-them and reads it, also when it sits in a folder above the one asked about. The index (a split or sparse one too),
-the objects (and the other object folders the repository names) and `.gitattributes` are still read by git, as
-they are for any repository a person clones. Standard library only.
+the same. The index (a split or sparse one too), the objects (and the other object folders the repository names)
+and `.gitattributes` are still read by git, as they are for any repository a person clones.
+
+Whose git folder it is (`_yours`). The folder a person asks about is read whoever owns it: they named it, and
+nothing in it is obeyed. Every part of a repository that lies OUTSIDE that folder is read only under git's own rule
+for a repository it would obey: a `.git` in a folder above (and that folder), the place a `.git` file names, the
+folder a linked worktree shares. Each must belong to the current user (for root also to the user `sudo` came from;
+on Windows also to the Administrators when the user is one: `lantern/winowner.py`), or the person must have named
+the repository in git's `safe.directory` list, which git itself is asked for, in a git folder of Lantern's own, so
+that only the person's and the computer's settings answer and never the project's. Otherwise no commit is reported,
+with a note. Before 2026-11-10 (a few hours after the settings fix) such a folder was read: on a shared computer
+another user's `/tmp/.git` or `C:\\.git` gave every project beneath it that has no git folder of its own that
+user's commit, branch and address. Stricter than git in one place (a Windows home folder that the system owns is
+not taken for the person's), and the list is compared without regard to upper and lower case on Windows.
+The cloud service is stricter still when it reads a run's commit in the service itself (`head_commit` with
+`alone`): only a repository that lies in the run's code, all of it, counts, and no program is started.
+Standard library only.
 """
 from __future__ import annotations
 
@@ -48,7 +60,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import remote
+from . import programs, remote
 
 HEX = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _BOOL = {"true": "true", "yes": "true", "on": "true", "1": "true", "": "false",
@@ -73,6 +85,9 @@ SUBMODULE_DEPTH = 5
 NOT_ONE = "not a git repository"
 UNREAD = ("its git folder is a link, or is kept in another place that does not name this folder back, "
           "so it was not read")
+NOT_YOURS = ("its git folder lies outside this folder, and it or the folder it is in does not belong to you (git's "
+             "own rule: another user owns it, or the owner could not be read, and your safe.directory setting does "
+             "not name the repository), so it was not read")
 REFTABLE = "its git folder keeps the branches in the newer reftable form, which Lantern does not read"
 UNKNOWN = "git could not compare the files with the commit, so they are counted as changed"
 
@@ -260,13 +275,124 @@ def _ceilings() -> set[str]:
     return out
 
 
-def _locate(folder: Path | str, up: bool = True) -> tuple[Repo | None, str | None]:
-    """(the repository `folder` is in, None), or (None, why it is not read; None when there is none at all)."""
+def _owner(path: Path | str) -> int | str | None:
+    """Whose `path` itself is, as the system records it: the user's number, on Windows the owner's SID as text.
+    None when the system does not say."""
+    try:
+        if os.name == "nt":
+            from . import winowner
+            return winowner.owner(str(path))
+        return os.lstat(path).st_uid
+    except (OSError, ValueError):
+        return None
+
+
+def _myself() -> frozenset:
+    """The owners whose folders are the current user's own, as git counts them (`is_path_owned_by_current_uid`):
+    the user; for root also the user `sudo` came from, when `SUDO_UID` is a plain number. On Windows the user's SID,
+    and the Administrators group when the user is one of them."""
+    if os.name == "nt":
+        from . import winowner
+        return winowner.myself()
+    me = os.geteuid()
+    mine = {me}
+    said = os.environ.get("SUDO_UID", "")
+    if me == 0 and said.isascii() and said.isdigit() and int(said) < 1 << 32:
+        mine.add(int(said))
+    return frozenset(mine)
+
+
+def _own_folder(lines: list[str], head: str) -> Path | None:
+    """A git folder of Lantern's own, new in the temp folder: a settings file with `lines`, a `HEAD`, and nothing of
+    any project. None when there is no place to make it. Whoever asked for it removes it."""
+    made = None
+    try:
+        made = Path(tempfile.mkdtemp(prefix="lantern-git-"))
+        (made / "config").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+        (made / "HEAD").write_text(head + "\n", encoding="utf-8", newline="\n")
+        for d in ("objects", "refs", "no-hooks"):
+            (made / d).mkdir()
+        return made
+    except OSError:
+        if made is not None:
+            shutil.rmtree(made, ignore_errors=True)
+        return None
+
+
+def _trusted() -> list[str]:
+    """The person's `safe.directory` list: the repositories they have told git to use although they are not their
+    own. git itself is asked, inside a git folder made here, so the answer holds the person's settings, the
+    computer's and those handed over for one command, with whatever they include, and nothing of a project."""
+    git = programs.find("git")
+    made = _own_folder(["[core]", "\trepositoryformatversion = 0", "\tbare = true"], "ref: refs/heads/none") \
+        if git else None
+    if made is None:
+        return []
+    # GIT_CONFIG is git's old way to have `git config`, and no other command, read one file in place of all the
+    # others. git's own rule never looks there, so neither does this question.
+    env = {k: v for k, v in os.environ.items() if k not in _PLACES and k != "GIT_CONFIG"}
+    env.update({"GIT_DIR": str(made), "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"})
+    try:
+        p = remote.run_bounded([git, "config", "--null", "--get-all", "safe.directory"], cwd=made, env=env,
+                               timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    finally:
+        shutil.rmtree(made, ignore_errors=True)
+    return p.stdout.split("\0")[:-1] if p.returncode == 0 else []      # each value ends with a NUL
+
+
+def _said_safe(top: Path, asked: Path) -> bool:
+    """Whether the person's `safe.directory` list names the repository whose files are in `top`, read the way git
+    reads it (`safe_directory_cb` in its setup.c): the last word wins; an empty entry forgets the ones before it;
+    `*` is every repository; `/folder/*` every repository inside that folder; `.` the repository whose top is where
+    the person stands, which here is the folder they asked about; `~` is their home folder; anything else must be
+    the whole path of the repository's top folder. An entry stands for the folder it names however that folder is
+    spelled (a link, a Windows short name), also before `/*`, where git for Windows leaves a short name as
+    written."""
+    here, safe = os.path.normcase(str(top)), False
+    for said in _trusted():
+        if said == "":
+            safe = False
+        elif said == "*":
+            safe = True
+        elif said == ".":
+            safe = safe or top == asked
+        else:
+            said = os.path.expanduser(said) if said.startswith("~") else said
+            inside = said.endswith(("/*", os.sep + "*"))
+            if not os.path.isabs(said):
+                continue                            # git passes such an entry over, too
+            try:
+                real = os.path.normcase(os.path.realpath(said[:-1] if inside else said))
+            except (OSError, ValueError):
+                continue
+            if inside:
+                safe = safe or here.startswith(real if real.endswith(os.sep) else real + os.sep)
+            else:
+                safe = safe or here == real
+    return safe
+
+
+def _yours(top: Path, outside: list[Path], asked: Path) -> bool:
+    """git's rule for a repository it would obey, kept for every part of one that lies outside the folder asked
+    about: each belongs to the current user, or the person's own list names the repository."""
+    mine = _myself()
+    return all(_owner(p) in mine for p in outside) or _said_safe(top, asked)
+
+
+def _locate(folder: Path | str, up: bool = True, asked: Path | None = None,
+            alone: bool = False) -> tuple[Repo | None, str | None]:
+    """(the repository `folder` is in, None), or (None, why it is not read; None when there is none at all).
+    `asked` is the folder the person asked about when that is another one than `folder` (a submodule is looked into
+    on behalf of the repository around it): what lies inside it is read whoever owns it. With `alone`, a repository
+    any part of which lies outside that folder is not read, whoever owns it, and nobody is asked."""
     try:
         here = Path(folder).resolve(strict=True)
         disk = os.stat(here).st_dev
     except (OSError, ValueError, RuntimeError):
         return None, None
+    asked = here if asked is None else asked
     stop = _ceilings() if up else set()
     for top in ((here, *here.parents) if up else (here,)):
         dot = top / ".git"
@@ -283,14 +409,23 @@ def _locate(folder: Path | str, up: bool = True) -> tuple[Repo | None, str | Non
         if _text(gitdir, "HEAD", SMALL) is None:
             return None, None                       # no git folder at all: it has no HEAD that is a plain file
         common = _common(gitdir, linked)
-        return (Repo(top, gitdir, common), None) if common is not None else (None, UNREAD)
+        if common is None:
+            return None, UNREAD
+        outside = [p for p in dict.fromkeys((top, dot, gitdir, common)) if p != asked and asked not in p.parents]
+        if outside and (alone or not _yours(top, outside, asked)):
+            return None, NOT_YOURS
+        return Repo(top, gitdir, common), None
     return None, None
 
 
-def find(folder: Path | str) -> Repo | None:
+def find(folder: Path | str, alone: bool = False) -> Repo | None:
     """The repository `folder` is in: its own `.git`, or the nearest one above it on the same disk, as git looks.
-    Found by looking, never by asking git. None when there is none Lantern reads (see the module's known limits)."""
-    return _locate(folder)[0]
+    Found by looking; git is asked one thing only, in a folder of Lantern's own: the person's own list of
+    repositories to trust, and only when a part of the repository outside `folder` is not the current user's.
+    With `alone` the folder is taken by itself: only a repository that lies in it, all of it, is read (no `.git`
+    from a folder above, no git folder kept in another place), and git is asked nothing.
+    None when there is none Lantern reads (see the module's known limits)."""
+    return _locate(folder, up=not alone, alone=alone)[0]
 
 
 def _ref_ok(ref: str) -> bool:
@@ -327,9 +462,10 @@ def head(repo: Repo) -> tuple[str | None, str | None]:
     return _ref(repo, ref), ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref[len("refs/"):]
 
 
-def head_commit(folder: Path | str) -> str | None:
-    """The commit a folder's files were checked out from, read by hand. No program is started."""
-    repo = find(folder)
+def head_commit(folder: Path | str, alone: bool = False) -> str | None:
+    """The commit a folder's files were checked out from, read by hand. With `alone` only a repository that lies in
+    the folder itself counts (see `find`), and no program is started, whatever the folder holds."""
+    repo = find(folder, alone)
     return head(repo)[0] if repo else None
 
 
@@ -341,28 +477,20 @@ def _shadow(repo: Repo, commit: str | None):
     folder must be the git folder's own (no link on the way), or nothing is asked. Removed afterwards; it holds two
     small text files written here and nothing of the project."""
     cfg = settings(repo.common)
-    git = shutil.which("git")
+    git = programs.find("git")
     index, objects = repo.gitdir / "index", repo.common / "objects"
     made = None
     if git and _real_dir(repo.top) and _real_dir(objects) and (_own_file(index) or not os.path.lexists(index)):
-        try:
-            made = Path(tempfile.mkdtemp(prefix="lantern-git-"))
-            sha256 = bool(commit and len(commit) == 64) or cfg.get("extensions.objectformat", "").lower() == "sha256"
-            lines = ["[core]", f"\trepositoryformatversion = {1 if sha256 else 0}", "\tbare = false"]
-            for key, allowed in INERT.items():
-                value = allowed.get(cfg.get(key, "\0").strip().lower())
-                if value is not None:
-                    lines.append(f"\t{key.split('.', 1)[1]} = {value}")
-            if sha256:
-                lines += ["[extensions]", "\tobjectformat = sha256"]
-            (made / "config").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
-            (made / "HEAD").write_text((commit or "ref: refs/heads/none") + "\n", encoding="utf-8", newline="\n")
-            for d in ("objects", "refs", "no-hooks"):
-                (made / d).mkdir()
-        except OSError:                             # no place to make it: every question is left unanswered
-            if made is not None:
-                shutil.rmtree(made, ignore_errors=True)
-            made = None
+        sha256 = bool(commit and len(commit) == 64) or cfg.get("extensions.objectformat", "").lower() == "sha256"
+        lines = ["[core]", f"\trepositoryformatversion = {1 if sha256 else 0}", "\tbare = false"]
+        for key, allowed in INERT.items():
+            value = allowed.get(cfg.get(key, "\0").strip().lower())
+            if value is not None:
+                lines.append(f"\t{key.split('.', 1)[1]} = {value}")
+        if sha256:
+            lines += ["[extensions]", "\tobjectformat = sha256"]
+        # None when there is no place to make it: every question is then left unanswered
+        made = _own_folder(lines, commit or "ref: refs/heads/none")
     env = {k: v for k, v in os.environ.items() if k not in _PLACES}
     env.update({"GIT_DIR": str(made), "GIT_WORK_TREE": str(repo.top), "GIT_OBJECT_DIRECTORY": str(objects),
                 "GIT_INDEX_FILE": str(index), "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
@@ -385,9 +513,11 @@ def _shadow(repo: Repo, commit: str | None):
             shutil.rmtree(made, ignore_errors=True)
 
 
-def _changed(repo: Repo, ask, depth: int = 0) -> bool | None:
+def _changed(repo: Repo, ask, depth: int = 0, asked: Path | None = None) -> bool | None:
     """Whether files git keeps track of differ from the commit, here or inside a submodule that is checked out.
-    None when that cannot be told."""
+    None when that cannot be told. `asked` is the top of the outermost repository: a submodule's git folder inside
+    it is part of what was asked about; one kept anywhere else must be the current user's (`_yours`)."""
+    asked = repo.top if asked is None else asked
     staged = ask(["ls-files", "--stage", "-z"])         # reads the index only
     if staged is None:
         return None
@@ -404,7 +534,7 @@ def _changed(repo: Repo, ask, depth: int = 0) -> bool | None:
             return None
         if not os.path.lexists(sub / ".git"):
             continue                                    # not checked out: none of its files are in the folder
-        inner, _ = _locate(sub, up=False) if depth < SUBMODULE_DEPTH and _real_dir(sub) else (None, None)
+        inner, _ = _locate(sub, False, asked) if depth < SUBMODULE_DEPTH and _real_dir(sub) else (None, None)
         at = head(inner)[0] if inner is not None else None
         if not at:
             return None
@@ -418,7 +548,7 @@ def _changed(repo: Repo, ask, depth: int = 0) -> bool | None:
         return True
     for inner, at in inside:
         with _shadow(inner, at) as ask_inner:
-            changed = _changed(inner, ask_inner, depth + 1)
+            changed = _changed(inner, ask_inner, depth + 1, asked)
         if changed is not False:
             return changed
     return False
@@ -441,7 +571,7 @@ def info(folder: Path | str) -> dict:
     """The commit a folder is at, its branch, whether files differ from the commit, the address of `origin`, and when
     the commit was made. `{"commit": None, "note": …}` when the folder is in no repository Lantern reads, or git is
     not installed. `dirty` is True, with a `note`, when git could not tell."""
-    if not shutil.which("git"):
+    if not programs.find("git"):
         return {"commit": None, "note": "git not installed"}
     repo, why = _locate(folder)
     if repo is None:

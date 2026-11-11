@@ -49,10 +49,11 @@ jobs:
             python tools/netless.py --watch "$RUNNER_TEMP/network.json" -- \
             python -m pytest -q -rs --cov=lantern --cov=gateway --cov=cloud --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=85 | tee pytest.log
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required' pytest.log || { echo "::error::The rules this step sets did not reach the tests: the last lines of the run do not name both"; exit 1; }
+          grep '^programs these tests started' pytest.log || true   # which npm the tests met: what npm asks differs by version, and this line is far up in the log
       - name: Coverage and the network record, for the summary
         if: always()
         run: |
-          { echo "### Coverage (Python ${{ matrix.python }})"; echo '```'; grep -E '^(TOTAL|Required|FAIL|rules of this run)' pytest.log || true; echo '```'
+          { echo "### Coverage (Python ${{ matrix.python }})"; echo '```'; grep -E '^(TOTAL|Required|FAIL|rules of this run|programs these tests started)' pytest.log || true; echo '```'
             echo "### Network during the tests (Python ${{ matrix.python }})"; echo '```'
             python -c "import json, sys; d = json.load(open(sys.argv[1])); print(sum(e['count'] for e in d['outside']), 'attempts to reach outside this computer;', d['connections_on_this_computer'], 'connections stayed on it'); [print(' ', e['count'], 'x', e['kind'], e['address'], e['port'], 'by:', e['program']) for e in d['outside']]" "$RUNNER_TEMP/network.json" || echo "no record was written"
             echo '```'; } >> "$GITHUB_STEP_SUMMARY"

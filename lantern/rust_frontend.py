@@ -37,7 +37,7 @@ import tree_sitter_rust as tsrs
 from tree_sitter import Language, Node as TSNode, Parser
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_bytes, project_text
 
 RUST = Language(tsrs.language())
 
@@ -189,7 +189,7 @@ def crates(repo: Path) -> dict[str, str]:
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d != "target" and not d.startswith(".")]
         if "Cargo.toml" in filenames:
             try:
-                text = (Path(dirpath) / "Cargo.toml").read_text(encoding="utf-8", errors="replace")
+                text = project_text(Path(dirpath) / "Cargo.toml", repo)
             except OSError:
                 continue
             m = re.search(r"(?ms)^\[package\].*?^name\s*=\s*\"([^\"]+)\"", text)
@@ -949,7 +949,7 @@ def add_rust(g: Graph, repo: str | Path) -> dict:
     for p in paths:
         rel = p.relative_to(repo).as_posix()
         try:
-            src = p.read_bytes()
+            src = project_bytes(p, repo)
         except OSError:
             continue
         if len(src) > 1_500_000:

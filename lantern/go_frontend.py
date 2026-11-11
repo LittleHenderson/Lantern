@@ -37,7 +37,7 @@ import tree_sitter_go as tsgo
 from tree_sitter import Language, Node as TSNode, Parser
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_bytes, project_text
 
 GO = Language(tsgo.language())
 
@@ -161,7 +161,7 @@ def discover(repo: Path) -> list[Path]:
 
 def module_path(repo: Path) -> str | None:
     try:
-        for line in (repo / "go.mod").read_text(encoding="utf-8", errors="replace").splitlines():
+        for line in project_text(repo / "go.mod", repo).splitlines():
             if line.startswith("module "):
                 return line.split(None, 1)[1].strip()
     except OSError:
@@ -734,7 +734,7 @@ def add_go(g: Graph, repo: str | Path) -> dict:
     for p in paths:
         rel = p.relative_to(repo).as_posix()
         try:
-            src = p.read_bytes()
+            src = project_bytes(p, repo)
         except OSError:
             continue
         if len(src) > 1_500_000:

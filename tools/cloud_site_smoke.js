@@ -74,13 +74,13 @@ async function until(p, fn, timeout) {
       await clean(p, 'advanced');
       await p.click('#viewmode [data-m="simple"]'); await p.waitForSelector('article.app');
     }
-    await p.goto(site + '#/run/going1'); await p.waitForSelector('.progress .running-steps'); await p.waitForSelector('.progress .indeterminate');
+    await p.goto(site + '#/run/going1-demo-0000'); await p.waitForSelector('.progress .running-steps'); await p.waitForSelector('.progress .indeterminate');
     await p.screenshot({ path: `${out}-${tag}-progress.png` });
     await a11y.axe(p, `${tag} progress`, errs);
     await clean(p, 'progress');
     // a fresh load at the run's address (not a hash change plus reload: Firefox and WebKit can reload the page before the
     // hash has moved, and the old run stays on screen)
-    await fresh(p, site + '#/run/failed1');
+    await fresh(p, site + '#/run/failed1-demo-000');
     try { await p.waitForSelector('.progress [data-again]'); }
     catch (e) { errs.push(`${tag}: no "Try again" on the failed run at ${p.url()}: ${(await p.$eval('#view', v => v.innerText).catch(() => '?')).slice(0, 300).replace(/\s+/g, ' ')}`); await p.close(); await ctx.close(); continue; }
     await clean(p, 'failed run');
@@ -90,7 +90,7 @@ async function until(p, fn, timeout) {
     await p.click('.progress [data-again]');
     if (!(await again)) errs.push(`${tag}: "Try again" on a failed run sent nothing`);
     await p.waitForTimeout(300); allow503 = false;
-    await fresh(p, site + '#/run/done1');
+    await fresh(p, site + '#/run/done1-demo-00000');
     await until(p, () => { try { return !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('#tabs'); } catch (e) { return false; } }, 20000);
     await p.waitForTimeout(800);
     await p.screenshot({ path: `${out}-${tag}-report.png` });
@@ -150,9 +150,17 @@ async function until(p, fn, timeout) {
     if (name === 'phone' && scheme === 'dark') {   // last pass: delete a run, then the whole account
       await p.click('.sheet [data-close]');
       await p.goto(site + '#/'); await p.waitForSelector('article.app');
-      await p.click('[data-del="failed1"]'); await p.waitForSelector('#dodel');
+      await p.click('[data-del="failed1-demo-000"]'); await p.waitForSelector('#dodel');
       await p.screenshot({ path: `${out}-${tag}-delete-run.png` });
-      await p.click('#dodel'); await until(p, () => document.querySelectorAll('article.app').length === 2, 5000);
+      // The demo server cannot remove this run's files (tools/cloud_site_demo.py), so it answers "files": "waiting":
+      // the run leaves the list, and the page says what is still to do in place of closing as if nothing were left.
+      await p.click('#dodel'); await p.waitForSelector('#fileswait .note');
+      const left = await p.$eval('.sheet', d => d.textContent);
+      if (!/could not remove its files/.test(left) || !/tries again/.test(left)) errs.push(`${tag}: a delete whose files wait said "${left}"`);
+      await p.screenshot({ path: `${out}-${tag}-delete-run-files-waiting.png` });
+      await a11y.axe(p, `${tag} files waiting`, errs);
+      await p.click('.sheet [data-close]');
+      await until(p, () => document.querySelectorAll('article.app').length === 2, 5000);
       await p.click('#who'); await p.click('#delme'); await p.waitForSelector('#sure');
       await p.check('#sure'); await p.screenshot({ path: `${out}-${tag}-delete-account.png` });
       // this account still has a check running, so the account is kept and the sheet says why

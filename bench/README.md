@@ -4,8 +4,9 @@ This file: the Python map benchmark (edges against a trace). Also here: `heldout
 five documented-vulnerable public apps, three clean ones and safe/unsafe twins, scored by `heldout/run_heldout.py`;
 `heldout/baseline.md` is the before), `mobile/` (findings precision on real phone
 apps, labelled by engineers), `explain_eval.py` (explanation pass rate with a real model), `ask_eval.py` (Ask Lantern
-answers), `fuzz.py` (random file mutation), `large_apps_results.md` (speed and memory on big apps), `mutation_results.md`
-(do the tests catch deliberate mistakes).
+answers), `fuzz.py` (random file mutation), `manifests.py` (project files of the wrong shape), `links.py` (every file
+of the samples as a link out of the project, a pipe, a link to itself; `links_results.md` is the last run),
+`large_apps_results.md` (speed and memory on big apps), `mutation_results.md` (do the tests catch deliberate mistakes).
 
 Every benchmark starts isolated (`tools/netguard/`): a temporary home folder, no keys or saved sign-ins from the
 shell, real model providers off, and the network refused except for the hosts the script names (the repositories it
