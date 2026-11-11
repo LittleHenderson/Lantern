@@ -268,7 +268,7 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 "mobile"}`
 
 A scanner record (`lantern/scanresult.py`, one per tool run: bandit, gitleaks, lantern-secrets, pip-audit, npm-audit,
-maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, packs): `tool`, `state` (`ok` | `partial` | `failed` |
+maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, lantern-flow, packs): `tool`, `state` (`ok` | `partial` | `failed` |
 `timeout` | `unavailable` | `skipped`), `status` (the same as one sentence: `ok`, `ok (…)`, `partial: …`, `error: …`,
 `error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
 `applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
@@ -288,6 +288,20 @@ audit that is skipped (`--offline`, tool not installed) carries `not_read` only 
 used. `incomplete` is read by readiness (`sec-scanners`), the Evidence Report, the badge (`scan incomplete`), the
 command line (`--fail-on` exits 1 for any state but `skipped`) and the app's project cards; a run with `--offline`
 lists its skipped audits there without failing the gate.
+
+`lantern-flow` (`lantern/flowscan.py`, Python and JS/TS; `applicable` false for a project with neither) is the step
+that follows request data across functions and files. Its record has `version` and `scope` `{files, functions,
+flows` (request values followed to a sensitive action), `on_other_findings` (flows attached to a finding another
+tool made on the same line), `not_followed_further` (calls where a value that still carried request data was handed
+to code Lantern does not read)`}`; `partial` when a file could not be read, a function could not be followed or the
+time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
+`LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
+(22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and three about
+who may reach what, always `tool_confidence: LOW` and rank `medium`: `LT-AUTHZ-OWNER` (639: a route with a login
+reaches a record by an id from the request, and nothing compares the record's owner with who is signed in; `line` is
+the route's own line, `flow.sink` the look-up), `LT-AUTHZ-ROLE` (285: an admin route with a login where nothing asks
+for an admin; no `flow`) and `LT-AUTHZ-MASS-ASSIGN` (915: everything the request sent is written onto a stored
+record). A route with no sign of a login gets none of the three: that is `LW-AUTH-MISSING`'s business.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -318,9 +332,19 @@ Finding: `id` (stable across moves: tool, rule, file and the flagged line's text
 `npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
 (`LOW` = show "heuristic"), `file`, `line`, `cwe`, `more_info`, `snippet`, `category`, `in_tests`, `node`,
 `reachable` (null or `{"entry", "kind", "path": [node ids]}`), `reachable_from_tests_only`, `ui_path` (node ids from a
-page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`), `rank` (`critical`|`high`|`medium`|`low`),
+page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`; when a flow was followed to the line,
+`{"via": <the words of the flow's first step>, "flow": true}`), `flow` (optional, `flowscan.py`: request data followed
+to this line across functions and files, on a `lantern-flow` finding or attached to another tool's finding for the same
+kind of problem on the same line: `{"class"` (`sql`, `shell`, `eval`, `deserialize`, `xxe`, `path`, `ssrf`, `xss`,
+`redirect`, `nosql`, `pollution`, `record`, `assign`), `"confidence"` (`HIGH`, or `LOW` when a step is a likely link),
+`"severity"`, `"source": {file, line, what}`, `"sink": {file, line, what}`, `"steps": [{file, line, what}]` (from the
+request to the sensitive action, in order; `what` is a sentence with code names between backticks), `"others"` (up to
+five other starting points that reach the same line), `"count"}`; the viewer's box "How the value gets there" lists
+the steps, every value escaped), `rank` (`critical`|`high`|`medium`|`low`),
 `context` (optional, `context.py`, read from names around the line: `{"hash": {"purpose": "security"|"non-security"|"unknown", "why", "password", "reads"}}`
-for weak-hash rules, `{"sql": {"fixed_only", "spliced": [{"expr", "fixed", "why"}], "driver_params", "reads"}}` for Python SQL), `rank_note` and
+for weak-hash rules, `{"sql": {"fixed_only", "spliced": [{"expr", "fixed", "why"}], "driver_params", "reads"}}` for Python SQL,
+`{"fixed": {"class": "sql"|"shell", "function", "calls": [{"from", "file", "line"}], "count"}}` when a tool flagged a query or a command, no flow
+reaches it, and every call Lantern found hands that function fixed text (only when the flow step read everything; rank `low` with the reason)), `rank_note` and
 `rank_before_context` (only when `context` lowered the rank: why, and the rank it would have had; the viewer shows both; a
 non-security hash or SQL splicing only fixed text → `low`, a hash of unknown purpose → at most `medium`),
 `trust` (LW-PUBLIC-SECRET only, `context.public_secret_trust`: `browser` `{exposed, where, sent_as}`, `server_trusts`
@@ -345,7 +369,11 @@ shown, also show `title` as "<tool> says: …"), `scenario` (`{"kind", "who", "s
 `version`, `score`, `grade`, `shape`, `stack` (`{frameworks, …}`), `categories` (`[{key, title, weight, score, percent,
 checks: [{id, title, points, earned, status: pass|fail|partial|skip, evidence, fix, how}]}]`), `next_steps` (the
 highest-gain failed checks, with `gain` and `category`), `protections` (`[{id, title, status: add|check|in place, why,
-evidence, found, how}]`), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
+evidence, found, how}]`; for `rate-limit` (`lantern/ratelimit.py`) `in place` means every route in question shows a
+limit that covers it (on the route, or put on the app before the route in the same file), `check` that a limit exists
+and the code does not show that for each of them (a default limit for the whole app, a limiter in another file, the
+project's own limiter in which nothing visibly counts), `add` that nothing puts a limit to work, whatever is
+installed; `evidence` lists the routes without one first, `found` what covers the others), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
 `sec-scanners` check in Security findings fails when one `failed` or timed out, is partial for a gap the run knew
 about, and passes only when every applicable scanner finished), `advice` (deployment advice strings for the shape),
 `hotspots`, `env_vars`, `starter` (`{filename: {content, snippet?}}`).

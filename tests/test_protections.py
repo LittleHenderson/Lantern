@@ -42,6 +42,12 @@ def test_protections_in_place_are_recognized(tmp_path):
     files["svc/main.py"] = (files["svc/main.py"].replace("hashlib.sha256(password.encode()).hexdigest()",
                                                          "bcrypt.hashpw(password.encode(), bcrypt.gensalt())")
                             .replace("import hashlib", "import bcrypt")
+                            # 2026-11-11: `slowapi` in the dependencies alone read "in place" here. A library that
+                            # is installed limits nothing, so the limiter is now put on the sign-in route
+                            # (tests/test_ratelimit.py has the installed-only case, which reads "add").
+                            .replace("app = FastAPI()\n", "app = FastAPI()\nlimiter = Limiter(key_func=lambda: 'ip')\n")
+                            .replace("@app.post('/login')\n", "@app.post('/login')\n@limiter.limit('5/minute')\n")
+                            .replace("import requests\n", "import requests\nfrom slowapi import Limiter\n")
                             .replace("return requests.get(url).text", "assert host_of(url) in ALLOWED_HOSTS\n"
                                      "    return requests.get(url).text")
                             .replace("return await file.read()", "assert file.content_type == 'image/png'\n"
@@ -324,12 +330,23 @@ def test_words_in_strings_and_pattern_lists_are_not_protections(tmp_path):
 
 
 def test_in_place_protections_say_what_was_found(tmp_path):
+    # Until 2026-11-11 this test held the opposite: `slowapi` in the dependencies, used nowhere, read "in place" with
+    # `found == ["slowapi in the dependencies"]`. A library that is installed protects nothing (directive point 4), so
+    # that case is now "add" and says the library is not put to work; "in place" names the route and the limiter.
     files = dict(BARE)
     files["pyproject.toml"] = files["pyproject.toml"].replace('"requests"]', '"requests", "slowapi"]')
-    _write(tmp_path, files)
-    p = _prot(tmp_path)["rate-limit"]
-    assert p["status"] == "in place" and p["found"] == ["slowapi in the dependencies"]
-    assert "was found" in p["why"] and "can be called as fast" not in p["why"]
+    _write(tmp_path / "installed", files)
+    p = _prot(tmp_path / "installed")["rate-limit"]
+    assert p["status"] == "add" and p["found"] == [], p
+    assert "`slowapi` is installed" in p["why"] and "can be called as fast" in p["why"], p
+    files["svc/main.py"] = (files["svc/main.py"]
+                            .replace("app = FastAPI()\n", "app = FastAPI()\nlimiter = Limiter(key_func=lambda: 'ip')\n")
+                            .replace("@app.post('/login')\n", "@app.post('/login')\n@limiter.limit('5/minute')\n")
+                            .replace("import requests\n", "import requests\nfrom slowapi import Limiter\n"))
+    _write(tmp_path / "used", files)
+    p = _prot(tmp_path / "used")["rate-limit"]
+    assert p["status"] == "in place" and p["found"] == ["POST /login: `limiter.limit` on the route (svc/main.py:9)"], p
+    assert "puts a request limit on it" in p["why"] and "can be called as fast" not in p["why"], p
 
 
 def test_routes_in_test_code_are_not_the_apps_routes(tmp_path):

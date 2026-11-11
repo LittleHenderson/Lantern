@@ -952,6 +952,25 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
     return None
 
 
+def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> list[str]:
+    """The name of every function within `depth` calls of a route that is named like an auth check: the walk of
+    `route_auth_sign`, which stops at the first one."""
+    out, seen, frontier = [], {n.id}, [n.id]
+    for _ in range(depth):
+        nxt = []
+        for u in frontier:
+            for v in adj.get(u, []):
+                if v in seen:
+                    continue
+                seen.add(v)
+                name = _func_name(g, v)
+                if auth_word(name, v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
+                    out.append(name)
+                nxt.append(v)
+        frontier = nxt
+    return out
+
+
 def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None) -> tuple[str, str] | None:
     """Everything Lantern can see about a route checking its caller: ("strong", why) from the decorator, signature,
     callees or body; ("weak", why) when the body only looks up a user by a request value and tests the result;

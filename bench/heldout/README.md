@@ -74,7 +74,7 @@ Baseline numbers are in `baseline.md`. Targets for the end of the directive's st
 
 | Measure | Baseline (bc7cf10) | Target |
 |---|---:|---:|
-| Documented problems found at medium or above | 28 of 79 (27 of the 61 public, 1 of the 18 local); 2 more only as low; 49 missed | at least 60% of the 61 public expectations, and every `sql`, `shell`, `eval`, `deserialize`, `xxe` one |
+| Documented problems found at medium or above | 28 of 79 (21 of the 61 public, 7 of the 18 local); 2 more only as low; 49 missed | at least 60% of the 61 public expectations, and every `sql`, `shell`, `eval`, `deserialize`, `xxe` one |
 | False alarms on safe-twin anchors | 3 of 17 (two review twins where an inner function sets a fixed string, one fixed ORDER BY clause passed between functions) | no more than at baseline, and none on `sql`/`shell` anchors whose value is a fixed string |
 | Vulnerable apps given a green release | 2 of 8 (dvna, express-unsafe) | 0 of 8 (5 public + 3 local) |
 | Clean apps not given a green release | 3 of 6 (taxonomy, review-safe, flows-safe), all through false alarms | 0 of 6, with every remaining medium+ finding labelled |
@@ -84,6 +84,11 @@ Baseline numbers are in `baseline.md`. Targets for the end of the directive's st
 | Unresolved share of call sites on the four Express apps | nodegoat 233/246, dvna 202/206, goof 154/160, express-boilerplate 397/506 | under 50% on each |
 
 A target missed is reported as missed, with where, and the work continues; it is never met by changing a definition.
+
+Correction (2026-11-11, no number of `baseline.json` changed): the first row's parenthesis read "27 of the 61
+public, 1 of the 18 local" until this date. `baseline.json` holds 21 found of the 61 public and 7 found of the 18
+local (28 in all, as the row always said); the split was written down wrong. The target is unchanged: 60% of 61 is
+37 public problems.
 
 ## Files
 

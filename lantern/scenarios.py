@@ -73,6 +73,53 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                      "can read and change every row of every table.",
                      "The service-role key stays on the server only, the browser uses the public key, and you rotate "
                      "the old one."),
+    # what Lantern follows from the request to the line (lantern/flow.py, LT-* rules)
+    "path": ("../../etc/passwd",
+             "The server uses those words as part of a file's name, and \"..\" means \"one folder up\", so the name "
+             "now points outside the folder it was meant to stay in. They can read, and where the code writes, "
+             "replace, files your server can reach.",
+             "The finished name is checked to still be inside the folder before the file is opened, so a name that "
+             "climbs out is refused."),
+    "ssrf": ("http://169.254.169.254/latest/meta-data/",
+             "Your server fetches that address for them. From where your server sits it can reach things the "
+             "internet cannot: your cloud provider's settings page with its keys, admin pages, other services on "
+             "the inside.",
+             "The server fetches only addresses on a short list of hosts you chose, and refuses a name that leads "
+             "to an address inside the network."),
+    "redirect": ("https://example.org/sign-in",
+                 "Your site sends the visitor on to that address. A link that begins with your site's own name ends "
+                 "on someone else's, which makes a copy of your sign-in page look like the real one.",
+                 "Only a path inside your own site (or a host on a short list) is followed; anything else goes to "
+                 "the home page."),
+    "nosql": ('{"$ne": null}',
+              "The database reads that as a rule (\"anything that is not empty\") and not as a value to look for, "
+              "so the question matches records it never should: the first user, or every user.",
+              "The value is turned into plain text (or refused unless it is text) before it goes into the "
+              "question, so it can only ever be looked for."),
+    "xxe": ('<!ENTITY x SYSTEM "file:///etc/passwd">',
+            "The XML reader follows the reference inside what they sent, and puts a file from your server (or the "
+            "answer of an address on the inside) into the document your code then reads back to them.",
+            "The XML reader is told not to follow outside references, so the line is read as plain text or "
+            "refused."),
+    "pollution": ('{"__proto__": {"isAdmin": true}}',
+                  "Merging that into an object changes the pattern every object in your app is made from, so every "
+                  "object now seems to have that field. Checks elsewhere in the app start to pass for everyone.",
+                  "Keys named __proto__, constructor and prototype are refused before anything is merged."),
+    "owner": (None,
+              "The server finds the record with that id and hands it over (or changes it), because nothing compares "
+              "the record's owner with who is asking. Going through the numbers one by one, they reach everyone's "
+              "records.",
+              "The look-up asks for the record with that id and this owner (or the owner is compared before "
+              "anything is returned or changed), so someone else's id finds nothing."),
+    "role": (None,
+             "The server does what the admin page does, because the route only checks that someone is signed in, "
+             "not that they are an admin.",
+             "The route first asks whether the signed-in person is an admin, and answers \"not allowed\" "
+             "otherwise."),
+    "mass-assign": ('"is_admin": true',
+                    "The server writes every field it was sent onto the record, including ones your form never "
+                    "offered. They can make themselves an admin, or change a price, a balance or an owner.",
+                    "The server copies only the fields it names and ignores the rest."),
     "auth": (None,
              "The server does what they asked, because nothing checks who they are first. They do not need an "
              "account, a password, or your page at all.",
@@ -256,6 +303,10 @@ RULE_KIND = {
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
     "LA-WALLET-DRAIN": "wallet", "LA-MODEL-OUTPUT-TO-TOOL": "model-to-tool", "LA-PROMPT-FROM-INPUT": "prompt",
     "LA-NOTEBOOK-SECRET": "secret", "LP-DJANGO-DEBUG": "debug",
+    "LT-SQL": "sql", "LT-SHELL": "shell", "LT-EVAL": "eval", "LT-XSS": "xss", "LT-DESERIALIZE": "deserialize",
+    "LT-PATH": "path", "LT-SSRF": "ssrf", "LT-REDIRECT": "redirect", "LT-NOSQL": "nosql", "LT-XXE": "xxe",
+    "LT-POLLUTION": "pollution", "LT-AUTHZ-OWNER": "owner", "LT-AUTHZ-ROLE": "role",
+    "LT-AUTHZ-MASS-ASSIGN": "mass-assign",
     "LM-EXPORTED": "android-exported", "LM-BACKUP": "android-backup", "LM-DEBUGGABLE": "android-debuggable",
     "LM-RELEASE-DEBUGGABLE": "android-debuggable", "LM-LOG-SENSITIVE": "android-log", "LM-CLEARTEXT": "cleartext",
     "LM-CLEARTEXT-URL": "cleartext", "LM-USER-CERTS": "tls-off", "LM-TLS-OFF": "tls-off",
@@ -326,10 +377,12 @@ ANDROID_START = {
 CWE_KIND = {78: "shell", 77: "shell", 89: "sql", 79: "xss", 94: "eval", 95: "eval", 502: "deserialize",
             327: "weak-hash", 328: "weak-hash", 916: "weak-hash", 295: "tls-off", 798: "secret", 259: "secret",
             306: "auth", 862: "auth", 942: "cors", 346: "cors", 770: "wallet", 489: "debug", 215: "debug",
-            922: "token-storage", 242: "unsafe", 703: "assert"}
+            922: "token-storage", 242: "unsafe", 703: "assert", 22: "path", 918: "ssrf", 601: "redirect",
+            943: "nosql", 611: "xxe", 1321: "pollution", 639: "owner", 285: "role", 915: "mass-assign"}
 
 # Kinds where what the person types is the whole point (the rest are about who can reach it or what leaks).
-TYPED = {"shell", "sql", "xss", "eval", "model-to-tool", "prompt"}
+TYPED = {"shell", "sql", "xss", "eval", "model-to-tool", "prompt", "path", "ssrf", "redirect", "nosql", "xxe",
+         "pollution", "mass-assign"}
 # Kinds about something anyone can read, not about a route.
 LEAKS = {"secret", "service-role"}
 
@@ -492,6 +545,14 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
         if kind in ("auth", "wallet") and route:
             steps.append(f"They are not signed in, and they send {route} again and again."
                          if kind == "wallet" else f"They are not signed in when they send {route}.")
+        if kind == "owner":
+            steps.append("They are signed in with their own account. In the request they change the record's id to "
+                         "another one, which is not theirs.")
+            if f.get("flow"):
+                basis.append("the id reaching the look-up comes from Lantern following the data from where the "
+                             "request is read (" + str(f["flow"]["source"]["what"]) + ")")
+        elif kind == "role":
+            steps.append("They are signed in with an ordinary account, not an admin's.")
         if typed and kind in TYPED:
             if f.get("input"):
                 if _from_another_app(route, rkind) and route.startswith("LINK "):
@@ -500,7 +561,9 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                     steps.append(f"In the data their app sends, they put: {typed}")
                 else:
                     steps.append(f"In {_typed_into(f)} they type: {typed}")
-                basis.append("what they type reaching this line comes from Lantern's input check ("
+                basis.append(("what they type reaching this line comes from Lantern following the data from where "
+                              "the request is read (" if f["input"].get("flow") else
+                              "what they type reaching this line comes from Lantern's input check (")
                              + str(f["input"].get("via")) + ")")
             elif f.get("input") is False:
                 steps.append(f"They type {typed} wherever they can, but Lantern found that nothing from the request "
@@ -541,6 +604,18 @@ HEADLINES: dict[str, tuple[str, str]] = {
                     "Data is unpacked in a way that can run code"),
     "model-to-tool": ("The AI model's answer is run as a command", "The AI model's answer is run as a command"),
     "prompt": ("What a visitor types goes into the AI prompt", "Outside text goes into the AI prompt"),
+    "path": ("{who} can reach files outside the folder they were meant for", "A file's name is put together from text"),
+    "ssrf": ("{who} can make your server fetch any address, also ones inside your network",
+             "Your server fetches an address put together from text"),
+    "redirect": ("A link to your site can send visitors on to someone else's",
+                 "Visitors are sent on to an address put together from text"),
+    "nosql": ("{who} can change what your database is asked", "A database question is made from what was sent"),
+    "xxe": ("XML from outside can make your server read its own files",
+            "XML is read in a way that follows outside references"),
+    "pollution": ("What a visitor sends is merged into your app's own objects",
+                  "Outside data is merged into the app's own objects"),
+    "mass-assign": ("A visitor can set fields your form never offered",
+                    "Everything that was sent is written onto a stored record"),
 }
 FIXED_HEADLINES = {
     "android-exported": "Other apps can start part of your app",
@@ -578,6 +653,8 @@ FIXED_HEADLINES = {
     "unsafe": "This code switches off the language's memory safety",
     "assert": "A safety check uses assert, which can be switched off",
     "subprocess-note": "This file starts other programs (a note, not a problem)",
+    "owner": "A signed-in person may be able to reach other people's records",
+    "role": "An admin route may not ask for an admin",
 }
 
 

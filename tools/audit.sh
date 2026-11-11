@@ -207,6 +207,9 @@ EOF
   # the same for scenarios alone, with the rest intact so the finding cards and Fix page that show them are drawn
   check "viewer: poisoned scenarios and headings stay text (finding cards, Fix page, Scenario lens)" \
     bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-sc/report.html' --only scenario,dropped_scenarios,headline && node tools/viewer_smoke.js '$W/poison-sc/report.html' '$W/sshot'"
+  # the same for the steps of a followed value (the box "How the value gets there" on a finding): files, lines, words
+  check "viewer: poisoned flow steps stay text (How the value gets there)" \
+    bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-fl/report.html' --only flow && node tools/viewer_smoke.js '$W/poison-fl/report.html' '$W/flshot'"
   # an Android app: the "On the phone" card, phone stories and entry details, poisoned, with the platform kept
   check "viewer: poisoned Android data stays text (On the phone card, screens, stories)" \
     bash -c "'$PY' tools/poison_report.py '$W/aa/report.html' '$W/poison-aa/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-aa/report.html' '$W/ashot'"
