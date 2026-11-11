@@ -190,6 +190,10 @@ def _finding_view(f: dict, g: Graph | None, exp: dict | None) -> dict:
                             "after_the_fix": sc.get("after_fix"), "basis": sc.get("basis")}
     if f.get("status") == "accepted":
         view["accepted"] = f.get("accepted")
+    if f.get("rank_note"):
+        view["rank_lowered"] = {"from": f.get("rank_before_context"), "why": f["rank_note"]}
+    if isinstance(f.get("case"), dict):   # claim, evidence, conditions, confidence, unknowns, status (case.py)
+        view["case"] = f["case"]
     return view
 
 

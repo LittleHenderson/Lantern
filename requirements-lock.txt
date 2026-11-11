@@ -29,10 +29,14 @@ certifi==2026.10.23
     #   httpcore
     #   httpx
     #   requests
+cffi==2.1.1
+    # via cryptography
 charset-normalizer==3.5.2
     # via requests
 click==8.5.0
     # via uvicorn
+cryptography==50.0.2
+    # via pyjwt
 cyclonedx-python-lib==11.12.0
     # via pip-audit
 defusedxml==0.7.1
@@ -87,6 +91,8 @@ pluggy==1.7.0
     # via pytest
 py-serializable==2.1.0
     # via cyclonedx-python-lib
+pycparser==3.12
+    # via cffi
 pydantic==2.14.2
     # via fastapi
 pydantic-core==2.50.2
@@ -95,6 +101,10 @@ pygments==2.21.0
     # via
     #   pytest
     #   rich
+pyjwt==2.15.1
+    # via
+    #   lantern (pyproject.toml)
+    #   pyjwt
 pyparsing==3.3.3
     # via pip-requirements-parser
 pytest==9.2.0

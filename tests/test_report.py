@@ -75,3 +75,15 @@ def test_written_report_hashes_match_its_bytes(tmp_path):
         digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode()
         assert f"'sha256-{digest}'" in scripts
     assert read_bundle(path)["graph"]["repo_root"]
+
+
+def test_graph_lights_up_the_chosen_steps_lines_and_says_what_a_line_means():
+    from pathlib import Path
+    page = (Path(__file__).resolve().parents[1] / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+    # the chosen function's lines glow slowly and carry dots the way the call goes; motion stops when asked
+    assert "@keyframes gpulse" in page and "@keyframes gflow" in page
+    assert "@media (prefers-reduced-motion: reduce){ #graph .gflow{display:none}" in page
+    # every line says in plain words what it is: a call read from the code, not proof it ran
+    assert "A → B: A can call B (read from the code)" in page
+    assert "what the chosen step calls" in page and "what calls it" in page
+    assert "can call ${esc(name(e.dst))}" in page

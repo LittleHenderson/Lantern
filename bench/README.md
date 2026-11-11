@@ -1,9 +1,18 @@
 # Benchmark
 
-This file: the Python map benchmark (edges against a trace). Also here: `mobile/` (findings precision on real phone
+This file: the Python map benchmark (edges against a trace). Also here: `heldout/` (the frozen held-out set of 2026-11-09:
+five documented-vulnerable public apps, three clean ones and safe/unsafe twins, scored by `heldout/run_heldout.py`;
+`heldout/baseline.md` is the before), `mobile/` (findings precision on real phone
 apps, labelled by engineers), `explain_eval.py` (explanation pass rate with a real model), `ask_eval.py` (Ask Lantern
 answers), `fuzz.py` (random file mutation), `large_apps_results.md` (speed and memory on big apps), `mutation_results.md`
 (do the tests catch deliberate mistakes).
+
+Every benchmark starts isolated (`tools/netguard/`): a temporary home folder, no keys or saved sign-ins from the
+shell, real model providers off, and the network refused except for the hosts the script names (the repositories it
+clones, the dependency audit's three addresses). The first line it prints to stderr says so, the last says which
+hosts were reached and lists anything else that was tried; that fails the run. The two scripts that use a real model
+on purpose are the live suite, `live.py`: they start only with `--live --model PROVIDER/MODEL --destination HOST
+--max-requests N`.
 
 ```bash
 python bench/run_bench.py WORKDIR            # clone, analyze, trace; writes WORKDIR/bench_results.json

@@ -139,3 +139,27 @@ def test_planted_result_files_never_reach_the_browser_as_written(done_run):
     assert page == render(data, None, nonce)                # exactly our template + the data
     e = cloud.get(path(v["evidence"])).text
     assert PAYLOAD not in e
+
+
+def test_big_report_pages_are_sent_compressed_and_the_site_says_it_is_opening(done_run):
+    """A big project's report is one page with all its data inside (noetic-compass: 54,909,481 bytes); sent as it is,
+    the run page stayed empty while it arrived. Pages go out gzip-compressed to a browser that asks, still rebuilt with
+    a nonce per response, and the website shows a counting note over the frame until the report has loaded."""
+    cloud, gw, s, tok, rid = done_run
+    v = links(cloud, tok, rid)
+    r = cloud.get(path(v["report"]), headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and r.headers["content-encoding"] == "gzip" and "Accept-Encoding" in r.headers["vary"]
+    assert int(r.headers["content-length"]) < len(r.content) / 3     # sent much smaller than the page it opens into
+    nonce = re.search(r"'nonce-([^']+)'", r.headers["content-security-policy"]).group(1)
+    assert f'<script nonce="{nonce}">' in r.text
+    again = cloud.get(path(v["report"]), headers={"Accept-Encoding": "gzip"})
+    assert re.search(r"'nonce-([^']+)'", again.headers["content-security-policy"]).group(1) != nonce
+    plain = cloud.get(path(v["report"]), headers={"Accept-Encoding": "identity"})
+    assert "content-encoding" not in plain.headers and '<script nonce="' in plain.text
+    j = cloud.get(path(v["graph"]), headers={"Accept-Encoding": "gzip"})
+    assert j.headers["content-encoding"] == "gzip" and "nodes" in j.json()
+    on = cloud.post(f"/v1/runs/{rid}/share", headers={**bearer(tok), "X-Lantern-Site": "1"}).json()
+    sh = cloud.get(path(on["url"]), headers={"Accept-Encoding": "gzip"})
+    assert sh.status_code == 200 and sh.headers["content-encoding"] == "gzip" and sh.headers["x-robots-tag"] == "noindex"
+    site = (ROOT / "cloud" / "lantern_cloud" / "site" / "index.html").read_text(encoding="utf-8")
+    assert site.count("${frameWait()}<iframe") == 2 and site.count("querySelector('.framewait')?.remove()") == 2

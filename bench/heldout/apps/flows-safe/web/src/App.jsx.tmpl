@@ -1,0 +1,31 @@
+import React, { useState } from "react";
+
+export default function App() {
+  const [sort, setSort] = useState("id");
+  const [rows, setRows] = useState([]);
+
+  async function loadItems() {
+    const r = await fetch("/items/search?sort=" + sort);
+    setRows(await r.json());
+  }
+
+  async function preview(url) {
+    const r = await fetch("/preview?url=" + encodeURIComponent(url));
+    return r.text();
+  }
+
+  async function openNote(id) {
+    const r = await fetch(`/notes/${id}`);
+    return r.json();
+  }
+
+  return (
+    <main>
+      <input value={sort} onChange={(e) => setSort(e.target.value)} />
+      <button onClick={loadItems}>Load items</button>
+      <button onClick={() => preview("https://example.com")}>Preview</button>
+      <button onClick={() => openNote(1)}>Open note</button>
+      <ul>{rows.map((r) => <li key={r.id}>{r.name}</li>)}</ul>
+    </main>
+  );
+}
