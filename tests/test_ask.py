@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from lantern import ask
 from lantern.pipeline import analyze
 from lantern.providers import FixtureProvider
@@ -41,10 +43,7 @@ def test_no_project_answers_about_lantern():
 
 def test_screenshot_without_tesseract_reports_size():
     import io
-    try:
-        from PIL import Image
-    except ImportError:
-        return
+    Image = pytest.importorskip("PIL.Image")      # skipped and named when Pillow is missing (it used to pass unseen)
     buf = io.BytesIO()
     Image.new("RGB", (40, 30), "white").save(buf, format="PNG")
     body = (b"--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"shot.png\"\r\nContent-Type: image/png\r\n\r\n"

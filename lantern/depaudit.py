@@ -30,11 +30,11 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import tomllib
 from pathlib import Path
 
+from . import scanresult
 from .python_frontend import SKIP_DIRS, inside_repo
 
 NPM_REGISTRY = "https://registry.npmjs.org/"
@@ -44,6 +44,10 @@ NOTHING_TO_CHECK = ("skipped: no Python dependency files", "skipped: no package.
                     "skipped: no composer.lock", "skipped: no Gemfile.lock")
 AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit")
 OSV_API = "https://api.osv.dev/v1"
+# Every host the audits ask: pip-audit's vulnerability service (it runs with --no-deps --disable-pip, so it downloads
+# no package), the npm registry, OSV. `lantern analyze` reaches nothing else, so a run that may reach only these
+# (python tools/netguard/lantern_netguard.py --allow <these> -- lantern analyze ...) loses nothing.
+AUDIT_HOSTS = ("pypi.org", "registry.npmjs.org", "api.osv.dev")
 NPM_SEVERITY = {"critical": "HIGH", "high": "HIGH", "moderate": "MEDIUM", "low": "LOW", "info": "LOW"}
 
 
@@ -79,7 +83,7 @@ def run_all(repo: Path) -> dict:
         try:
             f, info = fn(repo, False)
         except Exception as exc:  # noqa: BLE001 - one audit's surprise (a registry down, odd output) must not drop the others
-            f, info = [], {"tool": tool, "status": f"error: {type(exc).__name__} (network needed?)"}
+            f, info = [], scanresult.record(tool, "failed", f"{type(exc).__name__} (network needed?)")
         out[tool] = {"findings": f, "info": info}
     return out
 
@@ -175,35 +179,59 @@ def python_pins(repo: Path) -> tuple[dict[str, tuple[str, str]], list[str], list
     return pins, loose, sorted(set(files))
 
 
+PIP_AUDIT_TIMEOUT = 300
+
+
 def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
+    """pip-audit over the exact versions found in the repo. Exit 0 = ran, nothing known; exit 1 = ran, found
+    vulnerabilities; anything else is a failure. A package pip-audit could not look up (`skip_reason`) makes the run
+    `partial` and is listed; the findings for the others are kept."""
     from .security import _fid
     pre = precomputed("pip-audit")
     if pre is not None:
         return pre
-    info = {"tool": "pip-audit", "role": "known-vulnerable Python packages", "version": _pkg_version("pip-audit")}
+    info: dict = {"role": "known-vulnerable Python packages", "version": _pkg_version("pip-audit")}
     pins, loose, files = python_pins(repo)
     if not files:
-        return [], info | {"status": "skipped: no Python dependency files"}
+        return [], scanresult.record("pip-audit", "skipped", "no Python dependency files", **info)
     if not pins:
-        return [], info | {"status": "skipped: no exact versions to check (commit a lock file such as uv.lock or "
-                                     "poetry.lock, or pin with ==)", "files": files, "unpinned": len(loose)}
+        return [], scanresult.record("pip-audit", "skipped", "no exact versions to check (commit a lock file such as "
+                                     "uv.lock or poetry.lock, or pin with ==)", applicable=False, files=files,
+                                     unpinned=len(loose), **info)
     if not shutil.which("pip-audit"):
-        return [], info | {"status": 'skipped: not installed (pip install "lantern[scan]")', "files": files}
+        return [], scanresult.record("pip-audit", "unavailable", 'pip install "lantern[scan]"', files=files, **info)
     if offline() if no_network is None else no_network:
-        return [], info | {"status": "skipped: offline", "files": files}
+        return [], scanresult.record("pip-audit", "skipped", "offline", applicable=True, files=files, **info)
+    info |= {"files": files, "scope": {"files": files, "packages": len(pins)}, "checked": len(pins),
+             "unpinned": len(loose), "unpinned_examples": loose[:5]}
     with tempfile.TemporaryDirectory() as td:
         req = Path(td) / "requirements.txt"
         req.write_text("".join(f"{n}=={v}\n" for n, (v, _) in sorted(pins.items())), encoding="utf-8")
         cmd = ["pip-audit", "-r", str(req), "-f", "json", "--progress-spinner", "off", "--no-deps", "--disable-pip"]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
-            data = json.loads(proc.stdout or "{}")
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError) as exc:
-            return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
-    out = []
-    for dep in data.get("dependencies", []):
-        name = dep.get("name", "")
-        for v, aliases in _advisories(dep.get("vulns", [])):
+        run = scanresult.run_tool(cmd, timeout=PIP_AUDIT_TIMEOUT)
+    info |= {"exit_code": run.returncode, "duration_ms": run.duration_ms}
+    if run.timed_out:
+        return [], scanresult.record("pip-audit", "timeout", f"after {PIP_AUDIT_TIMEOUT} s", **info)
+    if run.error:
+        return [], scanresult.record("pip-audit", "failed", f"{run.error} (network needed?)", **info)
+    err = scanresult.tail(run.stderr)
+    if run.returncode not in (0, 1):
+        return [], scanresult.record("pip-audit", "failed", f"exit code {run.returncode}: {err or 'no message'} "
+                                     "(network needed?)", **info)
+    data, why = scanresult.parse_json(run.stdout, dict)
+    if data is None:
+        return [], scanresult.record("pip-audit", "failed", why + (f"; stderr: {err}" if err else ""), **info)
+    if not isinstance(data.get("dependencies"), list):
+        return [], scanresult.record("pip-audit", "failed", "no dependencies list in the output", **info)
+    out, errors = [], []
+    for dep in data["dependencies"]:
+        if not isinstance(dep, dict):
+            continue
+        name = str(dep.get("name") or "")
+        if dep.get("skip_reason"):
+            errors.append(f"{name or '?'}: {str(dep['skip_reason'])[:160]}")
+            continue
+        for v, aliases in _advisories(dep.get("vulns") or []):
             out.append({
                 "id": _fid("pip-audit", _norm(name), v["id"]),
                 "tool": "pip-audit", "rule": v["id"],
@@ -214,8 +242,11 @@ def run_pip_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
                              + (f". Also listed as {', '.join(aliases)}" if aliases else ""),
                 "snippet": (v.get("description") or "")[:400], "category": "dependency", "package": name,
             })
-    return out, info | {"status": "ok", "files": files, "checked": len(pins), "unpinned": len(loose),
-                        "unpinned_examples": loose[:5]}
+    info["findings"] = len(out)
+    if errors:
+        return out, scanresult.record("pip-audit", "partial", f"{len(errors)} package{'s' if len(errors) != 1 else ''} "
+                                      "could not be checked", errors=errors, **info)
+    return out, scanresult.record("pip-audit", "ok", **info)
 
 
 def _advisories(vulns: list[dict]) -> list[tuple[dict, list[str]]]:
@@ -235,49 +266,78 @@ def _advisories(vulns: list[dict]) -> list[tuple[dict, list[str]]]:
 
 # ---------------------------------------------------------------------------- JavaScript
 
+NPM_AUDIT_TIMEOUT = 180
+
+
+def _npm_version(npm: str) -> str | None:
+    run = scanresult.run_tool([npm, "--version"], timeout=30)
+    return (run.stdout or "").strip()[:20] or None
+
+
 def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
+    """`npm audit --package-lock-only` per lock file. Exit 0 = nothing known, exit 1 = vulnerabilities (or an error
+    npm reports as JSON `{"error": …}`, which is read as a failure). One lock file failing while another was checked
+    makes the run `partial`; all failing is `failed` (or `timeout` when every one timed out)."""
     from .security import _fid
     pre = precomputed("npm-audit")
     if pre is not None:
         return pre
-    info = {"tool": "npm-audit", "role": "known-vulnerable npm packages (production dependencies)"}
+    info: dict = {"role": "known-vulnerable npm packages (production dependencies)"}
     manifests = _project_files(repo, names=("package.json",))
     if not manifests:
-        return [], info | {"status": "skipped: no package.json"}
+        return [], scanresult.record("npm-audit", "skipped", "no package.json", **info)
     locks = [m.parent / "package-lock.json" for m in manifests if (m.parent / "package-lock.json").is_file()]
     other = [m.parent.relative_to(repo).as_posix() or "." for m in manifests
              if not (m.parent / "package-lock.json").is_file()]
     if not locks:
-        why = ("pnpm-lock.yaml / yarn.lock / bun.lock aren't read yet; run `pnpm audit` or `yarn npm audit`"
-               if any((m.parent / x).is_file() for m in manifests for x in ("pnpm-lock.yaml", "yarn.lock", "bun.lock"))
-               else "no package-lock.json, so exact versions are unknown (commit your lock file)")
-        return [], info | {"status": f"skipped: {why}"}
+        if any((m.parent / x).is_file() for m in manifests for x in ("pnpm-lock.yaml", "yarn.lock", "bun.lock")):
+            # the project's exact versions exist but Lantern cannot read them yet: a gap on Lantern's side
+            return [], scanresult.record("npm-audit", "skipped", "pnpm-lock.yaml / yarn.lock / bun.lock aren't read "
+                                         "yet; run `pnpm audit` or `yarn npm audit`", applicable=True, **info)
+        return [], scanresult.record("npm-audit", "skipped", "no package-lock.json, so exact versions are unknown "
+                                     "(commit your lock file)", applicable=False, **info)
     if offline() if no_network is None else no_network:
-        return [], info | {"status": "skipped: offline"}
+        return [], scanresult.record("npm-audit", "skipped", "offline", applicable=True, **info)
     npm = shutil.which("npm")
     if not npm:
-        return [], info | {"status": "skipped: npm not installed"}
-    out, files, errors = [], [], []
-    try:
-        info["version"] = subprocess.run([npm, "--version"], capture_output=True, text=True, encoding="utf-8",
-                                         errors="replace", timeout=30).stdout.strip()[:20] or None
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+        return [], scanresult.record("npm-audit", "unavailable", "npm is not on this computer", **info)
+    info["version"] = _npm_version(npm)
+    out, files, errors, timeouts = [], [], [], 0
+    codes: dict[str, int | None] = {}
+    duration = 0
     for lock in locks:
         rel = lock.relative_to(repo).as_posix()
         cmd = [npm, "audit", "--json", "--package-lock-only", "--omit=dev", f"--registry={NPM_REGISTRY}"]
-        try:
-            proc = subprocess.run(cmd, cwd=lock.parent, capture_output=True, text=True, encoding="utf-8",
-                                  errors="replace", timeout=180, env={**os.environ, "npm_config_audit_level": "info"})
-            data = json.loads(proc.stdout or "{}")
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError) as exc:
-            errors.append(f"{rel}: {type(exc).__name__}")
+        run = scanresult.run_tool(cmd, timeout=NPM_AUDIT_TIMEOUT, cwd=lock.parent,
+                                  env={**os.environ, "npm_config_audit_level": "info"})
+        codes[rel] = run.returncode
+        duration += run.duration_ms
+        if run.timed_out:
+            errors.append(f"{rel}: timed out")
+            timeouts += 1
             continue
-        if "error" in data and "vulnerabilities" not in data:
-            errors.append(f"{rel}: {str((data.get('error') or {}).get('summary', 'failed'))[:80]}")
+        if run.error:
+            errors.append(f"{rel}: {run.error}")
+            continue
+        data, why = scanresult.parse_json(run.stdout, dict)
+        if data is None:
+            err = scanresult.tail(run.stderr)
+            errors.append(f"{rel}: {why}" + (f" (exit code {run.returncode}; {err})" if err else f" (exit code {run.returncode})"))
+            continue
+        if isinstance(data.get("error"), dict) and "vulnerabilities" not in data:
+            e = data["error"]
+            errors.append(f"{rel}: {str(e.get('code') or 'error')[:40]}: {str(e.get('summary') or 'failed')[:120]}")
+            continue
+        if run.returncode not in (0, 1):
+            errors.append(f"{rel}: exit code {run.returncode}: {scanresult.tail(run.stderr) or 'no message'}")
+            continue
+        if not isinstance(data.get("vulnerabilities"), dict):
+            errors.append(f"{rel}: no vulnerabilities list in the output")
             continue
         files.append(rel)
-        for name, v in (data.get("vulnerabilities") or {}).items():
+        for name, v in data["vulnerabilities"].items():
+            if not isinstance(v, dict):
+                continue
             advisories = [x for x in v.get("via") or [] if isinstance(x, dict)]
             if not advisories:
                 continue   # only vulnerable through another package; that package gets its own finding
@@ -297,11 +357,17 @@ def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
                     "more_info": adv.get("url") or fix_txt, "snippet": fix_txt, "category": "dependency",
                     "package": name,
                 })
-    status = "ok" if files and not errors else ("partial: " if files else "error: ") + "; ".join(errors)[:200]
-    res = info | {"status": status, "files": files}
+    info |= {"files": files, "scope": {"files": files}, "findings": len(out), "duration_ms": duration,
+             "exit_code": next(iter(codes.values())) if len(codes) == 1 else None, "exit_codes": codes}
     if other:
-        res["not_checked"] = other[:10]
-    return out, res
+        info["not_checked"] = other[:10]
+    if files and not errors:
+        return out, scanresult.record("npm-audit", "ok", **info)
+    if files:
+        return out, scanresult.record("npm-audit", "partial", "; ".join(errors)[:300], errors=errors, **info)
+    if timeouts == len(locks):
+        return out, scanresult.record("npm-audit", "timeout", f"after {NPM_AUDIT_TIMEOUT} s per lock file", errors=errors, **info)
+    return out, scanresult.record("npm-audit", "failed", "; ".join(errors)[:300], errors=errors, **info)
 
 
 
@@ -430,28 +496,61 @@ def _osv_fixed(vuln: dict, coord: str) -> list[str]:
     return sorted(set(out))
 
 
+class OSVAnswer(ValueError):
+    """OSV answered in a shape Lantern does not understand (no results list, or not one answer per query)."""
+
+
+OSV_DETAIL_LIMIT = 300
+
+
+def _osv_failure(exc: Exception) -> tuple[str, str]:
+    """The state and reason for an OSV audit that could not finish."""
+    if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+        return "timeout", f"OSV did not answer in time ({type(exc).__name__})"
+    if isinstance(exc, OSVAnswer):
+        return "failed", str(exc)
+    if isinstance(exc, json.JSONDecodeError):
+        return "failed", f"JSONDecodeError: broken JSON from OSV ({str(exc)[:80]})"
+    return "failed", f"{type(exc).__name__}: {str(exc)[:120]} (network needed?)"
+
+
+def _osv_audit(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int]], info: dict) -> tuple[list[dict], dict]:
+    """Run one OSV-backed audit and write its record: `ok`, `partial` (a vulnerability's details could not be fetched;
+    the finding is kept with a generic title), `failed` or `timeout`."""
+    try:
+        out, errors = _osv_findings(tool, ecosystem, pins)
+    except (OSError, ValueError) as exc:
+        state, why = _osv_failure(exc)
+        return [], scanresult.record(tool, state, why, **info)
+    info["findings"] = len(out)
+    if errors:
+        return out, scanresult.record(tool, "partial", f"{len(errors)} vulnerability detail{'s' if len(errors) != 1 else ''}"
+                                      " could not be fetched", errors=errors, **info)
+    return out, scanresult.record(tool, "ok", **info)
+
+
 def run_maven_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
     pre = precomputed("maven-audit")
     if pre is not None:
         return pre
-    info = {"tool": "maven-audit", "role": "known-vulnerable Gradle/Maven libraries (OSV database)", "version": "osv-v1"}
+    info: dict = {"role": "known-vulnerable Gradle/Maven libraries (OSV database)", "version": "osv-v1"}
     pins, loose, files = maven_coords(repo)
     if not files:
-        return [], info | {"status": "skipped: no Gradle or Maven files"}
+        return [], scanresult.record("maven-audit", "skipped", "no Gradle or Maven files", **info)
     if not pins:
-        return [], info | {"status": "skipped: no exact versions to check", "files": files, "unpinned": len(loose)}
+        return [], scanresult.record("maven-audit", "skipped", "no exact versions to check", applicable=False, files=files,
+                                     unpinned=len(loose), **info)
     if offline() if no_network is None else no_network:
-        return [], info | {"status": "skipped: offline", "files": files}
-    try:
-        out = _osv_findings("maven-audit", "Maven", pins)
-    except (OSError, ValueError) as exc:
-        return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
-    return out, info | {"status": "ok", "files": files, "checked": len(pins), "unpinned": len(loose),
-                        "unpinned_examples": loose[:5]}
+        return [], scanresult.record("maven-audit", "skipped", "offline", applicable=True, files=files, **info)
+    return _osv_audit("maven-audit", "Maven", pins, info | {"files": files, "scope": {"files": files, "packages": len(pins)},
+                                                           "checked": len(pins), "unpinned": len(loose),
+                                                           "unpinned_examples": loose[:5]})
 
 
-def _osv_findings(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int]]) -> list[dict]:
-    """Ask OSV about exact `name → (version, file, line)` pins of one ecosystem; one finding per known vulnerability."""
+def _osv_findings(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int]]) -> tuple[list[dict], list[str]]:
+    """Ask OSV about exact `name → (version, file, line)` pins of one ecosystem; one finding per known vulnerability.
+    Returns the findings and the details that could not be fetched (one line each). Raises `OSVAnswer` when the
+    batch answer has the wrong shape, and lets network errors through for the caller's record."""
     from .security import _fid
     coords = sorted(pins)
     res = []
@@ -459,16 +558,33 @@ def _osv_findings(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int
         chunk = coords[i:i + 500]
         data = _osv_post("querybatch", {"queries": [{"package": {"name": c, "ecosystem": ecosystem},
                                                      "version": pins[c][0]} for c in chunk]})
-        res += list(zip(chunk, data.get("results") or []))
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, list):
+            raise OSVAnswer("wrong shape: OSV's answer has no results list")
+        if len(results) != len(chunk):
+            raise OSVAnswer(f"wrong shape: expected {len(chunk)} answer{'s' if len(chunk) != 1 else ''} from OSV, "
+                            f"got {len(results)}")
+        res += list(zip(chunk, results))
     details: dict[str, dict] = {}
+    errors: list[str] = []
+    not_fetched = 0
     out = []
     for coord, r in res:
-        for v in (r or {}).get("vulns") or []:
-            vid = str((v or {}).get("id") or "")[:60]
+        for v in (r.get("vulns") or []) if isinstance(r, dict) else []:
+            vid = str((v or {}).get("id") or "")[:60] if isinstance(v, dict) else ""
             if not vid:
                 continue
-            if vid not in details and len(details) < 300:
-                details[vid] = _osv_get(f"vulns/{vid}")
+            if vid not in details:
+                if len(details) >= OSV_DETAIL_LIMIT:
+                    details[vid] = {}
+                    not_fetched += 1
+                else:
+                    try:
+                        d = _osv_get(f"vulns/{vid}")
+                        details[vid] = d if isinstance(d, dict) else {}
+                    except (OSError, ValueError) as exc:
+                        details[vid] = {}
+                        errors.append(f"{vid}: {type(exc).__name__} {str(exc)[:120]}".rstrip())
             d = details.get(vid) or {}
             sev = OSV_SEVERITY.get(str((d.get("database_specific") or {}).get("severity") or "").upper(), "moderate")
             fixed = _osv_fixed(d, coord)
@@ -486,7 +602,10 @@ def _osv_findings(tool: str, ecosystem: str, pins: dict[str, tuple[str, str, int
                 "snippet": str(d.get("details") or d.get("summary") or "")[:400], "category": "dependency",
                 "package": coord,
             })
-    return out
+    if not_fetched:
+        errors.append(f"details of {not_fetched} vulnerabilit{'ies' if not_fetched != 1 else 'y'} not fetched "
+                      f"(limit {OSV_DETAIL_LIMIT} per run); their findings carry a generic title")
+    return out, errors
 
 
 # ---------------------------------------------------------------------------- PHP (Composer, OSV)
@@ -530,18 +649,14 @@ def run_composer_audit(repo: Path, no_network: bool | None = None) -> tuple[list
     pre = precomputed("composer-audit")
     if pre is not None:
         return pre
-    info = {"tool": "composer-audit", "role": "known-vulnerable PHP libraries (composer.lock, OSV database)",
-            "version": "osv-v1"}
+    info: dict = {"role": "known-vulnerable PHP libraries (composer.lock, OSV database)", "version": "osv-v1"}
     pins, files = composer_pins(repo)
     if not files:
-        return [], info | {"status": "skipped: no composer.lock"}
+        return [], scanresult.record("composer-audit", "skipped", "no composer.lock", **info)
     if offline() if no_network is None else no_network:
-        return [], info | {"status": "skipped: offline", "files": files}
-    try:
-        out = _osv_findings("composer-audit", "Packagist", pins)
-    except (OSError, ValueError) as exc:
-        return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
-    return out, info | {"status": "ok", "files": files, "checked": len(pins)}
+        return [], scanresult.record("composer-audit", "skipped", "offline", applicable=True, files=files, **info)
+    return _osv_audit("composer-audit", "Packagist", pins, info | {"files": files, "scope": {"files": files, "packages": len(pins)},
+                                                                  "checked": len(pins)})
 
 
 # ---------------------------------------------------------------------------- Ruby (Bundler, OSV)
@@ -613,17 +728,14 @@ def run_gem_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     pre = precomputed("gem-audit")
     if pre is not None:
         return pre
-    info = {"tool": "gem-audit", "role": "known-vulnerable Ruby gems (Gemfile.lock, OSV database)", "version": "osv-v1"}
+    info: dict = {"role": "known-vulnerable Ruby gems (Gemfile.lock, OSV database)", "version": "osv-v1"}
     pins, files = gem_pins(repo)
     if not files:
-        return [], info | {"status": "skipped: no Gemfile.lock"}
+        return [], scanresult.record("gem-audit", "skipped", "no Gemfile.lock", **info)
     if offline() if no_network is None else no_network:
-        return [], info | {"status": "skipped: offline", "files": files}
-    try:
-        out = _osv_findings("gem-audit", "RubyGems", pins)
-    except (OSError, ValueError) as exc:
-        return [], info | {"status": f"error: {type(exc).__name__} (network needed?)", "files": files}
-    return out, info | {"status": "ok", "files": files, "checked": len(pins)}
+        return [], scanresult.record("gem-audit", "skipped", "offline", applicable=True, files=files, **info)
+    return _osv_audit("gem-audit", "RubyGems", pins, info | {"files": files, "scope": {"files": files, "packages": len(pins)},
+                                                            "checked": len(pins)})
 
 
 if __name__ == "__main__":   # python -m lantern.depaudit REPO OUT.json  (the cloud service's audit step)

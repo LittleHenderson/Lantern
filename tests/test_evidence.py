@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -155,3 +156,13 @@ def test_page_has_no_inline_handlers(tmp_path):
     html = evidence.render_html(ev, nonce="n0nce")
     assert not re.search(r"<[^>]+\son[a-z]+\s*=", html)
     assert 'id="savepdf"' in html and "getElementById('savepdf')" in html
+
+
+def test_the_verify_command_installs_the_lantern_that_made_the_report(monkeypatch):
+    # "pip install ...Lantern" without a ref installs the newest Lantern, which can give another digest later
+    from lantern import _build, evidence
+    sha = "bc7cf10dce35e595bfc9aaf79e484bf1a577c0a4"
+    monkeypatch.setattr(_build, "COMMIT", sha)
+    assert evidence.engine_ref() == sha
+    monkeypatch.setattr(_build, "COMMIT", "not a commit")
+    assert re.fullmatch(r"[0-9a-f]{40}|v[\w.-]+", evidence.engine_ref())

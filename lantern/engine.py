@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import bridge, cpp_frontend, csharp_frontend, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, php_frontend, python_frontend, ruby_frontend, rust_frontend, swift_frontend
+from . import bridge, calls, cpp_frontend, csharp_frontend, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, php_frontend, python_frontend, ruby_frontend, rust_frontend, swift_frontend
 from .graph import Graph
 
 
@@ -72,4 +72,5 @@ def build_graph(repo: str | Path) -> Graph:
     from . import rn
     rn.add_entries(g, repo)        # React Native / Expo screens and links, from the JS map
     lanes.assign(g)
+    calls.finish(g)   # one record per call site (Python and JS/TS), summarised in g.meta["calls"]
     return g

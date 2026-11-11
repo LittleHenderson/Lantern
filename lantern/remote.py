@@ -117,6 +117,7 @@ def clone(link: str, log=None, dest: Path | None = None, root: Path | None = Non
     log = log or (lambda m: None)
     if (dest / ".git").exists():
         log(f"updating {dest}")
+        _git(["config", "core.symlinks", "false"], cwd=dest)   # a clone an earlier Lantern made: no new link from here on
         r = _git(["pull", "--ff-only", "--quiet"], cwd=dest)
         if r.returncode != 0:
             log("could not update it, kept the copy that was there: " + _tail(r.stderr))
@@ -212,6 +213,14 @@ def skipped(folder: Path) -> dict | None:
     return d if isinstance(d, dict) and isinstance(d.get("files"), int) else None
 
 
+# A repository can hold links to any path of the computer it is cloned on. Lantern's clones are written without
+# them (2026-11-10): git then writes a link as a small file that holds the link's own text, as it does on a Windows
+# without links, and keeps the setting in the clone, so a later update writes none either. The readers refuse a link
+# that leads out of a project themselves (`python_frontend.inside_repo`); this is for every program that reads a
+# clone after them.
+NO_LINKS = ["-c", "core.symlinks=false"]
+
+
 def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900, auth: str | None = None) -> None:
     """`git clone --depth 1` of `url` into `dest` (an empty or missing folder), without a checkout first: the files
     are measured from the index and refused above the size cap, then checked out. RuntimeError with a plain message.
@@ -220,8 +229,8 @@ def fetch(url: str, dest: Path, branch: str | None = None, timeout: int = 900, a
     comes first.
     `auth`: a read-only GitHub token (Lantern cloud's "Connect GitHub"), handed to git as an HTTP header through
     environment variables only (never in the link, `.git/config` or the log)."""
-    args = (["clone", "--depth", "1", "--single-branch", "--no-checkout"] + (["--branch", branch] if branch else [])
-            + ["--", url, str(dest)])
+    args = (["clone", *NO_LINKS, "--depth", "1", "--single-branch", "--no-checkout"]
+            + (["--branch", branch] if branch else []) + ["--", url, str(dest)])
     try:
         r = _git(args, cwd=None, timeout=timeout, **({"env": _auth_env(url, auth)} if auth else {}))
     except RuntimeError:
@@ -245,9 +254,14 @@ def has_files(dest: Path) -> bool:
 def missing_files(dest: Path) -> list[str] | None:
     """Files in the clone's index that are not in its working tree: what a checkout that stopped part-way left out
     (edited files are not missing, and are never touched). None when git cannot list them, which callers treat as
-    "not known to be complete" rather than "nothing missing"."""
-    r = _git(["ls-files", "--deleted", "-z"], cwd=dest)
-    return [p for p in r.stdout.split("\0") if p] if r.returncode == 0 else None
+    "not known to be complete" rather than "nothing missing".
+    Asked through `gitfacts.deleted`, which does not obey the folder's own git settings: `pipeline.analyze` asks
+    this of any folder that carries the clone mark, and anyone can put that mark, and a command for git to run
+    (`core.fsmonitor`), into a folder they hand over."""
+    if not shutil.which("git"):
+        raise RuntimeError("git is not installed. Install Git, or clone the repository yourself and add the folder.")
+    from . import gitfacts   # here, not above: gitfacts starts git through this module's `run_bounded`
+    return gitfacts.deleted(dest)
 
 
 MARK = "lantern-clone"   # a file in .git naming a folder Lantern cloned (git leaves unknown files in .git alone)

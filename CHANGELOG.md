@@ -39,6 +39,356 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   check runs, Simple shows a real progress bar with the step it is on in plain words ("Step 2 of 4: Looking for
   problems"), read from the pipeline's own log lines; the raw log is one tap away. Advanced keeps its add bar and
   its log as before (directive: user first, step 2).
+- Security: a link in a project that leads out of the project is no longer read or shown (2026-11-10; found during
+  stage 7 of the 2026-11-09 directive, while measuring what Lantern does with each file of 16 sample projects when
+  that file is a link). A project comes from anywhere, and a git repository can hold symbolic links to any path of the
+  computer it is cloned on. Lantern's readers of source files refused a file that was itself such a link
+  (`python_frontend.inside_repo`). Measured on the code before:
+  the notes file (`lantern-narratives.md`) was read without asking, and the Evidence Report shows it as it is. A
+  project that brought that name as a link had the first 20,000 characters of the file it led to in `evidence.html`
+  and `evidence.json`; a pipe under that name held the run up for good.
+  `inside_repo` looked at the last name of a path only, so a file reached through a folder that is a link out of the
+  project counted as the project's: `lantern-packs -> /somewhere` had the packs of rules in that folder loaded.
+  Bandit finds its files itself. It opened a `.py` link wherever it led, and its findings quote the lines; a pipe
+  under a `.py` name held it up until Lantern's time limit ended the whole Python check, so a project could switch
+  that check off by bringing one.
+  Now `inside_repo` answers for the whole path: a plain file, or a link to one, that lies inside the project by
+  whatever folders it is reached. A link that leads out, a file behind a folder that is such a link (on Windows a
+  junction too), a pipe, a device, a folder under a file's name and a name nothing answers to are not files of the
+  project. A link that stays inside the project is read as before, and so is a project that is itself reached through
+  the person's own shortcut. The notes file asks it. `security.run_bandit` hands Bandit an exclusion for each Python
+  file that is not the project's (`_not_the_projects`, `_only`: a pattern that fits that one file, since Bandit's own
+  matching would take `a.pyw` along with `a.py`), names those files in the record's `exclusions`, and takes no
+  finding, no count and no error from such a file whatever Bandit did. And a repository Lantern clones is written with
+  no link at all (`remote.NO_LINKS`, git's `core.symlinks=false`): git writes a small file that holds the link's own
+  text, as it does on a Windows without links, the clone does not count as changed for it, and a clone an earlier
+  Lantern made gets the setting the next time it is updated.
+  Changed for the person: in a repository Lantern clones from a link, a file that is a link to another file of the
+  same repository is now that small text file, not a second copy of the other file (a folder the person cloned
+  themselves and added is read as before, links inside it included). A file Bandit is told to leave out is named in
+  its record; before, a link to nothing made the Python check "partial".
+  Tests: `tests/test_links_out.py` (19 tests, each refusal beside a safe twin: the project's own notes file, a link
+  that stays inside, the person's shortcut, the project's own pack, real files whose names begin like a link's, a
+  project file Bandit cannot read). On the code before, 17 fail, 1 passes (the safe twin of the notes file) and 1
+  needs Windows; with this change 18 pass and 1 needs Windows (a junction), where CI's Windows job runs it.
+  Not covered: a clone an earlier Lantern made keeps the links it already has until it is cloned again (the readers
+  above refuse them all the same); a Python file that is not the project's and has a comma in its path, or is one of
+  more than fit a command line (24,000 characters of exclusions), is not handed to Bandit as an exclusion, so nothing
+  is taken from it but a pipe there still holds Bandit up to its time limit, which the record then says; an exclusion
+  is found, letter for letter, in no path but its own unless a folder was named for that purpose (`tool.p[y]z/`), and
+  a file in such a folder is then left out of Bandit as one in `build/` or `vendor/` already is; a link put in place
+  while an analysis runs (that takes another program of the same computer writing in the project at that moment).
+- Security: the git settings of a folder Lantern reads are no longer obeyed (2026-11-10; found during stage 7 of
+  the 2026-11-09 directive). `lantern analyze` asked git about the folder it was given: `git status` for
+  uncommitted changes (`evidence.git_info`) and, for a folder that carries the mark of a Lantern clone,
+  `git ls-files --deleted` (`remote.missing_files`). git obeys the folder's own settings file, `.git/config`, and
+  that file can name commands: `core.fsmonitor` is run whenever git reads the index, a clean filter when a file's
+  content has to be compared, and `git status` starts itself inside every submodule under that submodule's
+  settings. `git clone` never copies such settings, but a folder that arrives another way brings its `.git` as it
+  is: an unpacked archive, a download, an upload to the cloud service.
+  Measured on the code before, with commands that only write a marker: a planted `core.fsmonitor` was run by
+  `lantern analyze` (through `git status`, and through `git ls-files` once the folder carried the clone mark,
+  which anyone can write); a planted filter was run; a command in a submodule's settings was run. In the cloud
+  service the command of an uploaded zip ran inside the analysis step, where the service runs as root (the step
+  is then the user `nobody`) and where it runs as an ordinary user. The step has no network and may write only in
+  its temp folder, but it may read what its user may read, and the cloud image runs the service and its steps as
+  one ordinary user: in a local set-up of that kind, with a stand-in file, text from another person's stored
+  result ended up in the uploader's own stored result, in a run that ended "done". The same code also followed a
+  `.git` file, a `commondir` file or a link to another repository of the computer and reported that repository's
+  commit and `origin` address as the folder's; obeyed `GIT_DIR` and its like when they were set in the shell (as
+  inside a git hook); said "no uncommitted changes" when git could not compare the files at all; and let git
+  rewrite the folder's index.
+  Now (`lantern/gitfacts.py`) the folder's `.git` is read like any other file of the project: where the
+  repository is, the commit, the branch and the address of `origin` are read by hand, never through a link and
+  never through a `.git` file that names a place which does not name the folder back. git itself is started only
+  on a git folder Lantern makes for the occasion, whose settings file holds nothing but a short list of yes/no and
+  fixed-word settings copied from the project (how line ends and file modes were written to this disk); it reads
+  the project's index, objects and files from there and none of the project's settings. Submodules are looked into
+  one by one in the same way, never by git, and only where they are real folders inside the project. The cloud
+  service reads an upload's commit without starting any program, and its steps are no longer told to trust every
+  folder's git settings (`safe.directory=*`). When the files cannot be compared, they count as changed and the
+  Evidence Report and each finding's case say why (`header.note`, `where.revision_note`); a git folder that is not
+  read is named on the report too.
+  What changes for a repository of your own: nothing, unless its `.git` is a link or was made with
+  `git init --separate-git-dir` (no commit is reported, with the reason), it keeps its refs in the reftable form
+  (the same), or it relies on a filter or a submodule-ignore rule that only its own settings define (a file can
+  then count as changed). In the other direction: a repository that belongs to another user of the computer,
+  which git itself refuses unless the person listed it (`safe.directory`), is now read, also from a folder above
+  the one analyzed (before, no commit was reported for it). Nothing in it is obeyed; a rule of Lantern's own for
+  whose git folder may be read is not part of this change. The person's own git settings, in the home folder or
+  the computer's, still apply.
+  Tests: `tests/test_gitfacts.py`, 44 tests kept apart by kind: planted settings, pointers and variables that
+  must not be obeyed (24); what cannot be told, which must be said (3); repositories as people have them, which
+  must get the answers git itself gives (13: plain, packed refs, detached, linked worktree, shallow, sha256,
+  sparse checkout, submodules, line endings); the settings reader against git's own (1); and the limits (3). The
+  reader keeps a tab written inside a value as a tab, which is git's own reading since 2.45; older git made it a
+  space, so that one value is asked of git only as one of the two (GitHub's first run of these tests, on git
+  2.56, failed on it: written beside git 2.43, the reader made it a space, and the test said so). On
+  the code before, 28 of them fail (17 show a defect, 11 test the new reading, its words and its limits), 14 pass
+  and 2 need Windows; with the fix 42 pass and 2 need Windows. `tests/test_cloud_runs.py` has
+  2 more (an upload with planted git settings; the service starts no program to read a commit): both failed
+  before. One existing test of `tests/test_remote.py` now makes git fail for real instead of through a stand-in.
+
+- CI runs every test, and its log names each test it skips (2026-11-10). CI's test jobs installed neither PyJWT nor
+  cryptography, so `tests/test_cloud_github.py` was skipped while it was imported: its 14 tests (a private
+  repository is opened only for a person GitHub says may read it) counted as one skipped test, `pytest -q` named no
+  skipped test, and the runs were green. Found while counting the skipped tests of the entry below: 1,052 tests on a
+  developer's computer, 1,039 in CI. Now the `dev` extra holds what the tests need (`PyJWT[crypto]`, pinned in
+  `requirements-lock.txt` with what it brings: cryptography, cffi, pycparser), and CI and the release build run
+  pytest with `-rs` and with `LANTERN_TESTS_COMPLETE=required`: there a test file or a test that is skipped because a
+  library is not installed fails the run and is named with the library. The one-command audit prints its skipped
+  tests also when the run passed. A developer's own run without those libraries still skips and says so, and a test
+  skipped for another reason (another operating system, a program that is not installed) is not touched.
+  The first log that named its skipped tests showed four more that CI's test pass does not run, all four tests of
+  the isolation itself (`tests/test_netguard.py`): two need root, one starts the no-network runner (which cannot be
+  started inside itself without root) and one needs a way out for the refusal to show, while CI's tests run as the
+  ordinary user inside the no-network runner. Three of them ran nowhere in CI, the fourth only in the one-command
+  audit of the Python 3.13 job. CI's Linux jobs now run that file a second time, as root and with the
+  computer's ordinary network (the guard refuses and records as everywhere), with
+  `LANTERN_TESTS_COMPLETE=no-skips`: there a test that is skipped, whatever the reason, fails the run and is named.
+  One of the four failed when the session itself was started through sudo (the runner went back to the user who
+  called sudo, who cannot write where root's test keeps its files); the tests no longer hand sudo's variables on
+  (`_bare_env`). And a test file that is skipped while it is imported is now named by every run ("test files skipped
+  whole"): pytest counts such a file as one skipped test whatever it holds and names the line that skipped, which is
+  in another file when the skip came with an import. On Windows that is four files with 53 tests (the cloud worker
+  runs on Linux), two of them named nowhere in the log before; `20 skipped` there means 69 tests that do not run.
+  That second pass failed on its first run in CI, and what it found is fixed. One: a program that root starts under
+  another user started with no network guard in it where that user cannot read the folder the guard is in. Python
+  leaves a folder it cannot read out of its path without a word, CI's checkout is under a home folder that others
+  may not enter, and the test's program tried its address and carried on (a documentation address: nothing was
+  reached). For root, where that folder is closed to others, the programs of a run now load the guard from a copy
+  that every user can read and only root can change (`guard_folder`), so such a program is refused and stops like
+  any other. The copy is one folder with two files, in `/run` (or `/tmp`), named after its content. It stays when
+  the run ends: a program still going would otherwise start its next one from a path whose first folder is gone,
+  and Python passes over that as quietly as over a folder it cannot read. The next run uses it again, and only if
+  it is root's own, closed to everyone else and the same byte for byte. Two folders that hold the guard on the path
+  used to start each other until Python gave up, and the next start-up file never ran; the path now holds one, and
+  the start-up file passes any other by. Two: both of CI's Linux passes start through sudo, and the sudo of
+  GitHub's machines (sudo-rs) hands a command none of the caller's variables: "preserving the entire environment
+  is not supported, '-E' is ignored". So where that sudo ran, neither `LANTERN_TESTS_NETLESS=required` nor
+  `LANTERN_TESTS_COMPLETE=required` reached the tests of the Linux jobs, from the commit that set each: in both
+  runs whose logs were read for this (commits 1a2bc59 and eaf4045) sudo printed that line before each pass. Those
+  runs were inside the no-network runner all the same (its last line and the recorded addresses say so: 0 outside),
+  but a test skipped there for a missing library would not have failed that pass; the Windows job, the audit pass
+  and the release build, which do not start through sudo, were held to the rule. Each rule is now written on the
+  sudo line itself, a run under a rule names it in its last lines ("rules of this run: ..."), and each of the two
+  steps looks for its rules there and fails without them. CI also waits for Docker before the tests: in one of the
+  six Linux jobs of that run `docker info` did not answer and the four Docker sandbox tests were skipped (the log
+  named them).
+- Tests and benchmarks can no longer reach a real AI provider or the internet, and never see the keys of the person
+  running them (2026-11-09). Before, a full test run made 11 connections to the outside (6 by a `pip-audit` program one
+  test started, 5 to the OSV vulnerability database from the set-up of five test files), a test could read 13 of 19
+  keys planted in the shell and the saved sign-in, and code that hid a connection error let the attempt pass unseen.
+  Now every run starts in an empty temporary home folder with every key, token and saved sign-in taken out of the
+  environment, real model providers switched off (`LANTERN_NO_REAL_PROVIDERS`: only a model on this computer may
+  answer, anything else is refused with a plain error), and every connection or name lookup that is not for this
+  computer refused and written down, in the tests and in the programs they start (`tools/netguard/`). A test that
+  tries the network fails, also when the code under test swallowed the error, when the attempt was made by a program
+  it started, or in a set-up step; so does the run when something tries outside any test. On Linux, CI also runs the
+  tests in a network that holds nothing but the computer's own address and has the operating system write down every
+  address any program tries (`tools/netless.py --watch`); the measured count after the change is 0. The benchmarks
+  (`bench/run_bench.py`, `bench/mobile/run_mobile.py`, `bench/heldout/run_heldout.py`, `bench/fuzz.py`,
+  `tools/large_apps.py`, `tools/mutation.py`, `tools/load_test.py`) and `tools/audit.sh` start the same way and may
+  only reach the hosts they name (the repositories they clone, the three addresses the dependency audit asks); the
+  load test refuses any website that is not on this computer. The held-out benchmark starts each analysis as a Python
+  program in isolated mode (`-I`), which reads nothing from the variable the guard uses to get into a program, so the
+  plain way left the guard out of it; it now starts through the guard (`python_isolated`). The two scripts that measure a real model (`bench/explain_eval.py`, `bench/ask_eval.py`,
+  the `model-eval` workflow) are now a separate live suite that starts only with `--live --model PROVIDER/MODEL
+  --destination HOST --max-requests N` (and `--send-this-code` for code that is not a Lantern sample): there is no
+  default model and no falling back to whatever key the shell holds, the model must be served from the approved host,
+  and the run stops at the request cap and keeps what it has. Also fixed on the way: the CI step that runs the tests
+  piped its output into `tee` without `pipefail`, so on Python 3.11 and 3.12 a failing test run could not fail the
+  step (the same in the weekly large-apps job's phone and load checks).
+  The browser checks keep their pages off the internet too (`tools/outside.js`): the app and the website ask the
+  outside for one thing, their font stylesheet, which the one-command audit fetched from Google 26 times in one run
+  with one browser (measured: 26 refused connections to fonts.googleapis.com). It is now answered inside the
+  browser, so nothing is sent; anything else a page asks of the outside fails the check with the address, and a
+  report may ask for nothing at all. A browser has more ways out than the requests its pages make (a connection it
+  opens ahead of time because a page hinted at an address, a page nobody watched, its own housekeeping), so every
+  browser a check starts, the report speed check included, now has a proxy on this computer as its only way out; the
+  proxy forwards nothing, and a try for anything but the pages' font host, or an address the browser itself is known
+  to ask of its maker (listed in `tools/outside.js`), fails the check with the address.
+  Found by the new tests in their first CI run: the step that fetches the code left that run's own GitHub sign-in in
+  the checkout's git settings, where every test and every program a test starts there could read it (all 13 checkout
+  steps in the 7 workflows). No workflow leaves it now (`persist-credentials: false`); one test reads every workflow
+  for it and another looks in the checkout the tests run in. A test about git's settings now names only the kind of
+  setting it met, never the setting's name or value.
+  Found in their second CI run: an older test started a check on the cloud service and returned; its stand-in for the
+  download was taken away with the test, and the check, still going, asked github.com for the repository while the
+  next test ran (refused, and that test failed for it). Every test now finishes the checks and explanations it asked
+  the cloud service for before its stand-ins are taken away; measured on the whole suite that day, 3 of the 1,046
+  tests that ran had left one going. The browser proxy also showed three things in its first run in CI. CI's
+  Playwright (1.48.2; a developer's computer here has 1.63.0) sent Chromium's requests for this computer's own pages
+  to the proxy as well, so the app under test got the proxy's refusal; the list of addresses that go round the proxy
+  is now written so that both versions keep them out of it. On the website check WebKit and Firefox made 39 and 17
+  tries for the font host that the first layer never saw, WebKit told the page about 17 refusals in its console, and
+  Firefox asked its maker for a newer Firefox twice. All of these were stopped at this computer; they are now counted
+  and shown instead of failing the check, and any other address, any other console line and anything at all in a
+  report still fail. The one-command audit prints, for each browser, what the helper's own check found and what the
+  first report and the website asked and tried, also when the check passed: Firefox and WebKit run only in CI, so
+  CI's log is where their counts can be read.
+- Every call is counted once, and Lantern follows far more of them (2026-11-09, directive stage 3). A new call-site
+  inventory (`calls.json`, `graph.json` `meta.calls`) gives each call written in Python or JavaScript/TypeScript one
+  record, by file, line and column, with one outcome (into the repo, likely, one of several, guessed by name only,
+  library, built-in, or not followed) and, when Lantern cannot follow it, a reason in plain words ("`svc` is a
+  parameter whose type Lantern cannot follow"). Functions handed to a framework (FastAPI `Depends`, Express route
+  handlers and middleware) and test code are counted apart. The older edge-line count is kept unchanged beside it. The
+  JavaScript reader now understands `require()`, `module.exports`/`exports.x`, constructor functions (`this.x =
+  function`, `X.prototype.y`), handlers wrapped by a helper (`catchAsync(async (req, res) => ...)`), Express routers
+  mounted with `app.use('/api', router)` (routes get their full paths, also when the router comes from a factory that
+  ends `return router`), routes written `router.route('/x').get(h).post(h)`, route middleware (listed on the route,
+  and the login check reads it), `req`/`res`/`next`, TypeScript parameter types, values a library call returned
+  (`const app = express()`), chains on library results, and DOM lists, events and fetch responses. A route line whose
+  handler is made by a call (`router.post('/login', passport.authenticate('local'))`) is no longer taken for an
+  outgoing web request. Python follows methods a class inherits from a library (`self.assertEqual`,
+  `Note.objects.filter`, `n.save()` on a model), calls on a library call's result (`pandas.read_csv(p).head()`), names
+  that arrive through `from x import *` of a project file (a package `__init__` that re-exports its modules included),
+  and router prefixes from `include_router` (FastAPI) and `register_blueprint` (Flask). Lantern does not call
+  something a library when it cannot know: a class with a parent class it cannot look into, and a name imported from a
+  project file that is not there (a relative import, or a path the project's `tsconfig.json` maps to a folder that is
+  not in the repo, such as generated code), stay "not followed" and say so. Nor does it when the function may be the
+  project's own: a function the project puts on a library's object (`schema.statics.paginate = function`, `res.fail =
+  function`), a method of a project class the library hands back (`getRepository(User).findOne()`, Django's
+  `get_user_model().objects.create_member()`, `req.user.can()`), a method a mixin gives a subclass, and
+  `window.App.init()` are "not followed" with the reason, or keep the older name-only guess, instead of being counted
+  as library or built-in calls. A route whose handler is a library's function is not marked as one of the app's entry
+  points, and a middleware Lantern cannot read is judged by its own name, never by the folders it lives in
+  (`./auth/rate-limit` is not a login check). An import that the project's `tsconfig.json` finds through `baseUrl`
+  alone (`import { load } from 'lib/data'` with `"baseUrl": "src"`) is read as the project's own file; the old version
+  took it for a package. Each rule has a test that failed before it and a twin that must stay unresolved. On the
+  frozen held-out benchmark (14 apps, 9,532 calls written outside tests), calls not followed fell from 3,051 to 1,255
+  (1,807 newly followed; 11 that the old version called "library" although they come from a generated file that is not
+  in the repo now say so): from 244 of 288 to 74 on dvna, 276 of 441 to 140 on NodeGoat, 183 of 271 to 42 on goof, 441
+  of 653 to 82 on express-boilerplate, 946 of 3,614 to 299 on pygoat and 121 of 791 to 103 on dvra. The command and
+  code injections of NodeGoat, dvna, goof and the local Express app are now reached from their routes and ranked
+  critical, so none of the vulnerable apps gets a green release, while the safe twins' false alarms stay at 3 of 17.
+  The rules were written after reading these same apps' untraced calls, so a fresh set of apps would show a smaller
+  gain.
+- A scanner that fails can no longer read as a clean result (2026-11-09, directive "Engineer Lantern into a stronger
+  full-stack release reviewer", stage 2). Bandit was run with `--exit-zero` and empty output was read as "no
+  findings"; gitleaks wrote its report to the terminal and any trouble silently fell back to Lantern's small built-in
+  pattern list while the record still said "ok"; pip-audit's and npm's empty or broken output counted as a clean
+  audit, and a package pip-audit could not look up was dropped without a word; one OSV detail lookup failing dropped
+  every finding of that audit. Every scanner now writes one record (`lantern/scanresult.py`): a state (ok, partial,
+  failed, timed out, not installed, skipped), the reason, the tool's version, exit code, what it covered, the folders it
+  was told to skip, and the files or packages it could not read; findings a tool did produce are kept when the rest of
+  its run failed. Each tool's real exit codes are read (Bandit and pip-audit exit 1 when they find something; npm
+  reports an error as JSON). The scanners that apply to a project and did not finish are listed in `security.json`,
+  `readiness.json` and `run.json` as `incomplete`, fail the new readiness check "Every security scanner finished"
+  (partial for a gap the run knew about, such as `--offline`), are named in the Evidence Report's memo, Provenance and
+  Limits, make the badge say "scan incomplete" (never green), show on the app's project cards and above the findings
+  in the report, and make `lantern analyze --fail-on` exit 1 (a deliberate `--offline` skip is listed, not failed).
+  Scanners run through one bounded runner that kills the whole process tree at the time limit. Tests:
+  `tests/test_scanners.py` (48) feed each adapter empty, broken and wrong-shaped output, a missing program, a timeout,
+  an unreadable file and a partial failure, and follow the states to the command line, the app, the stored files and
+  the readiness score.
+- The rest of what Lantern's report on itself got wrong (2026-11-09). "Allow-list for outgoing requests" counted a
+  list of the host names a server answers to (`ALLOWED_HOSTS`, lantern-cloud's settings) as a list of the places it
+  may call; only an allow-list in a file that makes the requests counts now. An app-wide login check was read into a
+  request hook that only counts visits (the 20 lines after it, which belonged to the next function); only the hook's
+  own body is read now, and a word in Lantern's own pattern lists no longer counts as an auth library. Sign-out
+  routes (`/signout`, `/sign-out`, `/log-out`) need no login. The Evidence Report's "verify it yourself" command
+  installed the newest Lantern, which can give another digest once the analysis changes; it now installs the exact
+  Lantern that made the report (the commit, written into the lantern-cloud image at deploy time, or the release tag).
+  The scorecard says that low findings don't lower the score, so 100/100 beside open low findings reads as intended.
+
+- Lantern's report on its own code told four things wrong (2026-11-09, found by checking the Evidence Report of run
+  b51NcYcvaZzhuElb). Reports made on the website were titled "repo" for every project, because the code was read
+  from a folder called `repo`; it is now read from a folder named after the repository (`Lantern`, `shop`), so the
+  Evidence Report and "what keeps … safe" use the project's name. The "Protections" list marked rate limiting and
+  upload checks "in place" because it found the words in Lantern's own advice text and pattern lists; strings and
+  comments no longer count (the same line was also listed three times), and an item that is in place now says what
+  was found instead of repeating the warning. Routes in test code (Lantern's sample apps under `tests/fixtures`) are
+  no longer listed as "anyone on the internet can call them". A lock file no longer names frameworks the app does
+  not use (Starlette and Click came from `requirements-lock.txt`), and the "N findings are heuristic" line counts
+  only the findings the report lists.
+
+- Sign out everywhere (2026-11-09; gateway 0.2.5). The website's account box and Settings have a "Sign out everywhere" button: after
+  one confirmation it signs the account out on every computer and phone, in the Lantern app and in the terminal
+  (gateway `POST /v1/auth/signout` with `{"everywhere": true}`, which needs a working sign-in, so nobody can sign
+  someone else out). Results and the free allowance stay. A plain Sign out now also ends that browser's sign-in at the
+  gateway instead of only forgetting it.
+- Signing in somewhere new no longer signs you out everywhere else (2026-11-09; gateway 0.2.5). Each account had one
+  token, and every sign-in (the app, the CLI, the gateway's own page, the website on another computer) replaced it, so
+  the website's sign-in stopped working and asked again. Each sign-in now gets its own token and the earlier ones keep
+  working, up to 8 places per account (the one used least recently is signed out first, and a place unused for 90 days
+  is forgotten). All of an account's sign-ins share one allowance and one daily count, so signing in again never adds
+  free use, and switching an account off still signs it out everywhere. Accounts from before keep their current
+  token. The website also picks up a sign-in finished in the GitHub or Google tab after the page was reloaded or its
+  sign-in box closed, instead of asking again.
+- The intro's Sound and Skip intro buttons go away when the film ends (2026-11-09). They stayed in the corner of the
+  end card, where there was nothing left to skip or hear; now the end card shows only its two buttons, Escape leaves it,
+  and both come back when the intro plays again. Same on the website and the landing page; the intro still plays on
+  every visit.
+- Ask Lantern on the website says why it could not answer (2026-11-09). It used to say "The model did not
+  answer" for every problem. Now it names the real one in plain words: your sign-in is no longer accepted (and the
+  sign-in box opens), the model company refused Lantern's key or its account is out of
+  credit, the model company is down or busy, the question is too big, or Lantern's model server cannot be reached.
+  The server log records which one.
+- The gateway's "You're in" page no longer prints your Lantern token (gateway 0.2.4, 2026-11-09). When nothing comes
+  to pick the token up by itself, the page shows one Lantern button, "Copy my Lantern token", that puts it on the
+  clipboard and then says "Copied. Now paste it into Lantern". A token on screen ends up in screenshots. The token is
+  printed only if copying fails or the browser runs no scripts. The page's one script is allowed by its hash in the
+  Content-Security-Policy, so nothing else can run.
+- The Graph view says what its lines mean and lights up the chosen step's own lines (2026-11-09). A line with an arrow
+  from A to B means A can call B, read from the code; only teal lines were seen running under tests. Clicking a box now
+  makes its lines glow with a slow pulse, with dots moving the way the call goes: teal for what it calls, light for what
+  calls it, while every other line fades back. The legend and "What am I looking at" say this in plain words, and each
+  line's hover text reads "X can call Y · read from the code". With reduced motion the glow stays lit and nothing moves.
+- A big project's report no longer leaves the website's run page empty (2026-11-09). Noetic Compass's report is one
+  54,909,481-byte page; the cloud sent it uncompressed, and the frame stayed blank while it arrived (28 s on a 20 Mbit/s
+  line in a test, longer on slower ones). Result pages and data files now go out gzip-compressed to browsers that ask
+  (3,247,600 bytes for that page; 7 s on the same line), each still rebuilt with its own nonce, and at most two are
+  built at once so reloading cannot pile up builds. The run page shows "Opening the report" with a counting clock
+  until the report has loaded, and says big projects take longer after 12 seconds.
+- Fixed two problems an independent review found (2026-11-09). (1) SQL built from text that was first fixed and then
+  replaced with input through a `match` capture, `except … as`, or an inner function's `nonlocal`/`global` was called
+  "only fixed text" and lowered from high to low; any of those bindings now means "not followed", so the finding keeps
+  its rank. (2) `out = list()` was taken as Python's list even when the repo defines its own `list()`, takes a
+  parameter named `list`, imports or assigns one; that erased a real link (`out.append` → the repo's `Box.append`).
+  A rebound built-in name is now never counted as the built-in (an annotation such as `x: str` does not rebind it).
+  On Noetic Compass b574170: no finding changed rank, no link changed, 28 calls move from "built-in" back to "not
+  traced" (27,824 → 27,796; 28,519 → 28,547).
+- Tests can no longer reach a real model or the network: provider keys and tokens from the developer's shell are
+  removed, `LANTERN_HOME` is an empty folder per test, and connecting to any non-local address fails
+  (`tests/conftest.py`). The review's full run had called a real model through an inherited key.
+- Python built-in calls (`len`, `print`, a list's `append`) are now counted in the call-site total as their own group
+  instead of being dropped without a count; they are still not drawn on the map. A method call on a local that is
+  always a built-in literal in its function (`out = []` … `out.append(x)`; every binding of the name must be a literal
+  of that one type, the name must not be a parameter, and the type must have the method) is counted as a built-in
+  call instead of untraced. On one large app: untraced 33,318 → 28,519 call sites, and 23,025 built-in calls that were
+  never counted now are; one wrong link (a list's `append` taken for a library call's result) is gone; no link to the
+  app's own code changed on 15 other apps.
+- How to use Lantern: a guide page at `/guide` (website and `lantern serve`), in the main menu as "How to use Lantern".
+  A 60-second tour and 12 tasks, each with a short animated demo (one shared player, each demo is data: a simplified
+  copy of Lantern's screens, a moving cursor, gold-glowing instructions), numbered steps and a Good to know box, plus
+  keyboard shortcuts and a note on what is simulated. Demos play only while on screen, start paused with less motion,
+  and are labelled "Animated demo · not a screen recording".
+- Every finding outside test code now carries its case ("The case for this finding" on the finding card and panel, and
+  `case` in `security.json`): where, at which revision; the claim in the tool's words; the evidence and where each fact
+  came from; what has to be true for it to hurt, each marked yes / no / cannot check; the impact; why it has its rank;
+  how sure Lantern is (lower when the path depends on a likely link); what is not known; and the status words reported,
+  reproduced (same id as the previous run), fixed, tested and independently reviewed. Lantern never marks the last two
+  itself. Ids are unchanged.
+- A setting the browser can see (`VITE_…SECRET`, `NEXT_PUBLIC_…`) now says four things apart on its finding: that it is
+  visible (and the header it travels in), whether server code checks it (where, and on which routes), that whether a
+  stranger can get in is not determined from code alone, and what else guards those routes (other login checks, the
+  settings the checking code branches on). It is never called a confirmed bypass, and its rank does not change.
+- Two login-check mistakes fixed: a route decorator's `response_model=TokenResponse` and a request body typed
+  `TokenRequest` (or `OAuth2PasswordRequestForm`) no longer count as checking who is calling.
+- Every call site Lantern read is now sorted on one denominator (About page and Evidence report): linked for certain,
+  likely, one of several targets, guessed by method name, known library call, not traced. Untraced calls in test files
+  are counted and said apart, and untraced app calls are grouped by shape. The "guessed by method name" figure the map
+  showed before counts links between functions (2,100 on one app), not call sites (2,739), and is now labelled as such.
+- Fewer false alarms, nothing hidden. A weak hash (MD5/SHA-1) is ranked by what it is for, read from the names around
+  it (the value hashed, where the result goes, the function and class, and the callers of a small wrapper): an id,
+  a seed, a cache key or S3's `ContentMD5` checksum is `low`; a password, token or signature keeps its rank; when
+  Lantern cannot tell, it is at most `medium`. Python SQL that splices only fixed text (a literal, a choice between
+  literals, a module constant) while the values go to the driver as parameters is `low`. Every lowered finding keeps
+  its id and shows the rank it would have had and why. "Slow password hashing" now needs a password-named value to be
+  hashed (a word in a string or a regex list no longer counts, and `\bcrypto` in a regex is no longer read as
+  bcrypt); a password value with no hashing in sight is `check`, not `add`. Found on a real app: 3 critical → 0, with
+  paired safe/unsafe tests (`tests/test_context.py`).
 - Zoomed in, every page stays usable: when a project's top bar does not fit, its tabs move to a second row that
   scrolls sideways (website and app); Readiness and Protections scroll again after the map was opened (the map's
   full-panel layout stayed on and cut them off); the Findings and Readiness tables scroll sideways instead of cutting

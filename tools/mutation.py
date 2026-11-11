@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "netguard"))
+import lantern_netguard as netguard  # noqa: E402  (tools/netguard: every benchmark starts isolated)
 IGNORE = shutil.ignore_patterns(".git", "node_modules", "__pycache__", ".lantern", ".pytest_cache", "*.pyc", ".ruff_cache",
                                 "dist", "build", "htmlcov", ".coverage*")
 
@@ -137,13 +139,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--summary")
     ap.add_argument("--min-score", type=float, default=0.0)
     a = ap.parse_args(argv)
+    guard = netguard.begin()                      # isolated (tools/netguard); the tests it runs isolate themselves too
     res = run(a.module, a.tests, a.max, a.seed, a.timeout)
     md = table(res)
     print("\n" + md)
     if a.summary:
         with open(a.summary, "a", encoding="utf-8") as fh:
             fh.write(md + "\n\n")
-    return 0 if res["score"] is not None and res["score"] >= a.min_score else 1
+    refused = netguard.end(guard)
+    return 0 if res["score"] is not None and res["score"] >= a.min_score and not refused else 1
 
 
 if __name__ == "__main__":

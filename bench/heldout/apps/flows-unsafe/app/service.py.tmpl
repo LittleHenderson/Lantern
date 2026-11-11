@@ -1,0 +1,14 @@
+from . import db
+
+
+def list_items(sort: str):
+    return db.run(f"SELECT id, name FROM items ORDER BY {sort}")
+
+
+def find_by_name(name: str):
+    return db.run(f"SELECT id, name FROM items WHERE name = '{name}'")
+
+
+def get_note(note_id: int, user_id: int):
+    # the signed-in user's id is known here and not used: any note is returned to anyone
+    return db.run("SELECT id, owner_id, body FROM notes WHERE id = ?", (note_id,))
