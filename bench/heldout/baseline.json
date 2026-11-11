@@ -1,0 +1,2769 @@
+{
+ "label": "baseline: main bc7cf10, before any change of this directive",
+ "engine": "bc7cf10dce35e595bfc9aaf79e484bf1a577c0a4",
+ "definition_sha256": "e6b10d91686f16c908d59819010895a6e5e707ca4bf11dea53123a95e7402f68",
+ "offline": false,
+ "ran_at": "2026-11-09 21:50 UTC",
+ "apps": [
+  {
+   "name": "dvra",
+   "kind": "vulnerable",
+   "stack": "Python / FastAPI",
+   "complete": true,
+   "findings": {
+    "all": 333,
+    "outside_tests": 139,
+    "by_rank": {
+     "critical": 1,
+     "high": 126,
+     "medium": 0,
+     "low": 12
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: no package.json",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok (no JS/TS files; Python-side checks only)",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 61,
+    "grade": "D",
+    "shape": "web API"
+   },
+   "release": {
+    "decision": "Blocked",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 220,
+    "inferred_internal": 0,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 514,
+    "builtin": 62,
+    "unresolved": 477,
+    "unresolved_in_tests": 355,
+    "unresolved_kinds": {
+     "member of self or this": 1,
+     "method on a value of unknown type": 47,
+     "on another call's result": 51,
+     "dynamic (subscript, getattr, computed)": 2,
+     "name not found": 21
+    },
+    "total": 1273
+   },
+   "graph": {
+    "files": 75,
+    "functions": 160,
+    "internal_edges": 155,
+    "entry_points": 91
+   },
+   "expectations": [
+    {
+     "id": "dvra-shell",
+     "class": "shell",
+     "want": "finding",
+     "line": 8,
+     "found": true,
+     "rank": "critical",
+     "rule": "B602",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "dvra-sql",
+     "class": "sql",
+     "want": "finding",
+     "line": 36,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "dvra-bola-order",
+     "class": "authz",
+     "want": "finding",
+     "line": 17,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvra-mass-assign",
+     "class": "authz",
+     "want": "finding",
+     "line": 43,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvra-bfla-role",
+     "class": "authz",
+     "want": "finding",
+     "line": 26,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvra-debug",
+     "class": "exposure",
+     "want": "finding",
+     "line": 11,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvra-pin",
+     "class": "auth",
+     "want": "finding",
+     "line": 13,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    }
+   ]
+  },
+  {
+   "name": "nodegoat",
+   "kind": "vulnerable",
+   "stack": "Node / Express + MongoDB",
+   "complete": true,
+   "findings": {
+    "all": 88,
+    "outside_tests": 88,
+    "by_rank": {
+     "critical": 0,
+     "high": 56,
+     "medium": 23,
+     "low": 9
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no Python dependency files",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 54,
+    "grade": "F",
+    "shape": "full-stack web app"
+   },
+   "release": {
+    "decision": "Blocked",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 11,
+    "inferred_internal": 2,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 0,
+    "builtin": 0,
+    "unresolved": 233,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 0,
+     "method on a value of unknown type": 157,
+     "on another call's result": 10,
+     "dynamic (subscript, getattr, computed)": 3,
+     "name not found": 63
+    },
+    "total": 246
+   },
+   "graph": {
+    "files": 41,
+    "functions": 29,
+    "internal_edges": 10,
+    "entry_points": 20
+   },
+   "expectations": [
+    {
+     "id": "ng-eval",
+     "class": "eval",
+     "want": "finding",
+     "line": 32,
+     "found": true,
+     "rank": "medium",
+     "rule": "LJ-EVAL",
+     "reachable": false,
+     "status": "found"
+    },
+    {
+     "id": "ng-nosql",
+     "class": "nosql",
+     "want": "finding",
+     "line": 78,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ng-idor",
+     "class": "authz",
+     "want": "finding",
+     "line": 18,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ng-redirect",
+     "class": "redirect",
+     "want": "finding",
+     "line": 72,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ng-ssrf",
+     "class": "ssrf",
+     "want": "finding",
+     "line": 16,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ng-bfla",
+     "class": "authz",
+     "want": "finding",
+     "line": 55,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ng-secret",
+     "class": "secret",
+     "want": "finding",
+     "line": 8,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ng-cookie",
+     "class": "config",
+     "want": "finding",
+     "line": 82,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ng-csrf",
+     "class": "csrf",
+     "want": "finding",
+     "line": 107,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ng-xss",
+     "class": "xss",
+     "want": "finding",
+     "line": 64,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    }
+   ]
+  },
+  {
+   "name": "dvna",
+   "kind": "vulnerable",
+   "stack": "Node / Express + Sequelize",
+   "complete": true,
+   "findings": {
+    "all": 1,
+    "outside_tests": 1,
+    "by_rank": {
+     "critical": 0,
+     "high": 0,
+     "medium": 1,
+     "low": 0
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no Python dependency files",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: no package-lock.json, so exact versions are unknown (commit your lock file)",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 48,
+    "grade": "F",
+    "shape": "web API"
+   },
+   "release": {
+    "decision": "Passed",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 2,
+    "inferred_internal": 0,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 2,
+    "builtin": 0,
+    "unresolved": 202,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 0,
+     "method on a value of unknown type": 148,
+     "on another call's result": 30,
+     "dynamic (subscript, getattr, computed)": 1,
+     "name not found": 23
+    },
+    "total": 206
+   },
+   "graph": {
+    "files": 12,
+    "functions": 16,
+    "internal_edges": 2,
+    "entry_points": 14
+   },
+   "expectations": [
+    {
+     "id": "dvna-sql",
+     "class": "sql",
+     "want": "finding",
+     "line": 10,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-shell",
+     "class": "shell",
+     "want": "finding",
+     "line": 39,
+     "found": true,
+     "rank": "medium",
+     "rule": "LJ-EXEC",
+     "reachable": false,
+     "status": "found"
+    },
+    {
+     "id": "dvna-eval",
+     "class": "eval",
+     "want": "finding",
+     "line": 197,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-deser",
+     "class": "deserialize",
+     "want": "finding",
+     "line": 218,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-xxe",
+     "class": "xxe",
+     "want": "finding",
+     "line": 235,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-redirect",
+     "class": "redirect",
+     "want": "finding",
+     "line": 188,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-reset-token",
+     "class": "auth",
+     "want": "finding",
+     "line": 49,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-secret",
+     "class": "secret",
+     "want": "finding",
+     "line": 24,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-cookie",
+     "class": "config",
+     "want": "finding",
+     "line": 27,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-xss",
+     "class": "xss",
+     "want": "finding",
+     "line": 20,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-authz-admin",
+     "class": "authz",
+     "want": "finding",
+     "line": 42,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-idor",
+     "class": "authz",
+     "want": "finding",
+     "line": 87,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-exposure",
+     "class": "exposure",
+     "want": "finding",
+     "line": 206,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "dvna-deps",
+     "class": "dependency",
+     "want": "finding",
+     "line": 15,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    }
+   ]
+  },
+  {
+   "name": "goof",
+   "kind": "vulnerable",
+   "stack": "Node / Express + MongoDB (Snyk demo)",
+   "complete": true,
+   "findings": {
+    "all": 184,
+    "outside_tests": 184,
+    "by_rank": {
+     "critical": 0,
+     "high": 107,
+     "medium": 61,
+     "low": 16
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no Python dependency files",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 48,
+    "grade": "F",
+    "shape": "web API"
+   },
+   "release": {
+    "decision": "Blocked",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 6,
+    "inferred_internal": 0,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 0,
+    "builtin": 0,
+    "unresolved": 154,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 0,
+     "method on a value of unknown type": 116,
+     "on another call's result": 16,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 22
+    },
+    "total": 160
+   },
+   "graph": {
+    "files": 10,
+    "functions": 7,
+    "internal_edges": 4,
+    "entry_points": 4
+   },
+   "expectations": [
+    {
+     "id": "goof-nosql",
+     "class": "nosql",
+     "want": "finding",
+     "line": 52,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "goof-redirect",
+     "class": "redirect",
+     "want": "finding",
+     "line": 29,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "goof-shell",
+     "class": "shell",
+     "want": "finding",
+     "line": 174,
+     "found": true,
+     "rank": "medium",
+     "rule": "LJ-EXEC",
+     "reachable": false,
+     "status": "found"
+    },
+    {
+     "id": "goof-zipslip",
+     "class": "path",
+     "want": "finding",
+     "line": 270,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "goof-pollution",
+     "class": "pollution",
+     "want": "finding",
+     "line": 360,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "goof-secret",
+     "class": "secret",
+     "want": "finding",
+     "line": 43,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "goof-xss-admin",
+     "class": "xss",
+     "want": "finding",
+     "line": 17,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "goof-xss-marked",
+     "class": "xss",
+     "want": "finding",
+     "line": 20,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "goof-layout",
+     "class": "path",
+     "want": "finding",
+     "line": 99,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "goof-deps",
+     "class": "dependency",
+     "want": "finding",
+     "line": 4,
+     "found": true,
+     "rank": "high",
+     "rule": "GHSA-xcpc-8h2w-3j85",
+     "reachable": false,
+     "status": "found"
+    }
+   ]
+  },
+  {
+   "name": "pygoat",
+   "kind": "vulnerable",
+   "stack": "Python / Django + Flask labs",
+   "complete": true,
+   "findings": {
+    "all": 318,
+    "outside_tests": 318,
+    "by_rank": {
+     "critical": 4,
+     "high": 227,
+     "medium": 8,
+     "low": 79
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: no package.json",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    },
+    {
+     "tool": "lantern-pack:django",
+     "status": "ok (builtin, 8 finding(s))",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 32,
+    "grade": "F",
+    "shape": "full-stack web app"
+   },
+   "release": {
+    "decision": "Blocked",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 327,
+    "inferred_internal": 20,
+    "several_possible_targets": 5,
+    "name_only_guess": 40,
+    "known_external": 1496,
+    "builtin": 161,
+    "unresolved": 928,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 172,
+     "method on a value of unknown type": 621,
+     "on another call's result": 119,
+     "dynamic (subscript, getattr, computed)": 2,
+     "name not found": 14
+    },
+    "total": 2977
+   },
+   "graph": {
+    "files": 191,
+    "functions": 569,
+    "internal_edges": 314,
+    "entry_points": 301
+   },
+   "expectations": [
+    {
+     "id": "pg-sql",
+     "class": "sql",
+     "want": "finding",
+     "line": 57,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-shell",
+     "class": "shell",
+     "want": "finding",
+     "line": 30,
+     "found": true,
+     "rank": "high",
+     "rule": "B602",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-eval",
+     "class": "eval",
+     "want": "finding",
+     "line": 49,
+     "found": true,
+     "rank": "high",
+     "rule": "B307",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-pickle",
+     "class": "deserialize",
+     "want": "finding",
+     "line": 40,
+     "found": true,
+     "rank": "high",
+     "rule": "B301",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-xxe",
+     "class": "xxe",
+     "want": "finding",
+     "line": 58,
+     "found": true,
+     "rank": "high",
+     "rule": "B317",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-ssrf",
+     "class": "ssrf",
+     "want": "finding",
+     "line": 37,
+     "found": true,
+     "rank": "high",
+     "rule": "B113",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-lfi",
+     "class": "path",
+     "want": "finding",
+     "line": 22,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "pg-ssti",
+     "class": "eval",
+     "want": "finding",
+     "line": 57,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "pg-xss",
+     "class": "xss",
+     "want": "finding",
+     "line": 55,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "pg-auth-md5",
+     "class": "auth",
+     "want": "finding",
+     "line": 103,
+     "found": true,
+     "rank": "high",
+     "rule": "B324",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-crypto-md5",
+     "class": "auth",
+     "want": "finding",
+     "line": 38,
+     "found": true,
+     "rank": "critical",
+     "rule": "B324",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-crypto-sha1",
+     "class": "auth",
+     "want": "finding",
+     "line": 25,
+     "found": true,
+     "rank": "critical",
+     "rule": "B324",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-secret-aws",
+     "class": "secret",
+     "want": "finding",
+     "line": 58,
+     "found": true,
+     "rank": "critical",
+     "rule": "aws-access-key",
+     "reachable": false,
+     "status": "found"
+    },
+    {
+     "id": "pg-secret-stripe",
+     "class": "secret",
+     "want": "finding",
+     "line": 60,
+     "found": true,
+     "rank": "critical",
+     "rule": "stripe-live-key",
+     "reachable": false,
+     "status": "found"
+    },
+    {
+     "id": "pg-yaml",
+     "class": "deserialize",
+     "want": "finding",
+     "line": 62,
+     "found": true,
+     "rank": "high",
+     "rule": "B506",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-pickle2",
+     "class": "deserialize",
+     "want": "finding",
+     "line": 44,
+     "found": true,
+     "rank": "high",
+     "rule": "B301",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "pg-django-debug",
+     "class": "config",
+     "want": "finding",
+     "line": 28,
+     "found": true,
+     "rank": "low",
+     "rule": "LP-DJANGO-DEBUG",
+     "reachable": false,
+     "status": "found-low"
+    },
+    {
+     "id": "pg-django-secret",
+     "class": "secret",
+     "want": "finding",
+     "line": 23,
+     "found": true,
+     "rank": "medium",
+     "rule": "LP-DJANGO-SECRET-INLINE",
+     "reachable": false,
+     "status": "found"
+    },
+    {
+     "id": "pg-admin-cookie",
+     "class": "authz",
+     "want": "finding",
+     "line": 60,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "pg-csrf-exempt",
+     "class": "csrf",
+     "want": "finding",
+     "line": 155,
+     "found": true,
+     "rank": "high",
+     "rule": "LP-DJANGO-CSRF-EXEMPT",
+     "reachable": true,
+     "status": "found"
+    }
+   ]
+  },
+  {
+   "name": "fastapi-template",
+   "kind": "clean",
+   "stack": "Python / FastAPI + React",
+   "complete": true,
+   "findings": {
+    "all": 180,
+    "outside_tests": 7,
+    "by_rank": {
+     "critical": 0,
+     "high": 0,
+     "medium": 1,
+     "low": 6
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: pnpm-lock.yaml / yarn.lock / bun.lock aren't read yet; run `pnpm audit` or `yarn npm audit`",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 81,
+    "grade": "B",
+    "shape": "full-stack web app"
+   },
+   "release": {
+    "decision": "Passed",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 1065,
+    "inferred_internal": 69,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 797,
+    "builtin": 39,
+    "unresolved": 463,
+    "unresolved_in_tests": 74,
+    "unresolved_kinds": {
+     "member of self or this": 1,
+     "method on a value of unknown type": 210,
+     "on another call's result": 80,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 98
+    },
+    "total": 2433
+   },
+   "graph": {
+    "files": 149,
+    "functions": 441,
+    "internal_edges": 846,
+    "entry_points": 109
+   },
+   "expectations": [],
+   "loud_findings": [
+    {
+     "rule": "LW-AUTH-MISSING",
+     "rank": "medium",
+     "file": "backend/app/api/routes/private.py",
+     "line": 23,
+     "label": "false alarm",
+     "why": "backend/app/api/main.py mounts the private router only when FASTAPI_ENV == 'development'; the route never exists in a deployed app"
+    }
+   ]
+  },
+  {
+   "name": "express-boilerplate",
+   "kind": "clean",
+   "stack": "Node / Express + Mongoose",
+   "complete": true,
+   "findings": {
+    "all": 5,
+    "outside_tests": 5,
+    "by_rank": {
+     "critical": 0,
+     "high": 0,
+     "medium": 5,
+     "low": 0
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no Python dependency files",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: pnpm-lock.yaml / yarn.lock / bun.lock aren't read yet; run `pnpm audit` or `yarn npm audit`",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 74,
+    "grade": "C",
+    "shape": "library"
+   },
+   "release": {
+    "decision": "Passed",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 22,
+    "inferred_internal": 2,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 85,
+    "builtin": 0,
+    "unresolved": 397,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 0,
+     "method on a value of unknown type": 239,
+     "on another call's result": 96,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 62
+    },
+    "total": 506
+   },
+   "graph": {
+    "files": 49,
+    "functions": 42,
+    "internal_edges": 18,
+    "entry_points": 10
+   },
+   "expectations": [],
+   "loud_findings": [
+    {
+     "rule": "LW-CORS-ANY",
+     "rank": "medium",
+     "file": "src/app.js",
+     "line": 41,
+     "label": "intended",
+     "why": "cors() with no options allows any origin; the boilerplate leaves the origin list to the project that copies it"
+    },
+    {
+     "rule": "LW-CORS-ANY",
+     "rank": "medium",
+     "file": "src/app.js",
+     "line": 42,
+     "label": "intended",
+     "why": "same cors() call for preflight requests"
+    },
+    {
+     "rule": "LW-JWT",
+     "rank": "medium",
+     "file": "src/docs/components.yml",
+     "line": 31,
+     "label": "false alarm",
+     "why": "an example token in the OpenAPI documentation, not a credential"
+    },
+    {
+     "rule": "LW-JWT",
+     "rank": "medium",
+     "file": "src/routes/v1/auth.route.js",
+     "line": 141,
+     "label": "false alarm",
+     "why": "an example token inside a swagger doc comment"
+    },
+    {
+     "rule": "LW-JWT",
+     "rank": "medium",
+     "file": "src/routes/v1/auth.route.js",
+     "line": 167,
+     "label": "false alarm",
+     "why": "an example token inside a swagger doc comment"
+    }
+   ]
+  },
+  {
+   "name": "taxonomy",
+   "kind": "clean",
+   "stack": "TypeScript / Next.js 13 + Prisma + Stripe",
+   "complete": true,
+   "findings": {
+    "all": 2,
+    "outside_tests": 2,
+    "by_rank": {
+     "critical": 0,
+     "high": 1,
+     "medium": 1,
+     "low": 0
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no Python dependency files",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: pnpm-lock.yaml / yarn.lock / bun.lock aren't read yet; run `pnpm audit` or `yarn npm audit`",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 54,
+    "grade": "F",
+    "shape": "full-stack web app"
+   },
+   "release": {
+    "decision": "Blocked",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 381,
+    "inferred_internal": 8,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 114,
+    "builtin": 0,
+    "unresolved": 224,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 0,
+     "method on a value of unknown type": 129,
+     "on another call's result": 37,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 58
+    },
+    "total": 727
+   },
+   "graph": {
+    "files": 126,
+    "functions": 229,
+    "internal_edges": 330,
+    "entry_points": 22
+   },
+   "expectations": [],
+   "loud_findings": [
+    {
+     "rule": "LA-WALLET-DRAIN",
+     "rank": "high",
+     "file": "app/api/webhooks/stripe/route.ts",
+     "line": 8,
+     "label": "false alarm",
+     "why": "a Stripe webhook cannot have a login; stripe.webhooks.constructEvent checks Stripe's signature before any Stripe call"
+    },
+    {
+     "rule": "LA-WALLET-DRAIN",
+     "rank": "medium",
+     "file": "app/api/users/stripe/route.ts",
+     "line": 12,
+     "label": "false alarm",
+     "why": "getServerSession(authOptions) is checked first and returns 403 without a signed-in user"
+    }
+   ]
+  },
+  {
+   "name": "review-unsafe",
+   "kind": "vulnerable",
+   "stack": "Python / FastAPI",
+   "complete": true,
+   "findings": {
+    "all": 4,
+    "outside_tests": 4,
+    "by_rank": {
+     "critical": 0,
+     "high": 4,
+     "medium": 0,
+     "low": 0
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no exact versions to check (commit a lock file such as uv.lock or poetry.lock, or pin with ==)",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: no package.json",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok (no JS/TS files; Python-side checks only)",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 46,
+    "grade": "F",
+    "shape": "web API"
+   },
+   "release": {
+    "decision": "Blocked",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 4,
+    "inferred_internal": 1,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 6,
+    "builtin": 1,
+    "unresolved": 5,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 1,
+     "method on a value of unknown type": 4,
+     "on another call's result": 0,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 0
+    },
+    "total": 17
+   },
+   "graph": {
+    "files": 4,
+    "functions": 10,
+    "internal_edges": 5,
+    "entry_points": 4
+   },
+   "expectations": [
+    {
+     "id": "rv-match",
+     "class": "sql",
+     "want": "finding",
+     "line": 20,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "rv-except",
+     "class": "sql",
+     "want": "finding",
+     "line": 30,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "rv-nonlocal",
+     "class": "sql",
+     "want": "finding",
+     "line": 42,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "rv-global",
+     "class": "sql",
+     "want": "finding",
+     "line": 55,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "rv-list-edge",
+     "class": "resolution",
+     "want": "edge",
+     "status": "found"
+    }
+   ]
+  },
+  {
+   "name": "review-safe",
+   "kind": "clean",
+   "stack": "Python / FastAPI",
+   "complete": true,
+   "findings": {
+    "all": 4,
+    "outside_tests": 4,
+    "by_rank": {
+     "critical": 0,
+     "high": 2,
+     "medium": 0,
+     "low": 2
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no exact versions to check (commit a lock file such as uv.lock or poetry.lock, or pin with ==)",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: no package.json",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok (no JS/TS files; Python-side checks only)",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 46,
+    "grade": "F",
+    "shape": "web API"
+   },
+   "release": {
+    "decision": "Blocked",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 2,
+    "inferred_internal": 0,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 6,
+    "builtin": 3,
+    "unresolved": 6,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 1,
+     "method on a value of unknown type": 5,
+     "on another call's result": 0,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 0
+    },
+    "total": 17
+   },
+   "graph": {
+    "files": 4,
+    "functions": 9,
+    "internal_edges": 2,
+    "entry_points": 4
+   },
+   "expectations": [
+    {
+     "id": "rv-match-safe",
+     "class": "sql",
+     "want": "clean",
+     "line": 16,
+     "found": true,
+     "rank": null,
+     "rule": "B608",
+     "reachable": true,
+     "status": "clean"
+    },
+    {
+     "id": "rv-except-safe",
+     "class": "sql",
+     "want": "clean",
+     "line": 26,
+     "found": true,
+     "rank": null,
+     "rule": "B608",
+     "reachable": true,
+     "status": "clean"
+    },
+    {
+     "id": "rv-nonlocal-safe",
+     "class": "sql",
+     "want": "clean",
+     "line": 38,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "false-alarm"
+    },
+    {
+     "id": "rv-global-safe",
+     "class": "sql",
+     "want": "clean",
+     "line": 51,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "false-alarm"
+    },
+    {
+     "id": "rv-list-no-edge",
+     "class": "resolution",
+     "want": "no-edge",
+     "status": "clean"
+    }
+   ],
+   "loud_findings": [
+    {
+     "rule": "B608",
+     "rank": "high",
+     "file": "app/main.py",
+     "line": 38,
+     "label": "false alarm",
+     "why": "an inner function sets order to the fixed string 'name' through nonlocal; Lantern stops following at the nonlocal and keeps the rank (the safe direction after #151)"
+    },
+    {
+     "rule": "B608",
+     "rank": "high",
+     "file": "app/main.py",
+     "line": 51,
+     "label": "false alarm",
+     "why": "an inner function sets ORDER to the fixed string 'name' through global; same reason"
+    }
+   ]
+  },
+  {
+   "name": "flows-unsafe",
+   "kind": "vulnerable",
+   "stack": "Python / FastAPI + React",
+   "complete": true,
+   "findings": {
+    "all": 5,
+    "outside_tests": 5,
+    "by_rank": {
+     "critical": 1,
+     "high": 2,
+     "medium": 0,
+     "low": 2
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no exact versions to check (commit a lock file such as uv.lock or poetry.lock, or pin with ==)",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: no package-lock.json, so exact versions are unknown (commit your lock file)",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 31,
+    "grade": "F",
+    "shape": "web API"
+   },
+   "release": {
+    "decision": "Blocked",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 18,
+    "inferred_internal": 1,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 26,
+    "builtin": 3,
+    "unresolved": 11,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 0,
+     "method on a value of unknown type": 8,
+     "on another call's result": 1,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 2
+    },
+    "total": 59
+   },
+   "graph": {
+    "files": 8,
+    "functions": 21,
+    "internal_edges": 19,
+    "entry_points": 7
+   },
+   "expectations": [
+    {
+     "id": "fl-sql-chain",
+     "class": "sql",
+     "want": "finding",
+     "line": 5,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "fl-sql-htmlescape",
+     "class": "sql",
+     "want": "finding",
+     "line": 9,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "fl-ssrf",
+     "class": "ssrf",
+     "want": "finding",
+     "line": 19,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "fl-zipslip",
+     "class": "path",
+     "want": "finding",
+     "line": 10,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "fl-idor",
+     "class": "authz",
+     "want": "finding",
+     "line": 14,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "fl-shell-late-guard",
+     "class": "shell",
+     "want": "finding",
+     "line": 57,
+     "found": true,
+     "rank": "critical",
+     "rule": "B602",
+     "reachable": true,
+     "status": "found"
+    },
+    {
+     "id": "fl-authz-late-guard",
+     "class": "authz",
+     "want": "finding",
+     "line": 54,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "fl-ratelimit-unused",
+     "class": "protection",
+     "want": "protection",
+     "protection_status": "in place",
+     "status": "missed"
+    },
+    {
+     "id": "fl-sql-chain-path",
+     "class": "path-coverage",
+     "want": "reachable",
+     "line": 5,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "covered"
+    }
+   ]
+  },
+  {
+   "name": "flows-safe",
+   "kind": "clean",
+   "stack": "Python / FastAPI + React",
+   "complete": true,
+   "findings": {
+    "all": 5,
+    "outside_tests": 5,
+    "by_rank": {
+     "critical": 0,
+     "high": 1,
+     "medium": 0,
+     "low": 4
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no exact versions to check (commit a lock file such as uv.lock or poetry.lock, or pin with ==)",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: no package-lock.json, so exact versions are unknown (commit your lock file)",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 41,
+    "grade": "F",
+    "shape": "web API"
+   },
+   "release": {
+    "decision": "Blocked",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 17,
+    "inferred_internal": 1,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 31,
+    "builtin": 5,
+    "unresolved": 12,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 0,
+     "method on a value of unknown type": 9,
+     "on another call's result": 1,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 2
+    },
+    "total": 66
+   },
+   "graph": {
+    "files": 8,
+    "functions": 20,
+    "internal_edges": 18,
+    "entry_points": 7
+   },
+   "expectations": [
+    {
+     "id": "fl-sql-chain-safe",
+     "class": "sql",
+     "want": "clean",
+     "line": 5,
+     "found": true,
+     "rank": "high",
+     "rule": "B608",
+     "reachable": true,
+     "status": "false-alarm"
+    },
+    {
+     "id": "fl-sql-param-safe",
+     "class": "sql",
+     "want": "clean",
+     "line": 9,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "fl-ssrf-safe",
+     "class": "ssrf",
+     "want": "clean",
+     "line": 20,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "fl-zipslip-safe",
+     "class": "path",
+     "want": "clean",
+     "line": 15,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "fl-idor-safe",
+     "class": "authz",
+     "want": "clean",
+     "line": 14,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "fl-shell-safe",
+     "class": "shell",
+     "want": "clean",
+     "line": 57,
+     "found": true,
+     "rank": null,
+     "rule": "B607",
+     "reachable": true,
+     "status": "clean"
+    },
+    {
+     "id": "fl-authz-safe",
+     "class": "authz",
+     "want": "clean",
+     "line": 54,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "fl-ratelimit-used",
+     "class": "protection",
+     "want": "protection",
+     "protection_status": "in place",
+     "status": "found"
+    },
+    {
+     "id": "fl-ssrf-allowlist",
+     "class": "protection",
+     "want": "protection",
+     "protection_status": "in place",
+     "status": "found"
+    }
+   ],
+   "loud_findings": [
+    {
+     "rule": "B608",
+     "rank": "high",
+     "file": "app/service.py",
+     "line": 5,
+     "label": "false alarm",
+     "why": "order_clause is one of two fixed ORDER BY strings chosen in helpers.validate_sort; the value crosses a function boundary, which the input check does not follow"
+    }
+   ]
+  },
+  {
+   "name": "express-unsafe",
+   "kind": "vulnerable",
+   "stack": "Node / Express",
+   "complete": true,
+   "findings": {
+    "all": 1,
+    "outside_tests": 1,
+    "by_rank": {
+     "critical": 0,
+     "high": 0,
+     "medium": 1,
+     "low": 0
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no Python dependency files",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: no package-lock.json, so exact versions are unknown (commit your lock file)",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 49,
+    "grade": "F",
+    "shape": "library"
+   },
+   "release": {
+    "decision": "Passed",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 0,
+    "inferred_internal": 0,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 0,
+    "builtin": 0,
+    "unresolved": 23,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 0,
+     "method on a value of unknown type": 15,
+     "on another call's result": 3,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 5
+    },
+    "total": 23
+   },
+   "graph": {
+    "files": 5,
+    "functions": 0,
+    "internal_edges": 0,
+    "entry_points": 0
+   },
+   "expectations": [
+    {
+     "id": "ex-sql",
+     "class": "sql",
+     "want": "finding",
+     "line": 6,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ex-xss",
+     "class": "xss",
+     "want": "finding",
+     "line": 9,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ex-shell",
+     "class": "shell",
+     "want": "finding",
+     "line": 14,
+     "found": true,
+     "rank": "medium",
+     "rule": "LJ-EXEC",
+     "reachable": false,
+     "status": "found-low"
+    },
+    {
+     "id": "ex-redirect",
+     "class": "redirect",
+     "want": "finding",
+     "line": 20,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ex-secret",
+     "class": "secret",
+     "want": "finding",
+     "line": 7,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ex-cookie",
+     "class": "config",
+     "want": "finding",
+     "line": 10,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ex-authz-delete",
+     "class": "authz",
+     "want": "finding",
+     "line": 9,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    },
+    {
+     "id": "ex-link-search",
+     "class": "resolution",
+     "want": "linked",
+     "nodes": [],
+     "status": "missed"
+    },
+    {
+     "id": "ex-sql-path",
+     "class": "path-coverage",
+     "want": "reachable",
+     "line": 6,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "missed"
+    }
+   ]
+  },
+  {
+   "name": "express-safe",
+   "kind": "clean",
+   "stack": "Node / Express",
+   "complete": true,
+   "findings": {
+    "all": 0,
+    "outside_tests": 0,
+    "by_rank": {
+     "critical": 0,
+     "high": 0,
+     "medium": 0,
+     "low": 0
+    }
+   },
+   "scanners": [
+    {
+     "tool": "bandit",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "pip-audit",
+     "status": "skipped: no Python dependency files",
+     "state": null
+    },
+    {
+     "tool": "npm-audit",
+     "status": "skipped: no package-lock.json, so exact versions are unknown (commit your lock file)",
+     "state": null
+    },
+    {
+     "tool": "maven-audit",
+     "status": "skipped: no Gradle or Maven files",
+     "state": null
+    },
+    {
+     "tool": "composer-audit",
+     "status": "skipped: no composer.lock",
+     "state": null
+    },
+    {
+     "tool": "gem-audit",
+     "status": "skipped: no Gemfile.lock",
+     "state": null
+    },
+    {
+     "tool": "lantern-secrets",
+     "status": "ok (built-in patterns; install gitleaks for full coverage)",
+     "state": null
+    },
+    {
+     "tool": "lantern-web",
+     "status": "ok",
+     "state": null
+    },
+    {
+     "tool": "lantern-ai",
+     "status": "ok (no model, vector or paid API calls found)",
+     "state": null
+    }
+   ],
+   "readiness": {
+    "score": 51,
+    "grade": "F",
+    "shape": "library"
+   },
+   "release": {
+    "decision": "Passed",
+    "basis": "badge rule: no critical or high outside tests"
+   },
+   "call_sites": {
+    "resolved_internal": 1,
+    "inferred_internal": 0,
+    "several_possible_targets": 0,
+    "name_only_guess": 0,
+    "known_external": 0,
+    "builtin": 0,
+    "unresolved": 24,
+    "unresolved_in_tests": 0,
+    "unresolved_kinds": {
+     "member of self or this": 0,
+     "method on a value of unknown type": 15,
+     "on another call's result": 4,
+     "dynamic (subscript, getattr, computed)": 0,
+     "name not found": 5
+    },
+    "total": 25
+   },
+   "graph": {
+    "files": 5,
+    "functions": 1,
+    "internal_edges": 1,
+    "entry_points": 0
+   },
+   "expectations": [
+    {
+     "id": "ex-sql-safe",
+     "class": "sql",
+     "want": "clean",
+     "line": 14,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "ex-xss-safe",
+     "class": "xss",
+     "want": "clean",
+     "line": 16,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "ex-shell-safe",
+     "class": "shell",
+     "want": "clean",
+     "line": 21,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "ex-redirect-safe",
+     "class": "redirect",
+     "want": "clean",
+     "line": 28,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "ex-secret-safe",
+     "class": "secret",
+     "want": "clean",
+     "line": 7,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "ex-authz-delete-safe",
+     "class": "authz",
+     "want": "clean",
+     "line": 8,
+     "found": false,
+     "rank": null,
+     "rule": null,
+     "reachable": false,
+     "status": "clean"
+    },
+    {
+     "id": "ex-link-search-safe",
+     "class": "resolution",
+     "want": "linked",
+     "nodes": [],
+     "status": "missed"
+    }
+   ],
+   "loud_findings": []
+  }
+ ],
+ "summary": {
+  "expected_problems": 79,
+  "found_medium_or_above": 28,
+  "found_only_low": 2,
+  "missed": 49,
+  "by_class": {
+   "shell": {
+    "expected": 6,
+    "found": 5,
+    "found_low": 1,
+    "missed": 0
+   },
+   "sql": {
+    "expected": 10,
+    "found": 8,
+    "found_low": 0,
+    "missed": 2
+   },
+   "authz": {
+    "expected": 11,
+    "found": 0,
+    "found_low": 0,
+    "missed": 11
+   },
+   "exposure": {
+    "expected": 2,
+    "found": 0,
+    "found_low": 0,
+    "missed": 2
+   },
+   "auth": {
+    "expected": 5,
+    "found": 3,
+    "found_low": 0,
+    "missed": 2
+   },
+   "eval": {
+    "expected": 4,
+    "found": 2,
+    "found_low": 0,
+    "missed": 2
+   },
+   "nosql": {
+    "expected": 2,
+    "found": 0,
+    "found_low": 0,
+    "missed": 2
+   },
+   "redirect": {
+    "expected": 4,
+    "found": 0,
+    "found_low": 0,
+    "missed": 4
+   },
+   "ssrf": {
+    "expected": 3,
+    "found": 1,
+    "found_low": 0,
+    "missed": 2
+   },
+   "secret": {
+    "expected": 7,
+    "found": 3,
+    "found_low": 0,
+    "missed": 4
+   },
+   "config": {
+    "expected": 4,
+    "found": 0,
+    "found_low": 1,
+    "missed": 3
+   },
+   "csrf": {
+    "expected": 2,
+    "found": 1,
+    "found_low": 0,
+    "missed": 1
+   },
+   "xss": {
+    "expected": 6,
+    "found": 0,
+    "found_low": 0,
+    "missed": 6
+   },
+   "deserialize": {
+    "expected": 4,
+    "found": 3,
+    "found_low": 0,
+    "missed": 1
+   },
+   "xxe": {
+    "expected": 2,
+    "found": 1,
+    "found_low": 0,
+    "missed": 1
+   },
+   "dependency": {
+    "expected": 2,
+    "found": 1,
+    "found_low": 0,
+    "missed": 1
+   },
+   "path": {
+    "expected": 4,
+    "found": 0,
+    "found_low": 0,
+    "missed": 4
+   },
+   "pollution": {
+    "expected": 1,
+    "found": 0,
+    "found_low": 0,
+    "missed": 1
+   }
+  },
+  "safe_twin_anchors": 17,
+  "false_alarms_on_safe_twins": 3,
+  "false_alarms_by_class": {
+   "sql": 3
+  },
+  "false_links": 0,
+  "resolution_checks": {
+   "expected": 3,
+   "found": 1
+  },
+  "protection_checks": {
+   "expected": 3,
+   "found": 2
+  },
+  "security_paths": {
+   "found_problems": 30,
+   "with_a_mapped_path": 21,
+   "explicit_checks": 2,
+   "explicit_covered": 1
+  },
+  "call_sites_total": {
+   "resolved_internal": 2076,
+   "inferred_internal": 104,
+   "several_possible_targets": 5,
+   "name_only_guess": 40,
+   "known_external": 3077,
+   "builtin": 274,
+   "unresolved": 3159,
+   "unresolved_in_tests": 429,
+   "total": 8735
+  },
+  "vulnerable_apps": 8,
+  "vulnerable_apps_given_green": [
+   "dvna",
+   "express-unsafe"
+  ],
+  "clean_apps": 6,
+  "clean_apps_blocked": [
+   "taxonomy",
+   "review-safe",
+   "flows-safe"
+  ],
+  "loud_findings_on_clean_apps": 11,
+  "of_which_labelled_false_alarm": 9,
+  "anchor_missing": 0,
+  "incomplete_apps": []
+ }
+}

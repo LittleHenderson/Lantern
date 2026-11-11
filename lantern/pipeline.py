@@ -49,6 +49,9 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     s = g.stats()
     log(f"graph   {g.meta['files']} files, {s['nodes'].get('callable', 0)} functions, "
         f"{s['internal_call_edges']} internal calls, {s['entry_points']} entry points ({timings['graph']}s)")
+    from .calls import line_words
+    if line_words(g.meta.get("calls")):
+        log(f"calls   {line_words(g.meta.get('calls'))}")
     from .depaudit import offline as offline_env
     offline = offline_env() if offline is None else offline
     run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
@@ -78,16 +81,30 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     if not no_scan:
         t = time.perf_counter()
         sec = scan(g, offline)
+        from . import case
+        from .evidence import git_info
+        earlier = load(out, "security.json")    # the previous run of this folder, before it is replaced
+        base = load(out, "baseline.json")
+        ids = None
+        if earlier and earlier.get("id_version") == sec.get("id_version"):
+            ids = {f.get("id") for f in earlier.get("findings", [])}
+        if base and base.get("id_version") == sec.get("id_version"):
+            ids = (ids or set()) | set(base.get("findings") or {})
+        case.stamp(sec, git_info(repo), ids)
         timings["scan"] = round(time.perf_counter() - t, 2)
         c = sec["counts"]
         log(f"scan    {c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low "
             f"({timings['scan']}s)")
-        off = [t["tool"] for t in sec.get("tools", []) if "lantern[scan]" in str(t.get("status", ""))]
-        if off:
-            log(f"off     {', '.join(off)} not installed; Lantern's own rules ran. "
-                f'For these too: pip install "lantern[scan]"')
+        # A scanner that did not finish, or did not cover everything, is said on the console and kept in run.json,
+        # the readiness file, the Evidence Report and the badge (scanresult.py), never folded into "no findings".
+        run_meta["incomplete"] = [{k: t.get(k) for k in ("tool", "state", "status", "why", "role")}
+                                  for t in sec.get("incomplete") or []]
+        for t in run_meta["incomplete"]:
+            log(f"incomplete {t['tool']}: {t['status']}")
         (out / "security.json").write_text(json.dumps(sec, indent=1), encoding="utf-8")
     g.save(out / "graph.json")
+    from . import calls
+    calls.write(out / "calls.json", g)
     rd = assess(g, sec, run_meta)
     (out / "readiness.json").write_text(json.dumps(rd, indent=1), encoding="utf-8")
     log(f"ready   {rd['score']}/100 (grade {rd['grade']}), {rd['shape']}")
@@ -97,7 +114,7 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     log(f"report  {path}")
     log(f"proof   {evidence(out, g, sec, rd, run_meta, privacy)}")
     return {"score": rd["score"], "grade": rd["grade"], "shape": rd["shape"],
-            "counts": (sec or {}).get("counts"), "report": str(path)}
+            "counts": (sec or {}).get("counts"), "incomplete": run_meta.get("incomplete") or [], "report": str(path)}
 
 
 def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str) -> Path:

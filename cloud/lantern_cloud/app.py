@@ -16,9 +16,11 @@ Run:  LANTERN_ADMIN_SECRET=... uvicorn lantern_cloud.app:create_app --factory --
 from __future__ import annotations
 
 import asyncio
+import gzip
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import threading
 import time
@@ -37,6 +39,7 @@ from . import site
 from .store import FINISHED, LimitReached, Store
 from .worker import ACTIVE_EXPLAIN, HINTS, SAMPLE_PREFIX, STAGES, UPLOAD_EXPLAIN, UPLOAD_PREFIX, Worker, backfill_lanes, is_upload
 
+log = logging.getLogger("lantern_cloud")
 PRIVACY = {"structure", "full"}
 SESSION_COOKIE = "lt"          # the gateway token, HttpOnly: the website's script never reads it
 SIGNIN_COOKIE = "lsi"          # the one-time code a sign-in in progress is parked under, for this browser only
@@ -120,6 +123,29 @@ def _page_headers(extra: dict | None) -> dict:
          "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"}
     h.update(extra or {})
     return h
+
+
+# A big project's report is one page with all its data inside (noetic-compass: 54,909,481 bytes). Sent as it is, the
+# browser waits for every byte before it can draw anything, and the run page looks stuck. The page is text and
+# shrinks about 17 times (to 3,247,600 bytes), so result pages are sent gzip-compressed to any browser that asks.
+# Each request still builds the page from our template with its own nonce; at most RENDERS are built at once so
+# reloading a slow page does not stack builds of half a gigabyte each until the machine runs out of memory.
+COMPRESS_FROM = 1024
+RENDERS = threading.BoundedSemaphore(2)
+
+
+def result_response(out: Path, name: str, request: Request, extra: dict | None = None, lanes=None) -> Response:
+    """A result page or file rebuilt by `lantern.server.result_page`, compressed when the browser accepts gzip.
+    `lanes` limits the map to a team member's layers (see `scope.py`)."""
+    from lantern.server import result_page
+    with RENDERS:
+        code, body, ctype, headers = result_page(out, name, None, lanes)
+        data = body.encode("utf-8") if isinstance(body, str) else body
+        headers = {**headers, **(extra or {}), "Vary": "Accept-Encoding"}
+        if len(data) >= COMPRESS_FROM and "gzip" in (request.headers.get("accept-encoding") or "").lower():
+            data = gzip.compress(data, compresslevel=6)
+            headers["Content-Encoding"] = "gzip"
+    return Response(data, code, media_type=ctype, headers=_page_headers(headers))
 
 
 def run_view(r: dict, logs=None) -> dict:
@@ -419,9 +445,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         r = store.run(rid)
         if not r or r["status"] != "done":
             raise HTTPException(404, "No report here.")
-        from lantern.server import result_page
-        code, body, ctype, headers = result_page(Path(s.results_dir) / rid, VIEWABLE[name], None, scope.decode(lanes))
-        resp = Response(body, code, media_type=ctype, headers=_page_headers(headers))
+        resp = result_response(Path(s.results_dir) / rid, VIEWABLE[name], request, lanes=scope.decode(lanes))
         if k and key_lanes(rid, k) is not None:
             # the report links to evidence.html and badge.svg by relative path; the cookie lets those open too
             resp.set_cookie("lv", k, max_age=max(1, int(k.split(".", 1)[0]) - int(time.time())), path=f"/r/{rid}/",
@@ -458,14 +482,12 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return share_view(None)
 
     @app.get("/s/{slug}/{name}")
-    def shared(slug: str, name: str):
+    def shared(slug: str, name: str, request: Request):
         r = store.run_by_slug(slug)
         if name not in SHAREABLE or not r or r["status"] != "done":
             return Response(SHARE_GONE, 404, media_type="text/html; charset=utf-8",
                             headers=_page_headers({"X-Robots-Tag": "noindex"}))
-        from lantern.server import result_page
-        code, body, ctype, headers = result_page(Path(s.results_dir) / r["id"], VIEWABLE[name], None)
-        return Response(body, code, media_type=ctype, headers=_page_headers({**headers, "X-Robots-Tag": "noindex"}))
+        return result_response(Path(s.results_dir) / r["id"], VIEWABLE[name], request, {"X-Robots-Tag": "noindex"})
 
     @app.delete("/v1/runs/{rid}")
     async def delete_run(rid: str, request: Request):
@@ -561,15 +583,24 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         focus = {k: f[k][:300] for k in ("node", "finding") if isinstance(f.get(k), str) and f[k]}
         from fastapi.concurrency import run_in_threadpool
         from lantern import ask as _ask
-        from lantern.providers import AllowanceExhausted, ProviderError
+        from lantern.providers import AllowanceExhausted, ProviderError, why_failed
         try:
             res = await run_in_threadpool(_ask.ask, provider_for(request.state.token), q[:2000], None, focus or None,
                                           out, name)
         except AllowanceExhausted:
             raise HTTPException(402, "Your free allowance is used up for now. Everything else on Lantern still works; "
                                      "the local app can use your own key.") from None
-        except ProviderError:
-            raise HTTPException(503, "The model did not answer. Try again in a minute.") from None
+        except ProviderError as e:
+            kind, words = why_failed(e)
+            if kind == "signed_out":     # the gateway no longer knows this token: forget the cached "signed in"
+                ident.forget(request.state.token)
+                raise HTTPException(401, words) from None
+            log.warning("ask: gateway failed: %s (HTTP %s)", kind, getattr(e, "status", None))
+            raise HTTPException(413 if kind == "too_big" else 503, words) from None
+        except (KeyError, IndexError, TypeError) as e:   # an answer in a shape the client cannot read
+            log.warning("ask: unreadable model answer: %s", type(e).__name__)
+            raise HTTPException(502, "The model answered, but in a shape Lantern could not read. "
+                                     "Try again; if it keeps happening, this needs fixing on Lantern's side.") from None
         return {"answer": res["answer"], "cited": res["cited"], "invented": len(res["invented"])}
 
     shot_slots = threading.BoundedSemaphore(2)    # screenshots read at once on this machine (Tesseract is CPU-heavy)
@@ -783,6 +814,16 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             "Content-Security-Policy": _csp(nonce), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer", "Permissions-Policy": "camera=(), microphone=(), geolocation=()"})
 
+    @app.get("/guide")
+    def guide():
+        """How to use Lantern: the guide page with its animated demos (fixed content, no account needed)."""
+        from lantern.guide import page as guide_page
+        from lantern.server import _csp
+        html, nonce = guide_page(__version__, "/")
+        return Response(html, 200, media_type="text/html; charset=utf-8", headers={
+            "Content-Security-Policy": _csp(nonce), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer", "Permissions-Policy": "camera=(), microphone=(), geolocation=()"})
+
     @app.get("/{name}")
     def website_asset(name: str):
         a = site.asset(name)
@@ -843,9 +884,21 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         return resp
 
     @app.post("/v1/signout")
-    def signout(request: Request):
+    async def signout(request: Request, payload: dict | None = None):
+        """Sign this browser out (its sign-in ends at the gateway too), or with `{"everywhere": true}` every place
+        the account is signed in: the website on other devices, the app and the CLI."""
         site_only(request)
-        resp = JSONResponse({"signed_in": False})
+        everywhere = bool((payload or {}).get("everywhere"))
+        token = request.cookies.get(SESSION_COOKIE) or ""
+        ended = 0
+        if token:
+            try:
+                ended = await ident.sign_out(token, everywhere)
+            except GatewayUnavailable:
+                if everywhere:
+                    raise HTTPException(503, "Lantern can't reach sign-in right now, so nothing was signed out. "
+                                             "Try again in a minute.") from None
+        resp = JSONResponse({"signed_in": False, "ended": ended})
         resp.delete_cookie(SESSION_COOKIE, path="/")
         return resp
 

@@ -270,3 +270,58 @@ def test_ask_reads_a_screenshots_text_like_the_app(env):
     assert r.status_code == 400 and "too large" in r.json()["error"]["message"]
     huge, h4 = _multipart(b"\x89PNG" + b"0" * (9 * 1024 * 1024))
     assert cloud.post("/v1/ask/screenshot", content=huge, headers={**h4, **bearer(tok)}).status_code == 413
+
+
+def refusing_gateway(tmp_path, upstream_status):
+    """A live gateway whose model company always answers `upstream_status` (a dead key, no credit, an outage)."""
+    gw = create_gateway(GwSettings(primary="deepseek", deepseek_url="https://api.deepseek.test", deepseek_key="sk-owner",
+                                   admin_secret="a" * 24, db_path=str(tmp_path / "gw.db")),
+                        transport=httpx.MockTransport(lambda r: httpx.Response(upstream_status, json={"error": "no"})))
+    port = free_port()
+    server = uvicorn.Server(uvicorn.Config(gw, host="127.0.0.1", port=port, log_level="error"))
+    th = threading.Thread(target=server.run, daemon=True)
+    th.start()
+    for _ in range(200):
+        if server.started:
+            break
+        time.sleep(0.05)
+    return gw, f"http://127.0.0.1:{port}/v1", server, th
+
+
+@pytest.mark.parametrize("upstream, words", [(401, "refused Lantern's key"), (402, "run out of credit")])
+def test_ask_says_why_the_model_did_not_answer(tmp_path, upstream, words):
+    gw, url, server, th = refusing_gateway(tmp_path, upstream)
+    try:
+        s = Settings(gateway_url=url, db_path=str(tmp_path / "c.db"), results_dir=str(tmp_path / "r"),
+                     work_dir=str(tmp_path / "w"), audits=False)
+        cloud = TestClient(create_app(s, start_worker=False))
+        tok = gw.state.store.sign_in("github:1", "github:octo")
+        cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(tok))
+        r = cloud.post("/v1/ask", json={"question": "what is this app about?"}, headers=bearer(tok))
+        assert r.status_code == 503
+        msg = r.json()["error"]["message"]
+        assert words in msg and "Lantern's side" in msg and "did not answer" not in msg
+    finally:
+        server.should_exit = True
+        th.join(timeout=5)
+
+
+def test_ask_with_a_sign_in_the_gateway_dropped_asks_to_sign_in_again(tmp_path):
+    gw, url, sent, server, th = live_gateway(tmp_path)
+    try:
+        s = Settings(gateway_url=url, db_path=str(tmp_path / "c.db"), results_dir=str(tmp_path / "r"),
+                     work_dir=str(tmp_path / "w"), audits=False)
+        cloud = TestClient(create_app(s, start_worker=False))
+        store = gw.state.store
+        tok = store.sign_in("github:1", "github:octo")
+        cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(tok))
+        assert cloud.get("/v1/me", headers=bearer(tok)).status_code == 200    # "signed in" is now remembered
+        store.db.execute("update users set disabled = 1 where token_hash = ?", (store.user(tok)["hash"],))
+        store.db.commit()                                     # the gateway stops accepting it
+        r = cloud.post("/v1/ask", json={"question": "hi"}, headers=bearer(tok))
+        assert r.status_code == 401 and r.json()["error"]["type"] == "signed_out"
+        assert "Sign in again" in r.json()["error"]["message"]
+        assert cloud.get("/v1/me", headers=bearer(tok)).status_code == 401    # the remembered answer is dropped
+    finally:
+        server.should_exit = True
+        th.join(timeout=5)

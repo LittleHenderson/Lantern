@@ -141,7 +141,7 @@ ASSIGNMENT = re.compile(r"^\s*(?:(?:const|let|var)\s+)?(?P<lhs>[\w$]+(?:\s*,\s*[
                         r"\s*(?::[^=\n]+?)?\s*(?:[-+*/%&|^]|\*\*|//|\?\?|\|\||&&)?=(?![=>])\s*(?P<rhs>.+)$")
 CONDITION = re.compile(r"\b(?:if|elif|while|assert|unless)\b|[=!]==?|\bis\b|\bnot\b|!|&&|\|\||\?")
 PUBLIC_ROUTE_RE = re.compile(r"login|signin|sign-in|signup|sign-up|register|password|reset|recover|health|"
-                             r"webhook|callback|logout|verify|token|public|contact|subscribe|oauth|"
+                             r"webhook|callback|logout|log-out|signout|sign-out|verify|token|public|contact|subscribe|oauth|"
                              r"(?<![a-z])auth(?![a-z])", re.I)   # /auth/refresh, not /authors
 MUTATING = {"POST", "PUT", "PATCH", "DELETE", "ANY"}
 
@@ -777,6 +777,10 @@ def _params(signature: str) -> list[tuple[str, str, str]]:
     return out
 
 
+PAYLOAD_TYPE = re.compile(r"\b[A-Za-z_]\w*?(?:Request|RequestForm|Body|Payload|Input|In|Create|Update|Schema|Form|"
+                          r"Response|DTO|Dto|Params|Data)\b")
+
+
 def signature_sign(signature: str) -> str | None:
     """A parameter that brings the caller in: a dependency or type named like an auth check (`Depends(current_user)`,
     `user: CurrentUser`, `Security(...)`), or a name that can only mean the caller (`current_user`). A parameter
@@ -784,7 +788,9 @@ def signature_sign(signature: str) -> str | None:
     for name, annotation, default in _params(signature):
         if default and (auth_ident(default) or re.search(r"\bSecurity\s*\(", default)):
             return f"`{name}={default}`"[:70] + " in its parameters"
-        if annotation and auth_ident(annotation):
+        # a request body's type (`body: TokenRequest`, `form: OAuth2PasswordRequestForm`) is what the caller sent,
+        # not a check of who they are
+        if annotation and auth_ident(PAYLOAD_TYPE.sub("", annotation)):
             return f"`{name}: {annotation}`"[:70] + " in its parameters"
         if CALLER_PARAM.fullmatch(name):
             return f"`{name}` in its parameters"
@@ -900,6 +906,11 @@ def body_auth_sign(text: str, start_line: int, end_line: int, js: bool, signatur
     return weak
 
 
+ROUTE_DOC_KWARGS = re.compile(r"\b(?:response_model|response_class|responses|tags|summary|description|name|status_code|"
+                              r"operation_id|deprecated|include_in_schema|response_description|"
+                              r"response_model_exclude\w*)\s*=\s*(?:\[[^\]]*\]|\{[^}]*\}|[^,)]+)")
+
+
 def call_adjacency(g: Graph) -> dict[str, list[str]]:
     adj: dict[str, list[str]] = {}
     for e in g.call_edges():
@@ -912,11 +923,19 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
     its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
     js = n.id.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))   # JS, Go, Java, Kotlin, Swift, Dart, C#: camelCase; Python and Rust snake_case
     for d in n.decorators:
-        if auth_ident(d, js):
+        # a route decorator's description of its answer (`response_model=TokenResponse`, `tags=["auth"]`) says what
+        # the route returns, not that it checks the caller
+        d_check = ROUTE_DOC_KWARGS.sub("", d)
+        if auth_ident(d_check, js):
             return f"decorator @{d.split('(')[0]}"
     sig = signature_sign(n.signature or "")
     if sig:
         return sig
+    for mid in (n.entry or {}).get("middleware") or ():   # Express: router.delete('/x', requireLogin, handler)
+        # the function's own name: not the package or file it comes from, and never the folders on the way
+        name = _func_name(g, mid).split("(")[0].rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+        if auth_word(name, True):
+            return f"middleware `{name}`"
     seen, frontier = {n.id}, [n.id]
     for _ in range(depth):
         nxt = []

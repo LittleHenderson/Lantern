@@ -57,6 +57,6 @@ def test_a_model_that_never_answers_in_shape_scores_zero(project):
 
 def test_main_fails_under_the_first_try_floor(project, monkeypatch):
     monkeypatch.setattr("lantern.providers.make_provider", lambda spec: FixtureProvider(_garbage))
-    monkeypatch.setattr("lantern.providers.resolve_default", lambda: "fixture/stub")
-    assert explain_eval.main([str(project), "--limit", "2", "--min-first-try", "0.9"]) == 1
-    assert explain_eval.main([str(project), "--limit", "2"]) == 0
+    said = ["--live", "--model", "fixture/stub", "--destination", "localhost", "--max-requests", "40", "--send-this-code"]
+    assert explain_eval.main([str(project), "--limit", "2", "--min-first-try", "0.9", *said]) == 1
+    assert explain_eval.main([str(project), "--limit", "2", *said]) == 0

@@ -1,0 +1,27 @@
+var exec = require('child_process').exec
+var db = require('./db')
+
+// request -> route -> this handler -> query text built with the caller's words
+module.exports.search = function (req, res) {
+  var sql = "SELECT id, name FROM items WHERE name = '" + req.query.q + "'"
+  db.query(sql, function (err, rows) {
+    if (err) return res.status(500).end()
+    res.send('<h1>Results for ' + req.query.q + '</h1>' + JSON.stringify(rows))
+  })
+}
+
+module.exports.ping = function (req, res) {
+  exec('ping -c 1 ' + req.body.host, function (err, stdout) {
+    res.send(stdout)
+  })
+}
+
+module.exports.go = function (req, res) {
+  res.redirect(req.query.next)
+}
+
+module.exports.remove = function (req, res) {
+  db.query('DELETE FROM items WHERE id = ?', [req.params.id], function () {
+    res.status(204).end()
+  })
+}
