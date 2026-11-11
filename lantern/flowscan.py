@@ -70,6 +70,13 @@ def run(g, findings: list[dict], lines_for=None) -> tuple[list[dict], dict, flow
     except Exception as ex:   # noqa: BLE001  the scan goes on without the flows, and its record says so
         return [], scanresult.record("lantern-flow", "failed", f"{type(ex).__name__}: {ex}"[:300], version=VERSION,
                                      duration_ms=int((time.perf_counter() - t0) * 1000)), None
+    # "no login check was found" is said by the names around a route (`websec.missing_auth`). Where the route's
+    # code itself turns away whoever is not signed in (a check with a plain name, one written in place, a hook that
+    # runs before every request), the sentence is wrong and the finding is not kept; how many, in the record
+    shown = {(n.file, n.start_line) for n in (g.nodes.get(x) for x in res.logins) if n is not None}
+    named_open = [f for f in findings if f.get("rule") == "LW-AUTH-MISSING" and (f.get("file"), f.get("line")) in shown]
+    if named_open:
+        findings[:] = [f for f in findings if not any(f is x for x in named_open)]
     groups: dict[tuple, list[dict]] = {}
     for fl in res.flows:
         groups.setdefault((fl["class"], fl["file"], fl["line"]), []).append(fl)
@@ -120,7 +127,9 @@ def run(g, findings: list[dict], lines_for=None) -> tuple[list[dict], dict, flow
     # who may reach what, route by route: only where the route shows that someone has to be signed in (a route with
     # no login at all is LW-AUTH-MISSING's business, and "another person's record" means nothing there)
     adj = None
+    lets_on = 0     # findings on routes where a token library is called and a request with no valid token goes on
     claims: dict[tuple, dict] = {}
+    owned: dict[tuple, dict] = {}       # (file, line) a record is reached at -> its records and the routes that reach it
     for a in res.authz:
         n = g.nodes.get(a["node"])
         if n is None:
@@ -133,23 +142,45 @@ def run(g, findings: list[dict], lines_for=None) -> tuple[list[dict], dict, flow
             from .websec import call_adjacency
             adj = call_adjacency(g)
         src = lines_for(a["file"]) if lines_for is not None else []
-        sign = login_check(g, n, adj, "\n".join(src) if src else None)
-        if not sign or sign[0] != "strong":
-            f = _open_route(a, n, sign, findings, src)
-            if f is not None:
-                out.append(f)
+        # a route on whose way a token library is called and nothing turns anybody away: the library's name, and
+        # the names of the functions that let such a request on, are no sign of a login there
+        let_on = a["node"] in res.caught
+        sign = login_check(g, n, adj, "\n".join(src) if src else None, doubt=res.soft if let_on else None)
+        # `login`: the code itself turns away whoever is not signed in, whatever the function that asks is called
+        if not a.get("login"):
+            if not sign or sign[0] != "strong":
+                f = _open_route(a, n, sign, findings, src, let_on)
+                if f is not None:
+                    out.append(f)
+                    lets_on += let_on
+                continue
+            if not _signed_in(g, n, adj, sign[1], src):
+                continue
+        if not a["role"]:       # another person's record: one finding for each line a record is reached on
+            for r in a["records"]:
+                place = owned.setdefault((r["file"], r["line"]), {"records": [], "routes": []})
+                place["records"].append(r)
+                if a["detail"] not in place["routes"]:
+                    place["routes"].append(a["detail"])
             continue
-        if not _signed_in(g, n, adj, sign[1], src):
-            continue
-        cls = "role" if a["role"] else "record"
-        line = a["line"]
-        f = _finding(R.RULE[cls], f"{a['detail']} {R.TITLE[cls]}", R.SEVERITY[cls], a["file"], line, conf="LOW",
-                     cwe=R.CWE[cls], snippet=src[line - 1].strip() if 0 < line <= len(src) else "",
-                     fixed_rank=R.FIXED_RANK[cls])
+        line = a["line"]        # an admin route that asks for no admin: about the route, and on it
+        f = _finding(R.RULE["role"], f"{a['detail']} {R.TITLE['role']}", R.SEVERITY["role"], a["file"], line,
+                     conf="LOW", cwe=R.CWE["role"], snippet=src[line - 1].strip() if 0 < line <= len(src) else "",
+                     fixed_rank=R.FIXED_RANK["role"])
         f["tool"] = "lantern-flow"
-        if cls == "record":
-            f["flow"] = _shape(a["records"])
         out.append(f)
+    # the other routes of that kind (one that adds a record, one that changes something picked by no id): asked by
+    # the rule that asks the routes the frontend calls, which took the library's name for a login check
+    if res.caught:
+        from .websec import missing_auth
+        have = {(f.get("file"), f.get("line")) for f in [*findings, *out] if f.get("rule") == "LW-AUTH-MISSING"}
+        for f in missing_auth(g, only=res.caught, doubt=res.soft):
+            if (f["file"], f["line"]) not in have:
+                f["tool"] = "lantern-flow"
+                out.append(f)
+                lets_on += 1
+    for (file, line), place in sorted(owned.items()):
+        out.append(_owner(file, line, place, lines_for(file) if lines_for is not None else []))
     for _place, c in sorted(claims.items()):
         out.append(_client_role(c, lines_for(c["file"]) if lines_for is not None else []))
     st = res.stats
@@ -162,7 +193,9 @@ def run(g, findings: list[dict], lines_for=None) -> tuple[list[dict], dict, flow
         notes.append("the time limit was reached before every function was read")
     fields = {"version": VERSION, "findings": len(out), "duration_ms": int((time.perf_counter() - t0) * 1000),
               "scope": {"files": st.get("files", 0), "functions": st.get("functions", 0), "flows": len(res.flows),
-                        "on_other_findings": attached, "not_followed_further": st.get("stopped", 0)}}
+                        "on_other_findings": attached, "not_followed_further": st.get("stopped", 0),
+                        "login_read_from_code": len(named_open),
+                        "token_check_lets_on": lets_on}}
     if notes:
         rec = scanresult.record("lantern-flow", "partial", "; ".join(notes), errors=res.errors[:20], **fields)
     else:
@@ -196,14 +229,46 @@ def _client_role(c: dict, src: list[str]) -> dict:
     return f
 
 
-def _open_route(a: dict, n, sign, findings: list[dict], src: list[str]) -> dict | None:
+def _owner(file: str, line: int, place: dict, src: list[str]) -> dict:
+    """Another person's record (LT-AUTHZ-OWNER, a heuristic ranked medium): one finding for the line a record is
+    reached on by an id from the request, with the routes that reach it and compare no owner. That line is where the
+    owner has to be asked for, and one service function five routes use is one place to fix. `late`: every route
+    does ask whose the record is, but only after this line, where a record is changed or something is done that
+    cannot be taken back (`flow.Engine.acted`)."""
+    from .websec import _finding
+    recs, routes = place["records"], sorted(place["routes"])
+    many = len(routes) > 1
+    who = routes[0] + (f" and {len(routes) - 1} more route{'s' if len(routes) > 2 else ''}" if many else "")
+    late = next((r.get("act") or "change" for r in recs), None) if all(r.get("late") for r in recs) else None
+    title = f"{who} {R.LATE_DOES[late][many]} {R.LATE_TAIL[many]}" if late else f"{who} {R.OWNER_TITLE[many]}"
+    listed = ", ".join(routes[:8]) + (f" and {len(routes) - 8} more" if len(routes) > 8 else "")
+    more = "Heuristic. " + (
+        "The route asks whose the record is (or for a role) only after this line: whoever is turned away has "
+        "already had it done. " if late else
+        "This is the line the record is reached on: the place to ask for the owner as well as the id, or to compare "
+        "the owner of what comes back. ")
+    if many:
+        more += f"Reached this way by {listed}. "
+    more += "A route that makes that comparison before this line is not listed."
+    f = _finding(R.RULE["record"], title, R.SEVERITY["record"], file, line, conf="LOW", cwe=R.CWE["record"],
+                 snippet=src[line - 1].strip() if 0 < line <= len(src) else "", fixed_rank=R.FIXED_RANK["record"],
+                 more=more)
+    f["tool"] = "lantern-flow"
+    f["flow"] = _shape(recs)
+    f["routes"] = routes
+    if late:
+        f["late"] = late
+    return f
+
+
+def _open_route(a: dict, n, sign, findings: list[dict], src: list[str], let_on: bool = False) -> dict | None:
     """A route that shows no login and changes or removes a record picked by an id from the request: whoever sends
     the request chooses the record. It is the finding `websec.missing_auth` makes for a route the project's frontend
     calls (LW-AUTH-MISSING, a heuristic ranked medium), made here for a route nothing in the project calls, with the
     way from the request to the record. None when that finding is already on the route, when the path is one made
     to be open (sign-in, a webhook: `is_public_route`), and when the route only reads or adds."""
-    from .websec import _finding, is_public_route
-    changed = [r for r in a["records"] if r["change"]]
+    from .websec import TOKEN_LETS_ON, _finding, is_public_route, passed_over_words
+    changed = [r for r in a["records"] if r["change"] and not r.get("act")]     # a record, not a command or a file
     line = n.start_line or a["line"]
     if not changed or is_public_route(a["detail"]) or any(
             f.get("rule") == "LW-AUTH-MISSING" and f.get("file") == n.file and f.get("line") == line
@@ -214,10 +279,15 @@ def _open_route(a: dict, n, sign, findings: list[dict], src: list[str]) -> dict 
             "what the app puts in front of the route. ")
     if sign:
         more += f"The only sign in the handler is that {sign[1]}: that finds a record, not the caller. "
+    more += passed_over_words(n, "\n".join(src) if src else None)
     more += ("Whoever sends the request picks the record by its id. If this route is meant to be open to everyone, "
              "ignore it.")
+    found = "no login check was found"
+    if let_on:      # a token library is called on the way, and a request whose token does not hold goes on
+        found = "Lantern found nothing that turns away a request whose login token does not hold"
+        more = TOKEN_LETS_ON + more
     f = _finding("LW-AUTH-MISSING", f"{a['detail']} changes or removes a record picked by an id from the request, "
-                 "and no login check was found", "MEDIUM", n.file, line, conf="LOW", cwe=306, fixed_rank="medium",
+                 f"and {found}", "MEDIUM", n.file, line, conf="LOW", cwe=306, fixed_rank="medium",
                  more=more, snippet=src[line - 1].strip() if 0 < line <= len(src) else "")
     f["tool"] = "lantern-flow"
     f["flow"] = _shape(changed)

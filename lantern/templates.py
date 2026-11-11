@@ -20,7 +20,7 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
-from .python_frontend import SKIP_DIRS, inside_repo, project_text
+from .python_frontend import inside_repo, project_text, skipped
 
 KINDS = {".ejs": "ejs", ".hbs": "hbs", ".handlebars": "hbs", ".mustache": "hbs", ".pug": "pug", ".jade": "pug",
          ".html": "jinja", ".htm": "jinja", ".jinja": "jinja", ".jinja2": "jinja", ".j2": "jinja", ".njk": "jinja",
@@ -243,7 +243,7 @@ def files(repo: Path):
         if p.suffix.lower() not in KINDS or not p.is_file() or not inside_repo(p, repo):
             continue
         parts = p.relative_to(root).parts
-        if any(x in SKIP_DIRS for x in parts[:-1]) or p.name.endswith(NOT_A_PAGE):
+        if skipped(parts[:-1], root) or p.name.endswith(NOT_A_PAGE):
             continue
         rel = p.relative_to(root).as_posix()
         if NOT_APP.search(rel):

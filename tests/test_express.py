@@ -979,9 +979,61 @@ def test_what_is_not_a_check_before_a_route_is_not_listed_as_one(tmp_path):
     g = _g(tmp_path, files)
     adj = call_adjacency(g)
     by = {n.entry["detail"]: n for n in g.nodes.values() if n.entry and n.entry.get("kind") == "route"}
+    # the function written in place is named by the line it starts on (since 2026-11-11; until then it was not
+    # listed): what it asks is read from its own lines (`lantern/flow.py`), and this one asks nothing
+    at = files["server.js"].split("app.use((req, res, next) => next())")[0].count("\n") + 1
     for detail in ("POST /auth/notes", "POST /a"):
-        assert [u["id"] for u in by[detail].entry.get("use") or ()] == ["ext:passport.session"], detail
+        assert [u["id"] for u in by[detail].entry.get("use") or ()] == \
+            ["ext:passport.session", f"inline:server.js:{at}"], detail
         assert route_auth_sign(g, by[detail], adj) is None, detail
+
+
+def test_a_check_written_in_place_is_named_in_the_routes_entry_and_nothing_else_changes(tmp_path):
+    # `app.use((req, res, next) => { ... })`: the function has no name and gets no node, no call site and no edge.
+    # The route's entry names it by the line it starts on; the map and the inventory are what ae08c23 gave
+    g = _g(tmp_path, {"server.js": "const express = require('express')\nconst app = express()\n"
+                      "app.get('/health', (req, res) => res.send('ok'))\n"
+                      "app.use((req, res, next) => {\n  if (!req.session.userId) return res.status(401).end()\n"
+                      "  next()\n})\napp.get('/notes', (req, res) => res.json([]))\n"})
+    by = {n.entry["detail"]: n for n in g.nodes.values() if n.entry and n.entry.get("kind") == "route"}
+    assert by["GET /notes"].entry["use"] == [{"id": "inline:server.js:4", "file": "server.js", "line": 4}]
+    assert "use" not in by["GET /health"].entry                         # written before it
+    assert sorted((e.src, e.dst, e.via or "", e.confidence) for e in g.edges) == [
+        ("js:server", "ext:express", "import", "resolved"),
+        ("js:server", "ext:express().use", "library-value", "inferred"),
+        ("js:server", "ext:express.Response.status", "express-param", "inferred"),
+        ("js:server", "ext:express.Response.status().end", "library-result", "inferred"),
+        ("js:server", "ext:express.next", "express-param", "inferred"),
+        ("js:server", "js:server::get_health", "", "resolved"),
+        ("js:server", "js:server::get_notes", "", "resolved"),
+        ("js:server::get_health", "ext:express.Response.send", "express-param", "inferred"),
+        ("js:server::get_notes", "ext:express.Response.json", "express-param", "inferred")]
+    assert sorted(g.nodes) == [
+        "ext:express", "ext:express().use", "ext:express.Response.json", "ext:express.Response.send",
+        "ext:express.Response.status", "ext:express.Response.status().end", "ext:express.next", "js:server",
+        "js:server::get_health", "js:server::get_notes"]
+    assert (g.meta["calls"]["written"]["total"], g.meta["calls"]["handed"]["total"]) == (10, 0)
+
+
+@pytest.mark.parametrize("written, listed", [
+    ("app.use((req, res, next) => next())", True),
+    ("app.use(function (req, res, next) { next() })", True),
+    ("app.use(async (req, res, next) => { next() })", True),
+    ("app.use('/notes', (req, res, next) => next())", True),
+    ("app.use('/admin', (req, res, next) => next())", False),           # for another path
+    ("app.use((err, req, res, next) => next(err))", False),             # four parameters: runs when a route failed
+    ("app.use((req, res) => res.status(404).end())", False),            # two: it hands the request to nothing
+    ("app.use(config.base, (req, res, next) => next())", False),        # the first name may hold a path
+    ("app.all('*', (req, res, next) => next())", False),                # `all` is read for named functions only
+    ("other.use((req, res, next) => next())", False),                   # put on something else
+])
+def test_which_functions_written_in_place_are_listed_before_a_route(tmp_path, written, listed):
+    g = _g(tmp_path, {"server.js": "const express = require('express')\nconst app = express()\n"
+                      "const other = express()\nconst config = require('./config')\n" + written +
+                      "\napp.get('/notes', (req, res) => res.json([]))\n",
+                      "config.js": "module.exports = { base: process.env.BASE }\n"})
+    notes = next(n for n in g.nodes.values() if n.entry and n.entry.get("detail") == "GET /notes")
+    assert [u["id"] for u in notes.entry.get("use") or ()] == (["inline:server.js:5"] if listed else [])
 
 
 def test_the_order_of_use_is_read_only_where_the_code_shows_it(tmp_path):

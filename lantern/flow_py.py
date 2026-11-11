@@ -336,7 +336,10 @@ class _Reader:
         if isinstance(e, (ast.Yield, ast.YieldFrom)):
             return N("yield", line, a=self.expr(e.value) if e.value is not None else None)
         if isinstance(e, ast.Await):
-            return self.expr(e.value)
+            got = self.expr(e.value)
+            if isinstance(got, N) and got.k == "call":
+                got.c = "await"     # what the call hands back is waited for here
+            return got
         if isinstance(e, ast.FormattedValue):
             return self.piece(e)
         return N("unk", line, items=[self.expr(c) for c in ast.iter_child_nodes(e) if isinstance(c, ast.expr)])

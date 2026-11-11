@@ -126,7 +126,9 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   `app.use('/api', mw, router)`), outermost first, each with the place it was put on; only what the code shows comes
   first is listed: written on an earlier line of the same file and function as the route or as the router's mount, on
   a path that covers the route's, and in front of every mount of a router that is mounted more than once. A router, an
-  error handler (four parameters), a class and Passport's reading of the session are no such middleware. No edge and
+  error handler (four parameters), a class and Passport's reading of the session are no such middleware. A function
+  written in place has the id `inline:<file>:<line>` (`app.use((req, res, next) => { ... })`: it is no node of the
+  map), and a function put on every verb counts the same way (`app.all('*', check)`, `app.all('/api/*', check)`). No edge and
   no call site is added for it; the login check and the flow step read it. An entry is only ever on a function of the repo: a route whose handler is a
   library's function, or comes from a file that is not there, marks no node); an HTML page with script inside it is
   a `page` entry whose `detail` is the file path, and its functions are `js:<path>.html::<name>` with the page's own
@@ -271,8 +273,14 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 ### `security.json`
 
 `{"findings": [...], "tools": [scanner records], "incomplete": [the scanner records that apply and are not ok],
-"counts": {critical, high, medium, low, in_tests, accepted}, "id_version", "reachable_nodes", "total_callables", "ai",
-"mobile"}`
+"counts": {critical, high, medium, low, in_tests, accepted}, "id_version", "reachable_nodes", "total_callables",
+"logins_shown", "ai", "mobile"}`
+
+`logins_shown`: the node ids of the routes whose own code turns away whoever is not signed in, as the flow step read
+it (a check under any name, one written in place, a hook, a dependency); `null` when that step did not run, and
+absent from results written before 2026-11-11. The protection `route-auth` in `readiness.json` counts such a route
+as checked (found: "the code on the way to this route turns away whoever is not signed in"), and names a route an
+`LW-AUTH-MISSING` finding calls open among the open ones, whatever the names around it say.
 
 A scanner record (`lantern/scanresult.py`, one per tool run: bandit, gitleaks, lantern-secrets, pip-audit, npm-audit,
 maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, lantern-flow, packs): `tool`, `state` (`ok` | `partial` | `failed` |
@@ -300,14 +308,19 @@ lists its skipped audits there without failing the gate.
 that follows request data across functions and files. Its record has `version` and `scope` `{files, functions,
 flows` (request values followed to a sensitive action), `on_other_findings` (flows attached to a finding another
 tool made on the same line), `not_followed_further` (calls where a value that still carried request data was handed
-to code Lantern does not read)`}`; `partial` when a file could not be read, a function could not be followed or the
+to code Lantern does not read), `login_read_from_code` (findings "no login check was found" that were not kept
+because the route's own code turns away whoever is not signed in), `token_check_lets_on` (routes that change data
+on whose way a login token is read and nothing turns away a request whose token does not hold)`}`; `partial` when a file could not be read, a function could not be followed or the
 time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
 `LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
 (22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and four about
 who may reach what, always `tool_confidence: LOW` and rank `medium`: `LT-AUTHZ-OWNER` (639: a route with a login
 reaches a record by an id from the request, and nothing compares the record's owner with who is signed in; for a
 record that is changed or removed only what was asked before the change counts, also when the change is made by a
-helper; `line` is the route's own line, `flow.sink` the look-up), `LT-AUTHZ-ROLE` (285: an admin route with a login
+helper or through the object the record was read into (`db.session.delete(note)`, `order.deleteOne()`: the line of
+the change is then the flow's last step); `line` is the line the record is reached on, one finding for that line
+with `routes`, the routes that get there, and `late` when every one of them does ask whose the record is, but only
+after it), `LT-AUTHZ-ROLE` (285: an admin route with a login
 where nothing asks for an admin; no `flow`), `LT-AUTHZ-MASS-ASSIGN` (915: everything the request sent is written
 onto a stored record) and `LT-AUTHZ-CLIENT-ROLE` (807: a route decides what the caller may do on a value the caller
 writes, a cookie, a header, a word in the address or the body named like a role or an admin flag, and nothing on the
@@ -316,7 +329,16 @@ the value and the routes; no `flow`; made with or without a login on the route).
 gets none of the first three. `LW-AUTH-MISSING` says so instead: `lantern-web` makes it for a route the project's
 own frontend calls, and the flow step makes it (`tool: "lantern-flow"`, with a `flow` to the record) for any other
 route that changes or removes a record picked by an id from the request; a route made to be open (sign-in, a
-webhook) gets none, and a route gets the finding once.
+webhook) gets none, and a route gets the finding once. Whether a route shows a login is read from its code where
+the code says so (a condition on who is signed in whose other branch refuses, a token a library checked, a record
+found by the request's own credential: `lantern/flow.py`), and from names otherwise. Where the code shows a login,
+the finding by names is not kept. Where a login token is read on the way and nothing turns away a request whose
+token does not hold (the failure is caught and the request goes on, the token is read without being checked, the
+answer is not waited for), the name of that check is no sign, and a route that changes data gets the finding with
+the title "... changes data, and Lantern found nothing that turns away a request whose login token does not hold".
+`more_info` names what looked like a login on the route and was not taken for one, in sentences that begin "Not
+taken for a login check:" (a library's login made optional with `optional=True`; a FastAPI security scheme whose
+token the handler never looks at).
 
 Two rules of `lantern-web` rest on the same step. `LW-XSS-RAW` (79, `tool_confidence: LOW`): a place in a page
 template that prints a value without escaping it (EJS `<%- x %>`, Handlebars and Mustache `{{{x}}}` / `{{& x}}`, Pug
@@ -370,6 +392,10 @@ five other starting points that reach the same line), `"count"}`; the viewer's b
 the steps, every value escaped), `claim` (`LT-AUTHZ-CLIENT-ROLE` only: `{"name"` (the cookie, header or field as
 the code reads it), `"sent_as"` (`a cookie`, `a header`, `the address`, `the request's body`), `"what"` (a sentence:
 where the value arrives), `"routes"` (the routes that decide on it)`}`), `secret_kind` (`LW-SECRET-INLINE` only),
+`routes` (`LT-AUTHZ-OWNER` only: the routes that reach the record on this line, e.g. `["GET /orders/:id"]`),
+`late` (`LT-AUTHZ-OWNER` only, optional: `"change"`, `"shell"`, `"remove"` or `"send"` when the route does ask whose
+the record is, but only after it changed the record, ran a command, removed a file or told another service to
+change something for it; the scenario's `kind` is then `owner-late`),
 `fixed_why` (optional, on a rule Lantern gives one rank whatever reaches it: the sentence shown as the reason for
 the rank, `case.severity.why`), `rank` (`critical`|`high`|`medium`|`low`),
 `context` (optional, `context.py`, read from names around the line: `{"hash": {"purpose": "security"|"non-security"|"unknown", "why", "password", "reads"}}`

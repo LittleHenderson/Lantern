@@ -37,7 +37,7 @@ import tree_sitter_rust as tsrs
 from tree_sitter import Language, Node as TSNode, Parser
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo, project_bytes, project_text
+from .python_frontend import inside_repo, project_bytes, project_text, skipped_dir
 
 RUST = Language(tsrs.language())
 
@@ -174,7 +174,8 @@ class RsModule:
 def discover(repo: Path) -> list[Path]:
     out = []
     for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and d != "target" and not d.startswith("."))
+        dirnames[:] = sorted(d for d in dirnames if not skipped_dir(dirpath, d) and d != "target"
+                             and not d.startswith("."))
         for fn in sorted(filenames):
             p = Path(dirpath) / fn
             if fn.endswith(".rs") and inside_repo(p, repo):
@@ -186,7 +187,7 @@ def crates(repo: Path) -> dict[str, str]:
     """crate root dir (repo-relative, "" for the repo root) -> crate name, from every Cargo.toml with a [package]."""
     out = {}
     for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d != "target" and not d.startswith(".")]
+        dirnames[:] = [d for d in dirnames if not skipped_dir(dirpath, d) and d != "target" and not d.startswith(".")]
         if "Cargo.toml" in filenames:
             try:
                 text = project_text(Path(dirpath) / "Cargo.toml", repo)

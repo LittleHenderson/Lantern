@@ -494,13 +494,15 @@ class _Reader:
                       c=self.body(fin.child_by_field_name("body"), cls) if fin is not None else [])]
         if t == "switch_statement":
             value = self.expr(s.child_by_field_name("value"), cls)
-            cases = []
+            cases, labels = [], []
             sb = s.child_by_field_name("body")
             for c in (sb.named_children if sb is not None else ()):
                 if c.type in ("switch_case", "switch_default"):
                     val = c.child_by_field_name("value")
                     cases.append(self.block([x for x in c.named_children if val is None or x.id != val.id], cls))
-            return [N("match", ln, a=value, items=cases)]
+                    labels.append(self.expr(val, cls) if val is not None else None)
+            # `labels`: what each case is for, in order (None for `default`)
+            return [N("match", ln, a=value, items=cases, kw={"labels": labels})]
         if t == "statement_block":
             return self.block(s.named_children, cls)
         if t == "labeled_statement":
@@ -568,7 +570,10 @@ class _Reader:
         ln = self.line(n)
         if t in WRAP:
             inner = n.named_children[0] if n.named_child_count else None
-            return self.expr(inner, cls)
+            got = self.expr(inner, cls)
+            if t == "await_expression" and isinstance(got, N) and got.k == "call":
+                got.c = "await"     # what the call hands back is waited for here (`flow.Engine.arrived`)
+            return got
         if t in ("identifier", "this", "super", "property_identifier", "shorthand_property_identifier", "undefined"):
             if t == "undefined":
                 return N("const", ln, a=None)

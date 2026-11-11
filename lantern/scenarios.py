@@ -111,6 +111,11 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
               "records.",
               "The look-up asks for the record with that id and this owner (or the owner is compared before "
               "anything is returned or changed), so someone else's id finds nothing."),
+    "owner-late": (None,
+                   "The server does it first and asks whose the record is only afterwards. They are told \"not "
+                   "allowed\", and by then the command has run, the file is gone or the change is made.",
+                   "The question whose the record is comes before anything is done for it, so someone else's id is "
+                   "turned away with nothing changed."),
     "role": (None,
              "The server does what the admin page does, because the route only checks that someone is signed in, "
              "not that they are an admin.",
@@ -397,6 +402,8 @@ LEAKS = {"secret", "service-role"}
 def kind_of(f: dict) -> str:
     rule = str(f.get("rule") or "")
     if rule in RULE_KIND:
+        if rule == "LT-AUTHZ-OWNER" and f.get("late"):
+            return "owner-late"     # the route does ask whose the record is, after the thing was done
         return RULE_KIND[rule]
     if f.get("category") == "dependency":
         return "dependency"
@@ -552,7 +559,7 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
         if kind in ("auth", "wallet") and route:
             steps.append(f"They are not signed in, and they send {route} again and again."
                          if kind == "wallet" else f"They are not signed in when they send {route}.")
-        if kind == "owner":
+        if kind in ("owner", "owner-late"):
             steps.append("They are signed in with their own account. In the request they change the record's id to "
                          "another one, which is not theirs.")
             if f.get("flow"):
@@ -668,6 +675,7 @@ FIXED_HEADLINES = {
     "assert": "A safety check uses assert, which can be switched off",
     "subprocess-note": "This file starts other programs (a note, not a problem)",
     "owner": "A signed-in person may be able to reach other people's records",
+    "owner-late": "Something is done for a record before the app asks whose it is",
     "role": "An admin route may not ask for an admin",
     "client-role": "A visitor can say they are an admin",
 }

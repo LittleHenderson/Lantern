@@ -213,9 +213,10 @@ def test_no_name_is_given_twice_at_the_top_of_a_module():
     """A second `def` or assignment under a name a module already has replaces the first for every caller above it,
     and nothing says so: on 2026-11-11 a new helper in `websec.py` took the name of one the login check calls, and
     only that check's own tests showed it. A constant set in an `if`/`try` is not counted, only the module's own
-    top level."""
+    top level. The test files are held to the same rule: the same day a new constant `FIND` in `tests/test_flow.py`
+    was replaced by an older one further down, and the new test read the wrong text."""
     twice = []
-    for folder in ("lantern", "cloud/lantern_cloud", "gateway/lantern_gateway"):
+    for folder in ("lantern", "cloud/lantern_cloud", "gateway/lantern_gateway", "tests"):
         for path in sorted((ROOT / folder).glob("*.py")):
             seen: dict[str, int] = {}
             for node in ast.parse(path.read_text(encoding="utf-8")).body:

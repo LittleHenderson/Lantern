@@ -27,12 +27,14 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 
+from .flow_rules import READS_TOKEN, VERIFIES
 from .graph import Graph
 from .js_frontend import jwt_role
-from .python_frontend import SKIP_DIRS, inside_repo, project_text
+from .python_frontend import inside_repo, project_text, skipped
 
 PUBLIC_PREFIX = r"(?:NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_|GATSBY_|PUBLIC_|VUE_APP_)"
 SECRET_WORD = r"[A-Z0-9_]*(?:SECRET|PRIVATE|SERVICE_ROLE|PASSWORD|PASSWD|DB_URL|DATABASE_URL|STRIPE_SK|API_KEY)[A-Z0-9_]*"
@@ -160,7 +162,7 @@ def _files(repo: Path, exts=None, names=None):
         if not p.is_file() or not inside_repo(p, repo):
             continue
         parts = p.relative_to(repo).parts
-        if any(x in SKIP_DIRS for x in parts[:-1]):   # a file named .env is not the .env/ venv folder
+        if skipped(parts[:-1], repo):   # a file named .env is not the .env/ venv folder
             continue
         if p.name.endswith((".min.js", ".map", ".d.ts")) or p.name in ("package-lock.json", "bun.lock"):
             continue
@@ -670,10 +672,19 @@ def segments(ident: str) -> str:
     return " ".join(p.lower() for p in parts)
 
 
+# Python's `secrets.token_urlsafe`, `token_hex` and `token_bytes` make random text: a nonce, a share link, a new
+# key. The word `token` in them says nothing about who is calling (until 2026-11-11 a route that made a nonce read as
+# one with a login check, and Lantern's own share page was asked whose record it shows). With the module's name in
+# front, a call on what they give is on random text too (`secrets.token_bytes(8).hex()`).
+MAKES_TEXT = re.compile(r"(?:(?:ext )?secrets token (?:urlsafe|hex|bytes)\b|token (?:urlsafe|hex|bytes)$)")
+
+
 def auth_word(ident: str, js: bool = False) -> str | None:
     """The auth words `ident` is built from, matched as whole segments, or None: `get_token` -> "token", `tokenize`
     -> None, `load_permissions` -> None (plural: a list of permissions, not a check), `has_permission` -> a match."""
     words = segments(ident)
+    if MAKES_TEXT.match(words):
+        return None
     m = AUTH_WORDS.search(words) or (JS_AUTH_WORDS.search(words) if js else None)
     return m.group(0) if m else None
 
@@ -787,11 +798,14 @@ PAYLOAD_TYPE = re.compile(r"\b[A-Za-z_]\w*?(?:Request|RequestForm|Body|Payload|I
                           r"Response|DTO|Dto|Params|Data)\b")
 
 
-def signature_sign(signature: str) -> str | None:
+def signature_sign(signature: str, doubted: frozenset = frozenset()) -> str | None:
     """A parameter that brings the caller in: a dependency or type named like an auth check (`Depends(current_user)`,
     `user: CurrentUser`, `Security(...)`), or a name that can only mean the caller (`current_user`). A parameter
-    merely named like an auth word (`permissions: list[str]`, `is_admin: bool`) is data the caller sent."""
+    merely named like an auth word (`permissions: list[str]`, `is_admin: bool`) is data the caller sent. A parameter
+    filled by a function named in `doubted` is no sign (`_doubted_names`)."""
     for name, annotation, default in _params(signature):
+        if doubted and _names_one(default + " " + annotation, doubted):
+            continue
         if default and (auth_ident(default) or re.search(r"\bSecurity\s*\(", default)):
             return f"`{name}={default}`"[:70] + " in its parameters"
         # a request body's type (`body: TokenRequest`, `form: OAuth2PasswordRequestForm`) is what the caller sent,
@@ -924,27 +938,134 @@ def call_adjacency(g: Graph) -> dict[str, list[str]]:
     return adj
 
 
-def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> str | None:
+# npm packages that are a login check and nothing else: whatever they hand a route turns away a request that does
+# not carry what they ask for, under whatever name the package gives it (`expressjwt`). Read only for a library's
+# function (`ext:<package>.<member>`); a package that merely reads a token (`jwt-decode`) is not one.
+LOGIN_PACKAGE = re.compile(r"^(express-jwt|koa-jwt|express-basic-auth|basic-auth-connect|http-auth-connect|"
+                           r"express-oauth2-jwt-bearer|connect-ensure-login)(\.|\(|$)")
+
+
+def _in_doubt(nid, doubt) -> bool:
+    """With `doubt` (what the flow step read is no login, `flow.Soft`): whether this function's name is not to be
+    taken as a sign of one. A function of the project on whose way a token library is called and whose code turns
+    nobody away for it, the token library's own function, and what is called on that function's answer
+    (`jwt.decode().get`): on such a route a request whose token does not hold went on, so "it calls `jwt.decode`"
+    says nothing."""
+    if doubt is None or not isinstance(nid, str):
+        return False
+    if nid in doubt.nodes:
+        return True
+    if not nid.startswith("ext:"):
+        return False
+    lib = nid[4:].split("()", 1)[0]
+    return bool(VERIFIES.match(lib) or READS_TOKEN.match(lib))
+
+
+# A library's login made with the word that it is not required turns nobody away (Python; JS/TS has
+# `js_frontend.OPTIONAL_LOGIN`): Flask-JWT-Extended's `@jwt_required(optional=True)` and
+# `verify_jwt_in_request(optional=True)`, Flask-HTTPAuth's `@auth.login_required(optional=True)`: a call named
+# like a login check (`auth_word`) that is handed `optional=True`. On such a route the library's own names for who is calling
+# (`OPTIONAL_NAMES`) say nothing either: nobody may be. And FastAPI's security schemes (`SCHEME_ONLY`) carry the
+# credential in, and refuse a request that has none unless made with `auto_error=False`: they check nothing about
+# it, so a parameter filled by one, which the handler never looks at, is no login. Until 2026-11-11 both read as one.
+NOT_REQUIRED = re.compile(r"([A-Za-z_][\w.]*)\s*\([^()\n]*\boptional\s*=\s*True\b")
+OPTIONAL_NAMES = frozenset({"jwt_required", "verify_jwt_in_request", "get_jwt_identity", "get_jwt", "current_user",
+                            "get_current_user"})
+SCHEME_ONLY = re.compile(r"^[ \t]*([A-Za-z_]\w*)[ \t]*(?::[^=\n]+)?=[ \t]*(?:[\w.]+\.)?(OAuth2PasswordBearer|"
+                         r"OAuth2AuthorizationCodeBearer|OAuth2|HTTPBearer|HTTPBasic|HTTPDigest|APIKeyHeader|"
+                         r"APIKeyCookie|APIKeyQuery|OpenIdConnect)\(", re.M)
+
+
+def passed_over(n, text: str | None) -> dict[str, str]:
+    """What stands on a Python route and looks like a login check without being one, as name -> the reason in
+    words: a library's login made optional on this route (`NOT_REQUIRED`, on a decorator or in the handler's lines),
+    with the library's names for who is calling, and a FastAPI security scheme made in the route's own file whose
+    value the handler takes in and never looks at (the parameter's name stands nowhere but among the parameters)."""
+    out: dict[str, str] = {}
+    if not text or not n.file or not n.file.endswith(".py"):
+        return out
+    lines = text.splitlines()
+    start = n.start_line or 0
+    if not start or start > len(lines):
+        return out
+    body = code_only("\n".join(lines[start - 1:(n.end_line or start)]))
+    for where in (*(n.decorators or ()), body):
+        for m in NOT_REQUIRED.finditer(where):
+            parts = m.group(1).split(".")
+            name = parts[-1]
+            if not auth_word(name):
+                continue        # some other call that takes a parameter named `optional`: it says nothing of a login
+            why = (f"`{name}` is made optional here (`optional=True`), so a request that carries no token goes on, "
+                   "and what the library says about who is calling may be nobody")
+            for part in parts:  # `auth.login_required(optional=True)`: the object it hangs on is no sign either
+                out[part] = why
+            for other in OPTIONAL_NAMES:
+                out.setdefault(other, why)
+    schemes = dict(SCHEME_ONLY.findall(text))
+    if schemes:
+        for name, annotation, default in _params(n.signature or ""):
+            got = [s for s in re.findall(r"[A-Za-z_]\w*", default + " " + annotation) if s in schemes]
+            if got and len(re.findall(rf"(?<![\w.]){re.escape(name)}\b", body)) <= 1:
+                why = (f"`{got[0]}` only carries the token in (FastAPI's `{schemes[got[0]]}` checks nothing about "
+                       f"it), and nothing in the handler looks at `{name}`")
+                out[got[0]] = why
+                out.setdefault(schemes[got[0]], why)
+    return out
+
+
+def passed_over_words(n, text: str | None) -> str:
+    """A sentence for each thing `passed_over` names, for a finding's explanation; nothing when there is none."""
+    said: list[str] = []
+    for why in passed_over(n, text).values():
+        if why not in said:
+            said.append(why)
+    return "".join(f"Not taken for a login check: {why}. " for why in said)
+
+
+def _doubted_names(g: Graph, doubt) -> frozenset:
+    """The own names of the project's functions in `doubt`: where a decorator or a parameter names one of them, the
+    name is no sign either. By name alone, so another function of the same name is passed over with it."""
+    if doubt is None:
+        return frozenset()
+    return frozenset(name for name in (_func_name(g, nid) for nid in doubt.nodes if not nid.startswith("ext:"))
+                     if name)
+
+
+def _names_one(code: str, doubted: frozenset) -> bool:
+    return any(part in doubted for part in re.findall(r"[A-Za-z_$][\w$]*", code))
+
+
+def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, doubt=None,
+                    skip: frozenset = frozenset()) -> str | None:
     """The first visible sign that this route checks who is calling: a decorator, a parameter or dependency in
-    its signature, or a function named like an auth check within `depth` calls. None when nothing was found."""
+    its signature, or a function named like an auth check within `depth` calls. None when nothing was found.
+    `doubt`: what the flow step read is no login on this route (`_in_doubt`); its names are passed over, and so
+    are the names in `skip` (`passed_over`)."""
     js = n.id.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))   # JS, Go, Java, Kotlin, Swift, Dart, C#: camelCase; Python and Rust snake_case
+    doubted = _doubted_names(g, doubt) | skip
     for d in n.decorators:
         # a route decorator's description of its answer (`response_model=TokenResponse`, `tags=["auth"]`) says what
         # the route returns, not that it checks the caller
         d_check = ROUTE_DOC_KWARGS.sub("", d)
+        if doubted:     # `@token_optional`, `dependencies=[Depends(read_token)]`: the doubted name says nothing
+            d_check = re.sub(r"[A-Za-z_$][\w$]*", lambda m: "x" if m.group(0) in doubted else m.group(0), d_check)
         if auth_ident(d_check, js):
             return f"decorator @{d.split('(')[0]}"
-    sig = signature_sign(n.signature or "")
+    sig = signature_sign(n.signature or "", doubted)
     if sig:
         return sig
     for mid in (n.entry or {}).get("middleware") or ():   # Express: router.delete('/x', requireLogin, handler)
+        if _in_doubt(mid, doubt):
+            continue
         # the function's own name: not the package or file it comes from, and never the folders on the way
         name = _func_name(g, mid).split("(")[0].rsplit(".", 1)[-1].rsplit("/", 1)[-1]
-        if auth_word(name, True):
+        if auth_word(name, True) or LOGIN_PACKAGE.match(_func_name(g, mid)):
             return f"middleware `{name}`"
     for u in (n.entry or {}).get("use") or ():   # Express: app.use(requireLogin) written before the route
+        if _in_doubt(u["id"], doubt):
+            continue
         name = _func_name(g, u["id"]).split("(")[0].rsplit(".", 1)[-1].rsplit("/", 1)[-1]
-        if auth_word(name, True):
+        if auth_word(name, True) or LOGIN_PACKAGE.match(_func_name(g, u["id"])):
             return f"middleware `{name}` put on before this route ({u['file']}:{u['line']})"
     seen, frontier = {n.id}, [n.id]
     for _ in range(depth):
@@ -954,7 +1075,9 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> s
                 if v in seen:
                     continue
                 seen.add(v)
-                if auth_word(_func_name(g, v), v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
+                if not _in_doubt(v, doubt) and _func_name(g, v).split("(")[0].rsplit(".", 1)[-1] not in skip and \
+                        auth_word(_func_name(g, v),
+                                  v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
                     return f"calls `{_func_name(g, v)}`"
                 nxt.append(v)
         frontier = nxt
@@ -980,16 +1103,30 @@ def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> list
     return out
 
 
-def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None) -> tuple[str, str] | None:
+def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None, doubt=None) -> tuple[str, str] | None:
     """Everything Lantern can see about a route checking its caller: ("strong", why) from the decorator, signature,
     callees or body; ("weak", why) when the body only looks up a user by a request value and tests the result;
     None when nothing was found. Shared by the LW-AUTH-MISSING rule and the protections advisor so both tell the
-    same story: a weak sign is never "in place", and a route with no sign gets the finding."""
-    sign = route_auth_sign(g, n, adj)
+    same story: a weak sign is never "in place", and a route with no sign gets the finding. `doubt` (from the flow
+    step, for a route on whose way a token library is called and nothing turns anybody away): the names it holds
+    are no sign (`_in_doubt`), and neither are the handler's lines on which the token library is called. What
+    `passed_over` names on the route (a login made optional, a token only carried in) is no sign either."""
+    skip = frozenset(passed_over(n, text))
+    sign = route_auth_sign(g, n, adj, doubt=doubt, skip=skip)
     if sign:
         return "strong", sign
     if text is None or not n.file:
         return None
+    if doubt is not None:
+        rows = text.splitlines()
+        for file, line in doubt.lines:
+            if file == n.file and 0 < line <= len(rows):
+                rows[line - 1] = ""
+        text = "\n".join(rows)
+    doubted = _doubted_names(g, doubt) | skip   # `@login_required` above the handler, where that function is one
+    if doubted:
+        text = re.sub(r"[A-Za-z_$][\w$]*", lambda m: "_" * len(m.group(0)) if m.group(0) in doubted else m.group(0),
+                      text)
     return body_auth_sign(text, n.start_line or 0, n.end_line or n.start_line or 0, js=not n.file.endswith((".py", ".rb")),
                           signature=n.signature or "")
 
@@ -1004,13 +1141,26 @@ def mutating_route(detail: str) -> bool:
     return bool({v.upper() for v in verb.split("/")} & MUTATING)
 
 
-def missing_auth(g: Graph) -> list[dict]:
-    """Routes the frontend calls that change data, where no login check is visible within 3 calls."""
+# Said on a finding the flow step asks for: the route calls a library that reads a login token, and that is not
+# taken as a login check there. What Lantern found, and the three ways it comes about; never "the token is not
+# checked", which Lantern has not shown.
+TOKEN_LETS_ON = ("The code on the way to this route calls a library that reads a login token, and Lantern found "
+                 "nothing it can follow that turns away a request whose token does not hold, or that carries none: "
+                 "the failure is caught and the request goes on, the token is read without being checked, or the "
+                 "answer is not waited for. So that call was not taken as a login check for this route. ")
+
+
+def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
+    """Routes the frontend calls that change data, where no login check is visible within 3 calls. With `only`
+    (the map's nodes of routes, from the flow step: `flow.Result.caught`) those routes are asked instead, called by
+    the frontend or not, and read with `doubt` (`login_check`): a token library on the way to them is no sign."""
     out = []
     bridged = {}
     for e in g.call_edges():
         if (e.via or "").startswith("http-") and not e.dst.startswith("ext:"):
             bridged.setdefault(e.dst, e.detail)
+    if only is not None:
+        bridged = {rid: bridged.get(rid) or "" for rid in sorted(only)}
     adj = call_adjacency(g)
     texts: dict[str, str] = {}
     for rid, detail in bridged.items():
@@ -1025,7 +1175,7 @@ def missing_auth(g: Graph) -> list[dict]:
                 texts[n.file] = project_text(Path(g.repo_root) / n.file, g.repo_root)
             except OSError:
                 texts[n.file] = ""
-        sign = login_check(g, n, adj, texts.get(n.file or ""))
+        sign = login_check(g, n, adj, texts.get(n.file or ""), doubt=doubt)
         if sign and sign[0] == "strong":
             continue
         more = ("Heuristic: Lantern looked three calls deep for anything named like an auth check (current_user, "
@@ -1033,10 +1183,15 @@ def missing_auth(g: Graph) -> list[dict]:
         if sign:
             more += (f"The only sign in the handler is that {sign[1]}: that finds a record, not the caller. "
                      "Check the signed-in user as well. ")
+        more += passed_over_words(n, texts.get(n.file or ""))
+        title = f"{n.entry['detail']} changes data, is called by the app, and no login check was found"
+        if only is not None:
+            title = (f"{n.entry['detail']} changes data, and Lantern found nothing that turns away a request whose "
+                     "login token does not hold")
+            more = TOKEN_LETS_ON + more
         out.append(_finding(
-            "LW-AUTH-MISSING", f"{n.entry['detail']} changes data, is called by the app, and no login check was found",
-            "MEDIUM", n.file, n.start_line, category="code", conf="LOW", cwe=306, fixed_rank="medium",
-            more=more + "If this route is meant to be public, ignore it.", snippet=detail or ""))
+            "LW-AUTH-MISSING", title, "MEDIUM", n.file, n.start_line, category="code", conf="LOW", cwe=306,
+            fixed_rank="medium", more=more + "If this route is meant to be public, ignore it.", snippet=detail or ""))
     return out
 
 
@@ -1071,6 +1226,19 @@ PY_KEY_CALLS = [(re.compile(r"(?<![\w.])jwt\.(?:encode|decode)\s*\("), 1),
                 (re.compile(r"(?<![\w.])hmac\.new\s*\("), 0),
                 (re.compile(r"(?<![\w.])(?:URLSafeTimedSerializer|URLSafeSerializer|TimestampSigner|Signer|"
                             r"TimedSerializer)\s*\("), 0)]
+# the names Flask and Django themselves give the text that signs: a phrase under them is the secret, as in the call
+PY_OWN_NAMES = {"secret_key", "jwt_secret_key"}
+PY_LIT_END = re.compile(r"\s*(?:$|[,)}\]#])")
+# a secret under a plain name, followed from the call that signs with it (`_followed`)
+JS_REF = r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*){0,2}"
+PY_REF = r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*){0,2}"
+JS_REF_END = re.compile(r"(" + JS_REF + r")\s*(?:$|[,})\]])")
+PY_SIGNED_WITH = re.compile(r"(?:\.secret_key|\[\s*[\"'](?:JWT_)?SECRET_KEY[\"']\s*\]|(?<![\w.])(?:JWT_)?SECRET_KEY)"
+                            r"\s*=(?!=)\s*(" + PY_REF + r")\s*(?:$|[,)#])", re.M)
+NOT_A_SETTING = {"process", "import", "req", "request", "res", "this", "self", "cls", "env", "ctx", "os",
+                 "window", "undefined", "null", "true", "false", "None", "True", "False", "app", "current_app"}
+JS_FILE_ENDS = ("", ".js", ".ts", ".cjs", ".mjs", ".json", ".jsx", ".tsx", "/index.js", "/index.ts")
+FOLLOW_MOST = 4         # lines listed for one name: a text for each place the app runs, not a file of labels
 # the call a secret is handed to, a few lines up: there a phrase of several words is a secret too, not a message
 SIGNING_CALL = re.compile(r"(?:[sS]ession\w*|[jJ]wt\w*|JWT|\w*Strategy|NextAuth|[cC]ookie\w*)\s*\(")
 CONNECTION = re.compile(r"(?<![\w$])(?:host|hostname|server|database|dialect|service|connectionString)\s*:|"
@@ -1192,13 +1360,18 @@ def _secrets_in(text: str, js: bool, py: bool) -> dict[int, tuple[str, str, str]
     for i, src in enumerate(lines, 1):
         if not SECRET_WORTH_A_LOOK.search(src):
             continue
-        if py:      # a plain `NAME = "text"` is Bandit's (B105); only the default for a missing setting is new
+        if py:      # a name that says it signs (a password is left to Bandit's B105 and B106)
             for m in PY_SECRET_NAME.finditer(src):
-                d = PY_DEFAULT.match(src, m.end())
                 last = re.findall(r"[A-Za-z_]\w*", m.group("name"))
-                if d and last and secret_name(last[-1]) == "signing" and \
-                        not _no_secret(last[-1], _str_value(d, 3), True):
+                if not last or secret_name(last[-1]) != "signing":
+                    continue
+                d = PY_DEFAULT.match(src, m.end())
+                lit = string.match(src, m.end())
+                own = last[-1].lower() in PY_OWN_NAMES
+                if d and not _no_secret(last[-1], _str_value(d, 3), True):
                     add(i, "default", _str_value(d, 3), "LOW")
+                elif lit and PY_LIT_END.match(src, lit.end()) and not _no_secret(last[-1], _str_value(lit), own):
+                    add(i, "signing", _str_value(lit), "MEDIUM" if own else "LOW")
             continue
         for m in SECRET_CAND.finditer(src):
             kind = secret_name(m.group("name"))
@@ -1242,9 +1415,164 @@ def _redacted(src: str, value: str) -> str:
     return out.strip() if out != src else "[redacted]"
 
 
+def _texts_named(rel: str, text: str, key: str, py: bool, span: tuple | None = None) -> list[tuple]:
+    """(file, line, kind, the text) for each line of `text` that gives the name `key` a text of its own (or a text
+    for when a setting is missing): `key: '…'`, `exports.key = '…'`, `export const key = '…'`, Python's `KEY = '…'`
+    at the top or in a class. Inside `span` only, when one is given (the object a name of the file stands for)."""
+    k = re.escape(key)
+    if py:
+        rx = re.compile(r"(?m)^[ \t]*" + k + r"\s*(?::\s*str\s*)?=(?!=)\s*")
+    else:
+        rx = re.compile(r"(?<![\w$.])(?:(?:module\.)?exports\.|(?:export\s+)?(?:const|let|var)\s+)?"
+                        r"(?P<q>[\"']?)" + k + r"(?P=q)\s*(?::\s*string\s*(?==))?\s*[:=](?![=>])\s*")
+    string = re.compile(PY_STR if py else JS_STR)
+    out = []
+    for m in rx.finditer(text, *(span or ())):
+        start = text.rfind("\n", 0, m.start()) + 1
+        if text[start:m.start()].lstrip().startswith("#" if py else ("//", "*", "/*")):
+            continue
+        end = text.find("\n", m.end())
+        rest = text[m.end():end if end >= 0 else len(text)]
+        lit = string.match(rest)
+        dflt = PY_DEFAULT.match(rest) if py else JS_DEFAULT_HEAD.match(rest)
+        if lit and (PY_LIT_END.match(rest, lit.end()) if py else rest[lit.end():].lstrip()[:1] != "+") and \
+                not _no_secret(key, _str_value(lit), True):
+            out.append((rel, _line_of(text, m.start()), "signing", _str_value(lit)))
+        elif dflt and not _no_secret(key, _str_value(dflt, 3 if py else 1), True):
+            out.append((rel, _line_of(text, m.start()), "default", _str_value(dflt, 3 if py else 1)))
+    return out if len(out) <= FOLLOW_MOST else []
+
+
+def _project_file(repo: Path, candidates) -> tuple[str, str] | None:
+    """The first of `candidates` that is a file of the project Lantern reads: (path from the root, text)."""
+    root = repo.resolve()
+    for c in candidates:
+        try:
+            p = Path(os.path.normpath(c))
+            parts = p.relative_to(root).parts
+        except ValueError:
+            continue
+        if skipped(parts[:-1], root) or not p.is_file() or not inside_repo(p, repo):
+            continue
+        return p.relative_to(root).as_posix(), _read(p, repo)
+    return None
+
+
+def _js_where(repo: Path, rel: str, text: str, ref: str) -> list[tuple]:
+    """Where a name handed to a signing call gets its text: `PHRASE` and `settings.phrase` of this file, or the file
+    of the project the name was loaded from (`const config = require('./config')`, `import { phrase } from …`)."""
+    head, *rest = ref.split(".")
+    h = re.escape(head)
+    if not rest:
+        got = _texts_named(rel, text, head, False)
+        got = [g for g in got if re.match(r"\s*(?:export\s+)?(?:const|let|var)\s", text.splitlines()[g[1] - 1])]
+        if got:
+            return got
+    else:
+        m = re.search(r"(?m)^\s*(?:export\s+)?(?:const|let|var)\s+" + h + r"\s*(?::[^=\n]+)?=\s*\{", text)
+        if m:
+            inside = _args_at(text, m.end())
+            return _texts_named(rel, text, rest[-1], False, (m.end(), inside[-1][0] + len(inside[-1][1]))) \
+                if inside else []
+    key = rest[-1] if rest else None
+    spec = None
+    m = re.search(r"(?:const|let|var)\s+" + h + r"\s*=\s*require\(\s*[\"']([^\"']+)[\"']\s*\)", text) or \
+        re.search(r"import\s+(?:\*\s+as\s+)?" + h + r"\s+from\s*[\"']([^\"']+)[\"']", text)
+    if m:
+        spec = m.group(1)
+    else:
+        for m in re.finditer(r"(?:(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*[\"']([^\"']+)[\"']\s*\)|"
+                             r"import\s*(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*[\"']([^\"']+)[\"'])", text):
+            names, where = (m.group(1), m.group(2)) if m.group(1) is not None else (m.group(3), m.group(4))
+            for part in names.split(","):
+                bits = [b.strip() for b in re.split(r"\s+as\s+|\s*:\s*", part.strip())]
+                was, now = bits[0], bits[-1]
+                if now == head:
+                    spec, key = where, key or was
+    if spec is None or key is None or not spec.startswith("."):
+        return []
+    base = str((repo.resolve() / rel).parent / spec)
+    ends = [base + e for e in JS_FILE_ENDS] + ([base[:-3] + ".ts"] if base.endswith(".js") else [])
+    other = _project_file(repo, ends)
+    return _texts_named(other[0], other[1], key, False) if other else []
+
+
+def _py_where(repo: Path, rel: str, text: str, ref: str) -> list[tuple]:
+    """The same for Python: `PHRASE` of this file, `config.PHRASE` of a module or `Live.PHRASE` of a class the file
+    imports from the project."""
+    head, *rest = ref.split(".")
+    key = rest[-1] if rest else head
+    if not rest:
+        got = [g for g in _texts_named(rel, text, head, True) if not text.splitlines()[g[1] - 1][:1].isspace()]
+        if got:
+            return got
+    elif re.search(r"(?m)^class\s+" + re.escape(head) + r"\b", text):
+        return _texts_named(rel, text, key, True)
+    here = (repo.resolve() / rel).parent
+    modules: list[tuple[int, str]] = []         # (dots, dotted name) of the files the name may stand for
+    for m in re.finditer(r"(?m)^[ \t]*import\s+([^\n#]+)", text):
+        for part in m.group(1).split(","):
+            bits = part.split()
+            if bits and (bits[-1] if len(bits) == 3 and bits[1] == "as" else bits[0]) == head and rest:
+                modules.append((0, bits[0]))
+    for m in re.finditer(r"(?m)^[ \t]*from\s+(\.*)([\w.]*)\s+import\s+(\([^)]*\)|[^\n#]+)", text):
+        for part in m.group(3).strip("()").split(","):
+            bits = part.split()
+            if not bits or (bits[-1] if len(bits) == 3 and bits[1] == "as" else bits[0]) != head:
+                continue
+            base = m.group(2)
+            if rest:        # `from . import config` (a module) or `from .settings import Live` (a class in one)
+                modules.append((len(m.group(1)), (base + "." if base else "") + bits[0]))
+            if base or not rest:
+                modules.append((len(m.group(1)), base))
+            key = key if rest else bits[0]
+    for dots, name in modules:
+        path = name.replace(".", "/")
+        if dots:
+            starts = [here.parents[dots - 2] if dots > 1 else here]
+        else:
+            starts = [repo.resolve(), here, *[p for p in here.parents if repo.resolve() in (p, *p.parents)]]
+        tails = (path + ".py", path + "/__init__.py") if path else ("__init__.py",)
+        other = _project_file(repo, [str(s / t) for s in starts for t in tails])
+        if other:
+            got = _texts_named(other[0], other[1], key, True)
+            if got:
+                return got
+    return []
+
+
+def _followed(repo: Path, rel: str, text: str, js: bool) -> list[tuple]:
+    """A secret under a plain name: the names handed to the calls that sign (`session({ secret: config.phrase })`,
+    `jwt.sign(data, PHRASE)`, `app.secret_key = config.PHRASE`), each followed to the line that gives it its text."""
+    refs: list[str] = []
+    for rx, at in (JS_KEY_CALLS if js else PY_KEY_CALLS):
+        for m in rx.finditer(text):
+            args = _args_at(text, m.end())
+            if len(args) > at and re.fullmatch(JS_REF if js else PY_REF, args[at][1].strip()):
+                refs.append(args[at][1].strip())
+    if js:
+        lines = text.splitlines()
+        for i, src in enumerate(lines, 1):
+            if not SECRET_WORTH_A_LOOK.search(src):
+                continue
+            for m in SECRET_CAND.finditer(src):
+                ref = JS_REF_END.match(src, m.end())
+                if ref and secret_name(m.group("name")) == "signing" and \
+                        SIGNING_CALL.search("\n".join(lines[max(0, i - 7):i - 1]) + "\n" + src[:m.start()]):
+                    refs.append(ref.group(1))
+    else:
+        refs += [m.group(1) for m in PY_SIGNED_WITH.finditer(text)]
+    out: list[tuple] = []
+    for ref in dict.fromkeys(refs):
+        if ref.split(".")[0] not in NOT_A_SETTING:
+            out += (_js_where if js else _py_where)(repo, rel, text, ref)
+    return out
+
+
 def inline_secrets(repo: Path) -> list[dict]:
     """LW-SECRET-INLINE: one finding per line, ranked medium, the text itself never repeated in the finding."""
-    out = []
+    found: dict[tuple, tuple] = {}          # (file, line) -> (kind, the text, confidence)
+    texts: dict[str, str] = {}
     for p in _files(repo, JS_EXTS | {".py", ".json"}):
         rel = p.relative_to(repo).as_posix()
         if (p.suffix == ".json" and not SECRET_JSON.search(rel)) or SECRET_NOT_CODE.search(rel):
@@ -1252,12 +1580,24 @@ def inline_secrets(repo: Path) -> list[dict]:
         text = _read(p, repo)
         if not SECRET_FILE_WORTH_A_LOOK.search(text):
             continue
-        lines = text.splitlines()
-        for ln, (kind, value, conf) in sorted(_secrets_in(text, p.suffix in JS_EXTS, p.suffix == ".py").items()):
-            f = _finding("LW-SECRET-INLINE", SECRET_TITLES[kind], "HIGH" if kind == "signing" else "MEDIUM", rel, ln,
-                         conf=conf, cwe=798, snippet=_redacted(lines[ln - 1], value), fixed_rank="medium")
-            f["secret_kind"] = kind
-            out.append(f)
+        texts[rel] = text
+        js, py = p.suffix in JS_EXTS, p.suffix == ".py"
+        for ln, got in _secrets_in(text, js, py).items():
+            found[(rel, ln)] = got
+        if js or py:
+            for rel2, ln, kind, value in _followed(repo, rel, text, js):
+                if not SECRET_NOT_CODE.search(rel2):
+                    found.setdefault((rel2, ln), (kind, value, "LOW"))
+    out = []
+    for (rel, ln), (kind, value, conf) in sorted(found.items()):
+        if rel not in texts:
+            texts[rel] = _read(repo / rel, repo)
+        lines = texts[rel].splitlines()
+        f = _finding("LW-SECRET-INLINE", SECRET_TITLES[kind], "HIGH" if kind == "signing" else "MEDIUM", rel, ln,
+                     conf=conf, cwe=798, snippet=_redacted(lines[ln - 1] if ln <= len(lines) else "", value),
+                     fixed_rank="medium")
+        f["secret_kind"] = kind
+        out.append(f)
     return out
 
 

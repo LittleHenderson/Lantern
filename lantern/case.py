@@ -198,13 +198,18 @@ def build(f: dict, g: Graph) -> dict:
                 conditions[-1] = _cond("What they send reaches this line", False, "data flow: " + (
                     f"every call of `{ctx['fixed']['function']}` hands it fixed text" if ctx["fixed"]["calls"] else
                     "the text is written in the code itself"))
-        if kind == "owner":
+        if kind in ("owner", "owner-late"):
             conditions.append(_cond("The request chooses which record is reached", True if fl else None,
                                     f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}"
                                     if fl else "not followed"))
-            conditions.append(_cond("Nothing compares the record's owner with who is signed in", True,
-                                    "no such comparison on this route, in what runs before it, or in the functions "
-                                    "it calls that Lantern read"))
+            if kind == "owner-late":
+                conditions.append(_cond("Whose the record is gets asked only after this line", True,
+                                        "the route compares the owner (or asks for a role), and nothing it runs "
+                                        "before this line does"))
+            else:
+                conditions.append(_cond("Nothing compares the record's owner with who is signed in", True,
+                                        "no such comparison on this route, in what runs before it, or in the "
+                                        "functions it calls that Lantern read"))
             conditions.append(_cond("The record is one person's, not something every signed-in person may see", None,
                                     "Lantern does not know which records are private"))
             unknown.append("a rule outside the code Lantern reads (the database's own row rules, a library's "

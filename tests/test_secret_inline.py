@@ -212,3 +212,156 @@ def test_in_the_findings_it_is_ranked_medium_with_the_story_of_a_key_in_the_code
     fs = [f for f in scan(build_graph(tmp_path), offline=True)["findings"] if f["rule"] == "LW-SECRET-INLINE"]
     assert [(f["file"], f["line"], f["rank"]) for f in fs] == [("server.js", 4, "medium")], fs
     assert "key" in fs[0]["scenario"]["harm"].lower(), fs[0]["scenario"]
+
+
+# A secret kept under a plain name (round 3, 2026-11-11). The rule above reads names: `phrase: '…'` in a settings file
+# says nothing by itself. What says it is the call that signs with it, so the name is followed from that call to the
+# line that gives it its text: in the same file, or in the file of the project it was loaded from. Of 17 shapes of my
+# own 6 were missed, and a Flask app's `app.secret_key = '…'` was listed only by Bandit, ranked low, with the text in
+# its title. No held-out app was read; every value here is a plain made-up word.
+TEXT = "'made-up-signing-text'"
+SETTINGS = "module.exports = {\n  port: 3000,\n  phrase: " + TEXT + "\n}\n"
+LOADS = "const session = require('express-session')\nconst jwt = require('jsonwebtoken')\n"
+SIGNS = "app.use(session({ secret: config.phrase, resave: false }))\n"
+FOLLOWED = {
+    "caught: a plain name in a settings file, handed to the session":
+        ({"config.js": SETTINGS, "server.js": LOADS + "const config = require('./config')\n" + SIGNS},
+         [("config.js", 3, "signing")]),
+    "clean: the same settings file, and nothing signs with that name":
+        ({"config.js": SETTINGS, "server.js": LOADS + "const config = require('./config')\napp.listen(config.port)\n"},
+         []),
+    "caught: a plain name of the same file":
+        ({"server.js": LOADS + "const PHRASE = " + TEXT + "\napp.use(session({ secret: PHRASE }))\n"},
+         [("server.js", 3, "signing")]),
+    "caught: a settings object of the same file":
+        ({"server.js": LOADS + "const settings = {\n  port: 3000,\n  phrase: " + TEXT + "\n}\n"
+                               "app.use(session({ secret: settings.phrase }))\n"}, [("server.js", 5, "signing")]),
+    "clean: an object of the same file with that name in it, and the session takes a parameter's":
+        ({"server.js": LOADS + "const hints = { phrase: 'four words you remember' }\n"
+                               "function sessions(settings) {\n  return session({ secret: settings.phrase })\n}\n"}, []),
+    "caught: exported by itself, handed to the token signer":
+        ({"config.js": "exports.port = 3000\nexports.phrase = " + TEXT + "\n",
+          "server.js": LOADS + "const config = require('./config')\n"
+                               "const token = jwt.sign({ sub: 1 }, config.phrase, { expiresIn: '1h' })\n"},
+         [("config.js", 2, "signing")]),
+    "caught: an ES module's named export, imported by name, a token checked with it":
+        ({"src/config.ts": "export const port = 3000\nexport const phrase: string = " + TEXT + "\n",
+          "src/server.ts": "import jwt from 'jsonwebtoken'\nimport { phrase } from './config'\n"
+                           "export const check = (token: string) => jwt.verify(token, phrase)\n"},
+         [("src/config.ts", 2, "signing")]),
+    "caught: a default export imported under a name, handed to the cookie parser":
+        ({"config.js": "export default {\n  phrase: " + TEXT + "\n}\n",
+          "server.js": "import cookieParser from 'cookie-parser'\nimport config from './config.js'\n"
+                       "app.use(cookieParser(config.phrase))\n"}, [("config.js", 2, "signing")]),
+    "caught: taken out of the settings file by name":
+        ({"config.js": SETTINGS, "server.js": LOADS + "const { port, phrase } = require('./config')\n"
+                                              "app.use(session({ secret: phrase }))\n"},
+         [("config.js", 3, "signing")]),
+    "caught: a settings file in a folder, one level up from the code that signs":
+        ({"settings/all.js": SETTINGS, "src/server.js": LOADS + "const config = require('../settings/all')\n" + SIGNS},
+         [("settings/all.js", 3, "signing")]),
+    "caught: a settings file in JSON":
+        ({"settings.json": '{\n  "port": 3000,\n  "phrase": "made-up-signing-text"\n}\n',
+          "server.js": LOADS + "const config = require('./settings.json')\n" + SIGNS},
+         [("settings.json", 3, "signing")]),
+    "caught: the settings file falls back to text when the setting is missing":
+        ({"config.js": "module.exports = {\n  phrase: process.env.PHRASE || " + TEXT + "\n}\n",
+          "server.js": LOADS + "const config = require('./config')\n" + SIGNS}, [("config.js", 2, "default")]),
+    "caught: one text for each place the app runs":
+        ({"config.js": "module.exports = {\n  dev: { phrase: 'made-up-text-one' },\n"
+                       "  live: { phrase: 'made-up-text-two' }\n}\n",
+          "server.js": LOADS + "const config = require('./config')[process.env.NODE_ENV]\n" + SIGNS},
+         [("config.js", 2, "signing"), ("config.js", 3, "signing")]),
+    "clean: the settings file reads it from the environment":
+        ({"config.js": "module.exports = {\n  phrase: process.env.PHRASE\n}\n",
+          "server.js": LOADS + "const config = require('./config')\n" + SIGNS}, []),
+    "clean: the name holds the path of a key file":
+        ({"config.js": "module.exports = {\n  phrase: './keys/private.pem'\n}\n",
+          "server.js": LOADS + "const config = require('./config')\nconst t = jwt.sign({ sub: 1 }, config.phrase)\n"},
+         []),
+    "clean: a library's settings, not a file of the project":
+        ({"server.js": LOADS + "const config = require('config')\n" + SIGNS}, []),
+    "clean: the file it names is not in the project":
+        ({"server.js": LOADS + "const config = require('./config')\n" + SIGNS}, []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FOLLOWED))
+def test_a_secret_under_a_plain_name_is_found_from_the_call_that_signs_with_it(tmp_path, case):
+    files, want = FOLLOWED[case]
+    assert _found(tmp_path, files) == want
+
+
+PY_TEXT = "'made-up-signing-text'"
+PY_FOLLOWED = {
+    "caught: Flask's own name for the text that signs its sessions":
+        ({"app.py": "from flask import Flask\n\napp = Flask(__name__)\napp.secret_key = " + PY_TEXT + "\n"},
+         [("app.py", 4, "signing")]),
+    "caught: the same through the app's settings":
+        ({"app.py": "from flask import Flask\n\napp = Flask(__name__)\napp.config['SECRET_KEY'] = " + PY_TEXT + "\n"
+                    "app.config.update(JWT_SECRET_KEY=" + PY_TEXT + ")\n"},
+         [("app.py", 4, "signing"), ("app.py", 5, "signing")]),
+    "caught: in a settings file, at the top and in a class":
+        ({"settings.py": "DEBUG = False\nSECRET_KEY = " + PY_TEXT + "\n\n\nclass Live:\n    JWT_SECRET = " + PY_TEXT
+                         + "\n"}, [("settings.py", 2, "signing"), ("settings.py", 6, "signing")]),
+    "clean: read from the environment, empty, or the name of the setting":
+        ({"settings.py": "import os\n\nSECRET_KEY = os.environ['SECRET_KEY']\nJWT_SECRET = ''\n"
+                         "SECRET_KEY_SETTING = 'SECRET_KEY'\nHOOK_SECRET = 'HOOK_SECRET'\n"}, []),
+    "clean: names that are about a secret and are none":
+        ({"forms.py": "secret_label = 'Secret'\nsecret_help = 'Enter the secret you were sent.'\n"
+                      "SECRET_HEADER = 'x-hook-secret'\nsecret_file = '/run/secrets/signing.key'\n"}, []),
+    "caught: a plain name in a settings file, used as Flask's secret key":
+        ({"config.py": "PORT = 8000\nPHRASE = " + PY_TEXT + "\n",
+          "app.py": "from flask import Flask\n\nimport config\n\napp = Flask(__name__)\napp.secret_key = config.PHRASE\n"},
+         [("config.py", 2, "signing")]),
+    "clean: the same settings file, and nothing signs with that name":
+        ({"config.py": "PORT = 8000\nPHRASE = " + PY_TEXT + "\n",
+          "app.py": "from flask import Flask\n\nimport config\n\napp = Flask(__name__)\nprint(config.PORT)\n"}, []),
+    "caught: imported by name, a token signed with it":
+        ({"shop/config.py": "PHRASE = " + PY_TEXT + "\n",
+          "shop/auth.py": "import jwt\n\nfrom .config import PHRASE\n\n\ndef token(user):\n"
+                          "    return jwt.encode({'sub': user.id}, PHRASE, algorithm='HS256')\n"},
+         [("shop/config.py", 1, "signing")]),
+    "caught: the settings module of the same package":
+        ({"shop/config.py": "PHRASE = " + PY_TEXT + "\n",
+          "shop/auth.py": "import jwt\n\nfrom . import config\n\n\ndef check(token):\n"
+                          "    return jwt.decode(token, config.PHRASE, algorithms=['HS256'])\n"},
+         [("shop/config.py", 1, "signing")]),
+    "caught: a settings class of another file":
+        ({"shop/settings.py": "class Live:\n    DEBUG = False\n    PHRASE = " + PY_TEXT + "\n",
+          "shop/app.py": "from flask import Flask\n\nfrom shop.settings import Live\n\napp = Flask(__name__)\n"
+                         "app.config['SECRET_KEY'] = Live.PHRASE\n"}, [("shop/settings.py", 3, "signing")]),
+    "caught: a plain name of the same file, handed to a signer":
+        ({"links.py": "from itsdangerous import URLSafeTimedSerializer\n\nPHRASE = " + PY_TEXT + "\n"
+                      "signer = URLSafeTimedSerializer(PHRASE)\n"}, [("links.py", 3, "signing")]),
+    "clean: the plain name is read from the environment":
+        ({"config.py": "import os\n\nPHRASE = os.environ['PHRASE']\n",
+          "app.py": "from flask import Flask\n\nimport config\n\napp = Flask(__name__)\napp.secret_key = config.PHRASE\n"},
+         []),
+    "clean: a library's module":
+        ({"app.py": "import jwt\nimport settings_lib\n\n\ndef token(user):\n"
+                    "    return jwt.encode({'sub': user.id}, settings_lib.PHRASE, algorithm='HS256')\n"}, []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(PY_FOLLOWED))
+def test_a_python_secret_by_its_own_name_or_followed_from_the_call_that_signs(tmp_path, case):
+    files, want = PY_FOLLOWED[case]
+    assert _found(tmp_path, files) == want
+
+
+def test_a_line_this_rule_lists_is_not_listed_again_as_a_possible_password(tmp_path):
+    # one problem, one finding: Bandit lists `app.secret_key = '…'` as B105, ranked low, with the text in its title
+    pytest.importorskip("bandit")
+    from lantern.engine import build_graph
+    from lantern.security import scan
+    files = {"pyproject.toml": '[project]\nname="a"\nversion="0"\ndependencies=["flask"]\n',
+             "app.py": "from flask import Flask\n\napp = Flask(__name__)\napp.secret_key = " + PY_TEXT + "\n"
+                       "db_password = 'made-up-pass-text'\n"}
+    for rel, text in files.items():
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    fs = scan(build_graph(tmp_path), offline=True)["findings"]
+    assert sorted((f["rule"], f["line"], f["rank"]) for f in fs if f["file"] == "app.py") == \
+        [("B105", 5, "low"), ("LW-SECRET-INLINE", 4, "medium")], fs
+    mine = next(f for f in fs if f["rule"] == "LW-SECRET-INLINE")
+    assert "made-up-signing-text" not in str(mine["title"]) + str(mine["snippet"]), mine

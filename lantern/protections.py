@@ -51,6 +51,9 @@ GLOBAL_AUTH = re.compile(
     r"export\s+const\s+middleware\b|withMiddlewareAuth", re.I)
 
 
+SHOWN_BY_CODE = "the code on the way to this route turns away whoever is not signed in"
+
+
 def _where(hits, n=4) -> list[str]:
     out: list[str] = []
     for f, ln, _ in hits:          # one place per line: a pattern that matches twice on a line is still one place
@@ -225,8 +228,19 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     if need or no_auth:
         adj = call_adjacency(g)
         signed, weak, bare = [], [], []
+        # One story with the findings (2026-11-11). A route whose own code turns away whoever is not signed in, under
+        # whatever name (`logins_shown`, read by the flow step), is checked; and a route a finding calls open is not
+        # among those that show a login, whatever the names around it say (a token check that lets a failed token
+        # on, a login made optional). Results an older Lantern wrote have neither, and read as they did.
+        shown = set((sec or {}).get("logins_shown") or ())
+        said_open = {(f.get("file"), f.get("line")) for f in no_auth}
         for n, d in need:
             sign = login_check(g, n, adj, repo.text(n.file) if n.file else None)
+            if n.id in shown:
+                if sign is None or sign[0] != "strong":
+                    sign = ("strong", SHOWN_BY_CODE)
+            elif sign is not None and sign[0] == "strong" and (n.file, n.start_line) in said_open:
+                sign = None
             if sign is None:
                 bare.append((n, d, None))
             elif sign[0] == "weak":

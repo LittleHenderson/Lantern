@@ -92,6 +92,28 @@ def test_the_same_app_with_the_value_handed_to_the_driver_apart_is_clean(tmp_pat
     assert _flows(tmp_path, files) == []
 
 
+# A handler written inside the call that registers it is read as part of the code around it. The function it calls
+# may be in a file that is read later: the handler's file has to be read again once that function is known. (Until
+# 2026-11-11 it was not, and such a flow was missed or found depending on the files' names.)
+INLINE_SERVER = ("const express = require('express')\nconst { findUsers } = require('./{dir}/db')\n"
+                 "const app = express()\n\napp.get('/users', (req, res) => {\n"
+                 "  findUsers(req.query.name, (err, rows) => res.json(rows))\n})\napp.listen(3000)\n")
+
+
+@pytest.mark.parametrize("folder", ["core", "lib", "util", "zz"])
+def test_a_handler_written_inline_that_calls_into_another_file(tmp_path, folder):
+    flows = _flows(tmp_path, {"server.js": INLINE_SERVER.replace("{dir}", folder),
+                              f"{folder}/db.js": APP["core/db.js"]})
+    assert [(f["class"], f["file"], f["line"]) for f in flows] == [("sql", f"{folder}/db.js", 6)], flows
+    assert flows[0]["source"]["file"] == "server.js", flows
+
+
+@pytest.mark.parametrize("name", ["app.js", "index.js", "server.js", "zserver.js"])
+def test_the_same_whatever_the_handlers_file_is_called(tmp_path, name):
+    flows = _flows(tmp_path, {name: INLINE_SERVER.replace("{dir}", "lib"), "lib/db.js": APP["core/db.js"]})
+    assert [(f["class"], f["file"]) for f in flows] == [("sql", "lib/db.js")], flows
+
+
 # ------------------------------------------------------------- database queries
 
 SQL = {
@@ -434,6 +456,123 @@ PATHS = {
 @pytest.mark.parametrize("case", sorted(PATHS))
 def test_files(tmp_path, case):
     _check(tmp_path, PATHS, case)
+
+
+# The everyday safe helper, with the folder as its parameter (see the same section of `tests/test_flow.py`).
+INSIDE = ("function inside (folder, name) {\n  const full = path.resolve(folder, name)\n"
+          "  if (!full.startsWith(folder + path.sep)) throw new Error('outside')\n  return full\n}\n")
+SEND = _route("  res.sendFile(inside(BASE, req.query.name))\n")
+FOLDER = {
+    "clean: the helper works the path out and compares it with its folder":
+        (INSIDE + SEND, []),
+    "clean: the folder is worked out first, then compared":
+        ("function inside (folder, name) {\n  const root = path.resolve(folder)\n"
+         "  const full = path.resolve(root, name)\n"
+         "  if (!full.startsWith(root + path.sep)) throw new Error('outside')\n  return full\n}\n" + SEND, []),
+    "caught: glued together, where starting with the folder proves nothing":
+        ("function inside (folder, name) {\n  const full = folder + '/' + name\n"
+         "  if (!full.startsWith(folder)) throw new Error('outside')\n  return full\n}\n" + SEND, ["path"]),
+    "caught: the request chooses the folder too, and the check compares with what it chose":
+        (INSIDE + _route("  res.sendFile(inside(req.query.folder, req.query.name))\n"), ["path"]),
+    "clean: the way from the folder to the path, kept in a name, must not begin with two dots":
+        ("function inside (folder, name) {\n  const full = path.resolve(folder, name)\n"
+         "  const rel = path.relative(folder, full)\n"
+         "  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('outside')\n  return full\n}\n" + SEND,
+         []),
+    "caught: the way from the folder is worked out and never looked at":
+        ("function inside (folder, name) {\n  const full = path.resolve(folder, name)\n"
+         "  const rel = path.relative(folder, full)\n"
+         "  if (rel.length > 200) throw new Error('too long')\n  return full\n}\n" + SEND, ["path"]),
+    "clean: a yes-or-no helper that is handed the folder":
+        ("function stays (folder, full) {\n  return path.resolve(full).startsWith(path.resolve(folder) + path.sep)\n}\n" +
+         _route("  const full = path.join(BASE, req.query.name)\n"
+                "  if (!stays(BASE, full)) return res.status(400).end()\n  res.sendFile(full)\n"), []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FOLDER))
+def test_a_check_against_a_folder_that_is_a_parameter(tmp_path, case):
+    _check(tmp_path, FOLDER, case)
+
+
+# ------------------------------------------------------------- an uploaded archive, unpacked entry by entry
+# The names of the entries inside an archive are whatever its maker wrote (`../../etc/cron.d/x`): written to disk
+# where the name says, they land outside the folder. Added 2026-11-11: until then no archive was followed in
+# JavaScript at all.
+ZIP_HEAD = HEAD + ("const multer = require('multer')\nconst AdmZip = require('adm-zip')\n"
+                   "const unzipper = require('unzipper')\nconst upload = multer({ dest: 'tmp/' })\n")
+UP = "app.post('/import', upload.single('archive'), async (req, res) => {\n"
+ARCHIVES = {
+    "caught: each entry is written where its name says":
+        (UP + "  const zip = new AdmZip(req.file.buffer)\n  for (const entry of zip.getEntries()) {\n"
+              "    fs.writeFileSync(path.join(BASE, entry.entryName), entry.getData())\n  }\n  res.end()\n})\n",
+         ["path"]),
+    "caught: the archive is opened by the path the upload was kept under":
+        (UP + "  const zip = new AdmZip(req.file.path)\n  zip.getEntries().forEach((entry) => {\n"
+              "    fs.writeFileSync(path.join(BASE, entry.entryName), entry.getData())\n  })\n  res.end()\n})\n",
+         ["path"]),
+    "caught: read as a stream, each entry piped to a file named after it":
+        (UP + "  fs.createReadStream(req.file.path)\n    .pipe(unzipper.Parse())\n    .on('entry', (entry) => {\n"
+              "      entry.pipe(fs.createWriteStream(path.join(BASE, entry.path)))\n    })\n  res.end()\n})\n",
+         ["path"]),
+    "caught: opened from the buffer, each file written under its own path":
+        (UP + "  const directory = await unzipper.Open.buffer(req.file.buffer)\n"
+              "  for (const file of directory.files) {\n"
+              "    fs.writeFileSync(path.join(BASE, file.path), await file.buffer())\n  }\n  res.end()\n})\n",
+         ["path"]),
+    "clean: an entry that would land outside the folder is passed over":
+        (UP + "  const zip = new AdmZip(req.file.buffer)\n  for (const entry of zip.getEntries()) {\n"
+              "    const target = path.resolve(BASE, entry.entryName)\n"
+              "    if (!target.startsWith(BASE + path.sep)) continue\n"
+              "    fs.writeFileSync(target, entry.getData())\n  }\n  res.end()\n})\n", []),
+    "clean: only the last part of each entry's name is used":
+        (UP + "  const zip = new AdmZip(req.file.buffer)\n  for (const entry of zip.getEntries()) {\n"
+              "    fs.writeFileSync(path.join(BASE, path.basename(entry.entryName)), entry.getData())\n  }\n"
+              "  res.end()\n})\n", []),
+    "clean: an archive of the server's own":
+        (UP + "  const zip = new AdmZip(path.join(BASE, 'seed.zip'))\n  for (const entry of zip.getEntries()) {\n"
+              "    fs.writeFileSync(path.join(BASE, entry.entryName), entry.getData())\n  }\n  res.end()\n})\n", []),
+    "clean: the entries are only counted":
+        (UP + "  const zip = new AdmZip(req.file.buffer)\n  res.json({ entries: zip.getEntries().length })\n})\n", []),
+    "caught: a function in another part of the file is handed the buffer and the folder":
+        ("function unpack (buffer, dest) {\n  const zip = new AdmZip(buffer)\n  zip.getEntries().forEach((entry) => {\n"
+         "    fs.writeFileSync(path.join(dest, entry.entryName), entry.getData())\n  })\n}\n" +
+         UP + "  unpack(req.file.buffer, BASE)\n  res.end()\n})\n", ["path"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(ARCHIVES))
+def test_an_uploaded_archive_and_the_names_inside_it(tmp_path, case):
+    _check(tmp_path, ARCHIVES, case, head=ZIP_HEAD)
+
+
+UNPACK_HEAD = "const fs = require('fs')\nconst path = require('path')\nconst AdmZip = require('adm-zip')\n\n"
+UNPACKS = {
+    "caught: the helper writes each entry where its name says":
+        ("exports.unpack = function (buffer, dest) {\n  const zip = new AdmZip(buffer)\n"
+         "  zip.getEntries().forEach((entry) => {\n"
+         "    fs.writeFileSync(path.join(dest, entry.entryName), entry.getData())\n  })\n}\n",
+         [("path", "lib/archive.js", 8)]),
+    "clean: the helper uses only the last part of each entry's name":
+        ("exports.unpack = function (buffer, dest) {\n  const zip = new AdmZip(buffer)\n"
+         "  zip.getEntries().forEach((entry) => {\n"
+         "    fs.writeFileSync(path.join(dest, path.basename(entry.entryName)), entry.getData())\n  })\n}\n", []),
+    "clean: the helper only counts the entries":
+        ("exports.unpack = function (buffer, dest) {\n  const zip = new AdmZip(buffer)\n"
+         "  return zip.getEntries().length\n}\n", []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(UNPACKS))
+def test_an_uploaded_archive_handed_to_a_helper_in_another_file(tmp_path, case):
+    helper, want = UNPACKS[case]
+    flows = _flows(tmp_path, {
+        "server.js": ZIP_HEAD + "const { unpack } = require('./lib/archive')\n" + UP +
+                     "  unpack(req.file.buffer, BASE)\n  res.end()\n})\n",
+        "lib/archive.js": UNPACK_HEAD + helper})
+    assert [(f["class"], f["file"], f["line"]) for f in flows] == want, flows
+    if want:
+        assert flows[0]["source"]["file"] == "server.js", flows
 
 
 # ------------------------------------------------------------- code, stored objects, XML, filters, merged objects
@@ -915,3 +1054,226 @@ def test_a_template_that_prints_a_value_raw_is_ranked_by_what_is_known_of_the_va
             assert why in rank_reason(f), rank_reason(f)
             assert f["cwe"] == 79 and "without escaping" in f["title"], f
             assert not f.get("flow") or (f["input"]["flow"] and f["flow"]["sink"]["file"] == "views/profile.ejs"), f
+
+
+# ------------------------------------------------------------- an escape of the project's own, written other ways
+# Round 3 (2026-11-11): the one false alarm left on the safe twins of the held-out set was a page escaped by a small
+# helper. The held-out app was not read; 28 shapes of my own were, and the engine was wrong on the ways below of
+# saying what each character becomes. What it has to know is what the helper gives for `<`: worked out from the
+# helper's own code, never taken from its name.
+def _esc(body):
+    return "function esc (s) {\n" + body + "}\n" + HELLO
+
+
+TABLE3 = "const TABLE = { '&': '&amp;', '<': '&lt;', '>': '&gt;' }\n"
+BY_REPLACER = {
+    "clean: the table is written in the replacer itself":
+        (_esc("  return String(s).replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "
+              "'\"': '&quot;', \"'\": '&#39;' }[c]))\n"), []),
+    "clean: each character becomes its number":
+        (_esc("  return String(s).replace(/[&<>\"']/g, (c) => '&#' + c.charCodeAt(0) + ';')\n"), []),
+    "clean: the same, written as a template":
+        (_esc("  return String(s).replace(/[&<>\"']/g, (c) => `&#${c.charCodeAt(0)};`)\n"), []),
+    "clean: a switch on the character":
+        (_esc("  return String(s).replace(/[&<>]/g, function (c) {\n    switch (c) {\n"
+              "      case '&': return '&amp;'\n      case '<': return '&lt;'\n      default: return '&gt;'\n"
+              "    }\n  })\n"), []),
+    "clean: an if on the character":
+        (_esc("  return String(s).replace(/[&<>]/g, function (c) {\n    if (c === '<') return '&lt;'\n"
+              "    if (c === '>') return '&gt;'\n    return '&amp;'\n  })\n"), []),
+    "clean: a question on the character":
+        (_esc("  return String(s).replace(/[<>]/g, (c) => c === '<' ? '&lt;' : '&gt;')\n"), []),
+    "clean: the table, or the character itself where the table has none":
+        (TABLE3 + _esc("  return String(s).replace(/[&<>]/g, (c) => TABLE[c] || c)\n"), []),
+    "clean: the replacer is a function with a name":
+        (TABLE3 + "function one (c) {\n  return TABLE[c]\n}\n" + _esc("  return String(s).replace(/[&<>]/g, one)\n"),
+         []),
+    "clean: split at each character and joined with what it becomes":
+        (_esc("  return String(s).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;')\n"),
+         []),
+    "clean: single characters between bars, each asked of the table":
+        (TABLE3 + _esc("  return String(s).replace(/<|>|&/g, (c) => TABLE[c])\n"), []),
+    "caught: a longer match is handed to the replacer whole, and the table has no such entry":
+        (TABLE3 + _esc("  return String(s).replace(/<script|</g, (c) => TABLE[c] || c)\n"), ["xss"]),
+    "caught: the table written in the replacer has no <":
+        (_esc("  return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '>': '&gt;' }[c]))\n"), ["xss"]),
+    "caught: the replacer gives the character back":
+        (_esc("  return String(s).replace(/[&<>]/g, (c) => c)\n"), ["xss"]),
+    "caught: the replacer puts the character after its number":
+        (_esc("  return String(s).replace(/[&<>]/g, (c) => '&#' + c.charCodeAt(0) + ';' + c)\n"), ["xss"]),
+    "caught: the switch has no case for < and gives the character back otherwise":
+        (_esc("  return String(s).replace(/[&<>]/g, function (c) {\n    switch (c) {\n"
+              "      case '&': return '&amp;'\n      case '>': return '&gt;'\n      default: return c\n"
+              "    }\n  })\n"), ["xss"]),
+    "caught: the question is asked of > only":
+        (_esc("  return String(s).replace(/[<>]/g, (c) => c === '>' ? '&gt;' : c)\n"), ["xss"]),
+    "caught: the table has no <, and the character itself is what is left":
+        ("const TABLE = { '&': '&amp;', '>': '&gt;' }\n"
+         + _esc("  return String(s).replace(/[&<>]/g, (c) => TABLE[c] || c)\n"), ["xss"]),
+    "caught: the replacer with a name gives back what another table says, which Lantern does not know":
+        ("function one (c) {\n  return lookup(c)\n}\n" + _esc("  return String(s).replace(/[&<>]/g, one)\n"),
+         ["xss"]),
+    "caught: split and joined at > only":
+        (_esc("  return String(s).split('>').join('&gt;')\n"), ["xss"]),
+    "caught: split at < and joined with a tag":
+        (_esc("  return String(s).split('<').join('<wbr>')\n"), ["xss"]),
+    "caught: escaped, then turned back":
+        ("const _ = require('lodash')\n" + _route("  res.send('<p>' + _.unescape(_.escape(req.query.name)) + '</p>')\n"),
+         ["xss"]),
+    "caught: escaped by the project's own helper, then decoded":
+        (ESC + _route("  res.send('<p>' + decodeURIComponent(encodeURIComponent(req.query.name)) + '</p>')\n"),
+         ["xss"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(BY_REPLACER))
+def test_an_escape_that_says_what_each_character_becomes(tmp_path, case):
+    _check(tmp_path, BY_REPLACER, case)
+
+
+def test_the_same_escape_in_the_handlers_file_of_an_app_split_over_files(tmp_path):
+    files = {"server.js": "const express = require('express')\nconst handlers = require('./core/handlers')\n"
+                          "const app = express()\napp.get('/hello', handlers.hello)\n",
+             "core/handlers.js": "function escapeHtml (s) {\n  return String(s).replace(/[&<>\"']/g, (c) => "
+                                 "({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[c]))\n"
+                                 "}\n\nexports.hello = function (req, res) {\n"
+                                 "  res.send('<p>Hello ' + {use} + '</p>')\n}\n"}
+    safe = dict(files, **{"core/handlers.js": files["core/handlers.js"].replace("{use}", "escapeHtml(req.query.q)")})
+    assert _kinds(_flows(tmp_path / "safe", safe)) == []
+    raw = dict(files, **{"core/handlers.js": files["core/handlers.js"].replace("{use}", "req.query.q")})
+    assert _kinds(_flows(tmp_path / "raw", raw)) == ["xss"]
+
+
+# ------------------------------------------------------------- an address that starts with a value of the server's own
+# 2026-11-11, the JavaScript twin of `OWN_START` in tests/test_flow.py: the request chooses a path or a query on a
+# host the server names; the near-misses beside each safe shape must still be caught.
+
+OWN_START_JS = ("const express = require('express')\nconst axios = require('axios')\nconst app = express()\n"
+                "const API = process.env.API_URL\nconst proto = process.env.PROTO\n"
+                "const HOST = process.env.API_HOST\nconst PORT = process.env.API_PORT\n"
+                "const REGIONS = { eu: 'https://eu.example', us: 'https://us.example' }\n"
+                "const SITES = { docs: 'https://docs.example.com/start', shop: 'https://shop.example.com/start' }\n"
+                "function get (path) {\n  return fetch(API + path)\n}\n")
+OWN_START_X = "app.get('/x/:id', async (req, res) => {\n"
+OWN_START_END = "  res.json(await r.json())\n})\n"
+OWN_START_GO = "app.get('/go', (req, res) => {\n"
+OWN_START_CASES = {
+    "clean: the setting, then a path":
+        (OWN_START_X + "  const r = await fetch(`${API}/items/${req.params.id}`)\n" + OWN_START_END, []),
+    "clean: with plus":
+        (OWN_START_X + "  const r = await axios.get(API + '/items/' + req.params.id)\n  res.json(r.data)\n})\n", []),
+    "clean: the setting, then one slash":
+        (OWN_START_X + "  const r = await fetch(API + '/' + req.params.id)\n" + OWN_START_END, []),
+    "clean: read from the environment in place":
+        (OWN_START_X + "  const r = await fetch(`${process.env.API_URL}/items/${req.params.id}`)\n" + OWN_START_END, []),
+    "clean: a helper that puts its own setting in front":
+        (OWN_START_X + "  const r = await get('/items/' + req.params.id)\n" + OWN_START_END, []),
+    "clean: the host and the port are settings":
+        (OWN_START_X + "  const r = await fetch(`http://${HOST}:${PORT}/api/${req.params.id}`)\n" + OWN_START_END, []),
+    "clean: an address out of a table in the code, then a path":
+        (OWN_START_X + "  const r = await fetch(REGIONS[req.query.region] + '/items/' + req.params.id)\n" +
+         OWN_START_END, []),
+    "caught: the request's text straight after the setting":
+        (OWN_START_X + "  const r = await fetch(API + req.query.path)\n" + OWN_START_END, ["ssrf"]),
+    "caught: the helper is handed the request's text as it came":
+        (OWN_START_X + "  const r = await get(req.query.path)\n" + OWN_START_END, ["ssrf"]),
+    "caught: the scheme, two slashes, then the request's host":
+        (OWN_START_X + "  const r = await fetch(`${proto}//${req.query.host}/status`)\n" + OWN_START_END, ["ssrf"]),
+    "caught: a dot after the setting":
+        (OWN_START_X + "  const r = await fetch(`${API}.${req.query.zone}/status`)\n" + OWN_START_END, ["ssrf"]),
+    "caught: the host is a setting, the port is the request's":
+        (OWN_START_X + "  const r = await fetch(`http://${HOST}:${req.query.port}/api`)\n" + OWN_START_END, ["ssrf"]),
+    "caught: a table of hosts with nothing after them, the request's text straight after":
+        (OWN_START_X + "  const r = await fetch(REGIONS[req.query.region] + req.query.path)\n" + OWN_START_END,
+         ["ssrf"]),
+    "clean: a redirect to the server's own site and a path":
+        (OWN_START_GO + "  res.redirect(`${process.env.APP_URL}/welcome?next=${req.query.next}`)\n})\n", []),
+    "clean: a redirect to a whole address out of a table in the code, the request's text in the query":
+        (OWN_START_GO + "  res.redirect(SITES[req.query.site] + '?from=' + req.query.from)\n})\n", []),
+    "caught: a redirect with the request's text straight after the site":
+        (OWN_START_GO + "  res.redirect(process.env.APP_URL + req.query.next)\n})\n", ["redirect"]),
+    "caught: the site, one slash, then the request's text (an empty setting makes it two slashes and a host)":
+        (OWN_START_GO + "  res.redirect(process.env.APP_URL + '/' + req.query.next)\n})\n", ["redirect"]),
+    "caught: hosts out of a table with nothing after them, the request's text straight after":
+        (OWN_START_GO + "  res.redirect(REGIONS[req.query.region] + req.query.next)\n})\n", ["redirect"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(OWN_START_CASES))
+def test_an_address_that_starts_with_a_value_of_the_servers_own(tmp_path, case):
+    _check(tmp_path, OWN_START_CASES, case, head=OWN_START_JS)
+
+
+# ------------------------------------------------------------- an address with no host in it, and the request's own
+# The JavaScript twin of `PATH_ONLY` in tests/test_flow.py (2026-11-11): a client made with a base address, the
+# `baseURL` option, `concat`, an array joined with a slash; beside them one slash and the request's text, parts
+# joined with nothing or a dot, and the host the request itself names.
+
+PATH_ONLY_JS = ("const express = require('express')\nconst axios = require('axios')\n"
+                "const punycode = require('punycode')\nconst psl = require('psl')\nconst app = express()\n"
+                "const API = process.env.API_URL\nconst api = axios.create({ baseURL: API })\n"
+                "function trimmed(text) {\n  return text.trim().toLowerCase()\n}\n"
+                "app.get('/x/:id', async (req, res) => {\n")
+PATH_ONLY_END = "  res.json(r.data)\n})\n"
+PATH_ONLY_CASES = {
+    "clean: a client with a base address, handed a path":
+        ("  const r = await api.get('/items/' + req.params.id)\n" + PATH_ONLY_END, []),
+    "clean: the baseURL option":
+        ("  const r = await axios.get('/items/' + req.params.id, { baseURL: API })\n" + PATH_ONLY_END, []),
+    "caught: a client with a base address, handed the request's text as it came":
+        ("  const r = await api.get(req.query.path)\n" + PATH_ONLY_END, ["ssrf"]),
+    "caught: the same, one slash and the request's text":
+        ("  const r = await api.get('/' + req.query.path)\n" + PATH_ONLY_END, ["ssrf"]),
+    "clean: concat":
+        ("  const r = await axios.get(API.concat('/items/', req.params.id))\n" + PATH_ONLY_END, []),
+    "caught: concat with the request's text straight after the setting":
+        ("  const r = await axios.get(API.concat(req.query.path))\n" + PATH_ONLY_END, ["ssrf"]),
+    "clean: an array joined with a slash":
+        ("  const r = await axios.get([API, 'items', req.params.id].join('/'))\n" + PATH_ONLY_END, []),
+    "caught: an array joined with nothing":
+        ("  const r = await axios.get([API, req.query.path].join(''))\n" + PATH_ONLY_END, ["ssrf"]),
+    "caught: an array joined with a dot":
+        ("  const r = await axios.get([API, req.query.zone].join('.'))\n" + PATH_ONLY_END, ["ssrf"]),
+    "caught: the host name the request names":
+        ("  const r = await axios.get('http://' + req.hostname + '/x/' + req.params.id)\n" + PATH_ONLY_END, ["ssrf"]),
+    # what a library call gave back after the request's text went into it is not a value of the server's own
+    # (`Val.lost`; the caught one failed first, the clean one pins what read right)
+    "caught: the host came out of a library call the request's text went into":
+        ("  const host = punycode.toASCII(req.query.host)\n"
+         "  const r = await axios.get('https://' + host + '/api/' + req.params.id)\n" + PATH_ONLY_END, ["ssrf"]),
+    "clean: a later part came out of such a call, after the setting and a path":
+        ("  const name = punycode.toASCII(req.query.name)\n"
+         "  const r = await axios.get(API + '/items/' + name + '/' + req.params.id)\n" + PATH_ONLY_END, []),
+    # ... and the ways such a value gets into the address (the changelog says which of these failed before)
+    "caught: a field of what such a call gave back":
+        ("  const host = psl.parse(req.query.host).domain\n"
+         "  const r = await axios.get('https://' + host + '/api/' + req.params.id)\n" + PATH_ONLY_END, ["ssrf"]),
+    "caught: such a call's result in a template text":
+        ("  const r = await axios.get(`https://${punycode.toASCII(req.query.host)}/api/${req.params.id}`)\n"
+         + PATH_ONLY_END, ["ssrf"]),
+    "caught: such a call's result in one branch, written text in the other":
+        ("  const host = req.query.host ? punycode.toASCII(req.query.host) : 'api.example.com'\n"
+         "  const r = await axios.get('https://' + host + '/api/' + req.params.id)\n" + PATH_ONLY_END, ["ssrf"]),
+    "caught: such a call's result turned into text with String()":
+        ("  const host = String(punycode.toASCII(req.query.host))\n"
+         "  const r = await axios.get('https://' + host + '/api/' + req.params.id)\n" + PATH_ONLY_END, ["ssrf"]),
+    "caught: such a call's result handed on to a second library call":
+        ("  const host = punycode.toUnicode(punycode.toASCII(req.query.host))\n"
+         "  const r = await axios.get('https://' + host + '/api/' + req.params.id)\n" + PATH_ONLY_END, ["ssrf"]),
+    "caught: such a call's result handed through a helper of the project and back":
+        ("  const host = trimmed(punycode.toASCII(req.query.host))\n"
+         "  const r = await axios.get('https://' + host + '/api/' + req.params.id)\n" + PATH_ONLY_END, ["ssrf"]),
+    "clean: a setting handed through the same helper":
+        ("  const host = trimmed(process.env.API_HOST)\n"
+         "  const r = await axios.get('https://' + host + '/api/' + req.params.id)\n" + PATH_ONLY_END, []),
+    "clean: the library call was handed written text":
+        ("  const host = punycode.toASCII('api.example.com')\n"
+         "  const r = await axios.get('https://' + host + '/api/' + req.params.id)\n" + PATH_ONLY_END, []),
+    "caught: the Host header":
+        ("  const r = await axios.get(`${req.protocol}://${req.get('host')}/internal`)\n" + PATH_ONLY_END, ["ssrf"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(PATH_ONLY_CASES))
+def test_an_address_with_no_host_in_it_and_the_hosts_the_request_names(tmp_path, case):
+    _check(tmp_path, PATH_ONLY_CASES, case, head=PATH_ONLY_JS)

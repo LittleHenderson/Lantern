@@ -7,6 +7,7 @@ part of the callee (`execute`), which then needs evidence in the value itself (t
 
 from __future__ import annotations
 
+import os
 import re
 
 CLASSES = ("sql", "shell", "eval", "deserialize", "xxe", "path", "ssrf", "xss", "redirect", "nosql", "pollution")
@@ -65,6 +66,69 @@ def host_fixed(prefix) -> bool:
     return isinstance(prefix, str) and bool(HOST_FIXED.match(prefix))
 
 
+# Written leading text that names no host and lets nothing after it name one: a path (`/items/`, `items/`), a `?`
+# or a `#`. Not one slash alone (`'/' + x` is `//host` when `x` begins with a slash), not text a scheme could still
+# grow out of (`'http' + x`). An outbound call with such an address goes to the base its client was made with, or
+# fails; read against a base (`urljoin(base, page)`, `new URL(page, base)`) it stays on the base's host.
+NO_HOST = re.compile(r"^(?:/[^/\\]|[?#]|[^:/?#\\\x00\x01]+[/?#])")
+URL_JOIN = re.compile(r"^(?:urllib\.parse\.|urlparse\.|requests\.compat\.)?urljoin$")
+
+
+def no_host(prefix) -> bool:
+    return isinstance(prefix, str) and bool(NO_HOST.match(prefix))
+
+
+# ---- an address that starts with a value nobody outside chose: a setting (`API_URL + '/items/' + id`,
+# `f"http://{HOST}:{PORT}/api/{id}"`), a field the object was built with (`self.base + path`), an address out of a
+# table of the code. The host is then the server's to name: the request chooses a path or a query on it, not where
+# the server connects, once written text has closed the host part. `flow.concat` keeps the start of a text with
+# `MINE` standing for each such value, and `started` reads it. What must stay caught: the request's text straight
+# after such a value (`API + x`: `.evil.com/`), a dot or an at sign after it, only the scheme the server's.
+MINE = "\x01"                      # in the start of a text: a value nobody outside chose (it may be empty)
+BASE = "//\x00base"                # leading text of a value whose host such a start gives; `HOST_FIXED` reads it as one
+BASE_LONE = BASE + "\x00"          # ... closed by one slash and nothing written after it (see `START_SITE`)
+BARE_START = re.compile(r"^(?:(?:https?:)?//[^/?#@\\\s]*)?$", re.I)     # written text: nothing, or a scheme and host
+# The start up to the character that closes the host. Three shapes: a written scheme (or none) and `//`; a scheme
+# that is such a value (`f"{SCHEME}://{HOST}/x"`); such a value that holds the host itself, then nothing or more of
+# the host (`:8080`), then one slash (two would begin a host: `proto + '//' + x`), a `?` or a `#`.
+START_CLOSED = re.compile(r"^(?:(?:https?:|\x01:?)?//[^/?#@\\\s]+(?=[/?#])|"
+                          r"\x01(?:[^/?#@\\\s]*[^/?#@\\\s:])?(?=[?#]|/(?![/\\])))", re.I)
+# The same for a redirect, where such a value may be empty (a path prefix of the site): `PREFIX + '/' + next` is
+# then `//evil.example` when `next` begins with a slash, so after one slash a written character must follow.
+START_SITE = re.compile(r"^(?:(?:https?:|\x01:?)?//[^/?#@\\\s]+(?=[/?#])|"
+                        r"\x01(?:[^/?#@\\\s]*[^/?#@\\\s:])?(?=[?#]|/\x01*[^/\\\x01]))", re.I)
+OPEN_START = re.compile(r"^(?:(?:https?:|\x01:?)?//)?[^/?#@\\\s]*\x01$", re.I)   # still inside the host, on such a value
+
+
+def started(prefix: str, start: str, cut: bool) -> str:
+    """The leading text of a value built from parts. `prefix`: the written text it begins with, as it always was.
+    `start`: the same with `MINE` for each value nobody outside chose, up to the first value from outside (`cut`:
+    there is one). A written start that already says where the address goes stays as it is, and so does any text
+    that is no address."""
+    if MINE not in start or not BARE_START.match(prefix):
+        return prefix
+    m = START_CLOSED.match(start)
+    if m:
+        return (BASE if START_SITE.match(start) else BASE_LONE) + start[m.end():]
+    return BASE if cut and OPEN_START.match(start) else prefix
+
+
+def closes(text, site: bool = False) -> bool:
+    """Whether text glued straight after a start of the server's own closes the host (`site`: for a redirect)."""
+    return isinstance(text, str) and bool((START_SITE if site else START_CLOSED).match(MINE + text))
+
+
+def joined(a, b):
+    """The leading text of a value that is one of two: what both begin with; where each names its host in full and
+    the two differ (addresses out of a table of the code), a host that is fixed either way."""
+    if not (isinstance(a, str) and isinstance(b, str)):
+        return None
+    both = os.path.commonprefix([a, b])
+    if host_fixed(both) or not (host_fixed(a) and host_fixed(b)):
+        return both
+    return (BASE_LONE if a.startswith(BASE_LONE) or b.startswith(BASE_LONE) else BASE) + "/"
+
+
 def local_path(prefix) -> bool:
     """Leading text that keeps a redirect on this site: one slash and something that is not a second one."""
     return isinstance(prefix, str) and len(prefix) > 1 and prefix[0] == "/" and prefix[1] not in "/\\"
@@ -78,7 +142,7 @@ OWN_MARKS = frozenset({"redirect:own", "redirect:base"})
 OWN_ATTRS = {"origin", "href", "host", "hostname", "protocol", "port", "scheme", "netloc"}
 OWN_KEEP = {"clone", "toString", "toJSON", "valueOf", "strip", "rstrip", "lstrip", "trim", "trimEnd", "lower",
             "toLowerCase", "casefold"}                  # calls that give the same address back
-PY_OWN = {"url", "base_url", "url_root"}                 # of a Python request: the whole address, host first
+PY_OWN = {"url", "base_url", "url_root", "host_url", "root_url"}    # of a Python request: the whole address, host first
 URL_HOST_SET = {"host", "hostname", "href", "port", "protocol", "username", "password"}
 OWN = "\x00own"                    # leading text of a value that starts with this site's own origin
 OWN_EXACT = OWN + "\x00"           # ... and is nothing but that origin: the text glued after it goes on
@@ -92,7 +156,7 @@ def own_site(prefix) -> bool:
 def stays(prefix) -> bool:
     """Leading text that says where a redirect goes, whatever follows: a site written in the code, a path on this
     site, or this site's own origin."""
-    return host_fixed(prefix) or local_path(prefix) or own_site(prefix)
+    return (host_fixed(prefix) and not prefix.startswith(BASE_LONE)) or local_path(prefix) or own_site(prefix)
 
 
 # ---------------------------------------------------------------------------------------------- request data
@@ -100,6 +164,7 @@ def stays(prefix) -> bool:
 PY_INPUT = {"args", "form", "values", "json", "data", "files", "cookies", "headers", "GET", "POST", "FILES", "COOKIES",
             "META", "body", "query_params", "path_params", "view_args", "url", "path", "full_path", "query", "match_info",
             "rel_url", "query_string", "stream", "raw_post_data", "base_url", "url_root", "host", "referrer",
+            "host_url", "root_url", "origin",
             "user_agent", "content_type", "get_json", "get_data", "getlist", "query_arguments", "body_arguments",
             "arguments", "params", "post", "content", "text", "forms", "base64_data"}
 JS_INPUT = {"query", "params", "body", "headers", "cookies", "signedCookies", "files", "file", "url", "originalUrl",
@@ -286,6 +351,11 @@ RENDER_CALL = re.compile(r"^(flask\.render_template|flask\.templating\.render_te
                          r"django\.template\.response\.TemplateResponse|"
                          r"express\.Response\b.*\.render|.*\.TemplateResponse|bottle\.(template|jinja2_template)|"
                          r"aiohttp_jinja2\.render_template|sanic_jinja2\b.*\.render)$")
+# a page whose template is written in the code: Flask's escapes what the text prints unless the text says not to,
+# jinja2's own `Template` escapes nothing unless it is told to (`Engine.inline`)
+INLINE_PAGE = re.compile(r"^(flask|quart)(\.templating)?\.render_template_string$")
+INLINE_TEMPLATE = re.compile(r"^jinja2(\.environment)?\.Template$")
+PAGE_TEXT_METHODS = {"format", "format_map", "join"}      # fixed text filled in, or put between the parts
 # ---- text saved as a template: a file written into the folder the template engine reads its templates from
 OPEN_CALL = re.compile(r"^(open|io\.open|codecs\.open)$")
 FILE_WRITE = re.compile(r"^(fs|fs/promises|fs-extra|node:fs|node:fs/promises|graceful-fs|fs\.promises)\."
@@ -298,6 +368,13 @@ FILE_EXT = re.compile(r"\.([A-Za-z0-9]{1,10})$")
 TEMPLATE_EXT = {"html", "htm", "xhtml", "jinja", "jinja2", "j2", "tpl", "tmpl", "ejs", "pug", "jade", "hbs",
                 "handlebars", "mustache", "njk", "liquid", "twig", "txt", "xml", "svg", "mako", "eta", "vue"}
 UPLOAD_SAVE = {"save", "mv", "saveAs", "save_to", "transferTo"}
+# JavaScript libraries that open an archive (by the module's name, with or without `new`)
+ARCHIVE_LIB = re.compile(r"^(new )?(adm-zip|unzipper|yauzl|jszip|node-stream-zip|decompress|tar|tar-stream|tar-fs|"
+                         r"unzip-stream|node-unzip-2|zip-lib|compressing|node-7z|7zip-min)(\.[\w.$]+)?(\(\))?$")
+# what opens a file by its path and gives back what the file holds
+FILE_READ = re.compile(r"^(zipfile\.ZipFile|tarfile\.(open|TarFile)|gzip\.(open|GzipFile)|bz2\.open|lzma\.open|"
+                       r"(fs|fs/promises|fs-extra|node:fs|node:fs/promises|graceful-fs|fs\.promises)\."
+                       r"(readFile|readFileSync|createReadStream))$")
 TAR_EXTRACT = re.compile(r"^tarfile\b.*\.(extractall|extract)$|^shutil\.unpack_archive$")
 SSRF_CALL = re.compile(
     r"^((requests|httpx|aiohttp|urllib3|grequests|treq|pycurl|httplib2|urlfetch)\b.*\.(get|post|put|patch|delete|head|"
@@ -353,6 +430,23 @@ def covers_lt(pattern: str) -> bool:
     return any(part in ("<", "\\<", "\\x3c", "\\x3C", "\\u003c", "\\u003C") for part in p.split("|"))
 
 
+def one_at_a_time(pattern: str) -> bool:
+    """Whether every match of such a pattern is one character: a set (`[&<>]`), or single characters between bars
+    (`<|>|&`). A function that says what each match becomes is handed a longer match whole (`<script|<` gives it
+    `<script`), and a table asked for that has no entry."""
+    p = pattern
+    m = re.fullmatch(r"\((?:\?:)?(.*)\)", p)
+    if m and "(" not in m.group(1) and ")" not in m.group(1):
+        p = m.group(1)
+    if re.fullmatch(r"\[(?!\^)(?:[^\]\\]|\\.)*\]", p):
+        return True
+    return all(re.fullmatch(r"[^\\]|\\[^xu\d]|\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}", part) for part in p.split("|"))
+
+
+# What turns an escaped value back into what it was: the result is no safer for a page than before the escape.
+UNESCAPES = re.compile(r"^(html\.unescape|xml\.sax\.saxutils\.unescape|lodash\.unescape|he\.(decode|unescape)|"
+                       r"html-entities\.decode|entities\.decode\w*|unescape|decodeURIComponent|decodeURI|"
+                       r"urllib\.parse\.(unquote|unquote_plus))$")
 CONSTRUCTORS = {"__init__", "constructor"}
 RESPONSE_NAMES = {"res", "response", "reply", "resp"}
 RESPONSE_SEND = {"send", "write", "end"}
@@ -538,6 +632,28 @@ ACTION.update({
     "record": "chooses which record is read or changed",
     "assign": "is written onto a stored record, field by field as it was sent",
 })
+# What an ownership finding says (`flowscan._owner`): (for one route, for several). It stands on the line the record
+# is reached; `LATE_*` where the route does ask whose the record is, but only after that line.
+OWNER_TITLE = ("reaches a record by an id from the request, and nothing compares the record's owner with who is "
+               "signed in",
+               "reach a record by an id from the request, and nothing compares the record's owner with who is "
+               "signed in")
+LATE_DOES = {"change": ("changes or removes a record", "change or remove a record"),
+             "shell": ("runs a command for a record", "run a command for a record"),
+             "remove": ("removes a file for a record", "remove a file for a record"),
+             "send": ("tells another service to change something for a record",
+                      "tell another service to change something for a record")}
+LATE_TAIL = ("picked by an id from the request before it asks whose the record is",
+             "picked by an id from the request before they ask whose the record is")
+# Something that cannot be taken back, done with a value of the request (`Engine.acted`): a command, a file or folder
+# removed, a request to another service that changes something there.
+ACT = {"shell": "a command is run", "remove": "a file is removed", "send": "another service is told to change something"}
+ACT_REMOVES = re.compile(r"^(os\.(remove|unlink|rmdir|removedirs)|shutil\.rmtree|"
+                         r"(fs|fs/promises|fs-extra|node:fs|node:fs/promises|graceful-fs|fs\.promises)\."
+                         r"(unlink|unlinkSync|rm|rmSync|rmdir|rmdirSync|remove|removeSync))$")
+ACT_REMOVE_MEMBERS = {"unlink", "rmdir", "unlinkSync"}
+ACT_SENDS = re.compile(r"\.(post|put|patch|delete|del)$")
+ACT_VERBS = {"post", "put", "patch", "delete"}
 # A request value with one of these names picks one record (or one person's records).
 ID_NAME = re.compile(r"(^|_)(id|ids|pk|uuid|guid|key|slug|no|num|number)$|[a-z0-9](Id|ID|Ids|Pk|Uuid|Guid|Key|Slug)$|"
                      r"^(user|username|email|account|owner|customer|member|tenant|org|profile)$")
@@ -590,7 +706,63 @@ ADMIN_SECRET = re.compile(r"(admin|root|super|master)\w*[_.\-\[\]'\" ]*(key|secr
                           r"(key|secret|token|pass|password)\w*[_.\- ]*(admin|root|master)", re.I)
 SAME_SECRET = {"compare_digest", "timingSafeEqual", "constant_time_compare", "safe_str_cmp", "safeCompare",
                "secure_compare"}
+# Where a server keeps what it must not show, by the names code gives those places: the environment and the settings
+# (`process.env.X`, `os.environ["X"]`, `settings.X`, `config.x`, `app.config["X"]`; not `req.body.config.x`) ...
+KEPT_IN = re.compile(r"(^|[^\w.]|\b(this|self|app|current_app|import\.meta|django\.conf|Deno|Bun)\.)"
+                     r"(process\.env|os\.environ|environ|os\.getenv|getenv|settings|config|cfg|conf|secrets|env)\b",
+                     re.I)
+# ... and what it calls a secret there, as a whole word of the name: `API_KEY`, `hookSecret`, `SERVICE_TOKEN`. A
+# request that has to send the same value is let in as the server's own caller, whatever else it is asked.
+SECRET_WORDS = {"key", "apikey", "secret", "token", "password", "passwd", "pwd", "passphrase", "credential",
+                "credentials"}
+# The end of a name that says who is signed in, as a condition asks it: `req.user`, `req.session.userId`,
+# `session["user_id"]`, `current_user.is_authenticated`. Not the session itself, which a visitor who never signed in
+# has too, and not what a shop keeps in it (`req.session.cart`).
+SIGNED_IN = re.compile(r"(^|[._\[\]'\" ])((current_?)?(user|account|member|principal|identity|auth|login|admin|"
+                       r"customer|profile|passport|claims|decoded|jwt|token_payload|uid|sub|email|username)"
+                       r"(_?(id|name|email|uuid|key))?|me|(is_?)?(authenticated|logged_?in|signed_?in))"
+                       r"['\"\]]*(\.(_?id|sub|email|name|uuid))?$", re.I)
+# What a check for every request asks to leave the sign-in page itself open: which page this is.
+WHICH_PAGE = re.compile(r"^(request|req|ctx|c)\.(endpoint|path|url|originalUrl|baseUrl|url_rule|blueprint|full_path|"
+                        r"routerPath|route)\b")
+# Which verb the request is (`req.method === 'OPTIONS'`, `request.method in ("GET", "HEAD")`): a check may let some
+# verbs through unasked, and is then a login for the routes of the other verbs only (`flow.which_verbs`)
+VERB_READ = re.compile(r"^(request|req|ctx|c)(\.(request|req))?\.method$")
+VERB_CASE = {"toUpperCase", "toLowerCase", "upper", "lower"}
+ALL_VERBS = frozenset(v.upper() for v in HTTP_VERBS)
+# Asked of the request itself (Passport): `req.isAuthenticated()`.
+LOGIN_ASKED = {"isAuthenticated", "is_authenticated", "isLoggedIn", "isSignedIn"}
 PERSON_ATTR = re.compile(r"(email|e_mail|username|user_name|login|name|sub|uid|id)\W*$", re.I)
+# ---- a login read from what the code does, whatever the function that asks is called
+# A library call that checks a token and fails when it does not hold: a request that gets past it carries a token the
+# server made (or a sign-in service did). What it hands back says who is signed in. Reading a token without checking
+# it (`jsonwebtoken.decode`, `jwt-decode`) is none of these; PyJWT's and python-jose's `decode` check only when they
+# are handed a key and the check is not switched off (`flow.Engine.verifies`).
+VERIFIES = re.compile(r"^(jsonwebtoken\.verify|jose\.(jwtVerify|compactVerify|flattenedVerify|generalVerify)|"
+                      r"jwt\.decode|jose\.jwt\.decode|"
+                      r"firebase-admin(/auth)?\.(auth|getAuth)\(\)\.(verifyIdToken|verifySessionCookie)|"
+                      r"google-auth-library\.OAuth2Client\(\)\.verifyIdToken|"
+                      r"firebase_admin\.auth\.(verify_id_token|verify_session_cookie)|"
+                      r"google\.oauth2\.id_token\.(verify_oauth2_token|verify_token|verify_firebase_token))$")
+# Calls that read what a token says and check nothing: anybody can write such a token, so where one of these is the
+# only sign of a login on the way to a route, it is none (the evidence "caught" with no login beside it).
+READS_TOKEN = re.compile(r"^(jsonwebtoken\.decode|jwt-decode(\.(jwtDecode|default))?|"
+                         r"jose\.(decodeJwt|decodeProtectedHeader)|jwt\.get_unverified_header|"
+                         r"jose\.jwt\.(get_unverified_claims?|get_unverified_headers?))$")
+# Those of them that hand back a promise: the check has been made only where the answer is waited for.
+VERIFIES_LATER = re.compile(r"^(jose\.(jwtVerify|compactVerify|flattenedVerify|generalVerify)|firebase-admin|"
+                            r"google-auth-library)")
+# What a request carries to say who is calling, by its name (after `X-` and `HTTP_` are taken off and `-` is read as
+# `_`): a token, a key, the session's id. A record found by one is the caller's own. Not a name the caller's own id
+# goes by (`X-User-Id`: anybody can write a number), and not the tokens that guard a form or name a request.
+CREDENTIAL = re.compile(r"^(?!(?i:.*(csrf|xsrf|nonce|captcha|idempotency|trace|request|correlation|cache|sort|page|"
+                        r"public|etag)))((?i:authorization|auth|bearer|jwt|sid|session(_?id)?|(\w*_)?(token|apikey|"
+                        r"api_?key|key|secret))|[a-z][A-Za-z0-9]*(Token|ApiKey|Key|Secret|Jwt|SessionId))$")
+# ... and only from the parts of a request a page or a link does not fill in (a token in the address ends up in logs
+# and in other sites' referrers; whether that is one is not this check's to say).
+CREDENTIAL_PLACE = {"cookies", "COOKIES", "headers", "META", "signedCookies", "signed_cookies"}
+# Fixed values that stand for "nobody": what a check hands back, or a variable holds, when the token did not hold.
+NOBODY = (None, False, "", 0)
 # A function named for giving back who is signed in. Taken by its name: this is where identity starts, not a check.
 IDENT_FN = re.compile(r"^(get_?|require_?|fetch_?|load_?)?(current|auth|authenticated|logged_?in|session|active|"
                       r"request)_?(user|account|member|principal|identity)(_?id)?$|^(get_?jwt_?identity|"
@@ -604,6 +776,19 @@ ANN_IDENT = re.compile(r"^(?:Optional\[)?\s*\w*(CurrentUser|CurrentActiveUser|Cu
                        r"AuthenticatedUser|ActiveUser|LoggedInUser|CurrentAccount|TokenData|TokenPayload|UserDep|"
                        r"CurrentUserDep)\w*\]?$")
 CHANGE_MEMBERS = re.compile(r"^(delete|remove|destroy|update|replace|upsert|patch)|And(Update|Delete|Remove|Replace)$")
+# A record that was read into an object and is then changed or removed through that object (`Engine.changed`): the
+# object's own call (`note.delete()`, `order.deleteOne()`, `row.destroy()`, `doc.save()`; in Python not `update`,
+# which may be a dict's own on a document read with pymongo), the object handed to its store
+# (`db.session.delete(note)`, `repo.remove(order)`), and a field set on it before the session is saved
+# (`note.text = text` ... `db.session.commit()`). What a call on the record hands on that is still the record
+# (`.first()`, `.exec()`) is named in `HELD_AT`.
+HELD_OWN = {"py": re.compile(r"^(delete|remove|destroy|save|delete_instance)$"),
+            "js": re.compile(r"^(delete|remove|destroy|update|replace|upsert|patch)|^save$")}
+HELD_HANDED = {"delete", "remove", "destroy", "save"}
+HELD_SAVED = {"commit", "flush"}
+HELD_AT = re.compile(r"^record\(\)@(.+):(\d+)(\.(first|one|one_or_none|scalar|scalar_one|scalar_one_or_none|exec|"
+                     r"populate|orFail|select|unique|scalars|get)\(\))*$")
+HELD_STEP = "here the record that was read is changed or removed"
 AUTHZ_RAISES = re.compile(r"^(authorize|authorise|ensure|require|assert|check|verify|deny|forbid|guard|enforce|must)",
                           re.I)
 # Middleware, a decorator or a dependency from a library (code Lantern does not read), taken by its name.

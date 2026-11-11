@@ -32,7 +32,6 @@ judged per route, and by names where the code of a check cannot be read."""
 
 from __future__ import annotations
 
-import os
 import re as _re
 import time
 from pathlib import Path
@@ -50,6 +49,7 @@ MAX_PASSES = 4       # rounds over functions that call each other
 MAX_FILE = 2_000_000
 DOM_OK = {"xss", "redirect"}
 URL_NEEDS = {"nohost", "nolocal"}
+URL_OPEN = URL_NEEDS | {"based"}        # ... and "based": the value follows a start of the server's own (`R.BASE`)
 FIXED0: frozenset = frozenset()
 
 
@@ -139,17 +139,21 @@ class Dto(str):
 
 
 class Val:
-    __slots__ = ("taints", "fixed", "sql", "html", "prefix", "kind", "data")
+    __slots__ = ("taints", "fixed", "sql", "html", "prefix", "kind", "data", "lost")
 
-    def __init__(self, taints=(), fixed=None, sql=False, html=False, prefix=None, kind=None, data=None):
+    def __init__(self, taints=(), fixed=None, sql=False, html=False, prefix=None, kind=None, data=None, lost=False):
         self.taints = taints      # tuple[Taint]
         self.fixed = fixed        # None: not known to be fixed text | frozenset of parameter indices it is fixed under
         self.sql, self.html = sql, html
         self.prefix = prefix      # leading literal text, "" when the value starts with something else, None unknown
         self.kind, self.data = kind, data
+        # it is, or holds, what a library call the tables do not name gave back after the request's text went into
+        # it: the trail ended there, so it carries no origin, and it is not a value nobody outside chose either
+        # (`'https://' + normalize(host) + '/x/' + id`: see `concat` and `flow_rules.started`)
+        self.lost = lost
 
     def but(self, **kw) -> "Val":
-        v = Val(self.taints, self.fixed, self.sql, self.html, self.prefix, self.kind, self.data)
+        v = Val(self.taints, self.fixed, self.sql, self.html, self.prefix, self.kind, self.data, self.lost)
         for k, x in kw.items():
             setattr(v, k, x)
         return v
@@ -160,6 +164,7 @@ class Val:
 
 
 UNKNOWN = Val()
+ENDED = Val(lost=True)          # what a call the tables do not name gave back for the request's text: the trail ends
 
 
 def const(value) -> Val:
@@ -255,6 +260,141 @@ def refuses(stmts) -> bool:
     return False
 
 
+def goes_on(stmts, ends: bool, way: str = "next") -> bool:
+    """Whether a branch that leaves the function lets the request go on: it hands it to what comes next
+    (`return next()`; `way` is the name that function goes by here), or, in a function whose answer is not the
+    request's own (`ends` false: a helper, a hook, a dependency), it gives its caller one."""
+    for s in (stmts or ())[:8]:
+        if s.k in ("expr", "return") and s.a is not None and s.a.k == "call" and s.a.a is not None and \
+                s.a.a.k == "name" and s.a.a.name == way and not s.a.items:
+            return True
+        if s.k == "return" and not ends:
+            return True
+    return False
+
+
+# ---- a login read from what the code does (2026-11-11): which requests a function lets on, whatever it answers with
+def all_nodes(x, depth: int = 0):
+    """Every node under `x`, the functions written inside it included."""
+    if depth > 80:
+        return
+    if isinstance(x, N):
+        yield x
+        for y in (x.a, x.b, x.c, x.items, x.kw):
+            if y is not None:
+                yield from all_nodes(y, depth + 1)
+    elif isinstance(x, Fn):
+        yield from all_nodes(x.body, depth + 1)
+    elif isinstance(x, (list, tuple)):
+        for y in x:
+            yield from all_nodes(y, depth + 1)
+    elif isinstance(x, dict):
+        for y in x.values():
+            yield from all_nodes(y, depth + 1)
+
+
+def hands(e, way) -> bool:
+    """Whether this expression hands the request to what comes next: `next()`, `next('route')`. `next(err)` does
+    not: that ends the request with an error."""
+    return isinstance(e, N) and e.k == "call" and e.a is not None and e.a.k == "name" and e.a.name == way and \
+        (not e.items or (e.items[0].k == "const" and e.items[0].a in ("route", "router")))
+
+
+def ways(x, way) -> int:
+    """How many places under `x` hand the request on: a call of `way`, or `way` given to code that will call it
+    (`.then(next)`, `setTimeout(next)`; `.catch(next)` hands on an error, which is no way on)."""
+    if not way:
+        return 0
+    n = 0
+    for y in all_nodes(x):
+        if y.k != "call":
+            continue
+        if hands(y, way):
+            n += 1
+        elif not (y.a is not None and y.a.k == "attr" and y.a.name == "catch"):
+            n += sum(1 for a in y.items or () if isinstance(a, N) and a.k == "name" and a.name == way)
+    return n
+
+
+def hands_on(x, way) -> bool:
+    return ways(x, way) > 0
+
+
+def leaves(stmts) -> bool:
+    """Whether these statements always leave the function they are in: a return or a raise among them, a call that
+    never comes back, or an if and its else that both leave."""
+    for s in stmts or ():
+        if s.k in ("return", "raise"):
+            return True
+        if s.k == "expr" and s.a is not None and s.a.k == "call" and R.EXITS.search(text_of(s.a.a)):
+            return True
+        if s.k == "if" and s.c and leaves(s.b) and leaves(s.c):
+            return True
+    return False
+
+
+def answers(stmts) -> bool:
+    """Whether these statements leave with something: `return render_template("login.html")`. A hook that runs before
+    every request answers the request that way; `return` and `return None` let it go on to its route."""
+    for s in stmts or ():
+        if s.k == "return":
+            return s.a is not None and not (s.a.k == "const" and s.a.a is None)
+        if s.k == "raise":
+            return False
+    return False
+
+
+def thrown(stmts, lang: str) -> bool:
+    """Whether the request is turned away here by an error that code further out may catch: a `raise` or `throw`, and
+    in Python a call that refuses by raising (`abort(401)`). An answer that is returned cannot be caught."""
+    for s in (stmts or ())[:8]:
+        if s.k == "raise":
+            return True
+        if s.k in ("expr", "return") and s.a is not None and _says_no(s.a):
+            return lang == "py" and (s.k == "expr" or (s.a.k == "call" and text_of(s.a.a).rsplit(".", 1)[-1] == "abort"))
+    return False
+
+
+def turned_away(stmts, kind: str, way) -> bool:
+    """Whether a request that takes this branch never reaches its route, whatever it is answered with. In a function
+    every request passes through on its way (`kind` "gate": Express middleware) it does not when the branch leaves
+    without handing the request on; in a hook that runs before every request ("hook": Flask's `before_request`) it
+    does not when the branch answers."""
+    if not stmts:
+        return False
+    if kind == "gate":
+        return leaves(stmts) and not hands_on(stmts, way)
+    if kind == "hook":
+        return answers(stmts)
+    return False
+
+
+def lets_on(hbody, rest, top: bool, kind: str, way) -> bool:
+    """Whether a handler that catches a failure lets the request go on: then what the code in the `try` asked of who
+    is calling was not asked of the requests that failed it. `rest`: the statements after the `try`; `top`: the
+    `try` stands directly in its function (anywhere deeper, what follows is not looked at and the answer is yes)."""
+    if refuses(hbody):
+        return False
+    if kind == "gate":
+        if hands_on(hbody, way):
+            return True
+        return not leaves(hbody) and (not top or hands_on(rest, way))
+    if kind == "hook":
+        if answers(hbody):
+            return False
+        return leaves(hbody) or not top or not (rest and (refuses(rest[:1]) or answers(rest[:1])))
+    if kind == "route":
+        # what follows the `try` is only the answer: everything the route does stands inside it, after the check
+        only_answer = len(rest) == 1 and rest[0].k == "return"
+        return not leaves(hbody) and (not top or (bool(rest) and not refuses(rest[:1]) and not only_answer))
+    # a helper: whoever called it goes on with what it hands back
+    return leaves(hbody) or not top or not (rest and refuses(rest[:1]))
+
+
+def is_login(k) -> bool:
+    return k == "login" or (isinstance(k, tuple) and k[:1] == ("login",))
+
+
 def _says_no(e, depth: int = 0) -> bool:
     if not isinstance(e, N) or depth > 8:
         return False
@@ -278,6 +418,67 @@ def who(v: Val) -> tuple[bool, list]:
     """(whether `v` says who is signed in, the parameters of the function being summarised it may have come from)."""
     return (any(t.kind == "ident" and not isinstance(t.key, tuple) for t in v.taints),
             [t.key for t in v.taints if t.kind == "param"])
+
+
+class Proven(str):
+    """Who is signed in, known from what the code did and not from what something is called: a token a library
+    checked, a record found by what the request carries to say who is calling. It stands where a name stands (the
+    `key` of an "ident" `Taint`), in words with blanks, so no name is ever taken for it."""
+    __slots__ = ()
+
+
+def proven_val(what: str, data: str) -> Val:
+    return Val((Taint("ident", Proven(what), R.ALL, (), None, FIXED0),), kind="ext", data=data)
+
+
+def is_proven(v: Val | None) -> bool:
+    return v is not None and any(t.kind == "ident" and isinstance(t.key, Proven) for t in v.taints)
+
+
+def unproven(v: Val) -> Val:
+    return v.but(taints=tuple(t for t in v.taints if not (t.kind == "ident" and isinstance(t.key, Proven))))
+
+
+def nobody(v: Val | None) -> bool:
+    """Whether a value stands for nobody: never set, or fixed and nothing (`None`, `false`, `''`, `0`)."""
+    return v is None or (v.kind == "const" and not v.taints and (
+        v.data is None or v.data is False or (isinstance(v.data, (str, int, float)) and not v.data)))
+
+
+def shows(v: Val, soft: bool = False) -> tuple[bool, tuple]:
+    """`who`, as a condition reads it. `soft`: the code here stands where a failed check is caught and the request
+    goes on, so a value that says who is signed in only because the check passed says nothing."""
+    return (any(t.kind == "ident" and not isinstance(t.key, tuple) and not (soft and isinstance(t.key, Proven))
+                for t in v.taints), tuple(t.key for t in v.taints if t.kind == "param"))
+
+
+def ret_of(rets: list) -> Val | None:
+    """What a function hands back, from every way out of it. It says who is signed in by what the code did only when
+    every way out hands back that, somebody named, or nobody: `return jwt.decode(...)` beside `return GUEST` is not
+    a value whose being there shows a login."""
+    if not rets:
+        return None
+    out = join_all(rets)
+    if is_proven(out) and any(not nobody(r) and not who(r)[0] for r in rets):
+        out = unproven(out)
+    return out
+
+
+# what a token library hands the function it calls back when the token did not hold: `(err, payload) => ...`
+FAILED = Val(kind="failed")
+
+
+def nobody_or_known(v: Val | None) -> bool:
+    return nobody(v) or who(v)[0]
+
+
+def kept_proven(out: "Env", alts) -> None:
+    """After code whose failure is caught and the request goes on: a name still says who is signed in by what the
+    code did only if on every way a failure leaves it, it holds nobody, or somebody named. `alts(name)`: what it holds
+    on those ways."""
+    for name, v in list(out.vars.items()):
+        if is_proven(v) and any(not nobody_or_known(x) for x in alts(name)):
+            out.vars[name] = unproven(v)
 
 
 def marks_for(v: Val, kinds) -> tuple:
@@ -379,16 +580,16 @@ def join(a: Val | None, b: Val | None) -> Val:
             kind, data = "seq", (a.data + [x for x in b.data if x not in a.data])[:24]
         elif a.kind in ("ext", "req", "bag", "upload", "self", "regex", "ref") and a.data == b.data:
             kind, data = a.kind, a.data
+        elif a.kind == "ext" and at_record(a) is not None and at_record(b) is not None:
+            kind, data = "ext", "record()"      # a record read in one place or in another: a record, of no one place
         elif a.kind == "fn":
             kind, data = "fn", a.data
     elif a.kind in ("req", "upload", "bag", "ext") and b.kind in (None, "const") and not b.taints:
         kind, data = a.kind, a.data          # `x = request.files.get("f") or None`
     elif b.kind in ("req", "upload", "bag", "ext") and a.kind in (None, "const") and not a.taints:
         kind, data = b.kind, b.data
-    prefix = os.path.commonprefix([a.prefix, b.prefix]) if isinstance(a.prefix, str) and isinstance(b.prefix, str) \
-        else None
     return Val(merge(a.taints, b.taints), None if a.fixed is None or b.fixed is None else a.fixed | b.fixed,
-               a.sql or b.sql, a.html or b.html, prefix, kind, data)
+               a.sql or b.sql, a.html or b.html, R.joined(a.prefix, b.prefix), kind, data, a.lost or b.lost)
 
 
 def join_all(vals) -> Val:
@@ -413,6 +614,7 @@ def concat(parts: list, glue: bool = False) -> Val:
     text, prefix, open_, all_const = [], "", True, True
     sql = html = False
     solid = False
+    start, going, cut_ = "", True, False     # the start with `R.MINE` for each value nobody outside chose (`R.started`)
     for p in parts:
         mine = p.taints
         if glue and mine and solid:
@@ -427,9 +629,19 @@ def concat(parts: list, glue: bool = False) -> Val:
             text.append(s)
             if open_:
                 prefix += s
+            if going:
+                start += s
         else:
             all_const = False
             text.append("\x00")
+            if going:
+                start += p.prefix if isinstance(p.prefix, str) and p.prefix != R.OWN_EXACT else ""
+                if p.taints or len(start) > 400:
+                    going, cut_ = False, bool(p.taints)
+                elif p.lost:
+                    going = False       # what came of the request's text in a library call: nobody's for sure
+                else:
+                    start += R.MINE
             if open_ and not prefix and p.prefix == R.OWN_EXACT:
                 prefix = R.OWN          # this site's own origin and nothing else: the text after it goes on
             elif open_:
@@ -440,7 +652,7 @@ def concat(parts: list, glue: bool = False) -> Val:
     skeleton = "".join(text)[:3000]
     taints = tuple(t if t.kind == "ident" else t._replace(safe=t.safe | {"nosql"}) for t in taints)
     return Val(taints, fixed, sql or bool(R.SQL_WORDS.search(skeleton)), html or bool(R.HTML_WORDS.search(skeleton)),
-               prefix)
+               R.started(prefix, start, cut_), lost=any(p.lost for p in parts))
 
 
 def seq(items: list) -> Val:
@@ -603,6 +815,15 @@ class Az:
         self.records: dict = {}        # (file, line, origin) -> a record reached by a request value
 
 
+def at_record(v: "Val | None") -> tuple | None:
+    """(file, line) of the read that `v` is the record of, when that read was noted for the route to answer for
+    (`Engine.record`); None for anything else, a field of the record included."""
+    if v is None or v.kind != "ext" or not isinstance(v.data, str) or not v.data.startswith("record()@"):
+        return None
+    m = R.HELD_AT.match(v.data)
+    return (m.group(1), int(m.group(2))) if m else None
+
+
 def asked_of(az: Az) -> frozenset:
     """(parameter, check) for every check made so far on a parameter, should it be who is signed in."""
     return frozenset((i, k) for i, ks in az.pev.items() for k in ks if isinstance(k, str))
@@ -632,7 +853,7 @@ class Summary:
         r = self.ret
         rs = None if r is None else (frozenset((t.kind, t.key, t.safe, t.drop) for t in r.taints), r.fixed, r.sql,
                                      r.kind, r.data if r.kind in ("ext", "req", "bag", "upload") else None,
-                                     bool(r.prefix))
+                                     bool(r.prefix), r.lost)
         return (rs, frozenset((s.param, s.cls, s.file, s.line, s.safe, s.needs) for s in self.sinks),
                 tuple(sorted(self.guards.items())), tuple(sorted(self.pred_t.items())),
                 tuple(sorted(self.pred_f.items())), self.ev, tuple(sorted(self.pev.items())),
@@ -651,15 +872,28 @@ class Ctx:
         self.rets: list[Val] = []
         self.exits: list[tuple] = []     # (proved, truth, facts if true, facts if false)
         self.az: Az = parent.az if parent else Az()      # a route written inline gets one of its own (`closure`)
+        # above 0 where only some requests get to: inside a branch whose other way lets the request go on, and after
+        # a way on that some requests took. A login asked there is not asked of the others (`Engine.signed`)
+        self.narrow: int = parent.narrow if parent else 0
+        # the same for a condition that only asks which verb the request is: the verbs of the requests that get here
+        # (None: any), and the verbs that went on before they were asked (`if (req.method === 'GET') return next()`).
+        # A login asked here is asked of the other verbs, and counts for their routes (`login_for`, `Engine.settled`)
+        self.only: frozenset | None = parent.only if parent else None
+        self.round: frozenset = parent.round if parent else FIXED0
+        # above 0 inside code whose failure is caught and the request goes on (`lets_on`): a check that turns the
+        # request away by failing was not made of the requests that failed it
+        self.soft: int = parent.soft if parent else 0
+        self.role: tuple | None = None       # what the function is to a request (`Engine.passage`), asked when needed
         if parent is None:
             self.flows: dict = {}
             self.sinks: dict = {}
             self.calls: list = []        # (callee key, {param index: Val}, line)
             self.fields: dict = {}       # `self.x = value` / `this.x = value` in the function's own lines
             self.points: dict = {}       # (file, line) -> [(class, Val)] for "only fixed text reaches this line"
+            self.set_on: set = set()     # records read into an object on which a field was set (`Engine.changed`)
 
     def flow(self, cls, t: Taint, steps, conf, what, file, line, node, unless=FIXED0, change=False, had=None,
-             hadp=None) -> None:
+             hadp=None, act=None) -> None:
         top = self.top
         key = (cls, file, line, t.key)
         f = {"class": cls, "file": file, "line": line, "sink": what, "confidence": conf, "node": node,
@@ -670,11 +904,14 @@ class Ctx:
             # `unless`: parameters that make the record the caller's own if they are who is signed in; `had`: the
             # checks made before this line, which is what counts for a record that is changed or removed (`hadp`:
             # those made on a parameter, should it be who is signed in). A record inside a called function comes
-            # with both as they stood there (`Engine.use`).
-            f.update(unless=frozenset(unless), change=change,
+            # with both as they stood there (`Engine.use`). `act`: no record but something that cannot be taken
+            # back, done with the value (`Engine.acted`).
+            f.update(unless=frozenset(unless), change=change, act=act,
                      had=frozenset(self.az.ev) if had is None else had,
                      hadp=asked_of(self.az) if hadp is None else hadp)
             old = self.az.records.get(key)
+            if old is not None and old.get("through") and not change:
+                return      # read again: it stays the record that was changed through its object (`Engine.changed`)
             if old is None or len(f["steps"]) < len(old["steps"]):
                 self.az.records[key] = f
             return
@@ -693,10 +930,23 @@ class Ctx:
                                           drop=old.drop | rec.drop)
 
 
+class Soft(NamedTuple):
+    """What reads like a login check by its name and is none by its code: handed to the names check
+    (`websec.login_check(doubt=)`) for a route of `Result.caught`, so that it does not take these for a login."""
+    nodes: frozenset = frozenset()     # the map's nodes of the project's functions on whose way a token library is
+    #                                    called and whose code, with all it calls, turns nobody away for it
+    lines: frozenset = frozenset()     # (file, line) of every call of a token library
+
+
 class Result:
-    def __init__(self, flows, stats, errors, engine, authz=()):
+    def __init__(self, flows, stats, errors, engine, authz=(), logins=(), caught=(), soft=None):
         self.flows, self.stats, self.errors, self.engine = flows, stats, errors, engine
         self.authz = list(authz)       # per route: records reached with no owner compared, an admin route unasked
+        self.logins = set(logins)      # the routes (the map's nodes) whose code turns away whoever is not signed in
+        # the routes on whose way a token is checked and a request that fails the check, or that some requests go
+        # round, still goes on, and nothing else asks: the token library's name is no login there
+        self.caught = set(caught)
+        self.soft = soft if soft is not None else Soft()
 
     def fixed_only(self, file: str, line: int, cls: str):
         return self.engine.fixed_only(file, line, cls)
@@ -727,6 +977,7 @@ class Engine:
         self.mods: dict[str, Mod] = {}
         self.units: list[Fn] = []
         self.by_node: dict[str, Fn] = {}
+        self.inside: dict[str, Fn] = {}    # the map's node of a function written inside another -> the unit it is read with
         self.by_key: dict = {}
         self.summ: dict = {}
         self.flows: dict = {}
@@ -735,10 +986,24 @@ class Engine:
         self.escaped: set = set()
         self.attrs: dict = {}              # (file, class, attribute) -> what `self.attribute` was given
         self.plain_calls: set = set()      # calls that make an answer whose kind is then set to something not a page
+        self.page_calls: set = set()       # calls that give back text made in the code (a helper of the project,
+        #                                    a template written in the code, a layout filled in): a page when a
+        #                                    route returns it
+        self.else_refuses: dict = {}       # `if` statements with no else whose next statement turns the request
+        #                                    away -> that statement
+        self.else_away: dict = {}          # ... after which no request is handed on (a function requests pass
+        #                                    through), or the next statement answers (a hook) -> what follows
+        self.after_try: dict = {}          # a `try` -> (the statements after it, whether it stands directly in its
+        #                                    function)
+        self._passage: dict = {}
+        self.caught: set = set()           # the map's nodes of the routes of `Result.caught`
+        self.token_lines: set = set()      # (file, line) of every call of a token library (`R.VERIFIES`)
         self._pages: dict | None = None    # template file -> the places in it that print a value without escaping
         self.handed_pages: dict = {}       # (template, line) -> {(file, line, name): "safe" | "open"}: what each
         #                                    place that shows the page hands a raw place of it
         self.routes: dict = {}             # route function key -> (Fn, Az)
+        self.gates: dict = {}              # `inline:<file>:<line>` -> Az of a function written in place in `x.use()`
+        self.logins: set = set()           # the map's nodes of the routes whose code turns away who is not signed in
         self.before: dict = {}             # route function key -> {dependency name: its function's key or None}
         self.sent: dict = {}               # a request value's key (file, line, words) -> (its name, the part it is in)
         self.wide: dict = {}               # file -> [(name, key)]: what runs before every route of a router there
@@ -781,7 +1046,7 @@ class Engine:
         self.stats["files"] += 1
         for fn in mod.fns + [mod.top]:
             fn.mod, fn.file, fn.lang = mod, mod.file, mod.lang
-            self._inner(fn.body, mod)
+            self._inner(fn.body, mod, fn)
             fn.key = (mod.file, fn.first, fn.name)
             fn.node = self.module_at.get(mod.file) if fn is mod.top else self.node_for(mod.file, fn)
             self.units.append(fn)
@@ -808,8 +1073,8 @@ class Engine:
                 return f.name
         return "the top of the file"
 
-    def _inner(self, body, mod: Mod, depth: int = 0) -> None:
-        """Inline functions take their file from the function they are written in."""
+    def _inner(self, body, mod: Mod, unit: Fn | None = None) -> None:
+        """Inline functions take their file from the function they are written in, and are read with it (`inside`)."""
         stack = list(body or [])
         while stack:
             x = stack.pop()
@@ -819,6 +1084,8 @@ class Engine:
                     f.mod, f.file, f.lang = mod, mod.file, mod.lang
                     f.key = (mod.file, f.first, f.name)
                     f.node = self.node_for(mod.file, f)
+                    if f.node and unit is not None:
+                        self.inside.setdefault(f.node, unit)
                     for p in f.params:
                         if p.default is not None:
                             stack.append(p.default)
@@ -838,10 +1105,15 @@ class Engine:
     def order(self) -> tuple[list[Fn], dict]:
         adj: dict[str, set] = {}
         for s in self.sites.values():
+            # a call made inside a function that is written inside another (a handler written in the call that
+            # registers it, a route inside an app factory) is a call of the unit that function is read with
+            src = s["caller"]
+            if src not in self.by_node and src in self.inside and self.inside[src].node:
+                src = self.inside[src].node
             for t in s["to"]:
                 t2 = t if t in self.by_node else (t + ".__init__" if t + ".__init__" in self.by_node else None)
-                if t2:
-                    adj.setdefault(s["caller"], set()).add(t2)
+                if t2 and t2 != src:
+                    adj.setdefault(src, set()).add(t2)
         out: list[Fn] = []
         seen: set = set()
         for u in self.units:
@@ -914,7 +1186,19 @@ class Engine:
         out = sorted(flows.values(), key=lambda f: (f["file"], f["line"], f["class"], f["source"]["file"],
                                                     f["source"]["line"]))
         self.stats["flows"] = len(out)
-        return Result(out, self.stats, self.errors, self, self.authz())
+        return Result(out, self.stats, self.errors, self, self.authz(), self.logins, self.caught, self.soft_side())
+
+    def soft_side(self) -> Soft:
+        """The project's functions that call a token library, themselves or below them, and whose code shows no
+        login for it (the evidence "caught" with no login beside it), and the lines of those calls: by their names
+        they read like a login check, and Lantern has read that they turn nobody away."""
+        nodes = set()
+        for key, s in self.summ.items():
+            if "caught" in s.ev and not any(is_login(k) for k in s.ev):
+                f = self.by_key.get(key)
+                if f is not None and f.node:
+                    nodes.add(f.node)
+        return Soft(frozenset(nodes), frozenset(self.token_lines))
 
     # ---- one function
     def unit(self, fn: Fn) -> None:
@@ -925,7 +1209,7 @@ class Engine:
         if not self.block(fn.body, env, ctx):
             self.leave(ctx, env, None, None)
         s = Summary()
-        s.ret = join_all(ctx.rets) if ctx.rets else None
+        s.ret = ret_of(ctx.rets)
         s.sinks = list(ctx.sinks.values())
         idx = range(len(fn.params))
         if ctx.exits:
@@ -989,6 +1273,43 @@ class Engine:
             return True
         return any(R_ROUTE.search(d) for d in fn.decorators)
 
+    def passage(self, fn: Fn) -> tuple:
+        """What a function is to a request on its way to a route, and the name the way on goes by in it:
+        ("route", None); ("gate", way) for a function every request passes through, which hands the request on by
+        calling `way` (Express middleware: the parameter called `next`, else the third of three after the request
+        and the answer, the fourth of an error handler's four) and does hand one on somewhere; ("hook", None) for
+        one that runs before every request and lets it on by answering nothing (Flask's `before_request`);
+        ("helper", None) for any other: what it answers goes to the code that called it."""
+        got = self._passage.get(id(fn))
+        if got is None:
+            got = ("helper", None)
+            if self.is_route(fn):
+                got = ("route", None)
+            elif fn.lang == "js":
+                names = [p.name for p in fn.params]
+                way = "next" if "next" in names else None
+                if way is None and len(names) == 3 and names[0] in R.REQUEST_NAMES:
+                    way = names[2]
+                elif way is None and len(names) == 4 and names[1] in R.REQUEST_NAMES:
+                    way = names[3]
+                if way and hands_on(fn.body, way):
+                    got = ("gate", way)
+            elif any("before_request" in d or "before_app_request" in d for d in fn.decorators or ()):
+                got = ("hook", None)
+            self._passage[id(fn)] = got
+        return got
+
+    def role(self, ctx: Ctx) -> tuple:
+        if ctx.role is None:
+            ctx.role = self.passage(ctx.fn)
+        return ctx.role
+
+    def answers_request(self, fn: Fn, kind: str) -> bool:
+        """Whether what this function leaves with is the request's own answer (a route, a function every request
+        passes through), not something handed to the code that called it (a helper, a hook, a dependency)."""
+        return kind in ("route", "gate") or self.is_route(fn) or (fn.lang == "js" and (
+            len(fn.params) >= 3 or any(p.name == "next" for p in fn.params)))
+
     def route_path(self, fn: Fn) -> str:
         e = self.entry(fn)
         text = (e or {}).get("detail") or ""
@@ -1038,6 +1359,14 @@ class Engine:
             whose = tuple(t for t in dep.taints if t.kind == "ident" and not is_mark(t)) if dep is not None else ()
             return base.but(taints=merge(base.taints, whose)) if whose else base
         home = self.class_home(fn.mod, self.class_name(ann)) if body else None
+        if not route and py and "fastapi" in fn.mod.frameworks:
+            m = re_search(r"\b(Cookie|Header)\(", (p.text or "") + " " + ann)
+            if m:       # a dependency is handed a header or a cookie of the request, as a route is
+                part = {"Cookie": "cookies", "Header": "headers"}[m.group(1)]
+                words = f"`{name}` arrives with the request as {R.CLAIM_PLACE[part]} (a parameter of `{fn.name}`)"
+                self.sent[(fn.file, fn.line, words)] = (name, part)
+                safe = {"nosql"} if (not ann or re_search(r"\b(str|bytes)\b", ann)) else set()
+                return join(base, Val((self.source(fn, fn.line, words, safe),)))
         if not route:
             # a helper that says it takes such a body: its fields are read by what the class says they are
             return base.but(kind="bag", data=Dto(home)) if home else base
@@ -1212,6 +1541,17 @@ class Engine:
                     len(s.items or ()) == 1 and s.items[0].k == "name" and \
                     self.typed_later(stmts, i, s.items[0].name):
                 self.plain_calls.add(id(s.a))
+            if s.k == "if" and not s.c:
+                rest = stmts[i + 1:]
+                if refuses(rest[:1]):
+                    self.else_refuses[id(s)] = rest[:1]     # if (signedIn) return next(); res.redirect('/login')
+                elif stmts is env.fn.body:
+                    # ... res.render('welcome'): from here to the function's end no request is handed on
+                    kind, way = self.role(ctx)
+                    if (kind == "gate" and not hands_on(rest, way)) or (kind == "hook" and answers(rest[:1])):
+                        self.else_away[id(s)] = rest[:1]
+            elif s.k == "try":
+                self.after_try[id(s)] = (stmts[i + 1:], stmts is env.fn.body)
             if self.stmt(s, env, ctx):
                 return True
         return False
@@ -1264,14 +1604,62 @@ class Engine:
             return True
         if k == "if":
             asked = self.eval(s.a, env, ctx)
-            self.judged(asked, ctx)
             no_t, no_f = refuses(s.b), refuses(s.c)
+            self.judged(asked, ctx, no_t != no_f or (not s.c and id(s) in self.else_refuses))
             self.claimed(asked, ctx, None if no_t == no_f else "then" if no_t else "else")
             t, f = self.facts(s.a, env, ctx)
             et, ef = env.copy(), env.copy()
             self.apply(et, t)
             self.apply(ef, f)
-            xt, xf = self.block(s.b, et, ctx), self.block(s.c, ef, ctx)
+            # a branch only some requests take: a login asked in it is not asked of the others, unless the other
+            # way turns the request away or the condition only sets a few named pages apart
+            page = which_page(s.a)
+            verbs = which_verbs(s.a)    # the verbs it holds for, when all it asks is which verb the request is
+            # a request that takes a way which leaves without handing it on never reaches its route, whatever it is
+            # answered with there (the sign-in page, a 200 with words): read from what the function is to a request
+            kind, way = self.role(ctx)
+            out_t = no_t or turned_away(s.b, kind, way)
+            out_f = no_f or turned_away(s.c, kind, way)
+            away = not s.c and id(s) in self.else_away and (
+                goes_on(s.b, True, way) if kind == "gate" else leaves(s.b) and not answers(s.b) and not no_t)
+            rest_out = not s.c and (id(s) in self.else_refuses or away)
+            # ... or this way holds a place that hands the request on, however deep, and nothing after the `if`
+            # does: `if (header) { try { check(); next() } catch { answer 401 } }` and then only an answer
+            only_way = kind == "gate" and not s.c and id(s) in self.else_away and hands_on(s.b, way)
+            t_all = out_f or rest_out or only_way       # every request that goes on took this way
+            part_t = verbs is None and not (t_all or page == "all but")
+            part_f = verbs is None and not (out_t or page == "only")
+            only = ctx.only
+            if verbs is not None and not t_all:
+                ctx.only = verbs if only is None else only & verbs
+            ctx.narrow += part_t
+            xt = self.block(s.b, et, ctx)
+            ctx.narrow += part_f - part_t
+            ctx.only = only
+            if verbs is not None and not out_t:
+                ctx.only = other_verbs(verbs) if only is None else only & other_verbs(verbs)
+            xf = self.block(s.c, ef, ctx)
+            ctx.narrow -= part_f
+            ctx.only = only
+            # one way on turns the request away: what the other way knows about who is signed in holds from here
+            if out_t and not out_f:
+                self.signed(s.a, False, env, ctx, s.b)
+            elif (out_f and not out_t) or (not out_t and xt and rest_out):
+                self.signed(s.a, True, env, ctx,
+                            s.c or self.else_refuses.get(id(s)) or self.else_away.get(id(s)))
+            # a way on that some requests take here: what is asked after it is not asked of them. Not when they are
+            # the ones for a few named pages (the sign-in page), or the ones that are signed in
+            ends = self.answers_request(env.fn, kind)
+            for went, refused, body, want, few in ((xt, out_t, s.b, True, "only"),
+                                                   (xf, out_f, s.c, False, "all but")):
+                if went and not refused and not (xt and xf) and goes_on(body, ends, way or "next") and page != few:
+                    left: set = set()
+                    if verbs is not None:       # the requests of these verbs: the rest is not asked of them
+                        ctx.round |= verbs if want else other_verbs(verbs)
+                    elif not self.signed_gate(s.a, want, env, ctx, 0, left)[0]:
+                        ctx.narrow += 1
+                    else:                       # `if (req.method === 'GET' || req.user) return next()`
+                        ctx.round |= left
             if xt and xf:
                 return True
             if xt:
@@ -1320,17 +1708,34 @@ class Engine:
                 self.block(s.c, env, ctx)
             return False
         if k == "try":
+            # a failure that is caught, after which the request goes on: what the code in the `try` asked of who is
+            # calling by failing (a token that does not hold, an `abort`) was not asked of the requests that failed
+            rest, top = self.after_try.get(id(s), ((), False))
+            kind, way = self.role(ctx)
+            soft = any(lets_on(hbody, rest, top, kind, way) for _n, hbody in s.items or ())
+            pre0 = dict(env.vars)
             pre = env.copy()
+            ctx.soft += soft
             xb = self.block(s.b, env, ctx)
+            ctx.soft -= soft
             pre.join(env)
             alive = [] if xb else [env.copy()]
+            ends = []
+            went_on = False
             for name, hbody in s.items or ():
                 he = pre.copy()
+                for nm, v in list(he.vars.items()):     # the code that failed may not have got to setting it
+                    if is_proven(v) and not nobody_or_known(pre0.get(nm)):
+                        he.vars[nm] = unproven(v)
                 if name:
                     he.vars[name] = UNKNOWN
                     he.forget(name)
                 if not self.block(hbody, he, ctx):
                     alive.append(he)
+                    ends.append(he)
+                elif not refuses(hbody) and not turned_away(hbody, kind, way) and \
+                        goes_on(hbody, self.answers_request(env.fn, kind), way or "next"):
+                    went_on = True
             if not alive:
                 if s.c:
                     self.block(s.c, pre, ctx)
@@ -1338,14 +1743,36 @@ class Engine:
             out = alive[0]
             for e2 in alive[1:]:
                 out.join(e2)
+            if soft and ends:
+                kept_proven(out, lambda nm: [pre0.get(nm) if he.vars.get(nm) is pre.vars.get(nm) else he.vars.get(nm)
+                                             for he in ends])
             env.take(out)
+            if went_on:
+                # the requests that failed left from a handler and went on (`except: return None` in a helper,
+                # `catch { return next() }`): what is asked from here on is asked of the others only, as after
+                # `if not token: return None`. Until 2026-11-11 a look-up that refuses after such a `try` read as
+                # a login for every request
+                ctx.narrow += 1
             return self.block(s.c, env, ctx) if s.c else False
         if k == "with":
+            quiet = False
             for cexpr, target in s.items or ():
                 v = self.eval(cexpr, env, ctx)
                 if target is not None:
                     self.assign(target, v, env, ctx, s)
-            return self.block(s.b, env, ctx)
+                quiet = quiet or (cexpr is not None and cexpr.k == "call" and
+                                  text_of(cexpr.a).rsplit(".", 1)[-1] == "suppress")
+            if not quiet:
+                return self.block(s.b, env, ctx)
+            # `with suppress(SomeError):` a failure inside ends the block, and the code goes on after it
+            pre0 = dict(env.vars)
+            pre = env.copy()
+            ctx.soft += 1
+            self.block(s.b, env, ctx)
+            ctx.soft -= 1
+            env.join(pre)
+            kept_proven(env, lambda nm: [pre0.get(nm)])
+            return False
         if k == "def":
             f = s.a
             env.vars[f.name] = Val(kind="fn", data=(f, None))
@@ -1388,12 +1815,23 @@ class Engine:
             name = s.items[0].name
             if s.a.k == "name" and s.a.name in env.orig:
                 env.orig[name] = env.orig[s.a.name]
+            if self.kept_secret(s.a, val, env):      # want = 'Bearer ' + process.env.ADMIN_TOKEN
+                env.derived[name] = ("secret", "")
             sub = self.subject(s.a, env)
             if sub and sub[1] == "host" and sub[0] != name:
                 env.derived[name] = ("host", sub[0])
             whole = self.parsed(s.a, env)        # u = new URL(x) / parts = urlparse(x): `u.hostname` is x's host
             if whole and whole[1] is None and whole[0] != name:
                 env.derived[name] = ("url", whole[0])
+            if s.a.k == "call" and text_of(s.a.a).endswith(("path.relative", "path.relpath")) and \
+                    len(s.a.items or ()) > 1:
+                # rel = path.relative(folder, full) / os.path.relpath(full, folder): the way from the folder to the
+                # path, which begins with `..` when the path lies outside it
+                py_form = text_of(s.a.a).endswith("relpath")
+                full = self.subject(s.a.items[0 if py_form else 1], env)
+                if full and full[1] is None and full[0] != name and \
+                        self.own_folder(ctx, env, self.eval(s.a.items[1 if py_form else 0], env, ctx), s.a):
+                    env.derived[name] = ("rel", full[0])
             if s.a.k in ("cmp", "call", "not", "bool"):      # ok = host in HOSTS ... if not ok: refuse
                 yes, no = self.facts(s.a, env, ctx)
                 if (yes or no) and not any(p == name or p.startswith(name + ".") for p, _c, _f, _r in yes + no):
@@ -1444,6 +1882,8 @@ class Engine:
                     and stringy(val):
                 self.hit(ctx, env, "xss", val, at, "ctx.body =", "HIGH" if val.html else "MEDIUM")
             base = self.eval(t.a, env, ctx)
+            if at_record(base) is not None and len(ctx.top.set_on) < 64:
+                ctx.top.set_on.add(at_record(base))     # `note.text = text`: a change once it is saved
             if base.kind == "self" and ctx.fn is ctx.top.fn and len(ctx.fields) < 64:
                 ctx.fields[t.name] = join(ctx.fields.get(t.name), val)       # what a constructor keeps
             if base.kind == "self" and env.fn.cls:
@@ -1507,7 +1947,7 @@ class Engine:
                            data=keep.data if keep.kind == "ext" else None)
             return UNKNOWN          # arithmetic: a number
         if k == "cmp":
-            return self.compared(e, self.eval(e.a, env, ctx), self.eval(e.b, env, ctx))
+            return self.compared(e, self.eval(e.a, env, ctx), self.eval(e.b, env, ctx), env)
         if k == "bool":
             return join_all([self.eval(x, env, ctx) for x in e.items])
         if k == "not":
@@ -1517,8 +1957,16 @@ class Engine:
             return Val(asked) if asked else UNKNOWN
         if k == "cond":
             asked = self.eval(e.a, env, ctx)
-            self.judged(asked, ctx)
+            no_b, no_c = _says_no(e.b), _says_no(e.c)
+            self.judged(asked, ctx, no_b != no_c)
             self.claimed(asked, ctx)
+            if no_b != no_c:        # req.session.user ? next() : res.sendStatus(401)
+                self.signed(e.a, no_c, env, ctx)
+            elif not no_b:          # ... : res.render('login'), where the request is handed on nowhere else
+                kind, way = self.role(ctx)
+                if kind == "gate" and hands(e.b, way) != hands(e.c, way) and \
+                        ways(e, way) == ways(env.fn.body, way):
+                    self.signed(e.a, hands(e.b, way), env, ctx)
             t, f = self.facts(e.a, env, ctx)
             et, ef = env.copy(), env.copy()
             self.apply(et, t)
@@ -1728,7 +2176,7 @@ class Engine:
                 if fn.lang == "js" and data in R.DOM_SOURCE_HEADS:
                     words = f"`{data}` is part of the page's address, which whoever made the link chose"
                     return Val((self.source(fn, e.line, words, origin="dom"),), kind="ext", data=data)
-                return Val(kind="ext", data=data)
+                return Val(kind="ext", data=data, lost=base.lost)
             head = base.data[:-2] if isinstance(base.data, str) and base.data.endswith("()") else None
             if head and R.HOST_OF.match(head):
                 if name in R.URL_REST_ATTRS:
@@ -1749,8 +2197,8 @@ class Engine:
                 return UNKNOWN
             return self.attrs.get((fn.file, fn.cls, name), UNKNOWN)
         if not base.taints or name in R.NUMERIC_ATTRS:
-            return UNKNOWN
-        if name in R.ARCHIVE_ENTRY_ATTRS and any("content" in t.safe for t in base.taints):
+            return ENDED if base.lost and name not in R.NUMERIC_ATTRS else UNKNOWN
+        if name in R.ARCHIVE_ENTRY_ATTRS and any("content" in t.safe or "archive" in t.safe for t in base.taints):
             return self.entry_names(base, e, env)
         return Val(base.taints)
 
@@ -1790,12 +2238,17 @@ class Engine:
                 return base.data[key.data]
             return join_all(base.data) if base.data else Val(base.taints, base.fixed)
         if k == "self" or k == "ext" and not base.taints:
-            return UNKNOWN
-        return Val(base.taints, base.fixed if not base.taints else None)
+            return ENDED if base.lost else UNKNOWN
+        return Val(base.taints, base.fixed if not base.taints else None, lost=base.lost)
 
     # ---- calls
     def call(self, e: N, env: Env, ctx: Ctx) -> Val:
         v, asked = self.call1(e, env, ctx)
+        if v.kind == "later" and e.c == "await":
+            # what a token library hands back was waited for: the code goes on from here only when the token held
+            got, soft = v.data
+            self.token_held(ctx, soft)
+            v = got
         return v.but(taints=merge(v.taints, asked)) if asked else v
 
     def call1(self, e: N, env: Env, ctx: Ctx) -> tuple[Val, tuple]:
@@ -1823,11 +2276,22 @@ class Engine:
                 args.append(self.eval(a, env, ctx))
         kw = {k: self.eval(v, env, ctx) for k, v in (e.kw or {}).items()}
         cb_ret = None
+        early = self.canon_at(callee, self.sites.get((fn.file, e.line, e.col)), e) if closures else None
+        # `jwt.verify(token, key, (err, payload) => ...)`: the library tells the function written in the call
+        checks = early == "jsonwebtoken.verify" and fn.lang == "js" and self.verifies(early, e)
         for i, a in closures:      # a function written in the call: analysed here, with what the receiver holds
             given = [elem(recv)] if recv is not None and recv.taints and member in R.CALLBACK_METHODS else None
             if given and member in ("then", "on", "once", "subscribe", "pipe"):
                 given = [Val(recv.taints)]
-            r = self.closure(a.a, env, ctx, given, a)
+            then = recv is not None and recv.kind == "later" and member == "then" and i == 0
+            if checks and i >= 2 and i == len(e.items) - 1:
+                given = [FAILED, proven_val("a token the library checked", early + "()")]
+            elif then:      # `.then(fn)` on what a token library hands back: `fn` gets what the token said
+                given = [recv.data[0]]
+            r = self.closure(a.a, env, ctx, given, a,
+                             gate=member == "use" and fn.lang == "js" and len(a.a.params) == 3)
+            if then and not recv.data[1]:
+                self.passed_on(a.a, env, ctx)
             cb_ret = join(cb_ret, r) if r is not None else cb_ret
             args[i] = Val(kind="fn", data=(a.a, None))
         if callee.kind == "fn" and isinstance(callee.data, tuple):
@@ -1846,6 +2310,7 @@ class Engine:
                        if x.cls == b and x.name in R.CONSTRUCTORS][:1]
         asked = roled(recv, member) if recv is not None and member else ()      # `user.has_role("admin")`
         if targets:
+            self.page_calls.add(id(e))
             return self.use(targets, guess, e, env, ctx, args, kw, member is not None or e.name == "new"), asked
         if site and site["outcome"] in ("resolved", "likely") and site["to"] and \
                 all(getattr(self.g.nodes.get(x), "kind", None) == "class" for x in site["to"]):
@@ -1856,6 +2321,13 @@ class Engine:
                 step = (fn.file, e.line, f"is put into a `{text_of(f)[:40]}` object")
                 return Val(tuple(with_step(x, step) for x in carried.taints)), asked
             return UNKNOWN, asked
+        canon = self.canon_at(callee, site, e)
+        v = self.lib(e, env, ctx, canon, member, recv, recv_expr, callee, args, kw, cb_ret)
+        return v, asked + self.asked(e, ctx, canon, member, recv, args, kw, env)
+
+    @staticmethod
+    def canon_at(callee: Val, site, e: N):
+        """The name a library's function is known by, for a call that is no function of the project."""
         canon = None
         if callee.kind == "ext" and isinstance(callee.data, str) and not callee.data.startswith("."):
             canon = callee.data
@@ -1863,8 +2335,82 @@ class Engine:
             canon = site["to"][0].split(":", 1)[1]
         if e.name == "new" and canon:
             canon = canon if canon.startswith("new ") or canon != "URL" else "new URL"
-        v = self.lib(e, env, ctx, canon, member, recv, recv_expr, callee, args, kw, cb_ret)
-        return v, asked + self.asked(e, ctx, canon, member, recv, args, kw)
+        return canon
+
+    # ---- a login read from what the code does: a token a library checks
+    @staticmethod
+    def verifies(name, e: N) -> bool:
+        """Whether this call of a token library checks the token, so that it fails when the token does not hold.
+        Not when it is handed no key, when the check is switched off (`verify=False`, `options={"verify_signature":
+        False}`, options Lantern cannot read), or when "none" is among the ways of signing it accepts."""
+        if not name or not R.VERIFIES.match(name):
+            return False
+        items, kw = e.items or (), e.kw or {}
+        if "**" in kw:
+            return False
+
+        def none_among(x) -> bool:
+            return x is not None and x.k == "seq" and any(y is not None and y.k == "const" and
+                                                          str(y.a).lower() == "none" for y in x.items or ())
+        key = items[1] if len(items) > 1 else kw.get("key")
+        if name.endswith(".decode") or name == "jsonwebtoken.verify":
+            if key is None or (key.k == "const" and not key.a):
+                return False
+        if name.endswith(".decode"):        # PyJWT, python-jose
+            v = kw.get("verify")
+            if v is not None and not (v.k == "const" and v.a is True):
+                return False
+            if len(items) > 2 and items[2].k == "const" and items[2].a is False:
+                return False
+            opts = kw.get("options")
+            if opts is not None:
+                if opts.k != "map":
+                    return False
+                for k2, x in opts.items or ():
+                    if k2 is None or k2.k != "const" or x is None:
+                        return False
+                    if k2.a == "verify_signature" and not (x.k == "const" and x.a is True):
+                        return False
+            return not none_among(kw.get("algorithms")) and not (len(items) > 2 and none_among(items[2]))
+        if name == "jsonwebtoken.verify" and len(items) > 2 and items[2].k == "map":
+            return not any(k2 is not None and k2.k == "const" and k2.a == "algorithms" and none_among(x)
+                           for k2, x in items[2].items or ())
+        return True
+
+    def checked(self, e: N, ctx: Ctx, name: str, args: list) -> Val:
+        """What a call of a token library that checks the token gives back: who the token says is calling, and at
+        this line a login for the requests that get here. Where the library hands its answer to a function (`call1`
+        reads the one written in the call) or to code that waits for it later, nothing is known at this line."""
+        got = proven_val("a token the library checked", name + "()")
+        items = e.items or ()
+        if name == "jsonwebtoken.verify" and len(items) > 2 and (
+                items[-1].k == "fn" or len(items) > 3 or
+                (args[2] is not None and args[2].kind not in ("obj", "ext", "const"))):
+            return UNKNOWN
+        if R.VERIFIES_LATER.match(name) and e.c != "await":
+            return Val(kind="later", data=(got, False))
+        self.token_held(ctx)
+        return got
+
+    @staticmethod
+    def token_held(ctx: Ctx, soft: bool = False) -> None:
+        """The code goes on from here only with a token that held: a login, for the requests that get here. Not
+        where a failure is caught and the request goes on (`soft`, `Ctx.soft`), nor where only some requests get
+        to."""
+        if soft or ctx.soft or ctx.narrow:
+            return
+        got = login_for(ctx)
+        if got is not None:
+            ctx.az.ev.add(got)
+
+    def passed_on(self, f: Fn, env: Env, ctx: Ctx) -> None:
+        """`.then(f)` on what a token library hands back, with nothing that catches a failure before it: `f` runs
+        only when the token held. Where `f` holds every place the request is handed on, that is a login."""
+        kind, way = self.role(ctx)
+        if kind == "gate":
+            n = ways(f.body, way)
+            if n and n == ways(env.fn.body, way):
+                self.token_held(ctx)
 
     def is_model(self, f: N, callee: Val, env: Env) -> bool:
         """Whether the class called here makes a stored record: by its bases as written (Python), by the library or
@@ -1879,7 +2425,7 @@ class Engine:
         d = callee.data if callee.kind == "ext" and isinstance(callee.data, str) else ""
         return bool(d) and bool(R.DATA_LIBS.match(d) or (d.startswith((".", "@/", "~/")) and R.MODEL_PATH.search(d)))
 
-    def asked(self, e: N, ctx: Ctx, canon, member, recv, args: list, kw: dict) -> tuple:
+    def asked(self, e: N, ctx: Ctx, canon, member, recv, args: list, kw: dict, env: Env | None = None) -> tuple:
         """Checks made by a call whose code Lantern does not read, as marks on what it gives back: a fixed list asked
         whether it holds who is signed in (`ADMINS.includes(user.email)`), and a function named for a permission
         check that is handed who is signed in (`authorize(user, order)`, which refuses by itself)."""
@@ -1894,9 +2440,8 @@ class Engine:
                 if listed:      # `["admin", "staff"].includes(req.cookies.role)`: the visitor's own word
                     out += self.claims(v, listed, True)
         named_ = (member or text_of(e.a)).rsplit(".", 1)[-1]
-        if named_ in R.SAME_SECRET and any(x.k != "const" and R.ADMIN_SECRET.search(text_of(x))
-                                           for x in e.items or ()):
-            out += (mark("role"),)          # `hmac.compare_digest(sent, ADMIN_KEY)`
+        if named_ in R.SAME_SECRET and any(self.kept_secret(x, v, env) for x, v in zip(e.items or (), args)):
+            out += (mark("secret"),)        # `hmac.compare_digest(sent, ADMIN_KEY)`
         if member in R.EQUAL_MEMBERS and recv is not None and vals:     # `order.user.equals(req.user._id)`
             for x, y in ((recv, vals[0]), (vals[0], recv)):
                 if y.kind != "const" and not who(y)[0]:
@@ -1911,14 +2456,20 @@ class Engine:
             out += got
         return out
 
-    def judged(self, v: Val, ctx: Ctx) -> None:
-        """A condition was decided on `v`: the checks it stands for were made."""
+    def judged(self, v: Val, ctx: Ctx, refusing: bool = False) -> None:
+        """A condition was decided on `v`: the checks it stands for were made. What was sent compared with a secret
+        the server keeps ("secret") is a check only where one way on turns the request away (`refusing`): it asks
+        nothing of a person, so a branch that merely notes the answer lets everybody through."""
         if not v.taints:
             return
         az = ctx.az
         for t in v.taints:
             if is_mark(t) and not is_claim(t):
                 _eq, kind, i = t.key
+                if kind == "secret":
+                    if not refusing:
+                        continue
+                    kind = "role"
                 if i is None:
                     az.ev.add(kind)
                 else:
@@ -1959,7 +2510,7 @@ class Engine:
             if strong or (refused == "then" and not sense) or (refused == "else" and sense):
                 ctx.az.ev.add(("client", *where))
 
-    def compared(self, e: N, a: Val, b: Val) -> Val:
+    def compared(self, e: N, a: Val, b: Val, env: Env | None = None) -> Val:
         """What a comparison carries on: the values in it, as a number is carried (safe for every action), and the
         check it makes when one side says who is signed in. Against fixed text it asks a role (`user.role ==
         "admin"`, `user.email in ADMINS`); against anything else, whose record this is."""
@@ -1989,8 +2540,8 @@ class Engine:
             else:
                 kinds = ("owner",)
             asked += tuple(mark(k) for k in kinds if known) + tuple(mark(k, i) for i in params for k in kinds)
-        if equal and any(x.k != "const" and R.ADMIN_SECRET.search(text_of(x)) for x in (e.a, e.b) if x is not None):
-            asked += (mark("role"),)        # what was sent is compared with the admin's own secret
+        if equal and any(self.kept_secret(x, v, env) for x, v in ((e.a, a), (e.b, b))):
+            asked += (mark("secret"),)      # what was sent is compared with a secret only the server holds
         for x, y in ((a, b), (b, a)):       # what was sent is compared with fixed text: is it the visitor's own claim?
             if not equal or y.taints:
                 continue
@@ -2019,8 +2570,10 @@ class Engine:
             return (out if len(out) == 1 else []), True
         return out[:3], False
 
-    def closure(self, f: Fn, env: Env, ctx: Ctx, given, at: N) -> Val | None:
-        """A function written inside another one, read where it stands with the names around it."""
+    def closure(self, f: Fn, env: Env, ctx: Ctx, given, at: N, gate: bool = False) -> Val | None:
+        """A function written inside another one, read where it stands with the names around it. `gate`: it is
+        written in place in `x.use(...)` and runs before the routes after it, so what it asks is kept under the name
+        the map gives it (`inline:<file>:<line>`), apart from the function it stands in."""
         if ctx.depth >= MAX_DEPTH or f.body is None:
             if f.body is not None:
                 self.stats["unread"] = self.stats.get("unread", 0) + 1      # what it calls was not seen
@@ -2030,6 +2583,18 @@ class Engine:
         if route:
             sub.az = Az()       # a route written inline: its own account of who may reach what
             self.routes[f.key] = (f, sub.az)
+        elif gate:
+            sub.az = self.gates[f"inline:{f.file}:{f.line}"] = Az()
+        if route or gate:
+            sub.narrow, sub.only, sub.round, sub.soft = 0, None, FIXED0, 0
+        # what it is to a request: a route, a function requests pass through, or, written inside one of those and
+        # holding every place the request is handed on (the callback of a check), part of it
+        mine = ("route", None) if route else self.passage(f)
+        if mine[0] == "helper":
+            outer = self.role(ctx)
+            if outer[0] == "gate" and ways(f.body, outer[1]) == ways(env.fn.body, outer[1]) > 0:
+                mine = outer
+        sub.role = mine
         e2 = env.copy(f)
         e2.orig = {}
         for i, p in enumerate(f.params):
@@ -2040,7 +2605,7 @@ class Engine:
             if name in e2.vars:
                 env.vars[name] = join(env.vars.get(name, UNKNOWN), e2.vars[name])
                 env.forget(name)
-        return join_all(sub.rets) if sub.rets else None
+        return ret_of(sub.rets)
 
     def bound(self, t: Fn, e: N, args: list, kw: dict, method: bool) -> dict:
         """Which value each parameter of `t` gets from this call: {index: (value, the argument's code or None)}."""
@@ -2086,6 +2651,7 @@ class Engine:
                 continue
             shown = t.name if not t.cls or t.name != "__init__" else t.cls
             az = ctx.az
+            own_read = False
             before, before_p = frozenset(az.ev), asked_of(az)
 
             def carried(had, hadp, b=b, before=before, before_p=before_p) -> tuple[frozenset, frozenset]:
@@ -2102,8 +2668,9 @@ class Engine:
                         hp.update((j, kind) for j in mine)
                 return frozenset(h), frozenset(hp)
             if s.ev:                      # checks the function makes on its own account
-                az.ev |= s.ev
+                az.ev |= asked_here(s.ev, ctx)
             for i, kinds in s.pev.items():      # checks it makes on a parameter, when that is who is signed in
+                kinds = asked_here(kinds, ctx)
                 got = b.get(i)
                 if got is not None:
                     known, mine = who(got[0])
@@ -2113,7 +2680,9 @@ class Engine:
                         az.pev.setdefault(j, set()).update(kinds)
             for rkey, r in s.records.items():   # records it reaches by request values it reads itself
                 scoped, unless = self.told(frozenset(f"who:{i}" for i in r["unless"]), b)
-                if not scoped and rkey not in az.records:
+                if scoped:
+                    own_here(ctx)
+                elif rkey not in az.records:
                     h, hp = carried(r["had"], r["hadp"])
                     az.records[rkey] = dict(r, unless=unless, had=h, hadp=hp)
             for rec in s.sinks:
@@ -2121,13 +2690,16 @@ class Engine:
                 if got is None:
                     continue
                 av = got[0]
-                if ("nohost" in rec.needs and R.host_fixed(av.prefix)) or \
-                        ("nolocal" in rec.needs and R.stays(av.prefix)):
-                    continue
+                if ("nohost" in rec.needs and (R.host_fixed(av.prefix) or R.no_host(av.prefix))) or \
+                        ("nolocal" in rec.needs and R.stays(av.prefix)) or \
+                        ("based" in rec.needs and R.closes(av.prefix, rec.cls == "redirect")):
+                    continue        # "based": in the callee the value stands straight after a start of the server's own
                 unless: frozenset = FIXED0
                 change = "change" in rec.needs
                 qkeep = None
                 h = hp = None
+                act = next((n[4:] for n in rec.needs if n.startswith("act:")), None)
+                at = (rec.file, rec.line, rec.node, rec.what)
                 if rec.cls == "record":
                     h, hp = carried(frozenset(n[4:] for n in rec.needs if n.startswith("had:")),
                                     frozenset((int(n.split(":")[1]), n.split(":")[2]) for n in rec.needs
@@ -2135,7 +2707,11 @@ class Engine:
                 if rec.cls == "record":         # told who is signed in, the function reaches that person's own
                     scoped, unless = self.told(rec.needs, b)
                     if scoped or who(av)[0]:    # ... or the values that pick the record name them
+                        own_here(ctx)
                         continue
+                    # ... or one of them is a parameter of this function that its own callers may hand who is
+                    # signed in (`db.one(text, (order_id, user_id))` inside `get_order(order_id, user_id)`)
+                    unless = unless | frozenset(who(av)[1])
                     qn = next((n for n in rec.needs if n.startswith("q:")), None)
                     if qn is not None:          # the database text is this call's to say
                         qv = b.get(int(qn[2:]))
@@ -2143,9 +2719,16 @@ class Engine:
                         if said_ is None:
                             continue
                         if isinstance(said_, tuple):
+                            # the text is written here: this line says which record is reached, and is where the
+                            # owner has to be asked for (the helper below runs whatever it is handed)
                             change = said_[1]
+                            at = (fn.file, e.line, fn.node, text_of(e.a))
                         else:
                             qkeep = f"q:{said_}"
+                    if qkeep is None and act is None and any(self.credential(x) for x in av.taints):
+                        # ... or it is picked by what the request carries to say who is calling (`Engine.record`)
+                        own_read = own_read or not change
+                        continue
                 elif rec.cls == "assign":
                     sent = any(x.kind == "src" for x in av.taints)
                     passing = av.kind is None and bool(av.taints) and not sent
@@ -2164,18 +2747,20 @@ class Engine:
                     conf = "LOW" if guess else rec.conf
                     if ta.kind == "src":
                         if not need_sql and qkeep is None:
-                            ctx.flow(rec.cls, ta, steps, conf, rec.what, rec.file, rec.line, rec.node, unless, change,
-                                     h, hp)
+                            ctx.flow(rec.cls, ta, steps, conf, at[3], at[0], at[1], at[2], unless, change, h, hp, act)
                     else:
+                        bare = not av.prefix or av.prefix == R.BASE
                         keep = frozenset(n for n in rec.needs if (n == "sql" and need_sql) or
-                                         (n in URL_NEEDS and not av.prefix) or n in ("bag", "name")) | \
+                                         (n in URL_OPEN and bare) or n in ("bag", "name") or
+                                         n.startswith("act:")) | \
+                            (frozenset({"based"}) if av.prefix == R.BASE and rec.needs & URL_OPEN else FIXED0) | \
                             frozenset(f"who:{j}" for j in unless if j != ta.key) | \
                             (frozenset({"change"}) if change else FIXED0) | (frozenset({qkeep}) if qkeep else FIXED0)
                         if h is not None:
                             keep |= frozenset(f"had:{k}" for k in h if isinstance(k, str)) | \
                                 frozenset(f"hadp:{j}:{k}" for j, k in hp)
-                        ctx.sink(SinkRec(ta.key, rec.cls, safe, ta.drop | rec.drop, steps, rec.file, rec.line,
-                                         rec.what, conf, keep, rec.node))
+                        ctx.sink(SinkRec(ta.key, rec.cls, safe, ta.drop | rec.drop, steps, at[0], at[1], at[3], conf,
+                                         keep, at[2]))
             for i, classes in s.guards.items():
                 got = b.get(i)
                 if got is not None and got[1] is not None:
@@ -2198,7 +2783,14 @@ class Engine:
             r = s.ret
             if r is None:
                 continue
-            res = join(res, self.handed_back(r, b, t, shown, fn, e))
+            if r.kind == "later":       # what a token library hands back, not waited for there: `call` reads it here
+                res = r if res is None else res
+                continue
+            back = self.handed_back(r, b, t, shown, fn, e)
+            if own_read and back.kind == "ext" and isinstance(back.data, str) and back.data.startswith("record(") \
+                    and not who(back)[0]:
+                back = back.but(taints=merge(back.taints, proven_val("a record found by what the request carries to say who is calling", "").taints))
+            res = join(res, back)
         if res is None:
             # the function's own code was not read (a class with no constructor of its own): the object holds what
             # it was given
@@ -2216,6 +2808,7 @@ class Engine:
         back = f"is kept by `{shown}()`" if kept else f"comes back from `{shown}()`"
         taints: tuple = ()
         sql, html = r.sql, r.html
+        lost = r.lost
         for rt in r.taints:
             if is_mark(rt) and rt.key[2] is not None:      # a check on a parameter: made, if that is who is signed in
                 got = b.get(rt.key[2])
@@ -2230,6 +2823,7 @@ class Engine:
                 continue
             av = got[0]
             sql, html = sql or av.sql, html or av.html
+            lost = lost or av.lost      # the parameter comes back in it: so does a trail that ended before the call
             pname = t.params[rt.key].name
             if rt.steps:
                 mid = ((fn.file, e.line, f"handed to `{shown}()` as `{pname}`"),) + rt.steps + ((fn.file, e.line, back),)
@@ -2253,7 +2847,7 @@ class Engine:
             return r
         keep_kind = r.kind in ("req", "upload", "bag", "ext", "obj", "seq", "regex")
         return Val(taints, fixed, sql, html, r.prefix if r.prefix else None, r.kind if keep_kind else None,
-                   r.data if keep_kind else None)
+                   r.data if keep_kind else None, lost)
 
     @staticmethod
     def told(needs, b: dict) -> tuple[bool, frozenset]:
@@ -2279,7 +2873,7 @@ class Engine:
         rows that exist (written text needs a WHERE: without one it is every row, nobody's in particular); the index
         of a parameter when the text is that parameter as it was handed in; None otherwise."""
         text = q.data if q.kind == "const" and isinstance(q.data, str) else \
-            q.prefix if q.sql and isinstance(q.prefix, str) and q.prefix else None
+            q.prefix if q.sql and isinstance(q.prefix, str) and q.prefix and not q.prefix.startswith(R.BASE) else None
         if text is not None:
             if not R.RECORD_SQL.match(text) or (q.kind == "const" and not R.SQL_WHERE.search(text)):
                 return None
@@ -2318,6 +2912,15 @@ class Engine:
                 isinstance(a0.data, str) and a0.data.startswith("record("):
             for v in vals[1:]:
                 self.assigned(ctx, env, v, e, what)
+        # --- a record that was read into an object is changed or removed through that object
+        if member and R.HELD_OWN[env.fn.lang].search(member) and at_record(recv) is not None:
+            self.changed(ctx, env, at_record(recv), e, what)        # note.delete(), order.deleteOne(), doc.save()
+        elif member in R.HELD_HANDED and data_recv:
+            for v in vals:                                          # db.session.delete(note), repo.remove(order)
+                self.changed(ctx, env, at_record(v), e, what)
+        elif member in R.HELD_SAVED and data_recv:
+            for place in sorted(ctx.top.set_on):                    # note.text = text ... db.session.commit()
+                self.changed(ctx, env, place, e, what)
         # --- a record read, changed or removed
         told = None
         if (bool(name) and bool(R.SQL_CALL.match(name))) or (member in R.SQL_MEMBERS and
@@ -2357,6 +2960,11 @@ class Engine:
         whose = tuple(t for t in every if t.kind == "ident" and not is_mark(t))
         if rls:
             return Val(whose, kind="ext", data="record(rls)")
+        # ... and so is one picked by what the request carries to say who is calling (a token, a key, a session id
+        # in a cookie or a header): whoever holds that is the one the record belongs to
+        own = bool(whose) or (not more and any(self.credential(t) for t in taints))
+        if whose:
+            own_here(ctx)           # asked in the query itself: only the record of whoever is signed in is reached
         params = frozenset(t.key for t in every if t.kind == "param")
         lines = set()
         x, depth = e, 0
@@ -2366,8 +2974,8 @@ class Engine:
             elif x.k not in ("attr", "await", "index"):
                 break
             x, depth = x.a, depth + 1
-        self.amend(ctx, fn.file, lines, bool(whose), params)
-        if not whose:
+        self.amend(ctx, fn.file, lines, own, params)
+        if not own:
             step = (fn.file, e.line, f"`{what}`: here it {R.ACTION['record']}")
             for t in taints:
                 if t.kind == "src" and t.origin != "dom":
@@ -2379,7 +2987,47 @@ class Engine:
                         (frozenset({"change"}) if change else FIXED0) | had_marks(ctx.az)
                     ctx.sink(SinkRec(t.key, "record", t.safe, t.drop, cut(t.steps + (step,)), fn.file, e.line, what,
                                      "LOW", needs, fn.node))
-        return Val(whose, kind="ext", data="record()")
+        if own and not whose and not change:
+            # read by it: what was found says who is calling, and nothing was found for anybody else
+            return proven_val("a record found by what the request carries to say who is calling", "record()")
+        # a record noted here says where: the object it is read into may be removed or saved later (`changed`).
+        # A later call of the same chain (`.filter_by(id=x).first_or_404()`) hands on the record of the first
+        noted = not own and any(t.kind == "param" or (t.kind == "src" and t.origin != "dom") for t in taints)
+        return Val(whose, kind="ext", data=f"record()@{fn.file}:{e.line}" if noted else
+                   recv.data if at_record(recv) is not None else "record()")
+
+    def changed(self, ctx: Ctx, env: Env, place: tuple | None, e: N, what: str) -> None:
+        """The record read at `place` is changed or removed here, through the object it was read into
+        (`db.session.delete(note)`, `note.delete()`, `order.save()`, a field set and the session committed:
+        `flow_rules.HELD_OWN`, `HELD_HANDED`, `HELD_SAVED`). From here on it is a record that is changed, with what
+        had been asked of who is signed in up to this line: an owner asked for only afterwards comes too late, and a
+        route with no login is listed for it (`authz`, `flowscan._open_route`). Until 2026-11-11 only the read was
+        noted, and neither was said."""
+        if place is None:
+            return
+        az, fn = ctx.az, env.fn
+        words = f"`{what}`: {R.HELD_STEP}"
+        for key in [k for k in az.records if k[0] == "record" and (k[1], k[2]) == place]:
+            r = az.records[key]
+            if not r["change"] and not r.get("act"):
+                az.records[key] = dict(r, change=True, through=True, had=frozenset(az.ev), hadp=asked_of(az),
+                                       steps=r["steps"] + [{"file": fn.file, "line": e.line, "what": words}])
+        sinks = ctx.top.sinks
+        for key in [k for k in sinks if k[1] == "record" and (k[2], k[3]) == place]:
+            rec = sinks[key]
+            if "change" not in rec.needs:
+                kept = frozenset(n for n in rec.needs if not n.startswith(("had:", "hadp:")))
+                sinks[key] = rec._replace(needs=kept | frozenset({"change"}) | had_marks(az),
+                                          steps=cut(rec.steps + ((fn.file, e.line, words),)))
+
+    def credential(self, t: Taint) -> bool:
+        """Whether a request value is what a request carries to say who is calling: a cookie or a header named for
+        a token, a key or a session (`flow_rules.CREDENTIAL`). An id anybody can write there is none."""
+        if t.kind != "src":
+            return False
+        got = self.sent.get(t.key)
+        return bool(got) and isinstance(got[0], str) and got[1] in R.CREDENTIAL_PLACE and \
+            bool(R.CREDENTIAL.match(claim_name(got[0])))
 
     @staticmethod
     def amend(ctx: Ctx, file: str, lines: set, scoped: bool, params: frozenset) -> None:
@@ -2398,6 +3046,31 @@ class Engine:
             elif params:
                 rec = sinks[key]
                 sinks[key] = rec._replace(needs=rec.needs | frozenset(f"who:{i}" for i in params if i != rec.param))
+
+    def acted(self, ctx: Ctx, env: Env, e: N, what: str, vals: list, kind: str) -> None:
+        """Something that cannot be taken back is done here with `vals` (`flow_rules.ACT`: a command, a file removed,
+        another service told to change something). Noted the way a record that is changed is, with what had been
+        asked before this line: a route that asks whose the record is only afterwards has refused too late
+        (`authz`). Nothing is noted when who is signed in is among the values: it is done for the caller."""
+        fn = env.fn
+        taints: tuple = ()
+        for v in vals:
+            if v is not None:
+                taints = merge(taints, v.taints)
+        if any(t.kind == "ident" and not is_mark(t) for t in taints):
+            return
+        params = frozenset(t.key for t in taints if t.kind == "param")
+        step = (fn.file, e.line, f"`{what}`: here {R.ACT[kind]} for it")
+        for t in taints:
+            if t.kind == "src" and t.origin != "dom":
+                if ("record", fn.file, e.line, t.key) not in ctx.az.records:
+                    ctx.flow("record", t, cut(t.steps + (step,)), "LOW", what, fn.file, e.line, fn.node, params, True,
+                             act=kind)
+            elif t.kind == "param":
+                needs = frozenset(f"who:{i}" for i in params if i != t.key) | \
+                    frozenset({"change", "act:" + kind}) | had_marks(ctx.az)
+                ctx.sink(SinkRec(t.key, "record", t.safe, t.drop, cut(t.steps + (step,)), fn.file, e.line, what,
+                                 "LOW", needs, fn.node))
 
     def assigned(self, ctx: Ctx, env: Env, v: Val | None, e: N, what: str, named: bool = False) -> None:
         """`v` is written onto a stored record. A flow when it is everything the request sent (`named`: when the
@@ -2468,10 +3141,13 @@ class Engine:
         it (a `require_admin` that asks nothing counts for nothing); by its name where it is a library's."""
         ev: set = set()
 
-        def take(name: str, key) -> None:
+        def take(name: str, key, seen: tuple = ()) -> None:
             s = self.summ.get(key) if key is not None else None
             if s is not None:
                 ev.update(s.ev)
+                if key not in seen:     # what a dependency itself depends on ran before it
+                    for name2, key2 in (self.before.get(key) or {}).items():
+                        take(name2, key2, (*seen, key))
             elif key is None:
                 last = name.rsplit(".", 1)[-1]
                 if R.ROLE_NAME.search(last):
@@ -2489,15 +3165,33 @@ class Engine:
             if m:
                 take(m.group(1), self.fn_named(fn.mod, m.group(1)))
         entry = self.entry(fn) or {}
+        for u in entry.get("use") or ():
+            if isinstance(u.get("id"), str) and u["id"] not in self.by_node and self.made_with_secret(u):
+                ev.add("role")      # app.use(basicAuth({ users: { admin: process.env.ADMIN_PASSWORD } }))
         for mid in [*(entry.get("middleware") or ()), *(u.get("id") for u in entry.get("use") or ())]:
             f2 = self.by_node.get(mid) if isinstance(mid, str) else None
-            if f2 is not None:
+            if isinstance(mid, str) and mid.startswith("inline:"):
+                az = self.gates.get(mid)        # written in place in `use`: what its own lines ask
+                if az is not None:
+                    ev.update(az.ev)
+            elif f2 is not None:
                 take(f2.name, f2.key)
             elif isinstance(mid, str):
                 take(_re.split(r"[:/]", mid)[-1], None)
         for f2 in fn.mod.fns:       # Flask: `@app.before_request` runs before every route of the app
             if f2 is not fn and any("before_request" in x or "before_app_request" in x for x in f2.decorators):
                 take(f2.name, f2.key)
+        return ev
+
+    def settled(self, ev: set, fn: Fn) -> set:
+        """A login asked of the requests of some verbs only (`("login", verbs)`) is this route's login when the route
+        answers no other verb. A route whose entry names no verb Lantern knows (`ALL`, `ANY`) takes none of them."""
+        some = [k for k in ev if isinstance(k, tuple) and k[:1] == ("login",)]
+        if some:
+            ev.difference_update(some)
+            mine = route_verbs((self.entry(fn) or {}).get("detail") or "")
+            if mine and mine <= frozenset().union(*(k[1] for k in some)):
+                ev.add("login")
         return ev
 
     def authz(self) -> list:
@@ -2509,7 +3203,15 @@ class Engine:
             if fn.node is None:
                 continue
             pre = self.before_of(fn)
-            ev = set(az.ev) | pre
+            ev = self.settled(set(az.ev) | pre, fn)
+            asks = bool({"owner", "role"} & ev)
+            if "login" in ev:
+                self.logins.add(fn.node)
+            elif "caught" in ev and not asks and "own" not in ev:
+                # a token library on the way, and nothing that turns anybody away. Not where the route asks whose
+                # the record is or for a role, or reaches a record through who is signed in ("own"): whoever has
+                # no token is nobody's owner and has no role
+                self.caught.add(fn.node)
             detail = (self.entry(fn) or {}).get("detail") or fn.name
             signs_in = sign_in_route(detail)
             records = []
@@ -2519,10 +3221,18 @@ class Engine:
                     continue        # a search word, a page number: it picks no one's record
                 if signs_in and R.LOGIN_NAME.match(picked_by):
                     continue        # signing in, signing up, a new password: a person is looked up by the name typed
-                # a record that is changed or removed: only what was asked before it counts
-                have = (set(r["had"]) | pre) if r["change"] else ev
-                if not ({"owner", "role"} & have):
-                    records.append(r)
+                before = bool({"owner", "role"} & (set(r["had"]) | pre))
+                if r.get("act"):
+                    # something that cannot be taken back: reported where the route does ask, and only after it. A
+                    # route that never asks has the record's own finding; a command with no record is nobody's
+                    if asks and not before:
+                        records.append(dict(r, late=True))
+                elif r["change"]:
+                    # a record that is changed or removed: only what was asked before it counts
+                    if not before:
+                        records.append(dict(r, late=asks))
+                elif not asks:
+                    records.append(dict(r, late=False))
             # what the route decides on the visitor's own word, where no role of the signed-in person is asked
             client = [] if "role" in ev else sorted({x[1:] for x in ev if isinstance(x, tuple) and x[0] == "client"})
             # the admins' own sign-in page cannot ask for an admin; a route that asks the visitor is the finding above
@@ -2530,7 +3240,7 @@ class Engine:
             if records or role or client:
                 records.sort(key=lambda r: (r["file"], r["line"], r["source"]["file"], r["source"]["line"]))
                 out.append({"node": fn.node, "file": fn.file, "line": fn.line, "detail": detail,
-                            "records": records, "role": role,
+                            "records": records, "role": role, "login": "login" in ev,
                             "client": [{"file": f, "line": ln, "what": w, "name": (self.sent.get((f, ln, w)) or ("",))[0],
                                         "part": (self.sent.get((f, ln, w)) or ("", ""))[1]} for f, ln, w in client]})
         return out
@@ -2559,6 +3269,7 @@ class Engine:
             if member in R.KEEP_SUBJECT or (self.same_address(member, tainted_args) and
                                             any(t.safe & R.OWN_MARKS for t in recv.taints)):
                 return Val(recv.taints)     # `req.nextUrl.clone()`, `request.url.replace("http://", "https://")`
+            self.page_calls.add(id(e))
             return self.leaf(recv, key, e, env)
         if callee.kind in ("bag", "upload") and recv is not None and recv.kind == "req":
             if fn.lang == "js" and member in ("get", "header") and e.items and e.items[0].k == "const" and \
@@ -2571,10 +3282,7 @@ class Engine:
             if member in R.UPLOAD_SAVE and a0 is not None:
                 self.hit(ctx, env, "path", a0, e, what, "MEDIUM")
                 if e.items and e.items[0].k == "name":       # from here on that file holds what was uploaded
-                    nm = e.items[0].name
-                    content = tuple(t._replace(safe=t.safe | CONTENT) for t in recv.taints)
-                    env.vars[nm] = env.vars.get(nm, UNKNOWN).but(taints=merge(env.vars.get(nm, UNKNOWN).taints,
-                                                                               content))
+                    self.hold(env, e.items[0].name, recv)
                 return UNKNOWN
             return callee if callee.taints else Val(tuple(t._replace(safe=t.safe | CONTENT) for t in recv.taints))
         if fn.lang == "js":
@@ -2584,6 +3292,29 @@ class Engine:
             if name and name.rsplit(".", 1)[-1] in R.URL_HOOKS:
                 words = f"`{what}` reads the page's address, which whoever made the link chose"
                 return Val((self.source(fn, e.line, words, origin="dom"),), kind="bag", data="params")
+        # a login read from what the code does: what a token library hands back, and what is made of its promise
+        if recv is not None and recv.kind == "later" and member:
+            got, soft = recv.data
+            if member == "catch":       # a failure becomes what this hands back, and the code goes on
+                if any(a.k == "fn" for a in e.items or ()):
+                    nothing = nobody(cb_ret)
+                else:                   # `.catch(next)`: the failure goes on as an error, and nothing comes back
+                    way = self.role(ctx)[1]
+                    nothing = bool(way) and bool(e.items) and e.items[0].k == "name" and e.items[0].name == way
+                return Val(kind="later", data=(got if nothing else unproven(got), True))
+            if member == "then":
+                return Val(kind="later", data=(cb_ret if cb_ret is not None else UNKNOWN,
+                                               soft or len(e.items or ()) > 1))
+            return recv if member == "finally" else UNKNOWN
+        if name and R.VERIFIES.match(name):
+            # a token library is called on the way: what that shows is read here, never from the call's name
+            ctx.az.ev.add("caught")
+            self.token_lines.add((fn.file, e.line))
+            if self.verifies(name, e):
+                return self.checked(e, ctx, name, args)
+        elif name and R.READS_TOKEN.match(name):
+            ctx.az.ev.add("caught")     # the token is read and nothing is checked: no login, whatever comes of it
+            self.token_lines.add((fn.file, e.line))
         # 0. who is signed in, handed back by a call whose code Lantern does not read: taken by its name
         last = (name or text_of(e.a)).rsplit(".", 1)[-1]
         if (name and R.IDENT_CALLS.match(name)) or R.IDENT_FN.match(last):
@@ -2593,7 +3324,8 @@ class Engine:
         if got is not False:
             src = a0 if a0 is not None and (a0.taints or recv is None or not recv.taints) else recv
             if src is None or not src.taints:
-                return Val(kind="ext", data=name + "()") if name else UNKNOWN
+                lost = got is not None and src is not None and src.lost     # `str(x)`, an escape: the text is still in it
+                return Val(kind="ext", data=name + "()", lost=lost) if name else ENDED if lost else UNKNOWN
             if got is None:     # a number or a digest: no text of the caller's is left in it, but it is still
                 # the caller's choice (of a record), so its origin is kept
                 return Val(tuple(t if t.kind == "ident" else t._replace(safe=t.safe | R.ALL) for t in src.taints))
@@ -2622,19 +3354,39 @@ class Engine:
                 env.forget(first.name)
             return made
         # 3. what the call gives back
+        if fn.lang == "py" and name and a0 is not None and a0.kind == "const" and isinstance(a0.data, str):
+            if R.INLINE_PAGE.match(name):
+                return self.inline(e, env, a0.data, True, args[1:], kw, name)
+            if R.INLINE_TEMPLATE.match(name):
+                on = kw.get("autoescape")
+                escapes = on is not None and not (on.kind == "const" and not on.data)
+                return Val(fixed=FIXED0, kind="ext", data=Inline(name + "()", a0.data, escapes))
+        if member == "render" and recv is not None and recv.kind == "ext" and isinstance(recv.data, Inline):
+            return self.inline(e, env, recv.data.text, recv.data.escapes, args, kw, name or "render")
         if name == "lxml.etree.XMLParser":
             r = kw.get("resolve_entities")
             return Val(kind="ext", data="lxml.etree.XMLParser(safe)" if r is not None and r.kind == "const"
                        and r.data is False else "lxml.etree.XMLParser()")
         if name == "re.compile" and a0 is not None and a0.kind == "const":
             return Val(fixed=FIXED0, kind="regex", data=a0.data)
+        if name == "str.maketrans" and fn.lang == "py":     # a table for `translate`: does it take every `<` away?
+            return Val(fixed=FIXED0, kind="ext",
+                       data=TRANS_LT if self.table_takes_lt(fn, e.items or (), env, True) else "str.maketrans()")
+        if member == "translate" and fn.lang == "py" and recv is not None and recv.taints and len(args) == 1 and \
+                ((a0 is not None and a0.kind == "ext" and a0.data == TRANS_LT) or
+                 self.table_takes_lt(fn, e.items or (), env, False)):
+            step = (fn.file, e.line, f"`{what}` replaces every `<`: that protects {R.PROTECTS['xss']}, not other uses")
+            return Val(tuple(t if t.kind == "ident" else with_step(t._replace(safe=norm(t.safe | {"xss"}, fn.lang)), step)
+                             for t in recv.taints), None, recv.sql, recv.html)
         subbed = None           # re.sub(r"[<>]", "", text) / PATTERN.sub("&lt;", text): every `<` replaced by hand
         if name == "re.sub" and len(args) > 2 and args[2] is not None and args[2].taints:
-            subbed = (Val(kind="regex", data=a0.data) if a0 is not None and a0.kind == "const" else a0, args[1], args[2])
+            subbed = (Val(kind="regex", data=a0.data) if a0 is not None and a0.kind == "const" else a0, args[1], args[2],
+                      e.items[1])
         elif member == "sub" and recv is not None and recv.kind == "regex" and len(args) > 1 and \
                 args[1] is not None and args[1].taints:
-            subbed = (recv, a0, args[1])
-        if subbed and subbed[0] is not None and self.replaces_lt(fn, "sub", subbed[0], subbed[1], None, env, ctx):
+            subbed = (recv, a0, args[1], e.items[0])
+        if subbed and subbed[0] is not None and self.replaces_lt(fn, "sub", subbed[0], subbed[1], subbed[3], env,
+                                                                 ctx):
             step = (fn.file, e.line, f"`{what}` replaces every `<`: that protects {R.PROTECTS['xss']}, not other uses")
             return Val(tuple(t if t.kind == "ident" else with_step(t._replace(safe=norm(t.safe | {"xss"}, fn.lang)), step)
                              for t in subbed[2].taints), None, subbed[2].sql, subbed[2].html)
@@ -2650,14 +3402,47 @@ class Engine:
         if member in R.RESOLVER_MEMBERS and recv is not None and recv.taints:
             return Val(tuple(t._replace(safe=t.safe | {"path:resolved"}) for t in recv.taints), kind=recv.kind,
                        data=recv.data)
-        if name and R.HOST_OF.match(name):
+        if name and (R.HOST_OF.match(name) or R.URL_JOIN.match(name)):
             return self.address(fn, name, args, every)
+        if name and R.UNESCAPES.match(name) and every.taints:      # what an escape did for a page is undone
+            return Val(tuple(t if t.kind == "ident" else t._replace(safe=t.safe - {"xss"})
+                             for t in disowned(every.taints)), kind="ext", data=name + "()")
         if name and R.PROPAGATORS.match(name):
             taints = disowned(every.taints)
+            if R.FILE_READ.match(name):
+                taints = opened(taints)
             if name in ("json.loads", "json.load", "JSON.parse", "yaml.safe_load", "ast.literal_eval"):
                 taints = tuple(t._replace(safe=t.safe - {"nosql"}) for t in taints)
             return Val(taints, every.fixed if not taints else None, every.sql, every.html, kind="ext",
-                       data=name + "()")
+                       data=name + "()", lost=every.lost)
+        # --- request data written into a file: the file holds it from here on (`held`)
+        if member in ("write", "writelines") and recv is not None and recv.kind == "ext" and \
+                isinstance(recv.data, str) and a0 is not None and a0.taints:
+            if recv.data.startswith("open(w):"):
+                self.hold(env, recv.data[8:], a0)
+            elif recv.data.startswith("tempfile.") and recv_expr is not None and recv_expr.k == "name":
+                self.hold(env, recv_expr.name, a0)
+        elif name == "shutil.copyfileobj" and len(args) > 1 and a0 is not None and a0.taints and \
+                args[1] is not None and args[1].kind == "ext" and isinstance(args[1].data, str):
+            if args[1].data.startswith("open(w):"):
+                self.hold(env, args[1].data[8:], a0)
+            elif args[1].data.startswith("tempfile.") and e.items[1].k == "name":
+                self.hold(env, e.items[1].name, a0)
+        elif member in ("write_bytes", "write_text") and recv_expr is not None and recv_expr.k == "name" and \
+                a0 is not None and a0.taints and fn.lang == "py":
+            self.hold(env, recv_expr.name, a0)
+        elif name and R.FILE_WRITE.match(name) and len(args) > 1 and args[1] is not None and args[1].taints and \
+                e.items and e.items[0].k == "name":
+            self.hold(env, e.items[0].name, args[1])
+        if name and R.FILE_READ.match(name) and a0 is not None and \
+                any("held" in t.safe or "content" in t.safe for t in a0.taints):
+            return Val(opened(a0.taints), kind="ext", data=name + "()")
+        if name and fn.lang == "js" and R.ARCHIVE_LIB.match(name) and every.taints:
+            # an archive library handed what was uploaded, or the path of the file that holds it: what it gives
+            # back is that archive, and the names of its entries are its maker's (`entry.entryName`, `file.path`)
+            ts = tuple(t._replace(safe=t.safe | ARCHIVE) for t in opened(every.taints) if t.kind != "ident")
+            if ts:
+                return Val(ts, kind="ext", data=name + "()")
         if member in R.ARCHIVE_NAMES and recv is not None and recv.taints:
             return self.entry_names(recv, e, env)
         if member is not None and recv is not None:
@@ -2680,12 +3465,24 @@ class Engine:
                 else:
                     inner = Val(recv.taints, recv.fixed if recv.kind in ("obj", "seq") else None, recv.sql, recv.html)
                 return join(inner, default) if default is not None else inner
+            # x.split('<').join('&lt;') / '&lt;'.join(x.split('<')): cut at every `<` and joined with text that has none
+            cut = (recv, recv_expr, a0) if fn.lang == "js" else (a0, e.items[0] if e.items else None, recv)
+            if member == "join" and cut[0] is not None and cut[0].taints and split_at_lt(cut[1]) and \
+                    without_lt(cut[2]):
+                step = (fn.file, e.line, f"`{what}` replaces every `<`: that protects {R.PROTECTS['xss']}, "
+                                         "not other uses")
+                return Val(tuple(t if t.kind == "ident" else
+                                 with_step(t._replace(safe=norm(t.safe | {"xss"}, fn.lang)), step)
+                                 for t in cut[0].taints), None, cut[0].sql, cut[0].html)
             if member in R.ARG_ONLY_METHODS or (member in R.ARG_METHODS and not recv.taints):
                 if not tainted_args and not recv.taints and recv.fixed is None:
-                    return UNKNOWN
+                    return ENDED if recv.lost or any(v.lost for v in vals) else UNKNOWN
+                if recv.kind == "const" and isinstance(recv.data, str) and member in R.PAGE_TEXT_METHODS:
+                    self.page_calls.add(id(e))      # LAYOUT.format(body=text), '<br>'.join(lines)
                 parts = [recv] + vals + list(kw.values())
                 v = concat(parts) if len(parts) > 1 else recv
-                return self.built(ctx, env, e, Val(v.taints, v.fixed, v.sql, v.html))
+                return self.built(ctx, env, e, Val(v.taints, v.fixed, v.sql, v.html,
+                                                   self.glued(fn.lang, member, recv, recv_expr, vals, e), lost=v.lost))
             if recv.taints and recv.kind not in ("req",):
                 if member in ("replace", "replaceAll") and len(args) > 1 and \
                         self.replaces_lt(fn, member, args[0], args[1], e.items[1], env, ctx):
@@ -2705,16 +3502,31 @@ class Engine:
                            data=f"{recv.data}.{member}()" if recv.kind == "ext" else None)
         if cb_ret is not None and member in ("map", "flatMap", "then", "reduce"):
             return Val(cb_ret.taints)
-        if any(t.kind != "ident" and not R.ALL <= t.safe for v in vals + list(kw.values()) for t in v.taints):
+        stopped = any(t.kind != "ident" and not R.ALL <= t.safe for v in vals + list(kw.values()) for t in v.taints)
+        if stopped:
             self.stats["stopped"] += 1
+        # ... and what it gives back, or a call on that (`normalize(host).lower()`), is nobody's for sure (`Val.lost`)
+        stopped = stopped or (recv is not None and recv.lost) or any(v.lost for v in vals + list(kw.values()))
         if name and R.OPEN_CALL.match(name) and e.items:
             mode = args[1] if len(args) > 1 and args[1] is not None else kw.get("mode")
-            if mode is not None and mode.kind == "const" and isinstance(mode.data, str) and \
-                    set(mode.data) & set("wax+") and self.template_file(e.items[0], env):
+            writes = mode is not None and mode.kind == "const" and isinstance(mode.data, str) and \
+                bool(set(mode.data) & set("wax+"))
+            if writes and self.template_file(e.items[0], env):
                 return Val(kind="ext", data="open(template)")       # what is written to it becomes a template
+            if writes and e.items[0].k == "name":
+                return Val(kind="ext", data="open(w):" + e.items[0].name)     # what is written to it, it holds
+            if a0 is not None and any("held" in t.safe for t in a0.taints):
+                return Val(opened(a0.taints), kind="ext", data="open()")
         if callee.kind == "ext" and name:
-            return Val(kind="ext", data=name + "()")
-        return UNKNOWN
+            return Val(kind="ext", data=name + "()", lost=stopped)
+        return ENDED if stopped else UNKNOWN
+
+    @staticmethod
+    def hold(env: Env, name: str, data: Val) -> None:
+        """From here on the file whose path is kept in `name` holds `data` (an upload saved there, text written to
+        it): noted on the path, for whatever opens the file later."""
+        old = env.vars.get(name, UNKNOWN)
+        env.vars[name] = old.but(taints=merge(old.taints, held(data.taints)))
 
     def template_file(self, e: N, env: Env) -> bool:
         """Whether the path written here names a file in the folder the template engine reads: by the text of the
@@ -2759,6 +3571,27 @@ class Engine:
         self.hit(ctx, env, "eval", stepped(v, step), e, what, "LOW")
 
     @staticmethod
+    def glued(lang: str, member: str, recv: Val, recv_expr: N | None, vals: list, e: N) -> str | None:
+        """The leading text of what `x.concat(a, b)` or a join of a list written in the call gives, where that text
+        says where an address goes (None otherwise, as for every other call of this kind): there the parts stand in
+        the text in the order they are written, a join's separator between them. A list kept under a name is not
+        read this way: what it holds, and in which order, may differ from one way through the code to another."""
+        if member == "concat" and lang == "js":
+            order = [recv] + vals
+        elif member == "join":
+            sep, items, lit = (vals[0] if vals else const(","), recv, recv_expr) if lang == "js" else \
+                (recv, vals[0] if vals else None, e.items[0] if e.items else None)
+            if items is None or lit is None or lit.k != "seq" or items.kind != "seq" or sep.kind != "const" or \
+                    not isinstance(sep.data, str) or len(items.data) != len(lit.items or ()) or \
+                    any(x is None or x.k == "star" for x in lit.items or ()):
+                return None
+            order = [x for i, it in enumerate(items.data) for x in ((sep, it) if i else (it,))]
+        else:
+            return None
+        p = concat(order).prefix if len(order) > 1 else None
+        return p if isinstance(p, str) and (p.startswith(R.BASE) or R.host_fixed(p)) else None
+
+    @staticmethod
     def same_address(member: str | None, tainted_args: bool) -> bool:
         """Whether a call on an address gives the same address back (a copy, its text, its text with fixed text
         swapped for fixed text) and not a part of it."""
@@ -2770,16 +3603,19 @@ class Engine:
         starts with two slashes: a page that begins with written text of one slash and more cannot be, so what
         follows in it does not say where the address goes; a base that is the address the request was made to names
         this site. `new URL(req.url)` is that address again."""
-        if fn.lang != "js" or name not in ("URL", "new URL"):
+        joins = fn.lang == "py" and bool(R.URL_JOIN.match(name))    # `urljoin(base, page)`: the same, base first
+        if not joins and (fn.lang != "js" or name not in ("URL", "new URL")):
             return Val(every.taints, kind="ext", data=name + "()")
-        page = args[0] if args else None
-        base = args[1] if len(args) > 1 else None
+        page = args[1 if joins else 0] if len(args) > (1 if joins else 0) else None
+        base = args[0 if joins else 1] if len(args) > (0 if joins else 1) else None
+        if joins and (page is None or base is None):
+            return Val(every.taints, kind="ext", data=name + "()")
         mine = page.taints if page is not None else ()
         if base is None:
             mine = tuple(t._replace(safe=(t.safe - {"redirect:base"}) | {"redirect:own"})
                          if "redirect:base" in t.safe else t for t in mine)
             return Val(mine, kind="ext", data=name + "()")
-        if R.local_path(page.prefix if page is not None else None):
+        if R.local_path(page.prefix if page is not None else None) or (joins and R.no_host(page.prefix)):
             mine = tuple(t if t.kind == "ident" else t._replace(safe=t.safe | R.URLS) for t in mine)
         else:       # a whole address of its own, for all the code shows: `req.url` in Express may start with `//`
             mine = tuple(t._replace(safe=t.safe - {"redirect:base"}) if "redirect:base" in t.safe else t for t in mine)
@@ -2805,16 +3641,189 @@ class Engine:
             return False
         if rep is not None and rep.kind == "const" and isinstance(rep.data, str):
             return "<" not in rep.data
-        # (c) => TABLE[c]: a table written in the code, which gives text without `<` for `<`
-        f = rep_e.a if rep_e is not None and rep_e.k == "fn" else None
-        body = f.body if isinstance(f, Fn) and f.body and len(f.body) == 1 and f.params else None
-        ret = body[0].a if body and body[0].k == "return" else None
-        if ret is not None and ret.k == "index" and ret.a is not None and ret.a.k == "name" and \
-                ret.b is not None and ret.b.k == "name" and ret.b.name == f.params[0].name:
-            table = self.lookup(ret.a.name, env, ctx)
-            to = table.data.get("<") if table.kind == "obj" and isinstance(table.data, dict) else None
-            return to is not None and to.kind == "const" and isinstance(to.data, str) and "<" not in to.data
-        return False
+        # a function that says what each character becomes: what it gives for `<`, worked out from its own code
+        # (it has to be handed one character at a time: `<script|<` hands it `<script`)
+        if pat.kind == "regex" and not R.one_at_a_time(pat.data):
+            return False
+        f = rep_e.a if rep_e is not None and rep_e.k == "fn" else \
+            fn.mod.names.get(rep_e.name) if rep_e is not None and rep_e.k == "name" and rep_e.name not in env.vars \
+            else None
+        got = self.given_for(f if isinstance(f, Fn) else None, "<", env, ctx)
+        return isinstance(got, str) and "<" not in got
+
+    @staticmethod
+    def table_takes_lt(fn: Fn, items, env: Env, made: bool) -> bool:
+        """Whether a table for Python's `translate` replaces `<` by text that holds none, or takes it out. `made`:
+        the arguments of `str.maketrans`: one table whose keys are characters or their numbers, two texts of the
+        same length (and a third of characters to take out). Otherwise the table handed to `translate` itself, which
+        looks a character up by its number only: a key `'<'` is never found. The table is read where it is written:
+        in place, or once at the top of the file under a name nothing in the function sets."""
+        def text(x):
+            return x.a if x is not None and x.k == "const" and isinstance(x.a, str) else None
+        if made and len(items) in (2, 3):
+            a, b, gone = text(items[0]), text(items[1]), text(items[2]) if len(items) == 3 else ""
+            if a is None or b is None or gone is None or len(a) != len(b):
+                return False
+            return "<" in gone or ("<" in a and b[a.rindex("<")] != "<")
+        if len(items) != 1 or items[0] is None:
+            return False
+        table = items[0]
+        if table.k == "name" and table.name not in env.vars and table.name not in fn.mod.gwrites:
+            written = fn.mod.consts.get(table.name, ())
+            table = written[0] if len(written) == 1 else None
+        if table is None or table.k != "map":
+            return False
+        to = MISSING
+        for key, x in table.items or ():
+            if key is None:
+                return False
+            if key.k == "call" and text_of(key.a) == "ord" and len(key.items or ()) == 1 and \
+                    text(key.items[0]) is not None:
+                key = N("const", key.line, a=ord(key.items[0].a) if len(key.items[0].a) == 1 else -1)
+            if key.k != "const":
+                return False                        # a key Lantern cannot read may be the one for `<`
+            if key.a == 60 or (made and key.a == "<"):
+                to = x
+        if to is MISSING or to is None or to.k != "const":
+            return False
+        return to.a is None or (isinstance(to.a, str) and "<" not in to.a) or \
+            (isinstance(to.a, int) and not isinstance(to.a, bool) and to.a != 60)
+
+    def given_for(self, f: Fn | None, ch: str, env: Env, ctx: Ctx):
+        """What a small function gives back for the one character `ch`, worked out from its own code: the text, or
+        None where that is not known. It reads a table asked by the character (in a name or written in place, with
+        `|| c` for what the table lacks), text glued with the character's number, and a question, an `if` or a
+        `switch` on the character. Anything else (a loop, a call of another function) is not known."""
+        if f is None or not f.params or f.body is None:
+            return None
+        got = self._given_block(f.body, f.params[0].name, ch, env, ctx, 0)
+        return got if isinstance(got, str) else None
+
+    def _given_block(self, stmts, p: str, ch: str, env: Env, ctx: Ctx, depth: int):
+        if depth > 6:
+            return None
+        for s in (stmts or ())[:16]:
+            if s.k == "return":
+                return self._given(s.a, p, ch, env, ctx, depth + 1)
+            if s.k == "if":
+                yes = self._given_test(s.a, p, ch, env, ctx, depth + 1)
+                if yes is None:
+                    return None
+                got = self._given_block(s.b if yes else s.c, p, ch, env, ctx, depth + 1)
+                if got is not NO_RETURN:
+                    return got
+            elif s.k == "match" and isinstance(s.kw, dict) and "labels" in s.kw:
+                labels = s.kw["labels"]
+                if self._given(s.a, p, ch, env, ctx, depth + 1) != ch or \
+                        any(c is not None and c.k != "const" for c in labels):
+                    return None
+                at = next((i for i, c in enumerate(labels) if c is not None and c.a == ch), None)
+                if at is None:
+                    at = next((i for i, c in enumerate(labels) if c is None), None)
+                for body in (s.items or ())[at:] if at is not None else ():
+                    got = self._given_block(body, p, ch, env, ctx, depth + 1)
+                    if got is not NO_RETURN:
+                        return got
+                    if any(x.k == "jump" for x in body):
+                        break
+            else:
+                return None
+        return NO_RETURN
+
+    def _given_test(self, e: N | None, p: str, ch: str, env: Env, ctx: Ctx, depth: int):
+        """Whether a condition on the character holds for `ch`: True, False, or None where that is not known."""
+        if e is None or depth > 10:
+            return None
+        if e.k == "not":
+            got = self._given_test(e.a, p, ch, env, ctx, depth + 1)
+            return None if got is None else not got
+        if e.k == "cmp" and e.name in ("==", "===", "!=", "!=="):
+            a, b = self._given(e.a, p, ch, env, ctx, depth + 1), self._given(e.b, p, ch, env, ctx, depth + 1)
+            if not isinstance(a, str) or not isinstance(b, str):
+                return None
+            return (a == b) == (e.name in ("==", "==="))
+        if e.k == "bool" and e.name in ("&&", "and", "||", "or"):
+            got = [self._given_test(x, p, ch, env, ctx, depth + 1) for x in e.items or ()]
+            if any(g is None for g in got):
+                return None
+            return all(got) if e.name in ("&&", "and") else any(got)
+        return None
+
+    def _given(self, e: N | None, p: str, ch: str, env: Env, ctx: Ctx, depth: int):
+        """What an expression of such a function is for `ch`: text, MISSING (a table has no such key), or None."""
+        if e is None or depth > 10:
+            return None
+        k = e.k
+
+        def of(x):
+            return self._given(x, p, ch, env, ctx, depth + 1)
+        if k == "const":
+            return e.a if isinstance(e.a, str) else str(e.a) if isinstance(e.a, int) and not isinstance(e.a, bool) \
+                else None
+        if k == "name":
+            if e.name == p:
+                return ch
+            v = self.lookup(e.name, env, ctx, value=False)
+            return v.data if v.kind == "const" and isinstance(v.data, str) else None
+        if k == "index":
+            if e.a is not None and e.a.k == "name" and e.a.name == p:       # Python: m[0], the text that matched
+                return ch if e.b is not None and e.b.k == "const" and e.b.a == 0 else None
+            key = of(e.b)
+            if not isinstance(key, str) or e.a is None:
+                return None
+            if e.a.k == "map":                      # the table written in place
+                for kn, x in e.a.items or ():
+                    if kn is None or kn.k != "const":
+                        return None
+                    if str(kn.a) == key:
+                        return of(x)
+                return MISSING
+            if e.a.k == "name":
+                table = self.lookup(e.a.name, env, ctx, value=False)
+                if table.kind != "obj" or not isinstance(table.data, dict) or "..." in table.data:
+                    return None
+                to = table.data.get(key)
+                if to is None:
+                    return MISSING
+                return to.data if to.kind == "const" and isinstance(to.data, str) else None
+            return None
+        if k == "bool" and e.name in ("||", "??", "or") and len(e.items or ()) == 2:
+            left = of(e.items[0])
+            return of(e.items[1]) if left is MISSING or left == "" else left
+        if k == "bin" and e.name == "+":
+            a, b = of(e.a), of(e.b)
+            return a + b if isinstance(a, str) and isinstance(b, str) else None
+        if k == "str":
+            parts = [of(x) for x in e.items or ()]
+            return "".join(parts) if all(isinstance(x, str) for x in parts) else None
+        if k == "cond":
+            yes = self._given_test(e.a, p, ch, env, ctx, depth + 1)
+            return None if yes is None else of(e.b if yes else e.c)
+        if k == "arith" and len(e.items or ()) == 1:        # '&#%d;' % ord(c): only a number goes through `%d`
+            inner = of(e.items[0])
+            return inner if isinstance(inner, str) and inner.isdigit() else None
+        if k == "call" and e.a is not None:
+            items = e.items or ()
+            if e.a.k == "attr":
+                on = of(e.a.a) if not (e.a.a is not None and e.a.a.k == "name" and e.a.a.name == p
+                                       and e.a.name == "group") else None
+                if e.a.name == "group" and e.a.a is not None and e.a.a.k == "name" and e.a.a.name == p:
+                    return ch                       # Python: m.group(0), the text that matched
+                if isinstance(on, str) and len(on) == 1 and e.a.name in ("charCodeAt", "codePointAt"):
+                    return str(ord(on))
+                if isinstance(on, str) and e.a.name == "toString" and not items:
+                    return on
+                if e.a.name == "get" and e.a.a is not None and e.a.a.k == "name" and items:    # TABLE.get(c, c)
+                    got = of(N("index", e.line, a=e.a.a, b=items[0]))
+                    return (of(items[1]) if len(items) > 1 else MISSING) if got is MISSING else got
+                return None
+            if e.a.k == "name" and len(items) == 1:
+                inner = of(items[0])
+                if e.a.name in ("String", "str"):
+                    return inner
+                if e.a.name == "ord" and isinstance(inner, str) and len(inner) == 1:
+                    return str(ord(inner))
+        return None
 
     @staticmethod
     def answer_of(recv_expr: N | None) -> str | None:
@@ -2917,6 +3926,15 @@ class Engine:
                         self.hit(ctx, env, "shell", c.data[0], e, what)
                 else:
                     self.hit(ctx, env, "shell", c, e, what)
+        # --- something that cannot be taken back, done with what the call is handed (`acted`)
+        verb = kw.get("method") if py else (last.data.get("method") if last is not None else None)
+        act = "shell" if name and (R.SHELL_ALWAYS.match(name) or R.SHELL_PROGRAM.match(name)) else \
+            "remove" if (name and R.ACT_REMOVES.match(name)) or (not name and member in R.ACT_REMOVE_MEMBERS) else \
+            "send" if name and R.SSRF_CALL.match(name) and (R.ACT_SENDS.search(name) or any(
+                x is not None and x.kind == "const" and str(x.data).lower() in R.ACT_VERBS for x in (a0, verb))) \
+            else None
+        if act:
+            self.acted(ctx, env, e, what, [*args, *kw.values(), recv if act == "remove" and not name else None], act)
         # --- code and templates
         if name and R.EVAL_CALL.match(name) and a0 is not None:
             code = a0
@@ -2986,7 +4004,7 @@ class Engine:
             if u is not None and u.kind == "obj":
                 u = next((u.data[k] for k in ("url", "uri", "href", "baseURL", "hostname", "host") if k in u.data),
                          None)
-            if u is not None and not R.host_fixed(u.prefix):
+            if u is not None and not R.host_fixed(u.prefix) and not R.no_host(u.prefix):
                 self.hit(ctx, env, "ssrf", u, e, what, "HIGH", frozenset({"nohost"}))
         # --- pages
         if (name and R.RENDER_CALL.match(name)) or (not name and member == "render" and self.answer_of(recv_expr)):
@@ -3050,7 +4068,10 @@ class Engine:
                 if h.kind == "obj" and self.kind_said("set", [h]) is True:
                     return
             val = val.data[0]
-        if node.k in ("map", "call") or not stringy(val) or val.kind == "ext":
+        # what a call gives back is a page only where the text was made in the code (`page_calls`): a library's
+        # answer (`jsonify`, a rendered template file, a redirect) is its own business
+        if node.k == "map" or (node.k == "call" and id(node) not in self.page_calls) or not stringy(val) or \
+                val.kind == "ext":
             return
         self.hit(ctx, env, "xss", val, node, "return", "HIGH" if val.html else "MEDIUM")
 
@@ -3101,6 +4122,35 @@ class Engine:
                     self.hit(ctx, env, "xss", stepped(Val(v.taints), step), e,
                              f"{raw.shown} ({raw.way} prints without escaping)", "MEDIUM", at=(rel, raw.line))
 
+    def inline(self, e: N, env: Env, text: str, escapes: bool, args: list, kw: dict, name: str) -> Val:
+        """A page whose template is written in the code (`render_template_string('<p>{{ bio|safe }}</p>', bio=bio)`,
+        `Template('<p>{{ bio }}</p>').render(bio=bio)`): the text that comes back holds, as it came, each value
+        handed in under a name the template prints without escaping. Where the template escapes nothing (jinja2's
+        own `Template`, unless it is told to) that is every value it prints."""
+        from . import templates
+        fn = env.fn
+        places = templates.read(text if escapes else "{% autoescape off %}" + text, "jinja")
+        given = [a for a in args if a is not None] + ([kw["**"]] if "**" in kw else [])
+        out: tuple = ()
+        for raw in places:
+            for root in raw.roots:
+                v = kw.get(root) if root != "**" else None
+                for g in given:
+                    x = g.data.get(root) if g.kind == "obj" else g if g.kind not in ("req", "const", "fn", "self") \
+                        else None
+                    v = x if v is None else v if x is None else join(v, x)
+                if v is None or not v.taints:
+                    continue
+                way = f"{raw.way} prints without escaping" if escapes or "|" in raw.way else \
+                    "`jinja2.Template` escapes nothing it prints"
+                step = (fn.file, e.line, f"is handed to the template written here as `{root}`, where {raw.shown} "
+                                         f"puts it into the page ({way})")
+                out = merge(out, tuple(t if t.kind == "ident" else with_step(t, step) for t in v.taints))
+        if not out:
+            return Val(kind="ext", data=name + "()")
+        self.page_calls.add(id(e))
+        return Val(out, None, False, True)
+
     def hit(self, ctx: Ctx, env: Env, cls: str, val: Val | None, node: N, what: str, conf: str = "HIGH",
             needs: frozenset = FIXED0, at: tuple | None = None) -> None:
         """`val` reaches a sensitive action of kind `cls` here (or, with `at`, at that file and line: a place in a
@@ -3124,11 +4174,190 @@ class Engine:
                 if not need_sql:
                     ctx.flow(cls, t, cut(t.steps + (step,)), conf, what, file, line, fn.node)
             else:
-                keep = frozenset(n for n in needs if (n == "sql" and need_sql) or (n in URL_NEEDS and not val.prefix))
+                # an address: what a caller hands in may still say where it goes, where nothing stands before
+                # the value here, or only a start of the server's own (`R.BASE`: then text that closes the host)
+                bare = not val.prefix or val.prefix == R.BASE
+                keep = frozenset(n for n in needs if (n == "sql" and need_sql) or (n in URL_NEEDS and bare)) | \
+                    (frozenset({"based"}) if val.prefix == R.BASE and needs & URL_NEEDS else FIXED0)
                 ctx.sink(SinkRec(t.key, cls, t.safe, t.drop, cut(t.steps + (step,)), file, line, what, conf,
                                  keep, fn.node))
 
+    def own_folder(self, ctx: Ctx, env: Env, folder: Val, e: N) -> bool:
+        """Whether `folder`, what a path is compared with to see that it stays inside (`full.startswith(root +
+        os.sep)`), is the code's own. Request data is not: whoever chooses the folder chooses what passes. A
+        parameter of this function is, here; should a caller hand request data as it, that is a file-path action of
+        its own, at the line of the check."""
+        if any(t.kind == "src" for t in folder.taints):
+            return False
+        fn = env.fn
+        step = (fn.file, e.line, "here it is the folder a path is compared with: whoever chooses it, chooses what "
+                                 "passes the check")
+        for t in folder.taints:
+            if t.kind == "param" and not safe_for("path", t.safe):
+                ctx.sink(SinkRec(t.key, "path", t.safe, t.drop, cut(t.steps + (step,)), fn.file, e.line,
+                                 "the folder a path is compared with", "MEDIUM", FIXED0, fn.node))
+        return True
+
     # ---- what a condition proves
+    # ---- a secret the server keeps, and whether anybody is signed in, read from what the code does
+    def token_call(self, n: N, env: Env | None) -> bool:
+        """Whether `n` is a call of a token library: one that checks a token, or one that only reads it."""
+        if n.k != "call" or n.a is None:
+            return False
+        name = (self.canon_of(n, env) if env is not None else None) or text_of(n.a) or ""
+        return bool(R.VERIFIES.match(name) or R.READS_TOKEN.match(name) or R.VERIFIES_LATER.match(name))
+
+    def kept_secret(self, x: N | None, v: Val | None, env: Env | None, depth: int = 0) -> bool:
+        """Whether `x` is, or is built from, a secret the server keeps, by what the code calls it: an admin's
+        (`ADMIN_TOKEN`), or a key, token, secret or password read from the environment or the settings
+        (`process.env.API_KEY`, `settings.HOOK_SECRET`, Python's `os.getenv` of `SERVICE_TOKEN`), also behind a name
+        it was put in and inside text built with it (`'Bearer ' + process.env.ADMIN_TOKEN`). Not its length, and nothing that
+        came with the request (`v`, what `x` holds): what was sent, what says who is signed in, and what a token
+        library hands back for a token, though the key it was handed stands among its arguments (`payload =
+        jwt.decode(token, KEY)`: until 2026-11-11 `payload` and all read from it counted as the server's secret,
+        and `if payload.get("sub") is None: raise` as a caller who had to send it)."""
+        if x is None or x.k == "const" or depth > 2:
+            return False
+        if v is not None and any(t.kind in ("src", "param") or (t.kind == "ident" and not is_mark(t))
+                                 for t in v.taints):
+            return False
+        if (x.k == "attr" and x.name in ("length", "size")) or (x.k == "call" and text_of(x.a) == "len"):
+            return False
+        mod = env.fn.mod if env is not None else None
+        for n in every_node(x, skip=lambda y: self.token_call(y, env)):
+            if n.k == "name":
+                if env is not None and env.derived.get(n.name, ("", ""))[0] == "secret":
+                    return True
+                if mod is not None and (env is None or n.name not in env.vars) and any(
+                        self.kept_secret(ex, None, None, depth + 1) for ex in mod.consts.get(n.name, ())[:3]):
+                    return True
+            if n.k in ("name", "attr", "index"):
+                text = text_of(n)
+            elif n.k == "call":
+                text = text_of(n.a).rstrip("()") + " " + " ".join(
+                    i.a for i in n.items or () if i is not None and i.k == "const" and isinstance(i.a, str))
+            else:
+                continue
+            if R.ADMIN_SECRET.search(text) or (R.KEPT_IN.search(text) and secret_named(text)):
+                return True
+        return False
+
+    def made_with_secret(self, u: dict) -> bool:
+        """A check a library makes, put on with `use` at the place the map names, whose making names a secret only an
+        admin has: `app.use(basicAuth({ users: { admin: process.env.ADMIN_PASSWORD } }))`."""
+        mod = self.mods.get(u.get("file") or "")
+        if mod is None or mod.top is None:
+            return False
+        for n in every_node(mod.top.body):
+            if n.k == "call" and n.line == u.get("line") and n.a is not None and n.a.k == "attr" and \
+                    n.a.name in ("use", "all"):
+                return any(R.ADMIN_SECRET.search(text_of(y)) for x in n.items or () if x is not None and x.k == "call"
+                           for y in every_node(x.items or ()) if y.k in ("name", "attr", "index"))
+        return False
+
+    def signed(self, c: N | None, want: bool, env: Env, ctx: Ctx, by=None) -> None:
+        """The request goes on only where the condition `c` is `want`: where that shows somebody is signed in, the
+        route has a login, whatever the function that asks is called. `by`: the statements that turn the other
+        requests away."""
+        if ctx.narrow:
+            return      # asked of some requests only: the others got past it
+        if ctx.soft and thrown(by, env.fn.lang):
+            return      # turned away by an error that is caught further out, after which the request goes on
+        left: set = set()
+        known, params = self.signed_gate(c, want, env, ctx, 0, left)
+        got = login_for(ctx, left)
+        if got is None:
+            return
+        if known:
+            ctx.az.ev.add(got)
+        for i in params:
+            ctx.az.pev.setdefault(i, set()).add(got)
+
+    def signed_gate(self, c: N | None, want: bool, env: Env, ctx: Ctx, depth: int = 0,
+                    left: set | None = None) -> tuple[bool, tuple]:
+        """Whether the condition `c` being `want` shows that somebody is signed in, and the parameters of the function
+        it would show it of, were they who is signed in. `req.session.userId` being true does, `!req.user` being false
+        does, `user is None` being false does; in `a && b` being true either part may show it, in `a || b` both have
+        to (and the other way round for false). The session itself shows nothing: a visitor has one too."""
+        none: tuple[bool, tuple] = (False, ())
+        if c is None or depth > 5:
+            return none
+        k = c.k
+        soft = bool(ctx.soft)       # a value that says who it is only because a check passed says nothing here
+        if k == "not":
+            return self.signed_gate(c.a, not want, env, ctx, depth + 1, left)
+        if k == "bool":
+            conj = c.name in ("&&", "and")
+            if conj == want:
+                got = [self.signed_gate(x, want, env, ctx, depth + 1) for x in c.items or ()]
+                return any(g[0] for g in got), tuple(i for g in got for i in g[1])
+            # every part has to show it, but for a part that only leaves a few named pages open (the sign-in page):
+            # `request.endpoint != "login" and "user_id" not in session`, `req.path === '/login' || req.user`.
+            # A part that names the only pages the check is for (`path.startswith("/admin") and ...`) shows nothing
+            # for the rest. A part that only asks which verb the request is lets the requests of some verbs on
+            # unasked (`req.method !== 'GET' && !req.user`): they are put in `left`, where the caller keeps count
+            open_few = "all but" if conj else "only"
+            got = []
+            for x in c.items or ():
+                if which_page(x) == open_few:
+                    continue
+                verbs = which_verbs(x) if left is not None else None
+                if verbs is not None:
+                    left |= other_verbs(verbs) if conj else verbs
+                    continue
+                got.append(self.signed_gate(x, want, env, ctx, depth + 1))
+            return (bool(got) and all(g[0] for g in got)), ()
+        if k == "cmp" and c.name in ("==", "===", "is", "!=", "!==", "is not"):
+            for x, y in ((c.a, c.b), (c.b, c.a)):
+                if y is not None and y.k == "const" and y.a is None:      # user is None, req.user == null
+                    same = c.name in ("==", "===", "is")
+                    return self.signed_gate(x, want != same, env, ctx, depth + 1)
+            return none
+        if k == "cmp" and c.name in ("in", "not in") and c.a is not None and c.a.k == "const" and \
+                isinstance(c.a.a, str) and plain_chain(c.b):             # "user_id" in session
+            if want != (c.name == "in") or not R.SIGNED_IN.search("." + c.a.a):
+                return none
+            return shows(self.eval(c.b, env, ctx), soft)
+        if k == "cmp" and c.b is not None and c.b.k == "const" and c.b.a in (0, 1) and not isinstance(c.b.a, bool) \
+                and c.a is not None and ((c.a.k == "attr" and c.a.name == "length") or
+                                         (c.a.k == "call" and text_of(c.a.a) == "len")):
+            # `rows.length === 0`, `len(rows) > 0`: whether anything was found
+            found = {("==", 0): False, ("===", 0): False, ("!=", 0): True, ("!==", 0): True, (">", 0): True,
+                     ("<", 1): False, (">=", 1): True}.get((c.name, c.b.a))
+            return none if found is None else self.signed_gate(c.a, want == found, env, ctx, depth + 1)
+        if not want:
+            # `(err, payload) => { if (err) return res.sendStatus(403) ... }`: nothing went wrong, so the token held
+            if k == "name" and self.eval(c, env, ctx).kind == "failed":
+                return True, ()
+            return none
+        if k in ("name", "attr", "index") and plain_chain(c):
+            v = self.eval(c, env, ctx)
+            if not v.taints and c.a is not None and (
+                    (k == "attr" and c.name in ("length", "rows", "rowCount", "count")) or
+                    (k == "index" and c.b is not None and c.b.k == "const" and c.b.a == 0)):
+                v = self.eval(c.a, env, ctx)        # `rows.length`, `rows[0]`: something was found
+            if is_proven(v) and not soft:
+                return True, ()                     # who a checked token, or a record found by one, says it is
+            if not R.SIGNED_IN.search(text_of(c)):
+                return none
+            return shows(v, soft)
+        if k == "call" and c.a is not None and c.a.k == "name" and c.a.name == "len" and len(c.items or ()) == 1:
+            return self.signed_gate(c.items[0], True, env, ctx, depth + 1)
+        if k == "call" and c.a is not None and c.a.k == "attr" and plain_chain(c.a.a):
+            if c.a.name in R.LOGIN_ASKED and not c.items and text_of(c.a.a) in R.REQUEST_NAMES:
+                return True, ()                                         # req.isAuthenticated()
+            if c.a.name == "get" and c.items and c.items[0] is not None and c.items[0].k == "const" and \
+                    isinstance(c.items[0].a, str) and R.SIGNED_IN.search("." + c.items[0].a):
+                return shows(self.eval(c.a.a, env, ctx), soft)          # session.get("user_id")
+        if k == "call" and c.a is not None and c.a.k in ("name", "attr"):
+            # `get_jwt_identity() is None`: a call that says who is signed in, asked in the condition itself (by
+            # its name where Lantern does not read its code: `flow_rules.IDENT_CALLS`, `IDENT_FN`). Until
+            # 2026-11-11 only a name that held such a value was read (`uid = get_jwt_identity()` ... `if not uid`)
+            name = self.canon_of(c, env) or ""
+            if (name and R.IDENT_CALLS.match(name)) or R.IDENT_FN.match(text_of(c.a).rsplit(".", 1)[-1]):
+                return shows(self.eval(c, env, ctx), soft)
+        return none
+
     def subject(self, e: N | None, env: Env, depth: int = 0):
         """(name the condition is about, relation) : relation "host" when it is about the host of an address."""
         if e is None or depth > 5:
@@ -3288,6 +4517,8 @@ class Engine:
                     break
                 if x.k == "call" and text_of(x.a).endswith(("commonpath", "commonprefix")) and x.items:
                     inner = x.items[0]
+                    if not self.own_folder(ctx, env, self.eval(y, env, ctx), e):
+                        break
                     for it in (inner.items or ()) if inner.k == "seq" else ():
                         sub = self.subject(it, env)
                         v = self.eval(it, env, ctx) if sub else None
@@ -3336,6 +4567,9 @@ class Engine:
             m = f.name
             sub = self.subject(f.a, env)
             a0 = items[0] if items else None
+            if sub is None and m in ("startswith", "startsWith") and f.a.k == "call" and len(f.a.items or ()) == 1 \
+                    and R.RESOLVERS.match(self.canon_of(f.a, env) or ""):
+                sub = self.subject(f.a.items[0], env)       # realpath(full).startswith(root): it is about `full`
             if sub and m in ("endswith", "endsWith") and a0 is not None and a0.k == "const" and \
                     isinstance(a0.a, str) and R.OWN_SUFFIX.match(a0.a) and \
                     (sub[1] == "host" or env.derived.get(sub[0], ("", ""))[0] == "host"):
@@ -3361,13 +4595,17 @@ class Engine:
                             return (), ((name, frozenset({"redirect:noslash2"}), False, None),)
                         if pre.data.startswith(".."):
                             return (), ((name, frozenset({"path:dots"}), False, None),)
-                    if not pre.taints and mine.taints and all("path:resolved" in t.safe for t in mine.taints) and \
-                            (pre.kind != "const" or len(str(pre.data)) > 1):
+                    if env.derived.get(name, ("", ""))[0] == "rel" and pre.kind == "const" and \
+                            str(pre.data).startswith(".."):       # rel = path.relative(folder, full)
+                        return (), ((env.derived[name][1], frozenset({"path"}), False, None),)
+                    if mine.taints and all("path:resolved" in t.safe for t in mine.taints) and \
+                            (pre.kind != "const" or len(str(pre.data)) > 1) and self.own_folder(ctx, env, pre, e):
                         return ((name, frozenset({"path"}), False, None),), ()
                     return (), ()
                 if m in ("is_relative_to",) and a0 is not None:
                     mine = self.eval(f.a, env, ctx)
-                    if mine.taints and all("path:resolved" in t.safe for t in mine.taints):
+                    if mine.taints and all("path:resolved" in t.safe for t in mine.taints) and \
+                            self.own_folder(ctx, env, self.eval(a0, env, ctx), e):
                         return ((name, frozenset({"path"}), False, None),), ()
                     return (), ()
                 if m in ("includes", "has", "hasOwnProperty") and a0 is not None and a0.k == "const" and a0.a == "..":
@@ -3399,7 +4637,7 @@ class Engine:
                 if inner.k == "call" and text_of(inner.a).endswith("relative") and len(inner.items or ()) > 1 and \
                         items and items[0].k == "const" and str(items[0].a).startswith(".."):
                     sub1 = self.subject(inner.items[1], env)
-                    if sub1:
+                    if sub1 and self.own_folder(ctx, env, self.eval(inner.items[0], env, ctx), e):
                         return (), ((sub1[0], frozenset({"path"}), False, None),)
         tail = canon or text_of(f)
         a0 = items[0] if items else None
@@ -3547,6 +4785,20 @@ R_ROUTE = _re.compile(r"\.(route|get|post|put|delete|patch|head|options|websocke
 SANITIZERS = [(_re.compile(p), c) for p, c in R.SANITIZERS]
 SSRF = frozenset({"ssrf"})
 CONTENT = frozenset({"path", "ssrf", "redirect", "content"})     # what a file's content cannot be: a name or an address
+HELD = frozenset({"held"})
+ARCHIVE = frozenset({"archive"})        # a mark, no protection: the value came out of an archive library
+
+
+def held(taints: tuple) -> tuple:
+    """Request data as what a file holds, carried on the path of that file. The path's own text is whatever the
+    code made it (in a command or a query it is no request data: safe for every action), and what opens the file
+    gets the data back (`opened`). Where the path's text is request data too, it stays that (`merge`)."""
+    return tuple(t._replace(safe=R.ALL | HELD) for t in taints if t.kind != "ident" and not R.ALL <= t.safe)
+
+
+def opened(taints: tuple) -> tuple:
+    """What comes out of a file opened by a path that holds request data: that data again, as a file's content."""
+    return tuple(t._replace(safe=CONTENT) if "held" in t.safe else t for t in taints)
 _AUTH = _re.compile(r"(?:^|[._])(?:get_)?(?:current_)?(user|auth|token|login|session|principal|identity|jwt|"
                     r"api_key|permission|admin|account)", _re.I)
 _NEXT = _re.compile(r"(^|/)(app|pages)/.*\.(tsx?|jsx?)$")
@@ -3593,21 +4845,190 @@ def chain(path: str, classes: frozenset, rel, env: Env):
         classes = classes & (R.URLS if kind in ("host", "url") else SSRF if kind == "addr" else classes)
 
 
-def every_node(x, depth: int = 0):
-    """Every node under `x`, the functions written inside it left out."""
+NO_RETURN = object()        # a block of a small function ended without giving anything back
+TRANS_LT = "str.maketrans(<)"   # what `str.maketrans` made, where the table takes every `<` away
+MISSING = object()          # a table has no entry for the character asked
+
+
+class Inline(str):
+    """What `jinja2.Template('<p>{{ name }}</p>')` gives back, named as any library's value is, and with it the
+    template's own text and whether it escapes what it prints."""
+    text: str
+    escapes: bool
+
+    def __new__(cls, name: str, text: str, escapes: bool):
+        made = super().__new__(cls, name)
+        made.text, made.escapes = text, escapes
+        return made
+
+
+def split_at_lt(e: N | None) -> bool:
+    """`x.split('<')`: the value cut at every `<`."""
+    return e is not None and e.k == "call" and e.a is not None and e.a.k == "attr" and e.a.name == "split" and \
+        len(e.items or ()) == 1 and e.items[0] is not None and e.items[0].k == "const" and e.items[0].a == "<"
+
+
+def without_lt(v: Val | None) -> bool:
+    return v is not None and v.kind == "const" and isinstance(v.data, str) and "<" not in v.data
+
+
+def secret_named(text: str) -> bool:
+    """Whether a name holds a word for a secret, whole: `API_KEY`, `hookSecret`, not `KEYCLOAK_URL`."""
+    return any(w.lower() in R.SECRET_WORDS for w in _re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+", text))
+
+
+def which_page(e: N | None) -> str | None:
+    """A condition on which page is asked for, against fixed text: "only" when it holds for the pages it names
+    (`req.path === '/login'`, `request.endpoint in ("login", "static")`, `req.path.startsWith('/public')`),
+    "all but" when it holds for every other page (`request.endpoint != "login"`). None for anything else."""
+    if e is None:
+        return None
+    if e.k == "not":
+        got = which_page(e.a)
+        return None if got is None else "all but" if got == "only" else "only"
+    if e.k == "cmp" and e.name in ("==", "===", "is", "in", "!=", "!==", "is not", "not in"):
+        if any(x is not None and R.WHICH_PAGE.match(text_of(x)) for x in (e.a, e.b)) and \
+                any(x is not None and x.k in ("const", "seq") for x in (e.a, e.b)):
+            return "only" if e.name in ("==", "===", "is", "in") else "all but"
+        return None
+    if e.k == "call" and e.a is not None and e.a.k == "attr":       # req.path.startsWith('/public')
+        if R.WHICH_PAGE.match(text_of(e.a.a)) or (
+                e.items and e.items[0] is not None and R.WHICH_PAGE.match(text_of(e.items[0]))):
+            return "only"
+    return None
+
+
+def verb_read(e: N | None) -> bool:
+    """`req.method`, also made all capitals or all small letters first."""
+    if e is not None and e.k == "call" and e.a is not None and e.a.k == "attr" and e.a.name in R.VERB_CASE and \
+            not e.items:
+        e = e.a.a
+    return e is not None and e.k == "attr" and bool(R.VERB_READ.match(text_of(e)))
+
+
+def verbs_named(e: N | None) -> frozenset | None:
+    """The verbs fixed text names: `'GET'`, `['GET', 'HEAD']`. None for anything else, also for a name they are kept
+    under."""
+    if e is None:
+        return None
+    items = [e] if e.k == "const" else list(e.items or ()) if e.k == "seq" else []
+    if not items or not all(x is not None and x.k == "const" and isinstance(x.a, str) for x in items):
+        return None
+    return frozenset(x.a.upper() for x in items)
+
+
+def other_verbs(verbs: frozenset) -> frozenset:
+    return (R.ALL_VERBS | verbs) - verbs
+
+
+def which_verbs(e: N | None, depth: int = 0) -> frozenset | None:
+    """The verbs a condition holds for, when all it asks is which verb the request is: `req.method === 'OPTIONS'`,
+    `request.method in ("GET", "HEAD")`, `['GET', 'HEAD'].includes(req.method)`, and `not` of one. None for anything
+    else."""
+    if e is None or depth > 4:
+        return None
+    if e.k == "not":
+        got = which_verbs(e.a, depth + 1)
+        return None if got is None else other_verbs(got)
+    if e.k == "cmp" and e.name in ("==", "===", "is", "in", "!=", "!==", "is not", "not in"):
+        among = e.name in ("in", "not in")
+        for x, y in ((e.a, e.b),) if among else ((e.a, e.b), (e.b, e.a)):
+            if verb_read(x):
+                named = verbs_named(y)
+                if named is None or (y.k == "seq") != among:
+                    return None
+                return named if e.name in ("==", "===", "is", "in") else other_verbs(named)
+        return None
+    if e.k == "call" and e.a is not None and e.a.k == "attr" and e.a.name == "includes" and \
+            len(e.items or ()) == 1 and verb_read(e.items[0]) and e.a.a is not None and e.a.a.k == "seq":
+        return verbs_named(e.a.a)
+    return None
+
+
+def route_verbs(detail: str) -> frozenset:
+    """The verbs a route answers, from its entry (`DELETE /orders/:id`, Flask's `GET/POST /x`); none when the entry
+    names one Lantern does not know (`ALL`, `ANY`, a websocket)."""
+    words = [w for w in _re.split(r"[/,]", detail.partition(" ")[0].upper()) if w]
+    return frozenset(words) if words and all(w in R.ALL_VERBS for w in words) else frozenset()
+
+
+def login_for(ctx: Ctx, left=()):
+    """What a login asked here is noted as: "login" when every request that goes on was asked, `("login", verbs)`
+    when only the requests of those verbs were (the others went round the check, or the check stands in a branch for
+    some verbs), None when no request was."""
+    if ctx.only is None and not ctx.round and not left:
+        return "login"
+    asked = (R.ALL_VERBS if ctx.only is None else ctx.only) - ctx.round - frozenset(left)
+    return "login" if asked >= R.ALL_VERBS else ("login", frozenset(asked)) if asked else None
+
+
+def login_here(kinds, ctx: Ctx):
+    """What a called function asks, as its caller's: a login it asks is asked of the requests that get to the call,
+    which may be some only (`Ctx.narrow`) or those of some verbs."""
+    if not ctx.narrow and ctx.only is None and not ctx.round:
+        return kinds
+    out = set()
+    for k in kinds:
+        verbs = R.ALL_VERBS if k == "login" else k[1] if isinstance(k, tuple) and k[:1] == ("login",) else None
+        if verbs is None:
+            if k != "own" or not ctx.narrow:
+                out.add(k)
+        elif not ctx.narrow:
+            got = login_for(ctx, R.ALL_VERBS - verbs)
+            if got is not None:
+                out.add(got)
+    return out
+
+
+def asked_here(kinds, ctx: Ctx):
+    """`login_here`, and where a failure of the called function is caught and the request goes on (`Ctx.soft`), a
+    login it asks was not asked of the requests that failed it."""
+    if ctx.soft:
+        kinds = {k for k in kinds if not is_login(k) and k != "own"}
+    return login_here(kinds, ctx)
+
+
+def own_here(ctx: Ctx) -> None:
+    """A record is reached here through who is signed in, so whoever is not signed in reaches nobody's: noted for
+    the route ("own") only where every request that goes on gets here. Not in a branch some requests take or after
+    a way on that some took (`Ctx.narrow`), nor where a failure is caught and the request goes on (`Ctx.soft`):
+    until 2026-11-11 a person looked up after `if not token: return None` cleared the route for every request."""
+    if not ctx.narrow and not ctx.soft:
+        ctx.az.ev.add("own")
+
+
+def plain_chain(e: N | None, depth: int = 0) -> bool:
+    """A name, or attributes and fixed keys read off one (`req.session.userId`, `session["user_id"]`): reading it
+    again does nothing."""
+    if e is None or depth > 8:
+        return False
+    if e.k == "name":
+        return True
+    if e.k == "attr":
+        return plain_chain(e.a, depth + 1)
+    if e.k == "index":
+        return e.b is not None and e.b.k == "const" and plain_chain(e.a, depth + 1)
+    return False
+
+
+def every_node(x, depth: int = 0, skip=None):
+    """Every node under `x`, the functions written inside it left out, and so is a node `skip` says yes to, with
+    all that stands under it."""
     if depth > 60:
         return
     if isinstance(x, N):
+        if skip is not None and skip(x):
+            return
         yield x
         for y in (x.a, x.b, x.c, x.items, x.kw):
             if y is not None:
-                yield from every_node(y, depth + 1)
+                yield from every_node(y, depth + 1, skip)
     elif isinstance(x, (list, tuple)):
         for y in x:
-            yield from every_node(y, depth + 1)
+            yield from every_node(y, depth + 1, skip)
     elif isinstance(x, dict):
         for y in x.values():
-            yield from every_node(y, depth + 1)
+            yield from every_node(y, depth + 1, skip)
 
 
 def names_in(t: N | None) -> list:

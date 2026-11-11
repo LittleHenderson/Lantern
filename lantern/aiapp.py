@@ -284,12 +284,12 @@ def _said(value) -> str:
 
 def notebooks(repo: Path) -> tuple[list[dict], list[dict]]:
     """Secrets in .ipynb code cells and saved outputs. Returns (findings, notebook summaries)."""
-    from .python_frontend import SKIP_DIRS
+    from .python_frontend import skipped
     from .websec import _finding
     out, books = [], []
     for p in sorted(repo.rglob("*.ipynb")):
         rel = p.relative_to(repo).as_posix()
-        if any(part in SKIP_DIRS or part.startswith(".") for part in rel.split("/")[:-1]):
+        if skipped(rel.split("/")[:-1], repo) or any(part.startswith(".") for part in rel.split("/")[:-1]):
             continue
         try:
             nb = manifest.parse_json(project_text(p, repo))
