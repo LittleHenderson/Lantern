@@ -82,7 +82,8 @@ def main() -> None:
                     "--offline", "--privacy", "structure"], check=True, capture_output=True, text=True, encoding="utf-8",
                    env={**os.environ, "LANTERN_OFFLINE": "1"})
     from lantern.pipeline import explain, plan_explain
-    ex = explain(out, FixtureProvider(explain_answer), plan_explain(out)["nodes"])
+    shop = ROOT / "tests" / "fixtures" / "shop"
+    ex = explain(out, shop, FixtureProvider(explain_answer), plan_explain(out, shop)["nodes"])
     exps = ex["explanations"]
     explained = {"functions": len(exps), "validated": sum(1 for v in exps.values() if v.get("validated")),
                  "failed": ex["stats"].get("failed") or 0, "stopped": None}

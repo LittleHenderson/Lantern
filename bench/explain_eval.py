@@ -41,7 +41,7 @@ from lantern.graph import Graph  # noqa: E402
 
 def run_eval(provider, project: Path, limit: int | None = 40, depth: int = 3) -> dict:
     out = project / ".lantern"
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", project)
     sec = json.loads((out / "security.json").read_text(encoding="utf-8")) if (out / "security.json").exists() else {"findings": []}
     nids = ex.select_nodes(g, depth=depth, limit=limit)
     res = ex.run(g, provider, sec["findings"], out / "cache", nids, fresh=True)

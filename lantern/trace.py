@@ -9,6 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from . import results
 from .graph import CALLS, OBSERVED, Graph
 
 
@@ -34,15 +35,31 @@ def run_trace(repo: str | Path, command: list[str], timeout: int = 900) -> dict:
     env["PYTHONPATH"] = os.pathsep.join(p for p in [pkg_root, repo, env.get("PYTHONPATH", "")] if p)
     cmd = [sys.executable, "-m", "lantern.tracehook", out, repo, "--", *command]
     proc = subprocess.run(cmd, cwd=repo, env=env, timeout=timeout, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    try:
-        data = json.loads(Path(out).read_text(encoding="utf-8") or "{}")
-    except json.JSONDecodeError:
+    try:   # the traced program could put anything under this name: only a plain file is read (`results.plain`)
+        data = well_formed(json.loads(results.plain(Path(out))[0] or "{}"))
+    except (ValueError, RecursionError):
         data = {}
     finally:
         Path(out).unlink(missing_ok=True)
     data["returncode"] = proc.returncode
     data["stderr_tail"] = proc.stderr[-2000:]
     return data
+
+
+def _entry(e) -> bool:
+    """One side of a recorded call as `tracehook` writes it: [file, first line, name, line]."""
+    return (isinstance(e, list) and len(e) == 4 and isinstance(e[0], str) and isinstance(e[2], str)
+            and (e[3] is None or type(e[3]) is int))
+
+
+def well_formed(data) -> dict:
+    """The record of a traced run with only the rows that have the shape `tracehook` writes. The record is written
+    inside the program that was traced, so it can hold anything: until 2026-11-10 a row of another shape ended
+    "Watch my tests run" with a Python error."""
+    rows = data.get("pairs") if isinstance(data, dict) else None
+    kept = [row for row in (rows if isinstance(rows, list) else [])
+            if isinstance(row, dict) and _entry(row.get("caller")) and _entry(row.get("callee"))]
+    return {"pairs": kept}
 
 
 def _index(g: Graph):

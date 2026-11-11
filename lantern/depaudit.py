@@ -44,13 +44,12 @@ import json
 import os
 import re
 import shutil
-import stat
 import tempfile
 import tomllib
 from pathlib import Path
 
 from . import scanresult
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_text
 
 NPM_REGISTRY = "https://registry.npmjs.org/"
 TEST_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|fixtures|examples?)/")
@@ -77,6 +76,7 @@ COMPOSER_NAME = re.compile(r"(?=.{3,200}\Z)[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+")  
 COMPOSER_VERSION = re.compile(r"(?=.{1,100}\Z)v?[0-9]+(?:\.[0-9]+)*(?:[-.+][A-Za-z0-9_.+\-]+)?")
 COMPOSER_BRANCH = re.compile(r"[\x21-\x7e]{1,100}")                                            # dev-main, 2.x-dev
 GEM_LINE = re.compile(r"    ([A-Za-z0-9][A-Za-z0-9_.\-]{0,199}) \(([0-9][A-Za-z0-9_.]{0,99})(?:-[a-z][A-Za-z0-9_.\-]*)?\)\s*")
+NOT_THE_PROJECTS = "a link that does not lead to a file of the project, so it was not read"
 MAX_FILE = 32 * 1024 * 1024             # a dependency file larger than this is not read (the largest real ones: a few MB)
 
 
@@ -125,27 +125,28 @@ class Odd:
         return "; ".join(x for x in (said, also) if x)
 
 
-def _read(p: Path, rel: str, odd: Odd) -> str | None:
-    """The text of a dependency file, or None with the reason kept in `odd`: only a plain file of a size a real one
-    has is read (a pipe or a device under such a name would hold the analysis up for good)."""
+def _read(p: Path, rel: str, odd: Odd, repo: Path) -> str | None:
+    """The text of a dependency file of the project, or None with the reason kept in `odd`: only a plain file of a
+    size a real one has is read (a pipe or a device under such a name would hold the analysis up for good), and only
+    one that lies in the project (a link that leads out of it names somebody else's libraries, and Lantern would ask
+    the audit services about them)."""
     try:
-        st = os.stat(p)
-        if not stat.S_ISREG(st.st_mode):
-            odd.add(rel, "not a plain file, so it was not read")
+        if not inside_repo(p, repo):   # said in the same words whatever the link leads to, a file or nothing at all
+            odd.add(rel, NOT_THE_PROJECTS if os.path.islink(p) else "not a plain file, so it was not read")
             return None
-        if st.st_size > MAX_FILE:
+        if os.stat(p).st_size > MAX_FILE:
             odd.add(rel, f"larger than {MAX_FILE // (1024 * 1024)} MB, so it was not read")
             return None
-        return p.read_text(encoding="utf-8", errors="replace").removeprefix("\ufeff")   # the mark some editors put first
+        return project_text(p, repo).removeprefix("\ufeff")   # the mark some editors put first
     except OSError as exc:
         odd.add(rel, f"could not be read ({type(exc).__name__})")
         return None
 
 
-def _quiet(p: Path) -> str:
+def _quiet(p: Path, repo: Path) -> str:
     """The text of a file that only says where a library is written (composer.json, Gemfile): "" when it is not
     there or cannot be read, which costs a line number and nothing else."""
-    return _read(p, p.name, Odd()) or ""
+    return _read(p, p.name, Odd(), repo) or ""
 
 
 def _toml(text: str | None, rel: str, odd: Odd) -> dict | None:
@@ -228,7 +229,9 @@ def offline() -> bool:
 
 
 def _project_files(repo: Path, names: tuple[str, ...] | None = None, pattern: re.Pattern | None = None) -> list[Path]:
-    """Files in the project itself: not vendored, not in tests or sample apps, not symlinked out of the repo."""
+    """The names in the project itself that are dependency files: not vendored, not in tests or sample apps. A name
+    is listed whatever answers to it (a link that leads out of the project, a pipe), so that the audit's record can
+    say it was not read: `_read` is the one way such a file is opened, and it opens a file of the project only."""
     out = []
     for dirpath, dirnames, filenames in os.walk(repo):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d != "node_modules"]
@@ -236,7 +239,7 @@ def _project_files(repo: Path, names: tuple[str, ...] | None = None, pattern: re
             if (names and fn in names) or (pattern and pattern.search(fn)):
                 p = Path(dirpath) / fn
                 rel = p.relative_to(repo).as_posix()
-                if not TEST_DIR_RE.search(rel) and inside_repo(p, repo):
+                if not TEST_DIR_RE.search(rel):
                     out.append(p)
     return sorted(out)
 
@@ -266,7 +269,7 @@ def python_pins(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str
     for p in _project_files(repo, names=("uv.lock", "poetry.lock", "pdm.lock")):
         rel = p.relative_to(repo).as_posix()
         files.append(rel)
-        data = _toml(_read(p, rel, odd), rel, odd)
+        data = _toml(_read(p, rel, odd, repo), rel, odd)
         packages = data.get("package") if data is not None else None
         if packages is None:
             continue
@@ -288,7 +291,7 @@ def python_pins(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str
     for p in _project_files(repo, names=("Pipfile.lock",)):
         rel = p.relative_to(repo).as_posix()
         files.append(rel)
-        ok, data = _json(_read(p, rel, odd), rel, odd)
+        ok, data = _json(_read(p, rel, odd, repo), rel, odd)
         if not ok:
             continue
         default = data.get("default") if isinstance(data, dict) else None
@@ -307,7 +310,7 @@ def python_pins(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str
     for p in _project_files(repo, pattern=re.compile(r"^requirements[^/]*\.txt$")):
         rel = p.relative_to(repo).as_posix()
         files.append(rel)
-        for ln in (_read(p, rel, odd) or "").splitlines():
+        for ln in (_read(p, rel, odd, repo) or "").splitlines():
             s = ln.split(" #")[0].strip()
             if not s or s.startswith(("#", "-")):
                 continue
@@ -318,7 +321,7 @@ def python_pins(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str
                 loose.append(f"{rel}: {_plain(s, 60)}")
     for p in _project_files(repo, names=("pyproject.toml",)):
         rel = p.relative_to(repo).as_posix()
-        data = _toml(_read(p, rel, odd), rel, odd)
+        data = _toml(_read(p, rel, odd, repo), rel, odd)
         if data is None:
             continue
         deps: list = []
@@ -463,12 +466,14 @@ def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     if pre is not None:
         return pre
     info: dict = {"role": "known-vulnerable npm packages (production dependencies)"}
-    manifests = _project_files(repo, names=("package.json",))
+    manifests = [m for m in _project_files(repo, names=("package.json",)) if inside_repo(m, repo)]   # npm reads it itself
     if not manifests:
         return [], scanresult.record("npm-audit", "skipped", "no package.json", **info)
-    locks = [m.parent / "package-lock.json" for m in manifests if (m.parent / "package-lock.json").is_file()]
+    # npm reads the lock file itself: one that is a link out of the project counts as none (npm would send the
+    # names in somebody else's file to the registry)
+    locks = [m.parent / "package-lock.json" for m in manifests if inside_repo(m.parent / "package-lock.json", repo)]
     other = [m.parent.relative_to(repo).as_posix() or "." for m in manifests
-             if not (m.parent / "package-lock.json").is_file()]
+             if not inside_repo(m.parent / "package-lock.json", repo)]
     if not locks:
         if any((m.parent / x).is_file() for m in manifests for x in ("pnpm-lock.yaml", "yarn.lock", "bun.lock")):
             # the project's exact versions exist but Lantern cannot read them yet: a gap on Lantern's side
@@ -581,7 +586,7 @@ def maven_coords(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[st
 
     for p in _project_files(repo, names=GRADLE_FILES):
         rel = p.relative_to(repo).as_posix()
-        text = _read(p, rel, odd)
+        text = _read(p, rel, odd, repo)
         if text is None:
             continue
         text = text[:2_000_000]
@@ -598,7 +603,7 @@ def maven_coords(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[st
             files.append(rel)
     for p in _project_files(repo, names=("libs.versions.toml",)):
         rel = p.relative_to(repo).as_posix()
-        text = _read(p, rel, odd)
+        text = _read(p, rel, odd, repo)
         cat = _toml(text, rel, odd)
         if cat is None:
             continue
@@ -649,7 +654,7 @@ def maven_coords(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[st
             add(coord, ver, rel, text.count("\n", 0, pos) + 1 if pos >= 0 else 1)
     for p in _project_files(repo, names=("pom.xml",)):
         rel = p.relative_to(repo).as_posix()
-        text = _read(p, rel, odd)
+        text = _read(p, rel, odd, repo)
         if text is None:
             continue
         text = text[:2_000_000]
@@ -837,7 +842,7 @@ def composer_pins(repo: Path, odd: Odd | None = None,
     for lock in _project_files(repo, names=("composer.lock",)):
         rel = lock.relative_to(repo).as_posix()
         files.append(rel)
-        text = _read(lock, rel, odd)
+        text = _read(lock, rel, odd, repo)
         ok, data = _json(text, rel, odd)
         if not ok:
             continue
@@ -850,7 +855,7 @@ def composer_pins(repo: Path, odd: Odd | None = None,
             continue
         cj = lock.with_name("composer.json")
         cj_rel = cj.relative_to(repo).as_posix()
-        cj_text = _quiet(cj)
+        cj_text = _quiet(cj, repo)
         for i, pkg in enumerate(packages or [], 1):
             if not isinstance(pkg, dict):
                 odd.add(rel, f"entry {i} is {_shown(pkg)}, not a package")
@@ -935,11 +940,11 @@ def gem_pins(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str, s
     for lock in _project_files(repo, names=("Gemfile.lock",)):
         rel = lock.relative_to(repo).as_posix()
         files.append(rel)
-        text = _read(lock, rel, odd)
+        text = _read(lock, rel, odd, repo)
         if text is None:
             continue
         gf = lock.with_name("Gemfile")
-        glines, dev_only = _gemfile_dev_only(_quiet(gf))
+        glines, dev_only = _gemfile_dev_only(_quiet(gf, repo))
         in_specs = False
         for i, raw in enumerate(text.splitlines(), 1):
             if re.match(r"^\S", raw):

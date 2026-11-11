@@ -25,6 +25,7 @@ from pathlib import Path
 from . import results
 from .graph import Graph, Node
 from .providers import AllowanceExhausted, Provider, ProviderError
+from .python_frontend import project_text
 
 PROMPT_VERSION = "lens-v4"
 
@@ -148,7 +149,7 @@ def _term_in_code(term: str, code_lower: str) -> bool:
 
 def read_source(repo: Path, node: Node, max_lines: int = 160) -> str:
     try:
-        lines = (repo / node.file).read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = project_text(repo / node.file, repo).splitlines()
     except (OSError, TypeError):
         return ""
     start, end = (node.start_line or 1), (node.end_line or node.start_line or 1)

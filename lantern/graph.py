@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -150,9 +152,17 @@ class Graph:
         results.write(path, json.dumps(self.to_dict(), indent=1))
 
     @classmethod
-    def load(cls, path: str | Path) -> "Graph":
-        d = json.loads(Path(path).read_text(encoding="utf-8"))
-        g = cls(d["repo_root"])
+    def load(cls, path: str | Path, repo: str | Path | None = None) -> "Graph":
+        """The map a run saved at `path`, read only as a plain file (`results.table`). `repo` is the project folder
+        the caller was given, and every caller that goes on to read the project's files hands it over: the folder
+        the file itself names (`repo_root`) is then not used. The results folder lies inside the project by
+        default, so the file may have come with the project, and until 2026-11-10 `lantern report`, `explain` and
+        `evidence` read each function's lines from whatever folder the file named. Without `repo` the file's own
+        word is kept: for a map that is read for what it holds and nothing more (a round trip in a test)."""
+        d = results.table(path)
+        if d is None:
+            raise FileNotFoundError(errno.ENOENT, "no map was saved here", os.fspath(path))
+        g = cls(d["repo_root"] if repo is None else str(repo))
         g.meta = d.get("meta", {})
         for n in d["nodes"]:
             g.nodes[n["id"]] = Node(**n)

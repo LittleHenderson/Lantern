@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import manifest
 from .graph import Graph
+from .python_frontend import project_text
 
 SKIP = re.compile(r"(^|/)(node_modules|build|dist|\.expo|tests?|fixtures|__tests__)/")
 NAV_SCREEN = re.compile(r"<\s*[\w.]*Screen\b[^>]*?\bcomponent\s*=\s*\{\s*(?:[\w$]+\.)?([\w$]+)\s*\}", re.S)
@@ -38,7 +39,7 @@ def find_projects(repo: Path) -> list[dict]:
         if SKIP.search(rel):
             continue
         try:        # the file comes with the project: what is not the shape a package.json has is passed over
-            pkg = manifest.table(manifest.parse_json(p.read_text(encoding="utf-8", errors="replace")[:500_000]))
+            pkg = manifest.table(manifest.parse_json(project_text(p, repo, 500_000)))
         except OSError:
             continue
         deps = {**manifest.table(pkg.get("dependencies")), **manifest.table(pkg.get("devDependencies"))}
@@ -50,7 +51,7 @@ def find_projects(repo: Path) -> list[dict]:
         aj = p.parent / "app.json"
         if aj.is_file():
             try:
-                data = manifest.parse_json(aj.read_text(encoding="utf-8", errors="replace")[:500_000])
+                data = manifest.parse_json(project_text(aj, repo, 500_000))
             except OSError:
                 data = None
             if isinstance(data, dict):
@@ -103,7 +104,7 @@ def add_entries(g: Graph, repo: str | Path) -> dict:
     def text(file: str) -> str:
         if file not in texts:
             try:
-                texts[file] = (repo / file).read_text(encoding="utf-8", errors="replace")
+                texts[file] = project_text(repo / file, repo)
             except OSError:
                 texts[file] = ""
         return texts[file]
@@ -244,7 +245,7 @@ def config_findings(repo: Path, proj: dict, code: str) -> tuple[list[dict], list
     if not file or not isinstance(cfg, dict):
         return out, perms
     try:
-        text = (repo / file).read_text(encoding="utf-8", errors="replace")
+        text = project_text(repo / file, repo)
     except OSError:
         return out, perms
     schemes = cfg.get("scheme")
@@ -303,14 +304,17 @@ def scan(g: Graph) -> tuple[list[dict], dict | None]:
     if not projects:
         return [], None
     roots = [p["root"] for p in projects]
-    files = [(p.relative_to(repo).as_posix(), p.read_text(encoding="utf-8", errors="replace"))
+    files = [(p.relative_to(repo).as_posix(), project_text(p, repo))
              for p in _files(repo, {".js", ".jsx", ".ts", ".tsx"})]
     files = [(r, t) for r, t in files if _in(r, roots)]
     out = code_findings(files)
     summary = {"platform": "react-native", "modules": []}
     for proj in projects:
         code = "\n".join(t for r, t in files if r.startswith(proj["root"]))
-        pkg = (repo / (proj["root"] + "package.json")).read_text(encoding="utf-8", errors="replace")
+        try:
+            pkg = project_text(repo / (proj["root"] + "package.json"), repo)
+        except OSError:   # the file went away since the project was found
+            pkg = ""
         found, perms = config_findings(repo, proj, code + "\n" + pkg)
         out += found
         cfg = proj["config"] if isinstance(proj["config"], dict) else {}

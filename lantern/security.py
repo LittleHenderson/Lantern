@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import context, lanes, manifest, results
 from .graph import Graph
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_text
 
 UNTRUSTED_ENTRY_KINDS = {"route", "cli", "main", "script"}
 
@@ -64,8 +64,8 @@ def _rel(repo: Path, name: str) -> str:
     return s[2:] if s.startswith("./") else s
 
 
-def _read_text(p: Path) -> str:
-    return p.read_text(encoding="utf-8", errors="replace")
+def _read_text(p: Path, repo: Path) -> str:
+    return project_text(p, repo)
 
 
 BANDIT_READS = (".py", ".pyw")
@@ -270,7 +270,7 @@ def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
             continue
         rel = p.relative_to(repo).as_posix()
         try:
-            text = _read_text(p)
+            text = _read_text(p, repo)
         except OSError as exc:
             errors.append(f"{rel}: {exc.strerror or exc}")
             continue
@@ -459,7 +459,7 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
         return False
     if f["file"] not in cache:
         try:
-            cache[f["file"]] = (Path(g.repo_root) / f["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
+            cache[f["file"]] = project_text(Path(g.repo_root) / f["file"], g.repo_root).splitlines()
         except OSError:
             cache[f["file"]] = []
     src = cache[f["file"]]
@@ -693,8 +693,8 @@ def load_accepted(repo: Path) -> dict[str, dict]:
     """Accepted risks live in the repo (committed), each with the builder's written reason."""
     p = repo / ACCEPTED_FILE
     try:
-        data = manifest.parse_json(p.read_text(encoding="utf-8", errors="replace")) if p.is_file() else None
-    except OSError:
+        data = manifest.parse_json(project_text(p, repo))
+    except OSError:   # not there, or not a file of the project (a link that leads out of it, a pipe): nothing is accepted
         return {}
     # the file comes with the project: only a row with a finding's id and a written reason accepts anything
     return {r["id"]: r for r in manifest.tables(manifest.table(data).get("accepted"))
@@ -734,7 +734,7 @@ def stable_ids(repo: Path, findings: list[dict]) -> None:
             continue
         if f["file"] not in lines:
             try:
-                lines[f["file"]] = (repo / f["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
+                lines[f["file"]] = project_text(repo / f["file"], repo).splitlines()
             except OSError:
                 lines[f["file"]] = []
         src = lines[f["file"]]
@@ -794,7 +794,7 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     def lines_for(file: str) -> list[str]:
         if file not in lines_cache:
             try:
-                lines_cache[file] = (repo / file).read_text(encoding="utf-8", errors="replace").splitlines()
+                lines_cache[file] = project_text(repo / file, repo).splitlines()
             except OSError:
                 lines_cache[file] = []
         return lines_cache[file]

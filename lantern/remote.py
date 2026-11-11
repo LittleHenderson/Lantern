@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import removal
+from . import removal, results
 
 HTTPS = re.compile(r"^https://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(?::(?P<port>\d{1,5}))?"
                    r"/(?P<owner>[\w.-]+)/(?P<name>[\w.-]+?)(?:\.git)?/?"
@@ -207,9 +207,9 @@ def _pattern(path: str) -> str:
 
 def skipped(folder: Path) -> dict | None:
     """What a Lantern clone left out to stay under the size cap: {files, mb, examples}, or None."""
-    try:
-        d = json.loads((Path(folder) / ".git" / SKIPPED).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    try:   # Lantern's own note, kept in a folder that may have come from anywhere: read only as a plain file
+        d = json.loads(results.plain(Path(folder) / ".git" / SKIPPED)[0] or "null")
+    except (ValueError, RecursionError):
         return None
     return d if isinstance(d, dict) and isinstance(d.get("files"), int) else None
 

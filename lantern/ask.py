@@ -13,6 +13,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from . import results
 from .lanes import LANE_WORDS  # the four stack stops: Browser, Frontend, Server, Data
 
 SYSTEM = """You are Lantern's assistant inside the Lantern app. Lantern maps an app's code (every path from a
@@ -129,9 +130,11 @@ def _plain(text: str) -> str:
 
 
 def _load(p: Path):
+    """What a result file holds, or None. Only a plain file is read (`results.plain`), never a link or a pipe."""
+    text = results.plain(p)[0]
     try:
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
-    except (OSError, ValueError):
+        return None if text is None else json.loads(text)
+    except (ValueError, RecursionError):
         return None
 
 

@@ -108,6 +108,11 @@ The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`
 
 `{"schema", "repo_root", "meta", "nodes": [...], "edges": [...], "unresolved": {text: count}}`
 
+`repo_root` is where the run that wrote the file found the project. Nothing reads the project there afterwards:
+`lantern report`, `evidence`, `explain`, `trace`, the app and the connector read the functions' lines in the folder
+they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened only when it is a file of that folder
+(`python_frontend.project_text`: not through `..`, not from the top of the disk, not through a link that leads out).
+
 * Node: `id`, `kind` (`module`|`class`|`callable`|`external`), `name`, `qualname`, `file`, `start_line`, `end_line`,
   `parent`, `signature`, `docstring`, `decorators`, `entry` (null or `{"kind": "page"|"route"|"main"|"cli"|"script"|"test",
   "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?, "middleware"?: [node ids]}`
@@ -394,6 +399,15 @@ that cannot be used is neither compared with nor replaced, and the Evidence Repo
 `explain`, `verify`, `export`, the connector's tools) read its files strictly: one that cannot be read is an error
 there, never "no findings".
 
+Every reader of a result file reads it only as a plain file (`results.plain`): not through a link, and not a pipe,
+which would hold the reader up for good. The strict readers end with `error: <path> was not read: it is a link, and
+Lantern does not read its results through a link. Remove it and analyze the project again.` (or `it is not a plain
+file`, `it is larger than 256 MB`, `it is not text`) and 2; `lantern verify --report FILE` says the same of a report
+that is a link, a pipe or not there. In `lantern serve` the project cards, Ask Lantern and the Learn steps go on as if
+such a file were not there, a report page answers 409 (`This result file can't be read`), and a JSON result answers
+`null`. The record of calls a project's tests leave ("Watch my tests run", `lantern trace`) is read the same way, and
+only rows of the recorder's own shape are kept (`trace.well_formed`).
+
 How result files are written (`lantern/results.py`, `write` and `folder`): each file goes into a new file beside its
 place and is moved there in one step, so a reader sees the file of the run before or the new one, never a part. A link
 or a pipe under a result file's name is replaced by Lantern's own file (what a link pointed at is left alone) and the
@@ -408,8 +422,11 @@ a link.
 
 In the repo itself: `lantern-accepted.json` (accepted risks with reasons, committed; written the same way),
 `lantern-packs/*.json` (project analysis packs), `lantern-narratives.md` (the builder's own notes for the Evidence Report).
-Each is read only as a file of the project (`python_frontend.inside_repo`): a notes file or a packs folder that is a link
-leading out of the project counts as not there.
+Each is read only as a file of the project (`python_frontend.project_text`, which asks `inside_repo`), like every
+other file Lantern opens in a project: one that is a link leading out of the project, or lies behind a folder that is
+such a link, counts as not there, and a pipe under its name is not waited on. A dependency file that is such a link is
+named in its audit's record (`<file>: a link that does not lead to a file of the project, so it was not read`, the same
+words whatever the link leads to), and a `package-lock.json` that is one counts as no lock file.
 
 ## Cloud service (`cloud/`, cloud mode)
 

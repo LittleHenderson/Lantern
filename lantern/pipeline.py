@@ -19,9 +19,9 @@ RANKS = ["critical", "high", "medium", "low"]
 
 
 def load(out: Path, name: str) -> dict | None:
-    """A result file the command is about, read strictly: one that cannot be read is an error, never "nothing"."""
-    p = out / name
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    """A result file the command is about, read strictly: one that cannot be read is an error, never "nothing"
+    (`results.table`: only a plain file is read, a link or a pipe under the name is `results.Refused`)."""
+    return results.table(Path(out) / name)
 
 
 def earlier(out: Path, name: str, log: Log | None = None, then: str = "") -> dict | None:
@@ -192,10 +192,12 @@ def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str, log: Lo
     return ev.write(out, rec)["html"]
 
 
-def rebuild_outputs(out: Path, g: Graph | None = None) -> Path:
-    """Re-render report.html and evidence.html from saved results (after explanations change)."""
+def rebuild_outputs(out: Path, repo: Path, g: Graph | None = None) -> Path:
+    """Re-render report.html and evidence.html from saved results (after explanations change). `repo` is the
+    project folder the caller was given: the functions' lines are read there, never from a folder the saved map
+    names (`Graph.load`)."""
     from .report import write_report
-    g = g or Graph.load(out / "graph.json")
+    g = g or Graph.load(out / "graph.json", repo)
     run_meta = load(out, "run.json") or {}
     sec, rd = load(out, "security.json"), load(out, "readiness.json")
     path = write_report(out, g, sec, load(out, "explanations.json"), run_meta.get("privacy", "full"),
@@ -204,19 +206,20 @@ def rebuild_outputs(out: Path, g: Graph | None = None) -> Path:
     return path
 
 
-def plan_explain(out: Path, depth: int = 3, limit: int | None = 40, only: list[str] | None = None) -> dict:
+def plan_explain(out: Path, repo: Path, depth: int = 3, limit: int | None = 40, only: list[str] | None = None) -> dict:
     from .explain import estimate, select_nodes
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
     sec = load(out, "security.json") or {"findings": []}
     nids = select_nodes(g, depth=depth, limit=limit, only=only)
     return {**estimate(g, nids, sec["findings"]), "nodes": nids}
 
 
-def explain(out: Path, provider, nids: list[str], metaphor: str | None = None,
+def explain(out: Path, repo: Path, provider, nids: list[str], metaphor: str | None = None,
             progress: Callable | None = None, fresh: bool = False) -> dict:
-    """Explain `nids` with `provider`, merge into explanations.json, and re-render the report."""
+    """Explain `nids` with `provider`, merge into explanations.json, and re-render the report. The code that goes
+    to the model is read in `repo`, the project folder the caller was given."""
     from .explain import run
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
     sec = load(out, "security.json") or {"findings": []}
     prev = load(out, "explanations.json")
     if metaphor is None and prev and (prev.get("metaphor") or {}).get("world"):
@@ -228,5 +231,5 @@ def explain(out: Path, provider, nids: list[str], metaphor: str | None = None,
         if prev.get("metaphor", {}).get("world") == res["metaphor"]["world"] and prev["metaphor"].get("roles"):
             res["metaphor"] = prev["metaphor"]
     results.write(out / "explanations.json", json.dumps(res, indent=1))
-    rebuild_outputs(out, g)
+    rebuild_outputs(out, repo, g)
     return res

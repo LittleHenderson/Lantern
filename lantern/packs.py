@@ -34,7 +34,7 @@ import re
 from pathlib import Path
 
 from .graph import Graph
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_text
 
 BUILTIN_DIR = Path(__file__).parent / "packs"
 PROJECT_DIR = "lantern-packs"
@@ -162,10 +162,11 @@ def _check_files(files, where: str) -> list[str]:
 
 # ---------------------------------------------------------------------------- loading
 
-def _read_pack(p: Path, source: str) -> tuple[dict | None, str | None]:
+def _read_pack(p: Path, source: str, repo: Path | None = None) -> tuple[dict | None, str | None]:
+    """A pack file. One that comes with a project is read as a file of that project and in no other way."""
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        data = json.loads(project_text(p, repo) if source == "project" else p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
         return None, f"not readable as JSON ({type(e).__name__})"
     errs = validate(data)
     if errs:
@@ -194,7 +195,7 @@ def load_all(repo: Path | None = None, builtin: bool = True,
         for p in sorted(d.glob("*.json")):
             if source == "project" and not inside_repo(p, repo):
                 continue
-            pk, err = _read_pack(p, source)
+            pk, err = _read_pack(p, source, repo)
             if err:
                 problems.append((f"{source} pack {p.name}", err))
                 continue
@@ -218,7 +219,7 @@ def _applies(pk: dict, repo: Path) -> bool:
         if not any(_files(repo, [pat])):
             return False
     for word in req.get("text", []):
-        if not any(word in _read(p) for p in _manifests(repo)):
+        if not any(word in _read(p, repo) for p in _manifests(repo)):
             return False
     return True
 
@@ -249,11 +250,12 @@ def _files(repo: Path, globs: list[str]):
             yield p
 
 
-def _read(p: Path) -> str:
+def _read(p: Path, repo) -> str:
+    """The text of a file of the project `repo`; nothing when it is none, cannot be read or is very large."""
     try:
         if p.stat().st_size > MAX_FILE:
             return ""
-        return p.read_text(encoding="utf-8", errors="replace")
+        return project_text(p, repo)
     except OSError:
         return ""
 
@@ -283,7 +285,7 @@ def scan_packs(repo: Path, packs: list[dict]) -> tuple[list[dict], list[dict]]:
                 if p.suffix.lower() not in TEXT_EXTS and p.suffix:
                     continue
                 rel = p.relative_to(repo).as_posix()
-                for ln, line in _lines(_read(p)):
+                for ln, line in _lines(_read(p, repo)):
                     if not rx.search(line) or (unless and unless.search(line)):
                         continue
                     s = line.lstrip()
@@ -341,7 +343,7 @@ def apply_entries(g: Graph, repo: Path, packs: list[dict]) -> dict:
             gi = int(e["handler"][1:-1])
             for p in _files(repo, e["files"]):
                 rel = p.relative_to(repo).as_posix()
-                for ln, line in _lines(_read(p)):
+                for ln, line in _lines(_read(p, repo)):
                     for m in rx.finditer(line):
                         if gi > (m.lastindex or 0) or not m.group(gi):
                             continue

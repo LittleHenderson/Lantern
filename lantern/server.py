@@ -537,9 +537,9 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
         provider = app.make_provider()
 
         def work(log):
-            ids = a.node or pipeline.plan_explain(out, a.depth, a.max_nodes)["nodes"]
+            ids = a.node or pipeline.plan_explain(out, repo, a.depth, a.max_nodes)["nodes"]
             log(f"explaining {len(ids)} function(s) with {provider.label}")
-            res = pipeline.explain(out, provider, ids, fresh=a.fresh and bool(a.node), progress=lambda i, n, nid, rec: log(
+            res = pipeline.explain(out, repo, provider, ids, fresh=a.fresh and bool(a.node), progress=lambda i, n, nid, rec: log(
                 f"[{i}/{n}] {nid.split(':', 1)[-1]}  {'ok' if rec.get('validated') else 'rejected'}"))
             return {"stats": res["stats"]}
         return {"job": app.jobs.start(p["id"], "explain", work)}
@@ -552,7 +552,7 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
                 run = _load(out / "run.json") or {}
                 run["privacy"] = a.privacy
                 results.write(out / "run.json", json.dumps(run, indent=1))
-            path = pipeline.rebuild_outputs(out)
+            path = pipeline.rebuild_outputs(out, repo)
             log(f"report  {path}")
             return {"report": str(path)}
         return {"job": app.jobs.start(p["id"], "report", work)}
@@ -689,9 +689,13 @@ def _str(v):
 
 
 def _load(p: Path):
+    """What a result file holds, or None when there is none or it cannot be used. Only a plain file is read
+    (`results.plain`): the results folder lies in the project, and a link there would be read wherever it leads, a
+    pipe would hold the page up for good."""
+    text = results.plain(p)[0]
     try:
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
-    except (OSError, json.JSONDecodeError):
+        return None if text is None else json.loads(text)
+    except (ValueError, RecursionError):
         return None
 
 
@@ -948,7 +952,7 @@ class Handler(BaseHTTPRequestHandler):
             p = app.store.project(m.group(1)) or {}
             if not p or not (Path(p["path"]) / ".lantern/graph.json").exists():
                 return self._err(404, "analyze the project first")
-            plan = pipeline.plan_explain(app.out(p), int((q.get("depth") or ["3"])[0]),
+            plan = pipeline.plan_explain(app.out(p), Path(p["path"]), int((q.get("depth") or ["3"])[0]),
                                          int((q.get("limit") or ["40"])[0]))
             plan["nodes"] = len(plan["nodes"])
             return self._json(plan)
@@ -1132,7 +1136,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("analyze the project first")
 
             def work(log):
-                ids = nodes or pipeline.plan_explain(out, int(b.get("depth") or 3), int(b.get("limit") or 40))["nodes"]
+                ids = nodes or pipeline.plan_explain(out, repo, int(b.get("depth") or 3), int(b.get("limit") or 40))["nodes"]
                 log(f"explaining {len(ids)} function(s) with {provider.label}")
 
                 def progress(i, n, nid, rec):
@@ -1140,7 +1144,7 @@ class Handler(BaseHTTPRequestHandler):
                                                               else "rejected by the anchor check")
                     log(f"[{i}/{n}] {nid.split(':', 1)[-1]}  {flag}")
 
-                res = pipeline.explain(out, provider, ids, progress=progress, fresh=bool(b.get("fresh")) and bool(nodes))
+                res = pipeline.explain(out, repo, provider, ids, progress=progress, fresh=bool(b.get("fresh")) and bool(nodes))
                 st = res["stats"]
                 log(f"done: {st['validated']} validated, {st['failed']} failed, {st['cached']} from cache; "
                     f"{st['usage']['input_tokens']:,} tokens in, {st['usage']['output_tokens']:,} out")

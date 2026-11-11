@@ -27,6 +27,7 @@ import re
 from pathlib import Path
 
 from . import manifest
+from .python_frontend import project_text
 from .graph import Graph
 
 # kind, provider, pattern. Kinds: model | embedding | vector | image | speech | payment | email | sms
@@ -106,7 +107,7 @@ PLACEHOLDER = re.compile(r"(?i)your[_-]?|xxx|example|placeholder|<[^>]+>|\.\.\.|
 def _lines(repo: Path, rel: str, cache: dict[str, list[str]]) -> list[str]:
     if rel not in cache:
         try:
-            cache[rel] = (repo / rel).read_text(encoding="utf-8", errors="replace").splitlines()
+            cache[rel] = project_text(repo / rel, repo).splitlines()
         except OSError:
             cache[rel] = []
     return cache[rel]
@@ -282,7 +283,7 @@ def notebooks(repo: Path) -> tuple[list[dict], list[dict]]:
         if any(part in SKIP_DIRS or part.startswith(".") for part in rel.split("/")[:-1]):
             continue
         try:
-            nb = manifest.parse_json(p.read_text(encoding="utf-8", errors="replace"))
+            nb = manifest.parse_json(project_text(p, repo))
         except OSError:
             continue
         cells = nb.get("cells") if isinstance(nb, dict) else None

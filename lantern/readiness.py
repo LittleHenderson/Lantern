@@ -16,7 +16,7 @@ from . import manifest, scanresult
 from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
 from .graph import Graph
 from .protections import advise as advise_protections
-from .python_frontend import SKIP_DIRS, TEST_FILE_RE, inside_repo
+from .python_frontend import SKIP_DIRS, TEST_FILE_RE, inside_repo, project_text
 
 READINESS_VERSION = 1
 
@@ -126,7 +126,7 @@ class Repo:
     def text(self, rel: str) -> str:
         if rel not in self._text:
             try:
-                self._text[rel] = (self.root / rel).read_text(encoding="utf-8", errors="replace")
+                self._text[rel] = project_text(self.root / rel, self.root)
             except OSError:
                 self._text[rel] = ""
         return self._text[rel]

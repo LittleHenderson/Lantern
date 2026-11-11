@@ -44,6 +44,99 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   is found, letter for letter, in no path but its own unless a folder was named for that purpose (`tool.p[y]z/`), and
   a file in such a folder is then left out of Bandit as one in `build/` or `vendor/` already is; a link put in place
   while an analysis runs (that takes another program of the same computer writing in the project at that moment).
+- Security: a file of a project is opened only as a file of that project, a result file is read back only as a
+  plain file, and a saved map is used for the folder the person named (2026-11-10; stage 7 of the 2026-11-09
+  directive, "test path, link and ownership boundaries"; it goes on from the link fix above with the same
+  measurement). Three rules. What the code before did is measured on the stage with the link fix merged in.
+  **1. Files Lantern looks for by their name.** The link fix closed the source files, the notes file, the packs and
+  Bandit. Every other reader still opened its file with a plain read, wherever a link led. `bench/links.py` (new)
+  puts every file of the 15 sample projects, and of one more project made of the other files Lantern looks for by
+  name, in six states, one at a time (taken away; a link out of the project; the same link with an empty file at its
+  end; the same link with nothing at its end; a pipe; a link to itself), and runs the whole analysis on each: 232
+  files, 1424 runs. On the code before: 17 files were read through the link (`package.json`, `app.json`,
+  `go.mod`, `Cargo.toml`, `pubspec.yaml`, a `.csproj`, `build.gradle` and `build.gradle.kts`, `Info.plist`, the
+  entitlements file, `project.pbxproj`, the network security settings, a notebook: what they hold went into the map,
+  the findings and the readiness score), the results for 3 told whether the path a link named exists outside
+  the project (two Gradle files and `package-lock.json`), and a pipe held 29 runs up for good, at 10 lines of
+  the code in 8 modules. Under Python 3.11 and 3.12 a link to itself in the way of an import stopped the whole
+  analysis with a Python error (`RuntimeError: Symlink loop` from `Path.resolve()`): 28 of the 264 runs of that
+  state under Python 3.12.3, none under 3.13, which does not raise there. (On main, before the link fix, 230 of
+  those 264 runs stopped, in `inside_repo` itself; the link fix took those away.) With this change: 0 read
+  through, 0 tells, 0 held up, 0 stopped in 1424 runs under Python 3.13.18, and 0 stopped in the 264 under 3.12.3.
+  Reading the code found one more of the second kind, which no sample could show: the Android signing-key finding
+  (`LM-SIGNING-SECRET`) ranks higher when the key file is in the repository too, and a key file that was a link
+  counted when something was at its other end. It asks `inside_repo` now, and a test holds it. And a test written
+  for a planted mistake (below) showed one more of the first kind: a `setup.cfg` that was a link out of the project
+  was read, and the function it named as a script became an entry point. The samples' `setup.cfg` names none, so
+  the sweep could not show it; `project_text` had closed it already.
+  `python_frontend.project_text(p, repo[, limit])` and `project_bytes` are now the one way a file of a project is
+  opened. They ask `inside_repo` and raise FileNotFoundError for whatever it refuses, so every reader that passes a
+  missing file over passes these over too; the readers of 28 other modules of `lantern/` go through them (38
+  modules changed in all). Where a reader only asks whether a
+  file is there, it asks `inside_repo` in place of `exists()` or `is_file()` (`android.py`, and `sandbox.detect`,
+  which proposes the test command: ten names, the Gradle wrapper, the package manager's lock file, a linked `tests/`
+  folder). A path that cannot be followed is an import of nothing (`js_frontend._reached`). And an import of a file
+  that is a link to a project file with another kind of name (`helper.ts` → `kept.txt`) now leads to the link, which
+  is the module; before, on main too, the path was followed to its end first, no module was found there, and the
+  import was read as a library's.
+  **2. Result files read back.** `results.write` (below) made writing safe; reading back was still a plain
+  `read_text` in the commands about a finished run (`lantern report`, `evidence`, `verify`, `export`, the
+  connector's tools), the app's cards and pages, Ask Lantern and the Learn steps: a `.lantern/security.json` that a
+  project brought as a link was read wherever it led and shown as the project's findings, and a pipe there held the
+  command or the page up for good. `results.plain(p)` is now the one opener for a result file (never through a link,
+  never a pipe or a folder, at most 256 MB). `results.text` / `results.table` are the strict forms for the commands,
+  which end with result 2 and one sentence (`… security.json was not read: it is a link, and Lantern does not read
+  its results through a link. Remove it and analyze the project again.`); the app, Ask Lantern and the Learn steps go
+  on without the file. The record of calls that "Watch my tests run" reads is written inside the program under
+  test: it is read the same way, and only rows of the recorder's own shape are kept (`trace.well_formed`; before, a
+  row such as `{"pairs": [1]}` ended the run with a Python error). The note a clone keeps of what it left out
+  (`remote.skipped`) is read the same way.
+  **3. Which folder a saved map is about.** `graph.json` names the project folder it was made for (`repo_root`),
+  and `lantern report`, `lantern evidence` and `lantern explain` read each function's lines, and the notes file,
+  in the folder that file named. A project that brought its own `.lantern/graph.json` naming another folder had,
+  measured on the code before: a line of that folder's file in `report.html`; that folder's notes file in
+  `evidence.json`; and that line, not the project's own, in each of the 3 requests `lantern explain` sent to the
+  model. Now `Graph.load(path, repo)` takes the folder from its caller, every caller in `lantern/` hands over the
+  folder the person named, and each function's lines are opened with `project_text`, so a saved `file` that leads
+  out of the project has no lines. With this change: none of the three, and the project's own line is what is sent.
+  Changed for the person: a project file that is a link to a file outside the analyzed folder (a `tsconfig.json`
+  or `package.json` kept one folder up and linked into the folder that is analyzed) is no longer read; analyze the
+  folder that holds both. A results folder made for one place and used from another (the project was moved, or
+  `--out` names results of another copy) now reads the lines of the folder named on the command line, where before
+  it read the place the results were made for. For code that calls Lantern's functions:
+  `pipeline.rebuild_outputs(out, repo)`, `plan_explain(out, repo, …)` and `explain(out, repo, provider, …)` take the
+  project folder as their second argument.
+  Tests: `tests/test_project_files.py` (133 tests, each refusal beside a twin that must still be read: the
+  project's own file, a link that stays inside the project, the person's shortcut to the project, a plain result
+  file). `test_no_file_is_opened_any_other_way` reads every module of `lantern/` and fails on an `open`, `os.open`,
+  `read_text` or `read_bytes` outside the openers and a list of the places that open a file of Lantern's own, so a
+  reader added later is caught before any sweep is run. On the code before, 84 fail and 49 pass. Of the 84, 71 fail
+  on what the code does (33 a reader still waiting on a pipe when the test's limit ran out, 1 a refusal that did
+  not come, 1 stopped with `RuntimeError: Symlink loop`, 36 a compared result) and 13 because a function or an
+  argument of this change is not there yet. The 49 that pass: 33 of the 68 files looked for by name, whose reader
+  asked `inside_repo` already; 11 tests of the checking tools themselves; 5 tests of what was right before. With
+  this change 133 pass.
+  Mistakes planted in the changed lines, one at a time (84, in 18 of the 38 modules): 45 failed the new tests at
+  once, 18 failed the older tests of their module, and 21 failed neither. For those 21, eight tests were added and
+  three sharpened (the app's Explain button and its command drawer, `lantern explain --node`, the plan's three
+  levels and forty functions, the Supabase check, a setup file's scripts, the Android signing key, an Android file
+  over the size limit, the test command, the words of a refused report); all 84 now fail a test. Thirteen of the
+  21 sat in older logic on a line that only gained the folder argument or moved, which no test had tried (which
+  functions the app's Explain plans, a setup file's scripts, the Supabase check); eight in lines this change
+  rewrote. The older tests tried were each module's own test file, not the whole suite.
+  Found while doing this, in the measuring script itself: its time limit was an ordinary error raised once, and a
+  reader that passes over whatever goes wrong with a file passed over the limit too. A sweep of main's code then
+  waited on a second pipe for good and had to be stopped. The limit can no longer be passed over
+  (`links.limited`; a test plants the mistake three ways). The numbers above are from the corrected script; for
+  the stage's own code it gave the same 49 lines as the first run.
+  Not covered: the sweep sees a read only when what the file holds changes a result file (the look for openers
+  covers the rest by the way they open: it knows `open`, `os.open`, `read_text`, `read_bytes` and `.open`, not a
+  library that is handed a path); gitleaks, which finds its files itself, was not measured (not installed where the
+  sweep ran); a link put in place between Lantern's question and its open is read; whether a name is a folder is
+  still asked the plain way in places, and no file is read through it; every field of a result file other than the
+  project folder is still taken as Lantern's own when the file is a plain file of the right shape; rows of the right
+  shape in a test run's record are believed, so a test program can have a call between two functions of the map
+  marked as seen running, or added, that never happened; the sweep is POSIX only.
 - Security: Lantern's results are written into the results folder and nowhere else (2026-11-10; stage 7 of the
   2026-11-09 directive, part 3). The results folder lies inside the analysed project by default
   (`PATH/.lantern`), and a project comes from anywhere: a link somebody sent, a zip, a clone. Every result file

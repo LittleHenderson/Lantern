@@ -12,6 +12,9 @@ import json
 import re
 from pathlib import Path
 
+from . import results
+from .python_frontend import project_text
+
 ROOT = Path(__file__).parent / "starters"
 MARKER = ".lantern-starter"
 ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
@@ -78,7 +81,7 @@ def starter_of(repo: Path) -> str | None:
     """The starter a folder was created from, if its marker names one we ship (the marker itself may be planted,
     so only a known id is accepted and nothing else is read from it)."""
     try:
-        sid = json.loads((Path(repo) / MARKER).read_text(encoding="utf-8")).get("starter")
+        sid = json.loads(project_text(Path(repo) / MARKER, repo, 4096)).get("starter")
     except (OSError, ValueError, AttributeError):
         return None
     return sid if isinstance(sid, str) and ID_RE.fullmatch(sid) and sid in ids() else None
@@ -93,9 +96,11 @@ def solution_text(sid: str, rel: str) -> str | None:
 # ---------------------------------------------------------------------------- progress
 
 def _load(p: Path):
+    """What a result file holds, or None. Only a plain file is read (`results.plain`), never a link or a pipe."""
+    text = results.plain(p)[0]
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return None if text is None else json.loads(text)
+    except (ValueError, RecursionError):
         return None
 
 

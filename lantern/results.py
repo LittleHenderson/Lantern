@@ -14,9 +14,13 @@ good), and not one larger than `MAX_BYTES`. `SHAPES` says, per file, what the pa
 file with one odd part is passed over whole: a result file is Lantern's own, so an odd part means it is not what
 Lantern wrote, and the rest of it is no better known.
 
-Reading changes and removes nothing. The results a command is about (`lantern evidence`, `explain`, `verify` on a
-finished run) are still read strictly (`pipeline.load`): passing those over would turn a damaged scan result into
-"no findings".
+Reading changes and removes nothing. The results a command is about (`lantern evidence`, `explain`, `report`, the
+app's pages) are read strictly (`text`, `table`; `pipeline.load`): passing those over would turn a damaged scan result
+into "no findings". They too are read only as plain files (the same date): until then a plain `read_text` read them,
+so `.lantern/security.json` brought as a link was read wherever it led and shown as the project's findings, and a
+pipe under one of these names held the command, or the app's page, up for good. One that is not a plain file of
+text is `Refused` with the reason; the readers that can do without a file (the app's project cards, Ask Lantern,
+the Learn steps) take `plain(p)[0]` and go on as if nothing were there.
 
 Writing (the same date). The results folder lies inside the analysed project by default, and a project comes from
 anywhere: a link somebody sent, a zip, a clone. Until this date every result file was written with a plain
@@ -167,11 +171,30 @@ def earlier(out: Path, name: str) -> tuple[dict | None, str | None]:
     return (None, f"{NOT_OURS}: {odd}") if odd else (data, None)
 
 
-# ---------------------------------------------------------------------------- writing
-
 class Refused(RuntimeError):
-    """Lantern will not write where it was asked to. The message is for the person: the command line prints it after
-    `error:` and ends with 2, the app shows it as the reason the job did not run."""
+    """Lantern will not write where it was asked to, or will not read a result from what is there. The message is
+    for the person: the command line prints it after `error:` and ends with 2, the app shows it as the reason the
+    job did not run."""
+
+
+def text(p) -> str | None:
+    """What the result file at `p` holds, for a command that is about that file: None when nothing is there, and
+    `Refused` when what is there is not a plain file of text (`plain`: a link, a pipe, a folder, too large). The
+    reason is made of fixed words and the path, never of what the file holds."""
+    got, why = plain(Path(p))
+    if why:
+        raise Refused(f"{p} was not read: {why}. Remove it and analyze the project again.")
+    return got
+
+
+def table(p):
+    """`text`, read as JSON: what the file holds (the caller looks at its shape), or None when nothing is there.
+    A file that is not JSON is an error, as before (ValueError)."""
+    got = text(p)
+    return None if got is None else json.loads(got)
+
+
+# ---------------------------------------------------------------------------- writing
 
 
 KEEP_SAID = 200                     # lines kept until a run asks for them; more than that are not kept

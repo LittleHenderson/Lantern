@@ -139,7 +139,7 @@ def find_apps(repo: Path) -> list[App]:
         rel = proj.relative_to(repo).as_posix()
         if SKIP.search(rel) or ".xcodeproj/" not in rel:
             continue
-        text = _read(proj)
+        text = _read(proj, repo)
         if not re.search(r"SDKROOT\s*=\s*iphoneos|IPHONEOS_DEPLOYMENT_TARGET\s*=", text):
             continue
         root = rel.split(".xcodeproj/")[0].rpartition("/")[0]
@@ -157,7 +157,7 @@ def find_apps(repo: Path) -> list[App]:
         rel = pl.relative_to(repo).as_posix()
         if SKIP.search(rel) or ".xcodeproj/" in rel or ".framework/" in rel or ".bundle/" in rel:
             continue
-        root_el = _parse_plist(_read(pl))
+        root_el = _parse_plist(_read(pl, repo))
         d = plist_dict(_top_dict(root_el))
         root = next((r for r in sorted(apps, key=len, reverse=True) if rel.startswith(r)), None)
         if root is None:
@@ -237,7 +237,7 @@ def add_entries(g: Graph, repo: str | Path) -> dict:
 
     def src(file: str) -> str:
         if file not in sources:
-            sources[file] = _read(repo / file)
+            sources[file] = _read(repo / file, repo)
         return sources[file]
 
     children: dict[str, list] = {}
@@ -380,7 +380,7 @@ LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 def plist_findings(repo: Path, app: App) -> list[dict]:
     out: list[dict] = []
     if app.plist:
-        text = _read(repo / app.plist)
+        text = _read(repo / app.plist, repo)
         d = app.keys
         ats = plist_dict(d["NSAppTransportSecurity"][0]) if "NSAppTransportSecurity" in d else {}
         if _true((ats.get("NSAllowsArbitraryLoads") or (None,))[0]):
@@ -419,7 +419,7 @@ def plist_findings(repo: Path, app: App) -> list[dict]:
     for ent in app.entitlements:
         if re.search(r"(?i)debug|dev", ent):
             continue
-        text = _read(repo / ent)
+        text = _read(repo / ent, repo)
         d = plist_dict(_top_dict(_parse_plist(text)))
         if _true((d.get("get-task-allow") or (None,))[0]):
             ln = d["get-task-allow"][1]
@@ -431,7 +431,7 @@ def plist_findings(repo: Path, app: App) -> list[dict]:
         except ValueError:
             major = 99
         if major < 15:
-            text = _read(repo / app.pbxproj)
+            text = _read(repo / app.pbxproj, repo)
             m = re.search(r"IPHONEOS_DEPLOYMENT_TARGET\s*=\s*" + re.escape(app.min_ios), text)
             ln = text.count("\n", 0, m.start()) + 1 if m else 1
             out.append(_f("LI-OLD-TARGET", f"The app still runs on iOS {app.min_ios}, which no longer gets security "
@@ -445,7 +445,7 @@ def unused_permission_findings(repo: Path, app: App, code: str) -> list[dict]:
     for key, line, file in _usage_keys(app):
         words, rx = USAGE[key]
         if not re.search(rx, code):
-            text = _read(repo / file)
+            text = _read(repo / file, repo)
             out.append(_f("LI-UNUSED-PERMISSION", f"The app asks for {words} ({key}) but no code that uses it was "
                                                   "found", "LOW", file, line, cwe=250, snippet=_line(text, line),
                           rank="low", conf="LOW"))
@@ -516,7 +516,7 @@ def scan(g: Graph) -> tuple[list[dict], dict | None]:
     from .websec import _files
     repo = Path(g.repo_root)
     apps = find_apps(repo)
-    files = [(p.relative_to(repo).as_posix(), _read(p)) for p in _files(repo, IOS_EXTS)]
+    files = [(p.relative_to(repo).as_posix(), _read(p, repo)) for p in _files(repo, IOS_EXTS)]
     if not apps:
         files = [(r, t) for r, t in files if re.search(r"^\s*import\s+(UIKit|SwiftUI)\b", t, re.M)]
         return code_findings(files), None

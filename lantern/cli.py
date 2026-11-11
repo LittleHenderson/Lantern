@@ -41,8 +41,8 @@ def _out(repo: Path, out: str | None) -> Path:
 
 
 def _load(out: Path, name: str) -> dict | None:
-    p = out / name
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    from .pipeline import load
+    return load(out, name)
 
 
 def _split_cmd(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -93,7 +93,7 @@ def cmd_evidence(a) -> int:
     if a.reset_baseline and (out / "baseline.json").exists():
         (out / "baseline.json").unlink()
     from .pipeline import evidence
-    print(evidence(out, Graph.load(out / "graph.json"), _load(out, "security.json"), _load(out, "readiness.json"),
+    print(evidence(out, Graph.load(out / "graph.json", repo), _load(out, "security.json"), _load(out, "readiness.json"),
                    run_meta, run_meta.get("privacy", "full")))
     return 0
 
@@ -183,7 +183,7 @@ def cmd_trace(a, trace_cmd: list[str]) -> int:
     if not trace_cmd:
         print("give the command after --, e.g. lantern trace . -- python -m pytest -q", file=sys.stderr)
         return 2
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
     m = merge_trace(g, run_trace(repo, trace_cmd))
     print(json.dumps(m, indent=1))
     g.save(out / "graph.json")
@@ -201,7 +201,7 @@ def cmd_explain(a) -> int:
     if not (out / "graph.json").exists():
         print("run `lantern analyze` first", file=sys.stderr)
         return 2
-    plan = plan_explain(out, a.depth, a.max_nodes, a.node or None)
+    plan = plan_explain(out, repo, a.depth, a.max_nodes, a.node or None)
     print(f"plan    {len(plan['nodes'])} functions, about {plan['input_tokens']:,} input and "
           f"{plan['output_tokens']:,} output tokens. {plan['note']}")
     if a.estimate:
@@ -216,13 +216,13 @@ def cmd_explain(a) -> int:
     if not ensure_consent(provider, assume_yes=a.yes):
         print("Stopped: nothing was sent.", file=sys.stderr)
         return 3
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
 
     def progress(i, n, nid, rec):
         flag = "ok" if rec.get("validated") else ("ERR " + rec["error"][:80] if "error" in rec else "unvalidated")
         print(f"  [{i}/{n}] {g.nodes[nid].qualname}  {flag}", flush=True)
 
-    res = explain(out, provider, plan["nodes"], metaphor=a.metaphor, progress=progress)
+    res = explain(out, repo, provider, plan["nodes"], metaphor=a.metaphor, progress=progress)
     st = res["stats"]
     print(f"explain {st['validated']} validated ({st['first_try']} first try), {st['failed']} failed, "
           f"{st['cached']} from cache. Tokens: {st['usage']['input_tokens']:,} in, "
@@ -240,7 +240,7 @@ def cmd_report(a) -> int:
     from .report import write_report
     repo = Path(a.path).resolve()
     out = _out(repo, a.out)
-    g = Graph.load(out / "graph.json")
+    g = Graph.load(out / "graph.json", repo)
     run_meta = _load(out, "run.json") or {}
     print(write_report(out, g, _load(out, "security.json"), _load(out, "explanations.json"),
                        a.privacy or run_meta.get("privacy", "full"), run_meta.get("timings"),

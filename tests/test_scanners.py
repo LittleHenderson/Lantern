@@ -253,10 +253,10 @@ def test_built_in_secret_scan_counts_files_it_could_not_read(tmp_path, monkeypat
     monkeypatch.setattr(security.shutil, "which", lambda name: None)
     real = security._read_text
 
-    def read(p: Path) -> str:
+    def read(p: Path, repo: Path) -> str:
         if p.name == "b.py":
             raise OSError(13, "Permission denied")
-        return real(p)
+        return real(p, repo)
     monkeypatch.setattr(security, "_read_text", read)
     f, infos = security.run_secrets(tmp_path)
     s = next(i for i in infos if i["tool"] == "lantern-secrets")

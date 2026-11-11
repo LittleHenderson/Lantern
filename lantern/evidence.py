@@ -21,7 +21,7 @@ from . import SCHEMA_VERSION, __version__, gitfacts, results, scanresult
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
-from .python_frontend import inside_repo
+from .python_frontend import inside_repo, project_text
 from .security import ID_VERSION
 from .trace import counted
 
@@ -269,7 +269,10 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
     narratives = None
     nf = repo / NARRATIVES_FILE
     if inside_repo(nf, repo):   # the project's own file: until 2026-11-10 a link out of the project was shown too
-        narratives = nf.read_text(encoding="utf-8", errors="replace")[:20000]
+        try:
+            narratives = project_text(nf, repo, 20000)
+        except OSError:   # it cannot be read: the report is made without it
+            narratives = None
     entries = [{"kind": (n.entry or {}).get("kind"), "detail": (n.entry or {}).get("detail"), "name": n.qualname,
                 "file": n.file} for n in g.entry_points() if (n.entry or {}).get("kind") != "test"]
     models = []
@@ -326,15 +329,21 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
 
 
 def read_digest(report: Path) -> tuple[str | None, dict | None]:
-    """The digest named in an evidence.html or evidence.json, and the payload when the .json is beside it."""
-    m = re.search(r"sha256:[0-9a-f]{64}", report.read_text(encoding="utf-8", errors="replace"))
+    """The digest named in an evidence.html or evidence.json, and the payload when the .json is beside it. Both
+    are read only as plain files (`results.plain`): a report that is a link, a pipe or not there is
+    `results.Refused`, in words for the person; a .json beside it that is not a plain file is passed over."""
+    text, why = results.plain(report)
+    if text is None:
+        raise results.Refused(f"{report} was not read: {why or 'it is not there'}.")
+    m = re.search(r"sha256:[0-9a-f]{64}", text)
     want = m.group(0) if m else None
     old = None
     jp = report if report.suffix == ".json" else report.with_suffix(".json")
-    if jp.exists():
+    beside = text if jp == report else results.plain(jp)[0]
+    if beside is not None:
         try:
-            old = json.loads(jp.read_text(encoding="utf-8")).get("payload") or {}
-        except (OSError, json.JSONDecodeError, AttributeError):
+            old = json.loads(beside).get("payload") or {}
+        except (ValueError, RecursionError, AttributeError):
             old = None
     return want, old
 

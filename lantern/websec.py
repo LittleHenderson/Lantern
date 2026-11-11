@@ -27,7 +27,7 @@ from pathlib import Path
 
 from .graph import Graph
 from .js_frontend import jwt_role
-from .python_frontend import SKIP_DIRS, inside_repo
+from .python_frontend import SKIP_DIRS, inside_repo, project_text
 
 PUBLIC_PREFIX = r"(?:NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_|GATSBY_|PUBLIC_|VUE_APP_)"
 SECRET_WORD = r"[A-Z0-9_]*(?:SECRET|PRIVATE|SERVICE_ROLE|PASSWORD|PASSWD|DB_URL|DATABASE_URL|STRIPE_SK|API_KEY)[A-Z0-9_]*"
@@ -163,9 +163,10 @@ def _files(repo: Path, exts=None, names=None):
             yield p
 
 
-def _read(p: Path) -> str:
+def _read(p: Path, repo) -> str:
+    """The text of a file of the project `repo`; nothing when it is none or cannot be read."""
     try:
-        return p.read_text(encoding="utf-8", errors="replace")
+        return project_text(p, repo)
     except OSError:
         return ""
 
@@ -187,7 +188,7 @@ def _line_of(text: str, pos: int) -> int:
 def js_rules(repo: Path) -> list[dict]:
     out = []
     for p in _files(repo, JS_EXTS):
-        text = _read(p)
+        text = _read(p, repo)
         rel = p.relative_to(repo).as_posix()
         for rule, rx, sev, title, cwe in JS_RULES:
             for m in rx.finditer(text):
@@ -388,7 +389,7 @@ def ruby_rules(repo: Path) -> list[dict]:
         rel = p.relative_to(repo).as_posix()
         if re.search(r"(^|/)(spec|tests?|vendor|tmp|log|db/migrate)/", rel):
             continue
-        text = _read(p)
+        text = _read(p, repo)
         lines = text.splitlines()
         erb = rel.endswith(".erb")
         seen = set()
@@ -477,7 +478,7 @@ def cpp_rules(repo: Path) -> list[dict]:
         if SKIP.search(rel) or VENDORED.search(rel) or re.search(r"(^|/)(tests?|unittests?|spec|examples?|samples?|benchmarks?)/|_test\.|_unittest\.",
                                          rel):
             continue
-        text = _read(p)
+        text = _read(p, repo)
         lines = text.splitlines()
         seen = set()
         for rule, rx, sev, title, cwe, conf, rank in CPP_RULES:
@@ -504,7 +505,7 @@ def php_rules(repo: Path) -> list[dict]:
         rel = p.relative_to(repo).as_posix()
         if re.search(r"(^|/)tests?/|Test\.php$|(^|/)(storage|cache)/", rel):
             continue
-        text = _read(p)
+        text = _read(p, repo)
         lines = text.splitlines()
         blade = rel.endswith(".blade.php")
         seen = set()
@@ -533,7 +534,7 @@ def _pattern_rules(repo: Path, exts: set[str], rules, skip) -> list[dict]:
         rel = p.relative_to(repo).as_posix()
         if skip(rel):
             continue
-        text = _read(p)
+        text = _read(p, repo)
         for rule, rx, sev, title, cwe in rules:
             for m in rx.finditer(text):
                 ln = _line_of(text, m.start())
@@ -547,7 +548,7 @@ def _pattern_rules(repo: Path, exts: set[str], rules, skip) -> list[dict]:
 def exposed_secrets(repo: Path) -> list[dict]:
     out, seen = [], set()
     for p in _files(repo, WEB_EXTS | {".json", ".yml", ".yaml", ".toml"}, names=(".env",)):
-        text = _read(p)
+        text = _read(p, repo)
         rel = p.relative_to(repo).as_posix()
         is_conf = p.name.startswith(".env") or p.suffix in (".yml", ".yaml", ".toml")
         hits = [(m.start(), m.group(1)) for m in PUBLIC_SECRET_CONF_RE.finditer(text)] if is_conf else \
@@ -586,7 +587,7 @@ def exposed_secrets(repo: Path) -> list[dict]:
 def cors(repo: Path) -> list[dict]:
     out = []
     for p in _files(repo, {".py"} | JS_EXTS):
-        text = _read(p)
+        text = _read(p, repo)
         rel = p.relative_to(repo).as_posix()
         if p.suffix == ".py":
             for m in re.finditer(r"add_middleware\(\s*CORSMiddleware|\bCORS\(", text):
@@ -618,7 +619,7 @@ def _cors_finding(rel, line, creds):
 def database_rules(repo: Path) -> list[dict]:
     out = []
     for p in _files(repo, names=("firestore.rules", "storage.rules", "database.rules.json")):
-        text = _read(p)
+        text = _read(p, repo)
         rel = p.relative_to(repo).as_posix()
         for m in re.finditer(r"allow\s+[\w,\s]*:\s*if\s+true\s*;?", text):
             out.append(_finding("LW-DB-OPEN", "Database rules let anyone on the internet read or write", "HIGH",
@@ -632,11 +633,11 @@ def database_rules(repo: Path) -> list[dict]:
                                 _line_of(text, m.start()), category="config", cwe=284, fixed_rank="critical"))
     sql_files = list(_files(repo, {".sql"}))
     uses_supabase = (repo / "supabase").is_dir() or any(
-        "@supabase" in _read(pj) for pj in _files(repo, names=("package.json",)))
+        "@supabase" in _read(pj, repo) for pj in _files(repo, names=("package.json",)))
     if sql_files and uses_supabase:
         rls, created = set(), []
         for p in sql_files:
-            text = _read(p)
+            text = _read(p, repo)
             for m in re.finditer(r"alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:\"?public\"?\.)?\"?(\w+)\"?\s+"
                                  r"enable\s+row\s+level\s+security", text, re.I):
                 rls.add(m.group(1).lower())
@@ -993,7 +994,7 @@ def missing_auth(g: Graph) -> list[dict]:
             continue
         if n.file and n.file not in texts:
             try:
-                texts[n.file] = (Path(g.repo_root) / n.file).read_text(encoding="utf-8", errors="replace")
+                texts[n.file] = project_text(Path(g.repo_root) / n.file, g.repo_root)
             except OSError:
                 texts[n.file] = ""
         sign = login_check(g, n, adj, texts.get(n.file or ""))

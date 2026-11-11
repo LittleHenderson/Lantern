@@ -55,7 +55,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import removal
+from . import removal, results
 
 WALL_CLOCK = 600          # seconds; the directive's 10 minutes
 MARK = "LANTERN-SANDBOX-BLOCKED:"
@@ -79,20 +79,42 @@ SKIP = {".git", ".hg", ".svn", ".lantern", "__pycache__", ".pytest_cache", ".myp
 
 
 # ---------------------------------------------------------------------------- which command
-def _read_json(p: Path) -> dict:
+def _read_json(p: Path, repo: Path) -> dict:
+    """A JSON file of the project (`project_text`: a link that leads out of it, or a pipe, is a file that is not
+    there), or {} when it cannot be used."""
+    from .python_frontend import project_text
     try:
-        d = json.loads(p.read_text(encoding="utf-8"))
+        d = json.loads(project_text(p, repo))
         return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
 
 
-def _js_command(pkg: Path) -> tuple[str, str] | None:
-    d = _read_json(pkg)
+def _recorded(p: Path) -> dict:
+    """What the tests' recorder left at `p`, or {}. The tests ran in the folder that holds it and could put anything
+    under that name, so only a plain file is read (`results.plain`): not a link (it would be read wherever it leads)
+    and not a pipe (reading one nobody writes to never ends, long after the tests were stopped), and only the rows
+    that have the recorder's shape are kept (`trace.well_formed`)."""
+    from .trace import well_formed
+    try:
+        return well_formed(json.loads(results.plain(p)[0] or "{}"))
+    except (ValueError, RecursionError):
+        return {"pairs": []}
+
+
+def _has(repo: Path, *files: Path) -> bool:
+    """Whether one of these is a file of the project (`inside_repo`: not a link that leads out of it, whatever is
+    or is not at the link's other end, and not a pipe)."""
+    from .python_frontend import inside_repo
+    return any(inside_repo(f, repo) for f in files)
+
+
+def _js_command(pkg: Path, repo: Path) -> tuple[str, str] | None:
+    d = _read_json(pkg, repo)
     script = (d.get("scripts") or {}).get("test") if isinstance(d.get("scripts"), dict) else None
     deps = {**(d.get("dependencies") or {}), **(d.get("devDependencies") or {})} if isinstance(d.get("devDependencies") or {}, dict) else {}
     root = pkg.parent
-    pm = "pnpm" if (root / "pnpm-lock.yaml").exists() else "yarn" if (root / "yarn.lock").exists() else "npm"
+    pm = "pnpm" if _has(repo, root / "pnpm-lock.yaml") else "yarn" if _has(repo, root / "yarn.lock") else "npm"
     if isinstance(script, str) and script.strip() and "no test specified" not in script:
         return f"{pm} test", f"{pkg.parent.name}/package.json scripts.test" if pkg.parent.name else "package.json scripts.test"
     for tool, cmd in (("vitest", "npx vitest run"), ("jest", "npx jest"), ("mocha", "npx mocha")):
@@ -105,30 +127,30 @@ def detect(repo: Path) -> dict:
     """The command the sheet shows first: read from the project, editable before it runs.
     `language` decides the image and whether calls are recorded (`traced`: Python only for now)."""
     repo = Path(repo)
-    py = any((repo / f).exists() for f in ("pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "requirements.txt"))
-    has_py_tests = (any(d.is_dir() for d in (repo / "tests", repo / "test")) and any(repo.glob("test*/**/*.py"))) \
-        or any(repo.glob("test_*.py")) or any(repo.glob("*/tests/*.py"))
+    py = any(_has(repo, repo / f) for f in ("pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "requirements.txt"))
+    has_py_tests = (any(d.is_dir() for d in (repo / "tests", repo / "test")) and _has(repo, *repo.glob("test*/**/*.py"))) \
+        or _has(repo, *repo.glob("test_*.py")) or _has(repo, *repo.glob("*/tests/*.py"))
     if py or has_py_tests:
         return {"command": "python -m pytest -q", "how": "pyproject.toml / tests folder", "language": "python",
                 "supported": True, "traced": True,
                 "note": "Python tests are recorded function by function: calls they make turn solid on the map."}
     for pkg in [repo / "package.json", *sorted(repo.glob("*/package.json"))]:
-        if pkg.exists() and "node_modules" not in pkg.parts:
-            js = _js_command(pkg)
+        if _has(repo, pkg) and "node_modules" not in pkg.parts:
+            js = _js_command(pkg, repo)
             if js:
                 cmd, how = js
                 if pkg.parent != repo:
                     how += f" (runs in {pkg.parent.name}/)"
                 return {"command": cmd, "how": how, "language": "node", "cwd": pkg.parent.relative_to(repo).as_posix(),
                         "supported": True, "traced": False, "note": JS_NOTE}
-    if (repo / "go.mod").exists():
+    if _has(repo, repo / "go.mod"):
         return {"command": "go test ./...", "how": "go.mod", "language": "go", "supported": True, "traced": False, "note": JS_NOTE}
-    if (repo / "Cargo.toml").exists():
+    if _has(repo, repo / "Cargo.toml"):
         return {"command": "cargo test", "how": "Cargo.toml", "language": "rust", "supported": True, "traced": False, "note": JS_NOTE}
-    if (repo / "pom.xml").exists():
+    if _has(repo, repo / "pom.xml"):
         return {"command": "mvn -q -o test", "how": "pom.xml", "language": "java", "supported": True, "traced": False, "note": JS_NOTE}
-    if (repo / "build.gradle").exists() or (repo / "build.gradle.kts").exists():
-        cmd = "./gradlew test --offline" if (repo / "gradlew").exists() else "gradle test --offline"
+    if _has(repo, repo / "build.gradle", repo / "build.gradle.kts"):
+        cmd = "./gradlew test --offline" if _has(repo, repo / "gradlew") else "gradle test --offline"
         return {"command": cmd, "how": "build.gradle", "language": "java", "supported": True, "traced": False, "note": JS_NOTE}
     return {"command": "python -m pytest -q", "how": "default", "language": "python", "supported": False, "traced": False,
             "note": "No test setup was found. Add a tests folder (pytest, Jest, Vitest, Mocha, go test, cargo test, "
@@ -804,12 +826,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         log(_stopped(f"after {int(timeout)} s (the wall clock)", left, "every process it started was ended"))
     elif rc is None:
         log(_stopped("because it was asked to", left, "every process it started was ended"))
-    data = {}
-    if out_json.exists():
-        try:
-            data = json.loads(out_json.read_text(encoding="utf-8") or "{}")
-        except ValueError:
-            data = {}
+    data = _recorded(out_json)
     _map_pairs(data, str(app), repo)
     return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, output_tail=output[-6000:], _full=output,
                   not_ended=left)
@@ -902,12 +919,7 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel=None)
         log(_stopped(f"after {int(timeout)} s (the wall clock)", left, "the container was removed"))
     elif rc is None:
         log(_stopped("because it was asked to", left, "the container was removed"))
-    data = {}
-    if (out / "trace.json").exists():
-        try:
-            data = json.loads((out / "trace.json").read_text(encoding="utf-8") or "{}")
-        except ValueError:
-            data = {}
+    data = _recorded(out / "trace.json")
     _map_pairs(data, "/app", repo)
     return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, output_tail=output[-6000:], _full=output,
                   not_ended=left)
