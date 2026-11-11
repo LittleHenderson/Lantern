@@ -1,0 +1,16 @@
+var express = require('express')
+var session = require('express-session')
+var app = express()
+
+app.use(express.json())
+app.use(session({
+  secret: 'keyboard cat',
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: false }
+}))
+
+app.use('/', require('./routes/index')(express.Router()))
+
+app.listen(3000)
+module.exports = app

@@ -1,8 +1,13 @@
 """Explanation eval: run `lantern explain` with a real model on a sample app and record how many explanations pass the
 anchor validator, first try and after repair (test checklist 8.4; "Model changes" in the checklist).
 
-    python bench/explain_eval.py PROJECT [--model PROVIDER/MODEL] [--limit 40] [--out /tmp/explain_eval.json]
+    python bench/explain_eval.py PROJECT --live --model PROVIDER/MODEL --destination HOST --max-requests N
+                                 [--limit 40] [--out /tmp/explain_eval.json]
                                  [--record docs/explain-runs.md --note "what changed"]
+
+This is part of the live suite (bench/live.py): it starts only when --live, the model, the one host the sample's code
+may be sent to and a cap on the number of requests are all given. There is no default model and no falling back to
+whatever key the shell holds.
 
 PROJECT is a folder Lantern has analyzed (`lantern analyze PROJECT`; the shop and nextapp fixtures are the standing
 samples, the phone-app fixtures the newer ones). The selected functions (entry points + 3 levels, `--limit`) are
@@ -27,6 +32,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+import live  # noqa: E402  (bench/live.py)
 
 from lantern import explain as ex  # noqa: E402
 from lantern.graph import Graph  # noqa: E402
@@ -71,15 +78,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--record", help="append the row to this Markdown file (docs/explain-runs.md)")
     ap.add_argument("--note", default="")
     ap.add_argument("--min-first-try", type=float, default=0.0)
+    live.add_arguments(ap)
     a = ap.parse_args(argv)
-    from lantern.providers import make_provider, resolve_default
-    provider = make_provider(a.model or resolve_default())
+    try:
+        provider = live.gate(a, Path(a.project))
+    except live.NotApproved as e:
+        print(e, file=sys.stderr)
+        return 2
     res = run_eval(provider, Path(a.project), limit=a.limit)
+    res["requests"], res["max_requests"] = provider.requests, provider.max_requests
     for r in res["rows"]:
         mark = "PASS" if r["validated"] else "FAIL"
         extra = " (repaired)" if r["repaired"] else (" (undetermined)" if r["undetermined"] else "")
         print(f"{mark} {r['node']}{extra}" + ("" if r["validated"] else f"  <- {'; '.join(r['errors'])[:200]}"))
     print("\n" + row(res, a.note))
+    print(f"requests to the model: {res['requests']} of at most {res['max_requests']}")
     if res["stopped"]:
         print(f"STOPPED EARLY: {res['stopped']}")
     if a.out:
@@ -88,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         with open(a.record, "a", encoding="utf-8") as fh:
             fh.write(row(res, a.note) + "\n")
     rate = res["first_try_rate"] or 0.0
-    return 0 if rate >= a.min_first_try and not res["stopped"] else 1
+    refused = live.finish(provider)             # anything but the approved destination was refused, and fails the run
+    return 0 if rate >= a.min_first_try and not res["stopped"] and not refused else 1
 
 
 if __name__ == "__main__":

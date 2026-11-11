@@ -1,7 +1,8 @@
 # Deploy lantern-cloud or the gateway from GitHub instead of one laptop (test checklist, "one-person risk").
 # Run it from the Actions tab: pick the app and, if you like, a git ref. It needs one repository secret, FLY_API_TOKEN:
 # make it with `fly tokens create deploy -a lantern-cloud` (a token that can deploy only that app) and paste it under
-# Settings → Secrets and variables → Actions. Without the secret the job stops at the first step with a sentence.
+# Settings → Secrets and variables → Actions. The gateway lives in another Fly organisation, so it has its own secret,
+# FLY_GATEWAY_TOKEN (`fly tokens create deploy -a lantern-gateway`). Without the secret the job stops at the first step with a sentence.
 name: deploy
 
 on:
@@ -32,12 +33,13 @@ jobs:
     steps:
       - name: the Fly token is set
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_API_TOKEN: ${{ github.event.inputs.app == 'lantern-gateway' && secrets.FLY_GATEWAY_TOKEN || secrets.FLY_API_TOKEN }}
         run: |
           if [ -z "$FLY_API_TOKEN" ]; then
-            echo "::error::No FLY_API_TOKEN secret. Make one with 'fly tokens create deploy -a ${{ github.event.inputs.app }}' and add it under Settings → Secrets and variables → Actions."; exit 1; fi
+            echo "::error::No Fly token secret for ${{ github.event.inputs.app }} (FLY_API_TOKEN for lantern-cloud, FLY_GATEWAY_TOKEN for lantern-gateway). Make one with 'fly tokens create deploy -a ${{ github.event.inputs.app }}' and add it under Settings → Secrets and variables → Actions."; exit 1; fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
           ref: ${{ github.event.inputs.ref || github.ref }}
       - uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be  # v1.5
       - name: the volume is big enough
@@ -53,12 +55,15 @@ jobs:
           done
       - name: deploy
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_API_TOKEN: ${{ github.event.inputs.app == 'lantern-gateway' && secrets.FLY_GATEWAY_TOKEN || secrets.FLY_API_TOKEN }}
         run: |
           if [ "${{ github.event.inputs.app }}" = "lantern-cloud" ]; then
-            flyctl deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --remote-only -a lantern-cloud
+            flyctl deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --remote-only -a lantern-cloud \
+              --build-arg LANTERN_COMMIT="$(git rev-parse HEAD)"
           else
-            flyctl deploy gateway --config gateway/fly.toml --dockerfile gateway/Dockerfile --remote-only -a lantern-gateway
+            # The same command as the laptop (docs/deploy.md): run from the gateway folder, so fly.toml and Dockerfile
+            # are read from there. Given a folder argument, flyctl reads --config relative to that folder, not the repo.
+            cd gateway && flyctl deploy --remote-only -a lantern-gateway
           fi
       - name: the new version answers
         run: |

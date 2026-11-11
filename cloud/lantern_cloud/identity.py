@@ -5,7 +5,8 @@ the app and CLI use) and sends that token here as `Authorization: Bearer lt_...`
 secret or a password; it asks the gateway `GET /v1/whoami` which account the token belongs to, and keeps the answer
 in memory for a few minutes keyed by the token's SHA-256 (the token itself is never stored or logged).
 
-Signing in again rotates the token at the gateway; runs are keyed by the account id, so they follow the person.
+Each sign-in gets its own token at the gateway and earlier ones keep working; runs are keyed by the account id, so
+they follow the person.
 """
 
 from __future__ import annotations
@@ -63,6 +64,10 @@ class Identity:
         self.cache[key] = (time.monotonic() + (self.ttl if who else min(self.ttl, 30)), who)
         return who
 
+    def forget(self, token: str) -> None:
+        """Drop the remembered answer for a token the gateway has since refused (signed in somewhere else)."""
+        self.cache.pop(hashlib.sha256((token or "").encode()).hexdigest(), None)
+
     async def _get(self, path: str) -> httpx.Response:
         try:
             async with httpx.AsyncClient(transport=self.transport, timeout=10) as client:
@@ -102,6 +107,25 @@ class Identity:
         """The gateway page that sends the person straight to GitHub or Google; the token is parked under `cli`."""
         from urllib.parse import quote
         return f"{self.base}/auth/{quote(provider)}/start?cli={quote(cli)}"
+
+    async def sign_out(self, token: str, everywhere: bool = False) -> int:
+        """End this sign-in at the gateway (or every sign-in of the account) and forget cached answers."""
+        try:
+            async with httpx.AsyncClient(transport=self.transport, timeout=10) as client:
+                r = await client.post(self.base + "/auth/signout", json={"everywhere": everywhere},
+                                      headers={"authorization": f"Bearer {token}", "user-agent": "lantern-cloud"})
+        except httpx.HTTPError as e:
+            raise GatewayUnavailable(type(e).__name__) from None
+        # Every cached answer goes: the account's other tokens are not known here by hash.
+        self.cache.clear()
+        if r.status_code == 401:
+            return 0
+        if r.status_code != 200:
+            raise GatewayUnavailable(f"HTTP {r.status_code}")
+        try:
+            return int(r.json().get("signed_out") or 0)
+        except (ValueError, AttributeError, TypeError):
+            return 0
 
     async def claim(self, cli: str) -> str | None:
         """The token parked for `cli` once the person has signed in (once, within ten minutes), else None."""

@@ -13,6 +13,13 @@ WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./
 COPY lantern ./lantern
 COPY cloud ./cloud
+# The commit being deployed (the deploy workflow passes it), so each Evidence Report can name the exact Lantern to
+# install to check it. Only a full 40-character commit is written; anything else leaves it empty.
+ARG LANTERN_COMMIT=""
+RUN case "$LANTERN_COMMIT" in \
+      [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) \
+        [ ${#LANTERN_COMMIT} -eq 40 ] && printf 'COMMIT = "%s"\n' "$LANTERN_COMMIT" >> lantern/_build.py ;; \
+    esac; true
 RUN pip install --no-cache-dir ".[scan,ocr]" ./cloud && rm -rf /src
 WORKDIR /home/app
 USER app

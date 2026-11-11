@@ -5,8 +5,10 @@ Models never create or close findings. They only explain them later (see explain
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -14,7 +16,7 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from . import lanes
+from . import context, lanes
 from .graph import Graph
 from .python_frontend import SKIP_DIRS, inside_repo
 
@@ -40,54 +42,224 @@ def _fid(*parts) -> str:
 
 
 # ---------------------------------------------------------------------------- scanners
+#
+# Every scanner answers with `(findings, record)`, the record made by `scanresult.record` so a run that did not finish
+# can never read as a clean result (directive stage 2). The findings a tool did produce are kept even when the rest of
+# its run failed; the record's `state`, `why` and `errors` say what is missing.
 
-def run_bandit(repo: Path) -> tuple[list[dict], dict]:
-    import importlib.util
-    if importlib.util.find_spec("bandit") is None:
-        return [], {"tool": "bandit", "status": 'skipped: not installed (pip install "lantern[scan]")', "version": "-"}
-    excl = ",".join(str(repo / d) for d in SKIP_DIRS if (repo / d).exists())
-    cmd = [sys.executable, "-m", "bandit", "-r", str(repo), "-f", "json", "-q", "--exit-zero"]
-    if excl:
-        cmd += ["-x", excl]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
-        data = json.loads(proc.stdout or "{}")
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-        return [], {"tool": "bandit", "status": f"error: {exc}"}
-    out = []
-    for r in data.get("results", []):
-        rel = Path(r["filename"]).resolve().relative_to(repo).as_posix()
-        out.append({
-            "id": _fid("bandit", r["test_id"], rel, r["line_number"]),
-            "tool": "bandit", "rule": r["test_id"], "title": r["issue_text"],
-            "tool_severity": r["issue_severity"], "tool_confidence": r["issue_confidence"],
-            "file": rel, "line": r["line_number"],
-            "cwe": (r.get("issue_cwe") or {}).get("id"), "more_info": r.get("more_info"),
-            "snippet": (r.get("code") or "").strip()[:400], "category": "code",
-        })
-    version = _tool_version([sys.executable, "-m", "bandit", "--version"])
-    return out, {"tool": "bandit", "status": "ok", "version": version}
+BANDIT_TIMEOUT = 600
+GITLEAKS_TIMEOUT = 300
+SECRETS_VERSION = "2"      # the built-in pattern set (SECRET_PATTERNS); bump when a pattern changes
 
 
-def run_secrets(repo: Path) -> tuple[list[dict], dict]:
-    """gitleaks when installed; otherwise a small built-in pattern scan."""
-    if shutil.which("gitleaks"):
+def _rel(repo: Path, name: str) -> str:
+    """A path a scanner printed, relative to the repo (a tool prints absolute paths, `./x`, or repo-relative ones)."""
+    p = Path(str(name))
+    if p.is_absolute():
         try:
-            proc = subprocess.run(
-                ["gitleaks", "detect", "--no-git", "-s", str(repo), "-f", "json", "-r", "/dev/stdout",
-                 "--exit-code", "0"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
-            rows = json.loads(proc.stdout or "[]")
-            out = [{
-                "id": _fid("gitleaks", r["RuleID"], r["File"], r["StartLine"]),
-                "tool": "gitleaks", "rule": r["RuleID"], "title": f"Possible secret: {r['Description']}",
-                "tool_severity": "HIGH", "tool_confidence": "MEDIUM",
-                "file": Path(r["File"]).resolve().relative_to(repo).as_posix(), "line": r["StartLine"],
-                "snippet": "[redacted]", "category": "secret",
-            } for r in rows]
-            return out, {"tool": "gitleaks", "status": "ok"}
-        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, ValueError):
-            pass  # fall through to the built-in patterns below
+            return p.resolve().relative_to(repo.resolve()).as_posix()
+        except (ValueError, OSError):
+            return p.as_posix()
+    s = p.as_posix()
+    return s[2:] if s.startswith("./") else s
+
+
+def _read_text(p: Path) -> str:
+    return p.read_text(encoding="utf-8", errors="replace")
+
+
+BANDIT_READS = (".py", ".pyw")
+EXCLUSIONS_FIT = 24_000   # characters: Windows starts no program whose whole command line is longer than 32,767
+
+
+def _not_the_projects(repo: Path, skipped: list[str]) -> list[tuple[str, str]]:
+    """The Python files under the project that are not files of the project (`inside_repo`: a link that leads out of
+    it, a pipe, a link to nothing), each as (its name in the project, its path as Bandit will write it). Bandit finds
+    its files itself and opens whatever answers to a `.py` name; Lantern's own reader passed these by already."""
     out = []
+    top = os.fspath(repo)
+    for dirpath, dirnames, filenames in os.walk(top):
+        if dirpath == top:
+            dirnames[:] = [d for d in dirnames if d not in skipped]
+        dirnames.sort()
+        for fn in sorted(filenames):
+            path = os.path.join(dirpath, fn)
+            if fn.lower().endswith(BANDIT_READS) and not inside_repo(Path(path), repo):
+                out.append((_under(repo, path), path))
+    return out
+
+
+def _under(repo: Path, name) -> str:
+    """Where a path lies under the project, by the text of the two paths (nothing is followed): `pkg/tool.py`."""
+    try:
+        return Path(os.path.relpath(os.path.abspath(str(name)), os.path.abspath(repo))).as_posix()
+    except ValueError:   # Windows: on another drive
+        return ""
+
+
+def _only(paths) -> list[str]:
+    """One Bandit exclusion for each path, as many as fit a command line, the ones that are no file at all first (a
+    pipe is what Bandit would wait on). Bandit leaves a file out when an exclusion fits its path as a pattern or is
+    found anywhere in it, so the plain path of `a.py` would take `a.pyw` and `a.py.old.py` with it: with its last
+    letter in brackets it is a pattern for that one file and is found in no other path. A path with a comma in it
+    cannot be written (`-x a,b` is two exclusions to Bandit) and is passed over here; `run_bandit` takes nothing
+    from a file that is not the project's whether Bandit opened it or not."""
+    out, room = [], EXCLUSIONS_FIT
+    for path in sorted(paths, key=os.path.isfile):
+        if "," in path:
+            continue
+        esc = glob.escape(path)
+        one = esc[:-1] + "[" + esc[-1] + "]"
+        room -= len(one) + 1
+        if room < 0:
+            break
+        out.append(one)
+    return out
+
+
+def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
+    """Bandit over the repo's Python. Exit 0 = ran, nothing found; exit 1 = ran, found something (no --exit-zero, so a
+    crash cannot hide behind a zero); anything else is a failure. Files Bandit could not read make the run `partial`
+    and are listed. `applicable` is False when the project has no Python, so a missing Bandit is not a gap."""
+    import importlib.util
+    from . import scanresult
+    excl = sorted(d for d in SKIP_DIRS if (repo / d).exists())
+    left = _not_the_projects(repo, excl)
+    base: dict = {"role": "Python code patterns", "exclusions": excl + sorted(name for name, _ in left)}
+    if importlib.util.find_spec("bandit") is None:
+        return [], scanresult.record("bandit", "unavailable", 'pip install "lantern[scan]"', applicable=applicable,
+                                     version=None, **base)
+    cmd = [sys.executable, "-m", "bandit", "-r", str(repo), "-f", "json", "-q"]
+    if excl or left:
+        cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
+    run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
+    base |= {"version": _tool_version([sys.executable, "-m", "bandit", "--version"]), "exit_code": run.returncode,
+             "duration_ms": run.duration_ms}
+    if run.timed_out:
+        return [], scanresult.record("bandit", "timeout", f"after {BANDIT_TIMEOUT} s", **base)
+    if run.error:
+        return [], scanresult.record("bandit", "failed", run.error, **base)
+    err = scanresult.tail(run.stderr)
+    if run.returncode not in (0, 1):
+        return [], scanresult.record("bandit", "failed", f"exit code {run.returncode}: {err or 'no message'}", **base)
+    data, why = scanresult.parse_json(run.stdout, dict)
+    if data is None:
+        return [], scanresult.record("bandit", "failed", why + (f"; stderr: {err}" if err else ""), **base)
+    if not isinstance(data.get("results"), list):
+        return [], scanresult.record("bandit", "failed", "no results list in the output", **base)
+    out = []
+    gone = {name for name, _ in left}
+
+    def ours(name) -> bool:   # whatever the exclusions above did: nothing is taken from a file that is not the project's
+        return _under(repo, name) not in gone
+
+    for r in data["results"]:
+        if not isinstance(r, dict) or not r.get("test_id") or not r.get("filename") or not ours(r["filename"]):
+            continue
+        rel = _rel(repo, r["filename"])
+        out.append({
+            "id": _fid("bandit", r["test_id"], rel, r.get("line_number")),
+            "tool": "bandit", "rule": r["test_id"], "title": r.get("issue_text") or r["test_id"],
+            "tool_severity": r.get("issue_severity") or "MEDIUM", "tool_confidence": r.get("issue_confidence") or "MEDIUM",
+            "file": rel, "line": r.get("line_number"),
+            "cwe": (r.get("issue_cwe") or {}).get("id") if isinstance(r.get("issue_cwe"), dict) else None,
+            "more_info": r.get("more_info"),
+            "snippet": str(r.get("code") or "").strip()[:400], "category": "code",
+        })
+    metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
+    files = sum(1 for k in metrics if k != "_totals" and ours(k))
+    errors = [f"{_rel(repo, e.get('filename') or '?')}: {str(e.get('reason') or 'could not be read')[:160]}"
+              for e in (data.get("errors") or []) if isinstance(e, dict) and (not e.get("filename") or ours(e["filename"]))]
+    base |= {"scope": {"files": files}, "findings": len(out)}
+    if errors:
+        return out, scanresult.record("bandit", "partial", f"{len(errors)} file{'s' if len(errors) != 1 else ''} could "
+                                      "not be read", errors=errors, **base)
+    return out, scanresult.record("bandit", "ok", **base)
+
+
+def run_secrets(repo: Path) -> tuple[list[dict], list[dict]]:
+    """Secrets in files: gitleaks when installed, Lantern's built-in patterns otherwise, and also when gitleaks did
+    not finish (then both records are kept: gitleaks' failure, and the built-in run marked `fallback_for`), so the
+    weaker scan never passes as the stronger one. Returns the findings and one record per tool."""
+    from . import scanresult
+    records = []
+    fallback = None
+    if shutil.which("gitleaks"):
+        found, rec = _run_gitleaks(repo)
+        records.append(rec)
+        if rec["state"] == "ok":
+            return found, records
+        fallback = "gitleaks"
+    else:
+        records.append(scanresult.record(
+            "gitleaks", "unavailable", "built-in patterns ran instead; install gitleaks (github.com/gitleaks/gitleaks) "
+            "for its full rule set", applicable=False, role="secrets in files", version=None))
+    found, rec = _builtin_secrets(repo)
+    if fallback:
+        rec["fallback_for"] = fallback
+    records.append(rec)
+    return found, records
+
+
+def _run_gitleaks(repo: Path) -> tuple[list[dict], dict]:
+    """`gitleaks detect --no-git` writing its JSON report to a temp file (never stdout, where a warning could break
+    the JSON). `--exit-code 0` makes leaks exit 0, so a non-zero code means gitleaks itself failed; a report file that
+    is present and parses is the proof it finished."""
+    import os
+    import tempfile
+    from . import scanresult
+    fd, path = tempfile.mkstemp(prefix="lantern-gitleaks-", suffix=".json")
+    os.close(fd)
+    report = Path(path)
+    base: dict = {"role": "secrets in files"}
+    try:
+        cmd = ["gitleaks", "detect", "--no-git", "-s", str(repo), "-f", "json", "-r", str(report), "--exit-code", "0"]
+        run = scanresult.run_tool(cmd, timeout=GITLEAKS_TIMEOUT)
+        base |= {"version": _tool_version(["gitleaks", "version"]), "exit_code": run.returncode,
+                 "duration_ms": run.duration_ms}
+        if run.timed_out:
+            return [], scanresult.record("gitleaks", "timeout", f"after {GITLEAKS_TIMEOUT} s", **base)
+        if run.error:
+            return [], scanresult.record("gitleaks", "failed", run.error, **base)
+        err = scanresult.tail(run.stderr)
+        if run.returncode not in (0, 1):
+            return [], scanresult.record("gitleaks", "failed", f"exit code {run.returncode}: {err or 'no message'}", **base)
+        try:
+            text = report.read_text(encoding="utf-8", errors="replace") if report.exists() else ""
+        except OSError as exc:
+            return [], scanresult.record("gitleaks", "failed", f"report file could not be read ({exc.strerror or exc})", **base)
+        if not text.strip():
+            if run.returncode == 0:
+                return [], scanresult.record("gitleaks", "ok", findings=0, **base)
+            return [], scanresult.record("gitleaks", "failed", f"exit code 1 and no report written: {err or 'no message'}", **base)
+        rows, why = scanresult.parse_json(text, list)
+        if rows is None:
+            return [], scanresult.record("gitleaks", "failed", f"report file: {why}", **base)
+        out = []
+        for r in rows:
+            if not isinstance(r, dict) or not r.get("RuleID") or not r.get("File"):
+                continue
+            rel = _rel(repo, r["File"])
+            out.append({
+                "id": _fid("gitleaks", r["RuleID"], rel, r.get("StartLine")),
+                "tool": "gitleaks", "rule": str(r["RuleID"]), "title": f"Possible secret: {r.get('Description') or r['RuleID']}",
+                "tool_severity": "HIGH", "tool_confidence": "MEDIUM",
+                "file": rel, "line": r.get("StartLine"),
+                "snippet": "[redacted]", "category": "secret",
+            })
+        return out, scanresult.record("gitleaks", "ok", findings=len(out), **base)
+    finally:
+        try:
+            report.unlink()
+        except OSError:
+            pass
+
+
+def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
+    """Lantern's own secret patterns over the files it reads. A file it cannot read is counted and named, and makes
+    the run `partial`."""
+    from . import scanresult
+    out, errors, files = [], [], 0
     for p in repo.rglob("*"):
         if not p.is_file() or any(part in SKIP_DIRS for part in p.relative_to(repo).parts[:-1]) \
                 or not inside_repo(p, repo):
@@ -96,21 +268,28 @@ def run_secrets(repo: Path) -> tuple[list[dict], dict]:
             continue
         if p.name in SECRET_SKIP_FILES or p.name.endswith((".min.js", ".map")):
             continue
+        rel = p.relative_to(repo).as_posix()
         try:
-            text = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+            text = _read_text(p)
+        except OSError as exc:
+            errors.append(f"{rel}: {exc.strerror or exc}")
             continue
+        files += 1
         for i, line in enumerate(text.splitlines(), 1):
             for rule, rx in SECRET_PATTERNS:
                 if rx.search(line):
-                    rel = p.relative_to(repo).as_posix()
                     out.append({
                         "id": _fid("secrets", rule, rel, i), "tool": "lantern-secrets", "rule": rule,
                         "title": f"Possible secret ({rule})", "tool_severity": "HIGH",
                         "tool_confidence": "MEDIUM", "file": rel, "line": i,
                         "snippet": "[redacted]", "category": "secret",
                     })
-    return out, {"tool": "lantern-secrets", "status": "ok (built-in patterns; install gitleaks for full coverage)"}
+    base = {"role": "secrets in files (built-in patterns)", "version": SECRETS_VERSION, "scope": {"files": files},
+            "findings": len(out)}
+    if errors:
+        return out, scanresult.record("lantern-secrets", "partial", f"{len(errors)} file{'s' if len(errors) != 1 else ''} "
+                                      "could not be read", errors=errors, **base)
+    return out, scanresult.record("lantern-secrets", "ok", "built-in patterns; install gitleaks for full coverage", **base)
 
 
 def _tool_version(cmd: list[str]) -> str | None:
@@ -428,6 +607,33 @@ def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None =
 
 
 def rank(f: dict) -> str:
+    """The rank from the tool's severity, reachability and input, then capped by what the code around the line shows
+    (context.py: a weak hash used as an identifier, SQL that splices only fixed text). A cap is written on the finding
+    as `rank_note`, with the rank it would have had as `rank_before_context`, so nothing changes silently."""
+    r = _rank(f)
+    cap, why = None, None
+    ctx = f.get("context") or {}
+    h, sql = ctx.get("hash"), ctx.get("sql")
+    if h and h["purpose"] == "non-security":
+        cap, why = "low", (f"The hash looks like an identifier, seed or checksum ({h['why']}), not protection for a "
+                           "password, token or signature. MD5/SHA-1 are fine for that. Lantern read names, not meaning.")
+    elif h and h["purpose"] == "unknown":
+        cap, why = "medium", ("Lantern could not tell what this hash is for (" + h["why"] + "). It is not ranked "
+                              "critical or high without evidence that it protects a password, token or signature.")
+    elif sql and sql["fixed_only"]:
+        cap, why = "low", ("Only fixed text is put into the SQL string (" + "; ".join(
+            f"{s['expr']}: {s['why']}" for s in sql["spliced"]) + ")" + (
+            ", and the values are passed to the database driver separately." if sql["driver_params"] else "."))
+    if cap and RANK_ORDER[r] < RANK_ORDER[cap]:
+        f["rank_before_context"] = r
+        f["rank_note"] = why
+        return cap
+    f.pop("rank_before_context", None)
+    f.pop("rank_note", None)
+    return r
+
+
+def _rank(f: dict) -> str:
     if f.get("fixed_rank"):
         return f["fixed_rank"]
     sev = f["tool_severity"]
@@ -444,6 +650,39 @@ def rank(f: dict) -> str:
     if (sev == "MEDIUM" and reach) or sev == "HIGH":
         return "medium"
     return "low"
+
+
+def rank_reason(f: dict) -> str:
+    """Why `_rank` gave the rank it gave, in words (kept next to `_rank` so the two change together)."""
+    if f.get("in_tests") and f.get("category") == "code":
+        return "Test code: your users do not run it, so it is ranked low and counted apart."
+    if f.get("fixed_rank"):
+        return f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it."
+    sev = f.get("tool_severity")
+    reach = f.get("reachable")
+    untrusted = reach and reach["kind"] in UNTRUSTED_ENTRY_KINDS
+    if f.get("category") == "secret":
+        return "A key written in the code is always critical: anyone who can read the code can use it."
+    if f.get("category") == "dependency":
+        return "From the advisory's own severity (high when the audit gives none)."
+    base = f"{f.get('tool') or 'The tool'} rates the pattern {str(sev).lower()}"
+    if sev == "HIGH" and untrusted and f.get("input") is not False:
+        r = base + f", and {reach['kind']} code reaches it" + (", using request data." if f.get("input") else
+                                                               "; Lantern could not rule out request data.")
+    elif sev == "HIGH" and reach:
+        r = base + ", and something in the app reaches it" + (", but no request data reaches the line."
+                                                              if f.get("input") is False else ".")
+    elif sev == "MEDIUM" and untrusted:
+        r = base + f", and {reach['kind']} code reaches it."
+    elif sev == "MEDIUM" and reach:
+        r = base + f", reached from {reach['kind']} code (not a server route, command or script)."
+    elif sev == "HIGH":
+        r = base + ", but nothing in the map reaches it today."
+    else:
+        r = base + (", and nothing in the map reaches it." if not reach else ".")
+    if f.get("rank_note"):
+        r += " Then lowered by context: " + f["rank_note"]
+    return r
 
 
 RANK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -507,13 +746,19 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     (None: follow LANTERN_OFFLINE)."""
     repo = Path(g.repo_root)
     findings, tools = [], []
+    from . import scanresult
     from .depaudit import run_composer_audit, run_gem_audit, run_maven_audit, run_npm_audit, run_pip_audit
-    for fn in (run_bandit, lambda r: run_pip_audit(r, offline), lambda r: run_npm_audit(r, offline),
-               lambda r: run_maven_audit(r, offline), lambda r: run_composer_audit(r, offline),
-               lambda r: run_gem_audit(r, offline), run_secrets):
-        f, info = fn(repo)
+    # Bandit's absence is a gap only when there is Python to read
+    f, info = run_bandit(repo, applicable="python" in (g.meta.get("languages") or {}))
+    findings += f
+    tools.append(info)
+    for fn in (run_pip_audit, run_npm_audit, run_maven_audit, run_composer_audit, run_gem_audit):
+        f, info = fn(repo, offline)
         findings += f
         tools.append(info)
+    f, records = run_secrets(repo)
+    findings += f
+    tools += records
     from .websec import scan_web
     wf, wt = scan_web(g)
     findings += wf
@@ -542,6 +787,15 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     from .js_frontend import TEST_RE as JS_TEST_RE
     from .python_frontend import TEST_FILE_RE
     lines_cache: dict[str, list[str]] = {}
+    py_cache: dict = {}
+
+    def lines_for(file: str) -> list[str]:
+        if file not in lines_cache:
+            try:
+                lines_cache[file] = (repo / file).read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                lines_cache[file] = []
+        return lines_cache[file]
     for f in findings:
         f["in_tests"] = bool(f["file"] and (TEST_FILE_RE.search(f["file"]) or JS_TEST_RE.search(f["file"])))
         pin = f.pop("pin", None)          # a manifest finding names the class it is about (android.py)
@@ -560,6 +814,25 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
                                           f["hot_lane"], data_hops)
         f["input"] = _input_on_line(g, f, lines_cache) if f["category"] == "code" and r and \
             r["kind"] in UNTRUSTED_ENTRY_KINDS else None
+        if f["category"] == "code":
+            # what the flagged code is for (context.py); it can lower the rank, never remove the finding
+            ctx = {}
+            hp = context.hash_purpose(g, f, lines_for, py_cache)
+            if hp:
+                ctx["hash"] = hp
+            sq = context.sql_splice(g, f, py_cache)
+            if sq:
+                ctx["sql"] = sq
+                if sq["fixed_only"] and f["input"]:
+                    # the input check reads the whole statement; for SQL only what is spliced into the text counts
+                    f["input"] = False
+            if ctx:
+                f["context"] = ctx
+        if f.get("rule") == "LW-PUBLIC-SECRET" and not f["in_tests"]:
+            # a value visible in the browser is one fact; whether the server trusts it is another (context.py)
+            tr = context.public_secret_trust(g, f, lines_for)
+            if tr:
+                f["trust"] = tr
         f["rank"] = "low" if f["in_tests"] and f["category"] == "code" else rank(f)
         acc = accepted.get(f["id"])
         f["status"] = "accepted" if acc else "open"
@@ -568,11 +841,17 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     # Scenarios (scenarios.py): a short story of one person meeting each finding, built from the facts above only.
     from .scenarios import attach as attach_scenarios
     attach_scenarios(findings, g)
+    # The case for each finding outside tests (case.py): claim, evidence, conditions, confidence, unknowns, status.
+    from .case import attach as attach_cases
+    attach_cases(findings, g)
     findings.sort(key=lambda f: (f["in_tests"], RANK_ORDER[f["rank"]], f["file"] or "", f["line"] or 0))
     live =[f for f in findings if not f["in_tests"] and f["status"] == "open"]
     counts = {k: sum(1 for f in live if f["rank"] == k) for k in RANK_ORDER}
     counts["in_tests"] = sum(1 for f in findings if f["in_tests"])
     counts["accepted"] = sum(1 for f in findings if f["status"] == "accepted")
     return {"findings": findings, "tools": tools, "counts": counts, "id_version": ID_VERSION,
+            # the scanners that apply to this project and did not finish or did not cover everything (scanresult.py):
+            # readiness, the Evidence Report, the badge, the command line and the app all read this list
+            "incomplete": scanresult.incomplete(tools),
             "reachable_nodes": len(reach), "total_callables": sum(1 for n in g.nodes.values() if n.kind == "callable"),
             "ai": ai, "mobile": g.meta.get("mobile")}

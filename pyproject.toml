@@ -35,7 +35,9 @@ Source = "https://github.com/LittleHenderson/Lantern"
 [project.optional-dependencies]
 scan = ["bandit>=1.7", "pip-audit>=2.7"]
 ocr = ["Pillow>=10"]   # screenshot reading; the Tesseract program itself comes from the OS (see docs/try-lantern.md)
-dev = ["pytest>=8", "Pillow>=10", "fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.29"]
+# dev: what the tests need, the libraries of the two services (gateway/, cloud/) included. CI installs it and sets
+# LANTERN_TESTS_COMPLETE=required, so a test that is skipped there for a missing library fails the run.
+dev = ["pytest>=8", "Pillow>=10", "fastapi>=0.110", "httpx>=0.27", "uvicorn>=0.29", "PyJWT[crypto]>=2.8"]
 
 [project.scripts]
 lantern = "lantern.cli:main"

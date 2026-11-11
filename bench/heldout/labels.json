@@ -1,0 +1,57 @@
+{
+  "_about": "Medium-or-above findings Lantern reports on the clean public apps, read and labelled by a person. Key: rule@file:line as the runner prints it. label: 'false alarm' (the code is fine and the finding is wrong), 'real' (a true problem in a clean app), 'intended' (true as a fact but the project means it, e.g. a template that allows any origin). Unlabelled findings count as unlabelled, never as false alarms.",
+  "fastapi-template": {
+    "LW-AUTH-MISSING@backend/app/api/routes/private.py:23": {
+      "label": "false alarm",
+      "why": "backend/app/api/main.py mounts the private router only when FASTAPI_ENV == 'development'; the route never exists in a deployed app"
+    }
+  },
+  "express-boilerplate": {
+    "LW-CORS-ANY@src/app.js:41": {
+      "label": "intended",
+      "why": "cors() with no options allows any origin; the boilerplate leaves the origin list to the project that copies it"
+    },
+    "LW-CORS-ANY@src/app.js:42": {
+      "label": "intended",
+      "why": "same cors() call for preflight requests"
+    },
+    "LW-JWT@src/docs/components.yml:31": {
+      "label": "false alarm",
+      "why": "an example token in the OpenAPI documentation, not a credential"
+    },
+    "LW-JWT@src/routes/v1/auth.route.js:141": {
+      "label": "false alarm",
+      "why": "an example token inside a swagger doc comment"
+    },
+    "LW-JWT@src/routes/v1/auth.route.js:167": {
+      "label": "false alarm",
+      "why": "an example token inside a swagger doc comment"
+    }
+  },
+  "taxonomy": {
+    "LA-WALLET-DRAIN@app/api/webhooks/stripe/route.ts:8": {
+      "label": "false alarm",
+      "why": "a Stripe webhook cannot have a login; stripe.webhooks.constructEvent checks Stripe's signature before any Stripe call"
+    },
+    "LA-WALLET-DRAIN@app/api/users/stripe/route.ts:12": {
+      "label": "false alarm",
+      "why": "getServerSession(authOptions) is checked first and returns 403 without a signed-in user"
+    }
+  },
+  "review-safe": {
+    "B608@app/main.py:38": {
+      "label": "false alarm",
+      "why": "an inner function sets order to the fixed string 'name' through nonlocal; Lantern stops following at the nonlocal and keeps the rank (the safe direction after #151)"
+    },
+    "B608@app/main.py:51": {
+      "label": "false alarm",
+      "why": "an inner function sets ORDER to the fixed string 'name' through global; same reason"
+    }
+  },
+  "flows-safe": {
+    "B608@app/service.py:5": {
+      "label": "false alarm",
+      "why": "order_clause is one of two fixed ORDER BY strings chosen in helpers.validate_sort; the value crosses a function boundary, which the input check does not follow"
+    }
+  }
+}
