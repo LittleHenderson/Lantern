@@ -171,6 +171,7 @@ async function until(p, fn, timeout) {
       await p.click('#addrun'); await p.click('.sheet [data-add="done1"]'); await p.waitForSelector('.apps [data-open="done1"]');
       await p.screenshot({ path: `${out}-${tag}-team.png`, fullPage: true });
       const ctxT = await b.newContext({ viewport, colorScheme: scheme });
+      await outside.watch(ctxT, errs, outside.FONTS);
       await ctxT.addCookies([{ name: 'lt', value: token2, url: base }]);
       const t = await ctxT.newPage(); watch(t);
       await t.goto(site + '#/join/' + inv.split('#/join/')[1]); await t.waitForSelector('#dojoin');
