@@ -66,6 +66,24 @@ not be started (`"factory": true`); a word for a token variant that this version
 that was not run (now the plan is refused before the run); an outcome did not name the file that was written
 outside the app's folders (`saw.outside`).
 
+## What reading the code alone says about the same versions
+
+Measured 2026-11-11: each version written to a folder (`apps.build(folder, planted)`) and read with
+`lantern analyze FOLDER --offline`; its findings outside tests compared with the safe app's by rule, rank and count.
+The reading engine is main's (c5cb7cd); this step does not change it.
+
+| | Reading the code (`lantern analyze`) | Running it (`lantern behave`) |
+|---|---|---|
+| Planted versions told apart from the safe app | 6 of 31 | 31 of 31 |
+| The safe app | 2 findings at high, both false alarms | 80 cases held, 0 broken |
+
+The 6: `other-team-list` (`LT-AUTHZ-OWNER`), `unsigned-token` (`LW-AUTH-MISSING`, on another route), `open-redirect`
+and `redirect-half-checked` (`LT-REDIRECT`), `upload-name-escapes` and `upload-served-as-page` (one more `LT-PATH`
+each). For the other 25 the findings are the safe app's, one for one. The safe app's two findings are `LT-PATH` on
+the zip import, where every name is checked against the folder before anything is written
+(`if any(not t.startswith(inside) for t in targets): raise`): a check written over the whole list is not read as a
+guard yet. The runner's outcomes change no finding, so those two stay until the reading engine is corrected.
+
 ## What this does not measure
 
 One app, one framework (FastAPI), one database (SQLite), written by the same hand as the runner. The planted

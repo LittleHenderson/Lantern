@@ -411,7 +411,10 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
   (DNS rebinding, a redirect to an inside address). A file over `MAX_FILE` (2,000,000 characters) is not read and the
   whole step stops at its budget (300 s), both written in the record; a "fixed text only" rank is then never given
   (`whole`). One problem is one finding by (kind, file, line): two different values that reach the same line are one
-  finding with the other starting points listed.
+  finding with the other starting points listed. A check written over a whole list
+  (`if any(not t.startswith(base) for t in targets): raise`) is not read as a guard for the items used afterwards: the
+  safe version of the behaviour benchmark's zip import gets two `LT-PATH` findings at high (measured 2026-11-11,
+  `bench/behaviour/README.md`).
 * Who may reach what (`LT-AUTHZ-OWNER`, `LT-AUTHZ-ROLE`, `LT-AUTHZ-MASS-ASSIGN`; heuristics, always `tool_confidence:
   LOW`): the evidence is per route, not per use of a record: one condition anywhere on the route that compares
   something of the record with who is signed in clears every record the route reaches, and so does a role check. That
