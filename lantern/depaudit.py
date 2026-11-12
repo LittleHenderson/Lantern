@@ -60,7 +60,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-from . import manifest, programs, scanresult
+from . import listing, manifest, programs, scanresult
 from .python_frontend import inside_repo, project_text, skipped_dir
 
 NPM_REGISTRY = "https://registry.npmjs.org/"
@@ -255,9 +255,10 @@ def guarded(tool: str, fn, repo: Path, no_network: bool | None) -> tuple[list[di
 def run_all(repo: Path) -> dict:
     """All audits with the network on, as {tool: {findings, info}} (what LANTERN_AUDITS_FROM reads)."""
     out = {}
-    for tool, fn in audits():
-        f, info = guarded(tool, fn, repo, False)
-        out[tool] = {"findings": f, "info": info}
+    with listing.one_run(repo):     # the audits ask twelve times which files there are: one walk
+        for tool, fn in audits():
+            f, info = guarded(tool, fn, repo, False)
+            out[tool] = {"findings": f, "info": info}
     return out
 
 
@@ -270,15 +271,25 @@ def _project_files(repo: Path, names: tuple[str, ...] | None = None, pattern: re
     is listed whatever answers to it (a link that leads out of the project, a pipe), so that the audit's record can
     say it was not read: `_read` is the one way such a file is opened, and it opens a file of the project only."""
     out = []
+    for dirpath, fn in listing.once(repo, "dependency-files", lambda: _names(repo)):
+        if (names and fn in names) or (pattern and pattern.search(fn)):
+            p = Path(dirpath) / fn
+            rel = p.relative_to(repo).as_posix()
+            if not TEST_DIR_RE.search(rel):
+                out.append(p)
+    return sorted(out)
+
+
+def _names(repo: Path) -> list[tuple[str, str]]:
+    """Every name in the project's folders, with the folder it is in: not under a folder Lantern leaves out, not
+    under `node_modules`, and a folder that is a link is not walked into. One walk for all the audits of a run
+    (`listing.once`): until 2026-11-12 each of the twelve questions the audits ask walked the whole project, beside
+    the reading of the code."""
+    out = []
     for dirpath, dirnames, filenames in os.walk(repo):
         dirnames[:] = [d for d in dirnames if not skipped_dir(dirpath, d) and d != "node_modules"]
-        for fn in filenames:
-            if (names and fn in names) or (pattern and pattern.search(fn)):
-                p = Path(dirpath) / fn
-                rel = p.relative_to(repo).as_posix()
-                if not TEST_DIR_RE.search(rel):
-                    out.append(p)
-    return sorted(out)
+        out.extend((dirpath, fn) for fn in filenames)
+    return out
 
 
 def _norm(name: str) -> str:

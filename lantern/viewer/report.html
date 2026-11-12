@@ -661,7 +661,66 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
 <div id="ask"></div>
 <script type="application/json" id="lantern-data">/*__LANTERN_DATA__*/null</script>
 <script>
+// The map is written into the report column by column (lantern/columns.py: a third of the room, and a large report
+// opens in the time its file takes to come in). This gives back the rows exactly as they were: the same fields in
+// the same order, the same values. A packed map of any other shape was not written by Lantern and stops the page.
+function unpackGraph(g) {
+  if (!g || typeof g !== 'object' || Array.isArray(g) || !('packed' in g)) return g;
+  const no = () => { throw new Error('this report holds a map that was not written by Lantern'); };
+  if (g.packed !== 1) no();
+  if ('as_it_was' in g) return Object.keys(g).length === 2 ? g.as_it_was : no();
+  const plain = v => v === null || typeof v !== 'object';
+  const whole = (i, below) => Number.isInteger(i) && i >= 0 && i < below;
+  const rows = (p, listed, own) => {
+    if (Array.isArray(p)) return p;
+    if (!p || typeof p !== 'object') no();
+    const keys = p.keys, n = p.n, cols = p.cols;
+    if (!Array.isArray(keys) || !Array.isArray(cols) || !Number.isInteger(n) || n < 0 || !keys.length ||
+        keys.length !== cols.length || keys.some(k => typeof k !== 'string' || k === '__proto__') ||
+        new Set(keys).size !== keys.length) no();
+    let lists = 0;
+    for (const c of cols) {
+      if (!Array.isArray(c)) no();
+      const list = c[0] === 'c' && c.length === 2 ? null
+        : (c[0] === 'v' || c[0] === 'r') && c.length === 2 ? c[1] : c[0] === 't' && c.length === 3 ? c[2] : no();
+      if (list !== null) { if (!Array.isArray(list) || list.length !== n) no(); lists++; }
+    }
+    if (!lists) no();
+    const value = (c, ids) => {
+      if (c[0] === 'c') return plain(c[1]) ? new Array(n).fill(c[1]) : no();
+      if (c[0] === 'v') return c[1];
+      if (c[0] === 't') {
+        const t = c[1];
+        if (!Array.isArray(t) || !t.every(plain)) no();
+        return c[2].map(i => whole(i, t.length) ? t[i] : no());
+      }
+      if (!ids) no();
+      return c[1].map(x => whole(x, ids.length) && ids[x] !== null ? ids[x]
+        : Array.isArray(x) && x.length === 1 ? x[0] : no());
+    };
+    const read = cols.map(c => c[0] === 'r' ? null : value(c, null));
+    if (own) {
+      const at = keys.indexOf('id');
+      listed = at >= 0 && read[at] ? read[at].map(v => typeof v === 'string' ? v : null) : null;
+    }
+    cols.forEach((c, k) => { if (!read[k]) read[k] = value(c, listed); });
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const row = {};
+      for (let k = 0; k < keys.length; k++) row[keys[k]] = read[k][i];
+      out[i] = row;
+    }
+    return out;
+  };
+  const out = {};
+  for (const k of Object.keys(g)) if (k !== 'packed') out[k] = g[k];
+  if ('nodes' in out) out.nodes = rows(out.nodes, null, true);
+  const ids = Array.isArray(out.nodes) ? out.nodes.map(r => r && typeof r === 'object' && !Array.isArray(r) && typeof r.id === 'string' ? r.id : null) : [];
+  if ('edges' in out) out.edges = rows(out.edges, ids, false);
+  return out;
+}
 const DATA = JSON.parse(document.getElementById('lantern-data').textContent);
+if (DATA && DATA.graph) DATA.graph = unpackGraph(DATA.graph);
 const G = DATA.graph, SEC = DATA.security || {}, EXP = (DATA.explanations || {}).explanations || {};
 SEC.findings = Array.isArray(SEC.findings) ? SEC.findings : []; SEC.counts = SEC.counts || {};
 const SRC = DATA.sources || {};

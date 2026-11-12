@@ -430,12 +430,14 @@ def verify(repo: Path, want: str, old: dict | None, trace_cmd: list[str] | None 
                 "Lantern won't run a command taken from a report; check it and pass it yourself.",
                 "trace_command": want_trace, "report": want}
     offline = bool(run.get("offline")) or offline
-    g = build_graph(repo)
-    run_meta: dict = {"offline": offline}
-    if trace_cmd:
-        tm = merge_trace(g, run_trace(repo, trace_cmd))
-        run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}
-    sec = scan(g, offline) if do_scan else None
+    from . import kept
+    with kept.without():        # a verification does the work again: nothing kept from an earlier run is used
+        g = build_graph(repo)
+        run_meta: dict = {"offline": offline}
+        if trace_cmd:
+            tm = merge_trace(g, run_trace(repo, trace_cmd))
+            run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}
+        sec = scan(g, offline) if do_scan else None
     gi = git_info(repo)
     record, unread = results.earlier(beside, "behaviour.json") if beside is not None else (None, None)
     rd = assess(g, sec, run_meta, git=gi, behaviour=record, behaviour_unread=unread, out=beside)

@@ -106,20 +106,36 @@ def _senders(g, findings: list[dict], res, paid_calls) -> int:
     return len(drop)
 
 
-def run(g, findings: list[dict], lines_for=None, paid_calls=None) -> tuple[list[dict], dict, flow.Result | None]:
-    """(findings of its own, the tool's record, the engine's result). Flows that belong to a finding already in
-    `findings` are written on that finding. `paid_calls`: the calls that cost money (`aiapp.find_calls`), for the
-    routes whose sender is checked."""
+def read(g) -> tuple:
+    """The engine's reading of the project, which needs the map and nothing any other scanner found: `(result,
+    None, the seconds it took)`, `(None, the record of its failure, the seconds)`, or `()` where there is no code to
+    follow data through. `run` takes it as `ahead`, so the scan can have it worked out while a scanner program is
+    still going."""
     langs = g.meta.get("languages") or {}
     if not any(k in langs for k in LANGS):
-        return [], scanresult.record("lantern-flow", "skipped", "no Python or JavaScript code to follow data through",
-                                     applicable=False, version=VERSION), None
+        return ()
     t0 = time.perf_counter()
     try:
         res = flow.analyze(g)
     except Exception as ex:   # noqa: BLE001  the scan goes on without the flows, and its record says so
-        return [], scanresult.record("lantern-flow", "failed", f"{type(ex).__name__}: {ex}"[:300], version=VERSION,
-                                     duration_ms=int((time.perf_counter() - t0) * 1000)), None
+        return None, scanresult.record("lantern-flow", "failed", f"{type(ex).__name__}: {ex}"[:300], version=VERSION,
+                                       duration_ms=int((time.perf_counter() - t0) * 1000)), time.perf_counter() - t0
+    return res, None, time.perf_counter() - t0
+
+
+def run(g, findings: list[dict], lines_for=None, paid_calls=None,
+        ahead: tuple | None = None) -> tuple[list[dict], dict, flow.Result | None]:
+    """(findings of its own, the tool's record, the engine's result). Flows that belong to a finding already in
+    `findings` are written on that finding. `paid_calls`: the calls that cost money (`aiapp.find_calls`), for the
+    routes whose sender is checked. `ahead`: what `read(g)` gave, when the caller had it worked out before."""
+    got = read(g) if ahead is None else ahead
+    if not got:
+        return [], scanresult.record("lantern-flow", "skipped", "no Python or JavaScript code to follow data through",
+                                     applicable=False, version=VERSION), None
+    res, failed, spent = got
+    if res is None:
+        return [], failed, None
+    t0 = time.perf_counter() - spent        # the record's time: the reading and what follows, not a wait between them
     # "no login check was found" is said by the names around a route (`websec.missing_auth`). Where the route's
     # code itself turns away whoever is not signed in (a check with a plain name, one written in place, a hook that
     # runs before every request), the sentence is wrong and the finding is not kept; how many, in the record

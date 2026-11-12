@@ -170,6 +170,9 @@ OWN_FILES = {
     ("_behave_inside.py", "_Worker.blocked"): "what an app copy printed, in the sandbox's temp folder",
     ("_behave_inside.py", "Recorder.look"): "the app's own data files, in the sandbox's temp folder",
     ("_behave_inside.py", "main"): "the scene Lantern wrote into the sandbox's temp folder",
+    ("kept.py", "_digest_of"): "Lantern's own code and the parser libraries it runs with, for the stamp of the code",
+    ("kept.py", "Shelf._read"): "LANTERN_HOME/cache: an entry, never through a link, only this user's plain file",
+    ("kept.py", "Shelf.put"): "LANTERN_HOME/cache: writes", ("kept.py", "tidy"): "LANTERN_HOME/cache: the mark of the last tidy",
 }
 
 
