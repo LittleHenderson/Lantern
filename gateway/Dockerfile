@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.15-slim
 RUN useradd --create-home app
 WORKDIR /app
 COPY pyproject.toml ./
