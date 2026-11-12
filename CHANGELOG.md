@@ -5,6 +5,15 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- The Atlas says where you are, and the Graph and the Flowchart have a minimap (2026-11-12). Above the map a
+  breadcrumb runs from the project to the view, the starting point and, along the shortest path of calls, the
+  function you chose; each step is a button that brings that function to the middle of the map, a path of more than
+  five steps folds its middle into "N more", and a function the starting point does not reach stands after a gap.
+  The minimap is a copy of the map's own boxes and lines with a box for what the screen shows; a click or a drag on
+  it moves there. It can be shown at 100%, 60% or 30% or hidden (the M key too), and the choice is kept in the
+  browser (`lantern.minimap`). Its drawing is copied attribute by attribute from the map Lantern drew, never from
+  the data as text. `tools/viewer_smoke.js` checks the breadcrumb, the three settings, hiding and a click.
+
 - The release decision: Blocked, Incomplete or Passed, and a score that cannot speak over it (2026-11-11; point 6
   of the 2026-11-09 directive, "Fix severity and make 100 mean the required work passed"). Three things were wrong
   until now. A finding was ranked lower when Lantern found no path to its line. A check that was skipped left the

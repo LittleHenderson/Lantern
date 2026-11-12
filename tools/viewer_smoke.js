@@ -245,6 +245,21 @@ async function appSmoke(url, out, image, expectText, slowTests) {
         const filled = await p.evaluate(() => { const v = document.querySelector('#graph .vp').getBoundingClientRect(), s = document.querySelector('#graph svg').getBoundingClientRect(), c = document.querySelector('#center').getBoundingClientRect(); return Math.abs(v.width - s.width) < 2 && Math.abs(v.height - s.height) < 2 && v.width >= c.width - 2 && (innerWidth < 720 || v.bottom >= c.bottom - 2); });
         if (!filled) errs.push(`${name}: the graph does not fill its panel`);
         await p.screenshot({ path: `${out}-${name}-graph.png` });
+        // the breadcrumb says where you are, and the minimap shows the whole map with the screen's box on it
+        if (!await p.$('.crumbs [aria-current="location"]')) errs.push(`${name}: the map has no breadcrumb saying where you are`);
+        if (!await p.$('#graph .mmap .mmview')) errs.push(`${name}: the graph has no minimap`);
+        else {
+          await p.click('#graph .mmhead [data-o="30"]'); await p.waitForTimeout(60);
+          if (await p.evaluate(() => getComputedStyle(document.querySelector('#graph .mmsvg')).opacity) !== '0.3') errs.push(`${name}: the minimap's 30% button did not make it see-through`);
+          await p.click('#graph .mmhead [data-o="off"]'); await p.waitForTimeout(60);
+          if (await p.evaluate(() => getComputedStyle(document.querySelector('#graph .mmap')).display) !== 'none') errs.push(`${name}: the minimap did not hide`);
+          await p.click('#graph .mmshow'); await p.waitForTimeout(60);
+          if (await p.evaluate(() => getComputedStyle(document.querySelector('#graph .mmap')).display) === 'none') errs.push(`${name}: the minimap did not come back`);
+          await p.click('#graph .mmhead [data-o="100"]'); await p.waitForTimeout(60);
+          const before = await view(), m = await (await p.$('#graph .mmsvg')).boundingBox();
+          await p.mouse.click(m.x + 6, m.y + m.height - 6); await p.waitForTimeout(80);
+          if (await view() === before) errs.push(`${name}: a click on the minimap did not move the map`);
+        }
         if (name === 'desk') {
           const r = await (await p.$('#graph .vp')).boundingBox(), cx = r.x + r.width / 2, cy = r.y + r.height / 2;
           await p.click('#graph [data-z="fit"]'); await p.waitForTimeout(80);
