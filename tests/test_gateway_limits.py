@@ -28,6 +28,8 @@ from lantern_gateway.app import Settings, Store, create_app  # noqa: E402
 
 ADMIN = "admin-" + "k" * 24
 CLI = "c" * 40
+# where the clock of the limits stands in these tests: 40 s into its minute, 2,800 s into its hour, 6,400 s into its day
+START = 1_000_000_000.0
 PIECE = 65536
 
 
@@ -64,6 +66,7 @@ class Gateway:
                           db_path=str(tmp_path / "gw.db"), public_url="https://gw.test", github_client_id="gh-id",
                           github_client_secret="gh-secret", **over)
         self.app = create_app(self.s, transport=stand_ins(self.calls, github))
+        self.app.state.limiter.clock = lambda: START        # stands still until `later` moves it
         self.client = TestClient(self.app, follow_redirects=False, raise_server_exceptions=False)
 
     def ping(self, install: str = "a" * 32, sender: str = "203.0.113.5", **over):
@@ -105,6 +108,19 @@ class Gateway:
 @pytest.fixture
 def gw(tmp_path):
     return Gateway(tmp_path)
+
+
+def test_the_clock_the_limits_count_by_stands_still_until_a_test_moves_it(gw):
+    """The limits count in windows of the clock (this minute, this hour, this day). With the real clock a test that
+    counts "30 in a minute" loses its count when a full minute passes in the middle of it: on CI (2026-11-11) the
+    31st wrong secret was answered 403 where 429 was expected, because the 30 before it had been counted in the
+    minute that had just ended. So every gateway of these tests starts at one fixed moment, and only `later` moves
+    it."""
+    assert gw.app.state.limiter.clock() == START
+    time.sleep(0.01)
+    assert gw.app.state.limiter.clock() == START
+    gw.later(60)
+    assert gw.app.state.limiter.clock() == START + 60
 
 
 def stream(app, path: str, total: int, headers=(), method: str = "POST") -> dict:
@@ -778,7 +794,7 @@ def test_each_refusal_says_the_seconds_left_of_its_minute_hour_or_day(tmp_path):
     """The limiter's clock stands at 1,000,000,000 s: 40 s into its minute, 2,800 s into its hour, 6,400 s into
     its day."""
     g = Gateway(tmp_path, sender_pings_per_hour=3, sender_installs_per_day=1)
-    g.app.state.limiter.clock = lambda: 1_000_000_000.0
+    assert g.app.state.limiter.clock() == 1_000_000_000.0
     for n in range(5):
         g.stats(sender="203.0.113.7", secret=f"guess-{n}")
     assert g.stats(sender="203.0.113.7").headers["retry-after"] == "20"
