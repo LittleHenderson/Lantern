@@ -351,7 +351,7 @@ def _carried(settings) -> list:
             kinds.add(REWRITE)
         if ng._URL_PASSWORD.search(name) or ng._URL_PASSWORD.search(value):
             kinds.add(PASSWORD)
-        if (section, key) == ("user", "email") or key == "signingkey":
+        if ((section, key) == ("user", "email") and value != "tests@localhost") or key == "signingkey":
             kinds.add(IDENTITY)
     return sorted(kinds)
 
@@ -366,6 +366,7 @@ def test_what_a_git_setting_can_carry():
     assert _carried([("url.https://me:made-up@git.example/.insteadOf", "https://git.example/")]) == sorted([PASSWORD, REWRITE])
     assert _carried([("url.git@git.example:.pushInsteadOf", "https://git.example/")]) == [REWRITE]
     assert _carried([("user.email", "me@example.com")]) == [IDENTITY]
+    assert _carried([("user.email", "tests@localhost")]) == []                  # the made-up one temp_home writes
     assert _carried([("user.signingkey", "ABCD1234")]) == [IDENTITY]
     assert _carried([
         ("remote.origin.url", "https://github.com/LittleHenderson/Lantern.git"),      # no password: an address
@@ -785,6 +786,18 @@ def test_browsers_and_python_packages_installed_for_the_user_stay_usable(tmp_pat
     none = {"HOME": str(tmp_path / "empty")}
     ng.temp_home(str(tmp_path / "home3"), none)
     assert "PLAYWRIGHT_BROWSERS_PATH" not in none                                  # nothing installed: nothing set
+
+
+def test_git_has_a_name_and_an_address_in_the_temporary_home(tmp_path):
+    """Without them git makes an address up from this computer's name and looks that name up on the network for every
+    clone, branch and reset (seen with git 2.56.1 on GitHub's Linux machines): the no-network run counts that."""
+    env = {"HOME": str(tmp_path / "real")}
+    ng.temp_home(str(tmp_path / "home"), env)
+    settings = (tmp_path / "home" / ".gitconfig").read_text(encoding="utf-8")
+    assert "email = tests@localhost" in settings and "name = Lantern tests" in settings
+    (tmp_path / "home" / ".gitconfig").write_text("[user]\n\temail = mine@localhost\n", encoding="utf-8")
+    ng.temp_home(str(tmp_path / "home"), env)                                    # a file already there is left alone
+    assert "mine@localhost" in (tmp_path / "home" / ".gitconfig").read_text(encoding="utf-8")
 
 
 # ----------------------------------------------------------------------------- no network at all (Linux)
