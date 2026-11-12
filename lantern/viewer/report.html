@@ -198,6 +198,35 @@ body.gmax main{display:grid;grid-template-columns:minmax(0,1fr)!important}
 /* the zoom buttons stay clear of the Ask Lantern button when the map reaches the window's right edge */
 /* also inside the website's frame, whose own Ask Lantern button sits over the frame's bottom-right corner */
 body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{bottom:80px}
+/* breadcrumb: where you are, from the project down to the chosen function along the path that reaches it */
+.crumbs{display:flex;align-items:center;gap:2px;margin:0 0 8px;font-size:12.5px;color:var(--muted);overflow-x:auto;scrollbar-width:none;white-space:nowrap;min-width:0}
+.crumbs::-webkit-scrollbar{display:none}
+.crumbs ol{display:flex;align-items:center;gap:2px;list-style:none;margin:0;padding:0}
+.crumbs li{display:inline-flex;align-items:center;gap:2px;flex:none}
+.crumbs li+li::before{content:"›";color:var(--faint);padding:0 5px}
+.crumbs li.gap::before{content:"⋯";letter-spacing:0}
+.crumbs button{border:0;background:none;padding:3px 6px;border-radius:6px;color:var(--ink-2);font:500 12.5px var(--font);cursor:pointer;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.crumbs button.fn{font-family:var(--mono);font-size:12px}
+.crumbs button:hover{background:var(--hover);color:var(--ink)}
+.crumbs .here{color:var(--ink);font-weight:600}
+.crumbs button.here{background:var(--accent-soft);color:var(--ink)}
+.crumbs .cv{padding:3px 2px}
+/* minimap: the whole map small, with a box for what the screen shows; 100% / 60% / 30% see-through, or hidden */
+.canvas .mmap{position:absolute;right:12px;bottom:52px;width:200px;border-radius:10px;border:1px solid var(--line);background:var(--surface);box-shadow:0 4px 18px rgba(0,0,0,.08);overflow:hidden;z-index:2}
+.canvas .mmap[data-o="60"]{background:color-mix(in srgb, var(--surface) 60%, transparent);border-color:color-mix(in srgb, var(--line) 60%, transparent)}
+.canvas .mmap[data-o="30"]{background:color-mix(in srgb, var(--surface) 30%, transparent);border-color:color-mix(in srgb, var(--line) 30%, transparent);box-shadow:none}
+.canvas .mmap[data-o="60"] .mmsvg{opacity:.6} .canvas .mmap[data-o="30"] .mmsvg{opacity:.3}
+.canvas .mmap.off,.canvas .mmshow{display:none} .canvas .mmap.off+.mmshow{display:inline-flex}
+.canvas .mmhead{display:flex;align-items:center;gap:2px;padding:3px 4px 3px 9px;border-bottom:1px solid var(--line);background:var(--surface)}
+.canvas .mmhead .ops{display:inline-flex;gap:1px;flex:none} .canvas .mmhead .t{font:600 10.5px var(--font);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:auto}
+.canvas .mmhead button,.canvas .mmshow{border:0;background:none;border-radius:5px;padding:2px 5px;color:var(--ink-2);font:500 11px var(--mono);cursor:pointer;line-height:16px}
+.canvas .mmhead button:hover,.canvas .mmshow:hover{background:var(--hover);color:var(--ink)}
+.canvas .mmhead button[aria-pressed="true"]{background:var(--accent-soft);color:var(--ink)}
+.canvas .mmhead button[data-o="off"]{display:grid;place-items:center;padding:2px 4px}
+.canvas .mmsvg{display:block;width:100%;height:120px;cursor:pointer;touch-action:none}
+.canvas .mmsvg .mmview{fill:color-mix(in srgb, var(--accent) 12%, transparent);stroke:var(--accent);stroke-width:1.6}
+.canvas .mmshow{position:absolute;right:12px;bottom:52px;align-items:center;gap:5px;padding:5px 9px;border:1px solid var(--line);background:var(--surface);border-radius:9px;font:500 11.5px var(--font);z-index:2}
+body.gmax .canvas .mmap,main.rrail .canvas .mmap,main.noright .canvas .mmap,body.gmax .canvas .mmshow,main.rrail .canvas .mmshow,main.noright .canvas .mmshow{bottom:120px}
 #graph svg text{font-family:var(--mono);font-size:11.5px;fill:var(--ink)} #graph svg text.col{font-family:var(--font);font-size:11px;font-weight:600;letter-spacing:.06em;fill:var(--muted)}
 #graph svg text.sub{font-family:var(--font);font-size:10.5px;fill:var(--muted)} #graph svg text.lb{font-size:9px;fill:var(--muted)}
 #graph g[data-id]{cursor:pointer} #graph g[data-id]:hover rect.box{stroke:var(--accent-line)}
@@ -636,6 +665,8 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
   body.gmax .canvas{height:auto}
   .canvas .zoom,body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{top:10px;bottom:auto;right:10px}   /* on a phone the buttons sit at the top, clear of the legend and the Ask button */
   body:not(.embed) #graph .glegend{right:84px}
+  .canvas .mmap,body.gmax .canvas .mmap,main.rrail .canvas .mmap,main.noright .canvas .mmap,.canvas .mmshow,body.gmax .canvas .mmshow,main.rrail .canvas .mmshow,main.noright .canvas .mmshow{top:50px;bottom:auto;right:10px}   /* under the zoom buttons */
+  .canvas .mmap{width:168px} .canvas .mmsvg{height:90px} .canvas .mmhead{padding-left:4px} .canvas .mmhead .t{font-size:0;margin-right:auto} .canvas .mmhead button{padding:2px 4px}
   aside.right{width:100vw;top:auto;height:86vh;transform:translateY(105%);border-radius:20px 20px 0 0}
   aside.right.open{transform:none}
   .cat summary{grid-template-columns:16px 1fr 70px 52px}
@@ -938,7 +969,7 @@ function renderChart() {
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use the tree view to go deeper.</div>` : '';
-  return `<div id="chart" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Flowchart. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows all of it, F goes full screen.">${svg}</div>${zoomBar()}</div>${more}`;
+  return `<div id="chart" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Flowchart. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows all of it, F goes full screen, M shows or hides the minimap.">${svg}</div>${zoomBar()}${miniMap()}</div>${more}`;
 }
 
 
@@ -1132,13 +1163,26 @@ function renderGraph() {
     ? `<span><i style="background:var(--critical)"></i>critical</span><span><i style="background:var(--serious)"></i>high</span><span><i style="background:var(--warning)"></i>medium</span><span><i style="background:var(--accent)"></i>seen running</span><span>· ${hidden} hidden</span>`
     : S.mode === 'confidence' ? `<span><i style="background:var(--accent)"></i>seen running</span><span><i style="background:var(--ink)"></i>confirmed</span><span><i style="background:var(--muted)"></i>likely</span><span><i style="background:var(--faint)"></i>possible</span><span>· ${hidden} hidden</span>`
     : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`);
-  return `<div id="graph" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Call graph. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows the whole app, F goes full screen.">${svg}</div><div class="glegend">${legend}</div>${zoomBar()}</div>`;
+  return `<div id="graph" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Call graph. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows the whole app, F goes full screen, M shows or hides the minimap.">${svg}</div><div class="glegend">${legend}</div>${zoomBar()}${miniMap()}</div>`;
 }
 /* The graph is a camera over an endless canvas: the svg always fills the frame and its viewBox is what moves, so the
    drawing stays sharp at any zoom. GRAPH_ZOOM is a guard for the numbers (past it, 32-bit drawing coordinates shake),
    not a limit anyone reaches on purpose: at the far end one box is wider than a building, or the whole app is a dot. */
 const GRAPH_ZOOM = [1e-4, 1e4];
 const zoomBar = () => `<div class="zoom"><span class="zlevel" aria-live="off"></span><button data-z="in" title="Zoom in" aria-label="Zoom in">+</button><button data-z="out" title="Zoom out" aria-label="Zoom out">−</button><button data-z="fit" title="Show all of it (0)" aria-label="Show all of it">fit</button><button data-z="max" title="Full screen (F)" aria-label="Full screen" aria-pressed="false"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button></div>`;
+/* the minimap's own controls; what it draws is copied from the map itself in wireCanvas, never from the data as text */
+let MINIMAP = '100';
+try { const v = localStorage.getItem('lantern.minimap'); if (['100', '60', '30', 'off'].includes(v)) MINIMAP = v; } catch (e) {}
+const miniMap = () => `<div class="mmap${MINIMAP === 'off' ? ' off' : ''}" data-o="${MINIMAP === 'off' ? '100' : MINIMAP}"><div class="mmhead"><span class="t">Minimap</span><span class="ops" role="group" aria-label="How see-through the minimap is">${['100', '60', '30'].map(o => `<button data-o="${o}" aria-pressed="${MINIMAP === o}" title="Minimap at ${o}%">${o}%</button>`).join('')}</span><button data-o="off" title="Hide the minimap (M)" aria-label="Hide the minimap"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></div><svg class="mmsvg" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Minimap of the whole map. Click or drag to move there."></svg></div><button class="mmshow" title="Show the minimap (M)"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.5" y="3" width="13" height="10" rx="2"/><rect x="8" y="7" width="4.5" height="4" rx=".8"/></svg>Minimap</button>`;
+function setMinimap(v) {
+  MINIMAP = v;
+  try { localStorage.setItem('lantern.minimap', v); } catch (e) {}
+  for (const m of document.querySelectorAll('.canvas .mmap')) {
+    m.classList.toggle('off', v === 'off');
+    if (v !== 'off') m.dataset.o = v;
+    m.querySelectorAll('.mmhead [data-o]').forEach(b => { if (b.dataset.o !== 'off') b.setAttribute('aria-pressed', String(b.dataset.o === v)); });
+  }
+}
 function setGraphMax(on) {
   document.body.classList.toggle('gmax', on);
   const root = document.documentElement;
@@ -1158,6 +1202,22 @@ function wireCanvas(g, key) {
   svg.removeAttribute('width'); svg.removeAttribute('height');
   const label = g.querySelector('.zlevel');
   let cam = S.cams[key] && S.cams[key].size === size ? S.cams[key] : null, queued = false;
+  /* the minimap is a copy of the map's own boxes and lines (their shapes and colours only, set one attribute at a time) */
+  const mm = g.querySelector('.mmap'), msvg = mm && mm.querySelector('.mmsvg'), NS = 'http://www.w3.org/2000/svg';
+  let mview = null;
+  if (msvg) {
+    const make = (tag, attrs) => { const el = document.createElementNS(NS, tag); for (const k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]); msvg.appendChild(el); return el; };
+    for (const p of svg.querySelectorAll('path')) {
+      if (p.closest('defs') || p.classList.contains('gglow') || p.classList.contains('gflow')) continue;
+      make('path', {d: p.getAttribute('d'), fill: 'none', stroke: p.getAttribute('stroke'), 'stroke-width': p.closest('.glit') ? 1.6 : .8, 'vector-effect': 'non-scaling-stroke', opacity: p.closest('.glit') ? 1 : .55});
+    }
+    for (const r of svg.querySelectorAll('g[data-id] rect.box')) {
+      const on = S.sel && r.parentNode.dataset.id === S.sel;
+      make('rect', {x: r.getAttribute('x'), y: r.getAttribute('y'), width: r.getAttribute('width'), height: r.getAttribute('height'), rx: r.getAttribute('rx'),
+        fill: on ? 'var(--accent)' : r.getAttribute('fill'), stroke: on ? 'var(--accent)' : r.getAttribute('stroke'), 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke'});
+    }
+    mview = make('rect', {class: 'mmview', 'vector-effect': 'non-scaling-stroke', rx: 2});
+  }
   const draw = () => {
     queued = false;
     const cw = vp.clientWidth, ch = vp.clientHeight;
@@ -1170,6 +1230,15 @@ function wireCanvas(g, key) {
     const pct = cam.z * 100;
     label.textContent = (pct >= 100 ? Math.round(pct).toLocaleString('en-US') : pct >= 1 ? String(Math.round(pct)) : pct.toPrecision(1)) + '%';
     vp.dataset.zoom = cam.z;
+    if (mview) {
+      /* the minimap shows the whole map and the box the screen shows, together: zoomed far out or moved far away, the
+         box stays in sight and the map shrinks beside it, so you can always see where you are */
+      const vw = cw / cam.z, vh = ch / cam.z;
+      const x0 = Math.min(0, cam.x), y0 = Math.min(0, cam.y), x1 = Math.max(w0, cam.x + vw), y1 = Math.max(h0, cam.y + vh);
+      const pad = Math.max(x1 - x0, y1 - y0) * .04;
+      msvg.setAttribute('viewBox', `${x0 - pad} ${y0 - pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}`);
+      mview.setAttribute('x', cam.x); mview.setAttribute('y', cam.y); mview.setAttribute('width', vw); mview.setAttribute('height', vh);
+    }
   };
   const paint = () => { if (!queued) { queued = true; requestAnimationFrame(draw); } };
   const clampZ = z => Math.max(GRAPH_ZOOM[0], Math.min(GRAPH_ZOOM[1], z));
@@ -1188,8 +1257,26 @@ function wireCanvas(g, key) {
     if (w0 * z <= vp.clientWidth) wx = w0 / 2;
     look(z, wx, wy);
   }
+  /* a click on the breadcrumb asks for one function: bring it to the middle, at the zoom you had */
+  if (S.focus) {
+    const on = [...g.querySelectorAll('g[data-id]')].find(x => x.dataset.id === S.focus);
+    if (on) { try { const r = on.getBBox(); look(cam.z, r.x + r.width / 2, r.y + r.height / 2); } catch (e) {} }
+    S.focus = null;
+  }
   draw();
   new ResizeObserver(paint).observe(vp);
+  if (msvg) {
+    mm.querySelectorAll('.mmhead [data-o]').forEach(b => b.onclick = () => { setMinimap(b.dataset.o); paint(); });
+    g.querySelector('.mmshow').onclick = () => { setMinimap(mm.dataset.o || '100'); paint(); };
+    /* click or drag on the minimap to move the screen there */
+    let steer = false;
+    const goTo = e => { const m = msvg.getScreenCTM(); if (!m) return; const pt = msvg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const w = pt.matrixTransform(m.inverse()); look(cam.z, w.x, w.y); };
+    msvg.addEventListener('pointerdown', e => { if (e.button) return; steer = true; try { msvg.setPointerCapture(e.pointerId); } catch (err) {} goTo(e); e.preventDefault(); });
+    msvg.addEventListener('pointermove', e => { if (steer) goTo(e); });
+    const stop = () => { steer = false; };
+    msvg.addEventListener('pointerup', stop); msvg.addEventListener('pointercancel', stop);
+    mm.addEventListener('wheel', e => e.stopPropagation(), {passive: true});
+  }
   g.querySelectorAll('[data-z]').forEach(b => b.onclick = () => {
     const z = b.dataset.z;
     if (z === 'max') return setGraphMax(!document.body.classList.contains('gmax'));
@@ -1238,6 +1325,7 @@ function wireCanvas(g, key) {
     else if (e.key === '-' || e.key === '_') zoomAt(...centre(), 1 / 1.25);
     else if (e.key === '0') fit();
     else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) setGraphMax(!document.body.classList.contains('gmax'));
+    else if ((e.key === 'm' || e.key === 'M') && msvg && !e.ctrlKey && !e.metaKey && !e.altKey) { setMinimap(MINIMAP === 'off' ? (mm.dataset.o || '100') : 'off'); paint(); }
     else return;
     e.preventDefault();
   });
@@ -1520,7 +1608,7 @@ function renderMap() {
   if (n.entry && n.entry.kind === 'route') { const [m, p] = routeParts(n.entry.detail); title = `${m ? `<span class="m ${cls(m, METHODS)}">${esc(m)}</span>` : ''}${esc(p)}`; }
   else if (n.entry && n.entry.kind === 'script') title = esc(n.entry.detail);
   const lanesHead = (() => { if (S.view !== 'lanes') return ''; const ls = LANES.filter(l => entryLanes(n.id).has(l)); const eps = G.nodes.filter(x => x.entry && x.entry.kind !== 'test'); const k = eps.findIndex(x => x.id === n.id); return `<div class="lanehead"><span class="eyebrow">${k >= 0 ? `Path ${k + 1} of ${eps.length} · ` : ''}${ls.length > 1 ? `starts in the ${LANE_WORD[ls[0]]}, ends in ${LANE_WORD[ls[ls.length - 1]]}` : ls.length ? `stays on the ${LANE_WORD[ls[0]]}` : 'not placed in the stack'}</span>${(() => { const w = SEC.findings.filter(f => f.status !== 'accepted' && ((f.ui_path && f.ui_path[0] === n.id) || (f.reachable && f.reachable.entry === n.id))).sort((a, b) => RANK[a.rank] - RANK[b.rank])[0]; return w ? `<div class="lanegoal"><span class="badge ${cls(w.rank, RANKS)}"><i></i>${esc(w.rank)}</span> Where this path goes wrong: <b>${esc(w.headline || w.title)}</b></div>` : ''; })()}</div>`; })();
-  el.innerHTML = `${lanesHead}<div class="toolbar"><h2>${title}</h2>
+  el.innerHTML = `${crumbsHtml(n)}${lanesHead}<div class="toolbar"><h2>${title}</h2>
     <div class="seg"><button data-v="lanes" class="${S.view === 'lanes' ? 'on' : ''}" title="One lane per stop of the stack">Lanes</button><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button><button data-v="graph" class="${S.view === 'graph' ? 'on' : ''}">Graph</button></div>
     ${S.view === 'graph' ? `<div class="seg gmode" title="What the colours mean"><button data-m="risk" class="${S.mode === 'risk' ? 'on' : ''}">Risk</button><button data-m="confidence" class="${S.mode === 'confidence' ? 'on' : ''}">Confidence</button><button data-m="fanin" class="${S.mode === 'fanin' ? 'on' : ''}">Fan-in</button></div>` : `<button class="btn" id="expand">${icon('expand')}Expand all</button>`}${helpBtns()}</div>
     ${S.view === 'graph' || S.view === 'lanes' ? '' : `<div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>`}
@@ -1530,9 +1618,63 @@ function renderMap() {
   if (S.view === 'graph') wireGraph(el);
   if (S.view === 'chart') wireCanvas(el.querySelector('#chart.canvas'), 'chart:' + S.entry);
   wireHelp(el);
+  wireCrumbs(el);
   const ex = document.getElementById('expand'); if (ex) ex.onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
   el.querySelectorAll('[data-tog]').forEach(b => b.onclick = ev => { ev.stopPropagation(); const id = b.dataset.tog; S.open.has(id) ? S.open.delete(id) : S.open.add(id); renderMap(); });
   el.querySelectorAll('.node, g[data-id]').forEach(b => b.onclick = () => { const id = b.dataset.id; if (!S.open.has(id)) S.open.add(id); select(id); renderMap(); });
+}
+
+/* The breadcrumb says where you are: project › Atlas › view › starting point › … › the chosen function, along the
+   shortest path of calls from the starting point (the same lines the map draws). A long path keeps its two ends and
+   folds the middle into a button. A function the starting point does not reach is shown after a gap, not joined. */
+function trailTo(from, to) {
+  if (!to || to === from) return [from];
+  const back = {[from]: null}, q = [from];
+  for (let i = 0; i < q.length && q.length < 5000; i++) {
+    for (const e of OUT[q[i]] || []) {
+      if (e.dst in back) continue;
+      back[e.dst] = q[i];
+      if (e.dst === to) { const out = [to]; let c = q[i]; while (c != null) { out.unshift(c); c = back[c]; } return out; }
+      q.push(e.dst);
+    }
+  }
+  return null;
+}
+const VIEW_WORD = {lanes: 'Lanes', tree: 'Path', chart: 'Flowchart', graph: 'Graph'};
+function crumbName(id) {
+  const n = N[id];
+  if (!n) return short(id.startsWith('ext:') ? id.slice(4) : id);
+  if (n.entry && (n.entry.kind === 'route' || n.entry.kind === 'page' || n.entry.kind === 'script') && n.entry.detail) return n.entry.detail.length > 40 ? n.entry.detail.slice(0, 39) + '…' : n.entry.detail;
+  return short(id.startsWith('ext:') ? id.slice(4) : n.qualname);
+}
+function crumbsHtml(n) {
+  const trail = trailTo(n.id, S.sel && S.sel !== n.id ? S.sel : null);
+  const far = !trail;   // the chosen function is not reached from this starting point
+  let fns = far ? [n.id] : trail;
+  const fold = !S.crumbAll && fns.length > 5 ? fns.length - 3 : 0;   // keep the start, and the last two
+  const fn = (id, i, last) => `<li><button class="fn${last ? ' here' : ''}" data-crumb="${esc(id)}" title="${esc((N[id] || {}).qualname || id)}"${last ? ' aria-current="location"' : ''}>${esc(crumbName(id))}</button></li>`;
+  let items = '';
+  fns.forEach((id, i) => {
+    if (fold && i === 1) { items += `<li><button data-crumb-more title="Show every step of the path" aria-label="Show ${fold} more steps">${fold} more</button></li>`; return; }
+    if (fold && i > 1 && i < fns.length - 2) return;
+    items += fn(id, i, !far && i === fns.length - 1);
+  });
+  if (far) items += `<li class="gap"><button class="fn here" data-crumb="${esc(S.sel)}" title="Not reached from this starting point: ${esc((N[S.sel] || {}).qualname || S.sel)}" aria-current="location">${esc(crumbName(S.sel))}</button></li>`;
+  const atlas = S.simple ? 'Paths' : 'Atlas';
+  return `<nav class="crumbs" aria-label="Where you are"><ol><li><button data-crumb-top title="All starting points">${esc(PROJECT)}</button></li><li><span class="cv">${atlas}</span></li><li><span class="cv">${VIEW_WORD[S.view] || ''}</span></li>${items}</ol></nav>`;
+}
+function wireCrumbs(el) {
+  const nav = el.querySelector('.crumbs');
+  if (!nav) return;
+  const top = nav.querySelector('[data-crumb-top]'); if (top) top.onclick = () => { S.entry = null; S.sel = null; renderMap(); renderRight(); };
+  const more = nav.querySelector('[data-crumb-more]'); if (more) more.onclick = () => { S.crumbAll = true; renderMap(); };
+  nav.querySelectorAll('[data-crumb]').forEach(b => b.onclick = () => {
+    const id = b.dataset.crumb;
+    if (S.view === 'tree') { const st = trailTo(S.entry, id) || []; st.forEach(x => S.open.add(x)); }
+    S.focus = id; select(id); renderMap(); S.focus = null;
+    if (S.view === 'tree' || S.view === 'lanes') { const t = [...el.querySelectorAll('[data-id]')].find(x => x.dataset.id === id); if (t && t.scrollIntoView) t.scrollIntoView({block: 'nearest', inline: 'nearest'}); }
+  });
+  nav.scrollLeft = nav.scrollWidth;   // on a narrow screen the end of the trail (where you are) is what shows
 }
 
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
