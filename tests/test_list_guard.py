@@ -178,6 +178,76 @@ def test_the_javascript_look_alikes_are_still_listed(tmp_path, case):
     assert len(found) == 1, (case, [(f["line"], f["sink"]) for f in found])
 
 
+CHECK = "        if not t.startswith(inside):\n            abort(400)\n"
+LOOP_SAFE = {
+    "a loop that turns the request away at the first item outside, then a loop that uses them":
+        RESOLVED + "    for t in targets:\n" + CHECK + USE,
+    "the loop raises":
+        RESOLVED + "    for t in targets:\n        if not t.startswith(inside):\n            raise ValueError(t)\n" + USE,
+    "the loop does something else with the item after the check":
+        RESOLVED + "    for t in targets:\n" + CHECK + "        print(t)\n" + USE,
+    "the loop answers with a refusal":
+        RESOLVED + "    for t in targets:\n        if not t.startswith(inside):\n            return 'no', 403\n" + USE,
+}
+LOOP_NEAR = {
+    "an item outside is passed over and the loop goes on":
+        RESOLVED + "    for t in targets:\n        if not t.startswith(inside):\n            continue\n        print(t)\n"
+        + USE,
+    "an item outside is only noted":
+        RESOLVED + "    for t in targets:\n        if not t.startswith(inside):\n            print('outside')\n" + USE,
+    "the loop stops before it has seen every item":
+        RESOLVED + "    for t in targets:\n" + CHECK + "        if t.endswith('.last'):\n            break\n" + USE,
+    "some items go round the check":
+        RESOLVED + "    for t in targets:\n        if t.endswith('.txt'):\n            continue\n" + CHECK + USE,
+    "the loop is over a part of the list":
+        RESOLVED + "    for t in targets[:1]:\n" + CHECK + USE,
+    "the loop is over another list":
+        RESOLVED + "    others = [os.path.realpath(os.path.join(FILES, n)) for n in request.args.getlist('n')]\n"
+                   "    for t in others:\n" + CHECK + USE,
+    "names are added to the list inside the loop":
+        RESOLVED + "    for t in targets:\n" + CHECK +
+        "        if os.path.isdir(t):\n            targets.extend(os.path.join(t, n) for n in request.args.getlist('more'))\n"
+        + USE,
+    "the check says nothing of the item":
+        RESOLVED + "    for t in targets:\n        if not inside.startswith(t):\n            abort(400)\n" + USE,
+    "the check comes after the files are removed":
+        RESOLVED + USE + "    for t in targets:\n" + CHECK,
+    "the refusal is caught and the request goes on":
+        RESOLVED + "    try:\n        for t in targets:\n            if not t.startswith(inside):\n"
+                   "                raise ValueError(t)\n    except ValueError:\n        print('outside')\n" + USE,
+    "the loop is left by a function of its own, which the route does not ask":
+        RESOLVED + "    look(targets, inside)\n" + USE.rstrip("\n") + "\n    return 'removed'\n\n\n"
+                   "def look(targets, inside):\n    for t in targets:\n        if not t.startswith(inside):\n"
+                   "            return False\n    return True\n\n\ndef unused():",
+}
+
+
+@pytest.mark.parametrize("case", sorted(LOOP_SAFE))
+def test_a_loop_that_checks_every_item_and_turns_the_request_away_is_a_check(tmp_path, case):
+    """Found by trying the rule on more shapes of its own examples (2026-11-11): the check written as a loop of its
+    own, before the loop that uses the files, was still two lines listed at high."""
+    assert _py(tmp_path, LOOP_SAFE[case]) == [], case
+
+
+@pytest.mark.parametrize("case", sorted(LOOP_NEAR))
+def test_a_loop_that_lets_an_item_by_is_still_listed(tmp_path, case):
+    found = _py(tmp_path, LOOP_NEAR[case])
+    # one line listed; where names are added in the loop, once for each of the two places the names come from
+    want = 2 if case == "names are added to the list inside the loop" else 1
+    assert len(found) == want and len({f["line"] for f in found}) == 1, (case, [(f["line"], f["sink"]) for f in found])
+
+
+def test_the_checking_loop_in_javascript(tmp_path):
+    safe = "  for (const t of targets) {\n    if (!t.startsWith(inside)) return res.status(400).end()\n  }\n" + JS_USE
+    assert _js(tmp_path / "safe", safe) == []
+    thrown = "  for (const t of targets) {\n    if (!t.startsWith(inside)) throw new Error('outside')\n  }\n" + JS_USE
+    assert _js(tmp_path / "thrown", thrown) == []
+    near = "  for (const t of targets) {\n    if (!t.startsWith(inside)) continue\n    console.log(t)\n  }\n" + JS_USE
+    assert len(_js(tmp_path / "near", near)) == 1
+    part = "  for (const t of targets.slice(1)) {\n    if (!t.startsWith(inside)) return res.status(400).end()\n  }\n"
+    assert len(_js(tmp_path / "part", part + JS_USE)) == 1
+
+
 def test_a_list_made_with_map_holds_what_its_function_gave_back(tmp_path):
     """Found on the way: in JavaScript a list made with `map` kept the request's names beside what the function
     made of them, so a check on each item inside the loop was not seen either. The twin maps the names to

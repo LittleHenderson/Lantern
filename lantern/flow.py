@@ -1937,6 +1937,7 @@ class Engine:
             # a name that was looked up has at least one address (or the look-up raised), so what every turn of the
             # loop refuses holds after it; a `break` leaves with the rest not looked at
             sure = looked is not None and looked[0] == "addr" and not has_break(s.b)
+            each = self.loop_facts(s, env, ctx)
             for turn in range(2):
                 body = env.copy()
                 if test is not None:
@@ -1964,6 +1965,7 @@ class Engine:
                     env.take(body)
                 else:
                     env.join(body)
+            self.apply(env, each)       # the loop came to its end: no item was turned away
             if s.c:
                 self.block(s.c, env, ctx)
             return False
@@ -5293,6 +5295,28 @@ class Engine:
         told = tuple((whole.name, c, False, "each") for p, c, _fixed, rel in (yes if every else no)
                      if p == item and rel is None)
         return (told, ()) if every else ((), told)
+
+    def loop_facts(self, s: N, env: Env, ctx: Ctx) -> tuple:
+        """`for t in items: if <t fails a check>: <leave the function>`, and then the code goes on to use the
+        items: the check as a loop of its own. What it proves of one item is known of every item once the loop has
+        come to its end (`each_facts`, written as a loop). Only where every item gets to the check and none gets
+        past a failed one: the loop is over the whole list kept under a name, the check is the first thing in its
+        body and has no other branch, the branch for an item that fails always leaves the function (`leaves`: a
+        `continue` passes the item over and proves nothing), no `break` ends the loop early, and nothing else in
+        the body names the list (it may be adding to it)."""
+        target, it, test = s.items
+        body = s.b or ()
+        if test is not None or target is None or it is None or target.k != "name" or it.k != "name" or \
+                not target.name or it.name == target.name or it.name not in env.vars or not body or has_break(body):
+            return ()
+        first = body[0]
+        if first.k != "if" or first.c or first.a is None or not leaves(first.b) or \
+                any(n.k == "name" and n.name == it.name for st in body for n in all_nodes(st)):
+            return ()
+        e2 = env.copy()
+        self.assign(target, elem(self.eval(it, e2, ctx)), e2, ctx, s)
+        _yes, no = self.facts(first.a, e2, ctx)
+        return tuple((it.name, c, False, "each") for p, c, _fixed, rel in no if p == target.name and rel is None)
 
     def call_facts(self, e: N, env: Env, ctx: Ctx):
         f = e.a
