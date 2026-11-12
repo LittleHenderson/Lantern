@@ -49,6 +49,7 @@ lines and the server streams them to the browser.
 | `rn.py` | React Native / Expo projects from `package.json` + `app.json`; React Navigation and Expo Router screens, `Linking` handlers as entries (on the JS/TS map), `LN-*` code and `app.json` rules, the `security.mobile` summary | `rn.add_entries`, `rn.scan` |
 | `bridge.py` | Match `g.meta["http_calls"]` to route entries | `link`, `match` |
 | `trace.py`, `tracehook.py` | Runtime tracing (Python only), merge into graph | `run_trace`, `merge_trace` |
+| `behave.py`, `_behave_inside.py` | Behaviour checks (`lantern behave`; `docs/behaviour.md`): the project's app (Python ASGI, SQLite) is started in the test sandbox from the project's plan `lantern-behaviour.json` and asked as the people who must be refused and as those who may; the rows and files are compared before and after every step. `behave.py` checks the plan (paths only, never an address), judges from what was recorded and writes `behaviour.json`; `_behave_inside.py` runs inside the sandbox (app copies over pipes, no socket; database failures made at each write; names answered inside). A record of its own: no finding, score or page reads it | `load`, `check`, `scene`, `judge`, `run`; `Recorder`, `worker`, `token_variant` |
 | `security.py` | Scanner orchestration, node pinning, reachability, ranking, accepted risks | `scan`, `reachability`, `rank`, `load_accepted` |
 | `android.py` | Android apps: manifest/network-config/Gradle reading (expat, entities refused), manifest entry points, `LM-*` rules, the `security.mobile` summary (permissions, components) | `find_modules`, `add_entries`, `scan` |
 | `websec.py` | Full-stack rules (public env secrets, Supabase, Firebase, CORS, missing auth, JS patterns) | `scan_web` |
@@ -76,6 +77,7 @@ lines and the server streams them to the browser.
 | `readiness.json` | `score`, `grade`, `categories[]` → `checks[]` (`id`, `status` pass/fail/partial/skip, `points`, `earned`, `evidence`, `fix`, `how`), `shape`, `stack`, `advice`, `hotspots`, `next_steps`, `starter` |
 | `explanations.json` | `metaphor`, `explanations{node_id → record}` (`lens1`, `lens2`, `lens3.pairs[]` with `anchor`, `scenario`, `findings` (each may carry `scenario`), `dropped_scenarios`, `validated`, `validation_errors`, `model`, `prompt_version`, `code_hash`), `stats` |
 | `run.json`, `baseline.json` | timings, privacy, trace exit code; first-run counts and finding ids |
+| `behaviour.json` | Written only by `lantern behave`: `of` (plan SHA-256, commit, `dirty`, Lantern, Python, system), `ran`, `why_not`, `summary` (`held`, `broken`, `inconclusive`, `not-run`), `outcomes[]` (`check`, `case`, `kind`, `outcome`, `codes`, `said`, `saw`). Not in the digest, the report or the score |
 | `report.html` | Self-contained viewer with all of the above embedded (source included only at privacy `full`) |
 | `evidence.html`, `evidence.json`, `badge.svg` | Evidence Report, its data including `payload` and `digest`, README badge |
 

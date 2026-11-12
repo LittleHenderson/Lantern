@@ -5,6 +5,99 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Behaviour checks: `lantern behave PATH` starts the project's app in the test sandbox and tests what really
+  happens (2026-11-11; point 5 of the 2026-11-09 directive, "Test full-stack behavior, not just source patterns").
+  Until now everything Lantern said about a project came from reading it. A project can now carry a plan,
+  `lantern-behaviour.json`: how the app is loaded and set up, who the people are, and checks of twelve kinds
+  (`refuse`, `hide`, `tokens`, `input`, `keeps`, `contain`, `redirect`, `address`, `limit`, `once`, `retry`,
+  `faults`). The runner (`lantern/behave.py` outside, `lantern/_behave_inside.py` inside the sandbox) starts the app
+  on a read-only copy with no network, hands it each request inside one process over a pipe (the app is served at
+  no address), and compares the database's rows and the app's files before and after every step.
+  **A refused request that changed something all the same is a failure of its own kind** (`refused-but-changed`),
+  whatever the answer said. A refusal counts only beside the same request from somebody who may make it, which must
+  work and, for a request that changes things, must change something: otherwise the case is `inconclusive`, never
+  `held`; a case that could not be run is `not-run`, never `held`. Sign-in tokens are tried missing, empty,
+  garbage, cut short, altered, unsigned, signed with another key and expired. A request is made to fail at each of
+  its database writes and commits and is cut off before each of them and before the answer leaves; afterwards all
+  of its work must be there or none, and the next person's request must work and save only its own. A limit on
+  tries is asked straight after, after a restart and on a second copy of the app; two requests at the same moment
+  must end as one after the other does; the same request sent again must not be done twice. Where a name leads is
+  answered by the runner itself, so no question leaves the sandbox, and an app that looks a name up and refuses is
+  told from one that sets out for the address. **A plan cannot be pointed at a live site**: it holds paths only (an
+  address or a `Host` header in a request is refused before anything starts), the app's database files and folders
+  must lie in the folder the sandbox gives it, and SQL of the plan's own is run only on a database the plan names
+  there. The record is `behaviour.json` (`docs/api.md`), with `of`: the plan's SHA-256, the commit and whether files
+  differed from it, Lantern's version, Python and the system. The command ends with 0 only when every case held.
+  Nothing else reads the record yet: no finding, score or page changes with it (point 6 is where it is bound).
+  Guide: `docs/behaviour.md`.
+  Measured on throw-away apps only (`bench/behaviour/`, `python bench/behaviour/run_behaviour.py WORKDIR`;
+  `bench/behaviour/results.md` is the last run). Corkboard is a small notes app for teams (FastAPI, SQLite, PyJWT)
+  written by a generator as the safe app or with one of 31 problems planted, each differing from the safe app in
+  the pieces its problem names and in nothing else (`tests/test_behaviour_apps.py`): no login; another person's
+  and another team's notes read, changed, deleted, listed and exported; a member and another team's admin removing
+  a user; a delete that is refused after the note is gone; an expired, an unsigned and a wrongly scoped token; a
+  role taken through the profile form; a negative amount; a request of megabytes; an upload's and a zip entry's
+  name leaving the folder; an uploaded page served as a page; a zip that unpacks to megabytes; a redirect to any
+  site and a half-checked one; a preview that fetches internal addresses and one whose check misses other
+  spellings; no limit on wrong passwords and a limit kept in memory; a coupon redeemed twice at once; a transfer
+  that keeps its first half after a database error, after being cut off, when sent again, and whose half is saved
+  by the next person's request. The plan (40 checks, 97 cases asked, 80 outcomes on the safe app) and the cases
+  each planted problem must break (`plan.EXPECTED`) were written down before the first run. First pass: 27 of 31
+  planted versions came out as written down. The 4 that differed: one mistake in the table (`export-every-team`
+  takes away the control of one case, which then comes out undecided); two versions (`fetch-any-address`,
+  `fetch-half-checked`) that met one fault of the runner (on a computer with no IPv6 an app's try for an IPv6
+  address ends one step before the connection the sandbox refuses, and the runner saw nothing); and
+  `unsigned-token`, whose case "cut short" came out held and was taken for a second mistake in the table until a
+  second run gave the other answer: the runner cut the token at a place where the token library read the rest as
+  whole on one run and not on the next. While the first fault was being fixed a test for the safe twin showed one
+  more: an app that only asked where a name leads, and refused, was reported like one that went there. After the fixes, with the whole plan run
+  against every version: 32 of 32 as written down (each planted problem broken in its own cases and in no other;
+  the safe app 80 held, 0 broken), 0 attempts to reach anything outside this computer (`tools/netguard`). The safe
+  app's whole plan takes about 25 seconds (58 starts of the app); the first measurement was 66.9 seconds, over the
+  60 set beforehand, until the app's copies were let keep compiled Python in their temp folder.
+  Two apps that were not written for it (`tests/test_behave.py`): Lantern's own gateway, copied as it is (an app
+  made by a function, set up from the environment): 12 cases held, and the one that must come out broken did (a
+  chat request with no site listed: the gateway asked for `api.anthropic.com`, was answered inside the sandbox and
+  refused at the connection). Tried by hand and not kept as a test, because the gateway counts by the minute
+  of the real clock: after five wrong owner secrets the sixth is not looked at, and the count is forgotten at a
+  restart and on a second copy (it is kept in memory, as `gateway/README.md` says). The shop sample
+  (`tests/fixtures/shop`), whose backup route `lantern analyze` reports as a command built from the request: the
+  request was sent and the file it named was found where it said (`outside-file`, `saw.outside`). These two showed
+  three more faults, fixed with tests first: an app made by a function could not be started (`"factory": true`), a
+  word for a token variant that this version does not know came out as a case that was not run (now refused before
+  the run), and an outcome did not name the file that was written outside the app's folders.
+  Not in this step: only Python ASGI apps with SQLite as the database are started; a JavaScript app is not; the
+  report, the Evidence Report and the readiness score do not read the record; no app is started on Windows (two
+  entries down); macOS has fewer walls around the app than Linux; an app that sets out for an address through code
+  below Python (a client or an event loop written in C) is stopped by the kernel on Linux but not seen, so that
+  case can come out held (`docs/behaviour.md`, Limits).
+- Fixed, test sandbox ("Watch my tests run"): three defects of the Python guard that the behaviour runner's first
+  runs showed (2026-11-11; all three in every release so far; each fixed after a test that failed). **A name given
+  beside an open folder** (`os.unlink(name, dir_fd=fd)`, the way `shutil.rmtree` and `tempfile.TemporaryDirectory`
+  remove a tree) was read as a name in the current folder, the project's read-only copy: every test that removes a
+  folder tree in its own temp folder failed in the sandbox and was listed as a refused write. Such a name is now
+  read in the folder it was given beside (`_at`, `_full`, `_PATHS` in `sandbox.SITECUSTOMIZE`), and an open folder
+  the guard cannot place is refused. **A question about a name asked the older ways** (`socket.gethostbyname`,
+  `gethostbyname_ex`, `gethostbyaddr`) went to the real resolver, while `getaddrinfo` was refused; all four are
+  refused and reported now, and this computer under its own names is answered. **A database file**: SQLite opens
+  and writes its files itself, below Python, so the guard never saw them, and where no kernel layer stands behind
+  it (macOS, Windows, a Linux kernel without Landlock) a test could change a database file outside its temp
+  folder; `sqlite3.connect` on a file outside the temp folder is now refused and reported unless the file is there
+  and cannot be changed (a fixture database in the project's copy is still read), and a database in memory is no
+  file. Not covered: `os.open(name, flags, dir_fd=fd)` for writing (its event carries no folder), and code inside
+  the process that is not Python (a C extension other than SQLite, `ctypes`), which the guard cannot see and only
+  Landlock holds. Tests: `tests/test_sandbox.py` (each refusal beside the ordinary use that must keep working).
+- Found and not fixed, test sandbox on Windows (2026-11-11): a test that starts an event loop (an async test, a
+  test of a FastAPI or Starlette app through its test client) fails in the sandbox there. Windows has no call that
+  makes a pair of connected sockets, so Python builds the pair every event loop wakes itself with from a listener
+  on this computer and a connection to it, and the guard refuses the listener (seen on Linux by handing Python the
+  Windows way of making the pair; `tests/test_sandbox.py` says it on Windows itself, in CI's Windows job). A change
+  that let a program reach a listener of its own was written, tested and taken out again before it was pushed: the
+  event loop Windows uses by default makes its connections with a call for which Python reports no
+  `socket.connect` event (ConnectEx; Python's table of audit events), so a loop that could start could connect to
+  an address written as numbers with the guard seeing nothing. Until the guard covers those connections, such
+  tests fail on Windows as before, and `lantern behave` starts no app there (`sandbox.NO_APPS`: the command says
+  why and ends with 3).
 - Security: a value that arrives with a request is followed across functions and files to where it does something
   sensitive, a check counts for what its code proves, and who may reach a record is asked (2026-11-11; point 4 of the
   2026-11-09 directive, "Trace actual security problems across the whole app"; Python and JavaScript/TypeScript, the

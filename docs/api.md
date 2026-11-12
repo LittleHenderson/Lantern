@@ -464,6 +464,40 @@ dependency entries that were not checked because they have no exact version, wha
 line when the baseline in the results folder could not be used, in which case `scorecard.before`, `baseline_date` and
 `baseline_commit` are null and `security.fixed` and `changed` are empty), `digest` (`sha256:…`), `payload`.
 
+### `behaviour.json`
+
+Written by `lantern behave PATH` (`lantern/behave.py`), which starts the project's app in the test sandbox and runs
+the project's own plan, `lantern-behaviour.json` (its shape, the kinds of check and the limits: `docs/behaviour.md`).
+Nothing else reads this file yet: no finding, score or page changes with it.
+
+```json
+{"version": 1,
+ "from": "running the project's code in Lantern's test sandbox, with no network",
+ "of": {"plan_sha256": "9f2c…", "commit": "1a2b3c…", "dirty": false, "lantern": "0.10.0", "python": "3.13.1", "system": "Linux"},
+ "ran": true, "why_not": null,
+ "summary": {"held": 3, "broken": 1, "inconclusive": 0, "not-run": 0},
+ "outcomes": [
+   {"check": "delete-note", "case": "amir", "kind": "refuse", "about": "Only its owner deletes a note",
+    "outcome": "broken", "codes": ["refused-but-changed"],
+    "said": "was refused, and something had changed all the same",
+    "saw": {"status": 403, "changed": {"notes": [0, 1, 0]}}}],
+ "seconds": 1.2, "app_starts": 3}
+```
+
+`ran` false with `why_not` means nothing was judged: the project has no plan (`no_plan: true`, the only case that
+key is written in), the sandbox could not be set up or starts no app on this system (Windows, for now; the app was
+then not started), the plan's set-up failed at a
+step, or the run left no record. A plan that cannot be used writes no file at all. The command ends with 0 only when
+`ran` is true, at least one case held and none is broken, inconclusive or not run; 1 when a case is; 2 for no plan,
+a plan that cannot be used or a path that is no folder; 3 when the app was not started or the run left nothing to
+judge. `outcome` is `held`, `broken` (with `codes` and `said`), `inconclusive` or `not-run` (each with `why`).
+`saw`: `status` of the last answer, `changed` (per table `[rows added, removed, changed]`, `(files)` for the app's
+folders), `tried` (what the sandbox refused, or what the app began where this computer has no IPv6), `asked`
+(`[name, address]` the app asked about and the runner answered), `outside` (files outside the app's folders that
+were made, removed or changed, as paths from the sandbox's temp folder; at most five), `died`. `tried` and `outside`
+hold text a request may have chosen: escape them like any other value. `of` says what was run: the plan's SHA-256,
+the commit and whether files differed from it (`gitfacts.info`), Lantern's version, Python and the system.
+
 ### Other files
 
 `calls.json` (above), `run.json` (timings, privacy, offline, trace, `incomplete` `[{tool, state, status, why, role}]`,
