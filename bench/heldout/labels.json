@@ -4,6 +4,10 @@
     "LW-AUTH-MISSING@backend/app/api/routes/private.py:23": {
       "label": "false alarm",
       "why": "backend/app/api/main.py mounts the private router only when FASTAPI_ENV == 'development'; the route never exists in a deployed app"
+    },
+    "LT-XSS@backend/app/api/routes/login.py:121": {
+      "label": "false alarm",
+      "why": "the value does get into the page the way Lantern says (the e-mail address in the route's path, through a jinja2 Template that escapes nothing, into an HTMLResponse), but only a superuser reaches the route and the page is made only when an account with exactly that address exists (404 otherwise), so the text is a stored, validated e-mail address; Lantern does not see that the value has to equal a stored one"
     }
   },
   "express-boilerplate": {
@@ -52,6 +56,12 @@
     "B608@app/service.py:5": {
       "label": "false alarm",
       "why": "order_clause is one of two fixed ORDER BY strings chosen in helpers.validate_sort; the value crosses a function boundary, which the input check does not follow"
+    }
+  },
+  "express-safe": {
+    "LT-AUTHZ-OWNER@core/handlers.js:32": {
+      "label": "intended",
+      "why": "true as a fact: DELETE /items/:id asks for a login (auth.required) and then removes the item with that id, and nothing compares an owner; the twin's items have no owner at all, so every signed-in caller is meant to be able to remove one. The finding stands on the handler, in another file than the safe-twin anchor (routes/index.js), so the scorer does not count it as a false alarm on that anchor; read strictly it is one new medium finding on a route this benchmark calls safe"
     }
   }
 }

@@ -45,7 +45,7 @@ def test_shell_injection_story_walks_the_real_page_click_and_input(gs):
     assert "click the backup button" in text                      # the onClick hop the map recorded
     assert "`name`" in text and "report; whoami" in text          # the input check's parameter, then the example
     assert "page and clicks come from the map" in sc["basis"]
-    assert "input check (parameter `name`)" in sc["basis"]
+    assert "following the data from where the request is read (`name` arrives with the request" in sc["basis"]
 
 
 def test_same_finding_always_gets_the_same_person(gs):
@@ -91,6 +91,10 @@ def test_test_code_and_public_secret_stories(gs):
     ({"rule": "LJ-XSS-HTML"}, "xss"), ({"rule": "LA-WALLET-DRAIN"}, "wallet"), ({"rule": "X", "cwe": 89}, "sql"),
     ({"rule": "X", "cwe": "78"}, "shell"), ({"rule": "X", "category": "dependency"}, "dependency"),
     ({"rule": "X", "category": "secret"}, "secret"), ({"rule": "LP-SOMETHING-NEW", "cwe": None}, "generic"),
+    ({"rule": "LT-PATH", "cwe": 22}, "path"), ({"rule": "LT-SSRF"}, "ssrf"), ({"rule": "X", "cwe": 601}, "redirect"),
+    ({"rule": "LT-NOSQL"}, "nosql"), ({"rule": "LT-XXE"}, "xxe"), ({"rule": "LT-POLLUTION"}, "pollution"),
+    ({"rule": "LT-AUTHZ-OWNER"}, "owner"), ({"rule": "X", "cwe": 285}, "role"),
+    ({"rule": "LT-AUTHZ-MASS-ASSIGN"}, "mass-assign"), ({"rule": "LT-SQL"}, "sql"),
 ])
 def test_kind_by_rule_then_cwe_then_category(f, kind):
     assert scenarios.kind_of(f) == kind

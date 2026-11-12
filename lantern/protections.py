@@ -14,15 +14,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import ratelimit
 from .context import code_mentions, handles_passwords, password_hash_uses
 from .graph import Graph
 from .websec import call_adjacency, code_only, is_public_route, login_check, mentions_auth, mutating_route
 
 SENSITIVE_PATH = re.compile(r"(^|/)(login|log-in|signin|sign-in|signup|sign-up|register|auth|token|session|password|"
                             r"reset|forgot|otp|verify|magic-link|2fa|mfa|invite)(/|$|\b)", re.I)
-RATE_LIMIT_LIBS = re.compile(r"slowapi|fastapi[-_]limiter|flask[-_]limiter|django[-_]ratelimit|express-rate-limit|"
-                             r"rate-limiter-flexible|@upstash/ratelimit|@nestjs/throttler|hono-rate-limiter|"
-                             r"\bratelimit\b|\brate_limit\b|RateLimit", re.I)
+RATE_LIMIT_LIBS = ratelimit.LIBS      # what a rate-limiting library is called; where one is put to work: ratelimit.py
 HEADER_SIGNS = re.compile(r"helmet|Content-Security-Policy|Strict-Transport-Security|X-Frame-Options|"
                           r"SecurityMiddleware|secure\.Secure|talisman|frame-ancestors", re.I)
 FAST_HASH = re.compile(r"hashlib\.(md5|sha1|sha224|sha256|sha512)\s*\(|createHash\(\s*['\"](md5|sha1|sha256|sha512)['\"]")
@@ -50,6 +49,9 @@ GLOBAL_AUTH = re.compile(
     r"\b(?:app|router|server)\.use\(\s*[^)\n]*(?:auth|passport|jwt|session|requireUser|protect|guard|clerk)|"
     r"clerkMiddleware|withAuth\(|authMiddleware|export\s+(?:default\s+)?(?:async\s+)?function\s+middleware\b|"
     r"export\s+const\s+middleware\b|withMiddlewareAuth", re.I)
+
+
+SHOWN_BY_CODE = "the code on the way to this route turns away whoever is not signed in"
 
 
 def _where(hits, n=4) -> list[str]:
@@ -96,6 +98,43 @@ def _config_hits(repo, rx: re.Pattern) -> list[tuple[str, int, str]]:
     return hits
 
 
+def _rate_limit(view, trig: list, what: str) -> tuple[str, str, list[str], list[str]]:
+    """(status, why, evidence, found) for the rate-limit item: "in place" only when every route in question shows a
+    limit that covers it; "check" when a limit exists and the code does not show that for each of them; "add" when
+    nothing puts a limit to work, whatever is installed."""
+    states = [(n, d, *view.of(n)) for n, d in trig]
+    yes = [s for s in states if s[2] == "yes"]
+    own = [s for s in states if s[2] == "own"]
+    maybe = [s for s in states if s[2] == "maybe"]
+    rest = [s for s in states if s[2] != "yes"]
+    shown = [f"{d} ({n.file}:{n.start_line})" for n, d, _s, _w in (rest + yes)[:4]]     # the ones without first
+    if len(yes) == len(states):
+        return ("in place", f"{what} could be called as fast as an attacker likes; the code puts a request limit on "
+                + ("each of them." if len(states) > 1 else "it."), shown, [f"{d}: {w}" for _n, d, _s, w in yes[:4]])
+    open_ = ("can be called as fast as an attacker likes: password guessing, sign-up spam, or running up your bill.")
+    if yes or own or maybe:
+        parts = []
+        if yes:
+            parts.append(f"{len(yes)} of {len(states)} show a limit that covers the route; the others do not.")
+        if own:
+            parts.append(f"{own[0][3]}: a name is not a limit, so check what it does.")
+        if maybe:
+            parts.append("A limit is set up for the whole app, but the code does not show that it covers "
+                         + ("these routes" if len(states) > 1 else "this route")
+                         + " or that it is tight enough for signing in; check the ones listed.")
+        found = list(dict.fromkeys([f"{d}: {w}" for _n, d, _s, w in yes[:2]] + [w for _n, _d, _s, w in maybe[:2]]
+                                   + [w for _n, _d, _s, w in own[:2]]))
+        return "check", f"{what} {open_} " + " ".join(parts), shown, found[:4]
+    notes = list(dict.fromkeys(w for _n, _d, _s, w in states if w))
+    more = ""
+    if view.installed:
+        more = (f" `{view.installed}` is installed, but nothing in the code puts a limit on "
+                + ("these routes." if len(states) > 1 else "this route."))
+    if notes:
+        more += " " + notes[0][0].upper() + notes[0][1:] + "."
+    return "add", f"{what} {open_}{more}", shown, []
+
+
 def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     web = shape in ("full-stack web app", "web API", "frontend web app")
     # Routes in test code (a test's own server, the sample apps under tests/fixtures) are not the app's routes
@@ -115,20 +154,14 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     sensitive = [(n, d) for n, d in routes if SENSITIVE_PATH.search(d.partition(" ")[2] or d)]
     writes = [(n, d) for n, d in routes if d.split(" ")[0].upper() in ("POST", "PUT", "PATCH", "DELETE")]
     if sensitive or writes:
-        rl_dep = RATE_LIMIT_LIBS.search(deps)
-        rl_code = [] if rl_dep else _code_grep(repo, RATE_LIMIT_LIBS, limit=1)
-        rl = rl_dep or rl_code
+        # A library that is installed protects nothing (until 2026-11-11 its name in the dependencies read "in
+        # place"): the limit has to be on the route, or on the app where the code shows it covers the route.
         trig = sensitive or writes
         what = f"{len(sensitive)} sign-in or account route(s)" if sensitive else f"{len(writes)} route(s) that change data"
-        item("rate-limit", "Rate limiting", "in place" if rl else "add",
-             (f"{what} could be called as fast as an attacker likes, and a rate-limiting library or setting was "
-              "found; confirm it covers these routes." if rl else
-              f"{what} can be called as fast as an attacker likes: password guessing, sign-up spam, or running up "
-              "your bill."),
-             [f"{d} ({n.file}:{n.start_line})" for n, d in trig[:4]],
+        status, why, shown, found = _rate_limit(ratelimit.view(g, repo, deps), trig, what)
+        item("rate-limit", "Rate limiting", status, why, shown,
              "Limit requests per user and per IP on these routes: slowapi (FastAPI), Flask-Limiter, express-rate-limit, "
-             "or @upstash/ratelimit (Next.js / serverless).",
-             [] if not rl else [f"{rl_dep.group(0)} in the dependencies" if rl_dep else _where(rl_code)[0]])
+             "or @upstash/ratelimit (Next.js / serverless).", found)
 
     # 2. Security headers
     if web:
@@ -195,8 +228,19 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     if need or no_auth:
         adj = call_adjacency(g)
         signed, weak, bare = [], [], []
+        # One story with the findings (2026-11-11). A route whose own code turns away whoever is not signed in, under
+        # whatever name (`logins_shown`, read by the flow step), is checked; and a route a finding calls open is not
+        # among those that show a login, whatever the names around it say (a token check that lets a failed token
+        # on, a login made optional). Results an older Lantern wrote have neither, and read as they did.
+        shown = set((sec or {}).get("logins_shown") or ())
+        said_open = {(f.get("file"), f.get("line")) for f in no_auth}
         for n, d in need:
             sign = login_check(g, n, adj, repo.text(n.file) if n.file else None)
+            if n.id in shown:
+                if sign is None or sign[0] != "strong":
+                    sign = ("strong", SHOWN_BY_CODE)
+            elif sign is not None and sign[0] == "strong" and (n.file, n.start_line) in said_open:
+                sign = None
             if sign is None:
                 bare.append((n, d, None))
             elif sign[0] == "weak":

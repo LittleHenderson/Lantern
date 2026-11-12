@@ -15,6 +15,7 @@ is (2026-11-10, directive stage 7; the link fix before it is in tests/test_links
    model.
 """
 import ast
+import datetime as dt
 import json
 import os
 import shutil
@@ -22,6 +23,7 @@ import signal
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -164,6 +166,9 @@ OWN_FILES = {
     ("security.py", "_run_gitleaks"): "gitleaks' report in Lantern's own temporary folder",
     ("ask.py", "read_screenshot"): "a picture held in memory", ("cli.py", "cmd_login"): "a web page",
     ("server.py", "serve"): "a web address", ("usage.py", "_post"): "a web address",
+    ("_behave_inside.py", "_Worker.blocked"): "what an app copy printed, in the sandbox's temp folder",
+    ("_behave_inside.py", "Recorder.look"): "the app's own data files, in the sandbox's temp folder",
+    ("_behave_inside.py", "main"): "the scene Lantern wrote into the sandbox's temp folder",
 }
 
 
@@ -207,6 +212,30 @@ def test_no_file_is_opened_any_other_way():
     assert not new, f"opened without project_text / project_bytes / results.plain: {sorted(new)}"
     gone = sorted(k for k in OWN_FILES if k not in found)
     assert not gone, f"OWN_FILES names places that open nothing any more: {gone}"
+
+
+def test_no_name_is_given_twice_at_the_top_of_a_module():
+    """A second `def` or assignment under a name a module already has replaces the first for every caller above it,
+    and nothing says so: on 2026-11-11 a new helper in `websec.py` took the name of one the login check calls, and
+    only that check's own tests showed it. A constant set in an `if`/`try` is not counted, only the module's own
+    top level. The test files are held to the same rule: the same day a new constant `FIND` in `tests/test_flow.py`
+    was replaced by an older one further down, and the new test read the wrong text."""
+    twice = []
+    for folder in ("lantern", "cloud/lantern_cloud", "gateway/lantern_gateway", "tests"):
+        for path in sorted((ROOT / folder).glob("*.py")):
+            seen: dict[str, int] = {}
+            for node in ast.parse(path.read_text(encoding="utf-8")).body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    names = [node.name]
+                elif isinstance(node, ast.Assign):
+                    names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+                else:
+                    names = []
+                for name in names:
+                    if name in seen and name != "_":
+                        twice.append(f"{folder}/{path.name}: {name} (lines {seen[name]} and {node.lineno})")
+                    seen[name] = node.lineno
+    assert not twice, twice
 
 
 def test_the_look_for_openers_sees_each_way_of_opening():
@@ -269,6 +298,38 @@ def test_a_file_looked_for_by_its_name_is_not_read_through_a_link_and_not_waited
     assert not [v for state in ("pipe", "loop") for v in said[state].values() if v.startswith("unreadable")]
     # the twin: the same link kept inside the project is the project's file, and is read as the file itself is
     assert said["inside"] == said["beside"]
+
+
+def _a_day_later() -> types.SimpleNamespace:
+    """The `datetime` module as `lantern.evidence` finds it a day from now."""
+    day = dt.timedelta(days=1)
+
+    class Date(dt.date):
+        @classmethod
+        def today(cls):
+            return dt.date.today() + day
+
+    class DateTime(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt.datetime.now(tz) + day
+
+    return types.SimpleNamespace(date=Date, datetime=DateTime, timezone=dt.timezone)
+
+
+def test_what_two_runs_are_compared_on_does_not_change_with_the_day(tmp_path, monkeypatch):
+    """The comparisons above run the analysis several times and ask whether it said the same each time. On CI
+    (2026-11-11) one of them ran either side of midnight, and the two runs differed in `evidence.json`, which keeps
+    the day its baseline was made (`baseline_date`): a red check that said "read through the link" about a link
+    nobody had read through. The day is a time like any other and is left out of what is compared."""
+    _without_bandit(monkeypatch)
+    repo = tmp_path / "extras"
+    sweep.make(FIXTURES, "extras", repo)
+    said = {}
+    for day in ("today", "tomorrow"):
+        said[day] = sweep.says(_analyze(repo, tmp_path / day), str(tmp_path))
+        monkeypatch.setattr(evidence, "dt", _a_day_later())
+    assert said["today"] == said["tomorrow"]
 
 
 READ_BEFORE = [("aiapp", "notebooks/experiments.ipynb"), ("androidapp", "app/build.gradle"), ("goapp", "go.mod"),
