@@ -897,7 +897,7 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
         return lines_cache[file]
     # Follow the data (flow.py): request data followed across functions to a query, a command, a file, an address, a
     # page. A flow on a line another tool flagged is written on that finding; the others are findings of their own.
-    ff, info, flows = flowscan.run(g, findings, lines_for)
+    ff, info, flows = flowscan.run(g, findings, lines_for, paid_calls=ai["calls"])
     findings += ff
     tools.append(info)
     stable_ids(repo, findings)
