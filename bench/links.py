@@ -66,9 +66,10 @@ import lantern_netguard as netguard  # noqa: E402  (tools/netguard: every benchm
 
 STATES = ("gone", "link", "other", "nothing", "pipe", "loop")
 RESULTS = ("graph.json", "security.json", "readiness.json", "calls.json", "evidence.json")
-# what differs from one run to the next of the same project: times, and nothing else
+# what differs from one run to the next of the same project: times, and nothing else (the day too: two runs either
+# side of midnight differed in the day evidence.json keeps for its baseline, CI 2026-11-11)
 DROP = {"timings", "seconds", "elapsed", "generated", "generated_at", "time", "date", "when", "duration", "started",
-        "finished", "took", "ms", "analyzed_at", "created", "at", "duration_ms", "digest"}
+        "finished", "took", "ms", "analyzed_at", "created", "at", "duration_ms", "digest", "baseline_date"}
 
 # The files Lantern looks for by name that no sample project holds, as one small project.
 EXTRA = {

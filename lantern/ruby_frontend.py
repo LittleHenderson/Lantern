@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, MODULE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo, project_bytes
+from .python_frontend import inside_repo, project_bytes, skipped
 
 MAX_BYTES = 1_500_000
 SKIP = re.compile(r"(^|/)(vendor|tmp|log|coverage|node_modules|\.bundle)/|(^|/)db/schema\.rb$")
@@ -207,7 +207,7 @@ def discover(repo: Path) -> list[Path]:
     out = []
     for p in list(repo.rglob("*.rb")) + list(repo.rglob("Rakefile")):
         rel = p.relative_to(repo)
-        if any(x in SKIP_DIRS for x in rel.parts[:-1]) or SKIP.search(rel.as_posix()) or not p.is_file() \
+        if skipped(rel.parts[:-1], repo) or SKIP.search(rel.as_posix()) or not p.is_file() \
                 or not inside_repo(p, repo):
             continue
         out.append(p)
