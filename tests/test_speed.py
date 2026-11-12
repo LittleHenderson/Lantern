@@ -23,6 +23,7 @@ import shutil
 import sys
 import threading
 import time
+import types
 from dataclasses import asdict
 from pathlib import Path
 
@@ -328,6 +329,70 @@ def test_two_threads_that_ask_at_once_get_one_walk_and_nobody_waits_for_another_
         assert made == [1] and got == [["answer"]] * 3
         assert listing.once(repo, "slow", lambda: ["another"]) == ["answer"]
     assert listing.once(repo, "slow", lambda: ["outside a run"]) == ["outside a run"]
+
+
+def test_one_who_waited_for_a_walk_never_walks_again(tmp_path, monkeypatch):
+    """The answer is kept before those who waited for it are let go. Until 2026-11-12 it was kept just after: one
+    who waited could look first, find nothing, and walk the whole folder a second time."""
+    repo = _tree(tmp_path)
+    made, at_the_gate, waiter = [], threading.Event(), []
+
+    class Gate:                                 # the lock those who wait stand at
+        def __init__(self):
+            self.real = threading.Lock()
+
+        def acquire(self):
+            return self.real.acquire()
+
+        def release(self):
+            self.real.release()
+            if waiter and threading.current_thread() is not waiter[0]:
+                waiter[0].join(10)              # the worst order: the one who waited goes on first, to its end
+
+        def __enter__(self):
+            at_the_gate.set()
+            self.real.acquire()
+
+        def __exit__(self, *exc):
+            self.real.release()
+
+    def walk():
+        made.append(1)
+        if len(made) == 1:
+            assert at_the_gate.wait(10)         # the second asker stands at the gate before the walk ends
+        return ["answer"]
+
+    with listing.one_run(repo):
+        run = listing._RUNS[listing._where(repo)]
+        monkeypatch.setattr(listing, "threading", types.SimpleNamespace(Lock=Gate))    # only this module's gates
+        got = []
+        first = threading.Thread(target=lambda: got.append(listing.once(repo, "walk", walk)))
+        first.start()
+        deadline = time.monotonic() + 10
+        while not made and time.monotonic() < deadline:
+            time.sleep(0.01)
+        waiter.append(threading.Thread(target=lambda: got.append(listing.once(repo, "walk", walk))))
+        waiter[0].start()
+        first.join(10)
+        waiter[0].join(10)
+        monkeypatch.setattr(listing, "threading", threading)
+        assert got == [["answer"], ["answer"]] and made == [1]
+        assert not run.making
+
+
+def test_a_walk_that_fails_is_not_kept_and_holds_nobody_up(tmp_path):
+    repo = _tree(tmp_path)
+
+    def fails():
+        raise OSError("the folder went away")
+
+    with listing.one_run(repo):
+        run = listing._RUNS[listing._where(repo)]
+        with pytest.raises(OSError, match="went away"):
+            listing.once(repo, "walk", fails)
+        assert not run.making and not run.kept
+        assert listing.once(repo, "walk", lambda: ["found"]) == ["found"]       # the next asker walks for itself
+        assert listing.once(repo, "walk", fails) == ["found"]                   # and what it found is kept
 
 
 def _results(out: Path) -> dict:
@@ -1234,6 +1299,11 @@ def test_what_a_pattern_needs_is_read_from_the_pattern():
     for shows_nothing in (r"[a-z]+", r".", r"a|\d", r"(?:x)?", r"(?:ab|)", r"\d{3}\s\d{4}"):
         assert need(shows_nothing) is None, shows_nothing
         assert quick.may_match(re.compile(shows_nothing), "anything")       # nothing known: never left out
+    # a pattern over bytes is not asked: the text of a file is not held as bytes by any check
+    assert quick.needs(re.compile(rb"stripe\.")) is None
+    # a choice is asked arm by arm up to `MOST` arms; of one with more, nothing is said
+    arms = [chr(ord("a") + i) + "zz" for i in range(quick.MOST + 1)]
+    assert need("|".join(arms[:-1])) == tuple(arms[:-1]) and need("|".join(arms)) is None
 
 
 def test_the_quick_look_says_no_only_when_it_is_sure():
@@ -1343,6 +1413,97 @@ def test_a_file_only_one_run_wrote_is_a_difference(tmp_path):
     (b / "calls.json").unlink()
     assert speed.differing(speed.fingerprint(a), speed.fingerprint(b)) == ["calls.json"]
     assert speed.differing(speed.fingerprint(a), speed.fingerprint(b), names=("graph.json", "badge.svg")) == []
+
+
+# What a report holds, whatever way the page holds it: the one thing of a report another engine must write the same.
+def _report_bundle(took: int = 157, when: str = "2026-11-12 19:52 UTC", **changes) -> dict:
+    nodes = [{"id": f"py:app.f{i}", "kind": "callable", "name": f"f{i}", "file": "app.py", "start_line": i,
+              "parent": "py:app" if i else None, "decorators": []} for i in range(12)]
+    edges = [{"src": f"py:app.f{i}", "dst": f"py:app.f{i + 1}", "kind": "calls", "lines": [i]} for i in range(11)]
+    bundle = {"version": "1.2.3", "generated_at": when, "graph": {"schema": 7, "nodes": nodes, "edges": edges},
+              "stats": {"nodes": 12}, "security": {"findings": [{"id": "a1", "line": 3}],
+                                                   "tools": [{"tool": "bandit", "duration_ms": took, "state": "ok"}]},
+              "sources": {"py:app.f1": "def f1(): pass"}, "privacy": "full", "timings": {"graph": took / 7, "scan": 2.5},
+              "readiness": {"score": 71}}
+    bundle.update(changes)
+    return bundle
+
+
+def _as_rows(bundle: dict) -> str:
+    """The page an engine that writes the map row by row makes of a bundle (as every Lantern did until point 10)."""
+    from lantern.report import DATA_OPEN, safe_json
+    return "<html><p>an older page</p>" + DATA_OPEN + safe_json(bundle) + "</script></html>"
+
+
+def _report_marks(tmp_path: Path, name: str, page: str) -> dict:
+    return speed.fingerprint(_write(tmp_path / name, {"report.html": page}))
+
+
+def test_a_report_is_marked_by_what_it_holds_however_the_page_holds_it(tmp_path):
+    from lantern.report import render
+    packed = _report_marks(tmp_path, "packed", render(_report_bundle()))
+    rows = _report_marks(tmp_path, "rows", _as_rows(_report_bundle()))
+    assert '"packed":1' in render(_report_bundle()) and '"packed"' not in _as_rows(_report_bundle())
+    assert len(packed[speed.REPORT_DATA]) == 64 and packed[speed.REPORT_DATA] == rows[speed.REPORT_DATA]
+    assert speed.differing(rows, packed, speed.ACROSS_ENGINES) == []
+    assert speed.differing(rows, packed) == ["report.html"]             # the pages are two pages, their data is one
+    assert speed.REPORT_DATA in speed.ACROSS_ENGINES and "report.html" not in speed.ACROSS_ENGINES
+
+
+def test_what_a_clock_put_into_a_report_is_no_difference_in_its_data(tmp_path):
+    from lantern.report import render
+    a = _report_marks(tmp_path, "a", render(_report_bundle(157, "2026-11-12 19:52 UTC")))
+    b = _report_marks(tmp_path, "b", _as_rows(_report_bundle(9131, "2026-11-13 00:03 UTC")))
+    assert a[speed.REPORT_DATA] == b[speed.REPORT_DATA]
+
+
+def _one_field_first(bundle: dict) -> dict:
+    """The same nodes with two fields of each the other way round: the same data in another order."""
+    first = [dict([("kind", n["kind"]), ("id", n["id"]), *list(n.items())[2:]]) for n in bundle["graph"]["nodes"]]
+    return {**bundle, "graph": {**bundle["graph"], "nodes": first}}
+
+
+@pytest.mark.parametrize("what, change", [
+    ("a node's line", lambda b: b["graph"]["nodes"][7].update(start_line=70)),
+    ("a node fewer", lambda b: b["graph"]["nodes"].pop()),
+    ("where a link goes", lambda b: b["graph"]["edges"][3].update(dst="py:app.f9")),
+    ("a link to a function that is not there", lambda b: b["graph"]["edges"][3].update(dst="py:app.gone")),
+    ("a number for a whole number", lambda b: b["graph"]["nodes"][2].update(start_line=2.0)),
+    ("an empty list for nothing", lambda b: b["graph"]["nodes"][2].update(decorators=None)),
+    ("a finding's line", lambda b: b["security"]["findings"][0].update(line=4)),
+    ("how a scanner ended", lambda b: b["security"]["tools"][0].update(state="partial")),
+    ("a function's lines", lambda b: b["sources"].update({"py:app.f1": "def f1(): return 1"})),
+    ("the score", lambda b: b["readiness"].update(score=72)),
+    ("a field more", lambda b: b.update(extra=1)),
+])
+@pytest.mark.parametrize("held", ["packed", "rows"])
+def test_anything_else_in_a_report_is_a_difference_in_its_data(tmp_path, what, change, held):
+    from lantern.report import render
+    make = render if held == "packed" else _as_rows
+    other = _report_bundle()
+    change(other)
+    a = _report_marks(tmp_path, "a", render(_report_bundle()))
+    b = _report_marks(tmp_path, "b", make(other))
+    assert speed.REPORT_DATA in speed.differing(a, b), what
+
+
+def test_the_same_data_in_another_order_is_a_difference(tmp_path):
+    from lantern.report import render
+    a = _report_marks(tmp_path, "a", render(_report_bundle()))
+    b = _report_marks(tmp_path, "b", render(_one_field_first(_report_bundle())))
+    assert speed.REPORT_DATA in speed.differing(a, b)
+
+
+def test_a_report_that_cannot_be_read_back_is_a_difference_and_says_why(tmp_path):
+    from lantern.report import render
+    good = render(_report_bundle())
+    assert '"packed":1' in good
+    marks = _report_marks(tmp_path, "bad", good.replace('"packed":1', '"packed":2'))       # not a way this Lantern writes
+    assert marks[speed.REPORT_DATA].startswith("not read: ") and "analyze again" in marks[speed.REPORT_DATA]
+    assert speed.REPORT_DATA in speed.differing(marks, _report_marks(tmp_path, "good", good))
+    cut = _report_marks(tmp_path, "cut", good[:good.index('"packed":1')] + "</script>")     # the data is cut short
+    assert cut[speed.REPORT_DATA].startswith("not read: ")
+    assert speed.REPORT_DATA not in _report_marks(tmp_path, "none", "<html>no data here</html>")
 
 
 def test_where_the_time_of_a_run_went():

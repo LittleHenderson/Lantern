@@ -90,6 +90,13 @@ ODD = {
     "packed inside the rows": _graph([_node(1, entry={"keys": ["a"], "n": 1, "cols": [["v", [1]]]})], []),
     "not a map": {"nodes": 1},
     "empty": {},
+    # tables in which every field holds one value for all rows: no column would say how many rows there are
+    "one row of plain values": _graph([{"id": "a", "k": 1, "t": None}], [{"kind": "calls", "w": 0.5}]),
+    "every row the same, all plain": _graph([{"id": "a", "k": 1}] * 4, [{"kind": "calls", "w": True}] * 3),
+    "one field, the same in every row": _graph([{"id": "a"}] * 3, [{"kind": "calls"}] * 2),
+    # equal in Python, and two values in a file
+    "zero and minus zero": _graph([{"id": f"n{i}", "w": [0.0, -0.0][i % 2]} for i in range(20)],
+                                  [{"kind": "calls", "w": [-0.0, 0.0, 0][i % 3]} for i in range(30)]),
 }
 
 
@@ -191,6 +198,11 @@ NOT_OURS = {
     "a value in an empty box": _col("edges", "src", ["r", [0] * (E - 1) + [[]]]),
     "a function where no node can be named": _col("nodes", "id", ["r", [0] * N]),
     "nothing but the same value for all": _packed(edges_cols=[["c", 1]] * 7),
+    "a column that is an empty list": _col("edges", "via", []),
+    "a column that is nothing": _col("edges", "via", None),
+    "a column that is a table": _col("edges", "via", {"0": "c", "1": "x"}),
+    "a list of values that is text": _col("edges", "via", ["t", "ab", [0] * E]),
+    "a list of values that is a table": _col("edges", "via", ["t", {"0": "a"}, [0] * E]),
 }
 
 
@@ -280,8 +292,9 @@ def _in_order(x):
 
 
 # what a page reads differently from Python whatever the map is written as: a number past what it can hold, a field
-# named with a number (the page puts those first), a lone half of a character
-SAME_IN_THE_PAGE = [n for n in ODD if n not in ("numbers, yes and no", "fields that are numbers")]
+# named with a number (the page puts those first), a lone half of a character; and minus zero, which the page holds
+# and writes down as `0` when its answer is handed back to this test
+SAME_IN_THE_PAGE = [n for n in ODD if n not in ("numbers, yes and no", "fields that are numbers", "zero and minus zero")]
 
 
 def test_the_page_turns_the_packed_map_back_into_the_same_rows(tmp_path):
@@ -299,6 +312,17 @@ def test_the_page_makes_a_row_of_its_own_for_every_link(tmp_path):
     (tmp_path / "x").mkdir()
     got = _unpack_in_the_page([_through_a_file(columns.pack_graph(graph)), graph], tmp_path / "x")
     assert dict(got[0][1])["ok"] == _in_order(graph) == dict(got[1][1])["ok"]      # a map that is not packed: as it is
+
+
+NO_ROWS = {"schema": 7, "nodes": {"keys": ["id", "kind"], "n": 0, "cols": [["v", []], ["c", "callable"]]},
+           "edges": {"keys": ["src"], "n": 0, "cols": [["r", []]]}, "packed": 1}
+
+
+def test_a_packed_table_with_no_rows_is_no_rows(tmp_path):
+    """No Lantern writes one (a list with no rows is left as it is), and it reads as what it says: nothing."""
+    assert columns.unpack_graph(_through_a_file(NO_ROWS)) == {"schema": 7, "nodes": [], "edges": []}
+    got = _unpack_in_the_page([NO_ROWS], tmp_path)
+    assert dict(got[0][1])["ok"] == _in_order({"schema": 7, "nodes": [], "edges": []})
 
 
 def test_the_page_stops_at_a_packed_map_that_is_not_ours(tmp_path):

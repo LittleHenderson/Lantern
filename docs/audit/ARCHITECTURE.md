@@ -63,7 +63,11 @@ lines and the server streams them to the browser.
 | `explain.py` | Prompt, JSON parsing, anchor validation, scenario checks, selection, cache | `validate`, `check_scenarios`, `select_nodes`, `run` |
 | `scenarios.py` | A short story per finding (who, steps, what goes wrong, after the fix, basis) and a plain heading, both from the finding's own facts; no model | `for_finding`, `headline`, `kind_of`, `attach` |
 | `providers.py` | Anthropic, OpenAI-compatible presets, fixture stub | `make_provider` |
-| `report.py` | Bundle data into `viewer/report.html` | `write_report`, `collect_sources` |
+| `report.py` | Bundle data into `viewer/report.html`; inside the page the map is written column by column and read back as the same rows (`columns.py`) | `write_report`, `collect_sources`, `render`, `read_bundle` |
+| `columns.py` | The map as a report holds it (2026-11-12): `nodes` and `edges` column by column, a value written once where every row has it, a node's id as its place in the list of nodes. What comes back is exactly what went in (rows, order of fields, kind of every value); a packed map of another shape is refused. Only a report is written this way; `graph.json` is as it was. The page's `unpackGraph` is the same reading in JavaScript | `pack_graph`, `unpack_graph` |
+| `kept.py` | Work kept between runs, in `LANTERN_HOME/cache` (2026-11-12): how one Python file reads and what Bandit said about a set of files, each under one SHA-256 of the whole question (the file's bytes and name, the code that does the work: this Lantern, the Python that runs it, the parser libraries). Never in the project, data and never code, the current user's files only, never a finding, a rank, a score or a link between files. Off for `lantern verify`, cloud runs and `LANTERN_CACHE=off` | `Shelf.key`, `Shelf.get`, `Shelf.put`, `on`, `without`, `tally`, `tidy`, `clear` |
+| `listing.py` | The project's files, looked up once for a whole run and shared by every reader (which files there are, never what they hold; outside a run every call walks the folder as before) | `one_run`, `files`, `once`, `fresh` |
+| `quick.py` | Which line patterns can find anything in a file at all: pieces of plain text every match must hold, read from the pattern's own structure; a file with none of them is passed over for that pattern, and whenever it cannot tell the answer is "may match" | `needs`, `may_match`, `Text` |
 | `server.py` | Local HTTP app, jobs, settings and keys store | `serve`, `Handler`, `Store`, `Jobs` |
 | `viewer/app.html` | App shell: Projects, project tabs, Explanations, Learn and Guide, Settings (with Appearance), Help | vanilla JS |
 | `viewer/report.html` | Atlas: map (path tree + flowchart), Findings (with severity filter), Readiness, About, node detail with lenses. Drops its own brand row when framed by the app | vanilla JS |
@@ -112,6 +116,11 @@ Local app state in `~/.lantern/` (or `$LANTERN_HOME`): `projects.json`, `setting
    only stands beside `Passed`. What was not run, not finished or not checked is `missing`, never passed.
 10. No rank is under the tool's own severity without the reason written on the finding. A path Lantern did not find
     is not such a reason.
+11. Being faster changes no result. Work kept from an earlier run is used only for a question that is the same in
+    every part (the bytes read, the name, the code that reads), so a run with kept work, a run without it
+    (`LANTERN_CACHE=off`) and the engine before 2026-11-12 write the same result files but for what a clock put
+    into them; a report holds the same data however the page holds it. `bench/speed.py` fails on any difference, and
+    `tests/test_kept.py` checks it on every sample. No check is switched off and no file is read less to save time.
 
 ## Request flow in the local app
 

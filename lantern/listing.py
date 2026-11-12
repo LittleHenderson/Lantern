@@ -55,14 +55,16 @@ class _Run:
                     continue
             try:
                 value = make()
-            finally:
+            except BaseException:
                 with self.lock:
                     self.making.pop(key, None)
-                gate.release()
-            with self.lock:
+                gate.release()              # the next one who waited walks for itself
+                raise
+            with self.lock:                 # kept before those who waited are let go: none of them walks again
+                self.making.pop(key, None)
                 if self.round == began:     # else the folder may have changed while it was walked: handed on, not kept
-                    self.kept.setdefault(key, value)
-                    return self.kept[key]
+                    value = self.kept.setdefault(key, value)
+            gate.release()
             return value
 
 

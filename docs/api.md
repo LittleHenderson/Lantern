@@ -107,6 +107,28 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`, `security`, `readiness`,
 `explanations`, `sources`, `stats`). The CLI writes the same files, so a UI can also be built on them directly.
 
+**How a report holds the map (since 2026-11-12).** Inside `report.html`, and only there, `graph.nodes` and
+`graph.edges` are written column by column (`lantern/columns.py`), because most of the time a phone needs to open a
+large report is the time it needs to take the file in (Django's report: 73,896,338 bytes before, 38,055,367 after,
+the same data). `graph.json` is unchanged. The page's first lines (`unpackGraph`) and `lantern.report.read_bundle`
+turn the map back into the rows described under `graph.json`, with the fields in the same order and every value of
+the same kind, before anything else looks at it; anything that reads a report's data block by itself must do the same
+or, simpler, read `graph.json`:
+
+| In the data block | Meaning |
+|---|---|
+| `graph.packed` = `1` | the map's last entry: `nodes` and `edges` are written as below. No such entry: they are lists of rows, as every earlier Lantern wrote them (still read) |
+| `nodes`, `edges` = `{"keys": [...], "n": N, "cols": [...]}` | `keys`: the fields in the rows' own order; `n`: how many rows; `cols`: one column for each field. A list that could not be written this way (rows that are not all tables with the same fields in the same order) stays a list of rows |
+| a column `["v", [values]]` | the value of every row, as it is |
+| `["c", value]` | every row has this one value (text, a number, yes/no or nothing; never a list or a table) |
+| `["t", [values], [places]]` | few different values, each written once; `places[i]` is the place of row `i`'s value in `values` |
+| `["r", [places]]` | for `parent`, `src` and `dst`: the id of a node, written as that node's place in `nodes` (counted from 0). A value that is no such id stands in a list of its own: `["ext:os.path"]`, `[null]` |
+| `{"as_it_was": {...}, "packed": 1}` | a map that came with an entry `packed` of its own (none Lantern writes has one) is not packed and stands whole under this name |
+
+A packed map of any other shape is refused, by the page (it draws nothing) and by `read_bundle` (`ValueError`, "this
+report's map is not written the way this Lantern writes it; analyze again"): another value of `packed`, a count of
+rows that no column's list has, a place outside its list, a field named `__proto__`.
+
 ### `graph.json`
 
 `{"schema", "repo_root", "meta", "nodes": [...], "edges": [...], "unresolved": {text: count}}`
@@ -608,7 +630,12 @@ record counts for nothing. The seal says which Lantern made the record, not that
 ### Other files
 
 `calls.json` (above), `run.json` (timings, privacy, offline, trace, `incomplete` `[{tool, state, status, why, role}]`,
-finished_at; `trace`, when a test command was asked for = `{command, returncode, observed_edges, recall, stderr_tail,
+finished_at; `kept`, since 2026-11-12 and only when the run asked for kept work = `{"<kind>": {"reused": n, "anew": n}}`
+for the kinds `python-file` (how a Python file reads) and `bandit` (what Bandit said about a set of files): how much
+of the work this run took from `LANTERN_HOME/cache` and how much it worked out anew, also said in the log as
+`kept    bandit: 1 from kept work, 0 anew; python-file: 2788 from kept work, 0 anew`; it is about the run, like its
+timings, and in no other result file, and a run with `LANTERN_CACHE=off`, a `lantern verify` and a cloud run have
+none; `trace`, when a test command was asked for = `{command, returncode, observed_edges, recall, stderr_tail,
 backend, language, traced, timed_out, blocked, not_ended, ran}`, or `{command, ran: false, unavailable: "<why>",
 returncode: null, observed_edges: 0, …}` when the sandbox could not be set up and the tests were not run;
 `lantern.trace.counted` says whether anything of the run is in the results; tests the person stopped leave no record,

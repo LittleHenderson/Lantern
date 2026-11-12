@@ -87,7 +87,12 @@ class NotNamed:
     x: int = 0
 
 
-SHELF = kept.Shelf("test-values", classes=(Inner, Outer))
+@dataclass
+class Bare:
+    """A record with no fields at all: its name is the whole of it."""
+
+
+SHELF = kept.Shelf("test-values", classes=(Inner, Outer, Bare))
 
 VALUES = [
     None, True, False, 0, -7, 2 ** 70, 1.5, -0.0, float("inf"), "", "text", "café ſ \U0001f512", "\ud800 half a pair",
@@ -98,6 +103,8 @@ VALUES = [
     Inner("f"), Inner("g", (3, 4), {"x", "y"}),
     Outer("o", [Inner("a"), Inner("b", (1, 1))], {"a": Inner("a", None, {"t"})}, odd=[(1, {"k": frozenset({"v"})})]),
     [Outer("deep", odd={"list": [Inner("z")], "tuple": (Inner("y"),)})],
+    Bare(), [Bare(), Inner("beside")],
+    Inner(3, (1, 2)),       # a record's first field need not be text
 ]
 
 
@@ -130,6 +137,15 @@ def test_a_record_class_must_be_named_to_be_read():
     other = kept.Shelf("test-values", classes=(Outer,))     # the same kind of work, read by code that names no Inner
     assert other.key("k") != key                            # ... which is another question in the first place
     assert other._read(key) is kept.NOTHING                 # ... and could not read the answer if it were not
+
+
+def test_only_record_classes_can_be_named_for_a_kind_of_kept_work():
+    for wrong in (Path, int, Inner("an instance, not the class")):
+        with pytest.raises(TypeError, match="only record classes"):
+            kept.Shelf("test-other", classes=(wrong,))
+    for wrong in ("Not A Kind", "", "../python-file", "9lives"):
+        with pytest.raises(ValueError, match="small letters"):
+            kept.Shelf(wrong)
 
 
 def test_the_key_is_the_whole_question(monkeypatch):
@@ -223,6 +239,8 @@ def test_an_entry_that_is_not_whole_is_no_entry(tmp_path):
                        ("a list", b"[1]"), ("no answer in it", json.dumps({"k": key}).encode()),
                        ("another question's", _entry(other).read_bytes()),
                        ("a record of another shape", json.dumps({"k": key, "v": ["\x01c", "Inner", "only one"]}).encode()),
+                       ("a record with a field too many",
+                        json.dumps({"k": key, "v": ["\x01c", "Inner", "a", None, ["\x01s"], "one more"]}).encode()),
                        ("a class nobody named", json.dumps({"k": key, "v": ["\x01c", "Path", "/etc/passwd"]}).encode()),
                        ("a class's name that is no text", json.dumps({"k": key, "v": ["\x01c", 7]}).encode()),
                        ("a mark nobody knows", json.dumps({"k": key, "v": ["\x01x", 1]}).encode()),
@@ -259,6 +277,8 @@ def test_what_is_kept_is_closed_to_other_users():
     for folder in (entry.parent, entry.parent.parent, kept.home()):
         assert folder.stat().st_mode & 0o777 == 0o700, folder
     assert not [p for p in entry.parent.iterdir() if p.name.endswith(".tmp")]       # nothing half-written is left
+    assert kept.tidy(now=entry.stat().st_mtime, force=True) == 0 and entry.exists()
+    assert (kept.home() / ".tidied").stat().st_mode & 0o777 == 0o600                # the mark of the last look too
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX owners")
@@ -378,7 +398,7 @@ def test_a_sample_gives_the_same_results_with_kept_work_and_without(sample, tmp_
     said = []
     pipeline.analyze(repo, tmp_path / "full", log=said.append, offline=True)
     off, empty, full = (speed.fingerprint(tmp_path / name) for name in ("off", "empty", "full"))
-    assert len(off) == 10
+    assert len(off) == 11 and len(off[speed.REPORT_DATA]) == 64     # every result file, and what the report holds
     assert speed.differing(off, empty) == [] and speed.differing(off, full) == []
     assert _all_files(repo) == before                   # nothing was written into the project
     run = json.loads((tmp_path / "full" / "run.json").read_text(encoding="utf-8"))
@@ -589,20 +609,22 @@ def _aged(key: str, days: float, now: float) -> Path:
 
 def test_what_nobody_asked_for_in_a_month_goes(tmp_path):
     now = 2_000_000_000.0
-    keys = {name: SHELF.key(name) for name in ("fresh", "a week", "29 days", "31 days", "a year")}
+    keys = {name: SHELF.key(name) for name in ("fresh", "a week", "29 days", "30 days", "31 days", "a year")}
     for k in keys.values():
         assert SHELF.put(k, ["x" * 100])
-    for name, days in (("fresh", 0), ("a week", 7), ("29 days", 29), ("31 days", 31), ("a year", 365)):
+    for name, days in (("fresh", 0), ("a week", 7), ("29 days", 29), ("30 days", 30), ("31 days", 31), ("a year", 365)):
         _aged(keys[name], days, now)
     stray = kept.home() / "test-values" / "notes.txt"
     stray.write_text("not an entry\n", encoding="utf-8")
     assert kept.tidy(now=now) == 2
-    assert {name for name, k in keys.items() if _entry(k).exists()} == {"fresh", "a week", "29 days"}
+    assert {name for name, k in keys.items() if _entry(k).exists()} == {"fresh", "a week", "29 days", "30 days"}
     assert stray.exists()                                    # only what is an entry by its name and place is ever removed
     assert kept.tidy(now=now + 3600) == 0                    # looked at the whole folder an hour ago: not again
-    _aged(keys["a week"], 40, now)
-    assert kept.tidy(now=now + 3600) == 0 and kept.tidy(now=now + 3600, force=True) == 1
-    assert kept.tidy(now=now + 2 * DAY) == 0 and _entry(keys["fresh"]).exists() is False or True
+    _aged(keys["a week"], 40, now)                           # with "30 days", now an hour over: two go
+    assert kept.tidy(now=now + 3600) == 0 and kept.tidy(now=now + 3600, force=True) == 2
+    assert kept.tidy(now=now + 3600 + DAY - 1) == 0          # a second short of a day since the last look
+    assert kept.tidy(now=now + 3600 + DAY) == 1              # a day since: looked at again, and "29 days" is over 30 now
+    assert {name for name, k in keys.items() if _entry(k).exists()} == {"fresh"}
 
 
 def test_the_folder_stays_under_its_cap_and_the_least_recently_used_go_first(monkeypatch):
@@ -616,6 +638,8 @@ def test_the_folder_stays_under_its_cap_and_the_least_recently_used_go_first(mon
     removed = kept.tidy(now=now, force=True)
     left = [i for i, k in enumerate(keys) if _entry(k).exists()]
     assert removed == 6 and left == [0, 1, 2, 3]             # down to four fifths of the cap, the oldest gone
+    monkeypatch.setattr(kept, "cap_bytes", lambda: each * 4)
+    assert kept.tidy(now=now, force=True) == 0               # exactly at the cap is not over it
     monkeypatch.setattr(kept, "cap_bytes", lambda: each * 100)
     assert kept.tidy(now=now, force=True) == 0
 
@@ -644,8 +668,31 @@ def test_what_a_cut_off_write_left_is_removed_a_day_later():
     left.write_bytes(b'{"k": "half')
     os.utime(left, (now - 3600, now - 3600))
     assert kept.tidy(now=now, force=True) == 0 and left.exists()         # an hour old: a write may be under way
+    os.utime(left, (now - DAY, now - DAY))
+    assert kept.tidy(now=now, force=True) == 0 and left.exists()         # a day to the second: not yet over a day
     os.utime(left, (now - 2 * DAY, now - 2 * DAY))
     assert kept.tidy(now=now, force=True) == 1 and not left.exists() and _entry(key).exists()
+
+
+def test_a_write_that_is_cut_off_leaves_a_file_the_tidy_up_knows(monkeypatch):
+    """The name a half-written entry has while it is written is the name `tidy` looks for a day later."""
+    class Cut(BaseException):
+        pass
+
+    def cut(src, dst):
+        raise Cut()
+
+    key = SHELF.key("never whole")
+    with monkeypatch.context() as only_here:
+        only_here.setattr(os, "replace", cut)
+        with pytest.raises(Cut):
+            SHELF.put(key, ["half"])
+    left = list(_entry(key).parent.iterdir())
+    assert len(left) == 1 and left[0].name.startswith("." + key[2:] + ".") and left[0].name.endswith(".tmp")
+    assert SHELF.get(key) is kept.NOTHING and kept.size() == (0, 0)
+    now = 2_000_000_000.0
+    os.utime(left[0], (now - 2 * DAY, now - 2 * DAY))
+    assert kept.tidy(now=now, force=True) == 1 and not left[0].exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs the right to make a link")
@@ -657,13 +704,71 @@ def test_clearing_removes_entries_and_nothing_else(tmp_path):
     precious.write_text("{}", encoding="utf-8")
     folder = _entry(keys[0]).parent
     os.symlink(precious, folder / ("cd" * 31 + ".json"))                 # named like an entry, and a link out
-    os.symlink(tmp_path, kept.home() / "test-linked")                    # a kind's folder that is a link
+    # a folder somewhere else that is laid out like kept work, with a file named like an entry in it
+    theirs = tmp_path / "theirs" / "ab" / ("ef" * 31 + ".json")
+    theirs.parent.mkdir(parents=True)
+    theirs.write_text("{}", encoding="utf-8")
+    os.symlink(tmp_path / "theirs", kept.home() / "test-linked")         # a kind's folder that is a link to it
+    os.symlink(tmp_path / "theirs" / "ab", kept.home() / "test-values" / "ab")   # and a part's folder that is one
+    # files named like entries where no entry is ever written: beside the kinds, in a folder that is no kind's,
+    # and in a kind's folder that is no part's
+    strays = [kept.home() / ("ef" * 31 + ".json"), kept.home() / "Not_A_Kind" / "ab" / ("ef" * 31 + ".json"),
+              kept.home() / "test-values" / "abc" / ("ef" * 31 + ".json")]
+    for stray in strays:
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("{}", encoding="utf-8")
     (kept.home() / "README.txt").write_text("the person's own note\n", encoding="utf-8")
+    assert kept.size()[0] == 5
+    assert kept.tidy(now=4_000_000_000.0, force=True) == 5               # decades on, every entry is an old entry
+    assert kept.size() == (0, 0)
+    for k in keys:
+        assert SHELF.put(k, [1])
     assert kept.size()[0] == 5
     assert kept.clear() == (5, 0)
     assert kept.size() == (0, 0)
     assert precious.read_text(encoding="utf-8") == "{}" and (kept.home() / "README.txt").exists()
     assert (folder / ("cd" * 31 + ".json")).is_symlink()
+    assert theirs.read_text(encoding="utf-8") == "{}"                    # nothing was removed through a link
+    assert all(stray.read_text(encoding="utf-8") == "{}" for stray in strays)
+
+
+def test_clearing_says_how_many_entries_would_not_go(monkeypatch):
+    keys = [SHELF.key("entry", str(i)) for i in range(5)]
+    for k in keys:
+        assert SHELF.put(k, [1])
+    held = {_entry(keys[1]), _entry(keys[3])}
+    unlink = os.unlink
+
+    def some_stay(path, *a, **kw):
+        if Path(path) in held:
+            raise PermissionError("in use")
+        return unlink(path, *a, **kw)
+
+    monkeypatch.setattr(os, "unlink", some_stay)
+    assert kept.clear() == (3, 2)
+    assert kept.size()[0] == 2 and all(p.exists() for p in held)
+    monkeypatch.setattr(os, "unlink", unlink)
+    assert kept.clear() == (2, 0) and kept.size() == (0, 0)
+
+
+def test_a_home_that_is_not_there_yet_is_made_with_the_folders_above_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("LANTERN_HOME", str(tmp_path / "not" / "there" / "yet"))
+    key = SHELF.key("first of all")
+    assert SHELF.put(key, [1]) is True and SHELF.get(key) == [1]
+    assert kept.home() == tmp_path / "not" / "there" / "yet" / "cache" and kept.size()[0] == 1
+
+
+def test_an_answer_over_the_size_is_not_kept_and_not_read(monkeypatch):
+    key, other = SHELF.key("just fits"), SHELF.key("one more")
+    assert SHELF.put(key, "x" * 500)
+    size = _entry(key).stat().st_size
+    monkeypatch.setattr(kept, "MAX_ENTRY", size)                         # exactly as long as may be kept
+    assert SHELF.put(key, "y" * 500) is True and SHELF.get(key) == "y" * 500
+    assert SHELF.put(other, "x" * 501) is False and not _entry(other).exists()   # one more is not written
+    monkeypatch.setattr(kept, "MAX_ENTRY", size - 1)
+    assert SHELF.get(key) is kept.NOTHING                                # and one that is there is not read
+    monkeypatch.setattr(kept, "MAX_ENTRY", size)
+    assert SHELF.get(key) == "y" * 500
 
 
 def test_tidying_never_stops_a_run(tmp_path, monkeypatch):
