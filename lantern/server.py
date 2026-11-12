@@ -1202,7 +1202,8 @@ def _list_dir(raw: str) -> dict:
 LOCKED_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Lantern</title><body style="font:15px/1.5 system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 16px">
 <h1 style="font-size:20px">Lantern is running</h1><p>For safety, open the link that <code>lantern serve</code> printed
-in your terminal (it contains a one-time token). Run <code>lantern serve</code> again to get a new link.</p></body>"""
+in your terminal (it contains a one-time token). Run <code>lantern serve</code> again to get a new link.</p>
+<p><a href="/guide">How to use Lantern</a> (short animated demos; no link needed).</p></body>"""
 
 
 def _usage_sender() -> None:

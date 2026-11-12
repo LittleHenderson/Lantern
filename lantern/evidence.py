@@ -931,6 +931,7 @@ button.print{{float:right;position:relative;z-index:1;font:inherit;font-size:12.
 .seg{{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:var(--hover)}} .seg button{{font:600 12px var(--font);padding:5px 10px;border-radius:7px;border:0;background:none;color:var(--muted);cursor:pointer}} .seg button.on{{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(16,16,20,.08),0 0 0 1px var(--line)}}
 .topbar .btn{{font:600 12.5px var(--font);height:32px;padding:0 12px;border-radius:9px;border:1px solid var(--line-2);background:var(--panel);color:var(--ink);cursor:pointer}}
 .topbar .dg{{font:12px var(--mono);color:var(--muted);padding:0 8px}}
+.topbar a.btn{{display:inline-flex;align-items:center;text-decoration:none}} #guidelink[hidden]{{display:none}}
 .eyebrow{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font:600 11px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}}
 h1.memo{{font:600 26px/1.3 var(--display);letter-spacing:-.02em;margin:14px 0 10px;text-wrap:pretty}}
 p.lead{{font-size:15px;line-height:1.65;color:var(--body);margin:0 0 18px}} p.lead b{{color:var(--ink)}}
@@ -969,7 +970,7 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
 <div class="topbar"><span class="muted" style="font-weight:600;color:var(--ink)">{E(h['name'])} / Evidence Report</span><span class="sp"></span>
 <div class="seg" id="mode"><button data-m="simple" class="on">Simple</button><button data-m="advanced">Advanced</button></div>
 <span class="dg" title="{E(ev['digest'])}">digest {E(ev['digest'][:14])}…{E(ev['digest'][-4:])}</span>
-<button class="btn" id="copyverify">Copy verify command</button><button class="btn" id="savepdf">Save as PDF</button></div>
+<button class="btn" id="copyverify">Copy verify command</button><button class="btn" id="savepdf">Save as PDF</button><a class="btn" id="guidelink" href="https://lantern-cloud.fly.dev/guide" rel="noopener" title="How to use Lantern: short animated demos">How to use Lantern</a></div>
 <section><div class="eyebrow"><span>Evidence Report · Lantern {E(__version__)}</span><span>{E(h['name'])}{(' · commit ' + E(commit[:7])) if commit else ''} · {E(h['generated_at'][:10])}</span></div>
 <h1 class="memo">{memo['title']}</h1>
 <p class="lead">{memo['lead']}</p>
@@ -1040,6 +1041,12 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
   cv.onclick = function () {{ if (navigator.clipboard) navigator.clipboard.writeText(cmd); cv.textContent = 'Copied'; }};
   document.getElementById('savepdf').onclick = function () {{ window.print(); }};   // no inline handler: the page's script policy refuses them
   try {{ if (window.self !== window.top) {{ document.querySelector('.topbar .seg').style.display = 'none'; document.documentElement.classList.add('framed'); }} }} catch (e) {{}}
+  // How to use Lantern: the app or website around a framed page has the button; on its own, this site's /guide when
+  // Lantern serves the page (/p/, /r/, /s/), else the website's guide (a plain link: nothing is fetched until clicked).
+  var gl = document.getElementById('guidelink'), framed = true;
+  try {{ framed = window.self !== window.top; }} catch (e) {{}}
+  if (framed) gl.hidden = true;
+  else if (/^https?:$/.test(location.protocol) && /^\\/(p|r|s)\\//.test(location.pathname)) gl.setAttribute('href', '/guide');
 }})();
 </script></body></html>"""
 

@@ -92,7 +92,8 @@ def _note_page(title: str, text: str) -> str:
             f"<title>{title} · Lantern</title><body style=\"margin:0;min-height:100vh;display:grid;place-items:center;"
             "background:#F5F5F2;color:#46464C;font:15px/1.55 -apple-system,'Segoe UI',Roboto,sans-serif;padding:24px\">"
             "<div style=\"max-width:420px;text-align:center\"><div style=\"font:700 22px -apple-system,'Segoe UI',sans-serif;"
-            f"color:#161618;margin-bottom:8px;letter-spacing:-.02em\">{title}</div>{text}</div>")
+            f"color:#161618;margin-bottom:8px;letter-spacing:-.02em\">{title}</div>{text}"
+            "<p style=\"margin-top:18px;font-size:13.5px\"><a href=\"/guide\" style=\"color:#0B5F5A\">How to use Lantern</a></p></div>")
 
 
 SHARE_GONE = _note_page("This link is off", "Its owner stopped sharing this report, or deleted it. "

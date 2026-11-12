@@ -104,7 +104,7 @@ header{flex:none;background:var(--surface);border-bottom:1px solid var(--line);z
 .brand .repo{font:12px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 .iconbtn{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;color:var(--muted)}
 .iconbtn:hover{background:var(--hover);color:var(--ink)}
-.iconbtn .ic{width:17px;height:17px}
+.iconbtn .ic{width:17px;height:17px} a.iconbtn{text-decoration:none} #guidelink[hidden]{display:none}
 body.embed>header{display:none} body.embed .brand{display:none} body.embed nav.tabs{display:none} body.embed .seg.mode{display:none} body.embed .xnote{display:none}
 .bar2{display:flex;align-items:center;gap:16px;padding:0 16px;min-height:48px}
 @media (max-width:1100px){.bar2 .chips .chip{display:none}}
@@ -676,7 +676,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
 </head>
 <body>
 <header>
-  <div class="brand"><button class="home" id="brandhome" title="Back to the start of this report" aria-label="Lantern: back to the start of this report"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b></button><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
+  <div class="brand"><button class="home" id="brandhome" title="Back to the start of this report" aria-label="Lantern: back to the start of this report"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b></button><span class="repo" id="repo"></span><a class="iconbtn" id="guidelink" href="https://lantern-cloud.fly.dev/guide" rel="noopener" aria-label="How to use Lantern" title="How to use Lantern: short animated demos"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M8.5 8v4l3.5-2z"/></svg></a><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
   <div class="bar2">
     <nav class="tabs" id="tabs">
       <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="xp">Explanations</button><button data-t="about">About</button><button data-t="fix" hidden aria-label="Fix">Fix</button>
@@ -783,6 +783,12 @@ try { if (window.LANTERN_LIVE && window.self !== window.top) document.body.class
 // Static markup only: nothing from the report's data is ever interpolated here.
 const IN_FRAME = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
 if (IN_FRAME) document.documentElement.classList.add('framed');
+// How to use Lantern: inside the app or the website the bar around this report has the button, so it shows only when
+// the report is open on its own. Served by Lantern (/p/, /r/, /s/) it is this site's own /guide; opened from disk or
+// any other site it is the website's guide. A plain link: nothing is fetched until it is clicked.
+{ const g = document.getElementById('guidelink');
+  if (IN_FRAME) g.hidden = true;
+  else if (/^https?:$/.test(location.protocol) && /^\/(p|r|s)\//.test(location.pathname)) g.href = '/guide'; }
 function backdropHTML() {
   const hex = (cx, cy, r) => Array.from({length: 6}, (_, i) => `${(cx + r * Math.cos(Math.PI / 3 * i - Math.PI / 6)).toFixed(1)},${(cy + r * Math.sin(Math.PI / 3 * i - Math.PI / 6)).toFixed(1)}`).join(' ');
   const st = 'fill="none" stroke-width="1.2" vector-effect="non-scaling-stroke"';
