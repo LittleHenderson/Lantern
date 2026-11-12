@@ -25,7 +25,10 @@ def test_sql_injection_reachable_from_route(result):
     assert f["node"] == "py:shop.repo.UserRepo.get"
     assert f["reachable"]["path"] == [
         "py:shop.app.read_user", "py:shop.auth.Session.login", "py:shop.repo.UserRepo.get"]
-    assert f["rank"] == "high"
+    # Bandit rates the pattern medium, which alone made this high. Since the data-flow stage Lantern follows the
+    # route's parameter through `Session.login` into the query text, and a query built from request data is critical.
+    assert f["flow"]["class"] == "sql" and f["flow"]["source"]["file"] == "shop/app.py", f["flow"]
+    assert f["rank"] == "critical" and f["tool_severity"] == "MEDIUM"
 
 
 def test_shell_injection_is_critical(result):
@@ -120,13 +123,19 @@ def test_critical_needs_input_on_the_flagged_line(tmp_path):
         "@app.post('/nightly')\ndef nightly():\n    subprocess.run(CMD, shell=True)\n", encoding="utf-8")
     g = build_graph(tmp_path)
     f = {x["line"]: x for x in scan(g)["findings"] if x["rule"] == "B602"}
-    assert f[8]["rank"] == "critical" and f[8]["input"] == {"via": "parameter `name`"}
-    assert f[12]["rank"] == "high" and f[12]["input"] is False
+    assert f[8]["rank"] == "critical"
+    assert f[8]["input"] == {"via": "`name` arrives with the request (a parameter of `run`, POST /run)", "flow": True}
+    # the command that is fixed text: no input, as before; since the data-flow stage that is said as evidence
+    # (nothing from outside is put into the text), and the rank is low where it was high
+    assert f[12]["input"] is False
+    assert f[12]["rank"] == "low" and f[12]["rank_before_context"] == "high"
+    assert "Only fixed text reaches this line" in f[12]["rank_note"]
 
 
 def test_input_through_a_local_variable_is_still_critical(tmp_path):
-    """The classic shape: read the request into a variable, use it on the next line. Lantern follows assignments
-    inside the function, in order, and names the line that set the variable. A constant stays high."""
+    """The classic shape: read the request into a variable, use it on the next line. Lantern follows the value
+    from the line that read it, and the steps name each line that gave it a new name. A constant is not request
+    data: `input` is False, and since the data-flow stage the rank is low, with the reason written on the finding."""
     from lantern.engine import build_graph
     from lantern.security import scan
     (tmp_path / "app.py").write_text(
@@ -140,11 +149,15 @@ def test_input_through_a_local_variable_is_still_critical(tmp_path):
     g = build_graph(tmp_path)
     f = {x["node"].rsplit(".", 1)[-1]: x for x in scan(g)["findings"] if x["rule"] == "B602"}
     assert f["run"]["rank"] == "critical"
-    assert f["run"]["input"] == {"via": "`cmd`, which line 8 sets from request data `request.args`"}
+    assert f["run"]["input"] == {"via": "`cmd` in `request.args` is what the request sent", "flow": True}
+    assert [s["line"] for s in f["run"]["flow"]["steps"]] == [8, 9]
     assert f["run2"]["rank"] == "critical"   # bandit points at the `shell=True` line inside the multi-line call
-    assert f["run2"]["input"]["via"] == ("`cleaned`, which line 14 sets from `raw`, which line 13 sets from request "
-                                         "data `request.form`")
-    assert f["nightly"]["rank"] == "high" and f["nightly"]["input"] is False
+    assert f["run2"]["input"]["via"] == "`cmd` in `request.form` is what the request sent"
+    assert [(s["line"], s["what"]) for s in f["run2"]["flow"]["steps"]][:2] == [
+        (13, "`cmd` in `request.form` is what the request sent"), (14, "`cleaned` is set from it")]
+    assert f["run2"]["flow"]["steps"][-1]["line"] == 15
+    assert f["nightly"]["input"] is False
+    assert f["nightly"]["rank"] == "low" and f["nightly"]["rank_before_context"] == "high"
 
 
 def test_input_follows_assignments_in_js_handlers(tmp_path):
@@ -159,14 +172,20 @@ def test_input_follows_assignments_in_js_handlers(tmp_path):
         encoding="utf-8")
     f = {x["line"]: x for x in scan(build_graph(tmp_path))["findings"] if x["rule"] == "LJ-EXEC"}
     assert f[8]["rank"] == "critical"
-    assert f[8]["input"] == {"via": "`full`, which line 7 sets from `cmd`, which line 6 sets from request data `req.body`"}
-    assert f[14]["rank"] == "high" and f[14]["input"] is False
+    assert f[8]["input"] == {"via": "`cmd` in `req.body` is what the request sent", "flow": True}
+    assert [(s["line"], s["what"]) for s in f[8]["flow"]["steps"]][:2] == [
+        (6, "`cmd` in `req.body` is what the request sent"), (7, "`full` is set from it")]
+    assert f[8]["flow"]["steps"][-1]["line"] == 8
+    # 'backup ' + 'all': fixed text, so no input as before, and now low with the reason on the finding
+    assert f[14]["input"] is False
+    assert f[14]["rank"] == "low" and f[14]["rank_before_context"] == "high" and "fixed text" in f[14]["rank_note"]
 
 
 def test_reassigning_a_safe_value_clears_the_input(tmp_path):
     """`cmd = request.args.get(...)` then `cmd = "ls -la"` at the same level: the request value is gone, so the
-    line is high, not critical. A default inside an `if` block (`if not cmd: cmd = "ls"`) does not clear it,
-    nor does `cmd += "x"`, nor a reassignment that still uses the tainted name."""
+    line is not critical (it was high; since the data-flow stage it is low, because only fixed text reaches it).
+    A default inside an `if` block (`if not cmd: cmd = "ls"`) does not clear it, nor does `cmd += "x"`, nor a
+    reassignment that still uses the tainted name."""
     from lantern.engine import build_graph
     from lantern.security import scan
     (tmp_path / "app.py").write_text(
@@ -182,9 +201,12 @@ def test_reassigning_a_safe_value_clears_the_input(tmp_path):
         "@app.route('/param', methods=['POST'])\ndef param(cmd):\n    cmd = 'ls'\n    subprocess.run(cmd, shell=True)\n",
         encoding="utf-8")
     f = {x["node"].rsplit(".", 1)[-1]: x for x in scan(build_graph(tmp_path))["findings"] if x["rule"] == "B602"}
-    assert f["reset"]["rank"] == "high" and f["reset"]["input"] is False
-    assert f["param"]["rank"] == "high" and f["param"]["input"] is False
+    for name in ("reset", "param"):
+        assert f[name]["input"] is False
+        assert f[name]["rank"] == "low" and f[name]["rank_before_context"] == "high", name
+        assert "Only fixed text reaches this line" in f[name]["rank_note"]
     assert f["default"]["rank"] == "critical"
-    assert f["default"]["input"] == {"via": "`cmd`, which line 14 sets from request data `request.args`"}
+    assert f["default"]["input"] == {"via": "`cmd` in `request.args` is what the request sent", "flow": True}
     assert f["append"]["rank"] == "critical" and f["wrap"]["rank"] == "critical"
-    assert f["wrap"]["input"]["via"].startswith("`cmd`, which line 28 sets from `cmd`, which line 27 sets from")
+    assert [s["line"] for s in f["wrap"]["flow"]["steps"]] == [27, 28, 29]
+    assert "rank_note" not in f["default"] and "rank_note" not in f["append"] and "rank_note" not in f["wrap"]

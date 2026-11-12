@@ -109,7 +109,31 @@ def build(f: dict, g: Graph) -> dict:
                                   "Text that is not fixed is spliced into the SQL") + ": " +
                          "; ".join(f"{x['expr']} ({x['why']})" for x in s.get("spliced", [])[:4]),
                          "from": "context (code)"})
-    if f.get("input"):
+    fl = f.get("flow")
+    if ctx.get("fixed"):
+        fx = ctx["fixed"]
+        if fx["calls"]:
+            fact = f"Every call of `{fx['function']}` in the project hands it fixed text: " + "; ".join(
+                f"`{c['from']}` at {c['file']}:{c['line']}" for c in fx["calls"][:4]) + (
+                f" and {fx['count'] - 4} more" if fx["count"] > 4 else "")
+        else:
+            fact = "The text that reaches this line is written in the code itself; nothing from outside is put into it"
+        evidence.append({"fact": fact, "from": "data flow"})
+    elif fl and fl.get("class") == "record":
+        src, snk = fl["source"], fl["sink"]
+        evidence.append({"fact": f"An id from the request was followed to the look-up at {snk['file']}:{snk['line']} "
+                                 f"(`{snk['what']}`) in {len(fl['steps'])} steps, starting at {src['file']}:"
+                                 f"{src['line']}: {src['what']}" + (
+                                     f" ({fl['count'] - 1} more reach a record on this route too)"
+                                     if fl["count"] > 1 else ""), "from": "data flow"})
+    elif fl:
+        src = fl["source"]
+        evidence.append({"fact": f"Request data was followed to this line in {len(fl['steps'])} steps, starting at "
+                                 f"{src['file']}:{src['line']}: {src['what']}" + (
+                                     f" ({fl['count'] - 1} more origin(s) reach it too)" if fl["count"] > 1 else "") + (
+                                     ". One step rests on a call matched by name only." if fl["confidence"] == "LOW"
+                                     else ""), "from": "data flow"})
+    elif f.get("input"):
         evidence.append({"fact": f"Request data reaches this line ({f['input'].get('via')})", "from": "input check"})
     elif f.get("input") is False:
         evidence.append({"fact": "Nothing from the request reaches this line inside its function", "from": "input check"})
@@ -164,9 +188,54 @@ def build(f: dict, g: Graph) -> dict:
                                     "input check: " + (f["input"].get("via") if f.get("input") else
                                                        "nothing from the request" if f.get("input") is False
                                                        else "not checked (input is followed from server routes, commands and scripts only)")))
-            if ctx.get("sql") and ctx["sql"]["fixed_only"]:
+            if fl:
+                conditions[-1] = _cond("What they send reaches this line", True,
+                                       f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}")
+            elif ctx.get("sql") and ctx["sql"]["fixed_only"]:
                 conditions[-1] = _cond("What they send becomes part of the SQL text", False,
                                        "only fixed text is spliced; values go to the driver separately")
+            elif ctx.get("fixed"):
+                conditions[-1] = _cond("What they send reaches this line", False, "data flow: " + (
+                    f"every call of `{ctx['fixed']['function']}` hands it fixed text" if ctx["fixed"]["calls"] else
+                    "the text is written in the code itself"))
+        if kind in ("owner", "owner-late"):
+            conditions.append(_cond("The request chooses which record is reached", True if fl else None,
+                                    f"data flow: followed in {len(fl['steps'])} steps from {fl['source']['what']}"
+                                    if fl else "not followed"))
+            if kind == "owner-late":
+                conditions.append(_cond("Whose the record is gets asked only after this line", True,
+                                        "the route compares the owner (or asks for a role), and nothing it runs "
+                                        "before this line does"))
+            else:
+                conditions.append(_cond("Nothing compares the record's owner with who is signed in", True,
+                                        "no such comparison on this route, in what runs before it, or in the "
+                                        "functions it calls that Lantern read"))
+            conditions.append(_cond("The record is one person's, not something every signed-in person may see", None,
+                                    "Lantern does not know which records are private"))
+            unknown.append("a rule outside the code Lantern reads (the database's own row rules, a library's "
+                           "permission check under a name Lantern does not know) may still decide who sees the record")
+        elif kind == "role":
+            conditions.append(_cond("The route is meant for admins only", None,
+                                    "taken from its address; Lantern does not know what the route is meant for"))
+            conditions.append(_cond("Nothing asks what the signed-in person may do", True,
+                                    "no role or permission is asked on this route, in what runs before it, or in "
+                                    "the functions it calls that Lantern read"))
+            unknown.append("a check that covers the whole app from a place Lantern does not connect to this route "
+                           "(a proxy, middleware added for every route) may still ask for an admin")
+        elif kind == "client-role":
+            c = f.get("claim") or {}
+            conditions.append(_cond("Whoever sends the request writes the value the route decides on", True,
+                                    f"it is read from {c.get('sent_as') or 'the request'}: {c.get('what') or 'not kept'}"))
+            conditions.append(_cond("Nothing asks what the signed-in person may do", True,
+                                    "no role or permission of the signed-in person is asked on these routes, in what "
+                                    "runs before them, or in the functions they call that Lantern read"))
+            conditions.append(_cond("The decision gives something only some people may have", None,
+                                    "taken from the value's name; Lantern does not know what the branch protects"))
+            unknown.append("a proxy in front of the app may write this value itself and remove the visitor's own, "
+                           "and a value may be signed and checked in code Lantern did not connect to this line")
+        elif kind == "mass-assign":
+            conditions.append(_cond("The record has a field a visitor must not set", None,
+                                    "Lantern does not read which fields the record has"))
         if ctx.get("hash"):
             h = ctx["hash"]
             conditions.append(_cond("The hash protects a password, token or signature",

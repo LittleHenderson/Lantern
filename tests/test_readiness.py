@@ -131,8 +131,12 @@ def test_shop_fixture_end_to_end(tmp_path):
 
 
 def test_accept_finding_and_fail_on(tmp_path):
-    _write(tmp_path, {"app.py": "import subprocess\n\ndef run(cmd):\n    subprocess.call(cmd, shell=True)\n\n"
-                                "if __name__ == '__main__':\n    run('ls')\n"})
+    # The command comes from whoever starts the script. (Until 2026-11-11 this sample ran the fixed text 'ls'; since
+    # Lantern follows values across functions, a command made only of fixed text ranks low with the reason written on
+    # it, and this test is about accepting a finding that counts.)
+    _write(tmp_path, {"app.py": "import subprocess\nimport sys\n\ndef run(cmd):\n"
+                                "    subprocess.call(cmd, shell=True)\n\n"
+                                "if __name__ == '__main__':\n    run(sys.argv[1])\n"})
     out = tmp_path / "out"
     assert main(["analyze", str(tmp_path), "--out", str(out)]) == 0
     sec = json.loads((out / "security.json").read_text(encoding="utf-8"))
@@ -141,7 +145,7 @@ def test_accept_finding_and_fail_on(tmp_path):
     assert main(["analyze", str(tmp_path), "--out", str(out), "--fail-on", worst]) == 1
     assert main(["accept", str(tmp_path), f["id"], "--out", str(out), "--reason", "short"]) == 2
     assert main(["accept", str(tmp_path), f["id"], "--out", str(out),
-                 "--reason", "Only runs fixed commands from our own admin script", "--by", "tester"]) == 0
+                 "--reason", "Only runs commands we type ourselves, from our own admin script", "--by", "tester"]) == 0
     saved = json.loads((tmp_path / "lantern-accepted.json").read_text(encoding="utf-8"))
     assert saved["accepted"][0]["by"] == "tester"
     assert main(["analyze", str(tmp_path), "--out", str(out), "--fail-on", worst]) == 0
