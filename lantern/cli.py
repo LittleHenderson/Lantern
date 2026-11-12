@@ -4,6 +4,7 @@
   lantern learn [NAME [DIR]]                              create a starter app to learn Lantern step by step
   lantern analyze PATH [--trace -- python -m pytest -q]   build the graph, scan, write report
   lantern trace PATH -- python -m pytest -q               record what actually runs
+  lantern behave PATH                                     start the app in the sandbox and run its lantern-behaviour.json
   lantern explain PATH                                    add Three-Lens explanations (Claude Haiku by default)
   lantern login --github | --google                        get a free allowance (sign in once)
   lantern login --token TOKEN                             use a token you already have
@@ -191,6 +192,47 @@ def cmd_trace(a, trace_cmd: list[str]) -> int:
     write_report(out, g, _load(out, "security.json"), _load(out, "explanations.json"),
                  run.get("privacy", "full"), run.get("timings"), _load(out, "readiness.json"))
     return 0
+
+
+def _printable(text: str) -> str:
+    return "".join(ch if ch.isprintable() else "?" for ch in text)
+
+
+def cmd_behave(a) -> int:
+    """Run the project's behaviour plan (docs/behaviour.md). 0 only when every case held; 1 when a case is broken,
+    undecided or was not run; 2 when there is no plan or it cannot be used; 3 when the app was not started."""
+    from . import behave
+    repo = Path(a.path).resolve()
+    if not repo.is_dir():
+        print(f"error: {a.path} is not a folder", file=sys.stderr)
+        return 2
+    out = _out(repo, a.out)
+    try:
+        record = behave.run(repo, out=out, log=lambda line: print(line, file=sys.stderr))
+    except behave.PlanError as e:
+        print(f"error: {behave.PLAN_NAME} cannot be used: {e}", file=sys.stderr)
+        return 2
+    if not record["ran"]:
+        print(f"not run {record['why_not']}")
+        return 2 if record.get("no_plan") else 3
+    for o in record["outcomes"]:
+        if o["outcome"] != "held":
+            saw = o.get("saw") or {}
+            detail = "; ".join(x for x in (o.get("said") or o.get("why") or "",
+                                           f"status {saw['status']}" if saw.get("status") is not None else "",
+                                           f"changed {json.dumps(saw['changed'])}" if saw.get("changed") else "",
+                                           f"tried {'; '.join(saw['tried'])}" if saw.get("tried") else "",
+                                           f"outside its folders {json.dumps(saw['outside'])}" if saw.get("outside") else "")
+                               if x)
+            # what the app tried is text a request may have chosen: nothing of it reaches the terminal unprintable
+            print(_printable(f"{o['outcome']:13} {o['check']} / {o['case']}: {detail}"))
+            if o.get("about"):
+                print(_printable(f"{'':13} {o['about']}"))
+    s = record["summary"]
+    print(f"behave        {s['held']} held, {s['broken']} broken, {s['inconclusive']} undecided, {s['not-run']} not run "
+          f"({record.get('seconds')} s inside the sandbox)")
+    print(f"wrote         {out / behave.RESULT_NAME}")
+    return 0 if s["held"] and not (s["broken"] or s["inconclusive"] or s["not-run"]) else 1
 
 
 def cmd_explain(a) -> int:
@@ -446,6 +488,9 @@ def _main(argv: list[str]) -> int:
     sp = sub.add_parser("trace", help="run a command and mark calls that actually happen")
     common(sp)
 
+    sp = sub.add_parser("behave", help="start the app in the test sandbox and run the project's lantern-behaviour.json")
+    common(sp)
+
     sp = sub.add_parser("explain", help="add Three-Lens explanations")
     common(sp)
     sp.add_argument("--model", help="PROVIDER/MODEL. Default: anthropic/claude-haiku-5-5 with ANTHROPIC_API_KEY, "
@@ -546,6 +591,8 @@ def _main(argv: list[str]) -> int:
         return cmd_analyze(a, trace_cmd if a.trace else [])
     if a.cmd == "trace":
         return cmd_trace(a, trace_cmd)
+    if a.cmd == "behave":
+        return cmd_behave(a)
     if a.cmd == "explain":
         return cmd_explain(a)
     if a.cmd == "login":

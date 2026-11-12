@@ -1,3 +1,5 @@
+import pytest
+
 from lantern.engine import build_graph
 from lantern.readiness import assess
 from lantern.security import scan
@@ -42,6 +44,12 @@ def test_protections_in_place_are_recognized(tmp_path):
     files["svc/main.py"] = (files["svc/main.py"].replace("hashlib.sha256(password.encode()).hexdigest()",
                                                          "bcrypt.hashpw(password.encode(), bcrypt.gensalt())")
                             .replace("import hashlib", "import bcrypt")
+                            # 2026-11-11: `slowapi` in the dependencies alone read "in place" here. A library that
+                            # is installed limits nothing, so the limiter is now put on the sign-in route
+                            # (tests/test_ratelimit.py has the installed-only case, which reads "add").
+                            .replace("app = FastAPI()\n", "app = FastAPI()\nlimiter = Limiter(key_func=lambda: 'ip')\n")
+                            .replace("@app.post('/login')\n", "@app.post('/login')\n@limiter.limit('5/minute')\n")
+                            .replace("import requests\n", "import requests\nfrom slowapi import Limiter\n")
                             .replace("return requests.get(url).text", "assert host_of(url) in ALLOWED_HOSTS\n"
                                      "    return requests.get(url).text")
                             .replace("return await file.read()", "assert file.content_type == 'image/png'\n"
@@ -170,7 +178,9 @@ def test_a_payload_field_named_like_an_auth_word_is_data(tmp_path):
     ).replace(
         "    settings.is_admin = True\n", "    if not current_user.is_admin:\n        raise ValueError\n",
     ).replace(
-        "    permissions.append('x')\n", "    permissions.append('x')\n    jwt.decode(token)\n",
+        # until 2026-11-11 `jwt.decode(token)`: a token read with no key is checked by nothing, and since the flow
+        # step reads a login from what the code does the route is listed as open (the cards at the end of this file)
+        "    permissions.append('x')\n", "    permissions.append('x')\n    jwt.decode(token, KEY, algorithms=['HS256'])\n",
     )
     _write(tmp_path, files)
     p = _prot(tmp_path)["route-auth"]
@@ -324,12 +334,23 @@ def test_words_in_strings_and_pattern_lists_are_not_protections(tmp_path):
 
 
 def test_in_place_protections_say_what_was_found(tmp_path):
+    # Until 2026-11-11 this test held the opposite: `slowapi` in the dependencies, used nowhere, read "in place" with
+    # `found == ["slowapi in the dependencies"]`. A library that is installed protects nothing (directive point 4), so
+    # that case is now "add" and says the library is not put to work; "in place" names the route and the limiter.
     files = dict(BARE)
     files["pyproject.toml"] = files["pyproject.toml"].replace('"requests"]', '"requests", "slowapi"]')
-    _write(tmp_path, files)
-    p = _prot(tmp_path)["rate-limit"]
-    assert p["status"] == "in place" and p["found"] == ["slowapi in the dependencies"]
-    assert "was found" in p["why"] and "can be called as fast" not in p["why"]
+    _write(tmp_path / "installed", files)
+    p = _prot(tmp_path / "installed")["rate-limit"]
+    assert p["status"] == "add" and p["found"] == [], p
+    assert "`slowapi` is installed" in p["why"] and "can be called as fast" in p["why"], p
+    files["svc/main.py"] = (files["svc/main.py"]
+                            .replace("app = FastAPI()\n", "app = FastAPI()\nlimiter = Limiter(key_func=lambda: 'ip')\n")
+                            .replace("@app.post('/login')\n", "@app.post('/login')\n@limiter.limit('5/minute')\n")
+                            .replace("import requests\n", "import requests\nfrom slowapi import Limiter\n"))
+    _write(tmp_path / "used", files)
+    p = _prot(tmp_path / "used")["rate-limit"]
+    assert p["status"] == "in place" and p["found"] == ["POST /login: `limiter.limit` on the route (svc/main.py:9)"], p
+    assert "puts a request limit on it" in p["why"] and "can be called as fast" not in p["why"], p
 
 
 def test_routes_in_test_code_are_not_the_apps_routes(tmp_path):
@@ -368,3 +389,157 @@ def test_signing_out_needs_no_login(tmp_path):
     for d in ("POST /v1/signout", "POST /api/sign-out", "POST /log-out", "POST /logout"):
         assert is_public_route(d), d
     assert not is_public_route("POST /v1/notes")
+
+
+# --- the card and the findings tell one story about a login (2026-11-11) ---------------------------------------------
+# The whole suite showed it. Since the flow step reads a login from what the code does (`lantern/flow.py`), a route
+# behind a check with a plain name gets no "no login check was found" finding, and this card still said "add" or
+# "check" for it; and a route whose only login is a token check that lets a failed token on gets that finding, while
+# the card named the same route among those that show a login. Each dangerous example stands beside the same lines
+# with a real check.
+CARD_SHOWN = "the code on the way to this route turns away whoever is not signed in"
+CARD_PKG = ('{"name": "notes", "version": "1.0.0", "dependencies": {"express": "^4.19.0", '
+            '"express-session": "^1.18.0", "jsonwebtoken": "^9.0.0"}}\n')
+CARD_JS_HEAD = ("const express = require('express')\nconst session = require('express-session')\n"
+                "const jwt = require('jsonwebtoken')\nconst db = require('./db')\nconst app = express()\n"
+                "app.use(express.json())\napp.use(session({ secret: process.env.SESSION_SECRET }))\n")
+CARD_JS_ROUTE = ("app.delete('/notes/:id', async (req, res) => {\n"
+                 "  await db.notes.destroy({ where: { id: req.params.id } })\n  res.status(204).end()\n})\n"
+                 "app.listen(3000)\n")
+CARD_FLASK = '[project]\nname = "svc"\nversion = "0.1"\ndependencies = ["flask", "flask-jwt-extended"]\n'
+CARD_FL_HEAD = ("import sqlite3\nfrom flask import Flask, abort, g, request, session\n"
+                "from flask_jwt_extended import jwt_required\n\napp = Flask(__name__)\ndb = sqlite3.connect('notes.db')\n\n\n")
+CARD_FL_ROUTE = ("@app.route('/notes/<int:note_id>', methods=['DELETE'])\ndef drop(note_id):\n"
+                 "    db.execute('DELETE FROM notes WHERE id = ?', (note_id,))\n    db.commit()\n    return '', 204\n")
+CARD_FASTAPI = '[project]\nname = "svc"\nversion = "0.1"\ndependencies = ["fastapi", "pyjwt"]\n'
+CARD_FA_HEAD = ("import os\nimport sqlite3\nimport jwt\nfrom fastapi import Depends, FastAPI, Header, HTTPException, "
+                "Request\n\napp = FastAPI()\ndb = sqlite3.connect('notes.db')\nKEY = os.environ['JWT_KEY']\n\n\n")
+CARD_FA_DROP = ("@app.delete('/notes/{note_id}')\ndef drop(note_id: int, authorization: str = Header()):\n"
+                "    who = WHO\n    db.execute('DELETE FROM notes WHERE id = ?', (note_id,))\n    return {'ok': who}\n")
+CARD_READ = "jwt.decode(authorization, options={'verify_signature': False})"
+CARD_CHECKED = "jwt.decode(authorization, KEY, algorithms=['HS256'])"
+CARD_JS = "DELETE /notes/:id"
+CARD_FL = "DELETE /notes/<int:note_id>"
+CARD_FA = "DELETE /notes/{note_id}"
+# name -> (files, the file the route is in, the text its first line begins with, the route, the card's status, what
+# the card says was found for the route when it shows a login)
+CARD = {
+    "express, in place: a check with a plain name put on with use":
+        ({"package.json": CARD_PKG, "server.js": CARD_JS_HEAD + "function restrict(req, res, next) {\n"
+          "  if (!req.session.userId) return res.status(401).end()\n  next()\n}\napp.use(restrict)\n" + CARD_JS_ROUTE},
+         "server.js", "app.delete(", CARD_JS, "in place", CARD_SHOWN),
+    "express, add: the same name, and it turns nobody away":
+        ({"package.json": CARD_PKG, "server.js": CARD_JS_HEAD + "function restrict(req, res, next) {\n"
+          "  res.set('X-Seen', '1')\n  next()\n}\napp.use(restrict)\n" + CARD_JS_ROUTE},
+         "server.js", "app.delete(", CARD_JS, "add", None),
+    "express, in place: a check written in place":
+        ({"package.json": CARD_PKG, "server.js": CARD_JS_HEAD + "app.use((req, res, next) => {\n"
+          "  if (!req.session.userId) return res.status(401).end()\n  next()\n})\n" + CARD_JS_ROUTE},
+         "server.js", "app.delete(", CARD_JS, "in place", CARD_SHOWN),
+    "express, add: a check named for a login that lets a failed token on":
+        ({"package.json": CARD_PKG, "server.js": CARD_JS_HEAD + "function authenticate(req, res, next) {\n  try {\n"
+          "    req.user = jwt.verify(req.headers.authorization, process.env.JWT_KEY)\n  } catch (e) {}\n  next()\n}\n"
+          "app.use(authenticate)\n" + CARD_JS_ROUTE},
+         "server.js", "app.delete(", CARD_JS, "add", None),
+    "express, in place: the same check turns a failed token away":
+        ({"package.json": CARD_PKG, "server.js": CARD_JS_HEAD + "function authenticate(req, res, next) {\n  try {\n"
+          "    req.user = jwt.verify(req.headers.authorization, process.env.JWT_KEY)\n  } catch (e) {\n"
+          "    return res.status(401).end()\n  }\n  next()\n}\napp.use(authenticate)\n" + CARD_JS_ROUTE},
+         "server.js", "app.delete(", CARD_JS, "in place", "middleware `authenticate` put on before this route (server.js:16)"),
+    "flask, in place: a hook that turns visitors away":
+        ({"pyproject.toml": CARD_FLASK, "app.py": CARD_FL_HEAD + "@app.before_request\ndef gate():\n"
+          "    if 'user_id' not in session:\n        abort(401)\n\n\n" + CARD_FL_ROUTE},
+         "app.py", "@app.route('/notes", CARD_FL, "in place", CARD_SHOWN),
+    "flask, add: a hook that only counts":
+        ({"pyproject.toml": CARD_FLASK, "app.py": CARD_FL_HEAD + "@app.before_request\ndef gate():\n"
+          "    g.seen = 1\n\n\n" + CARD_FL_ROUTE},
+         "app.py", "@app.route('/notes", CARD_FL, "add", None),
+    "flask, add: the library's login made optional":
+        ({"pyproject.toml": CARD_FLASK, "app.py": CARD_FL_HEAD +
+          CARD_FL_ROUTE.replace("def drop", "@jwt_required(optional=True)\ndef drop")},
+         "app.py", "@app.route('/notes", CARD_FL, "add", None),
+    "flask, in place: the library's login as it comes":
+        ({"pyproject.toml": CARD_FLASK, "app.py": CARD_FL_HEAD +
+          CARD_FL_ROUTE.replace("def drop", "@jwt_required()\ndef drop")},
+         "app.py", "@app.route('/notes", CARD_FL, "in place", "decorator @jwt_required"),
+    "fastapi, in place: a dependency with a plain name":
+        ({"pyproject.toml": CARD_FASTAPI, "main.py": CARD_FA_HEAD + "def caller(request: Request):\n"
+          "    if not request.session.get('uid'):\n        raise HTTPException(401)\n    return request.session['uid']\n\n\n"
+          "@app.delete('/notes/{note_id}')\ndef drop(note_id: int, who=Depends(caller)):\n"
+          "    db.execute('DELETE FROM notes WHERE id = ?', (note_id,))\n    return {'ok': True}\n"},
+         "main.py", "@app.delete(", CARD_FA, "in place", CARD_SHOWN),
+    "fastapi, add: a token that is only read":
+        ({"pyproject.toml": CARD_FASTAPI, "main.py": CARD_FA_HEAD + CARD_FA_DROP.replace("WHO", CARD_READ)},
+         "main.py", "@app.delete(", CARD_FA, "add", None),
+    "fastapi, in place: the same token checked with the server's key":
+        ({"pyproject.toml": CARD_FASTAPI, "main.py": CARD_FA_HEAD + CARD_FA_DROP.replace("WHO", CARD_CHECKED)},
+         "main.py", "@app.delete(", CARD_FA, "in place", "calls `jwt.decode`"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(CARD))
+def test_the_login_card_and_the_findings_tell_one_story(tmp_path, case):
+    """A route the findings call open ("no login check was found", "nothing that turns away a request whose login
+    token does not hold") is one the card lists as open, by its name, and never among those that show a login; a
+    route whose code shows a login gets no such finding and the card counts it as checked."""
+    files, name, begins, route, status, found = CARD[case]
+    _write(tmp_path, files)
+    at = files[name].split(begins)[0].count("\n") + 1
+    g = build_graph(tmp_path)
+    sec = scan(g)
+    card = {p["id"]: p for p in assess(g, sec, {})["protections"]}["route-auth"]
+    said_open = [(f["file"], f["line"]) for f in sec["findings"] if f["rule"] == "LW-AUTH-MISSING"]
+    assert card["status"] == status, card
+    if status == "add":
+        assert said_open == [(name, at)]
+        assert card["evidence"] == [f"{route} ({name}:{at})"]
+        assert card["found"] == []
+    else:
+        assert said_open == []
+        assert card["evidence"] == []
+        assert card["found"] == [f"{route}: {found}"]
+
+
+def test_the_login_card_names_the_open_route_beside_one_that_checks(tmp_path):
+    """Two routes in one file: one only reads the token, one checks it with the server's key. The card names the
+    first as open and the second as checked, as the findings do."""
+    text = CARD_FA_HEAD + CARD_FA_DROP.replace("WHO", CARD_READ) + "\n\n" + \
+        CARD_FA_DROP.replace("WHO", CARD_CHECKED).replace("@app.delete(", "@app.put(").replace("def drop", "def keep")
+    _write(tmp_path, {"pyproject.toml": CARD_FASTAPI, "main.py": text})
+    at = text.split("@app.delete(")[0].count("\n") + 1
+    g = build_graph(tmp_path)
+    sec = scan(g)
+    card = {p["id"]: p for p in assess(g, sec, {})["protections"]}["route-auth"]
+    assert [(f["file"], f["line"]) for f in sec["findings"] if f["rule"] == "LW-AUTH-MISSING"] == [("main.py", at)]
+    assert card["status"] == "add", card
+    assert card["evidence"] == [f"{CARD_FA} (main.py:{at})"]
+    assert card["found"] == ["PUT /notes/{note_id}: calls `jwt.decode`"]
+
+
+def test_results_written_before_the_scan_named_the_logins_read_as_before(tmp_path):
+    """A `security.json` an older Lantern wrote has no `logins_shown`: the card reads the names, as it did."""
+    files, *_ = CARD["express, in place: a check with a plain name put on with use"]
+    _write(tmp_path, files)
+    g = build_graph(tmp_path)
+    sec = scan(g)
+    assert g.nodes[sec["logins_shown"][0]].entry["detail"] == CARD_JS and len(sec["logins_shown"]) == 1
+    old = {k: v for k, v in sec.items() if k != "logins_shown"}
+    card = {p["id"]: p for p in assess(g, old, {})["protections"]}["route-auth"]
+    assert card["status"] == "check" and card["evidence"] == [f"{CARD_JS} (server.js:13)"], card
+
+
+CARD_NEW_KEY = ("import secrets\nimport sqlite3\nfrom fastapi import FastAPI\n\napp = FastAPI()\n"
+                "db = sqlite3.connect('keys.db')\n\n\n@app.post('/keys')\ndef new_key(name: str):\n"
+                "    key = secrets.token_urlsafe(32)\n    db.execute('INSERT INTO keys (key, name) VALUES (?, ?)', "
+                "(key, name))\n    return {'key': key}\n")
+
+
+def test_a_route_that_makes_a_random_key_does_not_read_as_checked(tmp_path):
+    """`secrets.token_urlsafe` makes random text. Until 2026-11-11 the word `token` in its name made the card say
+    "in place: calls `secrets.token_urlsafe`" for a route anybody may call."""
+    _write(tmp_path, {"pyproject.toml": CARD_FASTAPI, "main.py": CARD_NEW_KEY})
+    at = CARD_NEW_KEY.split("@app.post(")[0].count("\n") + 1
+    g = build_graph(tmp_path)
+    card = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}["route-auth"]
+    assert card["status"] == "add", card
+    assert card["evidence"] == [f"POST /keys (main.py:{at})"]

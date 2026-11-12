@@ -61,7 +61,7 @@ import tomllib
 from pathlib import Path
 
 from . import manifest, programs, scanresult
-from .python_frontend import SKIP_DIRS, inside_repo, project_text
+from .python_frontend import inside_repo, project_text, skipped_dir
 
 NPM_REGISTRY = "https://registry.npmjs.org/"
 TEST_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|fixtures|examples?)/")
@@ -252,7 +252,7 @@ def _project_files(repo: Path, names: tuple[str, ...] | None = None, pattern: re
     say it was not read: `_read` is the one way such a file is opened, and it opens a file of the project only."""
     out = []
     for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and d != "node_modules"]
+        dirnames[:] = [d for d in dirnames if not skipped_dir(dirpath, d) and d != "node_modules"]
         for fn in filenames:
             if (names and fn in names) or (pattern and pattern.search(fn)):
                 p = Path(dirpath) / fn

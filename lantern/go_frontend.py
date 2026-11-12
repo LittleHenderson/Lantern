@@ -37,7 +37,7 @@ import tree_sitter_go as tsgo
 from tree_sitter import Language, Node as TSNode, Parser
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo, project_bytes, project_text
+from .python_frontend import inside_repo, project_bytes, project_text, skipped_dir
 
 GO = Language(tsgo.language())
 
@@ -151,7 +151,8 @@ class GoPackage:
 def discover(repo: Path) -> list[Path]:
     out = []
     for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and d != "testdata" and not d.startswith("."))
+        dirnames[:] = sorted(d for d in dirnames if not skipped_dir(dirpath, d) and d != "testdata"
+                             and not d.startswith("."))
         for fn in sorted(filenames):
             p = Path(dirpath) / fn
             if fn.endswith(".go") and inside_repo(p, repo):

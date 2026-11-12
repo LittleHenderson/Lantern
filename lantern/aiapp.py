@@ -154,11 +154,14 @@ def find_calls(g: Graph, cache: dict[str, list[str]] | None = None) -> list[dict
     return out
 
 
-def _rate_limited(g: Graph, cache: dict[str, list[str]]) -> bool:
-    from .protections import RATE_LIMIT_LIBS, _deps_text
+def _limits(g: Graph):
+    """Where the code puts a request limit to work (`ratelimit.View`). A library that is installed limits nothing:
+    until 2026-11-11 its name in the dependencies or in an import kept this rule quiet for every route."""
+    from . import ratelimit
+    from .protections import _deps_text
     from .readiness import Repo
     repo = Repo(Path(g.repo_root))
-    return bool(RATE_LIMIT_LIBS.search(_deps_text(repo)) or repo.grep(RATE_LIMIT_LIBS, limit=1))
+    return ratelimit.view(g, repo, _deps_text(repo))
 
 
 def wallet_drain(g: Graph, calls: list[dict], cache: dict[str, list[str]]) -> list[dict]:
@@ -166,7 +169,7 @@ def wallet_drain(g: Graph, calls: list[dict], cache: dict[str, list[str]]) -> li
     paid_nodes = {c["node"]: c for c in calls if c["node"] and c["kind"] in PAID_KINDS}
     if not paid_nodes:
         return []
-    limited = _rate_limited(g, cache)
+    limits = None
     adj = call_adjacency(g)
     out = []
     # which routes reach which paid calls (walk forward from each route)
@@ -191,6 +194,12 @@ def wallet_drain(g: Graph, calls: list[dict], cache: dict[str, list[str]]) -> li
         text = "\n".join(_lines(Path(g.repo_root), r.file, cache)) if r.file else None
         sign = login_check(g, r, adj, text)
         logged_in = bool(sign and sign[0] == "strong")
+        if limits is None:
+            limits = _limits(g)
+        # "no" alone counts as no limit: a limit for the whole app, or the project's own limiter, is not called absent
+        limited = limits.of(r)[0] != "no"
+        unused = (f" (`{limits.installed}` is installed, but nothing in the code puts a limit on this route.)"
+                  if limits.installed and not limited else "")
         if logged_in and limited:
             continue
         kinds = sorted({WORDS[h["kind"]] for h in hit})
@@ -198,14 +207,14 @@ def wallet_drain(g: Graph, calls: list[dict], cache: dict[str, list[str]]) -> li
         detail = r.entry.get("detail") or r.qualname
         if not logged_in and not limited:
             sev, title = "HIGH", f"{detail} spends money ({what}) and anyone can call it as often as they like"
-            why = ("No login check was found on this route and no rate-limiting library or setting anywhere in the app. "
-                   "A single script in a loop can run up the bill until the key's limit or the card's limit is hit.")
+            why = ("No login check was found on this route and nothing in the code puts a rate limit on it." + unused +
+                   " A single script in a loop can run up the bill until the key's limit or the card's limit is hit.")
         elif not logged_in:
             sev, title = "MEDIUM", f"{detail} spends money ({what}) without a login check"
-            why = "Rate limiting exists somewhere in the app, but the route itself does not check who is calling."
+            why = "A rate limit covers this route or the app, but the route itself does not check who is calling."
         else:
             sev, title = "MEDIUM", f"{detail} spends money ({what}) with no rate limit"
-            why = "Callers must log in, but nothing limits how often one account can call it."
+            why = "Callers must log in, but nothing limits how often one account can call it." + unused
         out.append(_finding(
             "LA-WALLET-DRAIN", title, sev, r.file, r.start_line, category="code", conf="LOW", cwe=770,
             fixed_rank="high" if sev == "HIGH" else "medium",
@@ -275,12 +284,12 @@ def _said(value) -> str:
 
 def notebooks(repo: Path) -> tuple[list[dict], list[dict]]:
     """Secrets in .ipynb code cells and saved outputs. Returns (findings, notebook summaries)."""
-    from .python_frontend import SKIP_DIRS
+    from .python_frontend import skipped
     from .websec import _finding
     out, books = [], []
     for p in sorted(repo.rglob("*.ipynb")):
         rel = p.relative_to(repo).as_posix()
-        if any(part in SKIP_DIRS or part.startswith(".") for part in rel.split("/")[:-1]):
+        if skipped(rel.split("/")[:-1], repo) or any(part.startswith(".") for part in rel.split("/")[:-1]):
             continue
         try:
             nb = manifest.parse_json(project_text(p, repo))

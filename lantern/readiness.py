@@ -16,7 +16,7 @@ from . import manifest, scanresult
 from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
 from .graph import Graph
 from .protections import advise as advise_protections
-from .python_frontend import SKIP_DIRS, TEST_FILE_RE, inside_repo, project_text
+from .python_frontend import TEST_FILE_RE, inside_repo, project_text, skipped
 
 READINESS_VERSION = 1
 
@@ -103,7 +103,7 @@ class Repo:
         self.files: list[str] = []
         for p in root.rglob("*"):
             rel = p.relative_to(root)
-            if any(x in SKIP_DIRS for x in rel.parts[:-1]) or not p.is_file() or not inside_repo(p, root):
+            if skipped(rel.parts[:-1], root) or not p.is_file() or not inside_repo(p, root):
                 continue
             self.files.append(rel.as_posix())
         self.files.sort()

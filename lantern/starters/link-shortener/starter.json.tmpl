@@ -3,9 +3,9 @@
   "title": "Link shortener with Express",
   "stack": "JavaScript · Node.js · Express · Postgres",
   "level": "Backend",
-  "minutes": 25,
-  "summary": "Paste a long link, get a short one. A plain JavaScript server with a tiny web page. The first draft builds SQL and shell commands out of whatever the user typed, turns off HTTPS certificate checks, lets anyone delete any link, and runs an Express version with known vulnerabilities.",
-  "teaches": ["Map for a plain JS server", "SQL injection", "Command injection", "TLS checks", "Ownership checks", "Rate limiting and headers", "Accepting a risk", "npm dependency audit"],
+  "minutes": 30,
+  "summary": "Paste a long link, get a short one. A plain JavaScript server with a tiny web page. The first draft builds SQL and shell commands out of whatever the user typed, turns off HTTPS certificate checks, opens any address a visitor types (even one inside your own network), lets anyone delete any link, and runs an Express version with known vulnerabilities.",
+  "teaches": ["Map for a plain JS server", "SQL injection", "Command injection", "TLS checks", "Requests to inside addresses", "Ownership checks", "Rate limiting and headers", "Accepting a risk", "npm dependency audit"],
   "run": [
     "npm install",
     "cp .env.example .env              # point DATABASE_URL at any Postgres (Supabase, Neon, or local)",
@@ -45,6 +45,16 @@
       "prompt": "In src/check.js, replace the exec/curl call with fetch(new URL(url), { method: 'HEAD' }) with a 5 second timeout, only allowing http(s) URLs, and fetch titles with fetch instead of https.get with rejectUnauthorized: false.",
       "fix_files": ["src/check.js"],
       "check": {"kind": "cleared", "rules": ["LJ-EXEC", "LJ-TLS-OFF"]}
+    },
+    {
+      "id": "inside", "title": "Keep the server out of your own network", "feature": "findings",
+      "body": [
+        "`isAlive` and `fetchTitle` open whatever address the visitor typed, and they open it from your server. A visitor can type an address that only your server can reach, such as `http://localhost:5432` or the cloud's settings page at `http://169.254.169.254`, and use your app to look around inside your network. Lantern followed the address from the form to the line that opens it, across two files. The finding lists each step.",
+        "Checking that the address starts with `https://` does not help, and neither does checking its name: any name can point at an inside address. The fix is to look the name up first and refuse when the answer is an address inside the network. Node has both parts built in: `dns.lookup` and `net.BlockList`. Don't follow redirects either, because a redirect can lead inside after the check."
+      ],
+      "prompt": "In src/check.js, add isOutside(url): look the host name up with dns.lookup from node:dns/promises and return false when the address is on a net.BlockList holding 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 0.0.0.0/8, ::1, fc00::/7 and fe80::/10. Call it at the top of isAlive and fetchTitle, and pass redirect: 'manual' to fetch.",
+      "fix_files": ["src/check.js"],
+      "check": {"kind": "cleared", "rules": ["LT-SSRF"]}
     },
     {
       "id": "owner", "title": "Only the creator can delete a link", "feature": "findings",

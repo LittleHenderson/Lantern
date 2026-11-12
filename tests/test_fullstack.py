@@ -285,6 +285,36 @@ def test_missing_auth_reads_the_handler_not_its_comments(tmp_path):
     assert "only sign" not in auth[4]["more_info"]
 
 
+def test_a_login_put_on_the_app_counts_for_the_routes_written_after_it(tmp_path):
+    """`app.use(requireLogin)` runs before every route written after it, and before none written above it. Until
+    2026-11-11 it counted for no route, so every changing route of such an app read as open."""
+    _write(tmp_path, {
+        "package.json": '{"dependencies": {"express": "4"}}',
+        "server.js": (
+            "const express = require('express')\nconst app = express()\n"
+            "function requireLogin (req, res, next) {\n  if (!req.session.userId) return res.status(401).end()\n"
+            "  next()\n}\n"
+            "app.post('/feedback', async (req, res) => {\n  res.send('ok')\n})\n"
+            "app.use(requireLogin)\n"
+            "app.post('/notes', async (req, res) => {\n  res.send('ok')\n})\n"
+            "app.delete('/notes/:id', async (req, res) => {\n  res.send('ok')\n})\n"
+            "app.listen(3000)\n"),
+        "web/app.js": (
+            "export async function tell(text) { await fetch('/feedback', {method: 'POST', body: text}) }\n"
+            "export async function save(text) { await fetch('/notes', {method: 'POST', body: text}) }\n"
+            "export async function remove(id) { await fetch('/notes/' + id, {method: 'DELETE'}) }\n"),
+    })
+    from lantern.readiness import assess
+    g = build_graph(tmp_path)
+    s = scan(g)
+    auth = [(f["line"], f["title"]) for f in s["findings"] if f["rule"] == "LW-AUTH-MISSING"]
+    assert auth == [(7, "POST /feedback changes data, is called by the app, and no login check was found")], auth
+    p = next(p for p in assess(g, s, {})["protections"] if p["id"] == "route-auth")
+    assert p["found"] == ["POST /notes: middleware `requireLogin` put on before this route (server.js:10)",
+                          "DELETE /notes/:id: middleware `requireLogin` put on before this route (server.js:10)"], p
+    assert p["status"] == "add" and p["evidence"] == ["POST /feedback (server.js:7)"], p
+
+
 def test_what_counts_as_a_login_check_in_a_handler():
     """The rules behind `LW-AUTH-MISSING` and the `route-auth` protection, read straight from a handler's lines.
     Request data and the names that hold it are data, an auth word is a check only as a call or an attribute, and a
