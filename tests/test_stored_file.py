@@ -206,6 +206,115 @@ def test_the_same_code_made_safe_is_not_listed(tmp_path, case):
     assert found == [], (case, [(f["line"], f["title"], f["rank"]) for f in found])
 
 
+OPENED = '''    with open(os.path.join(POSTS, name + ".html")) as f:
+        content = f.read()
+'''
+# what is read back, put into a larger text or handed to a function that runs it: (the read, more code, the line
+# the finding stands on, which is where the text is run)
+FURTHER = {
+    "put between two written texts": (
+        OPENED + '''    return render_template_string("<main>" + content + "</main>")''', "",
+        'render_template_string("<main>" + content'),
+    "put into an f-string": (
+        OPENED + '''    return render_template_string(f"<main>{content}</main>")''', "",
+        'render_template_string(f"<main>'),
+    "put into a text with %": (
+        OPENED + '''    return render_template_string("<main>%s</main>" % content)''', "",
+        'render_template_string("<main>%s'),
+    "put into a text with format": (
+        OPENED + '''    return render_template_string("<main>{}</main>".format(content))''', "",
+        'render_template_string("<main>{}'),
+    "kept under a second name and then run": (
+        OPENED + '''    page = LAYOUT + content
+    return render_template_string(page)''', '''
+
+LAYOUT = "{% extends 'base.html' %}"
+''', "render_template_string(page)"),
+    "handed to a function that runs what it is given": (
+        OPENED + '''    return run(content)''', '''
+
+def run(text):
+    return render_template_string(text)
+''', "render_template_string(text)"),
+    "handed to a function that puts it into a page and runs that": (
+        OPENED + '''    return page(name, content)''', '''
+
+def page(title, body):
+    return render_template_string("<h1>{{ title }}</h1>" + body, title=title)
+''', "render_template_string(\"<h1>"),
+    "handed on twice": (
+        OPENED + '''    return outer(content)''', '''
+
+def outer(text):
+    return inner("<main>" + text + "</main>")
+
+
+def inner(text):
+    return render_template_string(text)
+''', "render_template_string(text)"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FURTHER))
+def test_the_text_read_back_is_followed_into_a_larger_text_and_into_a_helper(tmp_path, case):
+    """Found by trying the rule on shapes of its own examples (2026-11-11): a page is seldom the stored text alone.
+    Until then the text of the file was known only as long as it stood by itself."""
+    read, more, needle = FURTHER[case]
+    code = FLASK.format(write=WRITE, read=read) + more
+    found, _ = _evals(tmp_path, {"requirements.txt": "flask==3.0.0\n", "app.py": code})
+    assert [(f["line"], f["rank"]) for f in found] == [(_line(code, needle), "medium")], \
+        (case, [(f["line"], f["title"], f["rank"]) for f in found])
+    steps = [s["line"] for s in found[0]["flow"]["steps"]]
+    assert _line(code, 'f.write(request.form["text"])') in steps and _line(code, "content = f.read()") - 1 in steps
+
+
+FURTHER_SAFE = {
+    "the larger text, and nothing writes request text into that folder": (
+        '''    with open(os.path.join(POSTS, "log.txt"), "a") as f:
+        f.write("a post was asked for\\n")''',
+        OPENED + '''    return render_template_string("<main>" + content + "</main>")''', ""),
+    "the helper runs what it is given, and is given a file of another folder": (
+        WRITE,
+        '''    with open(os.path.join(os.path.dirname(__file__), "mail", "welcome.html")) as f:
+        return run(f.read())''', '''
+
+def run(text):
+    return render_template_string(text)
+'''),
+    "the larger text is handed to the page as a value": (
+        WRITE,
+        OPENED + '''    return render_template_string("<pre>{{ text }}</pre>", text="<b>" + content + "</b>")''', ""),
+    "the helper shows what it is given and runs its own text": (
+        WRITE,
+        OPENED + '''    return show(content)''', '''
+
+def show(text):
+    return render_template_string("<pre>{{ text }}</pre>", text=text)
+'''),
+    "the helper is handed the name, not the text": (
+        WRITE,
+        '''    return run(name)''', '''
+
+def run(text):
+    return render_template_string("<h1>{{ t }}</h1>", t=text)
+'''),
+    "the braces are taken out of the text before it is run": (
+        WRITE,
+        OPENED + '''    return render_template_string(content.replace("{", "&#123;"))''', ""),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FURTHER_SAFE))
+def test_the_larger_text_and_the_helper_made_safe_are_not_listed(tmp_path, case):
+    """The last case is a choice: what a `replace` gives back is not followed, because the code may be taking the
+    template's own marks out there, and Lantern does not read which. So `content.replace("\\r", "")` run as a
+    template is missed (Known gaps)."""
+    write, read, more = FURTHER_SAFE[case]
+    code = FLASK.format(write=write, read=read) + more
+    found, _ = _evals(tmp_path, {"requirements.txt": "flask==3.0.0\n", "app.py": code})
+    assert found == [], (case, [(f["line"], f["title"], f["rank"]) for f in found])
+
+
 def test_one_problem_is_one_finding_when_the_file_is_in_the_templates_folder(tmp_path):
     """A write into the folder the template engine reads was listed at the write, as a reading of the path. Where
     the code itself reads the file back and runs it, that is the finding, and the write is one of its steps."""
@@ -334,3 +443,26 @@ def test_the_same_in_javascript_and_its_twin(tmp_path):
     assert len(found) == 1 and found[0]["line"] == _line(code, "ejs.render(text") and found[0]["rank"] == "medium", found
     found, _ = _evals(tmp_path / "b", {"package.json": PKG, "server.js": EXPRESS % (JS_OTHER, JS_READ)})
     assert found == [], found
+
+
+JS_FURTHER = {
+    "put into a larger text": (
+        "  const text = fs.readFileSync(path.join(PAGES, req.params.name + '.ejs'), 'utf8')\n"
+        "  res.send(ejs.render(`<main>${text}</main>`, { name: req.params.name }))", "", "ejs.render(`<main>"),
+    "put after a written text": (
+        "  const text = fs.readFileSync(path.join(PAGES, req.params.name + '.ejs'), 'utf8')\n"
+        "  res.send(ejs.render('<main>' + text, { name: req.params.name }))", "", "ejs.render('<main>'"),
+    "handed to a function that runs it": (
+        "  const text = fs.readFileSync(path.join(PAGES, req.params.name + '.ejs'), 'utf8')\n"
+        "  res.send(show(text))", "\nfunction show (body) {\n  return ejs.render(body, {})\n}\n", "ejs.render(body"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(JS_FURTHER))
+def test_the_larger_text_and_the_helper_in_javascript(tmp_path, case):
+    read, more, needle = JS_FURTHER[case]
+    code = EXPRESS % (JS_WRITE, read) + more
+    found, _ = _evals(tmp_path / "a", {"package.json": PKG, "server.js": code})
+    assert [(f["line"], f["rank"]) for f in found] == [(_line(code, needle), "medium")], (case, found)
+    found, _ = _evals(tmp_path / "b", {"package.json": PKG, "server.js": EXPRESS % (JS_OTHER, read) + more})
+    assert found == [], (case, found)

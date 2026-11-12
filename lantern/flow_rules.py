@@ -419,6 +419,8 @@ PATH_JOINS = {"join", "joinpath", "Path", "PurePath", "PosixPath", "WindowsPath"
 PATH_KEEPS = {"abspath", "normpath", "realpath", "expanduser", "str", "fspath", "normalize", "absolute", "resolve"}
 # The folder a file of the code is in, however it is written (`os.path.dirname(__file__)`, `__dirname`)
 READ_KEEPS = {"read", "readlines", "readline", "toString", "decode", "strip", "trim"}     # calls on a file's text that keep it
+# calls that put what they are handed into a larger text: the text of a file among it is still in there
+READ_INTO = {"format", "format_map", "join", "concat", "substitute", "safe_substitute"}
 PER_REQUEST = {"flask.session", "flask.g", "quart.session", "quart.g", "bottle.response", "flask.globals.session",
                "flask.globals.g"}        # not one value for the whole app: no fixed piece of a path
 PATH_HERE = {"__file__", "__filename", "__dirname"}                # the code's own file, and the folder it is in

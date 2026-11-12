@@ -745,8 +745,21 @@ def concat(parts: list, glue: bool = False) -> Val:
         return const("".join(text))
     skeleton = "".join(text)[:3000]
     taints = tuple(t if t.kind == "ident" else t._replace(safe=t.safe | {"nosql"}) for t in taints)
-    return Val(taints, fixed, sql or bool(R.SQL_WORDS.search(skeleton)), html or bool(R.HTML_WORDS.search(skeleton)),
-               R.started(prefix, start, cut_), lost=any(p.lost for p in parts))
+    out = Val(taints, fixed, sql or bool(R.SQL_WORDS.search(skeleton)), html or bool(R.HTML_WORDS.search(skeleton)),
+              R.started(prefix, start, cut_), lost=any(p.lost for p in parts))
+    mark = None if taints else read_of(parts)
+    if mark:        # the text of a file with other text around it still holds what the file holds (`Engine.ran`)
+        out.kind, out.data = "ext", mark
+    return out
+
+
+def read_of(parts) -> str | None:
+    """The first of `parts` that is the text of a file read where the code says in fixed words where the file is
+    (`Engine.read_mark`): what it is known by."""
+    for p in parts:
+        if p.kind == "ext" and isinstance(p.data, str) and R.READ_MARK.match(p.data):
+            return p.data
+    return None
 
 
 def seq(items: list) -> Val:
@@ -3057,6 +3070,8 @@ class Engine:
                 if got is None:
                     continue
                 av = got[0]
+                if rec.cls == "eval" and not safe_for("eval", norm(rec.safe, fn.lang)):
+                    self.ran(av, rec.file, rec.line, rec.node, rec.what)    # the text of a file, run in there
                 if ("nohost" in rec.needs and (R.host_fixed(av.prefix) or R.no_host(av.prefix))) or \
                         ("nolocal" in rec.needs and R.stays(av.prefix)) or \
                         ("based" in rec.needs and R.closes(av.prefix, rec.cls == "redirect")):
@@ -3860,8 +3875,12 @@ class Engine:
                     self.page_calls.add(id(e))      # LAYOUT.format(body=text), '<br>'.join(lines)
                 parts = [recv] + vals + list(kw.values())
                 v = concat(parts) if len(parts) > 1 else recv
-                return self.built(ctx, env, e, Val(v.taints, v.fixed, v.sql, v.html,
-                                                   self.glued(fn.lang, member, recv, recv_expr, vals, e), lost=v.lost))
+                out = Val(v.taints, v.fixed, v.sql, v.html, self.glued(fn.lang, member, recv, recv_expr, vals, e),
+                          lost=v.lost)
+                mark = read_of(parts) if member in R.READ_INTO and not v.taints else None
+                if mark:        # not `replace`: that may be the code taking a template's own marks out of the text
+                    out.kind, out.data = "ext", mark
+                return self.built(ctx, env, e, out)
             if recv.taints and recv.kind not in ("req",):
                 if member in ("replace", "replaceAll") and len(args) > 1 and \
                         self.replaces_lt(fn, member, args[0], args[1], e.items[1], env, ctx):
@@ -3989,13 +4008,17 @@ class Engine:
         """The text of a file is run as code or as a template here. Nothing by itself: a template the project
         ships is read this way. Noted for `read_back_flows`, which asks whether request text was written into a
         file of that place."""
+        self.ran(v, env.fn.file, e.line, env.fn.node, what)
+
+    def ran(self, v: Val | None, file: str, line: int, node: str | None, what: str) -> None:
+        """`read_back` for a line that may be in another function: the text of a file handed to a helper that runs
+        its parameter is run on the helper's line."""
         if v is None or v.kind != "ext" or not isinstance(v.data, str):
             return
         m = R.READ_MARK.match(v.data)
         read = (m.group(1), int(m.group(2))) if m else None
         if read in self.read_at:
-            self.read_runs[(env.fn.file, e.line, read)] = {"what": what, "node": env.fn.node,
-                                                           "place": self.read_at[read]}
+            self.read_runs[(file, line, read)] = {"what": what, "node": node, "place": self.read_at[read]}
 
     def read_back_flows(self, flows: list) -> list:
         """Request text written into a file (`stored`), and a file of the same place read back and run (`read_back`):
