@@ -302,7 +302,9 @@ def _status(f: dict, earlier: set | None) -> list[dict]:
         {"word": "fixed", "done": False, "why": "still flagged"},
         {"word": "tested", "done": None, "why": "Lantern keeps no record of a test for this finding"},
         {"word": "independently reviewed", "done": None,
-         "why": (f"accepted by {acc.get('by') or 'the builder'} with a reason; that is not an independent review"
+         "why": ("accepted in the code with a reason (a # nosec comment on the line); that is not an independent "
+                 "review" if f.get("status") == "accepted" and acc.get("how") == "nosec" else
+                 f"accepted by {acc.get('by') or 'the builder'} with a reason; that is not an independent review"
                  if f.get("status") == "accepted" else "no review recorded")},
     ]
     return rows

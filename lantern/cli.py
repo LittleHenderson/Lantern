@@ -78,6 +78,15 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
             print(f"fail    {len(broke)} scanner(s) did not finish or did not cover everything; no clean result "
                   "without them", file=sys.stderr)
             return 1
+    if a.require:
+        # The release decision of this very run, never one read back from the results folder (a project can bring
+        # a readiness.json of its own). `not-blocked` stops on Blocked; `passed` stops on Incomplete too.
+        decision = res.get("release")
+        if decision != "Passed" and (a.require == "passed" or decision != "Incomplete"):
+            words = str(res.get("release_words") or "")
+            print(f"fail    the release decision is {decision or 'not made'}"
+                  + (f" ({_printable(words)})" if words else ""), file=sys.stderr)
+            return 1
     return 0
 
 
@@ -108,7 +117,8 @@ def cmd_verify(a, trace_cmd: list[str]) -> int:
         print("give --digest sha256:... or --report evidence.html", file=sys.stderr)
         return 2
     repo = Path(a.path).resolve()
-    r = evidence.verify(repo, want, old, trace_cmd, a.no_scan, a.offline)
+    r = evidence.verify(repo, want, old, trace_cmd, a.no_scan, a.offline,
+                        beside=Path(a.report).resolve().parent if a.report else None)
     if r.get("refused"):
         print(r["refused"] + "\n  lantern verify " + (a.path or ".") + f" --report {a.report} -- "
               + " ".join(r["trace_command"]), file=sys.stderr)
@@ -484,6 +494,9 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--privacy", choices=["full", "structure"], default="full",
                     help="full embeds function source in the report; structure leaves it out")
     sp.add_argument("--fail-on", choices=RANKS, help="exit 1 if any open finding is at this rank or worse (for CI)")
+    sp.add_argument("--require", choices=["not-blocked", "passed"],
+                    help="exit 1 unless this run's release decision is good enough (for CI): not-blocked stops on "
+                         "Blocked; passed also stops on Incomplete, so it needs the tests run (--trace) and passing")
 
     sp = sub.add_parser("trace", help="run a command and mark calls that actually happen")
     common(sp)

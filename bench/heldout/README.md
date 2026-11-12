@@ -169,6 +169,41 @@ It stands in `core/handlers.js`; the safe-twin anchor is the route's line in `ro
 above it is not a false alarm on that anchor. Read strictly, as "a finding on a route this set calls safe", it would
 be 1 of 17.
 
+## Point 6 of the directive: targets (written down 2026-11-12 05:33 UTC, before the engine was run on the set)
+
+Point 6 ("fix severity and make 100 mean the required work passed") adds a release decision per app (Blocked,
+Incomplete, Passed) that does not depend on the score, and the runner now records it beside the score. Two targets
+of point 4 were missed and carried into this stage: `pg-ssti`, and the clean apps that were not given a green
+release. On the second the owner decided (2026-11-11) what counts: a clean app is refused only when it reads
+Blocked; one that reads Incomplete (a required piece of evidence is missing: the tests were not run, a library
+check could not be made) is not refused, and is listed with what is missing.
+
+Written before the run, on this exact definition (e6b10d91686f):
+
+| Measure | After point 4 (3e4687c): offline, with audits | Target |
+|---|---|---|
+| Documented problems found at medium or above, of 79 | 54, 55 | not below 54 offline and 55 with the audits |
+| of the 26 `sql`, `shell`, `eval`, `deserialize`, `xxe` ones | 25, 25 | 26: `pg-ssti` found at medium or above where it is documented |
+| Found only as low | 1, 1 | no more than 1 |
+| False alarms on the 17 safe-twin anchors | 0, 0 | 0 |
+| Vulnerable apps that read Passed or score 100, of 8 | (a green release: 0) | 0 |
+| Clean apps that read Blocked, of 6 | (not green: 2, fastapi-template and taxonomy) | 0; each one that reads Incomplete listed with what is missing |
+| Apps that score 100 while Blocked or Incomplete, of 14 | not recorded | 0 |
+| Medium+ findings on clean apps | 10, of which 7 labelled false alarm | every one labelled, and no more than 10 |
+| Found problems with a mapped path | 46 of 55, 46 of 56 | at least 70% |
+| Resolution checks, protection checks | 3 of 3, 3 of 3 | every one |
+
+What was known when these were written, so the numbers can be read for what they are. Three rules of this stage
+were written after a result of this set, each against examples of its own (none copied from the set; the apps'
+code was not read): a payment webhook that checks its sender before it spends (`tests/test_webhook_sender.py`,
+after taxonomy's false alarm, which this set's labels explain in one sentence), text a request wrote into a file
+that is read back and run as a template (`tests/test_stored_file.py`, after the `pg-ssti` miss, known by its line
+numbers and its one-line note), and a check made on a whole list at once (`tests/test_list_guard.py`, after two
+false alarms on the behaviour benchmark's own safe app, which is not part of this set). So taxonomy and `pg-ssti`
+no longer measure those two rules blind. No rule was written for fastapi-template's finding: that a page is made
+only when an account with exactly that address exists is not evidence Lantern can read from the code, and a rank
+is lowered only on evidence.
+
 ## Files
 
 * `cases.json` · the frozen definition: apps, commits, expectations, rules.

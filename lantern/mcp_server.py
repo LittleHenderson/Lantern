@@ -26,7 +26,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import __version__, pipeline, programs, results, usage
+from . import __version__, pipeline, programs, release, results, usage
 from .graph import Graph
 from .python_frontend import project_text
 
@@ -208,10 +208,12 @@ def tool_projects(P: Projects, args: dict) -> dict:
         out = Path(r["path"]) / ".lantern"
         rd, sec, run = _load(out, "readiness.json"), _load(out, "security.json"), _load(out, "run.json")
         rows.append({**r, "score": rd.get("score"), "grade": rd.get("grade"), "shape": rd.get("shape"),
+                     "release": (release.shown(rd) or {}).get("decision"),
                      "open_findings": {k: v for k, v in (sec.get("counts") or {}).items()
                                        if k in ("critical", "high", "medium", "low", "accepted")} or None,
                      "analyzed_at": run.get("finished_at")})
-    text = "\n".join(f"{r['name']}  {r['path']}" + (f"  readiness {r['score']}/100 ({r['grade']}), findings "
+    text = "\n".join(f"{r['name']}  {r['path']}" + (f"  readiness {r['score']}/100 ({r['grade']})"
+                     + (f", release {r['release']}" if r["release"] else "") + f", findings "
                      f"{r['open_findings']}" if r["analyzed"] else "  (not analyzed yet)") for r in rows) or \
         "No analyzed projects. Call lantern_analyze with a folder path, or run `lantern analyze PATH`."
     return {"text": text, "data": {"projects": rows}}
@@ -366,6 +368,8 @@ def tool_readiness(P: Projects, args: dict) -> dict:
             "evidence": c.get("evidence")} for c in rd.get("next_steps", [])]
     prot = [{k: p.get(k) for k in ("id", "title", "status", "why", "how")} for p in rd.get("protections") or []]
     lines = [f"{repo.name}: readiness {rd['score']}/100, grade {rd['grade']}, shape: {rd.get('shape')}"]
+    rel = release.shown(rd)         # None for results an older Lantern wrote: nothing is made up for them
+    lines += release.said(rel)
     for c in cats:
         lines.append(f"- {c['title']}: {c['percent'] if c['percent'] is not None else 'n/a'}%" +
                      (" — " + "; ".join(f"{x['title']} ({x['status']})" for x in c["failed"]) if c["failed"] else ""))
@@ -378,7 +382,8 @@ def tool_readiness(P: Projects, args: dict) -> dict:
     if rd.get("advice"):
         lines.append("Deployment advice: " + " ".join(str(a) for a in rd["advice"][:4]))
     return {"text": "\n".join(lines), "data": {"project": repo.name, "score": rd["score"], "grade": rd["grade"],
-                                               "shape": rd.get("shape"), "categories": cats, "next_steps": nxt,
+                                               "shape": rd.get("shape"), "release": rel,
+                                               "checklist": rd.get("checklist"), "categories": cats, "next_steps": nxt,
                                                "protections": prot, "advice": rd.get("advice"),
                                                "stack": rd.get("stack")}}
 
@@ -453,7 +458,7 @@ def tool_recheck(P: Projects, args: dict) -> dict:
 def tool_verify(P: Projects, args: dict) -> dict:
     from . import evidence
     repo = P.resolve(args.get("project"))
-    want, old = (args.get("digest") or "").strip() or None, None
+    want, old, beside = (args.get("digest") or "").strip() or None, None, None
     rp = args.get("report")
     if rp:
         p = Path(os.path.expanduser(str(rp)))
@@ -462,15 +467,17 @@ def tool_verify(P: Projects, args: dict) -> dict:
         if not p.exists():
             raise ValueError(f"no such report: {rp}")
         want, old = evidence.read_digest(p)
+        beside = p.parent
     if not want:
         ev = repo / ".lantern" / "evidence.json"
         if not ev.exists():
             raise ValueError("give digest (sha256:...) or report (path to evidence.html/.json); this project has "
                              "no Evidence Report of its own yet")
         want, old = evidence.read_digest(ev)
+        beside = ev.parent
     if not want:
         raise ValueError("that report carries no sha256 digest")
-    r = evidence.verify(repo, want, old, trace_cmd=None, offline=bool(args.get("offline")))
+    r = evidence.verify(repo, want, old, trace_cmd=None, offline=bool(args.get("offline")), beside=beside)
     if r.get("refused"):
         text = (r["refused"] + " From a terminal: lantern verify " + str(repo) + " --report <report> -- " +
                 " ".join(r["trace_command"]))

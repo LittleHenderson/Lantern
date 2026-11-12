@@ -129,6 +129,38 @@ def test_a_finding_counts_as_test_code_by_who_runs_it_not_only_by_the_files_name
         assert res["counts"]["critical"] == 0 and "Test code" in rank_reason(f)
 
 
+# A guess by method name is no evidence of who runs a file. The app calls `.launch()` on something whose type
+# Lantern cannot tell, and a class in a test file has a method `launch`: Lantern links the call to it by the name
+# alone (the inventory's "name-only"). Counted as "the app runs this file", each test double of a project became
+# the app's own code (on Lantern's own code: 12 findings in six of its test files, one of them high, 2026-11-11).
+GUESSED = {
+    "app.py": APP_HEAD + "@app.post('/run')\ndef go(worker, cmd: str):\n    return worker.launch(cmd)\n",
+    "tests/test_tools.py": "import subprocess\n\n\nclass FakeWorker:\n    def launch(self, cmd):\n"
+                           "        subprocess.run(cmd, shell=True)\n\n\ndef test_launch():\n    FakeWorker().launch('ls')\n",
+}
+# The near-miss: the same class, and the app makes one itself. That link is worked out, not guessed.
+WORKED_OUT = {
+    "app.py": "from tests.test_tools import FakeWorker\n" + APP_HEAD
+              + "@app.post('/run')\ndef go(cmd: str):\n    return FakeWorker().launch(cmd)\n",
+    "tests/__init__.py": "", "tests/test_tools.py": GUESSED["tests/test_tools.py"],
+}
+
+
+def test_a_guess_by_method_name_does_not_make_a_test_file_the_apps_own_code(tmp_path):
+    res = scan(build_graph(_write(tmp_path / "guessed", GUESSED)), offline=True)
+    f = next(f for f in res["findings"] if f["rule"] == "B602")
+    assert f["in_tests"] is True and f["rank"] == "low" and "test_file_in_use" not in f, (f["rank"], f.get("reachable"))
+    assert res["counts"]["critical"] == 0 and res["counts"]["high"] == 0
+    # ... and the guess is not hidden: the reason says a call by name alone might lead here
+    assert f["test_file_guessed"] is True
+    assert "by its name alone" in rank_reason(f) and "guess" in rank_reason(f), rank_reason(f)
+
+    res = scan(build_graph(_write(tmp_path / "worked", WORKED_OUT)), offline=True)
+    f = next(f for f in res["findings"] if f["rule"] == "B602")
+    assert f["in_tests"] is False and f["test_file_in_use"] is True and f["rank"] == "critical", (f["rank"], f.get("reachable"))
+    assert "test_file_guessed" not in f
+
+
 # ------------------------------------------------------- every lowering is written down, on every sample app
 SAMPLES = sorted(p.name for p in FIXTURES.iterdir() if p.is_dir() and p.name != "old_results")
 

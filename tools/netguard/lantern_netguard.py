@@ -55,7 +55,7 @@ GUARD_FILES = ("lantern_netguard.py", "sitecustomize.py")    # all a program nee
 # of these that is safe to load a program from. Named places, not the temporary folder the run's environment points
 # at: that one is its user's alone. /run first: only root can write there, and nothing clears it while the computer
 # is running (it starts empty at every boot).
-PUBLIC_PLACES = ("/run", "/tmp", "/var/tmp")
+PUBLIC_PLACES = ("/run", "/tmp", "/var/tmp")   # nosec B108: named on purpose, each checked before use (guard_folder)
 NO_PROXY = "localhost,127.0.0.1,::1"
 PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 LOCAL_NAMES = frozenset({"", "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"})

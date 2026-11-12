@@ -45,7 +45,9 @@ def sarif(sec: dict, repo: Path | None = None) -> dict:
             r["locations"] = [{"physicalLocation": {"artifactLocation": {"uri": str(f["file"]), "uriBaseId": "%SRCROOT%"},
                                                     **({"region": region} if region else {})}}]
         if f.get("status") == "accepted":
-            r["suppressions"] = [{"kind": "external", "status": "accepted",
+            # SARIF's own word for a comment in the code is "inSource"; `lantern-accepted.json` is "external"
+            r["suppressions"] = [{"kind": "inSource" if (f.get("accepted") or {}).get("how") == "nosec" else "external",
+                                  "status": "accepted",
                                   "justification": str((f.get("accepted") or {}).get("reason") or "")}]
         results.append(r)
     return {"$schema": SCHEMA, "version": "2.1.0", "runs": [{

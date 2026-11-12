@@ -149,6 +149,7 @@ def test_a_link_out_a_pipe_and_a_file_behind_a_linked_folder_are_not_there(tmp_p
 # openers. Everything else in `lantern/` that opens a file for reading is a find: (module, function) -> why not.
 OWN_FILES = {
     ("python_frontend.py", "project_bytes"): "the opener", ("python_frontend.py", "project_text"): "the opener",
+    ("python_frontend.py", "project_sha256"): "the opener", ("seal.py", "_key"): "LANTERN_HOME",
     ("results.py", "plain"): "the opener for result files", ("gitfacts.py", "_text"): "the opener for git's files",
     ("results.py", "write"): "writes", ("removal.py", "_write"): "writes", ("server.py", "FileLock.__enter__"): "a lock",
     ("_jail.py", "_landlock"): "a folder handle for Landlock", ("_jail.py", "_stat"): "/proc",
