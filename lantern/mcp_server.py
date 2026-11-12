@@ -173,8 +173,10 @@ def _finding_view(f: dict, g: Graph | None, exp: dict | None) -> dict:
             view["reachable_from"] = {"kind": r.get("kind"), "path": _chain(g, r["path"])}
         if not f.get("ui_path") and not r:
             view["reachable_from"] = None
-            view["note"] = "Only reached by tests." if f.get("reachable_from_tests_only") else \
-                "Not reachable from any detected entry point."
+            # what was not found is said as that: a path Lantern did not find is not a line nothing runs
+            view["note"] = ("Only the tests were found to reach it; that is not proof that nothing else runs it."
+                            if f.get("reachable_from_tests_only") else
+                            "No path found from a page, route or command; that is not proof that nothing runs it.")
     if f.get("input"):
         view["uses_outside_input"] = f["input"].get("via")
     if f.get("more_info") and not str(f["more_info"]).startswith("http"):

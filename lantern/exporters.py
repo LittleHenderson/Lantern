@@ -31,7 +31,7 @@ def sarif(sec: dict, repo: Path | None = None) -> dict:
         if path:
             msg += " Reachable from an entry point: " + " -> ".join(_short(p) for p in path) + "."
         else:
-            msg += " Not reachable from any detected entry point."
+            msg += " No path to it was found from an entry point, which is not proof that nothing runs it."
         if f.get("more_info") and not str(f["more_info"]).startswith("http"):
             msg += " " + str(f["more_info"])
         r = {"ruleId": rid, "level": SARIF_LEVEL.get(f.get("rank"), "warning"), "message": {"text": msg},

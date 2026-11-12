@@ -1526,7 +1526,7 @@ function pathsHtml(f) {
   const uiSame = f.ui_path && f.reachable && f.ui_path.join() === f.reachable.path.join();
   let path = f.ui_path ? chainHtml('From the app', f.ui_path) : '';
   if (f.reachable && !uiSame) path += chainHtml(`Reachable from ${esc(f.reachable.kind)}`, f.reachable.path);
-  return path || `<div class="note" style="margin-top:8px">${f.reachable_from_tests_only ? 'Only reached by tests.' : (f.platform === 'android' || f.platform === 'ios') && f.category !== 'code' ? 'A setting in the app’s ' + (f.platform === 'ios' ? 'Info.plist, entitlements or Xcode project' : 'manifest or build file') + ': it applies to the whole app, wherever it is opened.' : 'Not reachable from any detected entry point.'}</div>`;
+  return path || `<div class="note" style="margin-top:8px">${f.reachable_from_tests_only ? 'Only the tests were found to reach this code. That is not proof that nothing else runs it.' : (f.platform === 'android' || f.platform === 'ios') && f.category !== 'code' ? 'A setting in the app’s ' + (f.platform === 'ios' ? 'Info.plist, entitlements or Xcode project' : 'manifest or build file') + ': it applies to the whole app, wherever it is opened.' : 'No path found from a page, route or command. That is not proof that nothing runs this code.'}</div>`;
 }
 const hops = f => (f.ui_path || (f.reachable || {}).path || []).length;
 const seenHops = f => { const ids = f.ui_path || (f.reachable || {}).path || []; let n = 0; for (let i = 1; i < ids.length; i++) if (((OUT[ids[i - 1]] || []).find(x => x.dst === ids[i]) || {}).confidence === 'observed') n++; return n; };
@@ -1804,9 +1804,9 @@ function renderFindings() {
       <span class="note">Showing ${fs.length} · sorted by rank</span></div>
     <div class="ftable"><div class="r h"><span>Severity</span><span>Finding</span><span>Where</span><span>Reach</span><span>Input</span><span>Id</span></div>
     ${fs.map(f => `<div class="r ${S.fsel === f.id ? 'on' : ''}${f.status === 'accepted' ? ' acc' : ''}" data-f="${esc(f.id)}"><span class="sv"><i class="dot ${cls(f.rank, RANKS)}"></i>${esc(f.rank)}</span>
-      <div><div class="t">${esc(f.title)}</div><div class="d">${f.ui_path ? esc((f.ui_path || []).map(p => N[p] && N[p].entry && N[p].entry.detail ? N[p].entry.detail : short((N[p] || {}).qualname || p)).join(' → ')) : f.reachable ? esc(f.reachable.path.map(p => short((N[p] || {}).qualname || p)).join(' → ')) : f.status === 'accepted' ? 'accepted: ' + esc((f.accepted || {}).reason) : 'not reached from an entry point'}</div></div>
+      <div><div class="t">${esc(f.title)}</div><div class="d">${f.ui_path ? esc((f.ui_path || []).map(p => N[p] && N[p].entry && N[p].entry.detail ? N[p].entry.detail : short((N[p] || {}).qualname || p)).join(' → ')) : f.reachable ? esc(f.reachable.path.map(p => short((N[p] || {}).qualname || p)).join(' → ')) : f.status === 'accepted' ? 'accepted: ' + esc((f.accepted || {}).reason) : 'no path found to it'}</div></div>
       <div><div class="w">${hotLane(f) ? laneGlyph(fLanes(f), hotLane(f), f.rank) : ''}${esc(f.file)}${f.line ? ':' + esc(f.line) : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div><div class="d">${hotLane(f) ? `on the ${LANE_WORD[hotLane(f)]} · ` : ''}${esc(f.tool)} · ${esc(f.rule)}</div></div>
-      <span>${f.ui_path ? `yes · ${esc(entryOf(f))}` : f.reachable ? `yes · ${esc(f.reachable.kind)}` : f.reachable_from_tests_only ? 'tests only' : 'no'}</span><span>${f.input ? 'yes' : f.input === false ? 'no' : '–'}</span><span class="fid">${esc(f.id)}</span></div>`).join('')}</div>`;
+      <span>${f.ui_path ? `yes · ${esc(entryOf(f))}` : f.reachable ? `yes · ${esc(f.reachable.kind)}` : f.reachable_from_tests_only ? 'tests only' : 'no path found'}</span><span>${f.input ? 'yes' : f.input === false ? 'no' : '–'}</span><span class="fid">${esc(f.id)}</span></div>`).join('')}</div>`;
   wireMode(el); wireFindings(el);
   el.querySelector('#freach').onclick = () => { S.freach = !S.freach; renderFindings(); };
   el.querySelector('#finput').onclick = () => { S.finput = !S.finput; renderFindings(); };
@@ -1820,7 +1820,7 @@ function findingPanel(f) {
   return `<div class="detail">${hotLane(f) ? laneStrip(hotLane(f), fLanes(f), {rank: f.rank}) : ''}<div class="top" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${f.tool_confidence === 'LOW' ? '<span class="tag">heuristic</span>' : ''}<span class="fid" style="margin-left:auto">${esc(f.id)}</span></div>
     <h3 style="font-family:var(--display);font-size:17px">${esc(f.title)}</h3>
     <div class="meta">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${n ? ` · in ${esc(short(n.qualname))}` : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div>
-    <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'no entry point leads here'}</div></div>
+    <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No path found'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'not proof that nothing runs it'}</div></div>
       <div><div class="k">Uses input</div><div class="v">${f.input ? 'Yes' : f.input === false ? 'No' : 'Unknown'}</div><div class="d">${f.input ? esc(f.input.via) : f.input === false ? 'nothing from the request reaches this line' : 'not tracked for this rule'}</div></div></div>
     ${ctxNote(f)}${trustBox(f)}${flowBox(f)}${caseBox(f)}
     ${f.ui_path || f.reachable ? `<div class="k2">Path from the app</div>${chainHtml('', f.ui_path || f.reachable.path)}` : ''}
@@ -1925,7 +1925,7 @@ function renderReady() {
   const moveTitle = k => { const f = firstFinding(k); if (f) { const n = SEC.findings.filter(x => x.rank === f.rank && x.status !== 'accepted' && !x.in_tests).length; const what = (f.headline || f.title).replace(/\.$/, ''); return n > 1 ? `Fix the ${n} ${f.rank} findings, starting with: ${what}` : `Fix: ${what}`; } const fx = (k.fix || '').split(/(?<=\.)\s/)[0].replace(/\.$/, ''); return fx && fx.length < 120 ? fx : k.title; };
   const stepMeta = k => {
     const f = firstFinding(k);
-    if (f) return `<b class="${esc(f.rank)}">${esc(f.rank)}</b> · <code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${lang(f.file)} · ${f.ui_path ? `${visitor()} on ${esc(entryOf(f))} can reach it` : f.reachable ? `reachable from ${esc(f.reachable.kind)} ${esc(entryOf(f))}` : 'not reached from an entry point'}`;
+    if (f) return `<b class="${esc(f.rank)}">${esc(f.rank)}</b> · <code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${lang(f.file)} · ${f.ui_path ? `${visitor()} on ${esc(entryOf(f))} can reach it` : f.reachable ? `reachable from ${esc(f.reachable.kind)} ${esc(entryOf(f))}` : 'no path found to it'}`;
     const m = /(\S+\.\w+):(\d+)/.exec(k.evidence || '');
     const sev = /critical/.test(k.id) ? 'critical' : /high/.test(k.id) ? 'high' : /medium/.test(k.id) ? 'medium' : null;
     return `${sev ? `<b class="${sev}">${sev}</b> · ` : `${esc(k.category.toLowerCase())} · `}${m ? `<code>${esc(m[1])}:${esc(m[2])}</code>${lang(m[1])} · ` : ''}${esc(k.evidence || '')}`;

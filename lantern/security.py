@@ -586,15 +586,16 @@ def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
     return best
 
 
-def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None = None) -> dict[str, dict]:
-    """Multi-source BFS from entry points. Returns node id -> {entry, kind, path}."""
+def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None = None, where=None) -> dict[str, dict]:
+    """Multi-source BFS from entry points. Returns node id -> {entry, kind, path}. `where(node)` keeps only the entry
+    points it says yes to (`scan` asks for the ones outside test files)."""
     adj: dict[str, list[str]] = {}
     for e in g.call_edges():
         adj.setdefault(e.src, []).append(e.dst)
     seen: dict[str, dict] = {}
     q: deque[str] = deque()
     entries = [n for n in g.entry_points() if (include_tests or n.entry["kind"] != "test")
-               and (kinds is None or n.entry["kind"] in kinds)]
+               and (kinds is None or n.entry["kind"] in kinds) and (where is None or where(n))]
     # untrusted-input entries first so their paths win ties
     entries.sort(key=lambda n: 0 if n.entry["kind"] in UNTRUSTED_ENTRY_KINDS else 1)
     for n in entries:
@@ -618,9 +619,11 @@ def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None =
 
 
 def rank(f: dict) -> str:
-    """The rank from the tool's severity, reachability and input, then capped by what the code around the line shows
-    (context.py: a weak hash used as an identifier, SQL that splices only fixed text). A cap is written on the finding
-    as `rank_note`, with the rank it would have had as `rank_before_context`, so nothing changes silently."""
+    """The rank: the tool's own severity, raised when an entry point from outside reaches the line and request data
+    is not ruled out (`_steps`), then capped by what the code around the line shows (context.py: a weak hash used as
+    an identifier, SQL that splices only fixed text, a function every caller hands fixed text). A cap is written on
+    the finding as `rank_note`, with the rank it would have had as `rank_before_context`, so nothing changes silently.
+    That Lantern found no path to a line lowers nothing (directive point 6): it is written in `reachability`."""
     r = _rank(f)
     cap, why = None, None
     ctx = f.get("context") or {}
@@ -655,27 +658,92 @@ def rank(f: dict) -> str:
     return r
 
 
-def _rank(f: dict) -> str:
+# The tool's own severity as a rank. A rank goes under it only on evidence written on the finding (`rank_note` with
+# `rank_before_context`, test code, a rank a rule fixes itself). That Lantern found no path to a line is not evidence:
+# until 2026-11 a high with no path was ranked medium and a medium low, "because nothing in the map reaches it".
+FLOOR = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
+NO_PATH = ("which is not proof that nothing runs it: a scheduler, another program, a framework that calls by name or a "
+           "call Lantern could not follow would not show")
+
+
+def _step(name: str, to: str, why: str) -> dict:
+    return {"step": name, "rank": to, "why": why}
+
+
+def _steps(f: dict) -> list[dict]:
+    """How the rank comes about before the code around the line is looked at, one step after the other, each with its
+    reason. The tool's severity is where it starts; who reaches the line can only raise it."""
     if f.get("fixed_rank"):
-        return f["fixed_rank"]
+        return [_step("fixed", f["fixed_rank"], f.get("fixed_why") or
+                      f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it.")]
+    if f["category"] == "secret":
+        return [_step("fixed", "critical", "A key written in the code is always critical: anyone who can read the "
+                                           "code can use it.")]
+    if f["category"] == "dependency":   # npm says how bad; pip-audit doesn't, so those stay high
+        return [_step("severity", {"moderate": "medium", "low": "low", "info": "low"}.get(str(f.get("dep_severity")),
+                                                                                         "high"),
+                      "From the advisory's own severity (high when the audit gives none).")]
+    own = f.get("tool_severity")
+    out = [_step("severity", FLOOR.get(own, "low"), f"{f.get('tool') or 'The tool'} rates the pattern "
+                                                   f"{str(own).lower()}.")]
     sev = flowscan.raised_severity(f)     # the tool's own, or graver when request data was followed to the line
+    if sev != own:
+        out.append(_step("raised", FLOOR.get(sev, "low"), "Lantern followed request data to the line, which makes "
+                                                          f"the pattern {str(sev).lower()}."))
     reach = f.get("reachable")
     untrusted = reach and reach["kind"] in UNTRUSTED_ENTRY_KINDS
-    if f["category"] == "secret":
-        return "critical"
-    if f["category"] == "dependency":   # npm says how bad; pip-audit doesn't, so those stay high
-        return {"moderate": "medium", "low": "low", "info": "low"}.get(str(f.get("dep_severity")), "high")
     if sev == "HIGH" and untrusted and f.get("input") is not False:
-        return "critical"   # spec 9.3: high severity and touched by untrusted input (False: the line uses none)
-    if (sev == "HIGH" and reach) or (sev == "MEDIUM" and untrusted):
-        return "high"
-    if (sev == "MEDIUM" and reach) or sev == "HIGH":
-        return "medium"
-    return "low"
+        # spec 9.3: high severity and touched by untrusted input (False: the line uses none)
+        out.append(_step("raised", "critical", f"{reach['kind']} code reaches it" + (
+            ", using request data." if f.get("input") else ", and Lantern could not rule out request data.")))
+    elif sev == "MEDIUM" and untrusted:
+        out.append(_step("raised", "high", f"{reach['kind']} code reaches it."))
+    return out
+
+
+def _rank(f: dict) -> str:
+    return _steps(f)[-1]["rank"]
+
+
+def rank_basis(f: dict) -> list[dict]:
+    """The steps that end at `f["rank"]`: `severity` (the tool's own), `raised` (request data followed to the line; an
+    entry point from outside reaches it), `lowered` (evidence from the code around the line, `rank_note`), `fixed` (a
+    rank the rule or the kind of finding fixes), `test-code`. Read after `rank` and `in_tests` are set."""
+    out = _steps(f)
+    if f.get("in_tests") and f.get("category") == "code":
+        out.append(_step("test-code", "low", "Test code: your users do not run it, so it is ranked low and counted "
+                                             "apart."))
+    elif f.get("rank_note"):
+        out.append(_step("lowered", f["rank"], f["rank_note"]))
+    return out
+
+
+def reach_state(f: dict) -> dict:
+    """What is known about who runs the flagged code, as a fact of its own beside the rank: `reached` (with the kind
+    of entry point), `tests-only`, `unknown` (no path found, or the line is in no function of the map: never read as
+    "nothing runs it"), `not-code` (a library in a list: there is no line of the project to reach)."""
+    r = f.get("reachable")
+    if r:
+        out = {"state": "reached", "kind": r["kind"], "why": f"{r['kind']} code reaches it on Lantern's map."}
+    elif f.get("category") == "dependency":
+        out = {"state": "not-code", "why": "A library the project lists. Lantern does not follow calls into libraries, "
+                                           "so it cannot say which code of the project uses the affected part."}
+    elif f.get("reachable_from_tests_only"):
+        out = {"state": "tests-only", "why": "Only the test suite was found to reach this code, " + NO_PATH + "."}
+    elif not f.get("node"):
+        out = {"state": "unknown", "why": "This line is in no function on Lantern's map (a settings file, a template, "
+                                          "a part of the code Lantern does not map), so Lantern cannot say what runs "
+                                          "it. That is not proof that nothing does."}
+    else:
+        out = {"state": "unknown", "why": "Lantern found no path to this code from a page, route, command or script, "
+                                          + NO_PATH + "."}
+    if f.get("test_file_in_use"):
+        out["why"] += " The file is named like a test, but code outside the tests runs it."
+    return out
 
 
 def rank_reason(f: dict) -> str:
-    """Why `_rank` gave the rank it gave, in words (kept next to `_rank` so the two change together)."""
+    """Why `_steps` gave the rank it gave, in words (kept next to `_steps` so the two change together)."""
     if f.get("in_tests") and f.get("category") == "code":
         return "Test code: your users do not run it, so it is ranked low and counted apart."
     if f.get("fixed_rank"):
@@ -701,10 +769,16 @@ def rank_reason(f: dict) -> str:
         r = base + f", and {reach['kind']} code reaches it."
     elif sev == "MEDIUM" and reach:
         r = base + f", reached from {reach['kind']} code (not a server route, command or script)."
-    elif sev == "HIGH":
-        r = base + ", but nothing in the map reaches it today."
+    elif reach or not f.get("node"):
+        r = base + "."
+    elif f.get("reachable_from_tests_only"):
+        r = base + (". Only the test suite was found to reach it, which is not proof that nothing else runs it, so "
+                    "the rank stays at the tool's own severity.")
     else:
-        r = base + (", and nothing in the map reaches it." if not reach else ".")
+        r = base + (". Lantern found no path to it from a page, route or command, which is not proof that nothing "
+                    "runs it, so the rank stays at the tool's own severity.")
+    if f.get("test_file_in_use"):
+        r += " The file is named like a test, but code outside the tests runs it, so it is not counted as test code."
     if f.get("rank_note"):
         r += " Then lowered by context: " + f["rank_note"]
     return r
@@ -833,11 +907,25 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     test_reach = reachability(g, include_tests=True)
     from .js_frontend import TEST_RE as JS_TEST_RE
     from .python_frontend import TEST_FILE_RE
+    named_test = lambda file: bool(file and (TEST_FILE_RE.search(file) or JS_TEST_RE.search(file)))
+    own_reach = in_use = None             # what the entry points outside test files reach; worked out when first asked
     for f in findings:
-        f["in_tests"] = bool(f["file"] and (TEST_FILE_RE.search(f["file"]) or JS_TEST_RE.search(f["file"])))
         pin = f.pop("pin", None)          # a manifest finding names the class it is about (android.py)
         f["node"] = (pin if pin in g.nodes else None) or _node_at(g, f["file"], f["line"])
         r = reach.get(f["node"]) if f["node"] else None
+        # Test code is ranked low and counted apart: users do not run the test suite. The file's name alone does not
+        # show that. A file named like a test, one function of which a page, route or command outside the test files
+        # runs, is the app's own code: the app loads the whole file. (A test file's own small app does not make it
+        # so: its entry points are in a test file.)
+        f["in_tests"] = named_test(f["file"])
+        f.pop("test_file_in_use", None)
+        if f["in_tests"]:
+            if own_reach is None:
+                own_reach = reachability(g, where=lambda n: not named_test(n.file))
+                in_use = {g.nodes[nid].file for nid in own_reach if nid in g.nodes and named_test(g.nodes[nid].file)}
+            if f["file"] in in_use:
+                r = own_reach.get(f["node"]) or r
+                f["in_tests"], f["test_file_in_use"] = False, True
         f["reachable"] = r
         f["reachable_from_tests_only"] = bool(not r and f["node"] in test_reach)
         u = ui_reach.get(f["node"]) if f["node"] else None
@@ -892,6 +980,10 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
             if tr:
                 f["trust"] = tr
         f["rank"] = "low" if f["in_tests"] and f["category"] == "code" else rank(f)
+        # the facts the rank was worked out from stay their own fields beside it (`tool_severity`, `tool_confidence`,
+        # `reachable`, the case's evidence), with what is known about who runs the line and each step to the rank
+        f["reachability"] = reach_state(f)
+        f["rank_basis"] = rank_basis(f)
         acc = accepted.get(f["id"])
         f["status"] = "accepted" if acc else "open"
         if acc:

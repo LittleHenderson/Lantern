@@ -1089,7 +1089,10 @@ def test_a_handler_no_route_uses_is_found_but_not_ranked_as_reached(tmp_path):
     files["routes/main.js"] = APP["routes/main.js"].replace("router.get('/users', handlers.search)\n", "")
     fs = _scan(tmp_path, files)
     f = next(f for f in fs if f["rule"] == "LT-SQL")
-    assert f["reachable"] is None and f["rank"] in ("medium", "low"), (f["reachable"], f["rank"])
+    # no route was found to the handler: the rank is the severity of the problem itself, not raised as for a line a
+    # route reaches and, since 2026-11 (directive point 6), not lowered for a path Lantern did not find
+    assert f["reachable"] is None and f["rank"] == "high", (f["reachable"], f["rank"])
+    assert f["reachability"]["state"] == "unknown" and "rank_note" not in f
 
 
 RUN = "function run (cmd, cb) {\n  exec(cmd + ' 2>&1', cb)\n}\n"
