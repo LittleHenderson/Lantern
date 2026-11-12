@@ -165,12 +165,24 @@ def test_sql_that_splices_only_fixed_text_is_low(tmp_path, case):
     assert f["rank"] == "low" and f["input"] is False and "Only fixed text" in f["rank_note"]
 
 
+# where the value comes by a way the data-flow stage does not follow (a module value another function sets, the
+# name an `except` binds), the finding is what it was: high, not lowered. Everywhere else the route's parameter is
+# followed into the query text, and a query built from request data is critical.
+NOT_FOLLOWED = {"another function rebinds a module value with global", "inner function rebinds a module value with global",
+                "except as rebinds it"}
+
+
 @pytest.mark.parametrize("case", sorted(UNSAFE_SQL))
 def test_sql_that_splices_a_value_is_still_raised(tmp_path, case):
     f = _one(tmp_path, UNSAFE_SQL[case], "B608")
     assert not f["context"]["sql"]["fixed_only"], f["context"]
-    assert f["rank"] == "high" and "rank_note" not in f
+    assert "rank_note" not in f and "fixed" not in f["context"]
     assert any(not s["fixed"] for s in f["context"]["sql"]["spliced"])
+    if case in NOT_FOLLOWED:
+        assert f["rank"] == "high" and "flow" not in f
+    else:
+        assert f["rank"] == "critical" and f["flow"]["class"] == "sql", f
+        assert "arrives with the request (a parameter of" in f["flow"]["source"]["what"], f["flow"]
 
 
 # ---------------------------------------------------------------- slow password hashing

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo, project_bytes
+from .python_frontend import inside_repo, project_bytes, skipped
 
 MAX_BYTES = 1_500_000
 SKIP_SWIFT = {"Pods", "Carthage", "DerivedData", ".build", "SourcePackages"}
@@ -155,7 +155,8 @@ def discover(repo: Path) -> list[Path]:
     out = []
     for p in repo.rglob("*.swift"):
         rel = p.relative_to(repo)
-        if any(x in SKIP_DIRS or x in SKIP_SWIFT for x in rel.parts[:-1]) or not p.is_file() or not inside_repo(p, repo):
+        if skipped(rel.parts[:-1], repo) or any(x in SKIP_SWIFT for x in rel.parts[:-1]) or not p.is_file() or \
+                not inside_repo(p, repo):
             continue
         out.append(p)
     return sorted(out)

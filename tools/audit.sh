@@ -44,12 +44,16 @@ budget "self-audit: no open critical/high/medium" 300 lantern analyze . --out "$
 
 step "sample apps"
 budget "shop (React + FastAPI) analyzes" 60 lantern analyze tests/fixtures/shop --out "$W/shop"
-check "shop: 2 critical findings, shell path from /admin" "$PY" - "$W/shop" <<'EOF'
+check "shop: 3 critical findings, the SQL one followed from the request, shell path from /admin" "$PY" - "$W/shop" <<'EOF'
 import json, sys
 s = json.load(open(sys.argv[1] + "/security.json"))
-assert s["counts"]["critical"] == 2, s["counts"]
+# 3 since 2026-11-11 (directive point 4), 2 before: the planted SQL injection in shop/repo.py was high while request
+# data was followed inside one function only; it is followed from the route through three files now (critical)
+assert s["counts"]["critical"] == 3, s["counts"]
 b602 = next(f for f in s["findings"] if f["rule"] == "B602")
 assert b602["ui_path"] and b602["ui_path"][0].endswith("Admin::Admin"), b602["ui_path"]
+b608 = next(f for f in s["findings"] if f["rule"] == "B608")
+assert b608["rank"] == "critical" and b608["flow"]["source"]["file"] == "shop/app.py", (b608["rank"], b608.get("flow"))
 EOF
 budget "androidapp (Android) analyzes" 60 lantern analyze tests/fixtures/androidapp --out "$W/aa"
 check "androidapp: a deep link reaching rawQuery is critical, screens are on the phone" "$PY" - "$W/aa" <<'EOF'
@@ -207,6 +211,9 @@ EOF
   # the same for scenarios alone, with the rest intact so the finding cards and Fix page that show them are drawn
   check "viewer: poisoned scenarios and headings stay text (finding cards, Fix page, Scenario lens)" \
     bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-sc/report.html' --only scenario,dropped_scenarios,headline && node tools/viewer_smoke.js '$W/poison-sc/report.html' '$W/sshot'"
+  # the same for the steps of a followed value (the box "How the value gets there" on a finding): files, lines, words
+  check "viewer: poisoned flow steps stay text (How the value gets there)" \
+    bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-fl/report.html' --only flow && node tools/viewer_smoke.js '$W/poison-fl/report.html' '$W/flshot'"
   # an Android app: the "On the phone" card, phone stories and entry details, poisoned, with the platform kept
   check "viewer: poisoned Android data stays text (On the phone card, screens, stories)" \
     bash -c "'$PY' tools/poison_report.py '$W/aa/report.html' '$W/poison-aa/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-aa/report.html' '$W/ashot'"

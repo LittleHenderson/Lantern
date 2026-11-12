@@ -45,7 +45,9 @@ def test_handshake_lists_tools_and_records_the_client(shop):
                      "lantern_analyze", "lantern_recheck", "lantern_verify"]
     assert not any(w in n for n in names for w in ("accept", "close", "dismiss"))
     err, text, data = call(s, "lantern_projects")
-    assert not err and data["projects"][0]["name"] == "shop" and data["projects"][0]["open_findings"]["critical"] == 2
+    # three since 2026-11-11: the query in shop/repo.py is built from `user_id` of GET /users/{user_id}, which Lantern
+    # now follows there through four functions (before, the tool's own rating stood: high)
+    assert not err and data["projects"][0]["name"] == "shop" and data["projects"][0]["open_findings"]["critical"] == 3
     conns = mcp_server.connections(s.P.store)
     assert conns[0]["name"] == "Claude Code" and conns[0]["version"] == "2.1" and conns[0]["calls"] == 1
     assert conns[0]["last_tool"] == "lantern_projects"
@@ -54,10 +56,13 @@ def test_handshake_lists_tools_and_records_the_client(shop):
 def test_findings_paths_readiness_explain(shop):
     s = Server(Projects([str(shop)]))
     err, text, data = call(s, "lantern_findings", project="shop", rank="critical")
-    assert not err and data["total"] == 2 and data["cannot_close"] is True
+    assert not err and data["total"] == 3 and data["cannot_close"] is True
+    assert sorted(f["rule"] for f in data["findings"]) == ["B324", "B602", "B608"]
     b602 = next(f for f in data["findings"] if f["rule"] == "B602")
     assert b602["file"] == "shop/app.py" and b602["from_the_app"].startswith("/admin page")
-    assert "-HTTP POST /backup->" in b602["from_the_app"] and b602["uses_outside_input"] == "parameter `name`"
+    # the words are those of the value Lantern followed to the line, with the route it arrives by
+    assert "-HTTP POST /backup->" in b602["from_the_app"] and \
+        b602["uses_outside_input"] == "`name` arrives with the request (a parameter of `backup`, POST /backup)"
     assert "lantern accept" in text
     # one finding by id, as the "Send to…" reference names it
     err, text, one = call(s, "lantern_findings", project="shop", id=b602["id"][:6])

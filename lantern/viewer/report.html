@@ -478,7 +478,7 @@ input.search::placeholder{color:var(--faint)}
 .lenses button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
 .lens{border-radius:12px;padding:14px 16px;font-size:13.5px;line-height:1.6;color:var(--ink);border:1px solid}
 .lens.l1{background:var(--l1s);border-color:var(--l1)} .lens.l2{background:var(--l2s);border-color:var(--l2)} .lens.l3{background:var(--l3s);border-color:var(--l3)} .lens.l4{background:var(--l4s);border-color:var(--l4)}
-.scen ol{margin:6px 0 0;padding-left:20px} .scen li{margin:3px 0} .scen .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:10px} .scenbox{margin-top:10px} .scenbox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .scenbox .lens{margin-top:8px} .casebox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .casebox ul{margin:4px 0 6px;padding-left:20px} .casebox li{margin:2px 0} .casebox .note>div{margin-top:6px}
+.scen ol{margin:6px 0 0;padding-left:20px} .scen li{margin:3px 0} .scen .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:10px} .scenbox{margin-top:10px} .scenbox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .scenbox .lens{margin-top:8px} .casebox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .casebox ul,.casebox ol{margin:4px 0 6px;padding-left:20px} .casebox li{margin:2px 0} .casebox .note>div{margin-top:6px}
 .scen .basis{font-size:12px;color:var(--muted);margin-top:10px}
 .lens dl{margin:6px 0 0} .lens dt{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-top:10px} .lens dd{margin:2px 0 0;color:var(--ink-2)}
 .lens .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:12px}
@@ -1655,6 +1655,21 @@ function caseBox(f) {
     ${arr(c.unknown).length ? `<div><b>Not known:</b> ${arr(c.unknown).map(esc).join('; ')}.</div>` : ''}
     <div><b>Status:</b><ul>${arr(c.status).map(x => `<li>${x.done === true ? '✓ done' : x.done === false ? '✗ not done' : '? no record'}: <b>${esc(x.word)}</b> <span class="muted">(${esc(x.why)})</span></li>`).join('')}</ul></div></div></details>`;
 }
+// How a value from the request gets to the flagged line (flow.py): every step with its file and line, so a reader
+// can check them one by one. Every part is text from the analyzed code and goes through esc().
+function flowBox(f) {
+  const fl = f.flow;
+  if (!fl || typeof fl !== 'object' || !Array.isArray(fl.steps) || !fl.steps.length) return '';
+  const at = s => s && typeof s === 'object' && s.file ? `<code>${esc(s.file)}${s.line ? ':' + esc(s.line) : ''}</code>` : '';
+  const others = Array.isArray(fl.others) ? fl.others : [];
+  // a name the words put between backticks is shown as code: escaped first, so the only markup is this tag
+  const ticks = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+  return `<details class="casebox flowbox" style="margin-top:8px"><summary>How the value gets there: ${esc(fl.steps.length)} step${fl.steps.length === 1 ? '' : 's'}</summary><div class="note">
+    <ol>${fl.steps.map(s => `<li>${at(s)} ${ticks(s && s.what)}</li>`).join('')}</ol>
+    ${fl.sink && typeof fl.sink === 'object' ? `<div><b>It ends at:</b> ${at(fl.sink)} <code>${esc(fl.sink.what)}</code></div>` : ''}
+    ${others.length ? `<div><b>Other starting points that reach the same line:</b> ${others.map(o => `${at(o)} ${ticks(o && o.what)}`).join('; ')}${+fl.count > others.length + 1 ? ', and more' : ''}.</div>` : ''}
+    <div class="muted">Lantern followed the value through these lines by reading the code; it did not run the app.${fl.confidence === 'LOW' ? ' At least one step is a likely link, not a certain one.' : ''}</div></div></details>`;
+}
 // Every call site Lantern read, one denominator (graph.call_sites): what it knows about each target
 function callSiteRows(c) {
   const pct = n => c.total ? ` (${(100 * (+n || 0) / c.total).toFixed(1)}%)` : '';
@@ -1675,7 +1690,7 @@ function findingCard(f) {
     ${hotLane(f) ? `<div class="top" style="margin-top:8px;gap:10px">${laneGlyph(fLanes(f), hotLane(f), f.rank)}${onLane(f)}</div>` : ''}
     ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
     <h4>${esc(S.simple && f.headline ? f.headline : f.title)}</h4>${S.simple && f.headline ? `<div class="toolsays">${esc(f.tool)} says: “${esc(f.title)}”</div>` : ''}<p class="fdesc">${where}.${reach}${input}</p>
-    ${ctxNote(f)}${trustBox(f)}${caseBox(f)}
+    ${ctxNote(f)}${trustBox(f)}${flowBox(f)}${caseBox(f)}
     ${pathsHtml(f)}
     ${findingScenario(f, ex) ? `<details class="scenbox"><summary>See it happen: a scenario</summary>${findingScenario(f, ex)}</details>` : ''}
     ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
@@ -1807,7 +1822,7 @@ function findingPanel(f) {
     <div class="meta">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${n ? ` · in ${esc(short(n.qualname))}` : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div>
     <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'no entry point leads here'}</div></div>
       <div><div class="k">Uses input</div><div class="v">${f.input ? 'Yes' : f.input === false ? 'No' : 'Unknown'}</div><div class="d">${f.input ? esc(f.input.via) : f.input === false ? 'nothing from the request reaches this line' : 'not tracked for this rule'}</div></div></div>
-    ${ctxNote(f)}${trustBox(f)}${caseBox(f)}
+    ${ctxNote(f)}${trustBox(f)}${flowBox(f)}${caseBox(f)}
     ${f.ui_path || f.reachable ? `<div class="k2">Path from the app</div>${chainHtml('', f.ui_path || f.reachable.path)}` : ''}
     ${n ? srcBlock(n) : ''}
     ${f.status === 'accepted' ? `<div class="k2">Accepted</div><p>By ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</p>` : ''}

@@ -28,7 +28,7 @@ from tree_sitter import Language, Node as TSNode, Parser
 
 from . import calls, manifest
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo, project_bytes, project_text
+from .python_frontend import inside_repo, project_bytes, project_text, skipped_dir
 
 LANGS = {
     ".ts": Language(tst.language_typescript()),
@@ -48,6 +48,16 @@ _SCRIPT_RE = re.compile(rb"<script\b([^>]*)>(.*?)</script\s*>", re.I | re.S)
 _JS_TYPES = {b"", b"module", b"text/javascript", b"application/javascript", b"text/ecmascript", b"application/ecmascript"}
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
+# What `x.use(...)` is handed that is no check before a route. A library's router or app under the name the code gives
+# it (`authRoutes`, `adminRouter`, `api`): named for what it serves. Passport's `authenticate('session')` reads who is
+# signed in from the session and lets a visitor who is not signed in through (`passport.session()` is the same thing).
+ROUTER_NAME = re.compile(r"(?:Router|Routers|Routes|Route|Controller|Controllers|Api|App|^router|^routes|^api|^app)$")
+SESSION_ONLY = re.compile(r"\bauthenticate\(\s*['\"`]session['\"`]")
+# A library's login made with the word that it is not required (`expressjwt({ ..., credentialsRequired: false })`,
+# `auth({ authRequired: false })`): it reads who is calling when a token was sent, and turns nobody away.
+OPTIONAL_LOGIN = re.compile(r"\b(credentialsRequired|authRequired)['\"]?\s*:\s*false\b")
+# `app.all('*', mw)`, `app.all('/api/*', mw)`: every verb of every path, or of every path under one (group `pre`).
+ALL_UNDER = re.compile(r"^(?P<pre>(/[\w:.\-]+)*)/?(\*\w*|\(\.\*\)|\{\*\w+\})$")
 # Globals and browser/runtime APIs: calls to these are noise in a call map.
 JS_GLOBALS = {
     "console", "Math", "JSON", "Object", "Array", "String", "Number", "Boolean", "Promise", "Date",
@@ -331,6 +341,9 @@ class JSModule:
     param_lists: dict[str, list[list[str]]] = field(default_factory=dict)   # scope -> inline functions' parameters
     cb_params: dict[str, dict[str, tuple | None]] = field(default_factory=dict)  # scope -> name -> (callee, arg, i)
     mounts: list[dict] = field(default_factory=list)  # x.use('/prefix', router...): {recv, scope, prefix, targets}
+    alls: list[dict] = field(default_factory=list)    # x.all('*', mw...): the same shape, with `whole`
+    optional: set[str] = field(default_factory=set)   # names given a library's login made not to be required
+    required: dict[str, set[str]] = field(default_factory=dict)  # scope -> names bound there by `x = require('…')`
     returns: dict[str, set[str]] = field(default_factory=dict)   # function -> what its own `return` statements give:
     #                                                              a variable's name, or "" for anything else
     # functions the code puts on an object that is not this file's own function or class (JSResolver.own_names).
@@ -611,6 +624,8 @@ class Walker:
             self._class(value, name, scope, ui)
             return
         if value is not None and name_node.type == "identifier":
+            if value.type == "call_expression" and OPTIONAL_LOGIN.search(_text(value)):
+                self.m.optional.add(name)   # const maybe = expressjwt({ ..., credentialsRequired: false })
             sv = self._url_of(value)
             if sv is not None and not scope:
                 self.m.consts[name] = sv
@@ -650,6 +665,7 @@ class Walker:
             target = self.resolve_spec(spec)
             if name_node.type == "identifier":
                 self.m.imports[_text(name_node)] = (target, "cjs", spec)
+                self.m.required.setdefault(scope, set()).add(_text(name_node))
                 return True
             if name_node.type == "object_pattern":
                 for c in name_node.named_children:
@@ -1012,11 +1028,26 @@ class Walker:
             p = chained[1] if chained else self._url_of(argv[0])
             handlers = argv if chained else argv[1:]
             last = argv[-1]
+            every = None
+            if ch[-1] == "all" and not chained and p is not None and len(argv) > 1:
+                # x.all('*', mw) / x.all('/api/*', mw) / x.all('/orders/:id', mw): what is handed to it runs before
+                # the routes written after it, as with `use`, when every one of them passes the request on. Whether
+                # they do is read where the functions are known (`add_js`); here only what was written
+                under = ALL_UNDER.match(p)
+                if under or p.startswith("/"):
+                    targets = [self._mount_target(a) for a in argv[1:]]
+                    every = {"recv": ch[:-1], "scope": scope, "prefix": under.group("pre") if under else p,
+                             "line": line, "targets": [t for t in targets if t], "whole": all(targets),
+                             "star": under is not None,
+                             "lead": None, "unread": False}
+                    self.m.alls.append(every)
             if p is not None and p.startswith("/") and handlers and (
                     last.type in FUNC_TYPES or last.type == "identifier" or last.type == "member_expression"):
                 method = ch[-1].upper() if ch[-1] != "all" else "ANY"
                 reg = {"method": method, "path": p, "line": line, "scope": scope,
                        "recv": chained[0] if chained else ch[:-1], "mw": [], "at": _site_pos(last)}
+                if every is not None:
+                    reg["all"] = every
                 # the registration call is a call site (inventory only; the edge-line count never had it). A verb
                 # hung on .route() was always counted there as a call, and stays one
                 self.m.refs.append(JSRef(scope, ch, line, "call" if chained else "registration", ui, at, text))
@@ -1039,9 +1070,17 @@ class Walker:
         if ch and len(ch) >= 2 and ch[-1] == "use" and argv:
             prefix = self._url_of(argv[0])
             if prefix is None or prefix.startswith("/"):
+                first = _unparen(argv[0])
                 self.m.mounts.append({"recv": ch[:-1], "scope": scope, "prefix": prefix or "", "line": line,
                                       "targets": [t for a in (argv[1:] if prefix is not None else argv)
-                                                  for t in [self._mount_target(a)] if t]})
+                                                  for t in [self._mount_target(a, True)] if t],
+                                      # no path was read. `lead`: the first argument is a name, which may hold the
+                                      # path; `unread`: it is a list of paths, a pattern or a built text. Either way
+                                      # what follows may be for paths Lantern does not know
+                                      "lead": _text(first) if prefix is None and len(argv) > 1 and first is not None
+                                      and first.type in ("identifier", "member_expression") else None,
+                                      "unread": prefix is None and first is not None and first.type not in (
+                                          "identifier", "member_expression", "call_expression", *FUNC_TYPES)})
         if ch and ch[-1] == "listen" and len(ch) >= 2:
             self.m.listens = True
         if ch and ch[-1] in ("render", "hydrate") and (
@@ -1121,20 +1160,28 @@ class Walker:
                 out.append({"chain": ch, "at": _site_pos(a), "called": True, "text": _text(a)})
 
     @staticmethod
-    def _mount_target(a: TSNode) -> dict | None:
+    def _mount_target(a: TSNode, in_place: bool = False) -> dict | None:
         a = _unparen(a)
         if a is None:
             return None
+        if in_place and a.type in FUNC_TYPES:
+            # app.use((req, res, next) => { ... }): a function written where it is put on. It has no name and no node
+            # of its own; the route's entry names it by the line it starts on
+            ps = a.child_by_field_name("parameters")
+            n = len([c for c in ps.named_children if c.type != "comment"]) if ps is not None else \
+                1 if a.child_by_field_name("parameter") is not None else 0
+            return {"kind": "inline", "chain": [], "text": "", "line": a.start_point[0] + 1, "params": n}
         if a.type in ("identifier", "member_expression"):
             ch = _chain(a)
-            return {"kind": "value", "chain": ch} if ch else None
+            return {"kind": "value", "chain": ch, "text": _text(a)} if ch else None
         if a.type == "call_expression":
             full = _chain(a)
             if full and len(full) == 1 and full[0].startswith("require:") and not full[0].endswith("()"):
                 # require('./routes/notes')
-                return {"kind": "module", "spec": full[0][len("require:"):]}
+                return {"kind": "module", "spec": full[0][len("require:"):], "text": _text(a)}
             ch = _chain(a.child_by_field_name("function"))
-            return {"kind": "call", "chain": ch} if ch else None   # makeRouter() / require('./admin')(Router())
+            # makeRouter() / require('./admin')(Router())
+            return {"kind": "call", "chain": ch, "text": _text(a)} if ch else None
         return None
 
     def _obj_prop(self, obj: TSNode | None, keys) -> TSNode | None:
@@ -1428,7 +1475,7 @@ class SpecResolver:
 def discover(repo: Path) -> list[Path]:
     out = []
     for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.startswith("."))
+        dirnames[:] = sorted(d for d in dirnames if not skipped_dir(dirpath, d) and not d.startswith("."))
         for fn in sorted(filenames):
             p = Path(dirpath) / fn
             if not inside_repo(p, repo):
@@ -2274,6 +2321,11 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             if name in m.params.get(s, ()):
                 return (m.name, s, "param:" + name)
             if name in m.declared.get(s, ()):
+                if name in m.required.get(s, ()) and name in m.imports:   # const notes = require('./routes/notes')
+                    tmod, tname, _ = m.imports[name]
+                    there = exported_router(tmod, depth + 1) if tmod and tname == "cjs" else None
+                    if there is not None:
+                        return there
                 return (m.name, s, name)
             if not s:
                 break
@@ -2374,6 +2426,154 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             g.add_edge(src_id, tid, kind=CALLS, confidence=conf, line=ref.line, via=v)
         return tid
 
+    # Middleware put on with `use`. `app.use(mw)`, `app.use('/admin', mw)`, `router.use(mw)` and what stands before a
+    # router in its mount (`app.use('/api', mw, router)`) run before every route written after them on that app or
+    # router, and before the routes of a router mounted after them. Only a route's entry says so (`entry["use"]`,
+    # outermost first, each with the place it was put on): no call site, no outcome and no edge is added for it.
+    # Read only where the code shows the order: the same file and function as the route or the mount, an earlier line.
+    route_keys = {k for mm in mods.values() if not mm.is_test
+                  for k in ([router_key(mm, reg["scope"], reg.get("recv") or []) for reg in mm.route_regs]
+                            + [router_key(mm, mt["scope"], mt["recv"]) for mt in mm.mounts]) if k}
+
+    def makes_router(tm: JSModule, local: str) -> bool:
+        """A function that registers routes, mounts something or makes a router: what it gives is a router."""
+        def inside(s: str) -> bool:
+            for _ in range(12):
+                if s == local:
+                    return True
+                if not s:
+                    return False
+                s = JSResolver._up(tm, s)
+            return False
+        return any(inside(x["scope"]) for x in (*tm.route_regs, *tm.mounts)) or any(
+            ref.parts and ref.parts[-1] == "Router" and inside(ref.scope) for ref in tm.refs)
+
+    def use_named(m: JSModule, scope: str, t: dict):
+        """What a `use` argument names: ("def", module, local) for a function of the repo, ("ext", name) for a
+        library's, None when Lantern cannot tell."""
+        if t["kind"] == "module":
+            mm = mods.get(spec.resolve(t["spec"], m.path) or "")
+            return ("def", mm.name, mm.default) if mm is not None and mm.default in mm.defs else None
+        res = r.resolve_parts(m, scope, t["chain"])
+        if res is None:
+            more = r.resolve_more(m, scope, t["chain"], guard=False)
+            res = ("def", *more[1]) if more and more[0] == "def" else \
+                ("ext", more[1]) if more and more[0] == "ext" else None
+        return res
+
+    def passes_on(m: JSModule, scope: str, t: dict, star: bool) -> bool:
+        """Whether what an `all` argument names hands the request on to what is written after it: a function of the
+        repo with a third parameter that it calls (`next()`), written by name or made by a call (`requireRole('x')`,
+        where the function inside is the one read). A library's function is taken to only where `all` is for every
+        path (`app.all('*', helmet())`); on one path it may be the route itself (`app.all('/graphql', server)`)."""
+        res = use_named(m, scope, t)
+        if res is None:
+            return False
+        if res[0] != "def":
+            return res[0] == "ext" and star and t["kind"] == "call"
+        tm = mods[res[1]]
+
+        def under(s: str, top: str) -> bool:
+            for _ in range(12):
+                if s == top:
+                    return True
+                if not s:
+                    return False
+                s = JSResolver._up(tm, s)
+            return False
+        for local in ([res[2]] if t["kind"] != "call" else [x for x in tm.defs if x != res[2] and under(x, res[2])]):
+            ps = tm.params.get(local) or []
+            if len(ps) == 3 and any(ref.kind == "call" and ref.parts == [ps[2]] and under(ref.scope, local)
+                                    for ref in tm.refs):
+                return True
+        return False
+
+    def use_id(m: JSModule, scope: str, t: dict) -> str | None:
+        """The middleware a `use` argument names: a function of the repo, or a library's under the name the code
+        calls. None for what is no middleware or cannot be told: a router or a function that makes one, an error
+        handler (four parameters), a class, a value Lantern did not work out, a file that is not there, and
+        Passport's reading of the session, which turns nobody away. A function written in place has no node: it is
+        named `inline:<file>:<line it starts on>` when it takes the three things a middleware takes."""
+        if t["kind"] == "inline":
+            return f"inline:{m.rel}:{t['line']}" if t["params"] == 3 else None
+        if SESSION_ONLY.search(t.get("text") or "") or OPTIONAL_LOGIN.search(t.get("text") or "") or (
+                t["kind"] == "value" and len(t["chain"]) == 1 and t["chain"][0] in m.optional):
+            return None
+        res = use_named(m, scope, t)
+        if res is None:
+            return None
+        if res[0] == "ext":
+            name = _ext_js(res[1]) if "()" not in res[1] else res[1]
+            own = name.replace("()", "").rsplit(".", 1)[-1].rsplit("/", 1)[-1]
+            # a library's router is named for what it serves (`authRoutes`), which is not what it checks
+            if r.unread(res[1]) or ROUTER_NAME.search(own) or ROUTER_NAME.search(t["chain"][-1].replace("()", "")):
+                return None
+            return f"ext:{name}"
+        if res[0] != "def":
+            return None
+        tm, d = mods[res[1]], mods[res[1]].defs[res[2]]
+        if d.kind == "class" or len(tm.params.get(res[2]) or ()) == 4 or makes_router(tm, res[2]):
+            return None
+        tid = target_id(res)
+        return tid if tid in g.nodes and g.nodes[tid].kind == CALLABLE else None
+
+    uses: dict[tuple, list[dict]] = {}      # router -> what `use` put on it: {mod, scope, line, prefix, mids}
+    mounted: dict[tuple, list[dict]] = {}   # router -> its mounts: {pk, mod, scope, line, prefix, mids before it}
+    for m in mods.values():
+        if m.is_test:
+            continue
+        for mt in (*m.mounts, *m.alls):
+            pk = router_key(m, mt["scope"], mt["recv"])
+            if pk is None or mt.get("unread"):
+                continue
+            if "whole" in mt:   # x.all('*', mw): counts only when everything it was handed passes the request on
+                ids = [use_id(m, mt["scope"], t) for t in mt["targets"]] if mt["whole"] else []
+                if ids and all(ids) and all(passes_on(m, mt["scope"], t, mt["star"]) for t in mt["targets"]):
+                    mt["took"] = True
+                    uses.setdefault(pk, []).append({"mod": m.name, "scope": mt["scope"], "line": mt["line"],
+                                                    "prefix": mt["prefix"],
+                                                    "mids": [{"id": x, "file": m.rel, "line": mt["line"]}
+                                                             for x in ids]})
+                continue
+            row = []
+            for t in mt["targets"]:
+                ck = (exported_router(spec.resolve(t["spec"], m.path)) if t["kind"] == "module" else
+                      factory_key(m, mt["scope"], t["chain"]) if t["kind"] == "call" else
+                      router_key(m, mt["scope"], t["chain"]))
+                if ck is not None and ck != pk and ck in route_keys:
+                    row.append((t, "router", ck))
+                else:
+                    row.append((t, "mid", use_id(m, mt["scope"], t)))
+            if mt.get("lead") and (not row or row[0][0].get("text") != mt["lead"] or row[0][2] is None):
+                continue   # `app.use(config.base, requireLogin)`: the first name may hold a path
+            at = {"mod": m.name, "scope": mt["scope"], "line": mt["line"], "prefix": mt["prefix"]}
+            mids: list[dict] = []
+            for _t, kind, x in row:
+                if kind == "router":
+                    mounted.setdefault(x, []).append({**at, "pk": pk, "mids": list(mids)})
+                elif x:
+                    mids.append({"id": x, "file": m.rel, "line": mt["line"]})
+            if mids:
+                uses.setdefault(pk, []).append({**at, "mids": mids})
+
+    def put_before(key, path: str, mod: str, scope: str, line: int, seen=()) -> list[dict]:
+        """What `use` put in front of a route, or of a mount, written at `line` of `mod` on the router `key`, where
+        its path is `path`: through the router's mounts first (only what stands before every one of them), then the
+        router's own."""
+        out: list[dict] = []
+        ways = mounted.get(key) or []
+        if ways and key not in seen and len(seen) < 8:
+            lists = [put_before(w["pk"], _join_path(w["prefix"], path) if w["prefix"] else path, w["mod"],
+                                w["scope"], w["line"], (*seen, key)) + w["mids"] for w in ways]
+            out += [x for x in lists[0] if all(any(y["id"] == x["id"] for y in other) for other in lists[1:])]
+        for u in sorted(uses.get(key, ()), key=lambda u: u["line"]):
+            pre = u["prefix"].rstrip("/")
+            if u["mod"] == mod and u["scope"] == scope and u["line"] < line and (
+                    not pre or path == pre or path.startswith(pre + "/")):
+                out += u["mids"]
+        seen_ids: set[str] = set()
+        return [x for x in out if not (x["id"] in seen_ids or seen_ids.add(x["id"]))]
+
     routers: set[tuple] = set()   # the receivers routes are registered on
 
     def is_router(m: JSModule, scope: str, recv: list[str]) -> bool:
@@ -2416,6 +2616,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             src_id = nid(m.name, reg["scope"]) if reg["scope"] and reg["scope"] in m.defs else nid(m.name)
             mw = []
             for x in reg.get("mw", ()):
+                if x["called"] and OPTIONAL_LOGIN.search(x.get("text") or ""):
+                    continue   # expressjwt({ ..., credentialsRequired: false }): it turns nobody away
                 if x["called"]:   # auth(), passport.authenticate('jwt'): the call is a call site of its own
                     hit = r.resolve_parts(m, reg["scope"], x["chain"])
                     if hit is None:   # only the name, for the route's list of middleware: no guard
@@ -2433,13 +2635,16 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                         mw.append(mid)
                 else:
                     mid = handed(m, reg["scope"], x["chain"], x["at"], src_id, "middleware")
-                    if mid:
+                    if mid and not (len(x["chain"]) == 1 and x["chain"][0] in m.optional):
                         mw.append(mid)
+            passes = bool((reg.get("all") or {}).get("took"))   # x.all('/admin/*', requireLogin): no route of its own
             if "local" in reg:
                 tid = nid(m.name, reg["local"])
             else:
-                tid = handed(m, reg["scope"], reg["handler"] or [], reg.get("at"), src_id, "route-handler") \
-                    if reg["handler"] else None
+                tid = handed(m, reg["scope"], reg["handler"] or [], reg.get("at"), src_id,
+                             "middleware" if passes else "route-handler") if reg["handler"] else None
+            if passes:
+                tid = None
             key = router_key(m, reg["scope"], reg.get("recv") or [])
             if key:
                 routers.add(key)
@@ -2449,6 +2654,9 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 g.nodes[tid].entry = {"kind": "route", "detail": f"{reg['method']} {path}"}
                 if mw:
                     g.nodes[tid].entry["middleware"] = mw
+                wide = put_before(key, reg["path"], m.name, reg["scope"], reg["line"]) if key else []
+                if wide:
+                    g.nodes[tid].entry["use"] = wide
         if m.html:   # a page: what the visitor's browser runs, so its script starts in the Browser lane
             g.nodes[nid(m.name)].entry = {"kind": "page", "detail": m.rel}
         elif m.mounts_app:

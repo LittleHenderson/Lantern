@@ -26,11 +26,45 @@ from .graph import (CALLABLE, CALLS, CLASS, CONTAINS, IMPLEMENTS, INFERRED, MAY_
 PY_LANGUAGE = Language(tsp.language())
 
 SKIP_DIRS = {
-    ".git", ".hg", ".svn", "__pycache__", ".venv", "venv", "env", ".env", ".tox", ".nox",
+    ".git", ".hg", ".svn", "__pycache__", ".venv", "venv", ".env", ".tox", ".nox",
     "node_modules", "build", "dist", ".mypy_cache", ".pytest_cache", ".ruff_cache", "site-packages",
     ".eggs", ".lantern", ".next", ".nuxt", ".svelte-kit", ".turbo", ".vercel", ".expo", "coverage",
     ".parcel-cache", ".angular", "bower_components", "vendor",
 }
+
+# A folder named `env` is a Python environment in one project (`python -m venv env`) and the project's own code or
+# settings in another (`config/env/`, `src/env/`). It is left out only where it holds what an environment holds;
+# until 2026-11-11 the name alone was enough, and a project's own folder of that name was not read by any reader.
+ENV_NAMES = {"env"}
+ENV_SIGNS = ("pyvenv.cfg", "conda-meta", "bin/activate", "bin/python", "Scripts/activate", "Scripts/activate.bat",
+             "Scripts/python.exe", "Lib/site-packages")
+
+
+def is_environment(folder) -> bool:
+    """Whether this folder is a Python environment, by what it holds: the file `venv` writes, conda's records, the
+    programs that switch it on, its library folder. A link counts as being there and is never followed. What cannot
+    be told is left out, as every folder of that name was before."""
+    folder = Path(folder)
+    try:
+        return any(os.path.lexists(folder / sign) for sign in ENV_SIGNS) or any(folder.glob("lib/python*"))
+    except OSError:
+        return True
+
+
+def skipped_dir(parent, name: str) -> bool:
+    """Whether the folder `name` inside `parent` is left out: for a reader that walks the project folder by
+    folder."""
+    return name in SKIP_DIRS or (name in ENV_NAMES and is_environment(Path(parent) / name))
+
+
+def skipped(parts, root) -> bool:
+    """Whether a file under these folder names, counted from the project's root, is left out: for a reader that
+    lists every file and looks at its path."""
+    for i, name in enumerate(parts):
+        if name in SKIP_DIRS or (name in ENV_NAMES and is_environment(Path(root, *parts[:i + 1]))):
+            return True
+    return False
+
 
 BUILTIN_NAMES = set(dir(builtins))
 STDLIB = set(getattr(__import__('sys'), 'stdlib_module_names', ()))
@@ -141,7 +175,7 @@ def discover(repo: Path) -> list[tuple[Path, str]]:
     src_root = repo / "src" if (repo / "src").is_dir() else None
     out: list[tuple[Path, str]] = []
     for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and not d.endswith(".egg-info"))
+        dirnames[:] = sorted(d for d in dirnames if not skipped_dir(dirpath, d) and not d.endswith(".egg-info"))
         for fn in sorted(filenames):
             if not fn.endswith(".py"):
                 continue

@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, MODULE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo, project_bytes
+from .python_frontend import inside_repo, project_bytes, skipped
 
 C_EXTS = {".c"}
 CPP_EXTS = {".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".h", ".ipp"}
@@ -200,7 +200,7 @@ def discover(repo: Path) -> list[Path]:
         if p.suffix.lower() not in exts or not p.is_file():
             continue
         rel = p.relative_to(repo)
-        if any(x in SKIP_DIRS for x in rel.parts[:-1]) or SKIP.search(rel.as_posix()) or \
+        if skipped(rel.parts[:-1], repo) or SKIP.search(rel.as_posix()) or \
                 VENDORED.search(rel.as_posix()) or not inside_repo(p, repo):
             continue
         out.append(p)

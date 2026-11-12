@@ -18,14 +18,16 @@ nodemailer/smtplib; Twilio/Vonage. Add more in `CALL_PATTERNS`.
 
 | Rule | What it means | Rank |
 |---|---|---|
-| `LA-WALLET-DRAIN` | A route reaches a paid call and has **no login check and no rate limiting** anywhere in the app. One script in a loop runs up the bill. | high |
+| `LA-WALLET-DRAIN` | A route reaches a paid call and has **no login check and no rate limit that covers it**. One script in a loop runs up the bill. | high |
 | `LA-WALLET-DRAIN` | …has one of the two but not the other (logged-in users with no limit, or a limit but no login) | medium |
 | `LA-MODEL-OUTPUT-TO-TOOL` | Inside one function, text read from a model response is later run as a shell command, a database query, `eval`, a web request or a file path. Prompt injection becomes code execution. | critical when a route reaches it |
 | `LA-PROMPT-FROM-INPUT` | Visitor text goes into a model call in a function that also calls tool-like APIs. Normal for a chat app; informational. | low |
 | `LA-NOTEBOOK-SECRET` | An API key or token in a `.ipynb` code cell or a saved output (OpenAI, Anthropic, Google, Hugging Face, GitHub, AWS, Stripe, Slack, Replicate, or `api_key = "…"`). Placeholders are skipped. | critical (a secret) |
 
 The wallet-drain and model-output rules are heuristic (`tool_confidence: LOW`, shown as "heuristic"): the login
-check reads names the way `LW-AUTH-MISSING` does, the rate-limit check looks for a known library or setting, and
+check reads names the way `LW-AUTH-MISSING` does, the rate-limit check looks for a limiter that is put to work (on
+the route, or on the app: `lantern/ratelimit.py`; a library that is only installed or only loaded counts for nothing
+since 2026-11-11, and the finding then says so), and
 the output-to-tool rule follows assignments inside one function only. The notebook rule is exact.
 
 ## What it does not do yet

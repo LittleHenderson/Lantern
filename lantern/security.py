@@ -14,9 +14,9 @@ import subprocess
 from collections import deque
 from pathlib import Path
 
-from . import context, lanes, manifest, programs, results
+from . import context, flowscan, lanes, manifest, programs, results
 from .graph import Graph
-from .python_frontend import SKIP_DIRS, inside_repo, project_text
+from .python_frontend import ENV_NAMES, SKIP_DIRS, inside_repo, project_text, skipped, skipped_dir
 
 UNTRUSTED_ENTRY_KINDS = {"route", "cli", "main", "script"}
 
@@ -121,7 +121,7 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     and are listed. `applicable` is False when the project has no Python, so a missing Bandit is not a gap."""
     import importlib.util
     from . import scanresult
-    excl = sorted(d for d in SKIP_DIRS if (repo / d).exists())
+    excl = sorted(d for d in sorted(SKIP_DIRS) + sorted(ENV_NAMES) if (repo / d).exists() and skipped_dir(repo, d))
     left = _not_the_projects(repo, excl)
     base: dict = {"role": "Python code patterns", "exclusions": excl + sorted(name for name, _ in left)}
     if importlib.util.find_spec("bandit") is None:
@@ -271,7 +271,7 @@ def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
     from . import scanresult
     out, errors, files = [], [], 0
     for p in repo.rglob("*"):
-        if not p.is_file() or any(part in SKIP_DIRS for part in p.relative_to(repo).parts[:-1]) \
+        if not p.is_file() or skipped(p.relative_to(repo).parts[:-1], repo) \
                 or not inside_repo(p, repo):
             continue
         if p.suffix not in SECRET_EXTS and not p.name.startswith(".env"):
@@ -631,10 +631,21 @@ def rank(f: dict) -> str:
     elif h and h["purpose"] == "unknown":
         cap, why = "medium", ("Lantern could not tell what this hash is for (" + h["why"] + "). It is not ranked "
                               "critical or high without evidence that it protects a password, token or signature.")
-    elif sql and sql["fixed_only"]:
+    elif sql and sql["fixed_only"] and not f.get("flow"):
         cap, why = "low", ("Only fixed text is put into the SQL string (" + "; ".join(
             f"{s['expr']}: {s['why']}" for s in sql["spliced"]) + ")" + (
             ", and the values are passed to the database driver separately." if sql["driver_params"] else "."))
+    elif ctx.get("fixed"):
+        fx = ctx["fixed"]
+        if fx["calls"]:
+            calls = "; ".join(f"`{c['from']}` at {c['file']}:{c['line']}" for c in fx["calls"][:3])
+            more = f" and {fx['count'] - 3} more" if fx["count"] > 3 else ""
+            how = (f"every call of `{fx['function']}` in the project hands it fixed text ({calls}{more}), and Lantern "
+                   "found no other way the function is called. A new caller that hands it request data would change "
+                   "this.")
+        else:
+            how = "the text is written in the code itself, and nothing that comes from outside is put into it."
+        cap, why = "low", "Only fixed text reaches this line: " + how
     if cap and RANK_ORDER[r] < RANK_ORDER[cap]:
         f["rank_before_context"] = r
         f["rank_note"] = why
@@ -647,7 +658,7 @@ def rank(f: dict) -> str:
 def _rank(f: dict) -> str:
     if f.get("fixed_rank"):
         return f["fixed_rank"]
-    sev = f["tool_severity"]
+    sev = flowscan.raised_severity(f)     # the tool's own, or graver when request data was followed to the line
     reach = f.get("reachable")
     untrusted = reach and reach["kind"] in UNTRUSTED_ENTRY_KINDS
     if f["category"] == "secret":
@@ -668,7 +679,7 @@ def rank_reason(f: dict) -> str:
     if f.get("in_tests") and f.get("category") == "code":
         return "Test code: your users do not run it, so it is ranked low and counted apart."
     if f.get("fixed_rank"):
-        return f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it."
+        return f.get("fixed_why") or f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it."
     sev = f.get("tool_severity")
     reach = f.get("reachable")
     untrusted = reach and reach["kind"] in UNTRUSTED_ENTRY_KINDS
@@ -677,6 +688,9 @@ def rank_reason(f: dict) -> str:
     if f.get("category") == "dependency":
         return "From the advisory's own severity (high when the audit gives none)."
     base = f"{f.get('tool') or 'The tool'} rates the pattern {str(sev).lower()}"
+    if sev and flowscan.raised_severity(f) != sev:
+        sev = flowscan.raised_severity(f)
+        base += f"; Lantern followed request data to it, which makes it {sev.lower()}"
     if sev == "HIGH" and untrusted and f.get("input") is not False:
         r = base + f", and {reach['kind']} code reaches it" + (", using request data." if f.get("input") else
                                                                "; Lantern could not rule out request data.")
@@ -774,6 +788,11 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     tools += records
     from .websec import scan_web
     wf, wt = scan_web(g)
+    # one problem, one finding: a line LW-SECRET-INLINE lists (what the text signs, the text itself never repeated)
+    # is not listed again as Bandit's "possible hardcoded password", ranked low and with the text in its title
+    told = {(f["file"], f["line"]) for f in wf if f["rule"] == "LW-SECRET-INLINE"}
+    findings = [f for f in findings if not (f["rule"] in ("B105", "B106", "B107") and
+                                            (f["file"], f["line"]) in told)]
     findings += wf
     tools += wt
     from .aiapp import scan_ai
@@ -792,13 +811,6 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     tools += [{"tool": f"lantern-pack:{pk['pack']}", "status": "off (turned off in Settings)",
                "version": str(pk.get("version", "-"))} for pk in off]
     tools += [{"tool": where, "status": "skipped: " + why, "version": "-"} for where, why in skipped]
-    stable_ids(repo, findings)
-    accepted = load_accepted(repo)
-    reach = reachability(g)
-    ui_reach = reachability(g, kinds={"page", "main"})
-    test_reach = reachability(g, include_tests=True)
-    from .js_frontend import TEST_RE as JS_TEST_RE
-    from .python_frontend import TEST_FILE_RE
     lines_cache: dict[str, list[str]] = {}
     py_cache: dict = {}
 
@@ -809,6 +821,18 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
             except OSError:
                 lines_cache[file] = []
         return lines_cache[file]
+    # Follow the data (flow.py): request data followed across functions to a query, a command, a file, an address, a
+    # page. A flow on a line another tool flagged is written on that finding; the others are findings of their own.
+    ff, info, flows = flowscan.run(g, findings, lines_for)
+    findings += ff
+    tools.append(info)
+    stable_ids(repo, findings)
+    accepted = load_accepted(repo)
+    reach = reachability(g)
+    ui_reach = reachability(g, kinds={"page", "main"})
+    test_reach = reachability(g, include_tests=True)
+    from .js_frontend import TEST_RE as JS_TEST_RE
+    from .python_frontend import TEST_FILE_RE
     for f in findings:
         f["in_tests"] = bool(f["file"] and (TEST_FILE_RE.search(f["file"]) or JS_TEST_RE.search(f["file"])))
         pin = f.pop("pin", None)          # a manifest finding names the class it is about (android.py)
@@ -827,6 +851,23 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
                                           f["hot_lane"], data_hops)
         f["input"] = _input_on_line(g, f, lines_cache) if f["category"] == "code" and r and \
             r["kind"] in UNTRUSTED_ENTRY_KINDS else None
+        fl = f.get("flow")
+        if fl and not f["in_tests"]:
+            # followed across functions, from the place the request was read: that says more than the look at the
+            # flagged line's own function, which names whatever parameter stands on the line
+            f["input"] = {"via": fl["source"]["what"], "flow": True}
+            if not r:
+                # the map shows no way to this line, and the flow is one: but only from a function that a page, a
+                # route or a command reaches. A handler nothing uses read the request in name only.
+                start = _node_at(g, fl["source"]["file"], fl["source"]["line"])
+                sr = reach.get(start) if start else None
+                if sr:
+                    path = list(sr["path"])
+                    for s in fl["steps"]:
+                        nid = _node_at(g, s["file"], s["line"])
+                        if nid and nid != path[-1]:
+                            path.append(nid)
+                    r = f["reachable"] = {"entry": sr["entry"], "kind": sr["kind"], "path": path, "via": "data flow"}
         if f["category"] == "code":
             # what the flagged code is for (context.py); it can lower the rank, never remove the finding
             ctx = {}
@@ -836,9 +877,13 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
             sq = context.sql_splice(g, f, py_cache)
             if sq:
                 ctx["sql"] = sq
-                if sq["fixed_only"] and f["input"]:
+                if sq["fixed_only"] and f["input"] and not fl:
                     # the input check reads the whole statement; for SQL only what is spliced into the text counts
                     f["input"] = False
+            fx = flowscan.fixed_evidence(flows, f)
+            if fx:      # every call of the function hands it fixed text: said on the finding, which stays listed
+                ctx["fixed"] = fx
+                f["input"] = False
             if ctx:
                 f["context"] = ctx
         if f.get("rule") == "LW-PUBLIC-SECRET" and not f["in_tests"]:
@@ -867,4 +912,8 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
             # readiness, the Evidence Report, the badge, the command line and the app all read this list
             "incomplete": scanresult.incomplete(tools),
             "reachable_nodes": len(reach), "total_callables": sum(1 for n in g.nodes.values() if n.kind == "callable"),
+            # the routes whose own code turns away whoever is not signed in, as the flow step read it (`flow.Result.
+            # logins`; None when it did not run): the card "Login check on routes that change data" counts them as
+            # checked, so it tells the story the findings tell (`protections.advise`)
+            "logins_shown": sorted(x for x in flows.logins if x in g.nodes) if flows is not None else None,
             "ai": ai, "mobile": g.meta.get("mobile")}
