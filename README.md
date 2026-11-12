@@ -47,7 +47,8 @@ Your browser opens Lantern. The app is analyzed on first open (a few seconds), a
   Click any function for what it does; "Explain with …" asks your model for the three lenses.
 * **Findings**: security problems ranked by severity and by whether a user can reach them. "Accept risk…" records a
   written reason instead of hiding the finding.
-* **Readiness**: a 0–100 grade across ten areas with what to fix first, a deployment recommendation, and starter files
+* **Readiness**: a release decision (Blocked, Incomplete or Passed, with what blocks it or what is missing) above a
+  0–100 grade across ten areas with what to fix first, a deployment recommendation, and starter files
   (Dockerfile, CI workflow, `.env.example`, SECURITY.md) you can write with one click. Lantern never overwrites a file.
 * **Evidence Report**: a commit-pinned summary for a reviewer, with a "Save as PDF" button.
 * **Settings**: choose a model (Anthropic, OpenAI, OpenRouter, Mistral, Gemini, DeepSeek, or a local Ollama / LM Studio model) and
@@ -122,7 +123,11 @@ lantern verify path/to/repo --report evidence.html   # re-runs the analysis on t
 ```
 
 Attach your own walkthroughs of key flows by writing `lantern-narratives.md` at the repo root.
-`.lantern/badge.svg` is a README badge with the score.
+`.lantern/badge.svg` is a README badge with the commit, the open critical findings and the date. It is green only
+for a release that Passed; otherwise it ends in "blocked" or "incomplete".
+
+In CI, `lantern analyze . --require not-blocked` (or `--require passed`) ends with 1 unless this run's own release
+decision is good enough. Passed needs the project's tests run in the same command (`--trace -- <test command>`).
 
 Record what actually runs (Python): `lantern analyze path/to/repo --trace -- python -m pytest -q`
 

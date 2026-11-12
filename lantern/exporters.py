@@ -31,7 +31,7 @@ def sarif(sec: dict, repo: Path | None = None) -> dict:
         if path:
             msg += " Reachable from an entry point: " + " -> ".join(_short(p) for p in path) + "."
         else:
-            msg += " Not reachable from any detected entry point."
+            msg += " No path to it was found from an entry point, which is not proof that nothing runs it."
         if f.get("more_info") and not str(f["more_info"]).startswith("http"):
             msg += " " + str(f["more_info"])
         r = {"ruleId": rid, "level": SARIF_LEVEL.get(f.get("rank"), "warning"), "message": {"text": msg},
@@ -45,7 +45,9 @@ def sarif(sec: dict, repo: Path | None = None) -> dict:
             r["locations"] = [{"physicalLocation": {"artifactLocation": {"uri": str(f["file"]), "uriBaseId": "%SRCROOT%"},
                                                     **({"region": region} if region else {})}}]
         if f.get("status") == "accepted":
-            r["suppressions"] = [{"kind": "external", "status": "accepted",
+            # SARIF's own word for a comment in the code is "inSource"; `lantern-accepted.json` is "external"
+            r["suppressions"] = [{"kind": "inSource" if (f.get("accepted") or {}).get("how") == "nosec" else "external",
+                                  "status": "accepted",
                                   "justification": str((f.get("accepted") or {}).get("reason") or "")}]
         results.append(r)
     return {"$schema": SCHEMA, "version": "2.1.0", "runs": [{

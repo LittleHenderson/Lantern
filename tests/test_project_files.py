@@ -149,6 +149,7 @@ def test_a_link_out_a_pipe_and_a_file_behind_a_linked_folder_are_not_there(tmp_p
 # openers. Everything else in `lantern/` that opens a file for reading is a find: (module, function) -> why not.
 OWN_FILES = {
     ("python_frontend.py", "project_bytes"): "the opener", ("python_frontend.py", "project_text"): "the opener",
+    ("python_frontend.py", "project_sha256"): "the opener", ("seal.py", "_key"): "LANTERN_HOME",
     ("results.py", "plain"): "the opener for result files", ("gitfacts.py", "_text"): "the opener for git's files",
     ("results.py", "write"): "writes", ("removal.py", "_write"): "writes", ("server.py", "FileLock.__enter__"): "a lock",
     ("_jail.py", "_landlock"): "a folder handle for Landlock", ("_jail.py", "_stat"): "/proc",
@@ -642,11 +643,17 @@ def test_a_dependency_file_that_is_a_link_inside_the_project_is_read(tmp_path):
 def test_a_lock_file_that_is_a_link_out_of_the_project_is_no_lock_file_for_npm(tmp_path):
     """npm reads package-lock.json itself, and would send the names in somebody else's file to the registry."""
     lock = json.dumps({"name": "x", "lockfileVersion": 3, "packages": {}})
-    own = _write(tmp_path / "own", {"package.json": "{}", "package-lock.json": lock})
+    names = json.dumps({"dependencies": {"left-pad": "1.3.0"}})
+    own = _write(tmp_path / "own", {"package.json": names, "package-lock.json": lock})
     assert depaudit.run_npm_audit(own, True)[1]["why"] == "offline"
-    linked = _write(tmp_path / "linked", {"package.json": "{}"})
+    linked = _write(tmp_path / "linked", {"package.json": names})
     os.symlink(_write(tmp_path / "outside", {"l.json": lock}) / "l.json", linked / "package-lock.json")
-    assert depaudit.run_npm_audit(linked, True)[1]["why"].startswith("no package-lock.json")
+    record = depaudit.run_npm_audit(linked, True)[1]
+    assert record["why"].startswith("no package-lock.json") and record["unlocked"] == 1
+    # a package.json that names no library has nothing a lock file could say, linked or not (since point 6)
+    bare = _write(tmp_path / "bare", {"package.json": "{}"})
+    os.symlink(tmp_path / "outside" / "l.json", bare / "package-lock.json")
+    assert depaudit.run_npm_audit(bare, True)[1]["why"] == "no package.json names a library that ships"
 
 
 @only_posix

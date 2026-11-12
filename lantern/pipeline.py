@@ -126,12 +126,13 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
                              "recall": m["recall"], "stderr_tail": (m.get("stderr_tail") or "")[-600:], **extra}
         log(f"trace   {m['observed_edges']} calls seen running, recall {m['recall']}, "
             f"{m['runtime_only']} runtime-only (exit {m['returncode']})")
+    from .evidence import git_info
+    git = git_info(repo)        # asked once: the findings' cases and the release decision name the same commit
     sec = None
     if not no_scan:
         t = time.perf_counter()
         sec = scan(g, offline)
         from . import case
-        from .evidence import git_info
         # the previous run of this folder, before it is replaced, and the first one
         before = earlier(out, "security.json", log, "This run does not say which findings were there before.")
         base = earlier(out, "baseline.json")    # `evidence` below says so when this one cannot be used
@@ -140,7 +141,7 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
             ids = {f.get("id") for f in before.get("findings") or []}
         if base and base.get("id_version") == sec.get("id_version"):
             ids = (ids or set()) | set(base.get("findings") or {})
-        case.stamp(sec, git_info(repo), ids)
+        case.stamp(sec, git, ids)
         timings["scan"] = round(time.perf_counter() - t, 2)
         c = sec["counts"]
         log(f"scan    {c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low "
@@ -155,9 +156,14 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     g.save(out / "graph.json")
     from . import calls
     calls.write(out / "calls.json", g)
-    rd = assess(g, sec, run_meta)
+    # What `lantern behave` left in the results folder counts for the release decision only when it is of this code
+    # and this plan and carries this computer's seal (release.py); a file that cannot be used is said, not guessed at.
+    from . import behave, release
+    record, unread = results.earlier(out, behave.RESULT_NAME)
+    rd = assess(g, sec, run_meta, git=git, behaviour=record, behaviour_unread=unread, out=out)
     results.write(out / "readiness.json", json.dumps(rd, indent=1))
     log(f"ready   {rd['score']}/100 (grade {rd['grade']}), {rd['shape']}")
+    log(f"release {release.line(rd['release'])}")
     run_meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M")
     results.write(out / "run.json", json.dumps(run_meta, indent=1))
     words = earlier(out, "explanations.json", log, "The report is written without a model's explanations; "
@@ -167,7 +173,7 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     log(f"proof   {evidence(out, g, sec, rd, run_meta, privacy, log)}")
     for line in results.said(out):
         log(f"note    {line}")
-    return {"score": rd["score"], "grade": rd["grade"], "shape": rd["shape"],
+    return {"score": rd["score"], "grade": rd["grade"], "shape": rd["shape"], "release": rd["release"]["decision"], "release_words": rd["release"]["words"],
             "counts": (sec or {}).get("counts"), "incomplete": run_meta.get("incomplete") or [], "report": str(path)}
 
 

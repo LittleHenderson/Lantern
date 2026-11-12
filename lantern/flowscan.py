@@ -57,9 +57,59 @@ def _shape(group: list[dict]) -> dict:
             "steps": [dict(s) for s in main["steps"]], "others": others, "count": len(group)}
 
 
-def run(g, findings: list[dict], lines_for=None) -> tuple[list[dict], dict, flow.Result | None]:
+def _sender_first(g, n, at: int, paid: dict, adj: dict) -> bool:
+    """Whether everything a route pays for is paid after the line its sender check stands on (`flow.Result.senders`):
+    no paid call on the route's own lines up to that line, and none in or below a function the route calls up to
+    it. A call whose line is not known counts as made before the check."""
+    if any(line <= at for line in paid.get(n.id, ())):
+        return False
+    early = {e.dst for e in g.callees(n.id) if not e.lines or min(e.lines) <= at}
+    todo = list(early)
+    while todo:
+        u = todo.pop()
+        if u in paid:
+            return False
+        for v in adj.get(u, ()):
+            if v not in early:
+                early.add(v)
+                todo.append(v)
+    return True
+
+
+def _senders(g, findings: list[dict], res, paid_calls) -> int:
+    """A webhook whose sender is checked is not a route anyone can call. `LA-WALLET-DRAIN` says "anyone can call it
+    as often as they like" of a route that reaches a paid call and shows no login; where the route's code goes on
+    only with a message its provider signed, and pays for nothing before that check, the sentence is wrong and the
+    finding is not kept. How many: the return value, for the record."""
+    if not res.senders or paid_calls is None:
+        return 0
+    from .aiapp import PAID_KINDS
+    from .websec import call_adjacency
+    paid: dict[str, list[int]] = {}
+    for c in paid_calls:
+        if c.get("node") and c.get("kind") in PAID_KINDS:
+            paid.setdefault(c["node"], []).append(c["line"])
+    places = {(n.file, n.start_line): (n, at) for n, at in ((g.nodes.get(x), at) for x, at in res.senders.items())
+              if n is not None}
+    adj = None
+    drop = []
+    for f in findings:
+        got = places.get((f.get("file"), f.get("line"))) if f.get("rule") == "LA-WALLET-DRAIN" else None
+        if got is None:
+            continue
+        if adj is None:
+            adj = call_adjacency(g)
+        if _sender_first(g, got[0], got[1], paid, adj):
+            drop.append(f)
+    if drop:
+        findings[:] = [f for f in findings if not any(f is x for x in drop)]
+    return len(drop)
+
+
+def run(g, findings: list[dict], lines_for=None, paid_calls=None) -> tuple[list[dict], dict, flow.Result | None]:
     """(findings of its own, the tool's record, the engine's result). Flows that belong to a finding already in
-    `findings` are written on that finding."""
+    `findings` are written on that finding. `paid_calls`: the calls that cost money (`aiapp.find_calls`), for the
+    routes whose sender is checked."""
     langs = g.meta.get("languages") or {}
     if not any(k in langs for k in LANGS):
         return [], scanresult.record("lantern-flow", "skipped", "no Python or JavaScript code to follow data through",
@@ -77,6 +127,7 @@ def run(g, findings: list[dict], lines_for=None) -> tuple[list[dict], dict, flow
     named_open = [f for f in findings if f.get("rule") == "LW-AUTH-MISSING" and (f.get("file"), f.get("line")) in shown]
     if named_open:
         findings[:] = [f for f in findings if not any(f is x for x in named_open)]
+    sender_checked = _senders(g, findings, res, paid_calls)
     groups: dict[tuple, list[dict]] = {}
     for fl in res.flows:
         groups.setdefault((fl["class"], fl["file"], fl["line"]), []).append(fl)
@@ -195,7 +246,7 @@ def run(g, findings: list[dict], lines_for=None) -> tuple[list[dict], dict, flow
               "scope": {"files": st.get("files", 0), "functions": st.get("functions", 0), "flows": len(res.flows),
                         "on_other_findings": attached, "not_followed_further": st.get("stopped", 0),
                         "login_read_from_code": len(named_open),
-                        "token_check_lets_on": lets_on}}
+                        "token_check_lets_on": lets_on, "sender_checked": sender_checked}}
     if notes:
         rec = scanresult.record("lantern-flow", "partial", "; ".join(notes), errors=res.errors[:20], **fields)
     else:

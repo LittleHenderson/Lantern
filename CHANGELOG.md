@@ -5,6 +5,135 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- The release decision: Blocked, Incomplete or Passed, and a score that cannot speak over it (2026-11-11; point 6
+  of the 2026-11-09 directive, "Fix severity and make 100 mean the required work passed"). Three things were wrong
+  until now. A finding was ranked lower when Lantern found no path to its line. A check that was skipped left the
+  sum, so tests that were never run cost nothing. And the one number, an average over ten categories, was all there
+  was to say whether a project can ship. **This changes what an existing project sees, on purpose: scores go down
+  where required work was skipped, a badge that was green may now say "blocked" or "incomplete", some findings
+  rise by one rank, and lines that carry a `# nosec` comment appear in the results for the first time.**
+  - **A path Lantern did not find lowers nothing.** `security._steps`: the rank starts at the tool's own severity
+    (`FLOOR`) and who reaches the line can only raise it. Until now a high with no path was ranked medium and a
+    medium low, "because nothing in the map reaches it"; a scheduler, another program, a framework that calls by
+    name or a call Lantern could not follow would not show on the map. A rank goes under the tool's severity only
+    on evidence written on the finding (`rank_note` with `rank_before_context`: a weak hash used as an identifier,
+    SQL that splices only fixed text, a function every caller hands fixed text), for test code, or where a rule
+    fixes its rank. Every finding now carries the facts apart: `tool_severity` and `tool_confidence` as before,
+    `reachability` (`{state, kind?, why}`; `reached`, `tests-only`, `unknown`, `not-code`; `unknown` is never read
+    as "nothing runs it") and `rank_basis` (the steps to the rank, each `{step, rank, why}`: `severity`, `raised`,
+    `lowered`, `fixed`, `test-code`). The case, the scenario, the connector's note and the SARIF message say "no
+    path was found, which is not proof that nothing runs it" where they said "nothing reaches it" or "nobody can
+    do this yet", and the case's condition "Someone outside can reach this code" is not known (`null`) where it
+    was `false`. On Lantern's 15 sample apps five findings rise from low to medium for this reason (two on the
+    Android sample, one on the PHP sample, two on the Ruby sample); no finding fell.
+  - **Test code by what runs it, not by its name alone.** A file named like a test, one function of which a page,
+    route or command outside the test files runs through links Lantern worked out, is the app's own code
+    (`test_file_in_use`): its findings are ranked and counted like any other. A guess by method name, or one of
+    several classes that have the method, is no evidence of who runs a file (a test double has the methods of what
+    it stands in for): such a file stays test code and the finding says a guess leads there (`test_file_guessed`).
+  - **A `# nosec` comment hides nothing.** `# nosec` is Bandit's own switch: a comment that tells it to skip a
+    line, and it comes with the project like the code. Lantern ran Bandit as it comes, so such a line was listed
+    nowhere: no finding, no count, no word on the Evidence page. Bandit is now started with `--ignore-nosec` and
+    Lantern reads the comment itself (`security.nosec_says`, comments taken from Python's own reading of the file,
+    so the words inside a text are none). A comment with a written reason, on a line Lantern followed no request
+    data to, counts as a risk the project accepted, exactly like `lantern accept`: listed, counted apart, its rank
+    as it was, the reason beside it (`status: accepted`, `accepted.how: "nosec"`, `nosec.state: "accepted"`; the
+    Evidence page says "Accepted in the code (a # nosec comment on the line)", SARIF says `inSource`). A comment
+    with no reason accepts nothing (`bare`), and neither does one on a line Lantern followed request data to
+    (`overruled`): both stay open at their rank and the finding says so. A comment that names other checks only
+    is not about the finding. Lantern's own code had 28 such lines; each now carries its reason.
+  - **The release decision** (`lantern/release.py`, in `readiness.json` as `release`). `Blocked`: a required
+    criterion failed (a critical or high finding is open outside test code, the project's tests failed, a
+    behaviour check came out broken). `Incomplete`: nothing failed and something required is missing (a scanner
+    did not finish or did not cover everything, libraries were not checked, the tests were not run, the behaviour
+    plan was not run on this code). `Passed`: every required criterion that applies to this kind of project has
+    passed. Five criteria, each `passed`, `failed`, `missing` or `not-applicable` with its reason and what to do:
+    `findings`, `scanners` and `tests` for every project, `dependencies` where the project lists libraries,
+    `behaviour` where it brings a plan (`lantern-behaviour.json`). What the profile does not ask for is named with
+    the reason (`profile.not_required`), so Passed does not read as more than it is. Tests that were not run, that
+    the sandbox could not run, or that the project does not have are `missing`, never passed; tests that ended
+    with an error are `failed`, except where the sandbox refused something they tried (that may be the sandbox,
+    so it is `missing`).
+  - **The score cannot speak over the decision.** `checklist` is the weighted average as before; `score` is that
+    number held at 59 (the top of grade F) while the release is Blocked and under 100 until it is Passed
+    (`release.score`), so a critical issue is not averaged away by unrelated points and 100 is for a passed
+    release with complete evidence. A check the release needs that was skipped because the work was not done
+    (`required: true` on the check: the tests were not run, listed libraries were not looked up) keeps its points
+    in the sum and earns none (`readiness.counts`); any other skipped check leaves the sum as before.
+    `readiness.json` is `version` 2. On the 15 sample apps the score falls by between 0 and 6 points for this
+    reason (the Kotlin sample 46 to 40), and every one of them reads Blocked.
+  - **Tied to what was tested** (`release.bind` → `release.bound_to`): the commit and whether files differ from
+    it; one SHA-256 over every file of the project, by path and content (`code`: `files`, `sha256`, `not_read`,
+    and in words which folders no reader looks into); one for each file that lists libraries and one over all of
+    them (`dependencies`); the settings of the run (scan on or off, the test command, offline, where it was made,
+    packs switched off, the SHA-256 of `lantern-accepted.json` and of the behaviour plan); every tool with its
+    version and how its run ended; Lantern, Python and the system. The Evidence digest takes the decision, each
+    criterion's state and those SHA-256s in (`evidence._release_part`), so `lantern verify` fails when any of
+    them differs. A report an older Lantern made has no decision and its digest is what it was.
+  - **A behaviour record counts only when it is of this code** (`lantern/seal.py`). `behaviour.json` lies in the
+    results folder, which usually lies in the project, so a project could bring one that says every check held.
+    `lantern behave` now writes the SHA-256 of the code it started the app from (`of.code_sha256`) and this
+    computer's seal (`seal`: an HMAC-SHA256 under a key made on first use, `LANTERN_HOME/seal.key`, readable by
+    its owner only). The release decision counts a record only when the seal holds and the plan and the code are
+    the ones in the project now; otherwise `behaviour` is `missing` with the reason. The seal says which Lantern
+    made the record, not that the record is right, and whoever can read `LANTERN_HOME` can make one.
+  - **Libraries that could not be looked up are said.** A `package.json`, `composer.json` or `Gemfile` with no
+    lock file beside it names libraries whose versions nobody knows: the audit's record counts them (`unlocked`,
+    the first five in `unlocked_examples`) and names the folders whose versions are in a pnpm, yarn or bun lock
+    file Lantern does not read yet (`other_locks`); a `package.json` that names nothing that ships is "skipped:
+    no package.json names a library that ships" and no gap. The readiness check `dependencies` earns nothing for
+    them, the Evidence Limits say how many, and `dependencies` is `missing`. So is it for the kinds of project
+    Lantern has no library check for yet (`release.NO_AUDIT`: Go, Rust, Dart and Flutter, .NET, Swift, C and C++).
+  - **Where it shows.** The report's readiness page (a box above the score: the word, why, each criterion with
+    its state in words, what the decision is tied to); the app's project cards, list and CSV, and the website's
+    run cards (`release` in a run's summary); the Evidence page's Scorecard (the decision, the criteria, the
+    profile, "What this decision is tied to") and its Limits; `evidence.json` (`release`, `scorecard.checklist`);
+    the badge, which is green only for a release that Passed and otherwise ends in "blocked" or "incomplete";
+    `lantern analyze` (a `release` line in the log, and `--require not-blocked|passed` for CI: exit 1 unless this
+    run's own decision is good enough, never one read back from the results folder); the connector
+    (`lantern_readiness` returns `release` and `checklist`, `lantern_projects` names the decision); Ask Lantern's
+    facts. A decision read back from a file is taken as one of the three words with bounded plain text beside it,
+    and what blocks and what is missing is worked out anew from the criteria (`release.shown`); the one-command
+    audit poisons the box (`tools/audit.sh`).
+  - **Lantern's check of itself** (`tools/self_readiness.py`, CI) now fails on a release decision of Blocked, on
+    Incomplete for anything but the tests (that step reads the code and never runs the tests, which CI's test
+    jobs do: `ALLOWED_MISSING`, by name), and on a required check that was skipped and is not in `ALLOWED_SKIP`.
+  - **Three checks the code makes are now read as checks** (`lantern/flow.py`; each written after a false alarm
+    or a miss on a benchmark, against examples of its own). A payment webhook that checks who sent the message
+    before it spends is not "a route anyone can call" (`Engine.sender_checked`, `flow_rules.SENDER_VERIFIES`;
+    `flowscan._senders` drops `LA-WALLET-DRAIN` there only when nothing is paid for before the check; record
+    `scope.sender_checked`). Text a request wrote into a file that is read back and run as a template is one flow
+    from the request to the line that runs it, by way of the write and the read (`Engine.stored`, `read_back`,
+    `read_back_flows`, `same_place`: that the two files are one is read from the paths' fixed words, so the flow
+    is a guess, `LOW`, ranked medium; the text read back is followed into a larger text, `"<main>" + text`, an
+    f-string or template literal, `%`, `format` (`flow.read_of`, `flow_rules.READ_INTO`), and into a helper that
+    runs what it is handed, on the helper's line (`Engine.ran`), not through a `replace`, which may be the code
+    taking a template's own marks out). A check made on a whole list at once narrows every item of the list
+    (`Engine.each_facts`: Python `any(...)` / `all(...)` over a generator, JavaScript `some` / `every` with a
+    function written in the call; `zip(a, b)` pairs keep each list's own items; a JavaScript `map` gives what its
+    function gave back; the same check written as a loop of its own before the loop that uses the items,
+    `Engine.loop_facts`, only where every item gets to the check and none gets past a failed one; the safe app of
+    `bench/behaviour/` had two `LT-PATH` findings at high for want of it and has no finding now; the six planted
+    versions the reading told apart from it are still told apart, and a seventh with them, `zip-entry-escapes`,
+    where those two findings now stand alone). Tests: `tests/test_webhook_sender.py`, `tests/test_stored_file.py`,
+    `tests/test_list_guard.py`, each dangerous shape beside safe twins and look-alikes.
+  - **Measured on the held-out benchmark** (`bench/heldout/`, same definition, targets written down before the
+    run): 55 of 79 documented problems found at medium or above offline (54 before), none found only as low (1
+    before), no false alarm on the 17 safe twins, no vulnerable app reads Passed (8 of 8 read Blocked) and no app
+    scores 100. **Two targets were missed and are kept as missed:** one of the six clean apps reads Blocked
+    (fastapi-template, through one false alarm ranked high that Lantern has no evidence to lower), and `pg-ssti`
+    is still not found where the benchmark documents it (Lantern lists the problem 13 lines above, where the text
+    is saved; the app shows the saved file by its name and never reads it back to run it, so the new stored-file
+    rule does not fire there). The other five clean apps read Incomplete, each for the same two reasons: their
+    libraries were not all checked and their tests were not run by the benchmark.
+  - Tests: `tests/test_severity.py`, `tests/test_nosec.py`, `tests/test_release.py` (each downgrade and each
+    decision beside its deceptive near-miss: a comment that says the command is fixed on a line the request
+    reaches; a behaviour record with the right words and no seal, of another plan, of other code; a results folder
+    that brings its own `readiness.json`; a skipped required test; 100 points of checklist with a failed test).
+  - Not done here, and said where it matters: the cloud service never runs a project's tests, so a run on the
+    website reads Incomplete at best; a project in Go, Rust, Dart, .NET, Swift or C/C++ that lists libraries
+    reads Incomplete until Lantern can check them; "fixed" on the Evidence page still means only that a finding
+    of the baseline is no longer reported, not that anybody showed it fixed.
 - Behaviour checks: `lantern behave PATH` starts the project's app in the test sandbox and tests what really
   happens (2026-11-11; point 5 of the 2026-11-09 directive, "Test full-stack behavior, not just source patterns").
   Until now everything Lantern said about a project came from reading it. A project can now carry a plan,

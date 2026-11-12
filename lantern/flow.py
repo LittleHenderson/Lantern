@@ -32,6 +32,7 @@ judged per route, and by names where the code of a check cannot be read."""
 
 from __future__ import annotations
 
+import posixpath
 import re as _re
 import time
 from pathlib import Path
@@ -89,7 +90,7 @@ class Fn:
 
 class Mod:
     __slots__ = ("file", "lang", "imports", "consts", "gwrites", "fns", "top", "names", "frameworks", "cvals",
-                 "dotted", "bases", "fields", "stars")
+                 "dotted", "bases", "fields", "stars", "picked", "default")
 
     def __init__(self, file, lang):
         self.file, self.lang = file, lang
@@ -105,6 +106,10 @@ class Mod:
         self.bases: dict[str, list] = {}       # a class of the file -> its bases as written
         self.fields: dict[str, dict] = {}      # a class of the file -> its fields written with a type: name -> type
         self.stars: list[str] = []             # `from <this> import *`, as written (`.models`, `app.models`), in order
+        # JavaScript: a local name taken from another file of the project -> the name it goes by there ("default"
+        # for a default import), and what this file hands out by default when that is a value (`export default x`)
+        self.picked: dict[str, str] = {}
+        self.default: N | None = None
 
 
 # ------------------------------------------------------------------------------------------------ values
@@ -440,6 +445,88 @@ def unproven(v: Val) -> Val:
     return v.but(taints=tuple(t for t in v.taints if not (t.kind == "ident" and isinstance(t.key, Proven))))
 
 
+def given(n: N | None) -> bool:
+    """Whether an argument is written and is not fixed nothing, nor a setting that falls back to fixed empty text
+    (`process.env.SECRET || ""`, `os.getenv("SECRET", "")`): a secret that may be empty is one anybody has."""
+    if n is None:
+        return False
+    if n.k == "const":
+        return bool(n.a)
+    if n.k == "bool" and n.name in ("or", "||"):
+        return all(given(x) for x in n.items or ())
+    if n.k == "bin" and n.name == "??":
+        return given(n.a) and given(n.b)
+    if n.k == "cond":
+        return given(n.b) and given(n.c)
+    if n.k == "call":
+        return not any(x is not None and x.k == "const" and x.a == "" for x in [*(n.items or ()), *(n.kw or {}).values()])
+    return True
+
+
+def own_file(x: N | None) -> bool:
+    """`__file__`, also made absolute or into a path: the code's own file."""
+    if x is None:
+        return False
+    if x.k == "name":
+        return x.name in ("__file__", "__filename")
+    if x.k == "call" and x.a is not None and x.a.k in ("attr", "name"):
+        items = x.items or ()
+        if x.a.name in R.PATH_OF_FILE and len(items) == 1:
+            return own_file(items[0])
+        return x.a.name in ("resolve", "absolute") and not items and x.a.k == "attr" and own_file(x.a.a)
+    return False
+
+
+def own_folder_of(x: N | None) -> bool:
+    """The ways of writing "the folder this file is in": `os.path.dirname(__file__)`, `Path(__file__).parent`,
+    `__dirname`, also made absolute."""
+    if x is None:
+        return False
+    if x.k == "name":
+        return x.name == "__dirname"
+    if x.k == "attr":
+        return (x.name == "parent" and own_file(x.a)) or (x.name == "dirname" and text_of(x) == "import.meta.dirname")
+    if x.k == "call" and x.a is not None and x.a.k in ("attr", "name"):
+        items = x.items or ()
+        if x.a.name == "dirname" and len(items) == 1:
+            return own_file(items[0])
+        if x.a.name in R.PATH_OF_FILE and len(items) == 1:
+            return own_folder_of(items[0])
+        return x.a.name in ("resolve", "absolute") and not items and x.a.k == "attr" and own_folder_of(x.a.a)
+    return False
+
+
+def about_own_file(x: N) -> bool:
+    return any((n.k == "name" and n.name in R.PATH_HERE) or (n.k == "attr" and text_of(n).startswith("import.meta"))
+               for n in every_node(x))
+
+
+def spelt(x: N | None, depth: int = 0) -> str:
+    """An expression as written, what it is called with too: what tells `Path(__file__).parent.parent` from
+    `Path(__file__).parent`."""
+    if x is None or depth > 8:
+        return "…"
+    if x.k == "call":
+        return f"{spelt(x.a, depth + 1)}({', '.join(spelt(i, depth + 1) for i in x.items or ())})"
+    if x.k == "attr":
+        return f"{spelt(x.a, depth + 1)}.{x.name}"
+    if x.k == "index":
+        return f"{spelt(x.a, depth + 1)}[{spelt(x.b, depth + 1)}]"
+    return text_of(x)
+
+
+def same_place(a: tuple, b: tuple) -> bool:
+    """Whether two files may be one, by where the code says each is (`Engine.place`): the fixed pieces are the
+    same, or those of one are the start of the other's and something not fixed follows them there (a file whose
+    name comes from somewhere, in the folder the other one is in or above it). Two names that end in different
+    written text (`.txt`, `.html`) are two files."""
+    (pa, open_a, end_a), (pb, open_b, end_b) = a, b
+    n = min(len(pa), len(pb))
+    if not n or pa[:n] != pb[:n] or (end_a and end_b and end_a != end_b):
+        return False
+    return len(pa) == len(pb) or (open_a if len(pa) < len(pb) else open_b)
+
+
 def nobody(v: Val | None) -> bool:
     """Whether a value stands for nobody: never set, or fixed and nothing (`None`, `false`, `''`, `0`)."""
     return v is None or (v.kind == "const" and not v.taints and (
@@ -540,7 +627,7 @@ def stepped(v: Val, step: tuple) -> Val:
 def safe_for(cls: str, safe: frozenset) -> bool:
     """Whether a value with these marks is safe for an action of kind `cls`: made safe for it, or, for a redirect,
     the address the request itself was made to."""
-    return cls in safe or (cls == "redirect" and "redirect:own" in safe)
+    return cls in safe or (cls == "redirect" and "redirect:own" in safe) or (cls == "stored" and "eval" in safe)
 
 
 def disowned(taints: tuple) -> tuple:
@@ -658,8 +745,21 @@ def concat(parts: list, glue: bool = False) -> Val:
         return const("".join(text))
     skeleton = "".join(text)[:3000]
     taints = tuple(t if t.kind == "ident" else t._replace(safe=t.safe | {"nosql"}) for t in taints)
-    return Val(taints, fixed, sql or bool(R.SQL_WORDS.search(skeleton)), html or bool(R.HTML_WORDS.search(skeleton)),
-               R.started(prefix, start, cut_), lost=any(p.lost for p in parts))
+    out = Val(taints, fixed, sql or bool(R.SQL_WORDS.search(skeleton)), html or bool(R.HTML_WORDS.search(skeleton)),
+              R.started(prefix, start, cut_), lost=any(p.lost for p in parts))
+    mark = None if taints else read_of(parts)
+    if mark:        # the text of a file with other text around it still holds what the file holds (`Engine.ran`)
+        out.kind, out.data = "ext", mark
+    return out
+
+
+def read_of(parts) -> str | None:
+    """The first of `parts` that is the text of a file read where the code says in fixed words where the file is
+    (`Engine.read_mark`): what it is known by."""
+    for p in parts:
+        if p.kind == "ext" and isinstance(p.data, str) and R.READ_MARK.match(p.data):
+            return p.data
+    return None
 
 
 def seq(items: list) -> Val:
@@ -814,10 +914,11 @@ class SinkRec(NamedTuple):
 
 class Az:
     """What one route, or one function for its summary, shows about who may reach what."""
-    __slots__ = ("ev", "pev", "records")
+    __slots__ = ("ev", "pev", "records", "sender")
 
     def __init__(self):
         self.ev: set = set()           # "owner" / "role": checks that were made on who is signed in
+        self.sender: int | None = None  # the line from which only a message its provider signed goes on ("sender")
         self.pev: dict = {}            # parameter index -> the checks made on it, should it be who is signed in
         self.records: dict = {}        # (file, line, origin) -> a record reached by a request value
 
@@ -879,6 +980,9 @@ class Ctx:
         self.rets: list[Val] = []
         self.exits: list[tuple] = []     # (proved, truth, facts if true, facts if false)
         self.az: Az = parent.az if parent else Az()      # a route written inline gets one of its own (`closure`)
+        # whether `az` is the account of this function's own run. Not for a function written inside another one and
+        # read where it stands (nobody may call it, or only later), unless it is a route or a gate of its own
+        self.owner: bool = parent is None
         # above 0 where only some requests get to: inside a branch whose other way lets the request go on, and after
         # a way on that some requests took. A login asked there is not asked of the others (`Engine.signed`)
         self.narrow: int = parent.narrow if parent else 0
@@ -946,8 +1050,11 @@ class Soft(NamedTuple):
 
 
 class Result:
-    def __init__(self, flows, stats, errors, engine, authz=(), logins=(), caught=(), soft=None):
+    def __init__(self, flows, stats, errors, engine, authz=(), logins=(), caught=(), soft=None, senders=None):
         self.flows, self.stats, self.errors, self.engine = flows, stats, errors, engine
+        # the routes (the map's nodes) that go on only with a message whose signature the provider's own library
+        # checked -> the line of the route's own code that check stands on, or is called from
+        self.senders = dict(senders or {})
         self.authz = list(authz)       # per route: records reached with no owner compared, an admin route unasked
         self.logins = set(logins)      # the routes (the map's nodes) whose code turns away whoever is not signed in
         # the routes on whose way a token is checked and a request that fails the check, or that some requests go
@@ -1139,6 +1246,11 @@ class Engine:
         self.routes: dict = {}             # route function key -> (Fn, Az)
         self.gates: dict = {}              # `inline:<file>:<line>` -> Az of a function written in place in `x.use()`
         self.logins: set = set()           # the map's nodes of the routes whose code turns away who is not signed in
+        self.senders: dict = {}            # the map's nodes of the routes of `Result.senders` -> the check's line
+        self.stored_at: dict = {}          # (file, line) of a write of request text into a file -> its `place`
+        self.read_at: dict = {}            # (file, line) of a read of a file -> its `place`
+        self.read_runs: dict = {}          # (file, line, read) -> a file's text run as code or as a template there
+        self._assigned: dict = {}          # function key -> {name: what it is set to in the function's own lines}
         self.before: dict = {}             # route function key -> {dependency name: its function's key or None}
         self.sent: dict = {}               # a request value's key (file, line, words) -> (its name, the part it is in)
         self.wide: dict = {}               # file -> [(name, key)]: what runs before every route of a router there
@@ -1331,8 +1443,10 @@ class Engine:
                     flows[key] = f
         out = sorted(flows.values(), key=lambda f: (f["file"], f["line"], f["class"], f["source"]["file"],
                                                     f["source"]["line"]))
+        out = self.read_back_flows(out)
         self.stats["flows"] = len(out)
-        return Result(out, self.stats, self.errors, self, self.authz(), self.logins, self.caught, self.soft_side())
+        return Result(out, self.stats, self.errors, self, self.authz(), self.logins, self.caught, self.soft_side(),
+                      self.senders)
 
     def soft_side(self) -> Soft:
         """The project's functions that call a token library, themselves or below them, and whose code shows no
@@ -1823,6 +1937,7 @@ class Engine:
             # a name that was looked up has at least one address (or the look-up raised), so what every turn of the
             # loop refuses holds after it; a `break` leaves with the rest not looked at
             sure = looked is not None and looked[0] == "addr" and not has_break(s.b)
+            each = self.loop_facts(s, env, ctx)
             for turn in range(2):
                 body = env.copy()
                 if test is not None:
@@ -1850,6 +1965,7 @@ class Engine:
                     env.take(body)
                 else:
                     env.join(body)
+            self.apply(env, each)       # the loop came to its end: no item was turned away
             if s.c:
                 self.block(s.c, env, ctx)
             return False
@@ -2582,6 +2698,89 @@ class Engine:
         if got is not None:
             ctx.az.ev.add(got)
 
+    # ---- a webhook whose sender is checked: the provider's own library, a secret, a failure that ends the request
+    def sender_checked(self, name: str, callee: Val, e: N, env: Env) -> bool:
+        """Whether this call is a provider's own check of a message's signature, made with a secret, so that it
+        fails when the provider did not send the message (`flow_rules.SENDER_VERIFIES`). `name`: the library's name
+        for the call; there is none when the client was made in another file of the project, and then that file
+        must make it with the provider's library (`made_by`): a function of the project's own that goes by the
+        library's name checks nothing. Not when the secret is missing or fixed empty text (anybody can sign with
+        that), nor for a check whose answer comes later and is not waited for."""
+        d = name or (callee.data if callee.kind == "ext" and isinstance(callee.data, str) else "")
+        if "ebhook" not in d:
+            return False
+        m = R.SENDER_VERIFIES.match(d)
+        items, kw = e.items or (), e.kw or {}
+        if m is None or "**" in kw or any(x is not None and x.k == "star" for x in items):
+            return False
+        client = m.group("client")
+        if client is not None:
+            if client.startswith("."):
+                if not self.made_by(env.fn.mod, e.a, R.SENDER_PACKAGE):
+                    return False
+            elif not R.SENDER_CLIENT.match(client):
+                return False
+            if m.group("later") and e.c != "await":
+                return False
+        elif not m.group("own"):
+            return True     # svix, Standard Webhooks: the secret went to the constructor, which takes no empty one
+        return given(items[2] if len(items) > 2 else kw.get("secret"))
+
+    @staticmethod
+    def sender_held(ctx: Ctx, e: N) -> None:
+        """The code goes on from here only with a message its provider signed: noted for the route ("sender", and
+        the line) where every request that goes on gets here (`sender_counts`)."""
+        if not sender_counts(ctx):
+            return
+        ctx.az.ev.add("sender")
+        if ctx.az.sender is None:
+            ctx.az.sender = e.line
+
+    def made_by(self, mod: Mod, f: N | None, package: str) -> bool:
+        """Whether the value a call hangs on (`stripe` in `stripe.webhooks.constructEvent`), taken from another file
+        of the project, is there what the package's own function made, written once at the top of that file:
+        `export const stripe = new Stripe(key)`, `export default stripe`, `require('stripe')(key)`."""
+        while f is not None and f.k == "attr":
+            f = f.a
+        if f is None or f.k != "name":
+            return False
+        spec, picked = mod.imports.get(f.name), mod.picked.get(f.name)
+        src = self.js_file(mod, spec) if spec and spec.startswith(".") and picked else None
+        if src is None:
+            return False
+        made = src.default if picked == "default" else None
+        if made is None or made.k == "name":
+            name = picked if made is None else made.name
+            vals = () if name in src.names or name == "default" else src.consts.get(name) or ()
+            made = vals[0] if len(vals) == 1 else None
+        if made is None or made.k != "call" or made.a is None:
+            return False
+        f2 = made.a
+        if f2.k == "call":                                   # require('stripe')(key)
+            x = f2.items or ()
+            return f2.a is not None and f2.a.k == "name" and f2.a.name == "require" and "require" not in src.names \
+                and len(x) == 1 and x[0] is not None and x[0].k == "const" and x[0].a == package
+        d = src.imports.get(f2.name) if f2.k == "name" else None
+        return bool(d) and (d == package or d.startswith(package + "."))
+
+    def js_file(self, mod: Mod, spec: str) -> Mod | None:
+        """The JavaScript file of the project an import names, when exactly one fits: the path from the importing
+        file's folder, else (`@/lib/x`, which the reader writes `./lib/x`) the one file whose path ends with it."""
+        tail = spec
+        while tail.startswith(("./", "../")):
+            tail = tail.split("/", 1)[1]
+        here = posixpath.normpath(posixpath.join(posixpath.dirname(mod.file), spec))
+
+        def stem(file: str) -> str:
+            s = file.rsplit(".", 1)[0]
+            return s[:-6] if s.endswith("/index") else s
+        js = [(stem(m.file), m) for m in self.mods.values() if m.lang == "js" and m is not mod]
+        for fits in (lambda s: s == here, lambda s: bool(tail) and (s == tail or s.endswith("/" + tail))):
+            found = [m for s, m in js if fits(s)]
+            if found:
+                return found[0] if len(found) == 1 else None
+        return None
+
     def passed_on(self, f: Fn, env: Env, ctx: Ctx) -> None:
         """`.then(f)` on what a token library hands back, with nothing that catches a failure before it: `f` runs
         only when the token held. Where `f` holds every place the request is handed on, that is a login."""
@@ -2766,6 +2965,7 @@ class Engine:
             sub.az = self.gates[f"inline:{f.file}:{f.line}"] = Az()
         if route or gate:
             sub.narrow, sub.only, sub.round, sub.soft = 0, None, FIXED0, 0
+            sub.owner = True
         # what it is to a request: a route, a function requests pass through, or, written inside one of those and
         # holding every place the request is handed on (the callback of a check), part of it
         mine = ("route", None) if route else self.passage(f)
@@ -2847,7 +3047,10 @@ class Engine:
                         hp.update((j, kind) for j in mine)
                 return frozenset(h), frozenset(hp)
             if s.ev:                      # checks the function makes on its own account
-                az.ev |= asked_here(s.ev, ctx)
+                got = asked_here(s.ev, ctx)
+                if "sender" in got and az.sender is None:
+                    az.sender = e.line      # the check is made in the called function: from this call on
+                az.ev |= got
             for i, kinds in s.pev.items():      # checks it makes on a parameter, when that is who is signed in
                 kinds = asked_here(kinds, ctx)
                 got = b.get(i)
@@ -2869,6 +3072,8 @@ class Engine:
                 if got is None:
                     continue
                 av = got[0]
+                if rec.cls == "eval" and not safe_for("eval", norm(rec.safe, fn.lang)):
+                    self.ran(av, rec.file, rec.line, rec.node, rec.what)    # the text of a file, run in there
                 if ("nohost" in rec.needs and (R.host_fixed(av.prefix) or R.no_host(av.prefix))) or \
                         ("nolocal" in rec.needs and R.stays(av.prefix)) or \
                         ("based" in rec.needs and R.closes(av.prefix, rec.cls == "redirect")):
@@ -3384,6 +3589,10 @@ class Engine:
             pre = self.before_of(fn)
             ev = self.settled(set(az.ev) | pre, fn)
             asks = bool({"owner", "role"} & ev)
+            if "sender" in az.ev and az.sender is not None:
+                # read from the route's own code and what it calls only: what runs before the route (a middleware,
+                # a dependency) is not taken for it, because the order of what was paid there is not known here
+                self.senders[fn.node] = az.sender
             if "login" in ev:
                 self.logins.add(fn.node)
             elif "caught" in ev and not asks and "own" not in ev:
@@ -3494,6 +3703,8 @@ class Engine:
         elif name and R.READS_TOKEN.match(name):
             ctx.az.ev.add("caught")     # the token is read and nothing is checked: no login, whatever comes of it
             self.token_lines.add((fn.file, e.line))
+        elif self.sender_checked(name, callee, e, env):
+            self.sender_held(ctx, e)    # a webhook: nothing about the value changes, only who can get past here
         # 0. who is signed in, handed back by a call whose code Lantern does not read: taken by its name
         last = (name or text_of(e.a)).rsplit(".", 1)[-1]
         if (name and R.IDENT_CALLS.match(name)) or R.IDENT_FN.match(last):
@@ -3586,6 +3797,9 @@ class Engine:
         if name and R.UNESCAPES.match(name) and every.taints:      # what an escape did for a page is undone
             return Val(tuple(t if t.kind == "ident" else t._replace(safe=t.safe - {"xss"})
                              for t in disowned(every.taints)), kind="ext", data=name + "()")
+        if name == "zip" and fn.lang == "py" and len(args) > 1 and all(a is not None for a in args) and \
+                not any(x.k == "star" for x in e.items or ()):
+            return seq([seq([elem(a) for a in args])])
         if name and R.PROPAGATORS.match(name):
             taints = disowned(every.taints)
             if R.FILE_READ.match(name):
@@ -3624,6 +3838,9 @@ class Engine:
                 return Val(ts, kind="ext", data=name + "()")
         if member in R.ARCHIVE_NAMES and recv is not None and recv.taints:
             return self.entry_names(recv, e, env)
+        if member in R.READ_KEEPS and recv is not None and recv.kind == "ext" and isinstance(recv.data, str) and \
+                R.READ_MARK.match(recv.data) and not tainted_args:
+            return Val(recv.taints, None, recv.sql, recv.html, kind="ext", data=f"{recv.data}.{member}()", lost=recv.lost)
         if member is not None and recv is not None:
             if member in R.MUTATORS and tainted_args and recv_expr is not None and recv_expr.k == "name" \
                     and recv.kind not in ("req", "ext", "self", "upload"):
@@ -3660,8 +3877,12 @@ class Engine:
                     self.page_calls.add(id(e))      # LAYOUT.format(body=text), '<br>'.join(lines)
                 parts = [recv] + vals + list(kw.values())
                 v = concat(parts) if len(parts) > 1 else recv
-                return self.built(ctx, env, e, Val(v.taints, v.fixed, v.sql, v.html,
-                                                   self.glued(fn.lang, member, recv, recv_expr, vals, e), lost=v.lost))
+                out = Val(v.taints, v.fixed, v.sql, v.html, self.glued(fn.lang, member, recv, recv_expr, vals, e),
+                          lost=v.lost)
+                mark = read_of(parts) if member in R.READ_INTO and not v.taints else None
+                if mark:        # not `replace`: that may be the code taking a template's own marks out of the text
+                    out.kind, out.data = "ext", mark
+                return self.built(ctx, env, e, out)
             if recv.taints and recv.kind not in ("req",):
                 if member in ("replace", "replaceAll") and len(args) > 1 and \
                         self.replaces_lt(fn, member, args[0], args[1], e.items[1], env, ctx):
@@ -3677,10 +3898,18 @@ class Engine:
                 taints = merge(recv.taints, every.taints) if member in R.ARG_METHODS else recv.taints
                 if not self.same_address(member, tainted_args, args):
                     taints = disowned(taints)       # `url.href.split("next=")[1]`: a part, not the address
-                if cb_ret is not None and member in ("map", "flatMap", "then", "reduce"):
+                if cb_ret is not None and member in ("map", "flatMap") and fn.lang == "js":
+                    # the list holds what the function written in the call gave back for each item, and nothing
+                    # else: `names.map((n) => path.resolve(folder, n))` are resolved paths, each of them
+                    taints = cb_ret.taints
+                elif cb_ret is not None and member in ("map", "flatMap", "then", "reduce"):
                     taints = merge(taints, cb_ret.taints)
                 if member in ("toString", "valueOf") or member in R.SANITIZER_MEMBERS:
                     pass
+                mark = self.read_mark(env, e, recv_expr) if member in ("read_text", "read_bytes") and \
+                    fn.lang == "py" and (not name or name.startswith("pathlib.")) and recv_expr is not None else None
+                if mark:
+                    return Val(taints, None, recv.sql, recv.html, kind="ext", data=mark)
                 return Val(taints, None, recv.sql, recv.html, kind=recv.kind if recv.kind == "ext" else None,
                            data=f"{recv.data}.{member}()" if recv.kind == "ext" else None)
         if cb_ret is not None and member in ("map", "flatMap", "then", "reduce"):
@@ -3700,6 +3929,19 @@ class Engine:
                 return Val(kind="ext", data="open(w):" + e.items[0].name)     # what is written to it, it holds
             if a0 is not None and any("held" in t.safe for t in a0.taints):
                 return Val(opened(a0.taints), kind="ext", data="open()")
+            if not writes:
+                mark = self.read_mark(env, e, e.items[0])
+                if mark:
+                    return Val(kind="ext", data=mark, lost=stopped)
+        if name and fn.lang == "js" and R.FILE_READ.match(name) and e.items:
+            mark = self.read_mark(env, e, e.items[0])       # fs.readFileSync(path): the text of the file at that place
+            if mark:
+                return Val(kind="ext", data=mark, lost=stopped)
+        if member in ("read_text", "read_bytes") and fn.lang == "py" and (not name or name.startswith("pathlib.")) \
+                and recv_expr is not None and not tainted_args and (recv is None or not recv.taints):
+            mark = self.read_mark(env, e, recv_expr)
+            if mark:
+                return Val(kind="ext", data=mark, lost=stopped)
         if callee.kind == "ext" and name:
             return Val(kind="ext", data=name + "()", lost=stopped)
         return ENDED if stopped else UNKNOWN
@@ -3743,6 +3985,286 @@ class Engine:
             return False
         return any(R.TEMPLATE_DIR[fn.lang].search(s) for s in lits) or \
             any(R.TEMPLATE_DIR_NAME[fn.lang].search(n) for n in names)
+
+    # ---- text written into a file, read back and run
+    def stored(self, ctx: Ctx, env: Env, v: Val, e: N, what: str, path: N | None) -> None:
+        """Request text is written into a file here. No finding by itself: kept as a flow of its own kind
+        ("stored") with the place the file is in, for code that reads a file of that place back and runs what it
+        holds (`read_back`). Text made safe for a page is still a template; a number is not."""
+        place = self.place(path, env) if path is not None else None
+        if place is None:
+            return
+        self.stored_at[(env.fn.file, e.line)] = place
+        self.hit(ctx, env, "stored", v, e, what, "LOW")
+
+    def read_mark(self, env: Env, e: N, path: N | None) -> str | None:
+        """What the text of a file read here is known by afterwards, when the code says in fixed words where the
+        file is (`place`)."""
+        place = self.place(path, env) if path is not None else None
+        if place is None:
+            return None
+        self.read_at[(env.fn.file, e.line)] = place
+        return f"read()@{env.fn.file}:{e.line}"
+
+    def read_back(self, env: Env, v: Val | None, e: N, what: str) -> None:
+        """The text of a file is run as code or as a template here. Nothing by itself: a template the project
+        ships is read this way. Noted for `read_back_flows`, which asks whether request text was written into a
+        file of that place."""
+        self.ran(v, env.fn.file, e.line, env.fn.node, what)
+
+    def ran(self, v: Val | None, file: str, line: int, node: str | None, what: str) -> None:
+        """`read_back` for a line that may be in another function: the text of a file handed to a helper that runs
+        its parameter is run on the helper's line."""
+        if v is None or v.kind != "ext" or not isinstance(v.data, str):
+            return
+        m = R.READ_MARK.match(v.data)
+        read = (m.group(1), int(m.group(2))) if m else None
+        if read in self.read_at:
+            self.read_runs[(file, line, read)] = {"what": what, "node": node, "place": self.read_at[read]}
+
+    def read_back_flows(self, flows: list) -> list:
+        """Request text written into a file (`stored`), and a file of the same place read back and run (`read_back`):
+        one flow from the request to the line that runs the text, by way of the write and the read. That the two
+        files are one is read from the code's fixed words (`same_place`), so the flow says it is a guess ("LOW").
+        Where it is made, a finding the write had for being in the templates folder is not kept beside it: the
+        write is a step of this one."""
+        stored = [f for f in flows if f["class"] == "stored"]
+        flows = [f for f in flows if f["class"] != "stored"]
+        made: dict = {}
+        steps_of: set = set()
+        for (file, line, read), run in sorted(self.read_runs.items(), key=lambda kv: kv[0]):
+            for f in stored:
+                place = self.stored_at.get((f["file"], f["line"]))
+                if place is None or not same_place(place, run["place"]):
+                    continue
+                src = f["source"]
+                key = (file, line, src["file"], src["line"], src["what"])
+                steps = f["steps"] + [
+                    {"file": read[0], "line": read[1],
+                     "what": "a file of the same place is read back here: it holds whatever was written into it"},
+                    {"file": file, "line": line, "what": f"`{run['what']}`: here it {R.ACTION['eval']}"}]
+                old = made.get(key)
+                if old is None or len(steps) < len(old["steps"]):
+                    made[key] = {"class": "eval", "file": file, "line": line, "sink": run["what"], "confidence": "LOW",
+                                 "node": run["node"], "source": dict(src), "steps": steps}
+                steps_of.add((f["file"], f["line"]))
+        if not made:
+            return flows
+        flows = [f for f in flows if not (f["class"] == "eval" and f["confidence"] == "LOW" and
+                                          (f["file"], f["line"]) in steps_of)]
+        return sorted(flows + list(made.values()), key=lambda f: (f["file"], f["line"], f["class"], f["source"]["file"],
+                                                                  f["source"]["line"]))
+
+    @staticmethod
+    def opened_path(fn: Fn, f: N | None, line: int) -> N | None:
+        """The path the file written to here was opened with, for writing: `open(path, "w").write(x)`, or the
+        nearest `with open(path, "w") as f` / `f = open(path, "w")` above in the function's own lines."""
+        def writing(c) -> bool:
+            if c is None or c.k != "call" or not c.items or not R.OPEN_CALL.match(text_of(c.a)):
+                return False
+            mode = c.items[1] if len(c.items) > 1 else (c.kw or {}).get("mode")
+            return mode is not None and mode.k == "const" and isinstance(mode.a, str) and bool(set(mode.a) & set("wax+"))
+        if f is None:
+            return None
+        if f.k == "call":
+            return f.items[0] if writing(f) else None
+        if f.k != "name":
+            return None
+        best = None
+        for s in every_node(fn.body or ()):
+            if s.line > line or s.k not in ("with", "assign"):
+                continue
+            pairs = s.items or () if s.k == "with" else [(s.a, t) for t in s.items or ()]
+            for c, target in pairs:
+                if isinstance(c, N) and writing(c) and f.name in names_in(target) and (best is None or s.line >= best[0]):
+                    best = (s.line, c.items[0])
+        return best[1] if best else None
+
+    def set_in(self, fn: Fn) -> dict:
+        """What each name is set to in a function's own lines (a parameter: nothing that is known)."""
+        got = self._assigned.get(fn.key)
+        if got is None:
+            got = self._assigned[fn.key] = {p.name: [None] for p in fn.params}
+            for s in every_node(fn.body or ()):
+                if s.k == "assign" and isinstance(s.a, N):
+                    for t in s.items or ():
+                        for n in names_in(t):
+                            got.setdefault(n, []).append(s.a)
+                elif s.k in ("with", "for"):
+                    for t in ([x[1] for x in s.items or ()] if s.k == "with" else [s.a]):
+                        for n in names_in(t) if isinstance(t, N) else ():
+                            got.setdefault(n, []).append(None)
+        return got
+
+    def place(self, path: N | None, env: Env) -> tuple | None:
+        """Where a file is, as far as the code says it in fixed words: `(parts, open, ending)`. `parts`: the leading
+        pieces of its path that are fixed, each a piece of written text (`'posts'`) or something that stands for one
+        and the same value wherever it is written (a name set once at the top of a file, read for what it holds
+        when that is fixed too; `settings.MEDIA_ROOT`; the folder of the code's own file); `open`: whether something
+        that is not fixed follows them (a name the file gets from somewhere); `ending`: what the file's name ends
+        with where that is written text (`html` of `name + ".html"`). None for a path that starts with something
+        not fixed: such a file may be anywhere."""
+        fn = env.fn
+        budget = [80]
+
+        def once(m: Mod, name: str, seen: frozenset):
+            """A name set once at the top of a file: what it holds when that is fixed, else the name itself."""
+            vals = m.consts.get(name) or ()
+            key = f"{m.dotted or m.file}.{name}"
+            if len(vals) != 1:
+                return None
+            if key not in seen and isinstance(vals[0], N):
+                got, short = parts(vals[0], seen | {key}, m, None)
+                if got and not short:
+                    return got, vals[0]
+            return [key], None
+
+        def named(m: Mod, name: str, seen: frozenset):
+            """(pieces, the expression they were read from) for a name that is no local, or None: not fixed."""
+            if name in m.consts:
+                return once(m, name, seen)
+            d = m.imports.get(name)
+            if not d or name in R.REQUEST_NAMES:
+                return None
+            if m.lang == "py":
+                full = self.absolute(m, d)
+                if full in R.REQUEST_GLOBALS or full in R.PER_REQUEST:
+                    return None
+                head, _, last = full.rpartition(".")
+                m2 = self.py_mods.get(head) if head else None
+                return (once(m2, last, seen) if m2 is not None and m2 is not m and last in m2.consts else None) or \
+                    ([full], None)
+            src = self.js_file(m, d) if d.startswith(".") and name in m.picked else None
+            if src is None:
+                return [d], None
+            return (once(src, m.picked[name], seen) if m.picked[name] in src.consts else None) or \
+                ([f"{src.dotted or src.file}.{m.picked[name]}"], None)
+
+        def parts(x: N | None, seen: frozenset, m: Mod, local: dict | None) -> tuple[list, bool]:
+            """(the fixed leading pieces, whether something not fixed cuts them short). `local`: what the names of
+            the function are set to; None at the top of a file."""
+            budget[0] -= 1
+            if x is None or budget[0] < 0:
+                return [], True
+            k = x.k
+            if k == "const":
+                return ([f"'{p}'" for p in _re.split(r"[/\\]+", x.a) if p not in ("", ".")], False) \
+                    if isinstance(x.a, str) else ([], True)
+            if k == "call" and x.a is not None and x.a.k in ("attr", "name") and (
+                    x.a.name in R.PATH_JOINS or x.a.name in R.PATH_KEEPS) and not own_folder_of(x):
+                pass        # a path put together: read piece by piece below
+            elif k in ("call", "attr", "index", "name") and about_own_file(x) and \
+                    not (local and any(n.k == "name" and n.name in local for n in every_node(x))):
+                if own_folder_of(x):        # the folder the code's file is in: one place for every file of that folder
+                    return [f"here:{posixpath.dirname(m.file) or '.'}"], False
+                return [f"here:{m.file}:{spelt(x)}"], False
+            if k == "name":
+                if local is not None and x.name in local:
+                    vals = local[x.name]
+                    return parts(vals[0], seen | {x.name}, m, local) if len(vals) == 1 and x.name not in seen \
+                        else ([], True)
+                got = named(m, x.name, seen)
+                return (got[0], False) if got else ([], True)
+            if k in ("attr", "index"):
+                root = x
+                while root is not None and root.k in ("attr", "index"):
+                    if root.k == "index" and (root.b is None or root.b.k != "const"):
+                        return [], True
+                    root = root.a
+                if root is None or root.k != "name":
+                    return [], True
+                if root.name in ("self", "this", "cls") and fn.cls and local is not None:
+                    return [f"{m.file}:{fn.cls}:{text_of(x)}"], False
+                if local is not None and root.name in local:
+                    return [], True
+                if k == "attr" and x.a is root and m.lang == "py" and root.name in m.imports:     # `config.POSTS`
+                    m2 = self.py_mods.get(self.absolute(m, m.imports[root.name]))
+                    got = once(m2, x.name, seen) if m2 is not None and m2 is not m and x.name in m2.consts else None
+                    if got:
+                        return got[0], False
+                got = named(m, root.name, seen)
+                return ([f"{got[0][0]}:{text_of(x)}"], False) if got and len(got[0]) == 1 else ([], True)
+            if k == "call":
+                f = x.a
+                last = f.name if f is not None and f.k in ("attr", "name") else None
+                items = list(x.items or ())
+                if last in R.PATH_JOINS and (items or last == "resolve"):
+                    if f.k == "attr" and last in ("joinpath", "resolve") and not (
+                            f.a is not None and f.a.k == "name" and f.a.name in ("path", "os")):
+                        items.insert(0, f.a)        # `folder.joinpath(name)`, `folder.resolve()`
+                    return glue(items, seen, True, m, local)
+                if last in R.PATH_KEEPS and items:
+                    return parts(items[0], seen, m, local)
+                return [], True
+            if k == "bin" and x.name == "/":
+                return glue([x.a, x.b], seen, True, m, local)
+            if k == "bin" and x.name == "+":
+                return glue(flat(x), seen, False, m, local)
+            if k == "str":
+                return glue(list(x.items or ()), seen, False, m, local)
+            return [], True
+
+        def flat(x: N) -> list:
+            return flat(x.a) + flat(x.b) if x.k == "bin" and x.name == "+" and x.a is not None and x.b is not None else [x]
+
+        def glue(ops: list, seen: frozenset, apart: bool, m: Mod, local: dict | None) -> tuple[list, bool]:
+            """Pieces put one after the other: each a path piece of its own (`apart`: a join), or text glued on
+            (`+`, a text with values in it), where a piece counts only once a separator has closed it."""
+            out: list = []
+            begun = False       # the last piece of `out` is written text that more text may still continue
+            for op in ops:
+                if not apart and op is not None and op.k == "const" and isinstance(op.a, str):
+                    for i, p in enumerate(_re.split(r"[/\\]", op.a)):
+                        if i:
+                            begun = False
+                        if p and p != ".":
+                            if begun:
+                                out[-1] = out[-1][:-1] + p + "'"
+                            else:
+                                out.append(f"'{p}'")
+                            begun = True
+                    continue
+                got, short = parts(op, seen, m, local)
+                if begun and not apart:
+                    out.pop()       # `"post_" + name`: the piece is not fixed text
+                    return out, True
+                out += got
+                if short:
+                    return out, True
+                begun = False
+            return out, False
+
+        def ending(x: N | None, m: Mod, local: dict | None, depth: int = 0) -> str | None:
+            """What the file's name ends with, where the path ends in written text."""
+            if x is None or depth > 8:
+                return None
+            if x.k == "const":
+                found = R.FILE_EXT.search(x.a) if isinstance(x.a, str) else None
+                return found.group(1).lower() if found else None
+            if x.k == "name":
+                if local is not None and x.name in local:
+                    vals = local[x.name]
+                    return ending(vals[0], m, local, depth + 1) if len(vals) == 1 else None
+                got = named(m, x.name, frozenset())
+                return ending(got[1], m, None, depth + 1) if got and got[1] is not None else None
+            if x.k == "call":
+                f = x.a
+                last = f.name if f is not None and f.k in ("attr", "name") else None
+                items = list(x.items or ())
+                if items and (last in R.PATH_JOINS or last in R.PATH_KEEPS):
+                    return ending(items[-1] if last in R.PATH_JOINS else items[0], m, local, depth + 1)
+                return None
+            if x.k == "bin" and x.name in ("/", "+"):
+                return ending(x.b, m, local, depth + 1)
+            if x.k == "str":
+                return ending((x.items or [None])[-1], m, local, depth + 1)
+            return None
+
+        if path is None:
+            return None
+        local = self.set_in(fn)
+        got, short = parts(path, frozenset(), fn.mod, local)
+        return (tuple(got), short, ending(path, fn.mod, local)) if got else None
 
     def saved_template(self, ctx: Ctx, env: Env, v: Val | None, e: N, what: str) -> None:
         """Text written into a template file: the template engine runs it when the page is rendered. Read from the
@@ -4129,8 +4651,11 @@ class Engine:
                 code = join_all([a for a in args if a is not None])
             if name not in ("require", "compile", "__import__") or (a0.taints and a0.kind != "const"):
                 self.hit(ctx, env, "eval", code, e, what, "HIGH" if name != "require" else "MEDIUM")
+            if name not in R.EVAL_NAMES_ONLY:
+                self.read_back(env, code, e, what)
         elif member == "from_string" and a0 is not None and not name:
             self.hit(ctx, env, "eval", a0, e, what, "MEDIUM")
+            self.read_back(env, a0, e, what)
         # --- stored objects
         if name and R.DESERIALIZE_CALL.match(name) and a0 is not None:
             ok = True
@@ -4160,6 +4685,14 @@ class Engine:
         elif name and R.FILE_WRITE.match(name) and len(args) > 1 and e.items and \
                 self.template_file(e.items[0], env):
             self.saved_template(ctx, env, args[1], e, what)
+        # --- text written into a file, whatever folder: kept for what reads a file of that place back and runs it
+        if member in ("write", "writelines") and a0 is not None and a0.taints and recv is not None and \
+                recv.kind == "ext" and isinstance(recv.data, str) and recv.data.startswith("open("):
+            self.stored(ctx, env, a0, e, what, self.opened_path(env.fn, recv_expr, e.line))
+        elif member == "write_text" and py and a0 is not None and a0.taints and recv_expr is not None:
+            self.stored(ctx, env, a0, e, what, recv_expr)
+        elif name and R.FILE_WRITE.match(name) and len(args) > 1 and args[1] is not None and args[1].taints and e.items:
+            self.stored(ctx, env, args[1], e, what, e.items[0])
         # --- files
         if name and R.TAR_EXTRACT.match(name):
             src = recv if name.startswith("tarfile") else a0
@@ -4727,10 +5260,71 @@ class Engine:
             return (out, ()) if op in ("==", "===", "is") else ((), out)
         return (), ()
 
+    def each_facts(self, e: N, env: Env, ctx: Ctx):
+        """`any(<check of t> for t in items)`, `all(...)`, `items.some(t => <check of t>)`, `items.every(...)`: what
+        the check proves of one item is known of every item of the list, in the branch where no item failed it.
+        Only where the check is made on every item of a list kept under a name: not on a part of it
+        (`items[:1]`, a condition in the comprehension, `items.filter(...)`), and only for what it says about the
+        item itself. None when the call is nothing of the kind."""
+        f, items = e.a, e.items or ()
+        if f is None or len(items) != 1 or e.kw:
+            return None
+        if env.fn.lang == "py":
+            comp = items[0]
+            if f.k != "name" or f.name not in ("any", "all") or f.name in env.vars or \
+                    f.name in env.fn.mod.imports or f.name in env.fn.mod.names or f.name in env.fn.mod.consts:
+                return None
+            gens = comp.items or () if comp.k == "comp" else ()
+            if len(gens) != 1 or gens[0][2] or gens[0][0].k != "name" or gens[0][1] is None or gens[0][1].k != "name":
+                return None
+            item, whole, check, every = gens[0][0].name, gens[0][1], comp.a, f.name == "all"
+        else:
+            if f.k != "attr" or f.name not in ("some", "every") or f.a is None or f.a.k != "name" or \
+                    items[0].k != "fn":
+                return None
+            inner = items[0].a
+            body = inner.body or ()
+            if not inner.params or len(body) != 1 or body[0].k != "return" or body[0].a is None:
+                return None
+            item, whole, check, every = inner.params[0].name, f.a, body[0].a, f.name == "every"
+        if not item or whole.name == item or whole.name not in env.vars:
+            return None
+        e2 = env.copy()
+        self.assign(N("name", e.line, name=item), elem(self.eval(whole, e2, ctx)), e2, ctx, e)
+        yes, no = self.facts(check, e2, ctx)
+        told = tuple((whole.name, c, False, "each") for p, c, _fixed, rel in (yes if every else no)
+                     if p == item and rel is None)
+        return (told, ()) if every else ((), told)
+
+    def loop_facts(self, s: N, env: Env, ctx: Ctx) -> tuple:
+        """`for t in items: if <t fails a check>: <leave the function>`, and then the code goes on to use the
+        items: the check as a loop of its own. What it proves of one item is known of every item once the loop has
+        come to its end (`each_facts`, written as a loop). Only where every item gets to the check and none gets
+        past a failed one: the loop is over the whole list kept under a name, the check is the first thing in its
+        body and has no other branch, the branch for an item that fails always leaves the function (`leaves`: a
+        `continue` passes the item over and proves nothing), no `break` ends the loop early, and nothing else in
+        the body names the list (it may be adding to it)."""
+        target, it, test = s.items
+        body = s.b or ()
+        if test is not None or target is None or it is None or target.k != "name" or it.k != "name" or \
+                not target.name or it.name == target.name or it.name not in env.vars or not body or has_break(body):
+            return ()
+        first = body[0]
+        if first.k != "if" or first.c or first.a is None or not leaves(first.b) or \
+                any(n.k == "name" and n.name == it.name for st in body for n in all_nodes(st)):
+            return ()
+        e2 = env.copy()
+        self.assign(target, elem(self.eval(it, e2, ctx)), e2, ctx, s)
+        _yes, no = self.facts(first.a, e2, ctx)
+        return tuple((it.name, c, False, "each") for p, c, _fixed, rel in no if p == target.name and rel is None)
+
     def call_facts(self, e: N, env: Env, ctx: Ctx):
         f = e.a
         items = e.items or ()
         fn = env.fn
+        each = self.each_facts(e, env, ctx)
+        if each is not None:
+            return each
         site = self.sites.get((fn.file, e.line, e.col))
         targets, _guess = self.targets(site)
         if targets:
@@ -4874,6 +5468,8 @@ class Engine:
             for p, c in chain(path, classes, rel, env):
                 if p in env.vars:
                     env.vars[p] = narrow(env.vars[p], c, fixed and first and rel is None, lang)
+                    if rel == "each" and env.vars[p].kind == "seq" and env.vars[p].data:      # every item of the list
+                        env.vars[p] = env.vars[p].but(data=[narrow(x, c, False, lang) for x in env.vars[p].data])
                     i = env.orig.get(p)
                     if i is not None:
                         env.proved[i] = norm(env.proved.get(i, FIXED0) | c, lang)
@@ -5158,6 +5754,8 @@ def login_here(kinds, ctx: Ctx):
     for k in kinds:
         verbs = R.ALL_VERBS if k == "login" else k[1] if isinstance(k, tuple) and k[:1] == ("login",) else None
         if verbs is None:
+            if k == "sender":       # counts only where every request that goes on was asked (`Engine.sender_held`)
+                continue
             if k != "own" or not ctx.narrow:
                 out.add(k)
         elif not ctx.narrow:
@@ -5170,9 +5768,19 @@ def login_here(kinds, ctx: Ctx):
 def asked_here(kinds, ctx: Ctx):
     """`login_here`, and where a failure of the called function is caught and the request goes on (`Ctx.soft`), a
     login it asks was not asked of the requests that failed it."""
+    if "sender" in kinds and not sender_counts(ctx):
+        kinds = set(kinds) - {"sender"}
     if ctx.soft:
         kinds = {k for k in kinds if not is_login(k) and k != "own"}
     return login_here(kinds, ctx)
+
+
+def sender_counts(ctx: Ctx) -> bool:
+    """Whether a check of who sent the message, made here, is made of every request the route goes on with: in the
+    function's own run (a function written in place may never be called), not in a branch some requests take or
+    after a way on that some took, not for the requests of some verbs only, and not where the failure is caught and
+    the request goes on."""
+    return ctx.owner and not ctx.soft and not ctx.narrow and login_for(ctx) == "login"
 
 
 def own_here(ctx: Ctx) -> None:

@@ -144,7 +144,8 @@ class _Reader:
                     return []
                 if val.type == "object":
                     return [N("expr", self.line(s), a=self.top_object(val))]
-                return [N("expr", self.line(s), a=self.expr(val))]
+                mod.default = self.expr(val)        # `export default stripe`, `export default new Stripe(key)`
+                return [N("expr", self.line(s), a=mod.default)]
             return []      # export { a, b } / export * from
         if t in FUNC_DECLS:
             name = self.text(s.child_by_field_name("name")) or "default"
@@ -184,6 +185,8 @@ class _Reader:
                 if spec is not None and name_n is not None and name_n.type == "object_pattern":
                     for key, local in self.pattern_names(name_n):
                         mod.imports[local] = f"{spec}.{key}" if not spec.startswith(".") else spec
+                        if spec.startswith("."):
+                            mod.picked[local] = key
                     continue
                 out.append(N("assign", self.line(d), items=[self.target(name_n)], a=self.expr(val)))
             return out
@@ -304,6 +307,8 @@ class _Reader:
             for x in c.named_children:
                 if x.type == "identifier":                       # import axios from 'axios'
                     mod.imports[self.text(x)] = spec
+                    if not lib:
+                        mod.picked[self.text(x)] = "default"
                 elif x.type == "namespace_import":               # import * as fs from 'fs'
                     for y in x.named_children:
                         if y.type == "identifier":
@@ -315,6 +320,8 @@ class _Reader:
                         name = self.text(y.child_by_field_name("name"))
                         alias = self.text(y.child_by_field_name("alias")) or name
                         mod.imports[alias] = f"{spec}.{name}" if lib else spec
+                        if not lib:
+                            mod.picked[alias] = name
 
     def chain(self, n) -> list[str]:
         """`a.b.c` as ["a", "b", "c"], or [] when it is anything else."""

@@ -27,11 +27,11 @@ switch cannot tell you whether anything is actually connected.
 
 | Tool | What it does | Changes anything? |
 |---|---|---|
-| `lantern_projects` | The projects Lantern knows, with score and open findings | no |
+| `lantern_projects` | The projects Lantern knows, with score, release decision (Blocked, Incomplete or Passed) and open findings | no |
 | `lantern_findings` | Findings with file, line, the click path from the page that triggers them, whether outside input reaches the line, and the fix. `id` fetches one finding | no |
 | `lantern_paths` | What calls a function, what it calls, with confidence per link, and the path a user takes to reach it. For the assistant to call **before** editing | no |
 | `lantern_explain` | The stored three-lens explanation and the source. Never calls a model | no |
-| `lantern_readiness` | Score, grade, failed checks with fixes, what to do first, protections | no |
+| `lantern_readiness` | The release decision with each required criterion's state and what is missing (`release`), score, grade, the checklist's own number (`checklist`), failed checks with fixes, what to do first, protections | no |
 | `lantern_analyze` | (Re-)analyze a folder; reports fixed and new findings since last time | rewrites `.lantern/` |
 | `lantern_recheck` | After a fix: is this finding gone, still open, or moved? | rewrites `.lantern/` |
 | `lantern_verify` | Re-run an Evidence Report's analysis and compare digests | no |
@@ -68,8 +68,10 @@ start.
 
 `badge.svg` reads **Lantern · commit 1a2b3c · 0 critical · Oct 31** and links to the Evidence Report, whose
 Limits section says what was not checked. It never says "verified" or "secure": no tool can promise that,
-and an engineer will pick at it. Color follows the open findings (red: critical open; orange: high open;
-teal: neither), not the readiness score, which stays in the tooltip.
+and an engineer will pick at it. Color follows the open findings (red: critical open; orange: high open, or
+a release blocked by failed tests or a broken behaviour check), not the readiness score, which stays in the
+tooltip. It is teal only for a release that Passed: a blocked one ends in "blocked", and one with required
+evidence missing ends in "incomplete", in grey.
 
 ## 2. The three plugin seams
 

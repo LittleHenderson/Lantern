@@ -19,7 +19,11 @@ What is measured (raw counts, one definition each; see cases.json "rules"):
   * SECURITY PATHS: expected problems whose finding has a `reachable` entry (a route or page leads to the line)
   * CALL SITES: Graph.call_sites() per app (resolved / inferred / possible / name-only / external / built-in /
     unresolved, one denominator) plus unresolved reasons
-  * RELEASE: the decision per app; vulnerable apps given a green release
+  * RELEASE: the decision per app (Blocked / Incomplete / Passed, `readiness.json` "release"); vulnerable apps given
+    a green release (Passed); clean apps Blocked (the owner's rule of 2026-11-11: only Blocked counts as refused a
+    green release). This benchmark never runs an app's own tests, so every app reads Incomplete at best: those are
+    listed apart, each with what is missing, and the count used before the decision existed (anything but Passed)
+    stays in the table
   * SCANNERS: each tool's recorded state per app, so a failed scanner is never hidden in a result
 """
 from __future__ import annotations
@@ -149,9 +153,15 @@ def release_of(rd: dict | None, live: list[dict]) -> dict:
     """The release decision as Lantern states it; before a gate exists, the badge rule (no critical or high)."""
     gate = (rd or {}).get("release")
     if isinstance(gate, dict) and gate.get("decision"):
-        return {"decision": gate["decision"], "basis": "readiness.json release gate"}
+        crit = [c for c in gate.get("criteria") or [] if isinstance(c, dict) and c.get("required") is not False]
+        held = {state: [str(c.get("id")) for c in crit if c.get("state") == state] for state in ("failed", "missing")}
+        return {"decision": gate["decision"], "basis": "readiness.json release gate",
+                "blocking": held["failed"], "missing": held["missing"],
+                "why": {str(c.get("id")): str(c.get("why") or "")[:400] for c in crit
+                        if c.get("state") in ("failed", "missing")}}
     bad = [f for f in live if f.get("rank") in ("critical", "high")]
-    return {"decision": "Passed" if not bad else "Blocked", "basis": "badge rule: no critical or high outside tests"}
+    return {"decision": "Passed" if not bad else "Blocked", "basis": "badge rule: no critical or high outside tests",
+            "blocking": ["findings"] if bad else [], "missing": [], "why": {}}
 
 
 def score_app(app: dict, src: Path, out: Path, labels: dict) -> dict:
@@ -276,11 +286,38 @@ def summarize(apps: list[dict]) -> dict:
                            "explicit_covered": sum(1 for a in apps for r in a.get("expectations", []) if r["want"] == "reachable" and r["status"] == "covered")},
         "call_sites_total": cs_total,
         "vulnerable_apps": len(vuln), "vulnerable_apps_given_green": green,
-        "clean_apps": len(clean), "clean_apps_blocked": [a["name"] for a in clean if a["release"]["decision"] != "Passed"],
+        "vulnerable_apps_blocked": [a["name"] for a in vuln if a["release"]["decision"] == "Blocked"],
+        "vulnerable_apps_incomplete": [a["name"] for a in vuln if a["release"]["decision"] == "Incomplete"],
+        # Only Blocked counts as refused a green release (the owner's rule). Incomplete is listed apart with what is
+        # missing; `clean_apps_not_passed` is what results before the decision called `clean_apps_blocked`.
+        "clean_apps": len(clean),
+        "clean_apps_refused": [a["name"] for a in clean if a["release"]["decision"] == "Blocked"],
+        "clean_apps_incomplete": [{"name": a["name"], "missing": a["release"].get("missing") or []}
+                                  for a in clean if a["release"]["decision"] == "Incomplete"],
+        "clean_apps_not_passed": [a["name"] for a in clean if a["release"]["decision"] != "Passed"],
         "loud_findings_on_clean_apps": loud, "of_which_labelled_false_alarm": loud_false,
         "anchor_missing": sum(1 for a in apps for r in a.get("expectations", []) if r.get("status") == "anchor-missing"),
         "incomplete_apps": [a["name"] for a in apps if not a.get("complete")],
     }
+
+
+def of(name: str, names: list[str] | None, total: int) -> str:
+    """One table row: how many of the apps, and which. "not counted" for a result that was written before the count
+    existed."""
+    if names is None:
+        return f"| {name} | not counted in this result |"
+    return f"| {name} | {len(names)} / {total} ({', '.join(names) or 'none'}) |"
+
+
+def held_back(rel: dict) -> str | None:
+    """What a decision that is not Passed is held back by, in one line: each criterion with Lantern's own reason."""
+    why = rel.get("why") or {}
+    parts = []
+    for word, key in (("failed", "blocking"), ("missing", "missing")):
+        ids = rel.get(key) or []
+        if ids:
+            parts.append(f"{word}: " + "; ".join(f"{i} ({why[i]})" if why.get(i) else str(i) for i in ids))
+    return f"- release {rel['decision']} · " + " · ".join(parts) if parts else None
 
 
 def markdown(result: dict) -> str:
@@ -299,8 +336,15 @@ def markdown(result: dict) -> str:
          f"| Resolution checks passed | {s['resolution_checks']['found']} / {s['resolution_checks']['expected']} |",
          f"| Protection checks passed | {s['protection_checks']['found']} / {s['protection_checks']['expected']} |",
          f"| Found problems with a mapped path | {s['security_paths']['with_a_mapped_path']} / {s['security_paths']['found_problems']} |",
-         f"| Vulnerable apps given a green release | {len(s['vulnerable_apps_given_green'])} / {s['vulnerable_apps']} ({', '.join(s['vulnerable_apps_given_green']) or 'none'}) |",
-         f"| Clean apps not given a green release | {len(s['clean_apps_blocked'])} / {s['clean_apps']} ({', '.join(s['clean_apps_blocked']) or 'none'}) |",
+         of("Vulnerable apps given a green release (Passed)", s["vulnerable_apps_given_green"], s["vulnerable_apps"]),
+         of("Vulnerable apps Blocked", s.get("vulnerable_apps_blocked"), s["vulnerable_apps"]),
+         of("Vulnerable apps Incomplete, not Blocked", s.get("vulnerable_apps_incomplete"), s["vulnerable_apps"]),
+         of("Clean apps Blocked (refused a green release)", s.get("clean_apps_refused"), s["clean_apps"]),
+         of("Clean apps Incomplete (not refused: evidence is missing)",
+            [a["name"] for a in s["clean_apps_incomplete"]] if "clean_apps_incomplete" in s else None, s["clean_apps"]),
+         # a result written before the release decision has the one count, under its older name
+         of("Clean apps not Passed (the count before the release decision)",
+            s.get("clean_apps_not_passed", s.get("clean_apps_blocked")), s["clean_apps"]),
          f"| Medium+ findings on clean apps (public and twins) | {s['loud_findings_on_clean_apps']} (labelled false alarm: {s['of_which_labelled_false_alarm']}) |",
          f"| Anchors not found in the pinned code | {s['anchor_missing']} |", "",
          "## By class (documented problems)", "", "| Class | Expected | Found medium+ | Found low | Missed |", "|---|---:|---:|---:|---:|"]
@@ -323,6 +367,8 @@ def markdown(result: dict) -> str:
         L.append(f"### {a['name']} ({a['kind']}, {a.get('stack')}) · {a['findings']['by_rank']} · score {r['score']} {r['grade']} · "
                  f"release {a['release']['decision']}")
         L.append("")
+        if held_back(a["release"]):
+            L.append(held_back(a["release"]))
         for e in a["expectations"]:
             extra = f" ({e.get('rule')}, {e.get('rank')}{', path' if e.get('reachable') else ''})" if e.get("found") else ""
             if e["want"] == "protection":

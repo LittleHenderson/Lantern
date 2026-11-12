@@ -39,6 +39,7 @@ ACTION = {   # the last step: what the value does at the sink
     "sql": "is run as part of the database query",
     "shell": "is run as part of a command on the server",
     "eval": "is run as code or as a template",
+    "stored": "is written into a file",     # no finding by itself: for what reads the file back (`flow.Engine.read_back`)
     "deserialize": "is turned back into an object",
     "xxe": "is read as XML",
     "path": "names the file that is opened, written or removed",
@@ -410,6 +411,21 @@ FILE_EXT = re.compile(r"\.([A-Za-z0-9]{1,10})$")
 TEMPLATE_EXT = {"html", "htm", "xhtml", "jinja", "jinja2", "j2", "tpl", "tmpl", "ejs", "pug", "jade", "hbs",
                 "handlebars", "mustache", "njk", "liquid", "twig", "txt", "xml", "svg", "mako", "eta", "vue"}
 UPLOAD_SAVE = {"save", "mv", "saveAs", "save_to", "transferTo"}
+# ---- text written into a file, read back and run (`flow.Engine.stored`, `read_back`, `place`)
+# What a file read is known by afterwards: where it was read, and the calls that hand its text on as it is.
+READ_MARK = re.compile(r"^read\(\)@(.+):(\d+)((\.read(lines|line)?|\.toString|\.decode|\.strip|\.trim)\(\))*$")
+# Calls that put pieces of a path together, and calls that hand a path back as the same place.
+PATH_JOINS = {"join", "joinpath", "Path", "PurePath", "PosixPath", "WindowsPath", "resolve"}
+PATH_KEEPS = {"abspath", "normpath", "realpath", "expanduser", "str", "fspath", "normalize", "absolute", "resolve"}
+# The folder a file of the code is in, however it is written (`os.path.dirname(__file__)`, `__dirname`)
+READ_KEEPS = {"read", "readlines", "readline", "toString", "decode", "strip", "trim"}     # calls on a file's text that keep it
+# calls that put what they are handed into a larger text: the text of a file among it is still in there
+READ_INTO = {"format", "format_map", "join", "concat", "substitute", "safe_substitute"}
+PER_REQUEST = {"flask.session", "flask.g", "quart.session", "quart.g", "bottle.response", "flask.globals.session",
+               "flask.globals.g"}        # not one value for the whole app: no fixed piece of a path
+PATH_HERE = {"__file__", "__filename", "__dirname"}                # the code's own file, and the folder it is in
+PATH_OF_FILE = {"abspath", "realpath", "Path", "PurePath", "fspath", "str", "normpath", "fileURLToPath"}   # keep it that file
+EVAL_NAMES_ONLY = {"require", "compile", "__import__", "importlib.import_module"}      # handed a name, not text
 # JavaScript libraries that open an archive (by the module's name, with or without `new`)
 ARCHIVE_LIB = re.compile(r"^(new )?(adm-zip|unzipper|yauzl|jszip|node-stream-zip|decompress|tar|tar-stream|tar-fs|"
                          r"unzip-stream|node-unzip-2|zip-lib|compressing|node-7z|7zip-min)(\.[\w.$]+)?(\(\))?$")
@@ -794,6 +810,20 @@ READS_TOKEN = re.compile(r"^(jsonwebtoken\.decode|jwt-decode(\.(jwtDecode|defaul
 # Those of them that hand back a promise: the check has been made only where the answer is waited for.
 VERIFIES_LATER = re.compile(r"^(jose\.(jwtVerify|compactVerify|flattenedVerify|generalVerify)|firebase-admin|"
                             r"google-auth-library)")
+# ---- a webhook whose sender is checked
+# A provider signs what it sends, and its own library checks that signature with a secret the app and the provider
+# share: the call fails when the message is not the provider's. A route that goes on only after such a call is the
+# provider's to call and nobody else's, so "anyone can call it" is not true of it (`flow.Engine.sender_checked`,
+# `flowscan._sender_first`). Only a call that fails by itself belongs here (one that hands back yes or no is a
+# condition like any other), and a new provider is a new line.
+SENDER_VERIFIES = re.compile(
+    r"^(?P<client>.+?)\.webhooks\.constructEvent(?P<later>Async)?$|"                         # Stripe, JavaScript
+    r"^(?P<own>stripe\.(Webhook\.construct_event|WebhookSignature\.verify_header))$|"         # Stripe, Python
+    r"^(svix|standardwebhooks)(\.webhooks)?\.Webhook\(\)\.verify$")                           # svix, Standard Webhooks
+# What `<client>.webhooks` must hang on: the package, or a client made of it (`new Stripe(key)`, `require('stripe')(key)`).
+# A client taken from another file of the project is looked up there (`flow.Engine.made_by`).
+SENDER_CLIENT = re.compile(r"^stripe(\(\))?$")
+SENDER_PACKAGE = "stripe"
 # What a request carries to say who is calling, by its name (after `X-` and `HTTP_` are taken off and `-` is read as
 # `_`): a token, a key, the session's id. A record found by one is the caller's own. Not a name the caller's own id
 # goes by (`X-User-Id`: anybody can write a number), and not the tokens that guard a form or name a request.

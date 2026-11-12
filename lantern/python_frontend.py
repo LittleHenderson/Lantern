@@ -169,6 +169,18 @@ def project_text(p, repo, limit: int | None = None) -> str:
         return f.read() if limit is None else f.read(limit)
 
 
+def project_sha256(p, repo) -> str:
+    """The SHA-256 of what a file of the project holds (see `project_bytes`: FileNotFoundError for a path that is
+    not such a file), read a piece at a time, so a large file is never held whole."""
+    if not inside_repo(p, repo):
+        raise FileNotFoundError(errno.ENOENT, "not a file of the project", os.fspath(p))
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for piece in iter(lambda: f.read(1 << 20), b""):
+            h.update(piece)
+    return h.hexdigest()
+
+
 def discover(repo: Path) -> list[tuple[Path, str]]:
     """Return (path, dotted module name) for every Python file in the repo."""
     repo = repo.resolve()

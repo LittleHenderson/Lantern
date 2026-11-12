@@ -3,6 +3,12 @@
 Every point has a visible reason. A check is `pass`, `fail`, `partial`, or `skip` (not applicable or
 not measurable here); skipped checks leave the score's denominator, so a CLI isn't docked for having no
 health endpoint. Checks that rely on text patterns say so in `how`.
+
+Since 2026-11 (directive point 6) two things are no longer left to the average. A check the release needs that
+was skipped because the work was not done (`required`: the tests were not run, the libraries were not looked up)
+keeps its points in the sum and earns none: what was skipped is not a pass. And the file carries the release
+decision (`release.py`: Blocked, Incomplete or Passed, from required criteria only): `checklist` is the weighted
+average as before, `score` is that number held at 59 while the release is Blocked and under 100 until it is Passed.
 """
 
 from __future__ import annotations
@@ -12,13 +18,13 @@ import tomllib
 from collections import Counter
 from pathlib import Path
 
-from . import manifest, scanresult
+from . import manifest, release, scanresult
 from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
 from .graph import Graph
 from .protections import advise as advise_protections
-from .python_frontend import TEST_FILE_RE, inside_repo, project_text, skipped
+from .python_frontend import TEST_FILE_RE, project_text
 
-READINESS_VERSION = 1
+READINESS_VERSION = 2    # 2: `checklist`, `release`, `required` on a check; `score` held down by the release decision
 
 CATEGORIES = [
     ("security", "Security findings", 20),
@@ -98,15 +104,10 @@ SCAN_CMD = re.compile(r"\b(lantern|bandit|pip-audit|npm audit|pnpm audit|yarn au
 class Repo:
     """Cached, read-only view of the files that readiness checks look at."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, out: Path | None = None):
         self.root = root
-        self.files: list[str] = []
-        for p in root.rglob("*"):
-            rel = p.relative_to(root)
-            if skipped(rel.parts[:-1], root) or not p.is_file() or not inside_repo(p, root):
-                continue
-            self.files.append(rel.as_posix())
-        self.files.sort()
+        # the same list the release decision is tied to; `out`: this run's results folder, when it lies in the project
+        self.files: list[str] = release.listed(root, out)
         # Manifests and config inside test folders (fixtures, sample apps) don't describe this project.
         self.project_files = [f for f in self.files if not self.is_test(f)]
         self._text: dict[str, str] = {}
@@ -253,11 +254,21 @@ SERVICE_SHAPES = {"full-stack web app", "web API"}
 
 # ---------------------------------------------------------------------------- checks
 
-def _check(cid, title, points, status, evidence="", fix="", how="file check", earned=None):
+def _check(cid, title, points, status, evidence="", fix="", how="file check", earned=None, required=False):
+    """`required` (only with `skip`): the release needs this check and the work was not done. Its points stay in
+    the sum and it earns none (`counts`), where any other skipped check leaves the sum."""
     if earned is None:
         earned = {"pass": points, "partial": points / 2}.get(status, 0)
-    return {"id": cid, "title": title, "points": points, "earned": round(earned, 2) if status != "skip" else 0,
-            "status": status, "evidence": evidence, "fix": fix, "how": how}
+    c = {"id": cid, "title": title, "points": points, "earned": round(earned, 2) if status != "skip" else 0,
+         "status": status, "evidence": evidence, "fix": fix, "how": how}
+    if required and status == "skip":
+        c["required"] = True
+    return c
+
+
+def counts(c: dict) -> bool:
+    """Whether a check's points are in the sum: every check but a skipped one, and a skipped one the release needs."""
+    return c["status"] != "skip" or bool(c.get("required"))
 
 
 def _where(hits, n=3) -> str:
@@ -451,6 +462,12 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
     audited = [n for n in AUDIT_TOOLS if (tools.get(n) or {}).get("status") == "ok"]
     unchecked = [f"{n} ({str(tools[n].get('status', ''))[:90]})" for n in AUDIT_TOOLS
                  if n in tools and n not in audited and tools[n].get("status") not in NOTHING_TO_CHECK]
+    for n in audited:           # an audit that finished says nothing of a folder beside the ones it looked up
+        left = tools[n].get("unlocked")
+        if isinstance(left, int) and not isinstance(left, bool) and left > 0:
+            unchecked.append(f"{n} ({left} named in a file with no lock file beside it)")
+        if isinstance(tools[n].get("other_locks"), list) and tools[n]["other_locks"]:
+            unchecked.append(f"{n} ({len(tools[n]['other_locks'])} folder(s) with a pnpm, yarn or bun lock file)")
     vuln = [f for f in (sec or {}).get("findings", []) if f["category"] == "dependency" and f.get("status") != "accepted"]
     if vuln:
         out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "fail",
@@ -464,9 +481,12 @@ def check_deps(repo: Repo, sec: dict | None, shape: str) -> list[dict]:
                           "" if not unchecked else "Commit a lock file so exact versions can be checked.",
                           how="pip-audit, npm audit, OSV (Gradle/Maven)"))
     else:
+        # libraries that are listed and were not looked up earn nothing: not checked is not "none found"
         out.append(_check("deps-vuln", "No known-vulnerable versions", 4, "skip",
                           "not checked: " + ("; ".join(unchecked) if unchecked else "no dependency files"),
-                          how="pip-audit, npm audit, OSV (Gradle/Maven)"))
+                          "Run the check with the network on, and commit a lock file so exact versions can be "
+                          "checked." if unchecked else "",
+                          how="pip-audit, npm audit, OSV (Gradle/Maven)", required=bool(unchecked)))
     loose, unread = [], []      # `unread`: what could not be checked at all; said first, so the list never cuts it off
     for pj in js_manifests:
         d = manifest.parse_json(repo.text(pj) or "{}")
@@ -568,10 +588,15 @@ def _strs(v) -> list[str]:
     return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
 
 
+def test_files(repo: Repo) -> tuple[list[str], list[str]]:
+    """(every test file, those that are not the sample tests a new Android or Flutter project comes with)."""
+    tests = [f for f in repo.files if Path(f).suffix in CODE_EXTS | MOBILE_EXTS and repo.is_test(f)]
+    return tests, [f for f in tests if not TEMPLATE_TEST_RE.search(f)]
+
+
 def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
     out = []
-    tests = [f for f in repo.files if Path(f).suffix in CODE_EXTS | MOBILE_EXTS and repo.is_test(f)]
-    real = [f for f in tests if not TEMPLATE_TEST_RE.search(f)]
+    tests, real = test_files(repo)
     if tests and not real:
         out.append(_check("tests-exist", "Tests exist", 4, "partial",
                           f"only the sample tests Android Studio or Flutter write into every new project ({', '.join(t.rsplit('/', 1)[-1] for t in tests[:2])})",
@@ -621,9 +646,12 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
     else:
         out.append(_check("tests-entries", "Tests touch every entry point", 4, "skip", "no routes, pages, or commands"))
     tr = run_meta.get("trace") or {}
-    if tr.get("ran") is False:      # no sandbox, no tests: not run is not the same as failed
+    run_them = ("Run them under Lantern: `lantern analyze PATH --trace -- <your test command>`, or “Watch my tests "
+                "run” in the app.")
+    if tr.get("ran") is False:      # no sandbox, no tests: not run is not the same as failed, and it is no pass either
         out.append(_check("tests-pass", "Tests pass", 2, "skip",
-                          "not run: the sandbox the tests run in could not be set up on this computer"))
+                          "not run: the sandbox the tests run in could not be set up on this computer", run_them,
+                          required=True))
     elif "returncode" in tr:
         rc = tr["returncode"]
         said = (f"traced test run exited {rc}" if rc is not None else
@@ -632,7 +660,7 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
         out.append(_check("tests-pass", "Tests pass", 2, "pass" if rc == 0 else "fail", said, how="lantern analyze --trace"))
     else:
         out.append(_check("tests-pass", "Tests pass", 2, "skip",
-                          "not run (Lantern never runs your code unless you pass --trace)"))
+                          "not run (Lantern never runs your code unless you pass --trace)", run_them, required=True))
     return out
 
 
@@ -1100,9 +1128,14 @@ def grade(score: float) -> str:
     return "A" if score >= 90 else "B" if score >= 80 else "C" if score >= 70 else "D" if score >= 60 else "F"
 
 
-def assess(g: Graph, sec: dict | None, run_meta: dict | None = None) -> dict:
+def assess(g: Graph, sec: dict | None, run_meta: dict | None = None, *, git: dict | None = None,
+           behaviour: dict | None = None, behaviour_unread: str | None = None, out: Path | None = None) -> dict:
+    """The readiness file: the checklist, and the release decision made from required criteria (`release.py`).
+    `git`: what `gitfacts.info` says of the folder (asked here when not handed over). `behaviour`: the record
+    `lantern behave` left in the results folder, or `behaviour_unread`, why that file could not be used. `out`: this
+    run's results folder, left out of the project's files when it lies in the project."""
     root = Path(g.repo_root)
-    repo = Repo(root)
+    repo = Repo(root, out)
     stack = detect_stack(repo, g)
     stack["routes"] = [(n.entry or {}).get("detail") or "" for n in g.entry_points()
                        if (n.entry or {}).get("kind") == "route"]
@@ -1123,7 +1156,7 @@ def assess(g: Graph, sec: dict | None, run_meta: dict | None = None) -> dict:
     cats, total_w, total_e = [], 0.0, 0.0
     for key, title, weight in CATEGORIES:
         cs = checks[key]
-        avail = sum(c["points"] for c in cs if c["status"] != "skip")
+        avail = sum(c["points"] for c in cs if counts(c))
         got = sum(c["earned"] for c in cs if c["status"] != "skip")
         frac = got / avail if avail else None
         if frac is not None:
@@ -1132,13 +1165,23 @@ def assess(g: Graph, sec: dict | None, run_meta: dict | None = None) -> dict:
         cats.append({"key": key, "title": title, "weight": weight,
                      "score": None if frac is None else round(frac * weight, 1),
                      "percent": None if frac is None else round(frac * 100), "checks": cs})
-    score = round(100 * total_e / total_w) if total_w else 0
+    checklist = round(100 * total_e / total_w) if total_w else 0
     todo = sorted((c | {"category": cat["title"], "gain": round(cat["weight"] * (c["points"] - c["earned"]) /
-                                                                 max(1, sum(x["points"] for x in cat["checks"] if x["status"] != "skip")), 1)}
-                   for cat in cats for c in cat["checks"] if c["status"] in ("fail", "partial")),
+                                                                 max(1, sum(x["points"] for x in cat["checks"] if counts(x))), 1)}
+                   for cat in cats for c in cat["checks"] if c["status"] in ("fail", "partial") or c.get("required")),
                   key=lambda c: -c["gain"])
+    if git is None:
+        from .evidence import git_info
+        git = git_info(root)
+    rel = release.decide(shape=shape, sec=sec, tests_exist=bool(test_files(repo)[1]), run_meta=run_meta,
+                         files=repo.files, bound=release.bind(root, repo.files, sec, run_meta, git),
+                         behaviour=behaviour, behaviour_unread=behaviour_unread)
+    # The decision does not come from the average, and the average cannot speak over it: 100 is for a passed
+    # release, and a release that is blocked is not lifted by points earned elsewhere.
+    score = release.score(checklist, rel["decision"])
     return {
-        "version": READINESS_VERSION, "score": score, "grade": grade(score), "categories": cats,
+        "version": READINESS_VERSION, "score": score, "grade": grade(score), "checklist": checklist, "release": rel,
+        "categories": cats,
         "shape": shape, "stack": {k: v for k, v in stack.items() if k != "routes"},
         "advice": advice(shape, stack), "hotspots": hotspots(g),
         "protections": advise_protections(g, sec, repo, shape),

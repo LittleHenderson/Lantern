@@ -7,14 +7,17 @@ from __future__ import annotations
 
 import glob
 import hashlib
+import io
 import json
 import os
 import re
 import subprocess
+import tokenize
 from collections import deque
 from pathlib import Path
 
 from . import context, flowscan, lanes, manifest, programs, results
+from .calls import NAME_ONLY_VIA
 from .graph import Graph
 from .python_frontend import ENV_NAMES, SKIP_DIRS, inside_repo, project_text, skipped, skipped_dir
 
@@ -135,7 +138,10 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     # Bandit looks for no other.
     try:
         with programs.settings("bandit.ini", "[bandit]\n") as ini:
-            cmd = programs.python("bandit", "-r", str(repo), "--ini", str(ini), "-f", "json", "-q")
+            # --ignore-nosec: a `# nosec` comment in the project switches a check off for its line, and comes with
+            # the project like the code. Bandit lists the line all the same, and Lantern reads the comment itself
+            # (`nosec_says`): until 2026-11-11 such a line was listed nowhere.
+            cmd = programs.python("bandit", "-r", str(repo), "--ini", str(ini), "-f", "json", "-q", "--ignore-nosec")
             if excl or left:
                 cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
             run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
@@ -162,6 +168,7 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     def ours(name) -> bool:   # whatever the exclusions above did: nothing is taken from a file that is not the project's
         return _under(repo, name) not in gone
 
+    comments: dict[str, dict[int, str]] = {}
     for r in data["results"]:
         if not isinstance(r, dict) or not r.get("test_id") or not r.get("filename") or not ours(r["filename"]):
             continue
@@ -175,6 +182,9 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
             "more_info": r.get("more_info"),
             "snippet": str(r.get("code") or "").strip()[:400], "category": "code",
         })
+        said = _nosec_on(repo, rel, r, comments)
+        if said:
+            out[-1]["nosec"] = said
     metrics = data.get("metrics") if isinstance(data.get("metrics"), dict) else {}
     files = sum(1 for k in metrics if k != "_totals" and ours(k))
     errors = [f"{_rel(repo, e.get('filename') or '?')}: {str(e.get('reason') or 'could not be read')[:160]}"
@@ -184,6 +194,68 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
         return out, scanresult.record("bandit", "partial", f"{len(errors)} file{'s' if len(errors) != 1 else ''} could "
                                       "not be read", errors=errors, **base)
     return out, scanresult.record("bandit", "ok", **base)
+
+
+# `# nosec`, the form Bandit itself reads: the word, then the checks the comment is about (ids like B602, or their
+# names), then whatever else the person wrote. With no check named it is about every check on the line.
+NOSEC = re.compile(r"#\s*nosec\b(?P<rest>[^#]*)", re.I)
+NOSEC_WORD = re.compile(r"[\s,:]*([A-Za-z_]\w*)")
+NOSEC_ID = re.compile(r"B\d{3}$", re.I)
+NOSEC_NAME = re.compile(r"[a-z][a-z\d]*(_[a-z\d]+)+$")           # how Bandit names its checks: words joined by _
+NOSEC_ONE_WORD = frozenset({"exec", "hashlib", "blacklist"})    # ... and the few names that are one word
+NOSEC_REASON = 300
+
+
+def nosec_says(comment: str, rule: str, name: str | None = None) -> dict | None:
+    """What a `# nosec` comment says about one finding of Bandit's. None when it is no such comment, or names other
+    checks only (Bandit lists the line then, and the comment is not about this finding). Else `{"reason": text}`,
+    with None for the text when nothing that reads as a reason was written (`reason_ok`, the rule `lantern accept`
+    has for its reasons). The text is the project's own: bounded, on one line, printable."""
+    m = NOSEC.search(comment)
+    if not m:
+        return None
+    rest, pos, named = m.group("rest"), 0, []
+    while True:
+        t = NOSEC_WORD.match(rest, pos)
+        if not t:
+            break
+        w = t.group(1)
+        if not (NOSEC_ID.match(w) or NOSEC_NAME.match(w) or w.lower() in NOSEC_ONE_WORD
+                or (name and w.lower() == name.lower())):
+            break
+        named.append(w.lower())
+        pos = t.end()
+    if named and rule.lower() not in named and (name or "").lower() not in named:
+        return None
+    reason = " ".join("".join(c if c.isprintable() else " " for c in rest[pos:]).split()).strip(" :,-\u2013\u2014")
+    reason = reason[:NOSEC_REASON].rstrip()
+    return {"reason": reason if reason_ok(reason) else None}
+
+
+def _nosec_on(repo: Path, rel: str, r: dict, cache: dict[str, dict[int, str]]) -> dict | None:
+    """The `# nosec` comment on the lines of one of Bandit's results, if it is about that result. Comments are
+    taken from Python's own reading of the file, so the words inside a text are none."""
+    if rel not in cache:
+        found: dict[int, str] = {}
+        try:
+            text = project_text(repo / rel, repo)
+            if "nosec" in text.lower():
+                for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+                    if tok.type == tokenize.COMMENT and NOSEC.search(tok.string):
+                        found[tok.start[0]] = tok.string
+        except (OSError, tokenize.TokenError, SyntaxError, ValueError):
+            pass        # what was read up to there stands; a file Python cannot read has no findings of Bandit's
+        cache[rel] = found
+    if not cache[rel]:
+        return None
+    span = r.get("line_range") if isinstance(r.get("line_range"), list) else []
+    lines = sorted({n for n in [r.get("line_number"), *span] if isinstance(n, int)})
+    for n in lines:
+        if n in cache[rel]:
+            said = nosec_says(cache[rel][n], str(r["test_id"]), r.get("test_name") if isinstance(r.get("test_name"), str) else None)
+            if said:
+                return said
+    return None
 
 
 def run_secrets(repo: Path) -> tuple[list[dict], list[dict]]:
@@ -586,15 +658,21 @@ def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
     return best
 
 
-def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None = None) -> dict[str, dict]:
-    """Multi-source BFS from entry points. Returns node id -> {entry, kind, path}."""
+def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None = None, where=None,
+                 worked_out: bool = False) -> dict[str, dict]:
+    """Multi-source BFS from entry points. Returns node id -> {entry, kind, path}. `where(node)` keeps only the entry
+    points it says yes to (`scan` asks for the ones outside test files). `worked_out`: follow only the links Lantern
+    worked out to one function, not a guess by method name (`calls.NAME_ONLY_VIA`) and not one of several possible
+    targets (`possible`: every class that has the method, every implementation of an interface)."""
     adj: dict[str, list[str]] = {}
     for e in g.call_edges():
+        if worked_out and (e.confidence == "possible" or e.via in NAME_ONLY_VIA):
+            continue
         adj.setdefault(e.src, []).append(e.dst)
     seen: dict[str, dict] = {}
     q: deque[str] = deque()
     entries = [n for n in g.entry_points() if (include_tests or n.entry["kind"] != "test")
-               and (kinds is None or n.entry["kind"] in kinds)]
+               and (kinds is None or n.entry["kind"] in kinds) and (where is None or where(n))]
     # untrusted-input entries first so their paths win ties
     entries.sort(key=lambda n: 0 if n.entry["kind"] in UNTRUSTED_ENTRY_KINDS else 1)
     for n in entries:
@@ -618,9 +696,11 @@ def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None =
 
 
 def rank(f: dict) -> str:
-    """The rank from the tool's severity, reachability and input, then capped by what the code around the line shows
-    (context.py: a weak hash used as an identifier, SQL that splices only fixed text). A cap is written on the finding
-    as `rank_note`, with the rank it would have had as `rank_before_context`, so nothing changes silently."""
+    """The rank: the tool's own severity, raised when an entry point from outside reaches the line and request data
+    is not ruled out (`_steps`), then capped by what the code around the line shows (context.py: a weak hash used as
+    an identifier, SQL that splices only fixed text, a function every caller hands fixed text). A cap is written on
+    the finding as `rank_note`, with the rank it would have had as `rank_before_context`, so nothing changes silently.
+    That Lantern found no path to a line lowers nothing (directive point 6): it is written in `reachability`."""
     r = _rank(f)
     cap, why = None, None
     ctx = f.get("context") or {}
@@ -655,29 +735,116 @@ def rank(f: dict) -> str:
     return r
 
 
-def _rank(f: dict) -> str:
+# The tool's own severity as a rank. A rank goes under it only on evidence written on the finding (`rank_note` with
+# `rank_before_context`, test code, a rank a rule fixes itself). That Lantern found no path to a line is not evidence:
+# until 2026-11 a high with no path was ranked medium and a medium low, "because nothing in the map reaches it".
+FLOOR = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
+NO_PATH = ("which is not proof that nothing runs it: a scheduler, another program, a framework that calls by name or a "
+           "call Lantern could not follow would not show")
+
+
+def _step(name: str, to: str, why: str) -> dict:
+    return {"step": name, "rank": to, "why": why}
+
+
+def _steps(f: dict) -> list[dict]:
+    """How the rank comes about before the code around the line is looked at, one step after the other, each with its
+    reason. The tool's severity is where it starts; who reaches the line can only raise it."""
     if f.get("fixed_rank"):
-        return f["fixed_rank"]
+        return [_step("fixed", f["fixed_rank"], f.get("fixed_why") or
+                      f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it.")]
+    if f["category"] == "secret":
+        return [_step("fixed", "critical", "A key written in the code is always critical: anyone who can read the "
+                                           "code can use it.")]
+    if f["category"] == "dependency":   # npm says how bad; pip-audit doesn't, so those stay high
+        return [_step("severity", {"moderate": "medium", "low": "low", "info": "low"}.get(str(f.get("dep_severity")),
+                                                                                         "high"),
+                      "From the advisory's own severity (high when the audit gives none).")]
+    own = f.get("tool_severity")
+    out = [_step("severity", FLOOR.get(own, "low"), f"{f.get('tool') or 'The tool'} rates the pattern "
+                                                   f"{str(own).lower()}.")]
     sev = flowscan.raised_severity(f)     # the tool's own, or graver when request data was followed to the line
+    if sev != own:
+        out.append(_step("raised", FLOOR.get(sev, "low"), "Lantern followed request data to the line, which makes "
+                                                          f"the pattern {str(sev).lower()}."))
     reach = f.get("reachable")
     untrusted = reach and reach["kind"] in UNTRUSTED_ENTRY_KINDS
-    if f["category"] == "secret":
-        return "critical"
-    if f["category"] == "dependency":   # npm says how bad; pip-audit doesn't, so those stay high
-        return {"moderate": "medium", "low": "low", "info": "low"}.get(str(f.get("dep_severity")), "high")
     if sev == "HIGH" and untrusted and f.get("input") is not False:
-        return "critical"   # spec 9.3: high severity and touched by untrusted input (False: the line uses none)
-    if (sev == "HIGH" and reach) or (sev == "MEDIUM" and untrusted):
-        return "high"
-    if (sev == "MEDIUM" and reach) or sev == "HIGH":
-        return "medium"
-    return "low"
+        # spec 9.3: high severity and touched by untrusted input (False: the line uses none)
+        out.append(_step("raised", "critical", f"{reach['kind']} code reaches it" + (
+            ", using request data." if f.get("input") else ", and Lantern could not rule out request data.")))
+    elif sev == "MEDIUM" and untrusted:
+        out.append(_step("raised", "high", f"{reach['kind']} code reaches it."))
+    return out
+
+
+def _rank(f: dict) -> str:
+    return _steps(f)[-1]["rank"]
+
+
+def rank_basis(f: dict) -> list[dict]:
+    """The steps that end at `f["rank"]`: `severity` (the tool's own), `raised` (request data followed to the line; an
+    entry point from outside reaches it), `lowered` (evidence from the code around the line, `rank_note`), `fixed` (a
+    rank the rule or the kind of finding fixes), `test-code`. Read after `rank` and `in_tests` are set."""
+    out = _steps(f)
+    if f.get("in_tests") and f.get("category") == "code":
+        out.append(_step("test-code", "low", TEST_CODE + (GUESSED_LINK if f.get("test_file_guessed") else "")))
+    elif f.get("rank_note"):
+        out.append(_step("lowered", f["rank"], f["rank_note"]))
+    return out
+
+
+def reach_state(f: dict) -> dict:
+    """What is known about who runs the flagged code, as a fact of its own beside the rank: `reached` (with the kind
+    of entry point), `tests-only`, `unknown` (no path found, or the line is in no function of the map: never read as
+    "nothing runs it"), `not-code` (a library in a list: there is no line of the project to reach)."""
+    r = f.get("reachable")
+    if r:
+        out = {"state": "reached", "kind": r["kind"], "why": f"{r['kind']} code reaches it on Lantern's map."}
+    elif f.get("category") == "dependency":
+        out = {"state": "not-code", "why": "A library the project lists. Lantern does not follow calls into libraries, "
+                                           "so it cannot say which code of the project uses the affected part."}
+    elif f.get("reachable_from_tests_only"):
+        out = {"state": "tests-only", "why": "Only the test suite was found to reach this code, " + NO_PATH + "."}
+    elif not f.get("node"):
+        out = {"state": "unknown", "why": "This line is in no function on Lantern's map (a settings file, a template, "
+                                          "a part of the code Lantern does not map), so Lantern cannot say what runs "
+                                          "it. That is not proof that nothing does."}
+    else:
+        out = {"state": "unknown", "why": "Lantern found no path to this code from a page, route, command or script, "
+                                          + NO_PATH + "."}
+    if f.get("test_file_in_use"):
+        out["why"] += " The file is named like a test, but code outside the tests runs it."
+    return out
+
+
+TEST_CODE = "Test code: your users do not run it, so it is ranked low and counted apart."
+GUESSED_LINK = (" A call somewhere in the app might lead into this file by its name alone: a method here has the name "
+                "of one the app calls on something whose type Lantern cannot tell. That is a guess, and Lantern does "
+                "not count a guess as the app running a test file.")
+
+
+NOSEC_SAYS = {
+    "bare": " The line carries a `# nosec` comment, which asks scanners to skip it, and gives no reason. Lantern "
+            "lists the finding all the same.",
+    "overruled": " The line carries a `# nosec` comment with a reason. Lantern does not take that as settled, "
+                 "because it followed request data to this line.",
+}
+
+
+def _request_data(f: dict) -> bool:
+    """Did Lantern itself follow request data to the flagged line: across functions (`flow`), or in the line's own
+    function (`input` says "request data"; a parameter alone is not that)?"""
+    if f.get("flow"):
+        return True
+    i = f.get("input")
+    return isinstance(i, dict) and (bool(i.get("flow")) or "request data" in str(i.get("via") or ""))
 
 
 def rank_reason(f: dict) -> str:
-    """Why `_rank` gave the rank it gave, in words (kept next to `_rank` so the two change together)."""
+    """Why `_steps` gave the rank it gave, in words (kept next to `_steps` so the two change together)."""
     if f.get("in_tests") and f.get("category") == "code":
-        return "Test code: your users do not run it, so it is ranked low and counted apart."
+        return TEST_CODE + (GUESSED_LINK if f.get("test_file_guessed") else "")
     if f.get("fixed_rank"):
         return f.get("fixed_why") or f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it."
     sev = f.get("tool_severity")
@@ -701,10 +868,18 @@ def rank_reason(f: dict) -> str:
         r = base + f", and {reach['kind']} code reaches it."
     elif sev == "MEDIUM" and reach:
         r = base + f", reached from {reach['kind']} code (not a server route, command or script)."
-    elif sev == "HIGH":
-        r = base + ", but nothing in the map reaches it today."
+    elif reach or not f.get("node"):
+        r = base + "."
+    elif f.get("reachable_from_tests_only"):
+        r = base + (". Only the test suite was found to reach it, which is not proof that nothing else runs it, so "
+                    "the rank stays at the tool's own severity.")
     else:
-        r = base + (", and nothing in the map reaches it." if not reach else ".")
+        r = base + (". Lantern found no path to it from a page, route or command, which is not proof that nothing "
+                    "runs it, so the rank stays at the tool's own severity.")
+    if f.get("test_file_in_use"):
+        r += " The file is named like a test, but code outside the tests runs it, so it is not counted as test code."
+    if (f.get("nosec") or {}).get("state") in NOSEC_SAYS:
+        r += NOSEC_SAYS[f["nosec"]["state"]]
     if f.get("rank_note"):
         r += " Then lowered by context: " + f["rank_note"]
     return r
@@ -823,7 +998,7 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
         return lines_cache[file]
     # Follow the data (flow.py): request data followed across functions to a query, a command, a file, an address, a
     # page. A flow on a line another tool flagged is written on that finding; the others are findings of their own.
-    ff, info, flows = flowscan.run(g, findings, lines_for)
+    ff, info, flows = flowscan.run(g, findings, lines_for, paid_calls=ai["calls"])
     findings += ff
     tools.append(info)
     stable_ids(repo, findings)
@@ -833,11 +1008,35 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
     test_reach = reachability(g, include_tests=True)
     from .js_frontend import TEST_RE as JS_TEST_RE
     from .python_frontend import TEST_FILE_RE
+    named_test = lambda file: bool(file and (TEST_FILE_RE.search(file) or JS_TEST_RE.search(file)))
+    own_reach = in_use = guessed = None   # what the entry points outside test files reach; worked out when first asked
     for f in findings:
-        f["in_tests"] = bool(f["file"] and (TEST_FILE_RE.search(f["file"]) or JS_TEST_RE.search(f["file"])))
         pin = f.pop("pin", None)          # a manifest finding names the class it is about (android.py)
         f["node"] = (pin if pin in g.nodes else None) or _node_at(g, f["file"], f["line"])
         r = reach.get(f["node"]) if f["node"] else None
+        # Test code is ranked low and counted apart: users do not run the test suite. The file's name alone does not
+        # show that. A file named like a test, one function of which a page, route or command outside the test files
+        # runs, is the app's own code: the app loads the whole file. (A test file's own small app does not make it
+        # so: its entry points are in a test file.) "Runs" means a link Lantern worked out. A guess by method name,
+        # or one of several classes that have the method, is no evidence of who runs a file: a test double has the
+        # methods of what it stands in for, so every project's fakes would count as the app's own code. Such a
+        # file stays test code, and the finding says that a guess leads there (`test_file_guessed`).
+        f["in_tests"] = named_test(f["file"])
+        f.pop("test_file_in_use", None)
+        f.pop("test_file_guessed", None)
+        if f["in_tests"]:
+            if own_reach is None:
+                outside = lambda n: not named_test(n.file)      # noqa: E731
+                files = lambda found: {g.nodes[nid].file for nid in found          # noqa: E731
+                                       if nid in g.nodes and named_test(g.nodes[nid].file)}
+                own_reach = reachability(g, where=outside, worked_out=True)
+                in_use = files(own_reach)
+                guessed = files(reachability(g, where=outside)) - in_use
+            if f["file"] in in_use:
+                r = own_reach.get(f["node"]) or r
+                f["in_tests"], f["test_file_in_use"] = False, True
+            elif f["file"] in guessed:
+                f["test_file_guessed"] = True
         f["reachable"] = r
         f["reachable_from_tests_only"] = bool(not r and f["node"] in test_reach)
         u = ui_reach.get(f["node"]) if f["node"] else None
@@ -892,10 +1091,24 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
             if tr:
                 f["trust"] = tr
         f["rank"] = "low" if f["in_tests"] and f["category"] == "code" else rank(f)
+        # the facts the rank was worked out from stay their own fields beside it (`tool_severity`, `tool_confidence`,
+        # `reachable`, the case's evidence), with what is known about who runs the line and each step to the rank
+        f["reachability"] = reach_state(f)
+        f["rank_basis"] = rank_basis(f)
         acc = accepted.get(f["id"])
         f["status"] = "accepted" if acc else "open"
         if acc:
             f["accepted"] = {k: acc.get(k) if isinstance(acc.get(k), str) else None for k in ("reason", "by", "date")}
+        ns = f.get("nosec")
+        if ns:
+            # A `# nosec` comment with a written reason is the project's word that it looked at the line: the same
+            # as `lantern accept`, and shown the same way. It is not taken where Lantern itself followed request
+            # data to the line, and a comment with no reason accepts nothing.
+            f["nosec"] = ns = {"state": "bare" if not ns.get("reason") else "overruled" if _request_data(f)
+                               else "accepted", "reason": ns.get("reason")}
+            if ns["state"] == "accepted" and not acc:
+                f["status"] = "accepted"
+                f["accepted"] = {"reason": ns["reason"], "by": None, "date": None, "how": "nosec"}
     # Scenarios (scenarios.py): a short story of one person meeting each finding, built from the facts above only.
     from .scenarios import attach as attach_scenarios
     attach_scenarios(findings, g)

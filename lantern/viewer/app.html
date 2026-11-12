@@ -606,6 +606,11 @@ const note = (kind, html) => `<div class="note ${kind}">${icon({warn: 'warn', er
 // grade -> status color job (A/B good ... F critical); only these words reach a class name
 const GRADE_TONE = {A: 'good', B: 'good', C: 'warning', D: 'serious', F: 'critical'};
 const tone = g => Object.prototype.hasOwnProperty.call(GRADE_TONE, g) ? GRADE_TONE[g] : 'none';
+// the release decision (lantern/release.py): only these three words are ever shown, each with its tone and sentence
+const RELEASE_TONE = {Blocked: 'critical', Incomplete: 'warning', Passed: 'good'};
+const RELEASE_SAYS = {Blocked: 'Release decision: <b class="bad">Blocked</b>, something that must hold does not.', Incomplete: 'Release decision: <b>Incomplete</b>, part of the proof is missing.', Passed: 'Release decision: <b>Passed</b>.'};
+const releaseWord = d => Object.prototype.hasOwnProperty.call(RELEASE_TONE, d) ? d : '';
+const releaseSays = d => releaseWord(d) ? ' ' + RELEASE_SAYS[d] : '';
 function ring(score, grade) {
   const n = Math.max(0, Math.min(100, +score || 0)), c = 2 * Math.PI * 22, has = score != null;
   return `<div class="ring ${has ? tone(grade) : 'none'}" role="img" aria-label="${has ? `Readiness ${esc(score)} of 100, grade ${esc(grade)}` : 'Not analyzed yet'}">
@@ -973,7 +978,7 @@ function sentence(p) {
     parts.push(bits.length ? `No serious problems. <b>${esc(bits.join(' and '))}</b> to look at` : 'No open problems a visitor could reach');
   }
   if (c.accepted) parts[0] += `, and ${c.accepted} risk${c.accepted > 1 ? 's' : ''} you accepted with a reason`;
-  return parts.join('') + `. Readiness ${esc(p.score)} of 100.`;
+  return parts.join('') + `. Readiness ${esc(p.score)} of 100.${releaseSays(p.release)}`;
 }
 function addControls(el) {
   const input = el.querySelector('#addpath'), err = el.querySelector('#adderr');
@@ -1057,7 +1062,7 @@ function renderHomePro(el, ps) {
     const c = p.counts, run = isRunning(p), t = tone(p.grade);
     return `<div class="r"><div><div class="n">${esc(p.name)}${p.starter ? '<span class="tag">STARTER</span>' : ''}</div><div class="p" title="${esc(p.path)}">${esc(p.path)}</div></div>
       <span class="p" style="font:12px var(--font);color:var(--ink-2)">${esc(p.stack || (p.languages || []).join(' + ') || '–')}</span>
-      ${p.score != null ? `<div class="rd"><span style="font-weight:600;color:var(--ink);width:24px">${esc(p.score)}</span><div class="bar"><i class="bar-${t}" style="width:${barw(p)}%"></i></div><span class="g tone-${t}">${esc(p.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'analyzing' : 'not yet'}</span></div>`}
+      ${p.score != null ? `<div class="rd"${releaseWord(p.release) ? ` title="Release decision: ${releaseWord(p.release)}"` : ''}><span style="font-weight:600;color:var(--ink);width:24px">${esc(p.score)}</span><div class="bar"><i class="bar-${t}" style="width:${barw(p)}%"></i></div><span class="g tone-${t}">${esc(p.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'analyzing' : 'not yet'}</span></div>`}
       ${num(c ? c.critical : null, true)}${num(c ? c.high : null)}${num(c ? c.medium : null)}${num(c ? c.accepted : null)}
       <span class="num">${p.functions ? `${esc(p.explained || 0)} / ${esc(p.functions)}` : '<span class="dash">–</span>'}</span>
       <span style="color:var(--muted);white-space:nowrap">${run ? 'Analyzing…' : esc(p.finished_at || '–')}${p.stale === 'packs' && !run ? '<br><span class="stale" title="Analysis packs changed since this check">Re-check to apply</span>' : ''}${!run && arr(p.incomplete).length ? `<br><span class="stale" title="${esc(arr(p.incomplete).join(', '))} did not finish or did not cover everything">Scan incomplete</span>` : ''}</span>
@@ -1082,8 +1087,8 @@ function renderHomePro(el, ps) {
   el.querySelector('#recheckall').onclick = async () => { for (const p of ps) if (p.exists && !isRunning(p)) { try { const j = await api(`/api/projects/${p.id}/analyze`, {method: 'POST'}); watch(j.id, p.id); } catch (e) {} } render(); };
   el.querySelector('#csv').onclick = () => {
     const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const lines = [['project', 'path', 'stack', 'readiness', 'grade', 'critical', 'high', 'medium', 'accepted', 'explained', 'functions', 'analyzed'].join(',')]
-      .concat(rows.map(p => [p.name, p.path, p.stack, p.score, p.grade, ...(['critical', 'high', 'medium', 'accepted'].map(k => (p.counts || {})[k])), p.explained, p.functions, p.finished_at].map(q).join(',')));
+    const lines = [['project', 'path', 'stack', 'readiness', 'grade', 'release', 'critical', 'high', 'medium', 'accepted', 'explained', 'functions', 'analyzed'].join(',')]
+      .concat(rows.map(p => [p.name, p.path, p.stack, p.score, p.grade, releaseWord(p.release), ...(['critical', 'high', 'medium', 'accepted'].map(k => (p.counts || {})[k])), p.explained, p.functions, p.finished_at].map(q).join(',')));
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type: 'text/csv'})); a.download = 'lantern-projects.csv'; a.click(); URL.revokeObjectURL(a.href);
   };
 }
@@ -1112,7 +1117,7 @@ function drawProject(el) {
   const c = p.counts || {}, nf = (c.critical || 0) + (c.high || 0) + (c.medium || 0);
   const tab = (t, label) => `<button data-t="${t}" role="tab" aria-selected="${S.tab === t}" class="${S.tab === t ? 'on' : ''}">${label}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${nf}</span>` : ''}</button>`;
   el.innerHTML = `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to ${simple ? 'my apps' : 'projects'}">${icon('back')}<span>${simple ? 'My apps' : 'Projects'}</span></button>${simple ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(p.name)}</span>
-    ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100">${esc(p.grade)}${simple ? '' : ' · ' + esc(p.score)}</span>` : ''}
+    ${p.grade ? `<span class="gchip ${tone(p.grade)}" title="Readiness ${esc(p.score)}/100${releaseWord(p.release) ? ', release decision ' + releaseWord(p.release) : ''}">${esc(p.grade)}${simple ? '' : ' · ' + esc(p.score)}${releaseWord(p.release) ? ' · ' + releaseWord(p.release) : ''}</span>` : ''}
     <div class="tabs" role="tablist">${p.starter ? tab('guide', W.guide) : ''}${['atlas', 'findings', 'prot', 'ready', 'evidence', 'explain'].map(t => tab(t, W[t])).join('')}</div>
     <span class="spacer"></span><button class="btn ghost sm" id="termbtn" title="Terminal (press \`)">${icon('bolt')}<span>Terminal</span></button>${p.has_report ? `<button class="btn sm" id="watchtests" title="Watch my tests run" ${isRunning(p) ? 'disabled' : ''}>${icon('play')}<span>Watch my tests run</span></button>` : ''}<a class="btn ghost sm newtab" href="/p/${p.id}/${S.tab === 'evidence' ? 'evidence' : 'report'}.html" target="_blank" rel="noopener" title="Open in new tab">${icon('open')}<span>Open in new tab</span></a><span class="dock" data-dock="end"></span></div>
     <div id="toast"></div>
@@ -1426,7 +1431,8 @@ const FAQ = [
   ['Atlas', 'What is a hop?', 'One step along a path: a click handler, a function call, an HTTP request from the browser to a route, a call into a library. “Seven hops” means seven such steps from the page to the flagged line.'],
   ['Atlas', 'Why is a function missing from the map?', 'Either nothing reachable calls it (it is counted as hidden in the Graph view), or the call went through something Lantern cannot follow yet: hook results, framework dispatch, dynamic names. The About page lists what was unresolved.'],
   ['Readiness', 'How is the score made?', 'Ten weighted areas (security findings, secrets, input handling, dependencies, tests, observability, packaging, CI, resilience, documentation). Every point has a written reason. Checks that do not apply are skipped, not counted against you. Low findings do not lower the score; critical, high and medium ones do.'],
-  ['Readiness', 'What is a hard failure?', 'A critical finding a visitor can reach that uses their input. Those cap the grade until fixed; nothing else does.'],
+  ['Readiness', 'What is a hard failure?', 'A critical finding a visitor can reach that uses their input. Those cap the grade until fixed.'],
+  ['Readiness', 'What is the release decision?', 'One of three words beside the score. <b>Blocked</b>: something that must hold does not, such as an open critical or high finding, or tests that fail. <b>Incomplete</b>: nothing found blocks a release, but part of the proof is missing, such as tests that were not run or libraries that were not looked up. <b>Passed</b>: everything asked of this kind of project was checked and held. The decision does not come from the points: a blocked release cannot score above 59, and only a passed one can score 100. Press “Watch my tests run” to give it the tests.'],
   ['Readiness', 'Will Lantern overwrite my files?', 'Never. Starter files (Dockerfile, CI, .env.example, SECURITY.md) are written only when you press Write, and only where no file exists.'],
   ['Setup', 'How do I add an app?', 'My projects → Browse… to its folder, or paste a GitHub link, then Check my app. Python, TypeScript/JavaScript, Go, Rust and Java apps work today.'],
   ['Setup', 'How do explanations work, and what do they cost?', 'A model writes each function three ways and Lantern checks every phrase against your code. Sign in for a free allowance (about 300 explanations), use your own key, or run a local model for free. The Explanations tab shows the estimate before you press Explain.'],
