@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo, project_bytes
+from .python_frontend import inside_repo, project_bytes, skipped
 
 MAX_BYTES = 1_500_000
 SKIP_DART = {".dart_tool", "build", ".pub-cache", "ios", "android", "macos", "windows", "linux", "web"}
@@ -134,7 +134,7 @@ def discover(repo: Path) -> list[Path]:
     for p in repo.rglob("*.dart"):
         rel = p.relative_to(repo)
         parts = rel.parts[:-1]
-        if any(x in SKIP_DIRS for x in parts) or not p.is_file() or not inside_repo(p, repo):
+        if skipped(parts, repo) or not p.is_file() or not inside_repo(p, repo):
             continue
         # a Flutter project's platform folders hold generated code (ios/Runner, android/app/…), not the app's Dart
         if any(x in SKIP_DART for x in parts) and not any(x in ("lib", "test", "bin") for x in parts):

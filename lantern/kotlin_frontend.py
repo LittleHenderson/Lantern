@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo, project_bytes
+from .python_frontend import inside_repo, project_bytes, skipped
 
 MAX_BYTES = 1_500_000
 TEST_FILE_RE = re.compile(r"(^|/)src/(test|androidTest|sharedTest|commonTest|jvmTest)\w*/|(^|/)tests?/")
@@ -198,7 +198,7 @@ def discover(repo: Path) -> list[Path]:
     out = []
     for p in repo.rglob("*.kt"):
         rel = p.relative_to(repo)
-        if any(x in SKIP_DIRS for x in rel.parts[:-1]) or not p.is_file() or not inside_repo(p, repo):
+        if skipped(rel.parts[:-1], repo) or not p.is_file() or not inside_repo(p, repo):
             continue
         out.append(p)
     return sorted(out)

@@ -80,7 +80,7 @@
       ],
       "prompt": "In app/auth.py, load SECRET_KEY from the NOTES_SECRET_KEY environment variable, falling back to a random secrets.token_hex(32) for local development.",
       "fix_files": ["app/auth.py"],
-      "check": {"kind": "cleared", "rules": ["B105"]}
+      "check": {"kind": "cleared", "rules": ["B105", "LW-SECRET-INLINE"]}
     },
     {
       "id": "deps", "title": "Update packages with known vulnerabilities", "feature": "findings",

@@ -120,11 +120,20 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
 
 * Node: `id`, `kind` (`module`|`class`|`callable`|`external`), `name`, `qualname`, `file`, `start_line`, `end_line`,
   `parent`, `signature`, `docstring`, `decorators`, `entry` (null or `{"kind": "page"|"route"|"main"|"cli"|"script"|"test",
-  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?, "middleware"?: [node ids]}`
+  "detail": "/admin" or "POST /backup", "via"?: "pack:django", "registered_at"?, "middleware"?: [node ids],
+  "use"?: [{"id", "file", "line"}]}`
   (`middleware`: an Express route's own middleware, in order, e.g. `router.delete('/x', requireLogin, h)`: node ids,
   or the `ext:` name of a library's function or of one imported from a file that is not in the repo
   (`ext:./mw/guards.requireLogin`, for which no node exists); the login check reads each one's own name, what
-  follows the last `.` and `/`. An entry is only ever on a function of the repo: a route whose handler is a
+  follows the last `.` and `/`. `use`: the middleware Express runs before the route because it was put on the app or
+  on a router with `use` (`app.use(requireLogin)`, `app.use('/admin', requireAdmin)`, `router.use(mw)`,
+  `app.use('/api', mw, router)`), outermost first, each with the place it was put on; only what the code shows comes
+  first is listed: written on an earlier line of the same file and function as the route or as the router's mount, on
+  a path that covers the route's, and in front of every mount of a router that is mounted more than once. A router, an
+  error handler (four parameters), a class and Passport's reading of the session are no such middleware. A function
+  written in place has the id `inline:<file>:<line>` (`app.use((req, res, next) => { ... })`: it is no node of the
+  map), and a function put on every verb counts the same way (`app.all('*', check)`, `app.all('/api/*', check)`). No edge and
+  no call site is added for it; the login check and the flow step read it. An entry is only ever on a function of the repo: a route whose handler is a
   library's function, or comes from a file that is not there, marks no node); an HTML page with script inside it is
   a `page` entry whose `detail` is the file path, and its functions are `js:<path>.html::<name>` with the page's own
   line numbers), `lane` (the stack strip stop the
@@ -268,11 +277,17 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 ### `security.json`
 
 `{"findings": [...], "tools": [scanner records], "incomplete": [the scanner records that apply and are not ok],
-"counts": {critical, high, medium, low, in_tests, accepted}, "id_version", "reachable_nodes", "total_callables", "ai",
-"mobile"}`
+"counts": {critical, high, medium, low, in_tests, accepted}, "id_version", "reachable_nodes", "total_callables",
+"logins_shown", "ai", "mobile"}`
+
+`logins_shown`: the node ids of the routes whose own code turns away whoever is not signed in, as the flow step read
+it (a check under any name, one written in place, a hook, a dependency); `null` when that step did not run, and
+absent from results written before 2026-11-11. The protection `route-auth` in `readiness.json` counts such a route
+as checked (found: "the code on the way to this route turns away whoever is not signed in"), and names a route an
+`LW-AUTH-MISSING` finding calls open among the open ones, whatever the names around it say.
 
 A scanner record (`lantern/scanresult.py`, one per tool run: bandit, gitleaks, lantern-secrets, pip-audit, npm-audit,
-maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, packs): `tool`, `state` (`ok` | `partial` | `failed` |
+maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, lantern-flow, packs): `tool`, `state` (`ok` | `partial` | `failed` |
 `timeout` | `unavailable` | `skipped`), `status` (the same as one sentence: `ok`, `ok (…)`, `partial: …`, `error: …`,
 `error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
 `applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
@@ -292,6 +307,54 @@ audit that is skipped (`--offline`, tool not installed) carries `not_read` only 
 used. `incomplete` is read by readiness (`sec-scanners`), the Evidence Report, the badge (`scan incomplete`), the
 command line (`--fail-on` exits 1 for any state but `skipped`) and the app's project cards; a run with `--offline`
 lists its skipped audits there without failing the gate.
+
+`lantern-flow` (`lantern/flowscan.py`, Python and JS/TS; `applicable` false for a project with neither) is the step
+that follows request data across functions and files. Its record has `version` and `scope` `{files, functions,
+flows` (request values followed to a sensitive action), `on_other_findings` (flows attached to a finding another
+tool made on the same line), `not_followed_further` (calls where a value that still carried request data was handed
+to code Lantern does not read), `login_read_from_code` (findings "no login check was found" that were not kept
+because the route's own code turns away whoever is not signed in), `token_check_lets_on` (routes that change data
+on whose way a login token is read and nothing turns away a request whose token does not hold)`}`; `partial` when a file could not be read, a function could not be followed or the
+time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
+`LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
+(22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and four about
+who may reach what, always `tool_confidence: LOW` and rank `medium`: `LT-AUTHZ-OWNER` (639: a route with a login
+reaches a record by an id from the request, and nothing compares the record's owner with who is signed in; for a
+record that is changed or removed only what was asked before the change counts, also when the change is made by a
+helper or through the object the record was read into (`db.session.delete(note)`, `order.deleteOne()`: the line of
+the change is then the flow's last step); `line` is the line the record is reached on, one finding for that line
+with `routes`, the routes that get there, and `late` when every one of them does ask whose the record is, but only
+after it), `LT-AUTHZ-ROLE` (285: an admin route with a login
+where nothing asks for an admin; no `flow`), `LT-AUTHZ-MASS-ASSIGN` (915: everything the request sent is written
+onto a stored record) and `LT-AUTHZ-CLIENT-ROLE` (807: a route decides what the caller may do on a value the caller
+writes, a cookie, a header, a word in the address or the body named like a role or an admin flag, and nothing on the
+route asks for a role the server keeps; one finding per place the value is read, `line` is that line, `claim` names
+the value and the routes; no `flow`; made with or without a login on the route). A route with no sign of a login
+gets none of the first three. `LW-AUTH-MISSING` says so instead: `lantern-web` makes it for a route the project's
+own frontend calls, and the flow step makes it (`tool: "lantern-flow"`, with a `flow` to the record) for any other
+route that changes or removes a record picked by an id from the request; a route made to be open (sign-in, a
+webhook) gets none, and a route gets the finding once. Whether a route shows a login is read from its code where
+the code says so (a condition on who is signed in whose other branch refuses, a token a library checked, a record
+found by the request's own credential: `lantern/flow.py`), and from names otherwise. Where the code shows a login,
+the finding by names is not kept. Where a login token is read on the way and nothing turns away a request whose
+token does not hold (the failure is caught and the request goes on, the token is read without being checked, the
+answer is not waited for), the name of that check is no sign, and a route that changes data gets the finding with
+the title "... changes data, and Lantern found nothing that turns away a request whose login token does not hold".
+`more_info` names what looked like a login on the route and was not taken for one, in sentences that begin "Not
+taken for a login check:" (a library's login made optional with `optional=True`; a FastAPI security scheme whose
+token the handler never looks at).
+
+Two rules of `lantern-web` rest on the same step. `LW-XSS-RAW` (79, `tool_confidence: LOW`): a place in a page
+template that prints a value without escaping it (EJS `<%- x %>`, Handlebars and Mustache `{{{x}}}` / `{{& x}}`, Pug
+`!{x}` / `!=`, Jinja, Django, Nunjucks and Twig `|safe`, `|raw`, `{% autoescape off %}`; `lantern/templates.py`).
+Its rank is what Lantern knows of the value: request data followed from a route into that place has the `flow` and
+ranks like any flow into a page (`medium` when a step of the flow is only a likely link); when every place Lantern found that shows the page hands it fixed text, a number or
+a value made safe for a page, the rank is `low`; anything else is `medium`; `fixed_why` says which in a sentence.
+`LW-SECRET-INLINE` (798): a secret written in JS/TS, Python or a JSON settings file, one finding per line, rank
+`medium`, `secret_kind` `signing` (the text that signs sessions or login tokens), `default` (a signing secret that
+falls back to text in the code when the setting is missing), `password` (the password of an account the app
+connects with) or `address` (a database address that carries its password); the `snippet` has `[redacted]` in the
+secret's place and no field repeats the text.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -319,12 +382,30 @@ page), `<Component> screen · <Component>` or `· /<expo router path>` (React Na
 <fn>` (route). Readiness `shape` is `"Flutter app"` or `"React Native app"` for these.
 
 Finding: `id` (stable across moves: tool, rule, file and the flagged line's text), `tool` (`bandit`, `pip-audit`,
-`npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
+`lantern-flow`, `npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
 (`LOW` = show "heuristic"), `file`, `line`, `cwe`, `more_info`, `snippet`, `category`, `in_tests`, `node`,
 `reachable` (null or `{"entry", "kind", "path": [node ids]}`), `reachable_from_tests_only`, `ui_path` (node ids from a
-page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`), `rank` (`critical`|`high`|`medium`|`low`),
+page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`; when a flow was followed to the line,
+`{"via": <the words of the flow's first step>, "flow": true}`), `flow` (optional, `flowscan.py`: request data followed
+to this line across functions and files, on a `lantern-flow` finding or attached to another tool's finding for the same
+kind of problem on the same line: `{"class"` (`sql`, `shell`, `eval`, `deserialize`, `xxe`, `path`, `ssrf`, `xss`,
+`redirect`, `nosql`, `pollution`, `record`, `assign`), `"confidence"` (`HIGH`, or `LOW` when a step is a likely link),
+`"severity"`, `"source": {file, line, what}`, `"sink": {file, line, what}`, `"steps": [{file, line, what}]` (from the
+request to the sensitive action, in order; `what` is a sentence with code names between backticks), `"others"` (up to
+five other starting points that reach the same line), `"count"}`; the viewer's box "How the value gets there" lists
+the steps, every value escaped), `claim` (`LT-AUTHZ-CLIENT-ROLE` only: `{"name"` (the cookie, header or field as
+the code reads it), `"sent_as"` (`a cookie`, `a header`, `the address`, `the request's body`), `"what"` (a sentence:
+where the value arrives), `"routes"` (the routes that decide on it)`}`), `secret_kind` (`LW-SECRET-INLINE` only),
+`routes` (`LT-AUTHZ-OWNER` only: the routes that reach the record on this line, e.g. `["GET /orders/:id"]`),
+`late` (`LT-AUTHZ-OWNER` only, optional: `"change"`, `"shell"`, `"remove"` or `"send"` when the route does ask whose
+the record is, but only after it changed the record, ran a command, removed a file or told another service to
+change something for it; the scenario's `kind` is then `owner-late`),
+`fixed_why` (optional, on a rule Lantern gives one rank whatever reaches it: the sentence shown as the reason for
+the rank, `case.severity.why`), `rank` (`critical`|`high`|`medium`|`low`),
 `context` (optional, `context.py`, read from names around the line: `{"hash": {"purpose": "security"|"non-security"|"unknown", "why", "password", "reads"}}`
-for weak-hash rules, `{"sql": {"fixed_only", "spliced": [{"expr", "fixed", "why"}], "driver_params", "reads"}}` for Python SQL), `rank_note` and
+for weak-hash rules, `{"sql": {"fixed_only", "spliced": [{"expr", "fixed", "why"}], "driver_params", "reads"}}` for Python SQL,
+`{"fixed": {"class": "sql"|"shell", "function", "calls": [{"from", "file", "line"}], "count"}}` when a tool flagged a query or a command, no flow
+reaches it, and every call Lantern found hands that function fixed text (only when the flow step read everything; rank `low` with the reason)), `rank_note` and
 `rank_before_context` (only when `context` lowered the rank: why, and the rank it would have had; the viewer shows both; a
 non-security hash or SQL splicing only fixed text → `low`, a hash of unknown purpose → at most `medium`),
 `trust` (LW-PUBLIC-SECRET only, `context.public_secret_trust`: `browser` `{exposed, where, sent_as}`, `server_trusts`
@@ -349,7 +430,11 @@ shown, also show `title` as "<tool> says: …"), `scenario` (`{"kind", "who", "s
 `version`, `score`, `grade`, `shape`, `stack` (`{frameworks, …}`), `categories` (`[{key, title, weight, score, percent,
 checks: [{id, title, points, earned, status: pass|fail|partial|skip, evidence, fix, how}]}]`), `next_steps` (the
 highest-gain failed checks, with `gain` and `category`), `protections` (`[{id, title, status: add|check|in place, why,
-evidence, found, how}]`), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
+evidence, found, how}]`; for `rate-limit` (`lantern/ratelimit.py`) `in place` means every route in question shows a
+limit that covers it (on the route, or put on the app before the route in the same file), `check` that a limit exists
+and the code does not show that for each of them (a default limit for the whole app, a limiter in another file, the
+project's own limiter in which nothing visibly counts), `add` that nothing puts a limit to work, whatever is
+installed; `evidence` lists the routes without one first, `found` what covers the others), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
 `sec-scanners` check in Security findings fails when one `failed` or timed out, is partial for a gap the run knew
 about, and passes only when every applicable scanner finished), `advice` (deployment advice strings for the shape),
 `hotspots`, `env_vars`, `starter` (`{filename: {content, snippet?}}`).
@@ -382,6 +467,40 @@ notice under the tiles and the badge say `scan incomplete`, and the badge is nev
 dependency entries that were not checked because they have no exact version, whatever state that audit ended in; one
 line when the baseline in the results folder could not be used, in which case `scorecard.before`, `baseline_date` and
 `baseline_commit` are null and `security.fixed` and `changed` are empty), `digest` (`sha256:…`), `payload`.
+
+### `behaviour.json`
+
+Written by `lantern behave PATH` (`lantern/behave.py`), which starts the project's app in the test sandbox and runs
+the project's own plan, `lantern-behaviour.json` (its shape, the kinds of check and the limits: `docs/behaviour.md`).
+Nothing else reads this file yet: no finding, score or page changes with it.
+
+```json
+{"version": 1,
+ "from": "running the project's code in Lantern's test sandbox, with no network",
+ "of": {"plan_sha256": "9f2c…", "commit": "1a2b3c…", "dirty": false, "lantern": "0.10.0", "python": "3.13.1", "system": "Linux"},
+ "ran": true, "why_not": null,
+ "summary": {"held": 3, "broken": 1, "inconclusive": 0, "not-run": 0},
+ "outcomes": [
+   {"check": "delete-note", "case": "amir", "kind": "refuse", "about": "Only its owner deletes a note",
+    "outcome": "broken", "codes": ["refused-but-changed"],
+    "said": "was refused, and something had changed all the same",
+    "saw": {"status": 403, "changed": {"notes": [0, 1, 0]}}}],
+ "seconds": 1.2, "app_starts": 3}
+```
+
+`ran` false with `why_not` means nothing was judged: the project has no plan (`no_plan: true`, the only case that
+key is written in), the sandbox could not be set up or starts no app on this system (Windows, for now; the app was
+then not started), the plan's set-up failed at a
+step, or the run left no record. A plan that cannot be used writes no file at all. The command ends with 0 only when
+`ran` is true, at least one case held and none is broken, inconclusive or not run; 1 when a case is; 2 for no plan,
+a plan that cannot be used or a path that is no folder; 3 when the app was not started or the run left nothing to
+judge. `outcome` is `held`, `broken` (with `codes` and `said`), `inconclusive` or `not-run` (each with `why`).
+`saw`: `status` of the last answer, `changed` (per table `[rows added, removed, changed]`, `(files)` for the app's
+folders), `tried` (what the sandbox refused, or what the app began where this computer has no IPv6), `asked`
+(`[name, address]` the app asked about and the runner answered), `outside` (files outside the app's folders that
+were made, removed or changed, as paths from the sandbox's temp folder; at most five), `died`. `tried` and `outside`
+hold text a request may have chosen: escape them like any other value. `of` says what was run: the plan's SHA-256,
+the commit and whether files differed from it (`gitfacts.info`), Lantern's version, Python and the system.
 
 ### Other files
 

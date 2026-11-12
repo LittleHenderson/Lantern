@@ -74,7 +74,7 @@ Baseline numbers are in `baseline.md`. Targets for the end of the directive's st
 
 | Measure | Baseline (bc7cf10) | Target |
 |---|---:|---:|
-| Documented problems found at medium or above | 28 of 79 (27 of the 61 public, 1 of the 18 local); 2 more only as low; 49 missed | at least 60% of the 61 public expectations, and every `sql`, `shell`, `eval`, `deserialize`, `xxe` one |
+| Documented problems found at medium or above | 28 of 79 (21 of the 61 public, 7 of the 18 local); 2 more only as low; 49 missed | at least 60% of the 61 public expectations, and every `sql`, `shell`, `eval`, `deserialize`, `xxe` one |
 | False alarms on safe-twin anchors | 3 of 17 (two review twins where an inner function sets a fixed string, one fixed ORDER BY clause passed between functions) | no more than at baseline, and none on `sql`/`shell` anchors whose value is a fixed string |
 | Vulnerable apps given a green release | 2 of 8 (dvna, express-unsafe) | 0 of 8 (5 public + 3 local) |
 | Clean apps not given a green release | 3 of 6 (taxonomy, review-safe, flows-safe), all through false alarms | 0 of 6, with every remaining medium+ finding labelled |
@@ -85,6 +85,90 @@ Baseline numbers are in `baseline.md`. Targets for the end of the directive's st
 
 A target missed is reported as missed, with where, and the work continues; it is never met by changing a definition.
 
+Correction (2026-11-11, no number of `baseline.json` changed): the first row's parenthesis read "27 of the 61
+public, 1 of the 18 local" until this date. `baseline.json` holds 21 found of the 61 public and 7 found of the 18
+local (28 in all, as the row always said); the split was written down wrong. The target is unchanged: 60% of 61 is
+37 public problems.
+
+## After point 4 of the directive (measured 2026-11-11)
+
+Point 4 ("trace actual security problems across the whole app": a value followed across functions and files, a
+check that counts for what its code proves, who may reach a record) was measured on this definition five times
+while it was built, offline each time, as was the "before" of the same day. `after_point4.json` / `.md` is the fifth
+and last of them; `after_point4_audits.json` / `.md` is the same engine with the dependency audits on, as the frozen
+baseline ran. The third, the fourth and the fifth gave the same findings on every app of the set (with the audits
+on: 55 of 79 each time); their result files differ in the engine's commit and the time only.
+
+| Measure | Baseline, with audits (bc7cf10) | Before point 4 (eb3666e) | First (ae08c23) | Second (744b01a) | Third (d8a7980) | Fourth (1c7f819) and fifth (3e4687c) | Fourth and fifth, with audits | Target | Result |
+|---|---|---|---|---|---|---|---|---|---|
+| Documented problems found at medium or above, of 79 | 28 | 28 | 44 | 50 | 54 | 54 | 55 | | |
+| of the 61 public | 21 | 20 | 32 | 37 | 39 | 39 | 40 | at least 37 | met |
+| of the 18 local | 7 | 8 | 12 | 13 | 15 | 15 | 15 | | |
+| of the 26 `sql`, `shell`, `eval`, `deserialize`, `xxe` ones | 19 | 20 | 25 | 25 | 25 | 25 | 25 | 26 | missed: one `eval` (`pg-ssti`) |
+| Found only as low | 2 | 1 | 1 | 1 | 1 | 1 | 1 | | |
+| Missed | 49 | 50 | 34 | 28 | 24 | 24 | 23 | | |
+| False alarms on the 17 safe-twin anchors | 3 | 3 | 3 | 2 | 0 | 0 | 0 | no more than 3, none on a fixed `sql`/`shell` value | met |
+| Vulnerable apps given a green release, of 8 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | met |
+| Clean apps not given a green release, of 6 | 3 | 3 | 3 | 3 | 2 | 2 | 2 | 0 | missed: fastapi-template, taxonomy |
+| Medium+ findings on clean apps (labelled false alarm) | 11 (9) | 11 (9) | 13 (6) | 12 (6) | 10 (7) | 10 (7) | 10 (7) | every one labelled | met: 7 false alarm, 3 intended, none unlabelled |
+| Found problems with a mapped path | 21 of 30 | 25 of 29 | 40 of 45 | 43 of 51 | 46 of 55 | 46 of 55 | 46 of 56 | at least 70% | met |
+| Resolution checks, of 3 | 1 | 3 | 3 | 3 | 3 | 3 | 3 | every one | met (the row above says "4 of 4": the definition holds 3) |
+| Protection checks, of 3 | 2 | 2 | 3 | 3 | 3 | 3 | 3 | 3 | met |
+| Unresolved call sites: nodegoat, dvna, goof, express-boilerplate | 233/246, 202/206, 154/160, 397/506 | 116/330, 66/240, 36/184, 72/956 | the same | the same | the same | the same | the same | under half on each | met (since point 3) |
+
+By class, found at medium or above before point 4 and at the third measurement, of the expected: `auth` 3 and 3 of
+5, `authz` 0 and 3 of 11, `config` 0 and 0 of 4 (1 only as low), `csrf` 1 and 1 of 2, `dependency` 0 and 0 of 2 (not
+checked offline; 1 with the audits on), `deserialize` 3 and 4 of 4, `eval` 2 and 3 of 4, `exposure` 0 and 1 of 2,
+`nosql` 0 and 1 of 2, `path` 0 and 2 of 4, `pollution` 0 and 1 of 1, `redirect` 0 and 3 of 4, `secret` 3 and 7 of 7,
+`shell` 6 and 6 of 6, `sql` 8 and 10 of 10, `ssrf` 1 and 3 of 3, `xss` 0 and 4 of 6, `xxe` 1 and 2 of 2.
+
+How the set was used. The code of the apps and the anchors in `cases.json` were not read while the engine was
+written. After the first and after the second measurement the misses were read by expectation id, class, rule id,
+rank and line number only, and every rule that followed was written against examples of its own (the tests named in
+the changelog), none of them copied from the set. So the third number was preceded by two looks at which
+expectations were missed, and it is not the number a first look at an unseen set would give; the first measurement
+(44 of 79) is the one no look preceded. After the third measurement the two findings on clean apps that had no
+label were read in the code and labelled (in fastapi-template the route and the helper that makes its page, in
+express-safe the route, its handler, its login check and the twin's entry in `cases.json`).
+
+The engine did change once more after that, and not from this set. The ten large public apps of
+`tools/large_apps.py`, analysed before and after point 4 for time and memory, showed two false alarms of the new
+rules (a browser script that sends the visitor to the page's own site, and a name like `SESSION_KEY` that only
+names where something is kept); both were fixed against examples of their own (`bench/large_apps_results.md`,
+the changelog). The fourth measurement is that engine. It was preceded by the two looks above and by the reading
+for the two labels; nothing in the last change was written for an app of this set, and no number moved.
+
+It changed a last time after the fourth, again not from this set. Small examples written for the stage report
+showed that a record class a Python app loads with an import written from the top (`from app.models import Note`,
+the commonest way) was read as a library's, so who may reach the record was not asked (the changelog: "How a
+Python app loads its own files does not matter"). The fifth measurement is the engine with that corrected
+(3e4687c). Every app of the set lists exactly the findings it listed at the fourth, offline (627 findings in all)
+and with the audits on (1,197): the correction found nothing new here and raised no new false alarm.
+
+Where it still misses (24, and 1 found only as low):
+
+* `authz`, 8 of 11: `dvra-bola-order`, `dvra-bfla-role`, `ng-idor`, `ng-bfla`, `dvna-authz-admin`, `pg-admin-cookie`,
+  `fl-authz-late-guard`, `ex-authz-delete`. Who may reach what is still the weakest class.
+* `config`, 3 of 4 and the fourth only as low: `ng-cookie`, `dvna-cookie`, `ex-cookie`, `pg-django-debug`. Point 4
+  added no rule for cookie and debug settings.
+* `auth` 2 (`dvra-pin`, `dvna-reset-token`), `path` 2 (`goof-zipslip`, `goof-layout`), `xss` 2 (`ng-xss`, `pg-xss`),
+  `csrf` 1 (`ng-csrf`), `exposure` 1 (`dvra-debug`), `nosql` 1 (`ng-nosql`), `redirect` 1 (`goof-redirect`).
+* `eval` 1, `pg-ssti`: Lantern reports request text run as a template in the same file 13 lines above the documented
+  line (`LT-EVAL`, medium, line 44, for a value the request brings at line 95) and nothing within two lines of the
+  documented line 57. By the definition that is missed.
+* `dependency` 2 offline. With the audits on `goof-deps` is found; `dvna-deps` is not (npm's audit is recorded as
+  skipped for that app).
+
+The two clean apps still refused a green release, both through a false alarm at high: fastapi-template through a
+finding of the new engine (`LT-XSS` in `login.py`: the path it shows is real, a jinja2 `Template` that escapes
+nothing, but only a superuser reaches the route and the page is made only when an account with exactly that e-mail
+address exists, which Lantern does not see), taxonomy through `LA-WALLET-DRAIN` on a Stripe webhook, labelled at the
+baseline. One finding is new on a safe twin: `LT-AUTHZ-OWNER` (medium, labelled intended) on the handler behind
+express-safe's `DELETE /items/:id`, which asks for a login and compares no owner because the twin's items have none.
+It stands in `core/handlers.js`; the safe-twin anchor is the route's line in `routes/index.js`, so by the definition
+above it is not a false alarm on that anchor. Read strictly, as "a finding on a route this set calls safe", it would
+be 1 of 17.
+
 ## Files
 
 * `cases.json` · the frozen definition: apps, commits, expectations, rules.
@@ -92,3 +176,5 @@ A target missed is reported as missed, with where, and the work continues; it is
 * `labels.json` · hand labels for findings on the clean public apps.
 * `run_heldout.py` · fetch, analyze, score, write `<out>.json` and `<out>.md`.
 * `baseline.json`, `baseline.md` · the frozen before.
+* `after_point4.json`, `after_point4.md` · the fifth and last measurement after point 4 (offline, like the before
+  of the same day); `after_point4_audits.json`, `.md` · the same engine with the dependency audits on.

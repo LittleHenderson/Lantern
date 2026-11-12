@@ -1,7 +1,9 @@
-"""Test sandbox for "Watch my tests run" (and the terminal's `trace`).
+"""Test sandbox for "Watch my tests run" (and the terminal's `trace`), and for `lantern behave`.
 
-Lantern reads code and never runs it, with one exception the user asks for: running the project's own tests so the
-map can mark the calls that really happen. Those tests run here, never in the project folder as the user:
+Lantern reads code and never runs it, with two exceptions the user asks for: running the project's own tests so the
+map can mark the calls that really happen, and starting the project's app to see what it really does
+(`lantern.behave`, through `run_inside`: the restricted subprocess only, never Docker). Both run here, never in the
+project folder as the user:
 
 * **Docker** when the daemon answers (`docker info`) on a Linux computer: a per-language image pinned by digest, the
   project mounted read-only at `/app`, a writable tmpfs at `/tmp`, `--network none`, `--cpus 2 --memory 2g`, a
@@ -12,8 +14,18 @@ map can mark the calls that really happen. Those tests run here, never in the pr
   allow-list (PATH, HOME=a temp folder, locale, the runtime's own variables) so no secrets are inherited; resource
   limits on POSIX (CPU, file size, memory for Python) and a Job Object on Windows (memory, kill on close); on Linux a
   Landlock rule set that allows writes only inside the sandbox's temp folder and denies TCP connect/bind; for Python a
-  start-up audit hook that refuses writes outside the temp folder and any network socket, on every OS; when Lantern
-  runs as root the tests run as `nobody`.
+  start-up audit hook (`SITECUSTOMIZE`), on every OS, that refuses writes outside the temp folder (a name given
+  beside an open folder is read in that folder; a database file opened with `sqlite3` counts as a write unless it
+  cannot be changed), questions about where a name leads, and every network socket; when Lantern runs as root the
+  tests run as `nobody`. The hook sees what Python does: code inside the process that is not Python (a C
+  extension, `ctypes`) is held by Landlock where the kernel has it and by nothing else.
+
+Known and not fixed (found 2026-11-11): on Windows a test that starts an event loop (an async test, a FastAPI test
+client) fails in the sandbox. Windows has no call that makes a pair of connected sockets, so Python builds the pair
+every event loop wakes itself with from a listener on this computer, and the hook refuses it. The listener is not
+let through, because the event loop Windows uses by default makes its connections with a call the hook is never
+told about (ConnectEx: Python reports no `socket.connect` event for it), so a loop that could start could connect
+with nothing seen. For the same reason `run_inside` starts no app there (`NO_APPS`).
 
 Nothing the tests start outlives them (2026-11-10). When the test command ends, at the wall clock, when the caller
 asks (`cancel`, the app's Stop) and when Lantern itself ends, every process it started is ended too: on Linux by the
@@ -60,6 +72,11 @@ from . import programs, removal, results
 WALL_CLOCK = 600          # seconds; the directive's 10 minutes
 MARK = "LANTERN-SANDBOX-BLOCKED:"
 JS_NOTE = "Tests run; your map upgrades for Python only for now."
+INSIDE = ("lantern._behave_inside",)      # Lantern's own drivers that `run_inside` may start in the sandbox
+# Where `run_inside` starts nothing, and why (2026-11-11). An app is asked on an event loop, and on Windows the guard
+# cannot let one start without losing sight of what it connects to (this module's opening text).
+NO_APPS = ("on Windows the sandbox cannot yet see and refuse every connection an app's event loop makes"
+           if sys.platform == "win32" else "")
 
 # Images pinned by digest (multi-arch index digests, Docker Hub). Bump together with a check that they still pull.
 IMAGES = {
@@ -100,6 +117,16 @@ def _recorded(p: Path) -> dict:
         return well_formed(json.loads(results.plain(p)[0] or "{}"))
     except (ValueError, RecursionError):
         return {"pairs": []}
+
+
+def _observed(p: Path) -> dict:
+    """What one of Lantern's own drivers (`INSIDE`) left at `p`, or {}. The project's code ran beside it and could
+    put anything under that name, so it is read as `_recorded` reads: a plain file only, and of the driver's shape."""
+    try:
+        data = json.loads(results.plain(p)[0] or "{}")
+    except (ValueError, RecursionError):
+        return {}
+    return data if isinstance(data, dict) and isinstance(data.get("probes"), list) and isinstance(data.get("seed"), dict) else {}
 
 
 def _has(repo: Path, *files: Path) -> bool:
@@ -269,13 +296,42 @@ import os as _os, sys as _sys, socket as _socket
 _W = [_os.path.realpath(p) for p in _os.environ.get("LANTERN_SANDBOX_WRITABLE", "").split(_os.pathsep) if p]
 _DEV = {_os.devnull, "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"}
 _NET = {getattr(_socket, "AF_INET", 2), getattr(_socket, "AF_INET6", 10)}
+try:
+    _SELF = (_socket.gethostname(),)
+except OSError:
+    _SELF = ()
 _WFLAGS = _os.O_WRONLY | _os.O_RDWR | _os.O_CREAT | _os.O_APPEND | getattr(_os, "O_TRUNC", 0)
 for _p in _os.environ.get("LANTERN_SANDBOX_SITE", "").split(_os.pathsep):
     if _p and _p not in _sys.path:   # the host's packages (Docker); their .pth files name host paths, so skip them
         _sys.path.append(_p)
-def _ok(path):
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None
+def _at(fd):
+    # the folder an open folder handle is for; None when this system cannot say
     try:
-        p = _os.path.realpath(_os.fsdecode(path))
+        return _os.readlink("/proc/self/fd/%d" % fd)
+    except OSError:
+        pass
+    try:
+        return _os.fsdecode(_fcntl.fcntl(fd, _fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0])
+    except (AttributeError, OSError, ValueError):
+        return None
+def _full(path, fd=None):
+    # A name given beside an open folder (os.unlink(name, dir_fd=fd): how shutil.rmtree and TemporaryDirectory
+    # remove a tree) is a file of that folder, not of the current one. None: where that folder is cannot be told.
+    p = _os.fsdecode(path)
+    if isinstance(fd, int) and fd >= 0 and not _os.path.isabs(p):
+        base = _at(fd)
+        return None if base is None else _os.path.join(base, p)
+    return p
+def _ok(path, fd=None):
+    try:
+        p = _full(path, fd)
+        if p is None:
+            return False
+        p = _os.path.realpath(p)
     except (TypeError, ValueError):
         return True
     if p in _DEV or p.upper() == "NUL" or p.startswith("\\\\.\\"):
@@ -288,9 +344,11 @@ def _block(what):
     except OSError:
         pass
     raise PermissionError(msg)
-_PATHS = {"os.remove": (0,), "os.rmdir": (0,), "os.mkdir": (0,), "os.rename": (0, 1), "os.replace": (0, 1),
-          "os.symlink": (1,), "os.link": (1,), "os.truncate": (0,), "os.chmod": (0,), "os.chown": (0,),
-          "os.utime": (0,), "shutil.rmtree": (0,), "shutil.copyfile": (1,), "shutil.move": (1,)}
+# event -> (where the path is among its arguments, where the open folder it may be named beside is)
+_PATHS = {"os.remove": ((0, 1),), "os.rmdir": ((0, 1),), "os.mkdir": ((0, 2),), "os.rename": ((0, 2), (1, 3)),
+          "os.replace": ((0, 2), (1, 3)), "os.symlink": ((1, 2),), "os.link": ((1, 3),), "os.truncate": ((0, None),),
+          "os.chmod": ((0, 2),), "os.chown": ((0, 3),), "os.utime": ((0, 3),), "shutil.rmtree": ((0, 1),),
+          "shutil.copyfile": ((1, None),), "shutil.move": ((1, None),)}
 def _hook(ev, args):
     if ev == "open":
         path, mode, flags = (tuple(args) + (None, None, None))[:3]
@@ -300,17 +358,30 @@ def _hook(ev, args):
         if w and not _ok(path):
             _block("write to " + _os.fsdecode(path))
     elif ev in _PATHS:
-        for i in _PATHS[ev]:
+        for i, at in _PATHS[ev]:
             p = args[i] if i < len(args) else None
-            if p is not None and not isinstance(p, int) and not _ok(p):
-                _block(ev.split(".")[-1] + " " + _os.fsdecode(p))
+            fd = args[at] if at is not None and at < len(args) else None
+            if p is not None and not isinstance(p, int) and not _ok(p, fd):
+                _block(ev.split(".")[-1] + " " + (_full(p, fd) or _os.fsdecode(p)))
+    elif ev == "sqlite3.connect":
+        # SQLite opens and writes its files itself, below Python: a database file outside the temp folder is
+        # refused when it could be changed or would be made. One that cannot be written (a file of the project's
+        # read-only copy) can still be read.
+        db = args[0] if args else None
+        if isinstance(db, (str, bytes)) or hasattr(db, "__fspath__"):
+            p = _os.fsdecode(db)
+            if p.startswith("file:"):
+                p, _, q = p[5:].partition("?")
+                p = "" if "mode=memory" in q else ("/" + p.lstrip("/") if p.startswith("//") else p)
+            if p and p != ":memory:" and not _ok(p) and (not _os.path.exists(p) or _os.access(p, _os.W_OK)):
+                _block("write to " + p)
     elif ev in ("socket.connect", "socket.bind", "socket.sendto", "socket.sendmsg"):
         s = args[0]
         if getattr(s, "family", None) in _NET:
             _block("network " + ev.split(".")[1] + " " + repr(args[1] if len(args) > 1 else "")[:80])
-    elif ev == "socket.getaddrinfo":
-        host = args[0] if args else None
-        if host not in (None, "", "localhost", "127.0.0.1", "::1", b"localhost"):
+    elif ev in ("socket.getaddrinfo", "socket.gethostbyname", "socket.gethostbyaddr"):
+        host = args[0] if args else None      # this computer under its own names is no question to the network
+        if host not in (None, "", "localhost", "127.0.0.1", "::1", b"localhost") and host not in _SELF:
             _block("network lookup " + repr(host)[:80])
 _sys.addaudithook(_hook)
 _sys.lantern_sandbox_guard = "on"   # lantern.tracehook looks for this before it runs a test (LANTERN_SANDBOX_GUARD)
@@ -769,7 +840,41 @@ def _others_may_read(folder: Path) -> None:
         os.chmod(f, stat.S_IRUSR | stat.S_IWUSR | stat.S_IROTH)
 
 
-def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=None) -> Result:
+def run_inside(repo: Path, module: str, scene: dict, log=print, timeout: float = WALL_CLOCK, cancel=None) -> Result:
+    """Start one of Lantern's own drivers (`INSIDE`) on a copy of the project in the restricted process: no
+    network, writes only in the sandbox's temp folder, never Docker. `scene` goes in as a file and what the driver
+    wrote down comes back as `observed` ({} when it left nothing that can be read). The promises are `run`'s:
+    `Unavailable` when the sandbox cannot be set up, or starts no app on this system (`NO_APPS`): the project's code
+    was then not started. Everything the driver started is ended when it ends, at the time limit and when `cancel`
+    is set."""
+    if module not in INSIDE:
+        raise ValueError("not one of Lantern's own drivers")
+    if NO_APPS:
+        raise Unavailable(NO_APPS)
+    repo = Path(repo).resolve()
+    me = _Going(cancel)
+    with _LIVE_LOCK:
+        _GOING.add(me)
+    try:
+        _retry_left(log)
+        root = Path(tempfile.mkdtemp(prefix="lantern-sandbox-"))
+        try:
+            res = _run_subprocess(repo, [module], "python", root, log, timeout, "", me, inside=(module, scene))
+        finally:
+            if not _rm(root):
+                log(f"sandbox: its temp folder could not be deleted and is still there: {root}")
+                removal.note(root)
+    finally:
+        with _LIVE_LOCK:
+            _GOING.discard(me)
+        me.done.set()
+    res.update(backend="subprocess", language="python")
+    res["cancelled"] = res.get("returncode") is None and not res.get("timed_out")
+    res["blocked"] = blocked_reasons(res.get("output_tail", "") + "\n" + res.pop("_full", ""))
+    return res
+
+
+def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=None, inside=None) -> Result:
     from . import _jail
     app, tmp, hook = root / "app", root / "tmp", root / "hook"
     as_nobody = hasattr(os, "geteuid") and os.geteuid() == 0
@@ -777,6 +882,8 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         tmp.mkdir()
         hook.mkdir()
         (hook / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
+        if inside is not None:      # the scene of one of Lantern's own drivers, written before the folder changes hands
+            (tmp / "behave.scene.json").write_text(json.dumps(inside[1]), encoding="utf-8")
         log("sandbox: copying the project to a temp folder")
         _copy(repo, app)
         _make_read_only(app)
@@ -795,12 +902,14 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         first = e.args[0][0] if isinstance(e, shutil.Error) and e.args and e.args[0] else None
         what = f"{first[0]}: {first[2]}" if isinstance(first, (tuple, list)) and len(first) >= 3 else (e.strerror or type(e).__name__)
         raise Unavailable(f"the project could not be copied into the sandbox's temp folder ({str(what)[:200]})") from e
-    out_json = tmp / "trace.json"
+    out_json = tmp / ("behave.observed.json" if inside is not None else "trace.json")
     pkg_root = str(Path(__file__).resolve().parent.parent)
     if language == "python":
         env["PYTHONPATH"] = os.pathsep.join([str(hook), pkg_root, str(app)])
         env["LANTERN_SANDBOX_GUARD"] = "required"   # lantern.tracehook runs no test without the guard above
         cmd = [sys.executable, "-m", "lantern.tracehook", str(out_json), str(app), "--", *_python_argv(words)]
+        if inside is not None:
+            cmd = programs.python(inside[0], str(tmp / "behave.scene.json"), str(out_json), str(app))
     else:
         exe = programs.find(words[0], env.get("PATH")) or (str(app / words[0]) if words[0].startswith("./") else words[0])
         cmd = [exe, *words[1:]]
@@ -815,6 +924,8 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         # -I ignores PYTHONPATH for the jail itself; it finds lantern from its own path below
         cmd[2:4] = ["-c", f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])"]
     log(f"sandbox: restricted process, running {' '.join(words)}")
+    if inside is not None:
+        log("sandbox: the project's app is started by Lantern's own driver, with no network")
     left: list[str] = []
     rc, output, timed_out = _stream(cmd, cwd, env, timeout, log, job=_windows_job, cancel=cancel,
                                     ask=_jail.ASK if _LINUX else 0.0, left=left)
@@ -827,6 +938,9 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         log(_stopped(f"after {int(timeout)} s (the wall clock)", left, "every process it started was ended"))
     elif rc is None:
         log(_stopped("because it was asked to", left, "every process it started was ended"))
+    if inside is not None:
+        return Result(observed=_observed(out_json), returncode=rc, timed_out=timed_out, output_tail=output[-6000:],
+                      _full=output, not_ended=left)
     data = _recorded(out_json)
     _map_pairs(data, str(app), repo)
     return Result(pairs=data.get("pairs", []), returncode=rc, timed_out=timed_out, output_tail=output[-6000:], _full=output,

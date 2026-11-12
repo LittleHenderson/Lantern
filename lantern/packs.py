@@ -34,7 +34,7 @@ import re
 from pathlib import Path
 
 from .graph import Graph
-from .python_frontend import SKIP_DIRS, inside_repo, project_text
+from .python_frontend import inside_repo, project_text, skipped
 
 BUILTIN_DIR = Path(__file__).parent / "packs"
 PROJECT_DIR = "lantern-packs"
@@ -243,7 +243,7 @@ def _files(repo: Path, globs: list[str]):
         if not p.is_file() or not inside_repo(p, repo):
             continue
         rel = p.relative_to(repo)
-        if any(x in SKIP_DIRS for x in rel.parts[:-1]) or PROJECT_DIR in rel.parts[:-1]:
+        if skipped(rel.parts[:-1], repo) or PROJECT_DIR in rel.parts[:-1]:
             continue
         rp = rel.as_posix()
         if any(fnmatch.fnmatchcase(rp, pat) or fnmatch.fnmatchcase(rp, pat.removeprefix("**/")) for pat in pats):

@@ -37,7 +37,7 @@ import tree_sitter_java as tsjv
 from tree_sitter import Language, Node as TSNode, Parser
 
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
-from .python_frontend import SKIP_DIRS, inside_repo, project_bytes
+from .python_frontend import inside_repo, project_bytes, skipped_dir
 
 JAVA = Language(tsjv.language())
 
@@ -204,7 +204,8 @@ class JPackage:
 def discover(repo: Path) -> list[Path]:
     out = []
     for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and d not in SKIP_JAVA_DIRS and not d.startswith("."))
+        dirnames[:] = sorted(d for d in dirnames if not skipped_dir(dirpath, d) and d not in SKIP_JAVA_DIRS
+                             and not d.startswith("."))
         for fn in sorted(filenames):
             p = Path(dirpath) / fn
             if fn.endswith(".java") and not fn.startswith("package-info") and inside_repo(p, repo):
