@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 from . import programs, results
-from .python_frontend import project_bytes
+from .python_frontend import project_bytes, skipped_dir
 
 # id -> (name, the program to look for, how its command is built). The prompt is always one argument.
 AGENTS = {
@@ -34,8 +34,8 @@ AGENTS = {
     "aider": ("Aider", "aider", lambda prompt: ["aider", "--yes-always", "--no-auto-commits", "--no-gitignore",
                                                 "--message", prompt]),
 }
-SKIP_DIRS = {".git", ".lantern", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
-             ".next", "dist", "build", ".gradle", "target", ".dart_tool", "Pods", ".tox"}
+# Left out of the copy beside what every reader leaves out (python_frontend.skipped_dir): build output of other tools
+COPY_ALSO_SKIPS = {".gradle", "target", ".dart_tool", "Pods"}
 MAX_FILES, MAX_BYTES = 20_000, 300 << 20      # a copy bigger than this is refused, not made
 AGENT_MINUTES = 15
 DIFF_LINES = 400                               # per file, in what the page shows
@@ -65,7 +65,8 @@ def _files(root: Path) -> dict[str, str]:
     got: dict[str, str] = {}
     total = 0
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not os.path.islink(os.path.join(dirpath, d))]
+        dirnames[:] = [d for d in dirnames if not skipped_dir(dirpath, d) and d not in COPY_ALSO_SKIPS
+                       and not os.path.islink(os.path.join(dirpath, d))]
         for fn in filenames:
             p = Path(dirpath) / fn
             if p.is_symlink() or not p.is_file():
