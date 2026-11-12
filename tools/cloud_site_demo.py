@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -47,8 +48,9 @@ def main() -> None:
     bad = PAYLOAD if a.poison else ""
 
     base = Path(tempfile.mkdtemp(prefix="lantern-site-demo-"))
+    made = secrets.token_hex(8)       # for the dummy GitHub/Google apps: made for this run, written nowhere
     gw = create_gateway(GwSettings(admin_secret="d" * 24, db_path=str(base / "gw.db"), github_client_id="demo",
-                                   github_client_secret="demo", google_client_id="demo", google_client_secret="demo"))
+                                   github_client_secret=made, google_client_id="demo", google_client_secret=made))
     token = gw.state.store.sign_in("github:1", "github:octo")
     s = Settings(gateway_url="http://gateway.test/v1", public_url=f"http://127.0.0.1:{a.port}", admin_secret="d" * 24,
                  db_path=str(base / "cloud.db"), results_dir=str(base / "results"), work_dir=str(base / "work"),

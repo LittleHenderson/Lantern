@@ -55,7 +55,10 @@ def test_a_real_injection_shows_its_conditions_met(tmp_path):
     assert _cond(f, "outside")["met"] is True
     assert _cond(f, "send")["met"] is True
     assert "request data" in f["case"]["severity"]["why"]
-    assert any(e["from"] == "input check" for e in f["case"]["evidence"])
+    # the evidence that what they send reaches the line is the followed data, from where the request is read
+    ev = [e for e in f["case"]["evidence"] if e["from"] == "data flow"]
+    assert len(ev) == 1 and "`name` arrives with the request" in ev[0]["fact"], f["case"]["evidence"]
+    assert _cond(f, "send")["why"].startswith("data flow: followed in 2 steps")
 
 
 def test_a_lowered_hash_shows_the_condition_that_is_not_met(tmp_path):

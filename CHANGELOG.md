@@ -34,6 +34,404 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   check runs, Simple shows a real progress bar with the step it is on in plain words ("Step 2 of 4: Looking for
   problems"), read from the pipeline's own log lines; the raw log is one tap away. Advanced keeps its add bar and
   its log as before (directive: user first, step 2).
+- Behaviour checks: `lantern behave PATH` starts the project's app in the test sandbox and tests what really
+  happens (2026-11-11; point 5 of the 2026-11-09 directive, "Test full-stack behavior, not just source patterns").
+  Until now everything Lantern said about a project came from reading it. A project can now carry a plan,
+  `lantern-behaviour.json`: how the app is loaded and set up, who the people are, and checks of twelve kinds
+  (`refuse`, `hide`, `tokens`, `input`, `keeps`, `contain`, `redirect`, `address`, `limit`, `once`, `retry`,
+  `faults`). The runner (`lantern/behave.py` outside, `lantern/_behave_inside.py` inside the sandbox) starts the app
+  on a read-only copy with no network, hands it each request inside one process over a pipe (the app is served at
+  no address), and compares the database's rows and the app's files before and after every step.
+  **A refused request that changed something all the same is a failure of its own kind** (`refused-but-changed`),
+  whatever the answer said. A refusal counts only beside the same request from somebody who may make it, which must
+  work and, for a request that changes things, must change something: otherwise the case is `inconclusive`, never
+  `held`; a case that could not be run is `not-run`, never `held`. Sign-in tokens are tried missing, empty,
+  garbage, cut short, altered, unsigned, signed with another key and expired. A request is made to fail at each of
+  its database writes and commits and is cut off before each of them and before the answer leaves; afterwards all
+  of its work must be there or none, and the next person's request must work and save only its own. A limit on
+  tries is asked straight after, after a restart and on a second copy of the app; two requests at the same moment
+  must end as one after the other does; the same request sent again must not be done twice. Where a name leads is
+  answered by the runner itself, so no question leaves the sandbox, and an app that looks a name up and refuses is
+  told from one that sets out for the address. **A plan cannot be pointed at a live site**: it holds paths only (an
+  address or a `Host` header in a request is refused before anything starts), the app's database files and folders
+  must lie in the folder the sandbox gives it, and SQL of the plan's own is run only on a database the plan names
+  there. The record is `behaviour.json` (`docs/api.md`), with `of`: the plan's SHA-256, the commit and whether files
+  differed from it, Lantern's version, Python and the system. The command ends with 0 only when every case held.
+  Nothing else reads the record yet: no finding, score or page changes with it (point 6 is where it is bound).
+  Guide: `docs/behaviour.md`.
+  Measured on throw-away apps only (`bench/behaviour/`, `python bench/behaviour/run_behaviour.py WORKDIR`;
+  `bench/behaviour/results.md` is the last run). Corkboard is a small notes app for teams (FastAPI, SQLite, PyJWT)
+  written by a generator as the safe app or with one of 31 problems planted, each differing from the safe app in
+  the pieces its problem names and in nothing else (`tests/test_behaviour_apps.py`): no login; another person's
+  and another team's notes read, changed, deleted, listed and exported; a member and another team's admin removing
+  a user; a delete that is refused after the note is gone; an expired, an unsigned and a wrongly scoped token; a
+  role taken through the profile form; a negative amount; a request of megabytes; an upload's and a zip entry's
+  name leaving the folder; an uploaded page served as a page; a zip that unpacks to megabytes; a redirect to any
+  site and a half-checked one; a preview that fetches internal addresses and one whose check misses other
+  spellings; no limit on wrong passwords and a limit kept in memory; a coupon redeemed twice at once; a transfer
+  that keeps its first half after a database error, after being cut off, when sent again, and whose half is saved
+  by the next person's request. The plan (40 checks, 97 cases asked, 80 outcomes on the safe app) and the cases
+  each planted problem must break (`plan.EXPECTED`) were written down before the first run. First pass: 27 of 31
+  planted versions came out as written down. The 4 that differed: one mistake in the table (`export-every-team`
+  takes away the control of one case, which then comes out undecided); two versions (`fetch-any-address`,
+  `fetch-half-checked`) that met one fault of the runner (on a computer with no IPv6 an app's try for an IPv6
+  address ends one step before the connection the sandbox refuses, and the runner saw nothing); and
+  `unsigned-token`, whose case "cut short" came out held and was taken for a second mistake in the table until a
+  second run gave the other answer: the runner cut the token at a place where the token library read the rest as
+  whole on one run and not on the next. While the first fault was being fixed a test for the safe twin showed one
+  more: an app that only asked where a name leads, and refused, was reported like one that went there. After the fixes, with the whole plan run
+  against every version: 32 of 32 as written down (each planted problem broken in its own cases and in no other;
+  the safe app 80 held, 0 broken), 0 attempts to reach anything outside this computer (`tools/netguard`). The safe
+  app's whole plan takes about 25 seconds (58 starts of the app); the first measurement was 66.9 seconds, over the
+  60 set beforehand, until the app's copies were let keep compiled Python in their temp folder.
+  Two apps that were not written for it (`tests/test_behave.py`): Lantern's own gateway, copied as it is (an app
+  made by a function, set up from the environment): 12 cases held, and the one that must come out broken did (a
+  chat request with no site listed: the gateway asked for `api.anthropic.com`, was answered inside the sandbox and
+  refused at the connection). Tried by hand and not kept as a test, because the gateway counts by the minute
+  of the real clock: after five wrong owner secrets the sixth is not looked at, and the count is forgotten at a
+  restart and on a second copy (it is kept in memory, as `gateway/README.md` says). The shop sample
+  (`tests/fixtures/shop`), whose backup route `lantern analyze` reports as a command built from the request: the
+  request was sent and the file it named was found where it said (`outside-file`, `saw.outside`). These two showed
+  three more faults, fixed with tests first: an app made by a function could not be started (`"factory": true`), a
+  word for a token variant that this version does not know came out as a case that was not run (now refused before
+  the run), and an outcome did not name the file that was written outside the app's folders.
+  Not in this step: only Python ASGI apps with SQLite as the database are started; a JavaScript app is not; the
+  report, the Evidence Report and the readiness score do not read the record; no app is started on Windows (two
+  entries down); macOS has fewer walls around the app than Linux; an app that sets out for an address through code
+  below Python (a client or an event loop written in C) is stopped by the kernel on Linux but not seen, so that
+  case can come out held (`docs/behaviour.md`, Limits).
+- Fixed, test sandbox ("Watch my tests run"): three defects of the Python guard that the behaviour runner's first
+  runs showed (2026-11-11; all three in every release so far; each fixed after a test that failed). **A name given
+  beside an open folder** (`os.unlink(name, dir_fd=fd)`, the way `shutil.rmtree` and `tempfile.TemporaryDirectory`
+  remove a tree) was read as a name in the current folder, the project's read-only copy: every test that removes a
+  folder tree in its own temp folder failed in the sandbox and was listed as a refused write. Such a name is now
+  read in the folder it was given beside (`_at`, `_full`, `_PATHS` in `sandbox.SITECUSTOMIZE`), and an open folder
+  the guard cannot place is refused. **A question about a name asked the older ways** (`socket.gethostbyname`,
+  `gethostbyname_ex`, `gethostbyaddr`) went to the real resolver, while `getaddrinfo` was refused; all four are
+  refused and reported now, and this computer under its own names is answered. **A database file**: SQLite opens
+  and writes its files itself, below Python, so the guard never saw them, and where no kernel layer stands behind
+  it (macOS, Windows, a Linux kernel without Landlock) a test could change a database file outside its temp
+  folder; `sqlite3.connect` on a file outside the temp folder is now refused and reported unless the file is there
+  and cannot be changed (a fixture database in the project's copy is still read), and a database in memory is no
+  file. Not covered: `os.open(name, flags, dir_fd=fd)` for writing (its event carries no folder), and code inside
+  the process that is not Python (a C extension other than SQLite, `ctypes`), which the guard cannot see and only
+  Landlock holds. Tests: `tests/test_sandbox.py` (each refusal beside the ordinary use that must keep working).
+- Found and not fixed, test sandbox on Windows (2026-11-11): a test that starts an event loop (an async test, a
+  test of a FastAPI or Starlette app through its test client) fails in the sandbox there. Windows has no call that
+  makes a pair of connected sockets, so Python builds the pair every event loop wakes itself with from a listener
+  on this computer and a connection to it, and the guard refuses the listener (seen on Linux by handing Python the
+  Windows way of making the pair; `tests/test_sandbox.py` says it on Windows itself, in CI's Windows job). A change
+  that let a program reach a listener of its own was written, tested and taken out again before it was pushed: the
+  event loop Windows uses by default makes its connections with a call for which Python reports no
+  `socket.connect` event (ConnectEx; Python's table of audit events), so a loop that could start could connect to
+  an address written as numbers with the guard seeing nothing. Until the guard covers those connections, such
+  tests fail on Windows as before, and `lantern behave` starts no app there (`sandbox.NO_APPS`: the command says
+  why and ends with 3).
+- Security: a value that arrives with a request is followed across functions and files to where it does something
+  sensitive, a check counts for what its code proves, and who may reach a record is asked (2026-11-11; point 4 of the
+  2026-11-09 directive, "Trace actual security problems across the whole app"; Python and JavaScript/TypeScript, the
+  other languages keep the one-function reading). Until now "uses input" was read inside one function, in the order
+  the lines are written. A route that hands the request's text to a helper, which hands it to a service, which
+  builds the query, was listed (when a pattern matched the query) with no sign that a visitor chooses the text; a
+  function called `validate`, or `html.escape` in front of a query, was not told from a real check; and a
+  rate-limiting library that was only installed read as a protection "in place".
+  Follow the data (`lantern/flow.py`, `flow_py.py`, `flow_js.py`, `flow_rules.py`, `flowscan.py`): both readers put
+  a file into one small language, so the engine is written once, and nothing of the project is run. A value carries
+  where it came from, for each kind of action whether it was made safe for that action (`html.escape` is safe for a
+  page and for nothing else, `int()` for everything), its leading fixed text (`"https://api.example.com/" + name`
+  does not choose the host) and whether the text reads like SQL. Every function gets a summary (which parameters
+  reach its return value, which reach a sensitive action in it or below it, what its checks prove), callees before
+  callers. A check narrows a value only in the branch that passed it and only before the action; what it proves is
+  read from its code (a look-up in a list the request did not write, a pattern that bounds the whole value, a
+  resolved path that starts with the folder, a host on a list), so a function is a validator for what its body
+  proves, whatever it is called. What a constructor keeps is on the object and read back out of it, field by field;
+  a request body that FastAPI hands over as an object of a class of the project is the request's, field by field.
+  Flows become findings `LT-SQL`, `LT-SHELL`, `LT-EVAL`, `LT-DESERIALIZE`, `LT-XXE`, `LT-PATH`, `LT-SSRF`, `LT-XSS`,
+  `LT-REDIRECT`, `LT-NOSQL` and `LT-POLLUTION`, each with every step (file, line, a sentence); a flow that ends on a
+  line another tool flagged for the same kind of problem is attached to that finding instead, so one problem is one
+  finding. The report shows the steps in a box "How the value gets there", every value escaped. A query or a command
+  no flow reaches, where every call Lantern found hands the function fixed text, is ranked low with that reason, and
+  only when the engine read every file.
+  Pages and templates (`lantern/templates.py`): a place in a page template that prints a value without escaping it
+  is a finding of its own, `LW-XSS-RAW`, at the template's line (EJS `<%- x %>`, Handlebars and Mustache `{{{x}}}`,
+  Pug `!{x}`, Jinja, Django, Nunjucks and Twig `|safe`), ranked by what Lantern knows of the value: request data
+  followed from a route into that place ranks like any flow into a page, fixed text or an escaped value wherever the
+  page is shown ranks low, anything else is medium, and the reason is said in a sentence. Text of the request that
+  is run as a template (`Template(text)`, `from_string(text)`, or written into a file of the templates folder that
+  is then shown) is `LT-EVAL`: escaping it for a page changes nothing about that. A page escaped by hand, a page
+  sent as plain text and a redirect built on the request's own address (`new URL('/login', req.url)`) are not
+  reported.
+  Who may reach what, heuristics that say so (`tool_confidence: LOW`, ranked medium): a record reached by an id from
+  the request on a route with a login where nothing compares the record with who is signed in (`LT-AUTHZ-OWNER`;
+  for a record that is changed or removed only what was asked before the change counts, also when a helper makes
+  the change and checks afterwards); an admin path that never asks for an admin (`LT-AUTHZ-ROLE`); everything the
+  request sent written onto a stored record (`LT-AUTHZ-MASS-ASSIGN`); and a route that decides what the caller may
+  do on a value the caller writes, a cookie, a header or a word in the address or the body named like a role or an
+  admin flag (`LT-AUTHZ-CLIENT-ROLE`, new: `Cookie: is_admin=1` makes anybody an admin). A route with no login that
+  changes or removes a record picked by an id from the request gets `LW-AUTH-MISSING` with the way to the record,
+  also when nothing in the project's own frontend calls it (before, only routes the frontend calls were asked).
+  Express middleware put on with `use` (`app.use(requireLogin)`, `app.use('/admin', requireAdmin)`,
+  `router.use(mw)`, `app.use('/api', mw, router)`) now counts for the routes written after it and only for those
+  (`entry["use"]`); the login check and the flow step read it. A page that signs a person in is not reported for
+  looking them up by the name they typed, and a function that makes a token is not a sign that somebody is signed
+  in. Neither is one that makes random text (Python's `secrets.token_urlsafe`, `token_hex`, `token_bytes`): for the
+  check by names the word `token` in it said "login" until now, so a route that made a nonce or a new key read as
+  one with a login check.
+  A secret written in the code (`LW-SECRET-INLINE`): the text that signs sessions or login tokens, such a secret's
+  fallback for when the setting is missing (`process.env.SESSION_SECRET || 'keyboard cat'`), the password of an
+  account the app connects with, a database address that carries its password; in JS/TS, Python and JSON settings
+  files, ranked medium, and the finding never repeats the text. Keys of a known format stay with the key patterns
+  and gitleaks; a line they list is not listed twice.
+  A library being installed is not a protection (`lantern/ratelimit.py`): "Rate limiting" reads "in place" only
+  when the code shows a limit that covers the routes in question, "check" for an app-wide limit the code does not
+  show covers them or for the project's own limiter in which nothing counts, else "add", naming the library that is
+  installed and put to work nowhere. `LA-WALLET-DRAIN` reads the same way.
+  A login is read from what the code does, whatever the function that asks is called: it counts where the route's
+  code turns away whoever is not signed in. That is a check under a plain name (`restrict`), a function written in
+  place (`app.use((req, res, next) => { if (!req.session.userId) return res.status(401).end(); next() })`, named
+  `inline:<file>:<line>` in the route's `entry["use"]`; it adds no function, call or link to the map),
+  `app.all('*', check)` and `app.all('/api/*', check)`, a Flask `before_request` hook, a FastAPI dependency,
+  Passport's `req.isAuthenticated()`, and a library that is a login check and nothing else (`express-jwt`,
+  `express-basic-auth` and their like, by the package; not one made with `credentialsRequired: false`, which turns
+  nobody away). A caller that has to send a secret the server keeps (`req.headers['x-api-key'] !==
+  process.env.API_KEY`) is the server's own caller. A login asked of some requests only is no login for the rest: a
+  check in a branch other requests go round does not count, one that only leaves the sign-in page open does, and one
+  that lets some verbs through (`if (req.method === 'GET') return next()`) counts for the routes of the verbs it
+  asks and for no other. Where the code shows such a login, "no login check was found" (`LW-AUTH-MISSING`, said by
+  the names around a route) is not said any more, counted in the record as `login_read_from_code`: before, a route
+  the page calls behind a check with a plain name, one written in place or a Flask hook was listed as open to
+  everybody.
+  A login token is a login only where the code shows that a token which does not hold turns the request away: a
+  library checks it and fails when it does not hold (`flow_rules.VERIFIES`: `jsonwebtoken.verify`, `jose.jwtVerify`
+  where the answer is waited for, PyJWT's and python-jose's `decode` with a key and the check left on, Firebase's and
+  Google's own), the request's own credential (a token, a key or a session id in a header or a cookie) is looked up
+  among stored records, or a function every request passes through hands on only the requests that passed. The
+  other way round: a failed check that is caught and after which the request goes on (`try { req.user =
+  jwt.verify(t, KEY) } catch (e) {} next()`, `except JWTError: return None` in a dependency) is no login, also
+  under a telling name (`authenticate`) and also for the names check, which until now took the name; a library that
+  only reads a token (`jsonwebtoken.decode`, `jwt-decode`: `READS_TOKEN`; PyJWT's `decode` with no key or with the
+  check switched off) is none; what a token library hands back is the caller's word about who they are, not a secret the
+  server keeps, so a check that only asks whether it is there is not a role check; a library's login made optional
+  (`@jwt_required(optional=True)`, `verify_jwt_in_request(optional=True)`, `@auth.login_required(optional=True)`)
+  is none, unless the handler itself turns away whoever the library names nobody for (`if get_jwt_identity() is
+  None: abort(401)`); and a FastAPI security scheme whose token the handler takes in and never looks at (`token:
+  str = Depends(oauth2_scheme)`) only carries the token in. A route of that kind that changes data is listed
+  (`LW-AUTH-MISSING`, "... and Lantern found nothing that turns away a request whose login token does not hold",
+  counted in the record as `token_check_lets_on`), and the finding names what looked like a login and was not taken
+  for one ("Not taken for a login check: ..."). A record reached through who is signed in counts for the route
+  only where every request gets there, not after `if not token: return None`.
+  A record changed through its own object: a record read by its id into an object that is then removed or saved
+  (`db.session.delete(note)`, `note.delete()`, `order.deleteOne()`, `row.destroy()`, `repo.remove(order)`, a field
+  set and `save()` or the session's `commit()`) is a record that is changed, with the line of the change as a step
+  of the finding. Before, only the read was noted: an owner asked for after the removal was not reported as too
+  late, and a route with no login that removes a record this way was not listed.
+  Where an ownership finding stands: `LT-AUTHZ-OWNER` is on the line the record is reached, one finding for that
+  line with the routes that get there (`routes`), because that line is where the owner has to be asked for and one
+  service function five routes use is one place to fix (before: one finding per route, on the route's first
+  line). A route that does ask whose the record is, but only after it changed the record, ran a command, removed a
+  file or told another service to change something for it, is reported as that (`late`): "not allowed" after the
+  thing was done is no check.
+  How a Python app loads its own files does not matter. The engine told the project's own names from a library's
+  by the dot a relative import starts with (`from .models import Note`). A record class loaded any other way was
+  read as a library's value, "a library that is no database", and nothing about who may reach the record was
+  asked: `from app.models import Note` (the commonest way), a flat project's `from models import Note` and
+  `import models`, an app in a folder below the repository's, the file beside by its bare name in a folder that
+  is a package (an app started from inside its folder), a star import (`from .models import *`), and an import
+  from the top written inside the function that uses the class. Each of these is now read as the relative import
+  it stands for (`flow.own_imports`, `own_dotted`, `own_module`). A star import of a file of the project brings
+  what Python would bring: the names in `__all__` when it is written once as a list of text, else every name
+  without a leading underscore, also through a second file that passes them on with a star (`star_names`). A name
+  stays a library's where it may be one: a single name the standard library has; a longer path that starts with
+  one, unless that file is there in full; the file beside in a package that does not write the name asked of it
+  (`from celery import shared_task` beside `proj/celery.py`); a path two files of the project end with; and every
+  name of a star import once a later star import is one Lantern cannot read. Found on 2026-11-11 with the stage
+  report's own examples, not from the held-out set: every Flask example of the tests until then said
+  `from .models import ...`. Of 68 new examples (the same four routes in eleven layouts; star imports and imports
+  inside a function, each beside safe twins; three library look-alikes; ten on which file an import names) 43
+  failed on the code before. Data that is followed to a query, a command or an outbound call was already followed
+  through such imports (the map resolves the calls), and the 117 findings of the 15 sample apps are unchanged.
+  Pages made in the code: a template written in the code is read like a template file
+  (`render_template_string('<p>{{ bio|safe }}</p>', bio=bio)`; jinja2's own `Template(text)`, which escapes nothing
+  unless it is told to), and text a helper builds is a page where a route returns it (a library's answer, `jsonify`,
+  a rendered template file, a redirect, is not). An escape of the project's own counts for what its code does with
+  `<`: `x.replace('<', '&lt;')`, `x.split('<').join('&lt;')`, a pattern of single characters with a function or a
+  table that says what each becomes, Python's `translate` with a table that takes `<` away; one that misses it does
+  not (`/<script|</g` hands the function `<script`, for which its table has nothing), and what `html.unescape`,
+  `decodeURIComponent` and their like give back is as it was before the escape.
+  Uploads and archives: an upload saved under a path is what that path holds, and whatever opens the file later gets
+  it back; an archive library handed the upload, or the path it was saved under, gives entries whose names are the
+  archive maker's, so an entry's name joined to a folder and written is `LT-PATH` (zip slip), also when the
+  unpacking is a helper in another file. A path compared with the folder it must stay in counts as checked only
+  where the request does not choose that folder too.
+  An address that starts with a value of the server's own: a setting (`API_URL + '/items/' + id`,
+  `f"http://{HOST}:{PORT}/api/{id}"`), a field an object was built with (`self.base + path`), an address out of a
+  table in the code (`PROVIDERS[name]["authorize"] + "?" + query`). The host is then the server's to name, so the
+  request chooses a path or a query on it and not where the server connects: no `LT-SSRF` and no `LT-REDIRECT` once
+  written text has closed the host (one slash, a `?` or a `#`), also when a helper puts the start in front of a
+  path the route hands it. Still reported: the request's text straight after such a value (`API_URL + x`, where
+  `x` may be `.evil.example/`), a dot or an at sign after it, a start of which only the scheme is the server's,
+  `urljoin(API_URL, x)`, a helper handed the request's text as it came, and for a redirect one slash with nothing
+  written after it (`PREFIX + '/' + next`: where the prefix is empty that is `//evil.example`).
+  An address that names no host: written text of a path at its start (`'/items/' + id`, `'items/' + id`,
+  `'?q=' + q`) lets nothing after it name one, so an outbound call with it goes to the base its client was made
+  with (`axios.create({ baseURL })`, `httpx.Client(base_url=...)`) or fails: no `LT-SSRF`. `urljoin(base, page)` is
+  read like `new URL(page, base)`, and the parts of `x.concat(a, b)` and of a list written in a `join` call stand in
+  the order written. Still reported: one slash and then the request's text (`'/' + x` is `//host`), the request's
+  text as it came, parts joined with nothing or with a dot. Flask's `request.host_url`, `root_url` and `origin` are
+  what the request sent (the caller writes the Host and Origin headers), so an outbound call to an address that
+  starts with one of them is reported, and a redirect to the Origin header is. What a library call Lantern does
+  not know gave back after the request's text went into it is nobody's for sure, so it is not taken for a value of
+  the server's own either (`'https://' + normalize(host) + '/api/' + id` stays reported), whether it gets into the
+  address through a field or an item of it, a call on it, `str()`, a branch, a second library call or a helper of
+  the project that hands it back.
+  In the browser the page's own address is this site's. The scheme, the host and the port a page was loaded from
+  (`location.protocol`, `host`, `hostname`, `port`, `origin`) are not text whoever made the link wrote, and an
+  address that starts with them goes to this site once the host is closed (`location.origin + '/login'`;
+  `location.protocol + '//' + location.host + location.pathname`, which is read as the origin spelt out). Going to
+  the page's own address again leaves the site nowhere: `location.href` as it is, with text after it, with a
+  parameter set through `new URL(location.href)`, with fixed text swapped for fixed text, and without what follows
+  the `#` (`location.href.split('#')[0]`: the first piece still begins as the address did). Still reported: a
+  part read out of the address (the query, what follows the `#`, a later piece of a split, a parameter), the
+  address's text straight after the origin, the path alone as the next page (`location.pathname` may begin with
+  two slashes), the page that linked here, and the address put into the page as HTML. A swap that takes the site
+  off the front of an address (`url.replace(/^https?:\/\/[^/]+/, '')`) leaves a part of it, on the server too;
+  that read as the same address before and was missed. The leading text of `a + b + c + d` is read from all the
+  parts in the order written, as a template's is: pair by pair the start of `proto + '//' + host + path` was lost.
+  A secret under a plain name is followed from the call that signs with it (`session({ secret: config.phrase })`,
+  `jwt.sign(data, PHRASE)`, `app.secret_key = config.PHRASE`) to the line that gives the name its text, in that file
+  or in the file of the project it was loaded from (at most 4 lines for one name). In Python a text given to a
+  name that says it signs is listed, as an assignment or as a keyword argument (`SECRET_KEY = "..."`,
+  `JWT_SECRET`, `client_secret="..."`); for the names Flask and Django themselves read (`SECRET_KEY`,
+  `JWT_SECRET_KEY`) a phrase counts as the secret too. A password's name is left to Bandit. A line `LW-SECRET-INLINE`
+  lists is not listed again as Bandit's "possible hardcoded password" (B105, B106, B107), which ranked it low and
+  repeated the text in its title; the Learn step "Take the secret key out of the code" counts either rule.
+  A name like `SESSION_KEY`, `COOKIE_KEY` or `TOKEN_KEY` says "signs" and "is kept under" alike, so its text
+  decides: one that reads like a name (`SESSION_KEY = "_auth_user_id"`, `TOKEN_KEY = 'auth_token'`,
+  `cookieKey: 'sid'`) is the key something is kept under and is not listed. The text that signs under such a name
+  is still found from the call that signs with it, and the name counts as before where its file hands it over as a
+  secret, a password or one of the keys that sign (`keys: [COOKIE_KEY]`). A search pattern under a name that ends
+  in `secret` (`LOOKS_FOR_SECRET = '(?P<name>secret|token)='`) is no secret either; Lantern's audit of itself
+  found that one, on a line of this change.
+  A folder named `env` is left out only where it is a Python environment (`pyvenv.cfg`, conda's records, the
+  programs that switch it on, its library folder: `python_frontend.is_environment`). Until now the name alone was
+  enough: a project's own `config/env/` or `src/env/` was read by no reader of any language, its functions were not
+  on the map and nothing in it was checked.
+  Changed for the person: findings of a project that was analyzed before can differ. New findings `LT-*`,
+  `LW-XSS-RAW`, `LW-SECRET-INLINE`, and `LW-AUTH-MISSING` on routes the frontend does not call. A finding request
+  data was followed to starts from the graver of the tool's severity and the flow's kind, so a query built from
+  request data can rank higher than before; a query or command only fixed text reaches ranks low. A route behind
+  `app.use(requireLogin)` no longer gets `LW-AUTH-MISSING` and no longer counts under "route auth" as open. A
+  router loaded with `require` into a name and mounted by that name now has its prefix in its routes' addresses
+  (`/api/notes`, before `/notes`), so links between frontend and backend that matched by the end of the path can
+  now match exactly. "Rate limiting" turns from "in place" to "add" or "check" where the library is only
+  installed, and `LA-WALLET-DRAIN` can appear there. `LW-AUTH-MISSING` goes from a route whose code shows a login,
+  and an ownership finding can appear there instead; it appears on a route whose only sign of a login was a token
+  check that lets a failed token on, a login made optional or a token nobody looks at, and on a route with no login
+  that removes or saves a record through its object. The card "Login check on routes that change data" tells the
+  story the findings tell: a route whose code shows a login under a plain name is counted as checked (before: "add"
+  or "check", with the route listed as open), and a route a finding calls open is listed as open by its name and no
+  longer among the routes that show a login. A route whose only sign of a login was a call that makes random text
+  (`secrets.token_urlsafe`) now counts as open there. Code in a project's own folder named `env` is read for the
+  first time, with whatever is found in it. A Python line with a signing secret is listed once, as
+  `LW-SECRET-INLINE` (medium), where Bandit's B105 (low) stood; a risk accepted under the Bandit finding does not
+  carry over to the new one. The reason beside a rank that a rule fixes is now the rule's
+  own sentence where it has one (`fixed_why`). Result files: `security.json` findings may carry `flow`, `claim`,
+  `secret_kind`, `fixed_why`, and an ownership finding `routes` and `late`; `security.json` itself has
+  `logins_shown` (the routes whose code shows a login); a route's `entry` in `graph.json` may carry `use`; the
+  scanner list has a `lantern-flow` record (`docs/api.md`). Nothing was removed, and older result files open as
+  before.
+  Tests, each dangerous example beside safe twins and look-alikes, none copied from the held-out apps:
+  `tests/test_flow.py` (391), `tests/test_flow_js.py` (319), `tests/test_flow_authz.py` (648),
+  `tests/test_templates.py` (6), `tests/test_secret_inline.py` (110), `tests/test_ratelimit.py` (24),
+  `tests/test_env_folder.py` (11), and new tests in `tests/test_express.py` and `tests/test_fullstack.py` for
+  Express `use`. The examples a rule was written for came before its code and failed first; examples added
+  afterwards to pin down what already read right say so beside them. Older expectations that changed
+  are rewritten with the reason beside each (`tests/test_security.py`, `test_context.py`, `test_case.py`,
+  `test_scenarios.py`, `test_readiness.py`, `test_mcp.py`, `test_protections.py`; in the last round five more: a
+  route's `use` list names the function written in place in front of it (`tests/test_express.py`), a page made with
+  jinja2's own `Template` that prints the request's text is a finding where it read clean (`tests/test_flow.py`),
+  two ownership findings stand on the line of the record, not on the route's first line
+  (`tests/test_flow_authz.py`), and `jwt.decode(token)` with no key no longer makes the login card read "in place"
+  (`tests/test_protections.py`; the whole suite showed that the card and the new findings told two stories, and 14
+  examples were added there, 8 of which failed before the card was changed)). A name given twice at the top of a
+  test file now fails the suite, as it does for the product's own files (`tests/test_project_files.py`): a new
+  constant in a test file had been replaced by an
+  older one further down, and the new test read the wrong text. Lantern's audit of itself: 0
+  critical, 0 high, 0 medium, grade A. After the last round of rules it had failed with four findings at medium,
+  and three of them were Lantern's mistakes, which real projects would have met too: its cloud client
+  (`self.base + path`) and its sign-in redirect (an address out of a table in the code) were listed as "the request
+  chooses where the server connects", and its share page, which makes a nonce with `secrets.token_urlsafe`, was
+  asked whose record it shows. The rules above (the address that starts with a value of the server's own or
+  names no host, a library call's result that is not the server's own, random text is no login) came from that:
+  133 examples in the four test files, 72 of which failed before. Looked at apart, of 22 everyday safe shapes of an
+  outbound call (a setting and a path in their many spellings, a client with a base address) the code before this
+  round reported 20 and it now reports 1
+  (`os.path.join` used for an address). The fourth finding was right, a demo tool's made-up client secrets written
+  in the code, which are now made when it runs. Of the 117 findings of the 15 sample apps under `tests/fixtures`, the last
+  round of rules changes one: the signing secret in the shop sample (`shop/auth.py`, line 5) is listed as
+  `LW-SECRET-INLINE` (medium) where Bandit's B105 (low) stood. Against the code before point 4 the 15 samples
+  list the same 117 findings but for two of the shop sample: that one, and the planted SQL injection
+  (`shop/repo.py`, line 15), which is critical where it was high, because the request's value is now followed to
+  it from the route through three files. `tools/audit.sh` expects 3 critical findings there and checks that path;
+  it had expected 2, was not run here while the stage was built, and failed on GitHub for the first commits of
+  this change.
+  Measured on the held-out set (`bench/heldout/`: 14 apps the engine was not written on, definition
+  `e6b10d91686f`, offline): documented problems found at medium or above went from 28 of 79 before this change to
+  54 (44 at the first measurement, 50 at the second, 54 at the third, the fourth and the fifth and last; 55 with the
+  dependency audits on),
+  and on the five public apps from 20 of 61 to 39 (target: 37). False alarms on the 17 safe-twin anchors went from 3
+  to 0, a mapped path is on 46 of the 55 problems found, and no vulnerable app is given a green release (0 of 8, as
+  before). Two targets are missed. One of the 26 `sql`, `shell`, `eval`, `deserialize` and `xxe` problems is still
+  not found (`pg-ssti`: a finding stands 13 lines above the documented line and nothing at it). And 2 of the 6 clean
+  apps are still refused a green release, each through one false alarm at high; one of the two is a finding of this
+  engine, on a value that has to equal a stored e-mail address before it reaches the page. Who may reach what is
+  the weakest class (3 of 11 found). The third number was preceded by two looks at which expectations were missed,
+  by class, rule and line number only; the apps were not read. After it two findings on clean apps were read in
+  the code to label them. The rules for the browser's own address and for key names came after that, from the
+  large apps below and not from this set; the fourth measurement is the engine with them, and no number moved.
+  The fifth is the engine after the imports written from the top were read as the project's own (found with the
+  report's examples, not from this set): every app lists exactly what it listed at the fourth.
+  Every miss by name, the labels and all five measurements are in `bench/heldout/README.md`.
+  Time and memory, on the ten large public apps of `tools/large_apps.py` with the code before this change and
+  with it (two runs a side, each alone, the same container, offline; `bench/large_apps_results.md`): 183.8 s and
+  173.4 s for the ten before, 190.3 s and 198.9 s after, so between 6.5 s and 25.5 s longer (3.54% to 14.71%);
+  Django, the largest, 99.0 s and 91.3 s before with 759 MB, 103.9 s and 107.5 s after with 790 and 786 MB. The
+  same code run twice differs by about ten seconds on the ten, so the cost is known only as that range; the
+  first write-up, made from one run a side, called a second or two noise, which was wrong. No file and no check
+  was left out. An earlier run of these apps is also where the two false alarms above came from (the browser script of Hugo, the
+  key names of Django); on the final code Hugo lists what it listed before, and Django lists 20 new heuristic
+  findings at medium on its own templates, 4 of them false alarms on a plain-text e-mail (see Not covered).
+  Not covered (the whole list is in `CLAUDE.md` under Known gaps and in `docs/audit/CLAIMS.md`, S18 to S24): only
+  Python and JavaScript/TypeScript are followed. The values of a plain-text e-mail template inside
+  `{% autoescape off %}` are listed as page output that is not escaped (4 such lines in Django's own
+  `password_reset_email.html`): an e-mail's text is not told from a page. A value an object's own method reads back, or one kept in a
+  database, a session or a file and read back later (stored XSS, second-order SQL), is not followed. A library call
+  passes a value on only when `flow_rules.PROPAGATORS` names it. The who-may-reach-what rules, the template rule and
+  the secret rule read names and shapes and say so (heuristic): a shared record read by its id is reported like a
+  personal one, a guard on a class and Express `use` in another file than the routes are not applied, a secret under
+  a neutral name is not listed. A check made outside the code (a proxy, the database's own row rules) is not seen.
+  An address that starts with a value nobody outside chose is taken to have the server's host: one that starts with
+  an address a visitor saved earlier, with a part of the request the engine does not know as request data
+  (`request.remote_addr`), or with a library call's result for the request's text that was kept on an object and
+  is read in a method, is not reported; a helper that takes the host as a parameter is reported whoever fills it,
+  a setting too. In the browser a helper that is handed the page's address and cuts it (`head(location.href)`
+  around `u.split('#')[0]`), a piece cut from its start with `slice` or `substring`, and the path alone as the
+  next page are reported; a `replace` whose pattern is built when the page runs (`new RegExp(...)`) is taken to
+  leave the site in place. A signing secret under a name like `SESSION_KEY` whose text reads like a name
+  (letters only), which no call Lantern knows is handed and which its file hands to nothing named for a secret,
+  is not listed.
+  A login is taken on trust from a short list of token libraries; a value kept on the request and tested later
+  (`req.user = jwt.decode(t)`, then `if (!req.user)`) still reads as a login, and a login made optional is seen
+  only on the route itself. A record handed to a helper that removes it, one read with SQLAlchemy 2's
+  `session.execute(select(...))`, and a field saved by a `commit()` in another function are not counted as changed.
+  In a folder that is a package, the file beside used as a module by its bare name (`import models`, then
+  `models.Note`), a star import of it by its bare name (`from models import *`) and a name it only passes on are
+  still read as a library's, and so is what a star import brings when `__all__` is built or added to, or when an
+  import of the same name is written before the star: the who-may-reach rules ask nothing there. Another tool's
+  finding on a query (Bandit's B608) whose request value passed a real check (a fixed list, asked in the route or
+  in a helper) keeps that tool's rank and still says the request sets the value: the engine reports nothing of its
+  own there, and does not lower the other finding (kept for point 6).
+
 - lantern-cloud: 300 runs per person per day is now what `cloud/fly.toml` says (the owner's choice of 2026-11-11;
   the file said 50, his choice of 2026-11-04). The live service already ran with 300 through a setting kept on
   Fly, which wins over the file, so nothing changes for anybody; the file, `docs/deploy.md` and the testing
