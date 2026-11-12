@@ -1,7 +1,7 @@
 # Lantern cloud service. Build from the REPOSITORY ROOT (it installs the engine and this service together):
 #   docker build -f cloud/Dockerfile -t lantern-cloud .
 #   fly deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile      (also from the repository root)
-FROM python:3.12-slim
+FROM python:3.15-slim
 # git clones the repositories people link; npm reads package-lock.json for the dependency audit (lock files only,
 # never `npm install`). Nothing from an analysed repository is ever built or run. Tesseract reads the text in
 # screenshots dropped into Ask Lantern (through a pipe; images are never written to disk).
