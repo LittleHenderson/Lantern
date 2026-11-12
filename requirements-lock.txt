@@ -33,7 +33,7 @@ cffi==2.1.1
     # via cryptography
 charset-normalizer==3.5.2
     # via requests
-click==8.5.0
+click==8.5.1
     # via uvicorn
 cryptography==50.0.2
     # via pyjwt
@@ -41,7 +41,7 @@ cyclonedx-python-lib==11.12.0
     # via pip-audit
 defusedxml==0.7.1
     # via py-serializable
-fastapi==0.162.0
+fastapi==0.162.2
     # via lantern (pyproject.toml)
 filelock==4.2.9
     # via cachecontrol
@@ -89,13 +89,13 @@ platformdirs==4.14.5
     # via pip-audit
 pluggy==1.7.0
     # via pytest
-py-serializable==2.1.0
+py-serializable==2.2.0
     # via cyclonedx-python-lib
 pycparser==3.12
     # via cffi
-pydantic==2.14.2
+pydantic==2.14.3
     # via fastapi
-pydantic-core==2.50.2
+pydantic-core==2.50.4
     # via pydantic
 pygments==2.21.0
     # via
@@ -129,7 +129,7 @@ tomli==2.5.0
     # via pip-audit
 tomli-w==1.2.0
     # via pip-audit
-tree-sitter==0.25.2
+tree-sitter==0.26.1
     # via lantern (pyproject.toml)
 tree-sitter-c==0.24.2
     # via lantern (pyproject.toml)
