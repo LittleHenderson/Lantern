@@ -109,7 +109,7 @@ The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`
 
 **How a report holds the map (since 2026-11-12).** Inside `report.html`, and only there, `graph.nodes` and
 `graph.edges` are written column by column (`lantern/columns.py`), because most of the time a phone needs to open a
-large report is the time it needs to take the file in (Django's report: 73,896,338 bytes before, 38,055,367 after,
+large report is the time it needs to take the file in (Django's report: 73,896,338 bytes before, 38,050,642 after,
 the same data). `graph.json` is unchanged. The page's first lines (`unpackGraph`) and `lantern.report.read_bundle`
 turn the map back into the rows described under `graph.json`, with the fields in the same order and every value of
 the same kind, before anything else looks at it; anything that reads a report's data block by itself must do the same
