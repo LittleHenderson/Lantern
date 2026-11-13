@@ -68,7 +68,8 @@ TEST_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|fixtures|examples?)/")
 PIN_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._\-]*)(\[[^\]]*\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9.+!_\-]*)\s*(;.*)?$")
 NOTHING_TO_CHECK = ("skipped: no Python dependency files", "skipped: no package.json", "skipped: no Gradle or Maven files",
                     "skipped: no composer.lock", "skipped: no Gemfile.lock",
-                    "skipped: no package.json names a library that ships")
+                    "skipped: no package.json names a library that ships",
+                    "skipped: no software copied into a vendor folder")
 # A project that names libraries in a file with no lock file beside it has no version to ask about, so none of them
 # is looked up. That is not "nothing to check": the record counts them (`unlocked`, the first few in
 # `unlocked_examples`), its status says a lock file is missing, and a release decision counts them as not checked.
@@ -77,7 +78,7 @@ UNLOCKED_KEEP = 5
 OTHER_LOCKS = ("pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb")      # npm's lock files Lantern does not read yet
 PLATFORM_PACKAGE = re.compile(r"^(php(-64bit|-ipv6|-zts|-debug)?|hhvm|composer(-plugin-api|-runtime-api)?|"
                               r"(ext|lib)-[\w.-]+)$", re.I)       # composer.json `require`: PHP itself, no library
-AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit")
+AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit", "copied-audit")
 OSV_API = "https://api.osv.dev/v1"
 # Every host the audits ask: pip-audit's vulnerability service (it runs with --no-deps --disable-pip, so it downloads
 # no package), the npm registry, OSV. `lantern analyze` reaches nothing else, so a run that may reach only these
@@ -237,7 +238,7 @@ def precomputed(tool: str) -> tuple[list[dict], dict] | None:
 def audits() -> tuple:
     """Every audit as (tool, function), looked up when asked, so a test's stand-in for one of them is the one run."""
     return (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit), ("maven-audit", run_maven_audit),
-            ("composer-audit", run_composer_audit), ("gem-audit", run_gem_audit))
+            ("composer-audit", run_composer_audit), ("gem-audit", run_gem_audit), ("copied-audit", run_copied_audit))
 
 
 def guarded(tool: str, fn, repo: Path, no_network: bool | None) -> tuple[list[dict], dict]:
@@ -1297,6 +1298,69 @@ def run_gem_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
         return [], scanresult.record("gem-audit", "skipped", "offline", applicable=True, files=files, **info)
     return _osv_audit("gem-audit", "RubyGems", pins, info | {"files": files, "scope": {"files": files, "packages": len(pins)},
                                                             "checked": len(pins)}, odd)
+
+
+# ---------------------------------------------------------------------------- software copied into the project
+
+NO_COPIES = "no software copied into a vendor folder"
+
+
+def run_copied_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
+    """Software copied into the project (2026-11-12): what lies under a folder named `vendor`, which every reader
+    leaves out as not the project's own code, and which no dependency file lists. Until this date nothing named it,
+    and a project whose only outside software was such a copy read "lists no libraries". A copy that brings a
+    `package.json` with a published name and one exact version is looked up by what it says it is (OSV, ecosystem
+    npm; `unread.copied`); whether its files are that version, and what is packed inside it, is not checked, and the
+    Evidence Limits say so. Code files under `vendor` with no such file above them cannot be looked up: the record is
+    `partial` and counts them (`unnamed`). A package manager's own `vendor` folder is not a copy."""
+    pre = precomputed("copied-audit")
+    if pre is not None:
+        return pre
+    from . import unread
+    info: dict = {"role": "known problems in software copied into the project (vendor folders, OSV database)",
+                  "version": "osv-v1"}
+    got = unread.copied(repo)
+    if not got:
+        return [], scanresult.record("copied-audit", "skipped", NO_COPIES, **info)
+    named = got["named"]
+    info |= {"copied": len(named), "copied_examples": [f"{c['name']} {c['version']} ({c['at']})" for c in named][:5],
+             "unnamed": got["unnamed"], "unnamed_examples": got["unnamed_examples"],
+             "files": [c["file"] for c in named][:50]}
+    loose = "; ".join(x for x in (
+        f"{got['unnamed']} copied file{'s have' if got['unnamed'] != 1 else ' has'} no name and version to look up"
+        if got["unnamed"] else "",
+        "part of the vendor folders was not looked at (deeper or larger than Lantern reads)" if got["cut_short"] else "") if x)
+    if not named:
+        return [], scanresult.record("copied-audit", "partial", loose, **info)
+    if offline() if no_network is None else no_network:
+        return [], scanresult.record("copied-audit", "skipped", "offline", applicable=True, **info)
+    # a name is asked about once for each version it is copied in: `_osv_findings` takes one version for a name
+    rounds: list[dict[str, tuple[str, str, int]]] = []
+    for c in named:
+        pin = (c["version"], c["file"], c["line"])
+        for pins in rounds:
+            if c["name"] not in pins or pins[c["name"]][0] == c["version"]:
+                pins.setdefault(c["name"], pin)
+                break
+        else:
+            rounds.append({c["name"]: pin})
+    out: list[dict] = []
+    errors: list[str] = []
+    try:
+        for pins in rounds:
+            found, errs = _osv_findings("copied-audit", "npm", pins)
+            out += [f for f in found if f["id"] not in {x["id"] for x in out}]
+            errors += errs
+    except (OSError, ValueError) as exc:
+        state, why = _osv_failure(exc)
+        return [], scanresult.record("copied-audit", state, why, **info)
+    info |= {"findings": len(out), "checked": sum(len(pins) for pins in rounds),
+             "scope": {"files": len(named), "packages": sum(len(pins) for pins in rounds)}}
+    if errors or loose:
+        also = f"{len(errors)} vulnerability detail{'s' if len(errors) != 1 else ''} could not be fetched" if errors else ""
+        return out, scanresult.record("copied-audit", "partial", "; ".join(x for x in (loose, also) if x),
+                                      **(info | {"errors": errors}))
+    return out, scanresult.record("copied-audit", "ok", **info)
 
 
 if __name__ == "__main__":   # python -m lantern.depaudit REPO OUT.json  (the cloud service's audit step)

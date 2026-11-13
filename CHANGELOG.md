@@ -5,6 +5,54 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- Three things a report said that were not so, found on a real static site (2026-11-12). The site keeps 17 Python
+  files (12,518 lines) as `<name>.py.txt`, runs them in the browser beside a copy of their runtime in `vendor/`, and
+  is served with no security header. Its report said "Security headers: in place", "bandit: ok" (on 0 files), that
+  every scanner had covered everything, and that the project lists no libraries.
+  - **Security headers** (`lantern/headers.py`): the card reads `in place` only when the code or a hosting file shows
+    a header set for every response (a hosting rule for every path, a library put on the app, the project's own
+    function that runs for every request), `check` with the place when a header is set for a part (a `<meta>` tag in
+    one page, one route's answer, a rule or a library for one path), and `add` when nothing sets one. Until now one
+    of a few words anywhere in the code read "in place": there, a `<meta>` tag in one exported document and the word
+    "helmet" as an HTML tag's name in a search pattern. On that site the card now reads `check` and names the four
+    places. Projects that set a header for part of the app, or only name one, will see `in place` become `check` or
+    `add`: Lantern's own two services read `check` (each page sets its own headers; no one place does for all).
+    A setting counts for the app it is in, not for the one in the folder beside it: helmet on the API sends nothing
+    with the pages of the site, so a project with a site and an API reads `in place` only when each has its own
+    (an app begins at the nearest folder with a `package.json`, a `pyproject.toml` or the like; a rule at the top of
+    the project is for all of it; the card names the folders that are left out). A copy or a template of a hosting
+    file (`next.config.js.tmpl`) is not the settings in force: Lantern's own card read "in place" for the sample of
+    a starter app while this was written. Comments are found in one pass over the text (`headers._not_code`), which
+    no line can keep busy and which no longer takes the closing quotes of a text kept under a name for the start
+    of a docstring.
+  - **Code kept under another name** (`lantern/unread.py`): Python kept as text (`engine.py.txt`) is handed to Bandit
+    by name; on that site it now reads 17 files and reports 8 lines it could not see before. A command there that is
+    handed literals only is ranked `low` with the reason beside it (one of the 8: a line that clears the screen), as
+    in a `.py` file; a command that takes a value keeps its rank. Code kept as text that no scanner reads
+    (`helper.js.txt`) leaves the release decision's `scanners` criterion `missing` and is named. Templates and
+    left-over copies (`.tmpl`, `.bak`) are named in the Evidence Limits, which also say that the map and Lantern's
+    own checks read none of these files. `security.json` has the counts in `not_read`.
+  - **Software copied into the project** (`depaudit.run_copied_audit`, tool `copied-audit`): what lies under a folder
+    named `vendor` is named. A copy that brings a `package.json` with a name and one exact version is looked up
+    through OSV by that name and version, and a known problem is a finding at that file's `version` line; files with
+    no name and version are counted and cannot be looked up; offline the lookup is skipped. In each case the release
+    decision's `dependencies` criterion is `missing` where it used to say the project lists no libraries, and the
+    Evidence Limits name the copies. Only the name and the version leave Lantern. A package manager's own `vendor`
+    folder (Composer, Go modules, Bundler) is not a copy, and neither is one kept for the tests or inside a sample
+    app, nor what a Python environment named `env` holds. Where a `vendor` folder is deeper or larger than Lantern
+    looks into, the record and the Limits say that part of it was not looked at.
+  - Found while checking the new lines one by one: a wildcard in a command (`tar cf out.tar *`, Bandit B609, high) was
+    ranked `low` with the words "only fixed text reaches this line … nothing that comes from outside is put into
+    it", in any Python file. The shell fills the `*` in with the names of the files it finds, and a file's name can
+    be an option. Fixed text no longer lowers that finding (`flow_rules.FILLED_BY_THE_SHELL`); the same command
+    with no wildcard is still lowered (`tests/test_flow.py`, two cases).
+  - The Evidence Limits said "Python built-in calls" about a project with no Python on the map; they say "built-in
+    calls (the language's own functions)".
+  - Tests: `tests/test_headers.py` (45 cases) and `tests/test_unread.py` (38), every wrong answer beside a twin that
+    must read as before. Run against the code before, 17 of the first 30 header cases and 30 of the first 30 of the
+    other file fail. Not done: the map
+    still does not read renamed code, a copy outside a folder named `vendor` is not found, and nothing here runs the
+    site (see Known gaps in `CLAUDE.md`).
 - A terminal you pull up from the bottom of every screen, in the app and on the website (2026-11-12; design 5a/5b,
   which until now was a drawer reached only from a button on an open project's bar or the ` key, and was missing
   from the website). A "Terminal" tab sits at the bottom middle of every screen: a click or a drag up pulls the
