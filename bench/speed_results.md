@@ -24,8 +24,9 @@ What the words mean:
 * **first run**: nothing of an earlier run is there (no results folder, no kept work); the system's own file cache
   is warm, since the same files were read minutes before. **repeat run**: the same command again on the same folder.
 * **the same**: every result file compared, with only what a clock put into it taken out (how long a step or a tool
-  took, the minute the run was made). A run writes ten files; `graph.json`, `calls.json` and `baseline.json` are
-  compared byte for byte. Across the two engines the comparison is of `graph.json`, `calls.json`, `security.json`,
+  took, the minute the run was made). A run writes ten files; `graph.json` and `calls.json` are compared byte for
+  byte, and so was `baseline.json` in this measurement (since then without the day it begins with: see "After the
+  measurement"). Across the two engines the comparison is of `graph.json`, `calls.json`, `security.json`,
   `readiness.json`, `baseline.json`, the badge, and everything the report holds (read back out of `report.html`,
   with the map as rows again); the page around the data differs by design, and the evidence names the engine that
   made it.
@@ -198,6 +199,34 @@ Machine: 4 processors, Linux-6.18.44-fc-v378-x86_64-with-glibc2.39, Python 3.13.
   faster and 57 ms slower across the six, and Django's findings tab still takes 1819 ms (1841 ms before), close to
   the 2,000 ms that `tools/report_perf.js` allows.
 
+## After the measurement: `main` moved, and a fault in the comparison
+
+`main` moved to 8c79479 while this was measured (#178, the Atlas breadcrumb and minimap: a change to the report's
+page, nothing in the engine) and was merged into this branch. The numbers above are of the branch before that merge
+(3e38b7d) against the commit it started from (8f517f2).
+
+The merged branch was then compared with `main` at 8c79479 on the six projects, one first run and one repeat run a
+side. The machine was running the whole test suite at the same time, so those seconds are not given here. Excalidraw,
+Hugo, Django and Laravel: every result the same. For the shop sample and ripgrep the comparison said
+`baseline.json` differs, and ended with 1.
+
+Nothing in the two results differed but a day. `baseline.json` begins with the day the first analysis was made, the
+tool compared that file byte for byte, and `main`'s side started at 23:59:33 UTC on 2026-11-12: its first analysis of
+the shop sample and of ripgrep was written before midnight, everything else on both sides after it. With the day
+set back to 2026-11-12, the branch's two files have exactly the SHA-256 `main`'s side had.
+
+The fault was the measuring tool's, and it was fixed test first: the tests of `bench/speed.py` wrote an empty
+`baseline.json`, so "another day" was never tried on that file. `test_two_runs_are_the_same_whatever_the_clock_said`
+now writes it as Lantern does and failed (`['baseline.json']`);
+`test_only_the_day_a_baseline_was_made_is_taken_out_of_it` and five more cases of
+`test_anything_but_the_clock_is_a_difference` pin that the day at the start of the file is all that is taken out
+(a line number, the commit, a `date` further inside, a first `date` that is not written as a day: each is still a
+difference). The two projects were then compared again with the changed tool, `main` at 8c79479 against the merged
+branch: every result the same, ended with 0.
+
+The measurement above ran from 23:00 to 23:42 UTC of one day, so it could not meet this fault. The marks of
+`baseline.json` in `bench/speed_results.json` are of the whole file, as the tool made them then.
+
 ## Breaking the new code on purpose
 
 Every place in the four new modules where `tools/mutation.py` can change one thing (a comparison turned round,
@@ -209,9 +238,9 @@ or a change that makes no difference; each one was read and sorted.
 |---|---:|---:|---:|---:|
 | `lantern/columns.py` | 179 | 165 | 14 | 5 |
 | `lantern/kept.py` | 162 | 149 | 13 | 17 |
-| `lantern/quick.py` | 34 | @@QUICK_KILLED@@ | @@QUICK_LEFT@@ | 2 |
+| `lantern/quick.py` | 34 | 32 | 2 | 2 |
 | `lantern/listing.py` | 22 | 20 | 2 | 0 |
-| all four | 397 | @@ALL_KILLED@@ | @@ALL_LEFT@@ | 24 |
+| all four | 397 | 366 | 31 | 24 |
 
 What "makes no difference" means here, by module: `columns.py`, the sizes from which a column is written one way or
 another (any choice round-trips to the same rows); `kept.py`, changes that only show on another system or with

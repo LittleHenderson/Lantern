@@ -14,12 +14,13 @@ What is measured, each project alone with nothing else running, in a new process
   report, evidence), read from the moments the command's own lines arrive.
 * **the same results**: a repeat run that used what Lantern kept and a repeat run with that switched off
   (`LANTERN_CACHE=off`) must write the same result files, and so must a first run on kept work and the first run
-  that had none. Compared byte for byte: `graph.json`, `calls.json`, `readiness.json`, `baseline.json`; the other
-  result files without what a clock put into them and nothing else (`still`): how long each tool and each step
-  took (`security.json`, `run.json`, `report.html`), and the minute or the day the run was made (`run.json`,
-  `report.html`, `evidence.json`, `evidence.html`, the badge). A difference fails the benchmark. The report is
-  compared a second way, by what is in it: its data read back out of the page, the map as rows again
-  (`report.html: its data`), which is what is compared with another engine's report.
+  that had none. Compared byte for byte: `graph.json`, `calls.json`; the other result files without what a clock
+  put into them and nothing else (`still`): how long each tool and each step took (`security.json`,
+  `readiness.json`, `run.json`, `report.html`), and the minute or the day the run was made (`run.json`,
+  `report.html`, `evidence.json`, `evidence.html`, the badge, and the day `baseline.json` begins with). A
+  difference fails the benchmark. The report is compared a second way, by what is in it: its data read back out
+  of the page, the map as rows again (`report.html: its data`), which is what is compared with another engine's
+  report.
 * with `--browser`: how long the report takes to open and to answer three clicks on a slowed phone
   (`tools/report_perf.js`; needs Node with Playwright).
 
@@ -91,7 +92,13 @@ sys.argv = ['lantern'] + sys.argv[1:]
 runpy.run_module('lantern.cli', run_name='__main__')
 """
 
-BYTE_FOR_BYTE = ("graph.json", "calls.json", "baseline.json")
+BYTE_FOR_BYTE = ("graph.json", "calls.json")
+# baseline.json begins with the day the first analysis was made (`evidence.baseline_from`), and that day is all a
+# clock puts into it. Until 2026-11-12 the file was compared byte for byte: a comparison whose one side ran at
+# 23:59 and whose other side ran after midnight said "different" for the two projects in between, and nothing
+# but the day differed. Only that day is taken out, where the file starts with it written as a day.
+WITHOUT_ITS_DAY = ("baseline.json",)
+FIRST_DAY = re.compile(r'\A(\{\s*"date":\s*")[0-9]{4}-[0-9]{2}-[0-9]{2}(")')
 # readiness.json repeats the record of a scanner that did not finish or did not cover everything, with how long that
 # scanner took (`incomplete[i].duration_ms`); nothing else in it is a clock's. The first measurement of Django showed
 # it: 34739 in one run, 32368 in the next, and not one other difference.
@@ -158,15 +165,22 @@ def report_data(page: str):
 
 def fingerprint(out: Path) -> dict:
     """One SHA-256 for each result file of a run, of what has to be the same in two runs on the same input: the
-    files of `BYTE_FOR_BYTE` as they are, those of `WITHOUT_TOOL_TIME` without how long a tool took and nothing else
-    taken out, the files of `WITHOUT_CLOCK` without what a clock put into them (`still`), `run.json` without its
-    timings and clock time, and `REPORT_DATA`: everything the report holds, in the order it holds it, without what
-    a clock put into it. A file that is not there has no entry."""
+    files of `BYTE_FOR_BYTE` as they are, `baseline.json` without the day it was made and nothing else taken out
+    (`WITHOUT_ITS_DAY`), those of `WITHOUT_TOOL_TIME` without how long a tool took and nothing else taken out, the
+    files of `WITHOUT_CLOCK` without what a clock put into them (`still`), `run.json` without its timings and
+    clock time, and `REPORT_DATA`: everything the report holds, in the order it holds it, without what a clock put
+    into it. A file that is not there has no entry."""
     marks = {}
     for name in BYTE_FOR_BYTE:
         p = out / name
         if p.is_file():
             marks[name] = hashlib.sha256(p.read_bytes()).hexdigest()
+    for name in WITHOUT_ITS_DAY:        # a file that does not start with its day has the mark its bytes have
+        p = out / name
+        if p.is_file():
+            text = p.read_bytes().decode("utf-8", errors="surrogateescape")
+            marks[name] = hashlib.sha256(FIRST_DAY.sub(r"\1\2", text)
+                                         .encode("utf-8", errors="surrogateescape")).hexdigest()
     for name in WITHOUT_TOOL_TIME:      # a file with no tool time in it has the mark its bytes have
         p = out / name
         if p.is_file():

@@ -1358,7 +1358,10 @@ def _run_files(out: Path, when: str, took: int, extra: str = "") -> Path:
         "calls.json": "{}",
         "readiness.json": json.dumps({"score": 71, "generated": "2020-01-02 03:04 UTC", "incomplete": [
             {"tool": "bandit", "state": "partial", "duration_ms": took, "reason": "1 file could not be read"}]}, indent=1),
-        "baseline.json": "{}",
+        # as `evidence.baseline_from` writes it: the day of the first analysis is the file's first key
+        "baseline.json": json.dumps({"date": when[:10], "commit": "c1", "id_version": 2, "counts": {"high": 1},
+                                     "findings": {"a1": {"rule": "r1", "title": "seen 2020-01-02", "line": 3,
+                                                         "date": "2020-01-02"}}}, indent=1),
         "security.json": json.dumps({"findings": [{"id": "a1", "line": 3}],
                                      "tools": [{"tool": "bandit", "duration_ms": took, "state": "ok"}]}, indent=1) + extra,
         "run.json": json.dumps({"timings": {"graph": took / 7, "scan": 2.5}, "finished_at": when[:16], "offline": True}),
@@ -1386,6 +1389,11 @@ def test_two_runs_are_the_same_whatever_the_clock_said(tmp_path):
     ("readiness.json", "71", "72"),
     ("readiness.json", '"state": "partial"', '"state": "failed"'),
     ("readiness.json", "2020-01-02 03:04 UTC", "2020-01-02 03:05 UTC"),     # only a tool's time is taken out of this file
+    ("baseline.json", '"line": 3', '"line": 4'),
+    ("baseline.json", '"commit": "c1"', '"commit": "c2"'),
+    ("baseline.json", "seen 2020-01-02", "seen 2020-01-03"),          # a day that is not the baseline's own
+    ("baseline.json", '"date": "2020-01-02"', '"date": "2020-01-03"'),  # nor is a `date` further inside the file
+    ("baseline.json", '"date": "2026-11-12"', '"date": "2026-11-1"'),   # the first key, not written as a day
     ("run.json", '"offline": true', '"offline": false'),
     ("evidence.json", '"d1"', '"d2"'),
     ("evidence.html", "made 2020-01-02", "made 2020-01-03"),          # a date that is not the run's own
@@ -1405,6 +1413,30 @@ def test_a_file_with_no_tool_time_in_it_has_the_mark_of_its_bytes(tmp_path):
     import hashlib
     out = _write(tmp_path / "o", {"readiness.json": '{"score": 71,\r\n "caf\u00e9": "\u017f"}\n'})
     assert speed.fingerprint(out) == {"readiness.json": hashlib.sha256((out / "readiness.json").read_bytes()).hexdigest()}
+
+
+def test_only_the_day_a_baseline_was_made_is_taken_out_of_it(tmp_path):
+    """Found 2026-11-12: one side of a comparison ran at 23:59 UTC and the other after midnight, and
+    `baseline.json`, then compared byte for byte, was reported as different for the two projects in between."""
+    import hashlib
+    made = json.dumps({"date": "2026-11-12", "commit": None, "findings": {}}, indent=1)
+    a = _write(tmp_path / "a", {"baseline.json": made})
+    b = _write(tmp_path / "b", {"baseline.json": made.replace("2026-11-12", "2026-11-13")})
+    assert speed.fingerprint(a) == speed.fingerprint(b)
+    assert speed.fingerprint(a) != {"baseline.json": hashlib.sha256(made.encode("utf-8")).hexdigest()}
+    for n, text in enumerate(("{}",                                         # no day in it
+                              '{"commit": null, "date": "2026-11-12"}',     # a `date` that is not the first key
+                              '{"date": "today", "caf\u00e9": "\u017f"}\r\n',  # not a day
+                              '{"date": "2026-11-12 "}',                    # nor is this
+                              '[{"date": "2026-11-12"}]')):                 # not the file `baseline_from` writes
+        out = _write(tmp_path / f"o{n}", {"baseline.json": text})
+        assert speed.fingerprint(out) == {"baseline.json": hashlib.sha256((out / "baseline.json").read_bytes()).hexdigest()}
+    # the day at the start is taken out once: the same text further on stays
+    twice = '{"date": "2026-11-12", "then": {"date": "2026-11-12"}}'
+    c = _write(tmp_path / "c", {"baseline.json": twice})
+    d = _write(tmp_path / "d", {"baseline.json": twice.replace("2026-11-12", "2026-11-13", 1)})
+    e = _write(tmp_path / "e", {"baseline.json": twice.replace("2026-11-12", "2026-11-13")})
+    assert speed.fingerprint(c) == speed.fingerprint(d) != speed.fingerprint(e)
 
 
 def test_a_file_only_one_run_wrote_is_a_difference(tmp_path):
