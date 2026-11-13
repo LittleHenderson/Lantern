@@ -537,6 +537,7 @@ mark.p.on{background:var(--l3);color:var(--surface);border-radius:4px}
 .warn{display:flex;gap:8px;background:var(--warning-soft);color:var(--ink);font-size:12.5px;padding:10px 12px;border-radius:10px;margin:10px 0}
 .warn .ic{color:var(--warn-ink);margin-top:1px}
 .note{font-size:12.5px;color:var(--muted)}
+.scopenote{padding:6px 18px;border-top:1px solid var(--line);background:var(--surface-2,var(--surface))}
 .scanwarn{margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--warning-soft);color:var(--ink);font-size:13.5px;line-height:1.5} .scanwarn b{color:var(--warn-ink)} .scanwarn .note{display:block;margin-top:2px}
 .kv b.timeout,.kv b.failed,.kv b.partial,.kv b.unavailable{color:var(--warn-ink)}
 .byline{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:10px}
@@ -683,6 +684,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
     </nav>
     <div class="chips" id="chips"></div>
   </div>
+  <div class="note scopenote" id="scopenote" role="note" hidden></div>
 </header>
 <main id="main">
   <aside class="left" id="left"></aside>
@@ -1451,6 +1453,13 @@ const entryPhrase = e => !e ? '' : isScreen(e) ? `someone opens the ${String(e.d
 const extWords = id => { const n = String(id || '').replace(/^ext:/, ''); if (n.startsWith('HTTP ')) return n; const lib = n.split(/[./]/)[0]; return `the ${lib} library`; };
 function mapRecord(n) {
   if (!n || n.kind === 'class') return null;
+  if (n.sealed) {
+    // a layer this person may not see (a team workspace's per-layer permissions, lantern/scope.py): only that it is there
+    const who = [...new Set((IN[n.id] || []).filter(e => N[e.src] && !N[e.src].sealed).map(e => short(N[e.src].qualname)))];
+    const w = LANE_WORD[n.lane] || 'another layer', s = `Your code here calls something in the ${w}. You don’t have access to the ${w} layer, so Lantern shows only that the call is there.`;
+    return {from_map: true, validated: true, lens1: {summary: s, inputs: [], outputs: '', side_effects: [], errors: [], role: who.length ? `Called from ${who.slice(0, 3).join(', ')}${who.length > 3 ? ` and ${who.length - 3} more` : ''}.` : ''},
+      lens2: {text: s, example: '', analogy: ''}, lens3: {text: `A sealed boundary: the ${w} layer is not shared with you.`, pairs: []}};
+  }
   const where = onPhone(n) ? 'on the person’s phone, inside your app' : isJS(n.id) ? 'in the visitor’s browser' : layer(n.id) === 'backend' ? 'on your server' : 'in a library';
   const lines = n.start_line && n.end_line ? n.end_line - n.start_line + 1 : 0;
   const kindWord = n.kind === 'module' ? 'file' : n.kind === 'external' ? 'library call' : isJS(n.id) ? 'component or function' : 'function';
@@ -2473,7 +2482,15 @@ async function rAskSend(text) {
 
 window.setSimple = v => { setMode(PHONE.matches || v, false); if (LIVE) LIVE.view_mode = S.simple ? 'simple' : 'advanced'; render(); };   // the app's toggle, already saved
 PHONE.addEventListener('change', () => { if (PHONE.matches && !S.simple) { S.simple = true; render(); } });
+function renderScope() {   // per-layer permissions (lantern/scope.py): say once, on every tab, what this person sees
+  const el = document.getElementById('scopenote');
+  if (!el || !DATA.scope || !Array.isArray(DATA.scope.lanes)) return;
+  const ws = DATA.scope.lanes.map(l => LANE_WORD[l] || String(l)), and = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+  el.textContent = `You can see the ${and(ws)} ${ws.length === 1 ? 'layer' : 'layers'} of this app. Calls into the rest show as sealed boxes.`;
+  el.hidden = false;
+}
 function render() {
+  renderScope();
   // renderMap puts these back for Flowchart and Graph; left on, gfull's overflow:hidden stopped every other tab scrolling
   document.getElementById('center').classList.remove('dotted', 'gfull');
   if (S.tab !== 'map' && document.body.classList.contains('gmax')) setGraphMax(false);

@@ -189,9 +189,19 @@ async function until(p, fn, timeout) {
       if (/join\/[A-Za-z0-9_-]{20,}/.test(await t.evaluate(() => location.href))) errs.push(`${tag}: the invite's secret stayed in the address bar`);
       await a11y.axe(t, `${tag} join`, errs);
       await t.click('#dojoin'); await t.waitForSelector('.person + .person');
+      // per-layer permissions (step 4): the owner lets the teammate see only the Browser and Frontend layers
+      await p.reload(); await p.waitForSelector('[data-layers]');
+      await p.click('[data-layers]'); await p.waitForSelector('#savelayers');
+      await a11y.axe(p, `${tag} layers`, errs);
+      await p.uncheck('.layer input[value="server"]'); await p.uncheck('.layer input[value="data"]');
+      await p.screenshot({ path: `${out}-${tag}-layers.png` });
+      await p.click('#savelayers'); await until(p, () => /Browser and Frontend/.test(document.querySelector('[data-layers]')?.textContent || ''), 5000);
+      await t.reload(); await t.waitForSelector('[data-open="done1-demo-00000"]');
       await t.click('[data-open="done1-demo-00000"]');
       await until(t, () => { try { return !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('#tabs'); } catch (e) { return false; } }, 20000);
       if (await t.$('#share') || await t.$('.sub [data-del]')) errs.push(`${tag}: a teammate can share or delete someone else's report`);
+      if (await t.$('.sub [data-t="evidence"]')) errs.push(`${tag}: a teammate who sees only some layers is offered the whole-app evidence report`);
+      if (!await t.evaluate(() => !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('.scopenote'))) errs.push(`${tag}: the scoped report does not say which layers it shows`);
       await ctxT.close();
       await p.click('#viewmode [data-m="simple"]');
       await p.click('#who'); await p.waitForSelector('#signout');
