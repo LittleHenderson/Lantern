@@ -1513,6 +1513,8 @@ function renderSettings(el) {
       <div id="usageinfo" class="hint"></div></div>
     <div class="card group" id="conns"><h2>Connections</h2><div class="hint">Lantern works inside Claude, ChatGPT, Cursor and Claude Code as a connector (MCP). An assistant can read findings, paths, readiness and explanations, re-analyze, re-check a fix, and verify an Evidence Report. It can never accept or close a finding; that stays with you, with a written reason.</div>
       <div id="connlist"><div class="working"><span class="pulse"></span>Looking…</div></div></div>
+    <div class="card group" id="agentcard"><h2>Coding agent (optional)</h2><div class="hint">Off unless you pick one. Then a finding's Fix screen offers <b>Fix this for me</b>: Lantern copies the project to a folder only you can read, runs the agent there with your own sign-in to it, and analyzes the copy. You see Lantern's verdict and the changed files; nothing reaches your project until you press Apply. The agent sends the code it reads to its own service, under its own terms.</div>
+      <div id="agentlist"><div class="working"><span class="pulse"></span>Looking…</div></div><div id="agentmsg" class="hint"></div></div>
     <div class="card group" id="packs"><h2>Analysis packs</h2><div class="hint">Python web and TypeScript web apps are Lantern's engine and are always on; packs teach it more frameworks with patterns and entry points, written as data, never code.</div>
       <div id="packlist"><div class="working"><span class="pulse"></span>Looking…</div></div></div>
     <div class="card group"><h2>Appearance</h2><div class="hint">Saved in this browser right away.</div>
@@ -1534,6 +1536,18 @@ function renderSettings(el) {
          <div class="hint">ChatGPT and Claude on the web need a URL: put this server behind an MCP bridge (for example mcp-proxy) on a URL you control, then add it as a custom connector. Lantern never opens a port by itself. In a report, a finding's <b>Send to…</b> button hands the assistant a reference it resolves through this connector.</div>`;
   }).catch(e => { el.querySelector('#connlist').innerHTML = note('err', esc(e.message)); });
   drawPacks(el.querySelector('#packlist'));
+  api('/api/agents').then(a => {
+    const box = el.querySelector('#agentlist');
+    const opt = (id, label, hint, ok) => `<label class="choice"><input type="radio" name="agent" value="${esc(id)}" ${a.chosen === id ? 'checked' : ''} ${ok ? '' : 'disabled'}><span><b>${esc(label)}</b>${esc(hint)}</span></label>`;
+    box.innerHTML = opt('', 'None', 'Lantern shows the fix prompt to copy into your own assistant.', true)
+      + a.agents.map(x => opt(x.id, x.name, x.found ? 'Installed on this computer.' : 'Not found on this computer. Install it, sign in to it, then restart Lantern.', x.found || a.chosen === x.id)).join('');
+    box.onchange = async e => {
+      if (e.target.name !== 'agent') return;
+      const m = el.querySelector('#agentmsg');
+      try { const r = await api('/api/settings', {method: 'POST', body: {agent: e.target.value}}); S.state.settings = r.settings; m.textContent = e.target.value ? 'Saved. Open a finding and press Fix this for me.' : 'Saved. No coding agent.'; }
+      catch (err) { m.textContent = err.message; }
+    };
+  }).catch(e => { el.querySelector('#agentlist').innerHTML = note('err', esc(e.message)); });
   el.querySelectorAll('#themeseg button').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); el.querySelectorAll('#themeseg button').forEach(x => x.classList.toggle('on', x === b)); });
   const save = async (extra = {}) => {
     const body = {provider: el.querySelector('#prov').value, model: el.querySelector('#model').value, base_url: el.querySelector('#url').value,

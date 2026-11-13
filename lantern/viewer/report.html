@@ -394,6 +394,8 @@ code.cmd{font:11.5px var(--mono);color:var(--muted);background:var(--hover);padd
 .fixtwo{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0} .fixtwo .card{padding:14px 16px} .why{display:flex;flex-direction:column;gap:6px;font-size:13.5px;color:var(--ink-2)} .why b{display:inline-block;width:18px;color:var(--good-ink)}
 pre.oneline{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:var(--code-bg);color:var(--code-ink);font:12px var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 .paste{padding:14px 16px;margin-bottom:14px;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)} .paste p{margin:0;font-size:14px;line-height:1.6;color:var(--ink)}
+.agentres{margin-top:14px} .agentres .verdict{margin:6px 0 10px;font-size:14px;color:var(--ink)} .agentres .verdict.bad{color:var(--critical)}
+.agentres details{margin:6px 0} .agentres summary{cursor:pointer;font:13px var(--mono)} .agentres pre.diff{margin:6px 0 0;padding:8px 10px;border-radius:8px;background:var(--code-bg);color:var(--code-ink);font:12px var(--mono);white-space:pre;overflow:auto;max-height:340px}
 .fixbanner{margin:0 0 16px;padding:12px 16px;border-radius:12px;background:var(--critical-soft);color:var(--ink);font-size:14px} .fixbanner.ok{background:var(--good-soft)}
 @media (max-width:900px){.fixgrid,.fixtwo{grid-template-columns:1fr}}
 /* Ask Lantern pill + window (same look as the app) */
@@ -1689,8 +1691,8 @@ function renderFix() {
       <div class="fixtwo"><div class="card"><div class="k2" style="margin-top:0">Why it’s ${esc(f.rank)}</div><div class="why">${why}</div></div>
         <div class="card"><div class="k2" style="margin-top:0">Where</div><div>${esc(f.file)}${f.line ? `, line ${esc(f.line)}` : ''}${n ? ` · in <code>${esc(short(n.qualname))}</code>` : ''}</div>${srcLine ? `<pre class="oneline">${esc(srcLine)}</pre>` : ''}</div></div>
       <div class="card paste"><div class="k2" style="margin-top:0">Paste this into your AI assistant</div><p>${esc(prompt)}</p></div>
-      <div class="acts"><button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button><button class="btn" id="copyprompt">Copy the prompt</button>${LIVE ? `<button class="btn primary" id="recheck">${icon('check')}I fixed it, check again</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">See the path</button>` : ''}<span class="spacer"></span>${LIVE ? `<span class="note">Not a problem? <button class="linkbtn" data-accept="${esc(f.id)}">Accept with a reason</button></span>` : ''}</div><div class="sendslot"></div><div id="recheckmsg" class="note"></div></div></div></div>`;
-  wireMode(el); wireFindings(el);
+      <div class="acts"><button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button><button class="btn" id="copyprompt">Copy the prompt</button>${LIVE && LIVE.agent ? `<button class="btn primary" id="agentfix">${icon('sparkle')}Fix this for me with ${esc(LIVE.agent.name)}</button>` : ''}${LIVE ? `<button class="btn ${LIVE.agent ? '' : 'primary'}" id="recheck">${icon('check')}I fixed it, check again</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">See the path</button>` : ''}<span class="spacer"></span>${LIVE ? `<span class="note">Not a problem? <button class="linkbtn" data-accept="${esc(f.id)}">Accept with a reason</button></span>` : ''}</div><div class="sendslot"></div><div id="recheckmsg" class="note"></div><div id="agentslot"></div></div></div></div>`;
+  wireMode(el); wireFindings(el); wireAgent(el, f);
   el.querySelector('#backfind').onclick = () => { S.tab = 'findings'; render(); };
   el.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { S.fsel = b.dataset.q; S.fixBanner = null; renderFix(); });
   el.querySelector('#copyprompt').onclick = e => { navigator.clipboard?.writeText(prompt); e.target.textContent = 'Copied'; };
@@ -1704,6 +1706,43 @@ function renderFix() {
       if (j.status === 'error') throw new Error(j.error);
       location.reload();
     } catch (e) { msg.textContent = e.message; rc.disabled = false; }
+  };
+}
+// "Fix this for me" (lantern/agents.py): the coding agent the person picked in Settings fixes this finding in a copy of
+// the project; Lantern analyzes the copy and says whether the finding is gone. Nothing changes in the project until
+// they press Apply. The changed files are behind a tap, for whoever wants to read them.
+const jobErr = e => String(e && e.message || e).replace(/^\w+Error: /, '');
+function agentResult(r) {
+  const bad = r.status === 'not_fixed' || r.status === 'fixed_with_new';
+  const files = (r.files || []).map(x => `<details><summary>${esc(x.path)} · ${esc(x.change)}</summary><pre class="diff">${esc(x.diff)}</pre></details>`).join('');
+  const added = (r.new || []).length ? `<div class="note">New: ${(r.new || []).map(x => `${esc(x.rank)} · ${esc(x.title)}`).join('; ')}</div>` : '';
+  return `<div class="card agentres"><div class="k2" style="margin-top:0">${esc(r.agent)} · checked by Lantern</div>
+    <p class="verdict ${bad ? 'bad' : ''}">${esc(r.verdict)}</p>${added}
+    ${files ? `<div class="note">${(r.files || []).length} file${(r.files || []).length === 1 ? '' : 's'} changed. Tap one to see the change.</div>${files}` : ''}
+    ${r.fix ? `<div class="acts"><button class="btn ${r.status === 'fixed' ? 'primary' : ''}" id="agentapply">Apply to my project</button><button class="btn" id="agentdiscard">Throw it away</button><span class="note">Nothing in your project has changed yet.</span></div>` : ''}
+    <div id="agentmsg" class="note"></div></div>`;
+}
+function wireAgent(el, f) {
+  const btn = el.querySelector('#agentfix'), slot = el.querySelector('#agentslot'); if (!btn || !slot) return;
+  btn.onclick = async () => {
+    btn.disabled = true; slot.innerHTML = `<div class="note">${esc(LIVE.agent.name)} is working on a copy of your project. Your files are not touched.</div>`;
+    try {
+      const job = await live('/agentfix', {finding: f.id});
+      const j = await waitJob(job.id, log => { const last = log[log.length - 1]; if (last) slot.firstElementChild.textContent = last; });
+      if (j.status === 'error') throw new Error(j.error);
+      slot.innerHTML = agentResult(j.result); btn.disabled = false;
+      const ap = slot.querySelector('#agentapply'), dc = slot.querySelector('#agentdiscard'), msg = slot.querySelector('#agentmsg');
+      if (ap) ap.onclick = async () => {
+        ap.disabled = dc.disabled = true; msg.textContent = 'Copying the change into your project, then checking it again…';
+        try {
+          sessionStorage.setItem('lantern.recheck', JSON.stringify({score: (DATA.readiness || {}).score, id: f.id, title: plainTitle(f)}));
+          const aj = await waitJob((await live('/agentapply', {fix: j.result.fix})).id, log => { msg.textContent = log[log.length - 1] || 'Working…'; });
+          if (aj.status === 'error') throw new Error(aj.error);
+          location.reload();
+        } catch (e) { sessionStorage.removeItem('lantern.recheck'); msg.textContent = jobErr(e); ap.disabled = dc.disabled = false; }
+      };
+      if (dc) dc.onclick = async () => { await live('/agentdiscard', {fix: j.result.fix}).catch(() => {}); slot.innerHTML = '<div class="note">Thrown away. Your project is as it was.</div>'; };
+    } catch (e) { slot.innerHTML = `<div class="note">${esc(jobErr(e))}</div>`; btn.disabled = false; }
   };
 }
 // After "I fixed it, check again" the page reloads with fresh results: say what changed, in one line.
