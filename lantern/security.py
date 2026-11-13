@@ -5,6 +5,7 @@ Models never create or close findings. They only explain them later (see explain
 
 from __future__ import annotations
 
+import contextvars
 import glob
 import hashlib
 import io
@@ -12,14 +13,16 @@ import json
 import os
 import re
 import subprocess
+import threading
+import time
 import tokenize
 from collections import deque
 from pathlib import Path
 
-from . import context, flowscan, lanes, manifest, programs, results
+from . import context, flowscan, kept, lanes, listing, manifest, programs, quick, results
 from .calls import NAME_ONLY_VIA
 from .graph import Graph
-from .python_frontend import ENV_NAMES, SKIP_DIRS, inside_repo, project_text, skipped, skipped_dir
+from .python_frontend import ENV_NAMES, SKIP_DIRS, inside_repo, project_bytes, project_text, skipped_dir
 
 UNTRUSTED_ENTRY_KINDS = {"route", "cli", "main", "script"}
 
@@ -73,10 +76,10 @@ BANDIT_READS = (".py", ".pyw")
 EXCLUSIONS_FIT = 24_000   # characters: Windows starts no program whose whole command line is longer than 32,767
 
 
-def _not_the_projects(repo: Path, skipped: list[str]) -> list[tuple[str, str]]:
-    """The Python files under the project that are not files of the project (`inside_repo`: a link that leads out of
-    it, a pipe, a link to nothing), each as (its name in the project, its path as Bandit will write it). Bandit finds
-    its files itself and opens whatever answers to a `.py` name; Lantern's own reader passed these by already."""
+def _python_named(repo: Path, skipped: list[str]) -> list[tuple[str, str, bool]]:
+    """Every file under the project with a name Bandit reads, in one walk (the folders of `skipped`, at the top, are
+    the ones Bandit is told to leave out): (its name in the project, its path as Bandit will write it, whether it
+    is a file of the project, `inside_repo`)."""
     out = []
     top = os.fspath(repo)
     for dirpath, dirnames, filenames in os.walk(top):
@@ -84,10 +87,55 @@ def _not_the_projects(repo: Path, skipped: list[str]) -> list[tuple[str, str]]:
             dirnames[:] = [d for d in dirnames if d not in skipped]
         dirnames.sort()
         for fn in sorted(filenames):
-            path = os.path.join(dirpath, fn)
-            if fn.lower().endswith(BANDIT_READS) and not inside_repo(Path(path), repo):
-                out.append((_under(repo, path), path))
+            if fn.lower().endswith(BANDIT_READS):
+                path = os.path.join(dirpath, fn)
+                out.append((_under(repo, path), path, inside_repo(Path(path), repo)))
     return out
+
+
+def _not_the_projects(repo: Path, skipped: list[str], named: list | None = None) -> list[tuple[str, str]]:
+    """The Python files under the project that are not files of the project (`inside_repo`: a link that leads out of
+    it, a pipe, a link to nothing), each as (its name in the project, its path as Bandit will write it). Bandit finds
+    its files itself and opens whatever answers to a `.py` name; Lantern's own reader passed these by already."""
+    named = _python_named(repo, skipped) if named is None else named
+    return [(name, path) for name, path, own in named if not own]
+
+
+# What Bandit said about a set of files is kept between runs (`lantern/kept.py`) and used again only when the
+# question is the same in every part: the folder (Bandit writes full paths), what it was told to leave out, each
+# Python file it may read by name and content, Bandit itself and every plug-in installed for it, and Lantern's own
+# code. One file changed, added, removed or renamed: Bandit runs. Only a run that ended as a scan does (0 or 1, with
+# a list of results) is kept; `lantern verify` never asks (`kept.without`).
+_KEPT_BANDIT = kept.Shelf("bandit", libraries=("bandit",))
+BANDIT_GROUPS = ("bandit.plugins", "bandit.blacklists", "bandit.formatters")
+
+
+def _bandit_question(repo: Path, excl: list[str], named: list[tuple[str, str, bool]]) -> str | None:
+    """The key of what Bandit will be asked, or None when nothing may be kept (kept work is off, a file Bandit may
+    read cannot be read here, the installed plug-ins cannot be listed)."""
+    if not kept.on():
+        return None
+    try:
+        from importlib import metadata
+        plugins = sorted((group, ep.name, ep.value, getattr(getattr(ep, "dist", None), "version", "") or "")
+                         for group in BANDIT_GROUPS for ep in metadata.entry_points(group=group))
+        files = hashlib.sha256()
+        for name, path, own in named:
+            files.update(name.encode("utf-8", "surrogatepass") + b"\0")
+            files.update(hashlib.sha256(project_bytes(Path(path), repo)).digest() if own else b"left out")
+    except Exception:   # noqa: BLE001  (whatever went wrong: the scanner is simply run)
+        return None
+    return _KEPT_BANDIT.key("1", os.fspath(repo), json.dumps(excl), json.dumps(plugins), files.digest())
+
+
+def _bandit_kept(key: str | None):
+    """(what a run of Bandit gave, its version) as it was kept for this very question, or None."""
+    from . import scanresult
+    was = _KEPT_BANDIT.get(key)
+    if (type(was) is dict and was.get("returncode") in (0, 1) and type(was.get("stdout")) is str
+            and type(was.get("stderr")) is str and (was.get("version") is None or type(was["version"]) is str)):
+        return scanresult.ToolRun(was["returncode"], was["stdout"], was["stderr"]), was["version"]
+    return None
 
 
 def _under(repo: Path, name) -> str:
@@ -125,7 +173,8 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     import importlib.util
     from . import scanresult
     excl = sorted(d for d in sorted(SKIP_DIRS) + sorted(ENV_NAMES) if (repo / d).exists() and skipped_dir(repo, d))
-    left = _not_the_projects(repo, excl)
+    named = _python_named(repo, excl)
+    left = _not_the_projects(repo, excl, named)
     base: dict = {"role": "Python code patterns", "exclusions": excl + sorted(name for name, _ in left)}
     if importlib.util.find_spec("bandit") is None:
         return [], scanresult.record("bandit", "unavailable", 'pip install "lantern[scan]"', applicable=applicable,
@@ -136,20 +185,27 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     # folder it scans (checks to skip, files to leave out, a file to write its report to), and with checks switched
     # off that way the record below still said `ok`. Handed a settings file of Lantern's own, with nothing in it,
     # Bandit looks for no other.
-    try:
-        with programs.settings("bandit.ini", "[bandit]\n") as ini:
-            # --ignore-nosec: a `# nosec` comment in the project switches a check off for its line, and comes with
-            # the project like the code. Bandit lists the line all the same, and Lantern reads the comment itself
-            # (`nosec_says`): until 2026-11-11 such a line was listed nowhere.
-            cmd = programs.python("bandit", "-r", str(repo), "--ini", str(ini), "-f", "json", "-q", "--ignore-nosec")
-            if excl or left:
-                cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
-            run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
-    except OSError as exc:      # without its own settings file Bandit would look for the project's: it is not started
-        return [], scanresult.record("bandit", "failed", "Lantern's settings file for the scanner could not be written "
-                                     f"({exc.strerror or type(exc).__name__})", version=None, **base)
-    base |= {"version": _tool_version(programs.python("bandit", "--version")), "exit_code": run.returncode,
-             "duration_ms": run.duration_ms}
+    began = time.perf_counter()
+    question = _bandit_question(repo, excl, named)
+    asked = _bandit_kept(question)
+    if asked is not None:       # the same files, the same Bandit, the same question: what it said then
+        run, version = asked
+        run.duration_ms = int((time.perf_counter() - began) * 1000)
+    else:
+        try:
+            with programs.settings("bandit.ini", "[bandit]\n") as ini:
+                # --ignore-nosec: a `# nosec` comment in the project switches a check off for its line, and comes with
+                # the project like the code. Bandit lists the line all the same, and Lantern reads the comment itself
+                # (`nosec_says`): until 2026-11-11 such a line was listed nowhere.
+                cmd = programs.python("bandit", "-r", str(repo), "--ini", str(ini), "-f", "json", "-q", "--ignore-nosec")
+                if excl or left:
+                    cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
+                run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
+        except OSError as exc:  # without its own settings file Bandit would look for the project's: it is not started
+            return [], scanresult.record("bandit", "failed", "Lantern's settings file for the scanner could not be "
+                                         f"written ({exc.strerror or type(exc).__name__})", version=None, **base)
+        version = _tool_version(programs.python("bandit", "--version"))
+    base |= {"version": version, "exit_code": run.returncode, "duration_ms": run.duration_ms}
     if run.timed_out:
         return [], scanresult.record("bandit", "timeout", f"after {BANDIT_TIMEOUT} s", **base)
     if run.error:
@@ -162,6 +218,9 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
         return [], scanresult.record("bandit", "failed", why + (f"; stderr: {err}" if err else ""), **base)
     if not isinstance(data.get("results"), list):
         return [], scanresult.record("bandit", "failed", "no results list in the output", **base)
+    if asked is None:           # a scan that ended as a scan does: kept for the next time the question is the same
+        _KEPT_BANDIT.put(question, {"returncode": run.returncode, "stdout": run.stdout, "stderr": run.stderr,
+                                    "version": version})
     out = []
     gone = {name for name, _ in left}
 
@@ -342,23 +401,24 @@ def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
     the run `partial`."""
     from . import scanresult
     out, errors, files = [], [], 0
-    for p in repo.rglob("*"):
-        if not p.is_file() or skipped(p.relative_to(repo).parts[:-1], repo) \
-                or not inside_repo(p, repo):
-            continue
+    for p, parts in listing.files(repo):    # the project's files, walked once for a whole run
         if p.suffix not in SECRET_EXTS and not p.name.startswith(".env"):
             continue
         if p.name in SECRET_SKIP_FILES or p.name.endswith((".min.js", ".map")):
             continue
-        rel = p.relative_to(repo).as_posix()
+        rel = "/".join(parts)
         try:
             text = _read_text(p, repo)
         except OSError as exc:
             errors.append(f"{rel}: {exc.strerror or exc}")
             continue
         files += 1
+        whole = quick.Text(text)    # the patterns that can find anything in this file at all; the rest are not tried
+        patterns = [row for row in SECRET_PATTERNS if whole.may_match(row[1])]
+        if not patterns:
+            continue
         for i, line in enumerate(text.splitlines(), 1):
-            for rule, rx in SECRET_PATTERNS:
+            for rule, rx in patterns:
                 if rx.search(line):
                     out.append({
                         "id": _fid("secrets", rule, rel, i), "tool": "lantern-secrets", "rule": rule,
@@ -944,25 +1004,115 @@ def stable_ids(repo: Path, findings: list[dict]) -> None:
         f["id"] = _fid(key, seen[key])
 
 
-def scan(g: Graph, offline: bool | None = None) -> dict:
+MOST_BESIDE = 8
+
+
+def beside() -> int:
+    """How many scanner programs may run beside the reading of the code: `LANTERN_JOBS` when it is a whole number
+    (0: none, each scanner runs in its turn as before 2026-11-12; `MOST_BESIDE` at most), else two where the
+    computer has a processor to spare for them and none where it has one."""
+    said = os.environ.get("LANTERN_JOBS", "").strip()
+    if said.isdigit():
+        return min(MOST_BESIDE, int(said))
+    return min(2, max(0, (os.cpu_count() or 1) - 1))
+
+
+class Early:
+    """The scanners that read the project's files and nothing of the map, started when a run begins and run beside
+    the reading of the code, at most `room` at a time (directive point 10; until 2026-11-12 Bandit was started only
+    when the map was finished, and the analysis waited for it: half a minute on a large Python project).
+
+    Started early: Bandit where it is installed, every dependency audit, and the secret scan where gitleaks is
+    installed (each is a program of its own, or waits for the network). `scan(g, offline, early)` takes what each
+    one gave at the place it ran them before and in the same order, and runs by itself whatever was not started
+    early, so the findings and the records are the same as when one runs after the other. `close()` is for the end
+    of the run, however it ended: what is still going is ended with everything it started."""
+
+    def __init__(self, repo, offline: bool | None, room: int | None = None):
+        self.repo, self.offline = Path(repo), offline
+        self.room = beside() if room is None else room
+        self._jobs: dict = {}
+        self._threads: set[int] = set()
+        self._pool = None
+
+    def start(self) -> "Early":
+        if self.room < 1 or self._pool is not None:
+            return self
+        import importlib.util
+        from concurrent.futures import ThreadPoolExecutor
+        from . import depaudit
+        self._pool = ThreadPoolExecutor(max_workers=self.room, thread_name_prefix="lantern-scanner")
+        if importlib.util.find_spec("bandit") is not None:      # else `scan` writes the record of its absence
+            self._begin("bandit", lambda: run_bandit(self.repo))
+        for tool, fn in depaudit.audits():
+            self._begin(tool, lambda tool=tool, fn=fn: depaudit.guarded(tool, fn, self.repo, self.offline))
+        if programs.find("gitleaks"):
+            self._begin("secrets", lambda: run_secrets(self.repo))
+        return self
+
+    def _begin(self, name: str, fn) -> None:
+        def job():
+            self._threads.add(threading.get_ident())
+            return fn()
+        # in the run's own context: what the scanner takes from kept work is counted with the run's (`kept.tally`)
+        self._jobs[name] = self._pool.submit(contextvars.copy_context().run, job)
+
+    def take(self, name: str, fn):
+        """What the scanner `name` gave (waited for when it is still going), or what `fn()` gives now when it was
+        not started early."""
+        job = self._jobs.pop(name, None)
+        return fn() if job is None else job.result()
+
+    def close(self) -> None:
+        if self._pool is None:
+            return
+        from . import remote
+        left = [job for job in self._jobs.values() if not job.cancel()]   # going, or done and never taken
+        if any(not job.done() for job in left):
+            remote.end_for(self._threads)
+        self._pool.shutdown(wait=True, cancel_futures=True)
+        remote.forget(self._threads)
+        self._jobs.clear()
+        self._pool = None
+
+
+def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> dict:
     """All scanners. `offline` skips the dependency audits, the only steps that use the network
-    (None: follow LANTERN_OFFLINE)."""
+    (None: follow LANTERN_OFFLINE). `early`: the scanners a run started before the map was built (`Early`), used
+    only when they were started for this folder and this `offline`."""
     repo = Path(g.repo_root)
     findings, tools = [], []
     from . import depaudit, scanresult
+    if early is not None and (early.repo != repo or early.offline != offline):
+        early = None
+
+    def took(name: str, fn):
+        return fn() if early is None else early.take(name, fn)
+
+    # The steps that read the map and the project's files and nothing another scanner found are worked out first:
+    # a scanner program started with the run may still be going, and until 2026-11-12 the run stood still until it
+    # had ended (on Django Bandit ends 43 seconds in, the map is done at 26). What each step found is put together
+    # below at the place and in the order it always was.
+    from .aiapp import scan_ai
+    from .packs import load_all, scan_packs, split_enabled
+    from .websec import scan_web
+    wf, wt = scan_web(g)
+    af, ai = scan_ai(g)
+    loaded, skipped = load_all(repo, keep_disabled=True)
+    loaded, off = split_enabled(loaded)
+    pf, pt = scan_packs(repo, loaded) if loaded else ([], [])
+    flows_read = flowscan.read(g)
     # Bandit's absence is a gap only when there is Python to read
-    f, info = run_bandit(repo, applicable="python" in (g.meta.get("languages") or {}))
+    f, info = took("bandit", lambda: run_bandit(repo, applicable="python" in (g.meta.get("languages") or {})))
     findings += f
     tools.append(info)
     for tool, fn in depaudit.audits():      # each behind its own wall: one that raises is one `failed` record
-        f, info = depaudit.guarded(tool, fn, repo, offline)
+        f, info = took(tool, lambda tool=tool, fn=fn: depaudit.guarded(tool, fn, repo, offline))
         findings += f
         tools.append(info)
-    f, records = run_secrets(repo)
+    f, records = took("secrets", lambda: run_secrets(repo))
     findings += f
     tools += records
-    from .websec import scan_web
-    wf, wt = scan_web(g)
     # one problem, one finding: a line LW-SECRET-INLINE lists (what the text signs, the text itself never repeated)
     # is not listed again as Bandit's "possible hardcoded password", ranked low and with the text in its title
     told = {(f["file"], f["line"]) for f in wf if f["rule"] == "LW-SECRET-INLINE"}
@@ -970,16 +1120,10 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
                                             (f["file"], f["line"]) in told)]
     findings += wf
     tools += wt
-    from .aiapp import scan_ai
-    af, ai = scan_ai(g)
     findings += af
     tools.append({"tool": "lantern-ai", "status": "ok" + ("" if ai["calls"] else " (no model, vector or paid API calls found)"),
                   "version": "0.1"})
-    from .packs import load_all, scan_packs, split_enabled
-    loaded, skipped = load_all(repo, keep_disabled=True)
-    loaded, off = split_enabled(loaded)
     if loaded:
-        pf, pt = scan_packs(repo, loaded)
         findings += pf
         tools += pt
     # a pack turned off in Settings is named with its status, so the Evidence Report says it was not used
@@ -998,7 +1142,7 @@ def scan(g: Graph, offline: bool | None = None) -> dict:
         return lines_cache[file]
     # Follow the data (flow.py): request data followed across functions to a query, a command, a file, an address, a
     # page. A flow on a line another tool flagged is written on that finding; the others are findings of their own.
-    ff, info, flows = flowscan.run(g, findings, lines_for, paid_calls=ai["calls"])
+    ff, info, flows = flowscan.run(g, findings, lines_for, paid_calls=ai["calls"], ahead=flows_read)
     findings += ff
     tools.append(info)
     stable_ids(repo, findings)

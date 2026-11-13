@@ -477,7 +477,7 @@ def test_only_these_tests_may_try_the_network(request):
 # ----------------------------------------------------------------------------- benchmarks and the audit script
 BENCHMARKS = ("bench/run_bench.py", "bench/mobile/run_mobile.py", "bench/heldout/run_heldout.py", "bench/fuzz.py",
               "bench/manifests.py", "bench/links.py", "bench/behaviour/run_behaviour.py", "tools/large_apps.py",
-              "tools/mutation.py", "tools/load_test.py")
+              "tools/mutation.py", "tools/load_test.py", "bench/speed.py")
 LIVE_SUITE = ("bench/explain_eval.py", "bench/ask_eval.py")          # they go through bench/live.py's gate instead
 
 

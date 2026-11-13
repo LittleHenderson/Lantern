@@ -18,7 +18,7 @@ import tomllib
 from collections import Counter
 from pathlib import Path
 
-from . import manifest, release, scanresult
+from . import manifest, quick, release, scanresult
 from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
 from .graph import Graph
 from .protections import advise as advise_protections
@@ -111,6 +111,8 @@ class Repo:
         # Manifests and config inside test folders (fixtures, sample apps) don't describe this project.
         self.project_files = [f for f in self.files if not self.is_test(f)]
         self._text: dict[str, str] = {}
+        self._code: dict[bool, list[str]] | None = None      # the code files that are tests, and those that are not
+        self._quick: dict[str, quick.Text] = {}               # a file's text as the quick look keeps it
 
     def has(self, *names: str) -> str | None:
         """First file whose path or basename matches one of `names` (case-insensitive)."""
@@ -133,11 +135,15 @@ class Repo:
         return self._text[rel]
 
     def code(self, tests: bool = False):
-        for f in self.files:
-            if Path(f).suffix not in CODE_EXTS or f.endswith((".min.js", ".d.ts")):
-                continue
-            if self.is_test(f) != tests:
-                continue
+        """The code files (or the test files) with their text, in the order of the list. Which files those are is
+        worked out once: every search used to ask each file's ending and name again."""
+        if self._code is None:
+            which: dict[bool, list[str]] = {False: [], True: []}
+            for f in self.files:
+                if Path(f).suffix in CODE_EXTS and not f.endswith((".min.js", ".d.ts")):
+                    which[self.is_test(f)].append(f)
+            self._code = which
+        for f in self._code[bool(tests)]:
             yield f, self.text(f)
 
     @staticmethod
@@ -163,6 +169,11 @@ class Repo:
     def grep(self, rx: re.Pattern, tests: bool = False, limit: int = 20) -> list[tuple[str, int, str]]:
         out = []
         for f, t in self.code(tests):
+            look = self._quick.get(f)
+            if look is None:
+                look = self._quick[f] = quick.Text(t)
+            if not look.may_match(rx):          # no text in the file that a match would have to hold: nothing to find
+                continue
             for m in rx.finditer(t):
                 line = t.count("\n", 0, m.start()) + 1
                 out.append((f, line, t.splitlines()[line - 1].strip()[:160] if t else ""))

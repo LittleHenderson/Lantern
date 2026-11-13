@@ -66,11 +66,36 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     before any result file is written. `results.Refused` (a RuntimeError) before anything is analysed when the
     results folder is a link that came with the project, or a folder lies under a result file's name; every file is
     written through `results.write`, and what that met (a link, a pipe) is said in the log at the end."""
-    from . import remote
+    from . import kept, listing, remote
     results.folder(repo, out)   # also for the callers that name `out` themselves (the connector's recheck)
     results.ready(out, WRITTEN if no_scan else ("security.json", *WRITTEN))
     if remote.is_clone(repo):   # a clone whose checkout could not be completed would report on part of a repository
         remote.check_complete(repo)
+    from .depaudit import offline as offline_env
+    from .security import Early
+    offline = offline_env() if offline is None else offline
+    # Directive point 10: the project's folder is walked once for the whole run (`listing`), and the scanners that
+    # need nothing of the map are started now and run beside the reading of the code (`security.Early`). Not where
+    # the project's own tests are run in its folder: they may leave files there that the scanners then read, as
+    # they did when every scanner ran after the tests.
+    # And how a file reads is kept between runs (`lantern/kept.py`), so a file that has not changed is not read
+    # again; the run counts what it took from there and what it worked out anew, and says so.
+    in_its_folder = bool(trace_cmd) and not sandbox
+    early = None
+    with listing.one_run(Path(repo).resolve()), kept.tally():
+        try:
+            if not no_scan and not in_its_folder:
+                early = Early(Path(repo).resolve(), offline).start()
+            return _analyze(repo, out, privacy, trace_cmd, no_scan, log, offline, sandbox, test_cwd, cancel, early)
+        finally:
+            if early is not None:
+                early.close()   # whatever is still going is ended: a run that stops or fails leaves nothing behind
+            kept.tidy()         # at most once a day: what nobody asked for in a month goes, the folder stays bounded
+
+
+def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log: Log, offline: bool, sandbox: bool,
+             test_cwd: str, cancel, early) -> dict:
+    from . import listing, remote
     from .engine import build_graph
     from .readiness import assess
     from .report import write_report
@@ -87,8 +112,6 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     from .calls import line_words
     if line_words(g.meta.get("calls")):
         log(f"calls   {line_words(g.meta.get('calls'))}")
-    from .depaudit import offline as offline_env
-    offline = offline_env() if offline is None else offline
     run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
     left = remote.skipped(repo) if remote.is_clone(repo) else None
     if left:   # the clone left out files Lantern does not read, to stay under the size cap (remote._checkout)
@@ -121,6 +144,8 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
                 m["stderr_tail"] = data.get("stderr_tail")
         else:
             m = merge_trace(g, run_trace(repo, trace_cmd))
+            listing.fresh(repo)     # the tests ran in the project's folder: what is listed from here on is looked up anew
+            listing.fresh(Path(repo).resolve())
         timings["trace"] = round(time.perf_counter() - t, 2)
         run_meta["trace"] = {"command": trace_cmd, "returncode": m["returncode"], "observed_edges": m["observed_edges"],
                              "recall": m["recall"], "stderr_tail": (m.get("stderr_tail") or "")[-600:], **extra}
@@ -131,7 +156,7 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     sec = None
     if not no_scan:
         t = time.perf_counter()
-        sec = scan(g, offline)
+        sec = scan(g, offline, early)
         from . import case
         # the previous run of this folder, before it is replaced, and the first one
         before = earlier(out, "security.json", log, "This run does not say which findings were there before.")
@@ -164,6 +189,11 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     results.write(out / "readiness.json", json.dumps(rd, indent=1))
     log(f"ready   {rd['score']}/100 (grade {rd['grade']}), {rd['shape']}")
     log(f"release {release.line(rd['release'])}")
+    from . import kept
+    work = kept.current()
+    if work is not None and work.table():   # what this run did not have to work out again; about the run, like its
+        run_meta["kept"] = work.table()     # timings, and in no other result file
+        log(f"kept    {work.said()}")
     run_meta["finished_at"] = time.strftime("%Y-%m-%d %H:%M")
     results.write(out / "run.json", json.dumps(run_meta, indent=1))
     words = earlier(out, "explanations.json", log, "The report is written without a model's explanations; "
