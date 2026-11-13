@@ -1,0 +1,1857 @@
+{
+ "schema": "ucg-0.2",
+ "repo_root": "/home/someone/projects/shop",
+ "meta": {
+  "language": "python + typescript/javascript",
+  "files": 12,
+  "lines": 181,
+  "http_calls": [
+   {
+    "src": "js:web/src/api::getUser",
+    "method": "GET",
+    "path": "/api/users/{}",
+    "raw": "/api/users/{}",
+    "prefix_unknown": false,
+    "host": null,
+    "line": 6,
+    "ui": null,
+    "file": "web/src/api.ts"
+   },
+   {
+    "src": "js:web/src/api::runBackup",
+    "method": "POST",
+    "path": "/backup",
+    "raw": "/backup",
+    "prefix_unknown": false,
+    "host": null,
+    "line": 11,
+    "ui": null,
+    "file": "web/src/api.ts"
+   },
+   {
+    "src": "js:web/src/api::getWeather",
+    "method": "GET",
+    "path": "/v1/now",
+    "raw": "https://api.weather.example.com/v1/now?city={}",
+    "prefix_unknown": false,
+    "host": "api.weather.example.com",
+    "line": 15,
+    "ui": null,
+    "file": "web/src/api.ts"
+   }
+  ],
+  "languages": {
+   "python": {
+    "files": 6,
+    "lines": 106
+   },
+   "typescript/javascript": {
+    "files": 6,
+    "lines": 75,
+    "unresolved": 2,
+    "components": 5,
+    "http_calls": 3
+   }
+  },
+  "bridge": {
+   "http_calls": 3,
+   "routes": 2,
+   "matched": 2,
+   "exact": 1,
+   "suffix": 1,
+   "unknown-prefix": 0,
+   "exact-path-only": 0,
+   "ambiguous": 0,
+   "external": 1,
+   "unmatched": 0,
+   "unmatched_examples": []
+  },
+  "lanes": {
+   "browser": 3,
+   "frontend": 12,
+   "server": 30,
+   "data": 5
+  },
+  "calls": {
+   "version": 1,
+   "languages": [
+    "python",
+    "typescript/javascript"
+   ],
+   "not_inventoried": [],
+   "written": {
+    "total": 52,
+    "outcomes": {
+     "resolved": 19,
+     "likely": 3,
+     "possible": 1,
+     "name-only": 0,
+     "external": 19,
+     "builtin": 7,
+     "unresolved": 3
+    },
+    "reasons": {
+     "call-result": 1,
+     "local-unknown": 1,
+     "parameter": 1
+    },
+    "by_via": {
+     "import": 14,
+     "name": 7,
+     "jsx-render": 5,
+     "builtin": 3,
+     "constructor": 3,
+     "global": 3,
+     "self-method": 3,
+     "library-result": 2,
+     "local-ext-type": 2,
+     "local-type": 2,
+     "builtin-value": 1,
+     "cls-constructor": 1,
+     "self-attr-ext-type": 1,
+     "self-attr-type": 1,
+     "super": 1
+    },
+    "with_several_targets": 1,
+    "lines_with_several_calls": 6
+   },
+   "handed": {
+    "total": 1,
+    "outcomes": {
+     "resolved": 0,
+     "likely": 1,
+     "possible": 0,
+     "name-only": 0,
+     "external": 0,
+     "builtin": 0,
+     "unresolved": 0
+    },
+    "reasons": {},
+    "by_via": {
+     "ui-event": 1
+    },
+    "with_several_targets": 0,
+    "lines_with_several_calls": 0
+   },
+   "implicit": {
+    "total": 0,
+    "outcomes": {
+     "resolved": 0,
+     "likely": 0,
+     "possible": 0,
+     "name-only": 0,
+     "external": 0,
+     "builtin": 0,
+     "unresolved": 0
+    },
+    "reasons": {},
+    "by_via": {},
+    "with_several_targets": 0,
+    "lines_with_several_calls": 0
+   },
+   "in_tests": {
+    "total": 1,
+    "outcomes": {
+     "resolved": 1,
+     "likely": 0,
+     "possible": 0,
+     "name-only": 0,
+     "external": 0,
+     "builtin": 0,
+     "unresolved": 0
+    },
+    "reasons": {},
+    "by_via": {
+     "name": 1
+    },
+    "with_several_targets": 0,
+    "lines_with_several_calls": 0
+   }
+  }
+ },
+ "nodes": [
+  {
+   "id": "py:shop",
+   "kind": "module",
+   "name": "shop",
+   "qualname": "shop",
+   "file": "shop/__init__.py",
+   "start_line": 1,
+   "end_line": 2,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.app",
+   "kind": "module",
+   "name": "app",
+   "qualname": "shop.app",
+   "file": "shop/app.py",
+   "start_line": 1,
+   "end_line": 26,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.app.read_user",
+   "kind": "callable",
+   "name": "read_user",
+   "qualname": "shop.app.read_user",
+   "file": "shop/app.py",
+   "start_line": 8,
+   "end_line": 11,
+   "parent": "py:shop.app",
+   "fingerprint": "e9242a3f33789a4e",
+   "signature": "def read_user(user_id: str)",
+   "docstring": null,
+   "decorators": [
+    "app.get(\"/users/{user_id}\")"
+   ],
+   "entry": {
+    "kind": "route",
+    "detail": "GET /users/{user_id}"
+   },
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.app.backup",
+   "kind": "callable",
+   "name": "backup",
+   "qualname": "shop.app.backup",
+   "file": "shop/app.py",
+   "start_line": 14,
+   "end_line": 19,
+   "parent": "py:shop.app",
+   "fingerprint": "aaa2c4ac406a30f8",
+   "signature": "def backup(name: str)",
+   "docstring": null,
+   "decorators": [
+    "app.post(\"/backup\")"
+   ],
+   "entry": {
+    "kind": "route",
+    "detail": "POST /backup"
+   },
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.app.helper",
+   "kind": "callable",
+   "name": "helper",
+   "qualname": "shop.app.helper",
+   "file": "shop/app.py",
+   "start_line": 22,
+   "end_line": 25,
+   "parent": "py:shop.app",
+   "fingerprint": "85ba2f228834e4d4",
+   "signature": "def helper()",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.app.helper.inner",
+   "kind": "callable",
+   "name": "inner",
+   "qualname": "shop.app.helper.inner",
+   "file": "shop/app.py",
+   "start_line": 23,
+   "end_line": 24,
+   "parent": "py:shop.app.helper",
+   "fingerprint": "f7a08de664640e72",
+   "signature": "def inner()",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.auth",
+   "kind": "module",
+   "name": "auth",
+   "qualname": "shop.auth",
+   "file": "shop/auth.py",
+   "start_line": 1,
+   "end_line": 23,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.auth.Session",
+   "kind": "class",
+   "name": "Session",
+   "qualname": "shop.auth.Session",
+   "file": "shop/auth.py",
+   "start_line": 8,
+   "end_line": 14,
+   "parent": "py:shop.auth",
+   "fingerprint": "970d1cc947fa9c67",
+   "signature": "class Session()",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.auth.Session.__init__",
+   "kind": "callable",
+   "name": "__init__",
+   "qualname": "shop.auth.Session.__init__",
+   "file": "shop/auth.py",
+   "start_line": 9,
+   "end_line": 10,
+   "parent": "py:shop.auth.Session",
+   "fingerprint": "d4c2263c51acbfb6",
+   "signature": "def __init__(self)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.auth.Session.login",
+   "kind": "callable",
+   "name": "login",
+   "qualname": "shop.auth.Session.login",
+   "file": "shop/auth.py",
+   "start_line": 12,
+   "end_line": 14,
+   "parent": "py:shop.auth.Session",
+   "fingerprint": "1af56944101c92f3",
+   "signature": "def login(self, user_id, password)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.auth.check_password",
+   "kind": "callable",
+   "name": "check_password",
+   "qualname": "shop.auth.check_password",
+   "file": "shop/auth.py",
+   "start_line": 17,
+   "end_line": 18,
+   "parent": "py:shop.auth",
+   "fingerprint": "e6f2fd1fbeac5492",
+   "signature": "def check_password(password, user)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.auth.make_repo",
+   "kind": "callable",
+   "name": "make_repo",
+   "qualname": "shop.auth.make_repo",
+   "file": "shop/auth.py",
+   "start_line": 21,
+   "end_line": 22,
+   "parent": "py:shop.auth",
+   "fingerprint": "972a07aac31cf6a1",
+   "signature": "def make_repo()",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.cli",
+   "kind": "module",
+   "name": "cli",
+   "qualname": "shop.cli",
+   "file": "shop/cli.py",
+   "start_line": 1,
+   "end_line": 12,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.cli.admin",
+   "kind": "callable",
+   "name": "admin",
+   "qualname": "shop.cli.admin",
+   "file": "shop/cli.py",
+   "start_line": 5,
+   "end_line": 7,
+   "parent": "py:shop.cli",
+   "fingerprint": "dc22e39d094479a4",
+   "signature": "def admin()",
+   "docstring": null,
+   "decorators": [
+    "click.command()"
+   ],
+   "entry": {
+    "kind": "cli",
+    "detail": "click.command()"
+   },
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.cli.<main>",
+   "kind": "callable",
+   "name": "<main>",
+   "qualname": "shop.cli.<main>",
+   "file": "shop/cli.py",
+   "start_line": 10,
+   "end_line": 11,
+   "parent": "py:shop.cli",
+   "fingerprint": null,
+   "signature": "if __name__ == \"__main__\":",
+   "docstring": null,
+   "decorators": [],
+   "entry": {
+    "kind": "main",
+    "detail": "python shop/cli.py"
+   },
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo",
+   "kind": "module",
+   "name": "repo",
+   "qualname": "shop.repo",
+   "file": "shop/repo.py",
+   "start_line": 1,
+   "end_line": 37,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.BaseRepo",
+   "kind": "class",
+   "name": "BaseRepo",
+   "qualname": "shop.repo.BaseRepo",
+   "file": "shop/repo.py",
+   "start_line": 4,
+   "end_line": 9,
+   "parent": "py:shop.repo",
+   "fingerprint": "8b110bee01a1fbc0",
+   "signature": "class BaseRepo()",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.BaseRepo.__init__",
+   "kind": "callable",
+   "name": "__init__",
+   "qualname": "shop.repo.BaseRepo.__init__",
+   "file": "shop/repo.py",
+   "start_line": 5,
+   "end_line": 6,
+   "parent": "py:shop.repo.BaseRepo",
+   "fingerprint": "8f8beea29112e14b",
+   "signature": "def __init__(self, path)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.BaseRepo.execute",
+   "kind": "callable",
+   "name": "execute",
+   "qualname": "shop.repo.BaseRepo.execute",
+   "file": "shop/repo.py",
+   "start_line": 8,
+   "end_line": 9,
+   "parent": "py:shop.repo.BaseRepo",
+   "fingerprint": "c9630003e9d4cf47",
+   "signature": "def execute(self, sql)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.UserRepo",
+   "kind": "class",
+   "name": "UserRepo",
+   "qualname": "shop.repo.UserRepo",
+   "file": "shop/repo.py",
+   "start_line": 12,
+   "end_line": 22,
+   "parent": "py:shop.repo",
+   "fingerprint": "834e4ea9415b933c",
+   "signature": "class UserRepo(BaseRepo)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.UserRepo.get",
+   "kind": "callable",
+   "name": "get",
+   "qualname": "shop.repo.UserRepo.get",
+   "file": "shop/repo.py",
+   "start_line": 13,
+   "end_line": 15,
+   "parent": "py:shop.repo.UserRepo",
+   "fingerprint": "4f44cf1f9900bc56",
+   "signature": "def get(self, user_id)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.UserRepo.save",
+   "kind": "callable",
+   "name": "save",
+   "qualname": "shop.repo.UserRepo.save",
+   "file": "shop/repo.py",
+   "start_line": 17,
+   "end_line": 19,
+   "parent": "py:shop.repo.UserRepo",
+   "fingerprint": "3dd4dc7f77525707",
+   "signature": "def save(self, user)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.UserRepo.validate",
+   "kind": "callable",
+   "name": "validate",
+   "qualname": "shop.repo.UserRepo.validate",
+   "file": "shop/repo.py",
+   "start_line": 21,
+   "end_line": 22,
+   "parent": "py:shop.repo.UserRepo",
+   "fingerprint": "9e94d9751e49a0a9",
+   "signature": "def validate(self, user)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.CachedUserRepo",
+   "kind": "class",
+   "name": "CachedUserRepo",
+   "qualname": "shop.repo.CachedUserRepo",
+   "file": "shop/repo.py",
+   "start_line": 25,
+   "end_line": 27,
+   "parent": "py:shop.repo",
+   "fingerprint": "532b3702ec62f4fa",
+   "signature": "class CachedUserRepo(UserRepo)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.CachedUserRepo.validate",
+   "kind": "callable",
+   "name": "validate",
+   "qualname": "shop.repo.CachedUserRepo.validate",
+   "file": "shop/repo.py",
+   "start_line": 26,
+   "end_line": 27,
+   "parent": "py:shop.repo.CachedUserRepo",
+   "fingerprint": "11918a9781611569",
+   "signature": "def validate(self, user)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.Settings",
+   "kind": "class",
+   "name": "Settings",
+   "qualname": "shop.repo.Settings",
+   "file": "shop/repo.py",
+   "start_line": 30,
+   "end_line": 36,
+   "parent": "py:shop.repo",
+   "fingerprint": "b2e32fb30a302d21",
+   "signature": "class Settings()",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.Settings.__init__",
+   "kind": "callable",
+   "name": "__init__",
+   "qualname": "shop.repo.Settings.__init__",
+   "file": "shop/repo.py",
+   "start_line": 31,
+   "end_line": 32,
+   "parent": "py:shop.repo.Settings",
+   "fingerprint": "ffb2c2f176969e68",
+   "signature": "def __init__(self, path=None)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:shop.repo.Settings.default",
+   "kind": "callable",
+   "name": "default",
+   "qualname": "shop.repo.Settings.default",
+   "file": "shop/repo.py",
+   "start_line": 34,
+   "end_line": 36,
+   "parent": "py:shop.repo.Settings",
+   "fingerprint": "6615acf0e0e2afe9",
+   "signature": "def default(cls)",
+   "docstring": null,
+   "decorators": [
+    "classmethod"
+   ],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:tests.test_auth",
+   "kind": "module",
+   "name": "test_auth",
+   "qualname": "tests.test_auth",
+   "file": "tests/test_auth.py",
+   "start_line": 1,
+   "end_line": 6,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "server"
+  },
+  {
+   "id": "py:tests.test_auth.test_check_password",
+   "kind": "callable",
+   "name": "test_check_password",
+   "qualname": "tests.test_auth.test_check_password",
+   "file": "tests/test_auth.py",
+   "start_line": 4,
+   "end_line": 5,
+   "parent": "py:tests.test_auth",
+   "fingerprint": "e59c9be611232563",
+   "signature": "def test_check_password()",
+   "docstring": null,
+   "decorators": [],
+   "entry": {
+    "kind": "test",
+    "detail": "test_check_password"
+   },
+   "lane": "server"
+  },
+  {
+   "id": "ext:fastapi.FastAPI",
+   "kind": "external",
+   "name": "FastAPI",
+   "qualname": "fastapi.FastAPI",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": null
+  },
+  {
+   "id": "ext:fastapi.FastAPI().get",
+   "kind": "external",
+   "name": "get",
+   "qualname": "fastapi.FastAPI().get",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": null
+  },
+  {
+   "id": "ext:fastapi.FastAPI().post",
+   "kind": "external",
+   "name": "post",
+   "qualname": "fastapi.FastAPI().post",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": null
+  },
+  {
+   "id": "ext:subprocess.call",
+   "kind": "external",
+   "name": "call",
+   "qualname": "subprocess.call",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "data"
+  },
+  {
+   "id": "ext:hashlib.md5().hexdigest",
+   "kind": "external",
+   "name": "hexdigest",
+   "qualname": "hashlib.md5().hexdigest",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": null
+  },
+  {
+   "id": "ext:hashlib.md5",
+   "kind": "external",
+   "name": "md5",
+   "qualname": "hashlib.md5",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": null
+  },
+  {
+   "id": "ext:click.command",
+   "kind": "external",
+   "name": "command",
+   "qualname": "click.command",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": null
+  },
+  {
+   "id": "ext:sqlite3.connect",
+   "kind": "external",
+   "name": "connect",
+   "qualname": "sqlite3.connect",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "data"
+  },
+  {
+   "id": "ext:sqlite3.connect().execute",
+   "kind": "external",
+   "name": "execute",
+   "qualname": "sqlite3.connect().execute",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "data"
+  },
+  {
+   "id": "js:web/src/App",
+   "kind": "module",
+   "name": "App.tsx",
+   "qualname": "web/src/App",
+   "file": "web/src/App.tsx",
+   "start_line": 1,
+   "end_line": 15,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/App::App",
+   "kind": "callable",
+   "name": "App",
+   "qualname": "web/src/App::App",
+   "file": "web/src/App.tsx",
+   "start_line": 5,
+   "end_line": 14,
+   "parent": "js:web/src/App",
+   "fingerprint": "a4db6530f522bcbd",
+   "signature": "component App()",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/api",
+   "kind": "module",
+   "name": "api.ts",
+   "qualname": "web/src/api",
+   "file": "web/src/api.ts",
+   "start_line": 1,
+   "end_line": 17,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/api::getUser",
+   "kind": "callable",
+   "name": "getUser",
+   "qualname": "web/src/api::getUser",
+   "file": "web/src/api.ts",
+   "start_line": 5,
+   "end_line": 8,
+   "parent": "js:web/src/api",
+   "fingerprint": "ac9d56e5a221b3c3",
+   "signature": "getUser(id: string)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/api::runBackup",
+   "kind": "callable",
+   "name": "runBackup",
+   "qualname": "web/src/api::runBackup",
+   "file": "web/src/api.ts",
+   "start_line": 10,
+   "end_line": 12,
+   "parent": "js:web/src/api",
+   "fingerprint": "27e0e18ba3cca373",
+   "signature": "runBackup(name: string)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/api::getWeather",
+   "kind": "callable",
+   "name": "getWeather",
+   "qualname": "web/src/api::getWeather",
+   "file": "web/src/api.ts",
+   "start_line": 14,
+   "end_line": 16,
+   "parent": "js:web/src/api",
+   "fingerprint": "a42d65eb268640e7",
+   "signature": "getWeather(city: string)",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/main",
+   "kind": "module",
+   "name": "main.tsx",
+   "qualname": "web/src/main",
+   "file": "web/src/main.tsx",
+   "start_line": 1,
+   "end_line": 5,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": {
+    "kind": "main",
+    "detail": "app start (web/src/main.tsx)"
+   },
+   "lane": "browser"
+  },
+  {
+   "id": "js:web/src/components/Bio",
+   "kind": "module",
+   "name": "Bio.tsx",
+   "qualname": "web/src/components/Bio",
+   "file": "web/src/components/Bio.tsx",
+   "start_line": 1,
+   "end_line": 5,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/components/Bio::Bio",
+   "kind": "callable",
+   "name": "Bio",
+   "qualname": "web/src/components/Bio::Bio",
+   "file": "web/src/components/Bio.tsx",
+   "start_line": 1,
+   "end_line": 4,
+   "parent": "js:web/src/components/Bio",
+   "fingerprint": "177f687643e41a3a",
+   "signature": "component Bio({ html }: { html: string })",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/pages/Admin",
+   "kind": "module",
+   "name": "Admin.tsx",
+   "qualname": "web/src/pages/Admin",
+   "file": "web/src/pages/Admin.tsx",
+   "start_line": 1,
+   "end_line": 21,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/pages/Admin::BackupButton",
+   "kind": "callable",
+   "name": "BackupButton",
+   "qualname": "web/src/pages/Admin::BackupButton",
+   "file": "web/src/pages/Admin.tsx",
+   "start_line": 6,
+   "end_line": 9,
+   "parent": "js:web/src/pages/Admin",
+   "fingerprint": "5aba9b50543da9e8",
+   "signature": "component BackupButton({ name }: { name: string })",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/pages/Admin::BackupButton.start",
+   "kind": "callable",
+   "name": "start",
+   "qualname": "web/src/pages/Admin::BackupButton.start",
+   "file": "web/src/pages/Admin.tsx",
+   "start_line": 7,
+   "end_line": 7,
+   "parent": "js:web/src/pages/Admin::BackupButton",
+   "fingerprint": "bb967ad87d804c64",
+   "signature": "start()",
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/pages/Admin::Admin",
+   "kind": "callable",
+   "name": "Admin",
+   "qualname": "web/src/pages/Admin::Admin",
+   "file": "web/src/pages/Admin.tsx",
+   "start_line": 11,
+   "end_line": 20,
+   "parent": "js:web/src/pages/Admin",
+   "fingerprint": "3f4eba050a7fa089",
+   "signature": "component Admin()",
+   "docstring": null,
+   "decorators": [],
+   "entry": {
+    "kind": "page",
+    "detail": "/admin"
+   },
+   "lane": "browser"
+  },
+  {
+   "id": "js:web/src/pages/UserPage",
+   "kind": "module",
+   "name": "UserPage.tsx",
+   "qualname": "web/src/pages/UserPage",
+   "file": "web/src/pages/UserPage.tsx",
+   "start_line": 1,
+   "end_line": 12,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "frontend"
+  },
+  {
+   "id": "js:web/src/pages/UserPage::UserPage",
+   "kind": "callable",
+   "name": "UserPage",
+   "qualname": "web/src/pages/UserPage::UserPage",
+   "file": "web/src/pages/UserPage.tsx",
+   "start_line": 5,
+   "end_line": 11,
+   "parent": "js:web/src/pages/UserPage",
+   "fingerprint": "bd58a62e58e6b892",
+   "signature": "component UserPage({ id }: { id: string })",
+   "docstring": null,
+   "decorators": [],
+   "entry": {
+    "kind": "page",
+    "detail": "/users/:id"
+   },
+   "lane": "browser"
+  },
+  {
+   "id": "ext:axios.post",
+   "kind": "external",
+   "name": "post",
+   "qualname": "axios.post",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "data"
+  },
+  {
+   "id": "ext:HTTP GET api.weather.example.com",
+   "kind": "external",
+   "name": "com",
+   "qualname": "HTTP GET api.weather.example.com",
+   "file": null,
+   "start_line": null,
+   "end_line": null,
+   "parent": null,
+   "fingerprint": null,
+   "signature": null,
+   "docstring": null,
+   "decorators": [],
+   "entry": null,
+   "lane": "data"
+  }
+ ],
+ "edges": [
+  {
+   "src": "py:shop.app",
+   "dst": "py:shop.app.read_user",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.app",
+   "dst": "py:shop.app.backup",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.app",
+   "dst": "py:shop.app.helper",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.app.helper",
+   "dst": "py:shop.app.helper.inner",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth",
+   "dst": "py:shop.auth.Session",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth.Session",
+   "dst": "py:shop.auth.Session.__init__",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth.Session",
+   "dst": "py:shop.auth.Session.login",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth",
+   "dst": "py:shop.auth.check_password",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth",
+   "dst": "py:shop.auth.make_repo",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.cli",
+   "dst": "py:shop.cli.admin",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo",
+   "dst": "py:shop.repo.BaseRepo",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.BaseRepo",
+   "dst": "py:shop.repo.BaseRepo.__init__",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.BaseRepo",
+   "dst": "py:shop.repo.BaseRepo.execute",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo",
+   "dst": "py:shop.repo.UserRepo",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.UserRepo",
+   "dst": "py:shop.repo.UserRepo.get",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.UserRepo",
+   "dst": "py:shop.repo.UserRepo.save",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.UserRepo",
+   "dst": "py:shop.repo.UserRepo.validate",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo",
+   "dst": "py:shop.repo.CachedUserRepo",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.CachedUserRepo",
+   "dst": "py:shop.repo.CachedUserRepo.validate",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo",
+   "dst": "py:shop.repo.Settings",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.Settings",
+   "dst": "py:shop.repo.Settings.__init__",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.Settings",
+   "dst": "py:shop.repo.Settings.default",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:tests.test_auth",
+   "dst": "py:tests.test_auth.test_check_password",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.UserRepo",
+   "dst": "py:shop.repo.BaseRepo",
+   "kind": "implements",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.CachedUserRepo",
+   "dst": "py:shop.repo.UserRepo",
+   "kind": "implements",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "py:shop.app",
+   "dst": "ext:fastapi.FastAPI",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    5
+   ],
+   "via": "import",
+   "detail": null
+  },
+  {
+   "src": "py:shop.app",
+   "dst": "ext:fastapi.FastAPI().get",
+   "kind": "calls",
+   "confidence": "inferred",
+   "lines": [
+    8
+   ],
+   "via": "local-ext-type",
+   "detail": null
+  },
+  {
+   "src": "py:shop.app.read_user",
+   "dst": "py:shop.auth.Session.__init__",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    10
+   ],
+   "via": "constructor",
+   "detail": null
+  },
+  {
+   "src": "py:shop.app.read_user",
+   "dst": "py:shop.auth.Session.login",
+   "kind": "calls",
+   "confidence": "inferred",
+   "lines": [
+    11
+   ],
+   "via": "local-type",
+   "detail": null
+  },
+  {
+   "src": "py:shop.app",
+   "dst": "ext:fastapi.FastAPI().post",
+   "kind": "calls",
+   "confidence": "inferred",
+   "lines": [
+    14
+   ],
+   "via": "local-ext-type",
+   "detail": null
+  },
+  {
+   "src": "py:shop.app.backup",
+   "dst": "ext:subprocess.call",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    16
+   ],
+   "via": "import",
+   "detail": null
+  },
+  {
+   "src": "py:shop.app.backup",
+   "dst": "py:shop.auth.make_repo",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    17
+   ],
+   "via": "name",
+   "detail": null
+  },
+  {
+   "src": "py:shop.app.backup",
+   "dst": "py:shop.repo.UserRepo.save",
+   "kind": "calls",
+   "confidence": "inferred",
+   "lines": [
+    18
+   ],
+   "via": "local-type",
+   "detail": null
+  },
+  {
+   "src": "py:shop.app.helper",
+   "dst": "py:shop.app.helper.inner",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    25
+   ],
+   "via": "name",
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth.Session.__init__",
+   "dst": "py:shop.repo.BaseRepo.__init__",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    10
+   ],
+   "via": "constructor",
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth.Session.login",
+   "dst": "py:shop.repo.UserRepo.get",
+   "kind": "calls",
+   "confidence": "inferred",
+   "lines": [
+    13
+   ],
+   "via": "self-attr-type",
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth.Session.login",
+   "dst": "py:shop.auth.check_password",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    14
+   ],
+   "via": "name",
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth.check_password",
+   "dst": "ext:hashlib.md5().hexdigest",
+   "kind": "calls",
+   "confidence": "inferred",
+   "lines": [
+    18
+   ],
+   "via": "library-result",
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth.check_password",
+   "dst": "ext:hashlib.md5",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    18
+   ],
+   "via": "import",
+   "detail": null
+  },
+  {
+   "src": "py:shop.auth.make_repo",
+   "dst": "py:shop.repo.BaseRepo.__init__",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    22
+   ],
+   "via": "constructor",
+   "detail": null
+  },
+  {
+   "src": "py:shop.cli",
+   "dst": "ext:click.command",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    5
+   ],
+   "via": "import",
+   "detail": null
+  },
+  {
+   "src": "py:shop.cli.admin",
+   "dst": "py:shop.app.helper",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    7
+   ],
+   "via": "name",
+   "detail": null
+  },
+  {
+   "src": "py:shop.cli.<main>",
+   "dst": "py:shop.cli.admin",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    11
+   ],
+   "via": "name",
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.BaseRepo.__init__",
+   "dst": "ext:sqlite3.connect",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    6
+   ],
+   "via": "import",
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.BaseRepo.execute",
+   "dst": "ext:sqlite3.connect().execute",
+   "kind": "calls",
+   "confidence": "inferred",
+   "lines": [
+    9
+   ],
+   "via": "self-attr-ext-type",
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.UserRepo.get",
+   "dst": "py:shop.repo.BaseRepo.execute",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    15
+   ],
+   "via": "self-method",
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.UserRepo.save",
+   "dst": "py:shop.repo.UserRepo.validate",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    18
+   ],
+   "via": "self-method",
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.UserRepo.save",
+   "dst": "py:shop.repo.CachedUserRepo.validate",
+   "kind": "may_call",
+   "confidence": "possible",
+   "lines": [
+    18
+   ],
+   "via": "override",
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.UserRepo.save",
+   "dst": "py:shop.repo.BaseRepo.execute",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    19
+   ],
+   "via": "self-method",
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.CachedUserRepo.validate",
+   "dst": "py:shop.repo.UserRepo.validate",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    27
+   ],
+   "via": "super",
+   "detail": null
+  },
+  {
+   "src": "py:shop.repo.Settings.default",
+   "dst": "py:shop.repo.Settings.__init__",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    36
+   ],
+   "via": "cls-constructor",
+   "detail": null
+  },
+  {
+   "src": "py:tests.test_auth.test_check_password",
+   "dst": "py:shop.auth.check_password",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    5
+   ],
+   "via": "name",
+   "detail": null
+  },
+  {
+   "src": "js:web/src/App",
+   "dst": "js:web/src/App::App",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "js:web/src/api",
+   "dst": "js:web/src/api::getUser",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "js:web/src/api",
+   "dst": "js:web/src/api::runBackup",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "js:web/src/api",
+   "dst": "js:web/src/api::getWeather",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "js:web/src/components/Bio",
+   "dst": "js:web/src/components/Bio::Bio",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "js:web/src/pages/Admin",
+   "dst": "js:web/src/pages/Admin::BackupButton",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "js:web/src/pages/Admin::BackupButton",
+   "dst": "js:web/src/pages/Admin::BackupButton.start",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "js:web/src/pages/Admin",
+   "dst": "js:web/src/pages/Admin::Admin",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "js:web/src/pages/UserPage",
+   "dst": "js:web/src/pages/UserPage::UserPage",
+   "kind": "contains",
+   "confidence": "resolved",
+   "lines": [],
+   "via": null,
+   "detail": null
+  },
+  {
+   "src": "js:web/src/App::App",
+   "dst": "js:web/src/pages/UserPage::UserPage",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    9
+   ],
+   "via": "jsx-render",
+   "detail": null
+  },
+  {
+   "src": "js:web/src/App::App",
+   "dst": "js:web/src/pages/Admin::Admin",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    10
+   ],
+   "via": "jsx-render",
+   "detail": null
+  },
+  {
+   "src": "js:web/src/api::runBackup",
+   "dst": "ext:axios.post",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    11
+   ],
+   "via": "import",
+   "detail": null
+  },
+  {
+   "src": "js:web/src/main",
+   "dst": "js:web/src/App::App",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    4
+   ],
+   "via": "jsx-render",
+   "detail": null
+  },
+  {
+   "src": "js:web/src/pages/Admin::BackupButton.start",
+   "dst": "js:web/src/api::runBackup",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    7
+   ],
+   "via": "name",
+   "detail": null
+  },
+  {
+   "src": "js:web/src/pages/Admin::BackupButton",
+   "dst": "js:web/src/pages/Admin::BackupButton.start",
+   "kind": "calls",
+   "confidence": "inferred",
+   "lines": [
+    8
+   ],
+   "via": "ui-event",
+   "detail": "onClick"
+  },
+  {
+   "src": "js:web/src/pages/Admin::Admin",
+   "dst": "js:web/src/pages/Admin::BackupButton",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    16
+   ],
+   "via": "jsx-render",
+   "detail": null
+  },
+  {
+   "src": "js:web/src/pages/UserPage::UserPage",
+   "dst": "js:web/src/api::getUser",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    8
+   ],
+   "via": "name",
+   "detail": null
+  },
+  {
+   "src": "js:web/src/pages/UserPage::UserPage",
+   "dst": "js:web/src/components/Bio::Bio",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    10
+   ],
+   "via": "jsx-render",
+   "detail": null
+  },
+  {
+   "src": "js:web/src/api::getUser",
+   "dst": "py:shop.app.read_user",
+   "kind": "calls",
+   "confidence": "inferred",
+   "lines": [
+    6
+   ],
+   "via": "http-suffix",
+   "detail": "GET /api/users/{}"
+  },
+  {
+   "src": "js:web/src/api::runBackup",
+   "dst": "py:shop.app.backup",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    11
+   ],
+   "via": "http-exact",
+   "detail": "POST /backup"
+  },
+  {
+   "src": "js:web/src/api::getWeather",
+   "dst": "ext:HTTP GET api.weather.example.com",
+   "kind": "calls",
+   "confidence": "resolved",
+   "lines": [
+    15
+   ],
+   "via": "http-external",
+   "detail": "GET https://api.weather.example.com/v1/now?city={}"
+  }
+ ],
+ "unresolved": {
+  "password.encode": 1,
+  "setName": 1,
+  "getUser().then": 1
+ },
+ "unresolved_totals": {
+  "call_sites": 3,
+  "distinct": 3,
+  "builtin": 4,
+  "in_tests": 0,
+  "kinds": {
+   "member of self or this": 0,
+   "method on a value of unknown type": 1,
+   "on another call's result": 1,
+   "dynamic (subscript, getattr, computed)": 0,
+   "name not found": 1
+  }
+ }
+}

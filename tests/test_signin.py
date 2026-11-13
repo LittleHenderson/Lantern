@@ -224,9 +224,10 @@ def test_the_mark_and_word_lantern_link_home(monkeypatch):
     monkeypatch.delenv("LANTERN_HOME_URL", raising=False)
     for page in (auth.done_page("lt_x", "google:…abc", True), auth.login_page([], "", None), auth.error_page("x")):
         assert '<header><a class="home" href="https://lantern-cloud.fly.dev/"' in page
-        assert "<span>Lantern</span></a></header>" in page
+        assert '<span>Lantern</span></a><a class="guide" href="https://lantern-cloud.fly.dev/guide"' in page
     monkeypatch.setenv("LANTERN_HOME_URL", "https://example.org/lantern/")
     assert 'href="https://example.org/lantern/"' in auth.error_page("x")
+    assert 'href="https://example.org/lantern/guide"' in auth.error_page("x")   # How to use Lantern goes there too
     for bad in ("javascript:alert(1)", "http://example.org/", 'https://x.org/"><script>'):
         monkeypatch.setenv("LANTERN_HOME_URL", bad)
         assert 'href="https://lantern-cloud.fly.dev/"' in auth.error_page("x")

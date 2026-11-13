@@ -615,7 +615,7 @@ class Recorder:
                             rows = conn.execute(f"SELECT rowid, * FROM {quoted}").fetchall()   # nosec B608: a table's own name
                             tables[name] = {str(r[0]): hashlib.sha256(repr(r[1:]).encode()).hexdigest()[:16] for r in rows}
                         except sqlite3.Error:
-                            rows = conn.execute(f"SELECT * FROM {quoted}").fetchall()         # nosec B608
+                            rows = conn.execute(f"SELECT * FROM {quoted}").fetchall()   # nosec B608: a table's own name
                             tables[name] = {hashlib.sha256(repr(r).encode()).hexdigest()[:16]: "" for r in rows}
                 finally:
                     conn.close()

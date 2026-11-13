@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+import lantern_files
 from lantern import ask, depaudit, evidence, learn, pipeline, remote, results, sandbox, scanresult, security
 from lantern.cli import main
 from lantern.graph import Graph
@@ -149,6 +150,7 @@ def test_a_link_out_a_pipe_and_a_file_behind_a_linked_folder_are_not_there(tmp_p
 # openers. Everything else in `lantern/` that opens a file for reading is a find: (module, function) -> why not.
 OWN_FILES = {
     ("python_frontend.py", "project_bytes"): "the opener", ("python_frontend.py", "project_text"): "the opener",
+    ("python_frontend.py", "project_sha256"): "the opener", ("seal.py", "_key"): "LANTERN_HOME",
     ("results.py", "plain"): "the opener for result files", ("gitfacts.py", "_text"): "the opener for git's files",
     ("results.py", "write"): "writes", ("removal.py", "_write"): "writes", ("server.py", "FileLock.__enter__"): "a lock",
     ("_jail.py", "_landlock"): "a folder handle for Landlock", ("_jail.py", "_stat"): "/proc",
@@ -169,6 +171,9 @@ OWN_FILES = {
     ("_behave_inside.py", "_Worker.blocked"): "what an app copy printed, in the sandbox's temp folder",
     ("_behave_inside.py", "Recorder.look"): "the app's own data files, in the sandbox's temp folder",
     ("_behave_inside.py", "main"): "the scene Lantern wrote into the sandbox's temp folder",
+    ("kept.py", "_digest_of"): "Lantern's own code and the parser libraries it runs with, for the stamp of the code",
+    ("kept.py", "Shelf._read"): "LANTERN_HOME/cache: an entry, never through a link, only this user's plain file",
+    ("kept.py", "Shelf.put"): "LANTERN_HOME/cache: writes", ("kept.py", "tidy"): "LANTERN_HOME/cache: the mark of the last tidy",
 }
 
 
@@ -205,7 +210,7 @@ def test_no_file_is_opened_any_other_way():
     own (OWN_FILES says which). A new reader that opens a project's file with a plain `open` or `read_text` fails
     here, before any sweep is run."""
     found = {}
-    for path in sorted((ROOT / "lantern").glob("*.py")):
+    for path in lantern_files.modules():
         for function, line in _opens(ast.parse(path.read_text(encoding="utf-8"))):
             found.setdefault((path.name, function), []).append(line)
     new = {f"{module}:{lines[0]} {function}" for (module, function), lines in found.items() if (module, function) not in OWN_FILES}
@@ -221,8 +226,11 @@ def test_no_name_is_given_twice_at_the_top_of_a_module():
     top level. The test files are held to the same rule: the same day a new constant `FIND` in `tests/test_flow.py`
     was replaced by an older one further down, and the new test read the wrong text."""
     twice = []
-    for folder in ("lantern", "cloud/lantern_cloud", "gateway/lantern_gateway", "tests"):
-        for path in sorted((ROOT / folder).glob("*.py")):
+    places = [("lantern", lantern_files.modules())] + [
+        (folder, sorted((ROOT / folder).glob("*.py"))) for folder in ("cloud/lantern_cloud", "gateway/lantern_gateway", "tests")]
+    assert all(files for _, files in places), [folder for folder, files in places if not files]
+    for folder, files in places:
+        for path in files:
             seen: dict[str, int] = {}
             for node in ast.parse(path.read_text(encoding="utf-8")).body:
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -642,11 +650,17 @@ def test_a_dependency_file_that_is_a_link_inside_the_project_is_read(tmp_path):
 def test_a_lock_file_that_is_a_link_out_of_the_project_is_no_lock_file_for_npm(tmp_path):
     """npm reads package-lock.json itself, and would send the names in somebody else's file to the registry."""
     lock = json.dumps({"name": "x", "lockfileVersion": 3, "packages": {}})
-    own = _write(tmp_path / "own", {"package.json": "{}", "package-lock.json": lock})
+    names = json.dumps({"dependencies": {"left-pad": "1.3.0"}})
+    own = _write(tmp_path / "own", {"package.json": names, "package-lock.json": lock})
     assert depaudit.run_npm_audit(own, True)[1]["why"] == "offline"
-    linked = _write(tmp_path / "linked", {"package.json": "{}"})
+    linked = _write(tmp_path / "linked", {"package.json": names})
     os.symlink(_write(tmp_path / "outside", {"l.json": lock}) / "l.json", linked / "package-lock.json")
-    assert depaudit.run_npm_audit(linked, True)[1]["why"].startswith("no package-lock.json")
+    record = depaudit.run_npm_audit(linked, True)[1]
+    assert record["why"].startswith("no package-lock.json") and record["unlocked"] == 1
+    # a package.json that names no library has nothing a lock file could say, linked or not (since point 6)
+    bare = _write(tmp_path / "bare", {"package.json": "{}"})
+    os.symlink(tmp_path / "outside" / "l.json", bare / "package-lock.json")
+    assert depaudit.run_npm_audit(bare, True)[1]["why"] == "no package.json names a library that ships"
 
 
 @only_posix
@@ -906,7 +920,7 @@ def test_every_loader_of_a_saved_map_says_which_folder_it_means():
     """In `lantern/`, a map is loaded with the project folder beside it. A `Graph.load(path)` alone would go on to
     read wherever the file says the project is."""
     alone = []
-    for path in sorted((ROOT / "lantern").glob("*.py")):
+    for path in lantern_files.modules():
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "load"
                     and isinstance(node.func.value, ast.Name) and node.func.value.id == "Graph"

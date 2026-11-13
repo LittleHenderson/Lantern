@@ -16,7 +16,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, gitfacts, programs, results, scanresult
+from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
@@ -105,8 +105,24 @@ def digest_payload(g: Graph, sec: dict | None, rd: dict | None, commit: str | No
         "readiness": None if not rd else {
             "score": rd["score"], "checks": sorted(f"{c['id']}:{c['status']}" for cat in rd["categories"]
                                                    for c in cat["checks"]),
-            "protections": sorted(f"{x['id']}:{x['status']}" for x in rd.get("protections") or [])},
+            "protections": sorted(f"{x['id']}:{x['status']}" for x in rd.get("protections") or []),
+            **_release_part(rd.get("release"))},
     }
+
+
+def _release_part(rel) -> dict:
+    """The release decision's share of the digest: the decision, each criterion's state and what the decision is
+    tied to (the code, the dependency files, the plan, the accepted risks). Nothing for a readiness file an older
+    Lantern wrote, so its digest stays what it was."""
+    if not isinstance(rel, dict) or rel.get("decision") not in release.DECISIONS:
+        return {}
+    b = rel.get("bound_to") if isinstance(rel.get("bound_to"), dict) else {}
+    part = lambda k: b.get(k) if isinstance(b.get(k), dict) else {}   # noqa: E731
+    return {"release": {
+        "decision": rel["decision"],
+        "criteria": sorted(f"{c.get('id')}:{c.get('state')}" for c in rel.get("criteria") or [] if isinstance(c, dict)),
+        "code": part("code").get("sha256"), "dependencies": part("dependencies").get("sha256"),
+        "plan": part("settings").get("plan_sha256"), "accepted": part("settings").get("accepted_sha256")}}
 
 
 def digest(payload: dict) -> str:
@@ -121,12 +137,74 @@ def _call_site_words(c: dict) -> str:
     return (f" Of {c['total']} call sites read: {pct(c.get('resolved_internal'))} linked to repo code for certain, "
             f"{pct(c.get('inferred_internal'))} likely, {pct(c.get('several_possible_targets'))} to one of several "
             f"targets, {pct(c.get('name_only_guess'))} guessed by method name, {pct(c.get('known_external'))} known "
-            f"library calls, {pct(c.get('builtin'))} Python built-in calls, {pct(c.get('unresolved'))} not traced"
+            f"library calls, {pct(c.get('builtin'))} built-in calls (the language's own functions), "
+            f"{pct(c.get('unresolved'))} not traced"
             + (f" ({c['unresolved_in_tests']} of those in test files)" if c.get("unresolved_in_tests") else "") + ".")
 
 
 AUDIT_LANG = {"pip-audit": "Python", "npm-audit": "npm", "maven-audit": "Gradle/Maven", "composer-audit": "PHP (Composer)",
-              "gem-audit": "Ruby (Bundler)"}
+              "gem-audit": "Ruby (Bundler)", "copied-audit": "copied-in software"}
+
+
+def _whole(x) -> int:
+    """A count out of a record that may have been read back from disk: a whole number above 0, else 0."""
+    return x if isinstance(x, int) and not isinstance(x, bool) and x > 0 else 0
+
+
+def _names(x, most: int = 3) -> list[str]:
+    return [str(v)[:120] for v in (x if isinstance(x, list) else []) if isinstance(v, str)][:most]
+
+
+def not_read_lines(sec: dict | None) -> list[str]:
+    """The Limits lines for what the project holds that Lantern takes for code or software and no reader opened
+    (`security.json` `not_read`, `lantern/unread.py`): code kept under another name, software copied into a vendor
+    folder. Counts and the first few names; the record may be one read back from disk."""
+    got = (sec or {}).get("not_read")
+    got = got if isinstance(got, dict) else {}
+    out = []
+    kept = got.get("renamed") if isinstance(got.get("renamed"), dict) else None
+    n = _whole(kept.get("files")) if kept else 0
+    if n:
+        endings = kept.get("endings") if isinstance(kept.get("endings"), dict) else {}
+        kinds = ", ".join(f"`{str(k)[:20]}`" for k in list(endings)[:6])
+        ex = _names(kept.get("examples"))
+        line = (f"{n} file{'s hold' if n != 1 else ' holds'} code under another name"
+                + (f" ({kinds})" if kinds else "") + (f", {_whole(kept.get('lines'))} lines" if _whole(kept.get("lines")) else "")
+                + (f", for example {', '.join(ex)}" if ex else "") + ". Lantern's readers do not open such files: no "
+                "map, no path and none of Lantern's own checks (data flow, login checks, call counts) covers them.")
+        scanned = min(_whole(kept.get("scanned")), n)
+        if scanned == n:
+            line += " Bandit read " + ("it" if n == 1 else "all of them") + " for known Python patterns."
+        elif scanned:
+            line += f" Bandit read {scanned} of them for known Python patterns; no scanner read the other {n - scanned}."
+        else:
+            line += " No scanner read " + ("it" if n == 1 else "them") + " either."
+        out.append(line)
+    cp = got.get("copied") if isinstance(got.get("copied"), dict) else None
+    copies, loose = (_whole(cp.get("copies")), _whole(cp.get("unnamed"))) if cp else (0, 0)
+    cut = bool(cp) and cp.get("cut_short") is True
+    if copies or loose or cut:
+        parts = []
+        if copies:
+            named = _names(cp.get("named"))
+            tools = (sec or {}).get("tools")
+            looked = any(isinstance(x, dict) and x.get("tool") == "copied-audit" and scanresult.state_of(x) in ("ok", "partial")
+                         for x in (tools if isinstance(tools, list) else []))
+            one = copies == 1
+            parts.append(f"{copies} cop{'y says' if one else 'ies say'} what {'it is' if one else 'they are'}"
+                         + (f" ({', '.join(named)})" if named else "") + f" and {'was' if one else 'were'} "
+                         + ("looked up for known problems" if looked else "not looked up for known problems in this check")
+                         + f": the lookup goes by the name and version {'it says it is' if one else 'they say they are'}, "
+                         "so whether the files are that version, and what is packed inside, is not checked")
+        if loose:
+            ex = _names(cp.get("unnamed_examples"))
+            parts.append(f"{loose} file{'s' if loose != 1 else ''} of code there carr{'y' if loose != 1 else 'ies'} no name "
+                         "and version Lantern can look up" + (f" (for example {', '.join(ex)})" if ex else ""))
+        out.append("Software copied into the project (a `vendor` folder). Lantern's readers leave such folders out, so "
+                   "no map and no code scanner covers them." + (" " + "; ".join(parts) + "." if parts else "")
+                   + (" Part of what lies there was not looked at, not even for names: Lantern looks a few folders "
+                      "deep and at a limited number of files." if cut else ""))
+    return out
 
 
 def _reason(t: dict) -> str:
@@ -166,6 +244,26 @@ def incomplete_lines(tools: list[dict]) -> list[str]:
     return out
 
 
+def accepted_by(acc) -> str:
+    """Who accepted a risk and when, or where: a `# nosec` comment in the code has no name and no date."""
+    acc = acc if isinstance(acc, dict) else {}
+    if acc.get("how") == "nosec":
+        return "in the code, a # nosec comment on the line"
+    return f"{acc.get('by') or '?'}, {acc.get('date') or '?'}"
+
+
+def accepted_words(acc) -> str:
+    """One line for an accepted risk (plain text: the caller escapes it)."""
+    acc = acc if isinstance(acc, dict) else {}
+    if acc.get("how") == "nosec":
+        return f"Accepted in the code (a # nosec comment on the line): {acc.get('reason') or ''}"
+    return f"Accepted by {acc.get('by') or '?'} on {acc.get('date') or '?'}: {acc.get('reason') or ''}"
+
+
+NO_LOCK_WORDS = {"npm-audit": ("npm", "package.json"), "composer-audit": ("PHP", "composer.json"),
+                 "gem-audit": ("Ruby", "Gemfile")}
+
+
 def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy: str, exp: dict | None,
            baseline_unread: str | None = None) -> list[str]:
     st = g.stats()
@@ -180,6 +278,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
         out.append(f"{st['guessed_by_method_name']} call edges were linked by method name alone because the object's "
                    "type was unknown. They are marked likely or possible, never confirmed, and can point at the "
                    "wrong function.")
+    out += deep.words(g.meta)    # code nested deeper than a reader follows: left where the reading stopped, and named
     tr = run_meta.get("trace")
     if counted(tr):
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "
@@ -217,6 +316,17 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
             out.append(f"{n} PHP librar{'ies' if n != 1 else 'y'} in composer.lock {'are' if n != 1 else 'is'} "
                        f"installed from a branch, not a released version, so {were} not checked for known "
                        "vulnerabilities.")
+        u = t.get("unlocked")           # named where no lock file says which version is installed
+        u = u if isinstance(u, int) and not isinstance(u, bool) and u > 0 else 0
+        if u and tool in NO_LOCK_WORDS:
+            kind, file = NO_LOCK_WORDS[tool]
+            out.append(f"{u} {kind} librar{'ies are' if u != 1 else 'y is'} named in a {file} with no lock file "
+                       f"beside it, so no exact version is known and {'they were' if u != 1 else 'it was'} not "
+                       "checked for known vulnerabilities. Committing the lock file fixes this.")
+        if isinstance(t.get("other_locks"), list) and t["other_locks"]:
+            k = len(t["other_locks"])
+            out.append(f"The libraries of {k} folder{'s' if k != 1 else ''} are fixed by a pnpm, yarn or bun lock "
+                       "file, which Lantern does not read yet, so they were not checked for known vulnerabilities.")
     if any(f.get("category") == "dependency" for f in (sec or {}).get("findings", [])) or any(
             t.get("tool") in AUDIT_TOOLS and t.get("status") == "ok" for t in (sec or {}).get("tools", [])):
         out.append("Dependency findings come from live vulnerability databases, so a re-check can find new ones "
@@ -229,6 +339,14 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
     if rd:
         out.append("The readiness score uses file and pattern checks. A check passing means the thing exists, not "
                    "that it is configured well.")
+    rel = (rd or {}).get("release") if isinstance((rd or {}).get("release"), dict) else None
+    if rel:
+        out.append("The release decision is about exactly the files, libraries, settings and tools it names, on the "
+                   "computer it was made on. A change to any of them needs a new check, and a file in a folder "
+                   "Lantern does not read (installed libraries, build output) is not part of it.")
+        for x in (rel.get("profile") or {}).get("not_required") or []:
+            if isinstance(x, dict) and x.get("id") == "behaviour" and isinstance(x.get("why"), str):
+                out.append("What the app does when it runs. " + x["why"][:400])
     if exp and exp.get("explanations"):
         out.append("Plain-language explanations were written by a model. Each phrase is checked to anchor to real "
                    "code, but the wording itself is not proof. The results digest does not cover explanations or "
@@ -240,6 +358,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    f"(baseline.json in the results folder) could not be used: {str(baseline_unread)[:300]}. It was "
                    "left as it is, and this report compares with nothing. `lantern evidence PATH --reset-baseline` "
                    "starts a new record from today's findings.")
+    out += not_read_lines(sec)
     left = run_meta.get("skipped") if isinstance(run_meta.get("skipped"), dict) else None
     if left and isinstance(left.get("files"), int):
         ex = [str(x)[:120] for x in (left.get("examples") or []) if isinstance(x, str)][:3]
@@ -288,6 +407,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
                    "mode": "local", "privacy": privacy, "engine": engine_ref()},
         "scorecard": {
             "readiness": None if not rd else {"score": rd["score"], "grade": rd["grade"], "shape": rd["shape"],
+                                              "checklist": rd.get("checklist"),
                                               "categories": [{k: c[k] for k in ("title", "weight", "score", "percent")}
                                                              for c in rd["categories"]]},
             "now": {k: sum(1 for f in live if f["rank"] == k and f.get("status") == "open")
@@ -316,6 +436,9 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
             "incomplete": [{k: t.get(k) for k in ("tool", "state", "status", "why", "role", "version")}
                            for t in scanresult.incomplete((sec or {}).get("tools")) if isinstance(t, dict)],
         },
+        # the release decision with every criterion and what it is tied to (release.py); None for a readiness file an
+        # older Lantern wrote
+        "release": (rd or {}).get("release") if isinstance((rd or {}).get("release"), dict) else None,
         "understanding": narratives,
         "provenance": {"tools": tool_versions(sec), "models": models,
                        "rules": ["bandit default profile", "lantern-web LW-*/LJ-* rules", "lantern secret patterns",
@@ -348,13 +471,16 @@ def read_digest(report: Path) -> tuple[str | None, dict | None]:
 
 
 def verify(repo: Path, want: str, old: dict | None, trace_cmd: list[str] | None = None, no_scan: bool = False,
-           offline: bool = False) -> dict:
+           offline: bool = False, beside: Path | None = None) -> dict:
     """Re-run the analysis on `repo` the way the report was made and compare digests.
 
     Scanning on/off and offline are copied from the report's recorded options; a trace command never is, because a
     trace runs the project's code. The caller types it, and it must match what the report recorded, or the result
-    is `refused` with the command to check. Returns match, both digests, the options used, and which payload
-    sections differ (when the report's payload is available)."""
+    is `refused` with the command to check. `beside`: the results folder the report lies in. It is left out of the
+    project's files as it was when the report was made, and the record `lantern behave` left there is handed to the
+    release decision (which counts it only with this computer's seal, for this code and this plan); no app is
+    started here. Returns match, both digests, the options used, and which payload sections differ (when the
+    report's payload is available)."""
     from .engine import build_graph
     from .readiness import assess
     from .security import scan
@@ -368,14 +494,17 @@ def verify(repo: Path, want: str, old: dict | None, trace_cmd: list[str] | None 
                 "Lantern won't run a command taken from a report; check it and pass it yourself.",
                 "trace_command": want_trace, "report": want}
     offline = bool(run.get("offline")) or offline
-    g = build_graph(repo)
-    run_meta: dict = {"offline": offline}
-    if trace_cmd:
-        tm = merge_trace(g, run_trace(repo, trace_cmd))
-        run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}
-    sec = scan(g, offline) if do_scan else None
-    rd = assess(g, sec, run_meta)
+    from . import kept
+    with kept.without():        # a verification does the work again: nothing kept from an earlier run is used
+        g = build_graph(repo)
+        run_meta: dict = {"offline": offline}
+        if trace_cmd:
+            tm = merge_trace(g, run_trace(repo, trace_cmd))
+            run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}
+        sec = scan(g, offline) if do_scan else None
     gi = git_info(repo)
+    record, unread = results.earlier(beside, "behaviour.json") if beside is not None else (None, None)
+    rd = assess(g, sec, run_meta, git=gi, behaviour=record, behaviour_unread=unread, out=beside)
     new = digest_payload(g, sec, rd, gi.get("commit"), gi.get("dirty", False), run_options(sec, run_meta))
     got = digest(new)
     differs = [k for k in new if old is not None and old.get(k) != new[k]] if old is not None else None
@@ -444,6 +573,10 @@ def _memo(ev: dict) -> dict:
     title = (f"What changed in {name} since {since}, and what is still open." if since and not same_day
              else f"Where {name} stands today, and what is still open.")
     parts = []
+    rel = _release(ev)
+    if rel:
+        said = release.line(rel)[len(rel["decision"]):].rstrip()
+        parts.append(f"Release decision: <b>{E(rel['decision'])}</b>{E(said[:400])}" + ("" if said.endswith(".") else "."))
     if rd:
         if isinstance(base.get("score"), (int, float)) and isinstance(rd["score"], (int, float)) and base["score"] != rd["score"] and not same_day:
             parts.append(f"Readiness moved from <b>{E(base['score'])} to {E(rd['score'])}</b> out of 100 "
@@ -515,8 +648,11 @@ def badge_text(ev: dict | None) -> str:
     crit = now.get("critical")
     if isinstance(crit, int) and not isinstance(crit, bool):
         parts.append(f"{crit} critical")
+    rel = _release(ev)
     if _incomplete(ev):
         parts.append("scan incomplete")
+    elif rel and rel["decision"] != "Passed":   # a release that is not passed says so; one that is says nothing more
+        parts.append(rel["decision"].lower())
     when = str(h.get("generated_at") or "")[:10]
     if when:
         try:
@@ -531,16 +667,30 @@ def _incomplete(ev: dict | None) -> bool:
     return isinstance(inc, list) and any(isinstance(x, dict) for x in inc)
 
 
+def _release(ev: dict | None) -> dict | None:
+    """The report's release decision when it has one of the three words; None for a report an older Lantern made
+    and for a file that holds something else there."""
+    rel = (ev or {}).get("release")
+    return rel if isinstance(rel, dict) and rel.get("decision") in release.DECISIONS else None
+
+
 def badge_svg(score: int | None = None, grade: str | None = None, ev: dict | None = None) -> str:
     """`Lantern · commit 1a2b3c · 0 critical · Oct 31`. Color follows the open findings (none critical or high:
     good), not the readiness score, which stays in the tooltip. A scan that did not finish is never green: it says
-    "scan incomplete" in grey, because "0 critical" from a scanner that did not run is not a result."""
+    "scan incomplete" in grey, because "0 critical" from a scanner that did not run is not a result. Since 2026-11
+    the badge is green only for a release that Passed (release.py): a blocked one says "blocked" (the color of the
+    findings, or of a high one when tests or a behaviour check block it), an incomplete one "incomplete" in grey.
+    A report an older Lantern made has no decision and keeps the older rule."""
     now = ((ev or {}).get("scorecard") or {}).get("now") or {}
     crit = now.get("critical") if isinstance(now.get("critical"), int) else 0
     high = now.get("high") if isinstance(now.get("high"), int) else 0
-    color = "#B42318" if crit else "#B54708" if high else "#64748B" if _incomplete(ev) else "#0D9488" if now else "#64748B"
+    rel = _release(ev)
+    blocked, short = bool(rel and rel["decision"] == "Blocked"), bool(rel and rel["decision"] == "Incomplete")
+    color = ("#B42318" if crit else "#B54708" if high or blocked else "#64748B" if _incomplete(ev) or short
+             else "#0D9488" if now else "#64748B")
     right = badge_text(ev)
-    title = f"Lantern: {right}" + (f"; readiness {score}/100 {grade}" if score is not None and grade else "")
+    title = f"Lantern: {right}" + (f"; readiness {score}/100 {grade}" if score is not None and grade else "") + (
+        f"; release decision {rel['decision']}" if rel else "")
     w1, w2 = 58, 12 + round(6.3 * len(right))
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w1 + w2}" height="20" role="img" '
             f'aria-label="{html.escape(title, quote=True)}"><title>{html.escape(title)}</title>'
@@ -605,9 +755,73 @@ def _narratives_html(text: str) -> str:
     return "".join(out)
 
 
+DECISION_LOOK = {"Blocked": ("✕", "critical"), "Incomplete": ("◐", "warning"), "Passed": ("✓", "good")}
+STATE_LOOK = {"passed": ("✓", "passed", "good"), "failed": ("✕", "failed", "critical"),
+              "missing": ("◐", "missing", "warning"), "not-applicable": ("–", "not required", "none")}
+
+
+def _release_html(ev: dict) -> str:
+    """The release decision for the Scorecard section: the word, each criterion with its reason and what to do, the
+    profile, and what the decision is tied to. Every value is escaped and taken only in the shape Lantern writes:
+    the page is also rebuilt from an `evidence.json` read back from a project's folder."""
+    rel = _release(ev)
+    if not rel:
+        return ""
+    text = lambda v, n=600: E(v[:n]) if isinstance(v, str) else ""   # noqa: E731
+    table = lambda v: v if isinstance(v, dict) else {}               # noqa: E731
+    mark, tone = DECISION_LOOK[rel["decision"]]
+    rows = []
+    for c in rel.get("criteria") or []:
+        if not isinstance(c, dict):
+            continue
+        m, word, t = STATE_LOOK.get(c.get("state"), ("?", "not known", "none"))
+        rows.append(f"<tr><td><span class='st {t}'>{m} {word}</span></td><td><b>{text(c.get('title'), 200)}</b>"
+                    f"<div class='muted'>{text(c.get('why'))}</div>"
+                    + (f"<div>{text(c.get('fix'))}</div>" if c.get("state") in ("failed", "missing") and c.get("fix") else "")
+                    + "</td></tr>")
+    prof = table(rel.get("profile"))
+    b = table(rel.get("bound_to"))
+    code, deps, st = table(b.get("code")), table(b.get("dependencies")), table(b.get("settings"))
+    sha = lambda v: f"<code>{E(v)}</code>" if isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) else "–"   # noqa: E731
+    commit = b.get("commit") if isinstance(b.get("commit"), str) else None
+    tied = [("Commit", (f"<code>{E(commit[:12])}</code>" + (" with uncommitted changes" if b.get("uncommitted_changes") else ""))
+             if commit else "no git commit"),
+            ("Code", f"{E(code.get('files'))} files, SHA-256 {sha(code.get('sha256'))}"
+             + (f" · {E(code.get('not_read'))} could not be read" if code.get("not_read") else "")
+             + (f"<div class='muted'>Not counted: {text(code.get('left_out'), 300)}.</div>" if code.get("left_out") else "")),
+            ("Library lists", (f"{E(deps.get('count'))} file{'s' if deps.get('count') != 1 else ''}, SHA-256 {sha(deps.get('sha256'))}"
+                               + "".join(f"<div class='muted'><code>{E(str(k)[:200])}</code> {sha(v)}</div>"
+                                         for k, v in list(table(deps.get('files')).items())[:12]))
+             if deps.get("count") else "none"),
+            ("Settings", " · ".join(x for x in (
+                "security scan on" if st.get("scan") else "security scan off",
+                ("tests run with <code>" + E(" ".join(str(w) for w in st["trace"])[:200]) + "</code>")
+                if isinstance(st.get("trace"), list) and st["trace"] else "tests not run",
+                "library check offline" if st.get("offline") else "library check online",
+                f"made on {text(st.get('place'), 40) or 'this computer'}",
+                ("packs switched off: " + E(", ".join(str(x) for x in st["packs_off"])[:300]))
+                if isinstance(st.get("packs_off"), list) and st["packs_off"] else "") if x)
+             + (f"<div class='muted'>Accepted risks file: {sha(st.get('accepted_sha256'))}</div>" if st.get("accepted_sha256") else "")
+             + (f"<div class='muted'>Behaviour plan: {sha(st.get('plan_sha256'))}</div>" if st.get("plan_sha256") else "")),
+            ("Tools", ", ".join(f"{text(t.get('tool'), 60)} {text(t.get('version'), 40) or '?'}"
+                                + (f" ({text(t.get('state'), 30)})" if t.get("state") else "")
+                                for t in (b.get("tools") or [])[:40] if isinstance(t, dict)) or "–")]
+    req = ", ".join(E(str(x)[:40]) for x in prof.get("required") or [] if isinstance(x, str)) or "–"
+    not_req = "".join(f"<div class='muted'>Not required: {E(str(x.get('id'))[:40])}. {text(x.get('why'))}</div>"
+                      for x in prof.get("not_required") or [] if isinstance(x, dict))
+    return (f"<div class='rel {tone}'><b>{mark} Release decision: {E(rel['decision'])}</b>"
+            f"<div>{text(rel.get('words'), 1500)}</div></div>"
+            f"<table class='crit'>{''.join(rows)}</table>"
+            f"<p class='muted'>The decision comes from these criteria, never from the score. Profile: "
+            f"{text(prof.get('name'), 80) or '–'}. Required: {req}.</p>{not_req}"
+            "<details class='tied'><summary>What this decision is tied to</summary><div class='kv'>"
+            + "".join(f"<div>{k}</div><div>{v}</div>" for k, v in tied) + "</div></details>")
+
+
 def render_html(ev: dict, nonce: str | None = None) -> str:
     h, sc, ar, se = ev["header"], ev["scorecard"], ev["architecture"], ev["security"]
     rd = sc["readiness"]
+    rel = _release(ev)
     commit = h.get("commit")
     commit_html = (f"<code>{E(commit[:12])}</code>" + (" <b class='warn'>with uncommitted changes</b>" if h.get("dirty") else "")
                    if commit else "<b class='warn'>not pinned: no git commit</b>")
@@ -648,9 +862,7 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
                 f"</span>{'<br><span class=path>' + path + '</span>' if path else ''}{extra}</td></tr>")
 
     open_rows = "".join(frow(f) for f in se["open"]) or "<tr><td colspan=2 class='muted'>None.</td></tr>"
-    acc_rows = "".join(frow(f, f"<div class='reason'>Accepted by {E(f['accepted'].get('by') or '?')} on "
-                                f"{E(f['accepted'].get('date') or '?')}: {E(f['accepted'].get('reason') or '')}</div>")
-                       for f in se["accepted"])
+    acc_rows = "".join(frow(f, f"<div class='reason'>{E(accepted_words(f['accepted']))}</div>") for f in se["accepted"])
     changed_rows = "".join(f"<tr><td><span class='sev {E(f['rank'])}'>{E(f['rank'])}</span></td><td><b>{E(f['title'])}</b> "
                            f"<span class='tag'>changed · still open</span><br><span class='muted'>{E(f['rule'])} · "
                            f"{E(f['file'] or '')}</span></td></tr>" for f in se.get("changed") or [])
@@ -703,7 +915,7 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     d_html = (f"<span class='delta {'up' if memo['delta'] > 0 else 'down'}'>{'↑' if memo['delta'] > 0 else '↓'} {abs(memo['delta'])}</span>"
               if memo.get("delta") else "")
     tiles = (f"<div class='tiles'>"
-             f"<div><div class='v'>{E(rd['score']) if rd else '–'} {d_html}</div><div class='k'>Readiness, grade {E(rd['grade']) if rd else '–'}</div></div>"
+             f"<div><div class='v'>{E(rd['score']) if rd else '–'} {d_html}</div><div class='k'>Readiness, grade {E(rd['grade']) if rd else '–'}{' · release ' + E(rel['decision']) if rel else ''}</div></div>"
              f"<div class='{'fixed' if se['fixed'] else ''}'><div class='v'>{len(se['fixed'])}</div><div class='k'>Fixed since baseline</div></div>"
              f"<div class='{'open' if memo['crit'] or memo['high'] else ''}'><div class='v'>{memo['open']}</div><div class='k'>Open · {memo['crit']} critical, {memo['high']} high</div></div>"
              f"<div><div class='v'>{len(se['accepted'])}</div><div class='k'>Accepted with a reason</div></div></div>")
@@ -730,7 +942,7 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     diff_rows = ("".join(drow("FIXED", f) for f in se["fixed"])
                  + "".join(drow("NEW", f) for f in sc.get("new") or [] if not same_day)
                  + "".join(drow("OPEN", f) for f in se["open"] if f["rank"] in ("critical", "high"))
-                 + "".join(drow("ACCEPT", f, f" <span class='muted'>· “{E(f['accepted'].get('reason') or '')}” · {E(f['accepted'].get('by') or '?')}, {E(f['accepted'].get('date') or '')}</span>") for f in se["accepted"]))
+                 + "".join(drow("ACCEPT", f, f" <span class='muted'>· “{E(f['accepted'].get('reason') or '')}” · {E(accepted_by(f['accepted']))}</span>") for f in se["accepted"]))
     rest_open = [f for f in se["open"] if f["rank"] not in ("critical", "high")]
     diff_more = (f"<p class='muted'>+{len(rest_open)} open ({sum(1 for f in rest_open if f['rank'] == 'medium')} medium, "
                  f"{sum(1 for f in rest_open if f['rank'] == 'low')} low) in section 3.</p>" if rest_open else "")
@@ -759,6 +971,11 @@ h2 small{{color:var(--muted);font:400 13px var(--font);letter-spacing:0}} h4{{co
 code{{font:12.5px var(--mono);background:var(--soft);color:var(--ink);padding:1px 6px;border-radius:6px;overflow-wrap:anywhere}}
 .muted{{color:var(--muted)}} .warn{{color:var(--warn-ink)}}
 .incomplete{{margin:14px 0 0;padding:10px 14px;border-radius:10px;background:var(--warning-soft);color:var(--ink);font-size:14px;line-height:1.5}} .incomplete b{{color:var(--warn-ink)}}
+.rel{{margin:0 0 12px;padding:12px 16px;border-radius:12px;background:var(--hover);color:var(--ink);font-size:14px;line-height:1.5}} .rel b{{font-size:16px}}
+.rel.critical{{background:var(--critical-soft)}} .rel.critical b{{color:var(--crit-ink)}} .rel.warning{{background:var(--warning-soft)}} .rel.warning b{{color:var(--warn-ink)}} .rel.good{{background:var(--good-soft)}} .rel.good b{{color:var(--good-ink)}}
+.crit td{{vertical-align:top}} .st{{display:inline-block;white-space:nowrap;font-size:11.5px;font-weight:600;padding:1px 9px;border-radius:99px;background:var(--hover);color:var(--ink)}}
+.st.critical{{background:var(--critical-soft);color:var(--crit-ink)}} .st.warning{{background:var(--warning-soft);color:var(--warn-ink)}} .st.good{{background:var(--good-soft);color:var(--good-ink)}}
+.tied{{margin:10px 0 16px}} .tied summary{{cursor:pointer;font-weight:600}} .tied code{{word-break:break-all}}
 .kv{{display:grid;grid-template-columns:160px 1fr;gap:8px 16px}} .kv div:nth-child(odd){{color:var(--muted)}} .kv div:nth-child(even){{color:var(--ink)}}
 .score{{display:flex;gap:20px;align-items:center;flex-wrap:wrap}} .big{{font:700 52px/1 var(--display);letter-spacing:-.035em;color:var(--ink);font-variant-numeric:tabular-nums}}
 .grade{{font:700 20px/1 var(--display);width:46px;height:46px;border-radius:13px;display:grid;place-items:center;background:var(--hover);color:var(--ink)}}
@@ -780,6 +997,7 @@ button.print{{float:right;position:relative;z-index:1;font:inherit;font-size:12.
 .seg{{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:var(--hover)}} .seg button{{font:600 12px var(--font);padding:5px 10px;border-radius:7px;border:0;background:none;color:var(--muted);cursor:pointer}} .seg button.on{{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(16,16,20,.08),0 0 0 1px var(--line)}}
 .topbar .btn{{font:600 12.5px var(--font);height:32px;padding:0 12px;border-radius:9px;border:1px solid var(--line-2);background:var(--panel);color:var(--ink);cursor:pointer}}
 .topbar .dg{{font:12px var(--mono);color:var(--muted);padding:0 8px}}
+.topbar a.btn{{display:inline-flex;align-items:center;text-decoration:none}} #guidelink[hidden]{{display:none}}
 .eyebrow{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font:600 11px var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}}
 h1.memo{{font:600 26px/1.3 var(--display);letter-spacing:-.02em;margin:14px 0 10px;text-wrap:pretty}}
 p.lead{{font-size:15px;line-height:1.65;color:var(--body);margin:0 0 18px}} p.lead b{{color:var(--ink)}}
@@ -818,7 +1036,7 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
 <div class="topbar"><span class="muted" style="font-weight:600;color:var(--ink)">{E(h['name'])} / Evidence Report</span><span class="sp"></span>
 <div class="seg" id="mode"><button data-m="simple" class="on">Simple</button><button data-m="advanced">Advanced</button></div>
 <span class="dg" title="{E(ev['digest'])}">digest {E(ev['digest'][:14])}…{E(ev['digest'][-4:])}</span>
-<button class="btn" id="copyverify">Copy verify command</button><button class="btn" id="savepdf">Save as PDF</button></div>
+<button class="btn" id="copyverify">Copy verify command</button><button class="btn" id="savepdf">Save as PDF</button><a class="btn" id="guidelink" href="https://lantern-cloud.fly.dev/guide" rel="noopener" title="How to use Lantern: short animated demos">How to use Lantern</a></div>
 <section><div class="eyebrow"><span>Evidence Report · Lantern {E(__version__)}</span><span>{E(h['name'])}{(' · commit ' + E(commit[:7])) if commit else ''} · {E(h['generated_at'][:10])}</span></div>
 <h1 class="memo">{memo['title']}</h1>
 <p class="lead">{memo['lead']}</p>
@@ -838,8 +1056,9 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
 <div>Privacy level</div><div>{E(h['privacy'])}</div></div></section>
 
 <section><h2>3 · Scorecard</h2>
+{_release_html(ev)}
 {f'''<div class="score"><span class="big">{E(rd["score"])}<span style="font-size:20px" class="muted">/100</span></span><span class="grade {rd["grade"] if rd.get("grade") in ("A", "B", "C", "D", "F") else ""}">{E(rd["grade"])}</span>
-<div class="muted">Deployment readiness for a {E(rd["shape"])}.<br>Checks that don't apply are skipped, not counted.<br>Low findings don't lower the score; critical, high and medium ones do.</div></div>
+<div class="muted">Deployment readiness for a {E(rd["shape"])}.<br>Checks that don't apply are skipped, not counted.<br>Low findings don't lower the score; critical, high and medium ones do.{"<br>A required check that was skipped (tests not run, libraries not looked up) earns no points. The score reads 100 only when the release decision is Passed and is held at 59 while it is Blocked" + (f" (the checklist alone gives {E(rd.get('checklist'))})." if isinstance(rd.get("checklist"), (int, float)) and rd.get("checklist") != rd.get("score") else ".") if rel else ""}</div></div>
 <table style="margin-top:12px">{cats}</table>''' if rd else '<p class="muted">Readiness was not computed.</p>'}
 <div class="kv" style="margin-top:14px"><div>Open findings now</div><div>{cnt(sc['now'])}</div>
 <div>At first analysis</div><div>{cnt(sc['before'])}{(' <span class="muted">(' + E(sc['baseline_date'] or '') + ')</span>') if sc.get('before') else ''}</div></div></section>
@@ -888,6 +1107,12 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
   cv.onclick = function () {{ if (navigator.clipboard) navigator.clipboard.writeText(cmd); cv.textContent = 'Copied'; }};
   document.getElementById('savepdf').onclick = function () {{ window.print(); }};   // no inline handler: the page's script policy refuses them
   try {{ if (window.self !== window.top) {{ document.querySelector('.topbar .seg').style.display = 'none'; document.documentElement.classList.add('framed'); }} }} catch (e) {{}}
+  // How to use Lantern: the app or website around a framed page has the button; on its own, this site's /guide when
+  // Lantern serves the page (/p/, /r/, /s/), else the website's guide (a plain link: nothing is fetched until clicked).
+  var gl = document.getElementById('guidelink'), framed = true;
+  try {{ framed = window.self !== window.top; }} catch (e) {{}}
+  if (framed) gl.hidden = true;
+  else if (/^https?:$/.test(location.protocol) && /^\\/(p|r|s)\\//.test(location.pathname)) gl.setAttribute('href', '/guide');
 }})();
 </script></body></html>"""
 
