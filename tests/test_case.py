@@ -7,6 +7,7 @@ import json
 import shutil
 from pathlib import Path
 
+import lantern_files
 from lantern import pipeline
 from lantern.case import STATUS_WORDS
 from lantern.engine import build_graph
@@ -112,7 +113,7 @@ def test_a_second_run_marks_findings_reproduced_and_records_the_revision(tmp_pat
 
 
 def test_the_viewer_escapes_every_case_field(tmp_path):
-    html = (Path(__file__).parents[1] / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+    html = lantern_files.page("report.html")
     body = html[html.index("function caseBox(f)"):html.index("// Every call site Lantern read")]
     import re
     for m in re.finditer(r"\$\{([^}]*)\}", body):

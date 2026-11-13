@@ -1,0 +1,85 @@
+{
+ "date": "2026-11-13",
+ "commit": null,
+ "id_version": 2,
+ "readiness": {
+  "score": 26,
+  "grade": "F",
+  "categories": {
+   "Security findings": 4.0,
+   "Secrets and config": 3.6,
+   "Input and error handling": 10.0,
+   "Dependencies": 2.0,
+   "Tests": 4.0,
+   "Observability": 2.0,
+   "Packaging": 0.0,
+   "CI/CD": 0.0,
+   "Resilience": 0.0,
+   "Documentation": 0.0
+  }
+ },
+ "counts": {
+  "critical": 3,
+  "high": 1,
+  "medium": 3,
+  "low": 1
+ },
+ "findings": {
+  "57fa455f7b3b": {
+   "rule": "B602",
+   "rank": "critical",
+   "title": "subprocess call with shell=True identified, security issue.",
+   "file": "shop/app.py",
+   "line": 16
+  },
+  "12771352490c": {
+   "rule": "B324",
+   "rank": "critical",
+   "title": "Use of weak MD5 hash for security. Consider usedforsecurity=False",
+   "file": "shop/auth.py",
+   "line": 18
+  },
+  "271ac69ef170": {
+   "rule": "B608",
+   "rank": "critical",
+   "title": "Possible SQL injection vector through string-based query construction.",
+   "file": "shop/repo.py",
+   "line": 15
+  },
+  "3009f20c07ea": {
+   "rule": "LW-PUBLIC-SECRET",
+   "rank": "high",
+   "title": "Secret-looking setting VITE_ADMIN_SECRET is sent to every visitor's browser",
+   "file": "web/src/pages/Admin.tsx",
+   "line": 4
+  },
+  "27105c2e3afc": {
+   "rule": "LW-AUTH-MISSING",
+   "rank": "medium",
+   "title": "POST /backup changes data, is called by the app, and no login check was found",
+   "file": "shop/app.py",
+   "line": 14
+  },
+  "cb19d1c15090": {
+   "rule": "LW-SECRET-INLINE",
+   "rank": "medium",
+   "title": "A signing secret is written in the code: anyone who can read the code can forge a session or a login token; read it from a setting kept outside the code",
+   "file": "shop/auth.py",
+   "line": 5
+  },
+  "408d05131176": {
+   "rule": "LJ-XSS-HTML",
+   "rank": "medium",
+   "title": "Inserts raw HTML into the page (cross-site scripting risk)",
+   "file": "web/src/components/Bio.tsx",
+   "line": 3
+  },
+  "6715dbeeddd8": {
+   "rule": "B404",
+   "rank": "low",
+   "title": "Consider possible security implications associated with the subprocess module.",
+   "file": "shop/app.py",
+   "line": 1
+  }
+ }
+}

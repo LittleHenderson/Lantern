@@ -27,6 +27,8 @@ import re
 from pathlib import Path
 
 from . import manifest
+from . import quick
+from . import strings
 from .python_frontend import project_text
 from .graph import Graph
 
@@ -85,8 +87,8 @@ SINKS = [
 VISITOR_INPUT = re.compile(r"\b(?:request|req)\.(?:json|body|args|form|query|params|get_json|data)\b|\bsearchParams\b|\bformData\b|"
                            r"\bmessages?\b.*\brequest\b|\bawait\s+(?:req|request)\.(?:json|text|formData)\(\)|\bctx\.(?:body|query|params)\b|"
                            r"\br\.(?:PathValue|FormValue|Body)\b|\bc\.(?:Param|Query|PostForm|BindJSON)\(|Json\(\w+\)|\.getParameter\(")
-MAX_LINE = 2000   # longer lines are minified bundles (jquery.min.js): vendored code, and quadratic for STRING_RE
-STRING_RE = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
+MAX_LINE = 2000   # longer lines are minified bundles (jquery.min.js): vendored code
+QUOTES = "'\"`"   # what opens a string in the lines read here (found by lantern/strings.py)
 
 KEY_PATTERNS = [
     ("OpenAI key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}")),
@@ -131,11 +133,16 @@ def find_calls(g: Graph, cache: dict[str, list[str]] | None = None) -> list[dict
         by_file.setdefault(n.file, []).append(n)
     for rel, nodes in by_file.items():
         lines = _lines(repo, rel, cache)
+        # the patterns that can find anything in this file at all (`quick`): the others are not tried on its lines
+        whole = quick.Text("\n".join(lines))
+        patterns = [row for row in CALL_PATTERNS if whole.may_match(row[2])]
+        if not patterns:
+            continue
         for i, raw in enumerate(lines, 1):
             if _comment(raw) or len(raw) > MAX_LINE:
                 continue
-            code = STRING_RE.sub("''", raw) if "'" in raw or '"' in raw else raw
-            for kind, provider, rx in CALL_PATTERNS:
+            code = strings.sub(QUOTES, "''", raw) if "'" in raw or '"' in raw else raw
+            for kind, provider, rx in patterns:
                 if not (rx.search(code) or (kind == "vector" and rx.search(raw))):
                     continue
                 # the innermost callable holding this line
@@ -241,7 +248,7 @@ def model_output_sinks(g: Graph, calls: list[dict], cache: dict[str, list[str]])
             raw = lines[i - 1]
             if _comment(raw) or len(raw) > MAX_LINE:
                 continue
-            code = STRING_RE.sub("''", raw)
+            code = strings.sub(QUOTES, "''", raw)
             if input_line is None and VISITOR_INPUT.search(code):
                 input_line = i
             m = re.match(r"\s*(?:(?:const|let|var|val)\s+)?(?:\{\s*)?([A-Za-z_$][\w$]*)\s*(?::\s*[^=]+)?\s*(?:\}\s*)?(?::?=)\s*(.+)$", code)
@@ -262,7 +269,7 @@ def model_output_sinks(g: Graph, calls: list[dict], cache: dict[str, list[str]])
                               "code chooses, not the text. Heuristic: assignments followed inside this function only."),
                         snippet=raw.strip()[:200]))
                     break
-        if input_line is not None and any(rx.search(STRING_RE.sub("''", lines[i - 1])) for i in range(lo, hi + 1) if len(lines[i - 1]) <= MAX_LINE for _w, rx in SINKS):
+        if input_line is not None and any(rx.search(strings.sub(QUOTES, "''", lines[i - 1])) for i in range(lo, hi + 1) if len(lines[i - 1]) <= MAX_LINE for _w, rx in SINKS):
             call_line = next((c["line"] for c in calls if c["node"] == nid and c["kind"] == "model"), lo)
             out.append(_finding(
                 "LA-PROMPT-FROM-INPUT", "Visitor text goes into a model call in a function that also runs tools", "LOW",

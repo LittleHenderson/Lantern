@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+import lantern_files
 from lantern import ask, depaudit, evidence, mcp_server, remote, sandbox, scanresult, security
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -583,10 +584,11 @@ def test_no_program_is_started_any_other_way():
     """Every module of Lantern, the cloud service and the gateway: a later line that starts a program by its bare
     name, asks `shutil.which`, or starts a Python tool with the current folder first fails here."""
     found = []
-    for base in ("lantern", "cloud/lantern_cloud", "gateway"):
-        for p in sorted((ROOT / base).rglob("*.py")):
-            if "starters" not in p.parts:
-                found += _unsafe_starts(p.read_text(encoding="utf-8"), p.relative_to(ROOT).as_posix())
+    services = [p for base in ("cloud/lantern_cloud", "gateway") for p in sorted((ROOT / base).rglob("*.py"))]
+    assert len(services) > 10                # the two services are read from the checkout, Lantern from where it is loaded
+    for p in lantern_files.modules(deep=True) + services:
+        if "starters" not in p.parts:
+            found += _unsafe_starts(p.read_text(encoding="utf-8"), lantern_files.named(p))
     assert found == []
 
 

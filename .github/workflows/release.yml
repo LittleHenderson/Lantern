@@ -1,10 +1,16 @@
 # A pushed tag v* (v0.9.0, v0.9.0-rc1) builds the sdist and wheel, runs the test suite against the built wheel
 # in a clean environment, checks the hosted gateway is up, and publishes a GitHub Release with both files.
 # The Release body is the matching CHANGELOG.md section (tools/changelog_section.py).
+#
+# A rehearsal: "Run workflow" on the Actions tab (or `gh workflow run release.yml --ref main`) does everything a tag
+# does on that branch except the last job. Nothing is published and no tag is needed. Run it before the tag is
+# pushed: twice (0.10.0, and a trial of 0.11.0) the tests against the built wheel failed where every other check
+# was green, and a tag that ends in a failed release has to be moved by hand.
 name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -17,13 +23,19 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
-      - name: Tag matches the package version
+      - name: Tag matches the package version (a rehearsal has no tag and takes the version the package says)
         run: |
-          tag="${GITHUB_REF_NAME#v}"
           ver="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Rehearsal of v$ver on $GITHUB_REF_NAME: nothing will be published."
+            echo "RELEASE_NAME=v$ver" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          tag="${GITHUB_REF_NAME#v}"
           case "$tag" in "$ver"|"$ver"-*|"$ver"rc*) ;; *) echo "tag $GITHUB_REF_NAME does not match version $ver"; exit 1;; esac
-      - name: The CHANGELOG has a section for this tag
-        run: python tools/changelog_section.py "$GITHUB_REF_NAME" > release-notes.md && cat release-notes.md
+          echo "RELEASE_NAME=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+      - name: The CHANGELOG has a section for this tag, short enough for the release page
+        run: python tools/changelog_section.py "$RELEASE_NAME" > release-notes.md && cat release-notes.md
       - run: pip install build && python -m build
       - name: Software bill of materials (every library in requirements-lock.txt, CycloneDX JSON, shipped with the Release)
         run: pip install cyclonedx-bom && cyclonedx-py requirements requirements-lock.txt -o dist/lantern-sbom.cdx.json && python -c "import json; d=json.load(open('dist/lantern-sbom.cdx.json')); print(len(d['components']), 'components')"
@@ -73,6 +85,7 @@ jobs:
 
   publish:
     needs: [build, test-wheel, gateway-up]
+    if: github.event_name == 'push'      # a pushed tag only: a rehearsal (workflow_dispatch) ends before this job
     runs-on: ubuntu-latest
     permissions:
       contents: write

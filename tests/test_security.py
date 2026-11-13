@@ -46,7 +46,8 @@ def test_test_only_code_is_not_reachable(result):
 
 def test_rank_rules():
     base = {"category": "code", "reachable": None}
-    assert rank({**base, "tool_severity": "HIGH"}) == "medium"
+    # until 2026-11 this was "medium": a path Lantern did not find lowered the rank (tests/test_severity.py)
+    assert rank({**base, "tool_severity": "HIGH"}) == "high"
     assert rank({**base, "tool_severity": "LOW"}) == "low"
     assert rank({**base, "tool_severity": "HIGH", "reachable": {"kind": "route"}}) == "critical"
     assert rank({**base, "tool_severity": "HIGH", "reachable": {"kind": "test"}}) == "high"

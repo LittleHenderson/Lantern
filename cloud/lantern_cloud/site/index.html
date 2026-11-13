@@ -139,6 +139,7 @@
     <button data-v="settings" aria-label="Settings"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg><span>Settings</span></button>
   </nav>
   <div class="seg" id="viewmode" title="Simple: plain sentences and one next action. Advanced: every table and panel."><button data-m="simple">Simple</button><button data-m="advanced">Advanced</button></div>
+  <a class="iconbtn" id="guidebtn" href="/guide" aria-label="How to use Lantern" title="How to use Lantern: short animated demos"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M8.5 8v4l3.5-2z"/></svg></a>
   <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
   <div class="acct" id="acct"></div>
 </header>
@@ -146,6 +147,8 @@
 <div id="xtoast" aria-live="polite"></div>
 <div id="ask"></div>
 <div id="sheet"></div>
+<button id="termtab" type="button" aria-controls="term" aria-expanded="false" title="Pull up the terminal: click, or drag up (key: `)"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6l3.5 3L4 12M9.5 13H16"/></svg><span>Terminal</span><kbd>`</kbd></button>
+<div id="term" hidden role="region" aria-label="Terminal"><div class="tgrip" id="tgrip" role="separator" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="2000" aria-valuenow="340" aria-label="Terminal height: drag, or use the up and down arrow keys" tabindex="0"><i></i></div><div class="tbar"><b>Terminal</b><span class="muted" id="tsub">Lantern commands only · each does what a button does</span><span class="spacer"></span><label class="muted" title="Background opacity"><input type="range" min="0.4" max="1" step="0.05" value="1" id="termop" aria-label="Terminal background opacity"></label><button class="x" id="termclose" aria-label="Close the terminal">×</button></div><div class="tout" id="tout" role="log" aria-live="polite"></div><div class="tin"><span class="ps">lantern</span><input type="text" id="tcmd" aria-label="Type a Lantern command" placeholder="help · runs · open 1 · check https://github.com/you/app · findings · status" autocomplete="off" spellcheck="false" autocapitalize="off"></div></div>
 <script>
 const VERSION = '__VERSION__';
 /*__APP_JS__*/
@@ -243,7 +246,7 @@ function sentence(sum) {
   let s;
   if (c.critical) s = `<b class="bad">${esc(c.critical)} serious problem${c.critical > 1 ? 's' : ''}</b>${smaller ? `, and ${esc(smaller)} smaller one${smaller > 1 ? 's' : ''}` : ''}`;
   else { const bits = []; if (c.high) bits.push(`${c.high} high`); if (c.medium) bits.push(`${c.medium} medium`); s = bits.length ? `No serious problems. <b>${esc(bits.join(' and '))}</b> to look at` : 'No open problems found'; }
-  return `${s}. Readiness ${esc(sum.score)} of 100.`;
+  return `${s}. Readiness ${esc(sum.score)} of 100.${releaseSays(sum.release)}`;
 }
 const PRIV = {structure: 'Map and findings only', full: 'With code snippets'};
 
@@ -645,7 +648,7 @@ function renderHomePro(el) {
     const s = r.summary || {}, c = r.status === 'done' ? s.counts || {} : null, t = tone(s.grade), run = ACTIVE.includes(r.status);
     return `<div class="r"><div><div class="n">${esc(repoName(r.link))}${r.privacy === 'full' ? '<span class="tag">SNIPPETS</span>' : ''}${r.shared ? '<span class="tag">SHARED</span>' : ''}</div><div class="p" title="${esc(r.link)}">${esc(r.link)}</div></div>
       <span class="p" style="font:12px var(--font);color:var(--ink-2)">${esc(r.host)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</span>
-      ${r.status === 'done' && s.score != null ? `<div class="rd"><span style="font-weight:600;color:var(--ink);width:24px">${esc(s.score)}</span><div class="bar"><i class="bar-${t}" style="width:${Math.max(2, Math.min(100, +s.score || 0))}%"></i></div><span class="g tone-${t}">${esc(s.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'checking' : esc(r.status)}</span></div>`}
+      ${r.status === 'done' && s.score != null ? `<div class="rd"${releaseWord(s.release) ? ` title="Release decision: ${releaseWord(s.release)}"` : ''}><span style="font-weight:600;color:var(--ink);width:24px">${esc(s.score)}</span><div class="bar"><i class="bar-${t}" style="width:${Math.max(2, Math.min(100, +s.score || 0))}%"></i></div><span class="g tone-${t}">${esc(s.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'checking' : esc(r.status)}</span></div>`}
       ${num(c ? c.critical : null, true)}${num(c ? c.high : null)}${num(c ? c.medium : null)}${num(c ? c.low : null)}
       ${c && s.lanes ? whereStrip(s) : '<span class="dash">–</span>'}
       <span class="num">${s.files != null && r.status === 'done' ? esc(s.files) : '<span class="dash">–</span>'}</span>
@@ -686,7 +689,7 @@ async function viewLinks(r) {
   if (have && have.until > Date.now() + 60000) return have;
   const v = await api(`/v1/runs/${encodeURIComponent(r.id)}/view`, {method: 'POST'});
   const rel = u => { try { const x = new URL(u, location.href); return x.origin === location.origin ? x.pathname + x.search : null; } catch (e) { return null; } };
-  return (S.links[r.id] = {report: rel(v.report), evidence: rel(v.evidence), until: Date.now() + v.expires_in * 1000});
+  return (S.links[r.id] = {report: rel(v.report), evidence: rel(v.evidence), findings: rel(v.findings), until: Date.now() + v.expires_in * 1000});
 }
 function subBar(r, tabs) {
   const s = r.summary || {}, c = s.counts || {}, nf = (c.critical || 0) + (c.high || 0) + (c.medium || 0), sm = simple();
@@ -694,7 +697,7 @@ function subBar(r, tabs) {
                : {atlas: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', evidence: 'Evidence'};
   const tab = t => `<button data-t="${t}" role="tab" aria-selected="${S.tab === t}" class="${S.tab === t ? 'on' : ''}">${W[t]}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${esc(nf)}</span>` : ''}</button>`;
   return `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to my runs">${icon('back')}<span>My runs</span></button>${sm ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(repoName(r.link))}</span>
-    ${r.status === 'done' && s.grade ? `<span class="gchip ${tone(s.grade)}" title="Readiness ${esc(s.score)}/100">${esc(s.grade)}${sm ? '' : ' · ' + esc(s.score)}</span>` : ''}
+    ${r.status === 'done' && s.grade ? `<span class="gchip ${tone(s.grade)}" title="Readiness ${esc(s.score)}/100${releaseWord(s.release) ? ', release decision ' + releaseWord(s.release) : ''}">${esc(s.grade)}${sm ? '' : ' · ' + esc(s.score)}${releaseWord(s.release) ? ' · ' + releaseWord(s.release) : ''}</span>` : ''}
     ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].map(tab).join('')}</div>` : ''}
     <span class="spacer"></span>${tabs ? `${explainBtn(r)}<button class="btn sm" id="share" aria-label="${r.shared ? 'Shared: manage the link' : 'Share this report'}">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button><a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#" aria-label="Open the report in a new tab">${icon('open')}<span>Open in new tab</span></a><button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}<span class="dock" data-dock="end"></span></div>`;
 }
@@ -958,6 +961,107 @@ async function askAttach(file) {
 document.getElementById('ask').addEventListener('keydown', e => { if (e.target.id === 'askin' && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('asksend').click(); } });
 
 // ---- help
+// ---- terminal: the drawer is the app's own (pulled in above); these are the website's commands
+// Each command does what a button on this page does, through the same request to this service: nothing typed here goes
+// anywhere else, and the server gets no new way in. What cannot be undone (delete) or makes something public (share)
+// opens the same window the button opens, so it still asks first.
+const TERM_HELLO = 'Lantern commands only, never a shell. Type help for the list. Finding ids in the output are links.';
+const TERM_HELP = `Lantern commands only: each one does what a button on this page does.
+  runs                                     list your checks
+  open NUMBER | NAME                       open one (open 1, open shop)
+  check LINK                               check a public repository (map and findings only, no code kept)
+  check LINK --snippets --agree            the same, keeping short code snippets with the results
+  samples                                  the sample apps;  sample ID  checks one
+  status                                   the open check: score, release decision, problems
+  findings [critical|high|medium|low]      the open check's findings (ids are links)
+  explain                                  write plain-words explanations (asks before anything goes to a model)
+  share                                    make or stop a share link (asks first)
+  delete                                   delete the open check (asks first)
+  ask QUESTION                             ask Lantern about the open check
+  signin  |  home  |  help-page  |  settings
+${TERM_ALWAYS}
+Shell commands are refused: this terminal never runs a shell or anybody's code.`;
+const RANKS = ['critical', 'high', 'medium', 'low', 'info'];
+// One line about a finished check, as plain text (termPrint escapes it): the score and the open problems.
+function termSum(s) {
+  s = s || {}; const c = s.counts || {}, n = k => Math.max(0, Math.floor(+c[k]) || 0);
+  return `${s.score != null ? 'readiness ' + s.score + '/100' : 'not graded'}${releaseWord(s.release) ? ', ' + releaseWord(s.release) : ''}, ${n('critical')} critical, ${n('high')} high, ${n('medium')} medium`;
+}
+function termRunNow() { return S.view === 'run' && S.run && S.run.id === S.runId ? S.run : null; }
+function termNeedMe() { if (S.me) return false; termPrint('Sign in first: type signin.', 'err'); return true; }
+async function termRuns() { if (!S.runs) await loadRuns(); return S.runs || []; }
+function termDone(r) { if (r && r.status === 'done') return true; termPrint(r ? 'This check has no report yet: it is ' + r.status + '.' : 'Open a check first: runs, then open NUMBER.', 'err'); return false; }
+async function termRun(line) {
+  termPrint('lantern ' + line, 'me');
+  const w = termWords(line); if (w[0] === 'lantern') w.shift();
+  const verb = (w[0] || 'help').toLowerCase(), rest = w.slice(1), r = termRunNow();
+  try {
+    if (verb === 'help' || verb === '?') return termPrint(TERM_HELP, 'sys');
+    if (verb === 'home') return go('home');
+    if (verb === 'help-page') return go('help');
+    if (verb === 'settings') return go('settings');
+    if (verb === 'signin' || verb === 'login') { if (S.me) return termPrint('You are signed in.', 'ok'); return signInSheet(); }
+    if (verb === 'runs' || verb === 'ls') {
+      if (termNeedMe()) return;
+      const all = await termRuns();
+      return termPrint(all.length ? all.map((x, n) => `${String(n + 1).padStart(2)}  ${repoName(x.link)}  ${x.status === 'done' ? termSum(x.summary) : x.status}  ${ago(x.created)}`).join('\n') : 'No checks yet. Type check LINK, or samples.', all.length ? '' : 'sys');
+    }
+    if (verb === 'open' || verb === 'cd') {
+      if (termNeedMe()) return;
+      const all = await termRuns(), q = rest.join(' '), n = Number(q), lw = q.toLowerCase();
+      const hit = Number.isInteger(n) && n >= 1 && n <= all.length ? all[n - 1] : all.find(x => x.id === q) || (all.filter(x => repoName(x.link).toLowerCase().includes(lw)).length === 1 ? all.find(x => repoName(x.link).toLowerCase().includes(lw)) : null);
+      if (!q || !hit) return termPrint('No single check matches that. Type runs for the list.', 'err');
+      location.hash = '#/run/' + encodeURIComponent(hit.id); return termPrint('opened ' + repoName(hit.link), 'ok');
+    }
+    if (verb === 'samples') {
+      if (!S.samples.length) await loadSamples();
+      return termPrint(S.samples.length ? S.samples.map(x => `${x.id}  ${x.title || ''}${x.stack ? '  (' + x.stack + ')' : ''}`).join('\n') + '\nType sample ID to check one.' : 'No sample apps on this server.', 'sys');
+    }
+    if (verb === 'check' || verb === 'sample' || verb === 'analyze') {
+      const snip = rest.includes('--snippets'), agree = rest.includes('--agree'), what = rest.filter(x => !x.startsWith('--'));
+      if (what.length !== 1) return termPrint(verb === 'sample' ? 'Type sample ID (samples lists them).' : 'Type check LINK, for example check https://github.com/you/app', 'err');
+      if (snip && !agree) return termPrint('Keeping code snippets needs your agreement. Add --agree to say: I agree that short snippets of this repository\'s code are stored on Lantern\'s server with my results, until I delete them.', 'err');
+      const link = verb === 'sample' ? SAMPLE + what[0] : what[0];
+      if (verb !== 'sample' && !/^https:\/\//i.test(link) && !/^git@/i.test(link)) return termPrint('Only a https:// link to a repository works here. To check code on your computer, use Upload on My runs.', 'err');
+      termPrint('starting the check…', 'sys'); S.addMsg = null;
+      await startRun2(link, snip ? 'full' : 'structure', snip && agree);
+      if (S.addMsg) termPrint(String(S.addMsg.html).replace(/<[^>]*>/g, ''), 'err');
+      return;
+    }
+    if (verb === 'status') {
+      if (!r) return termPrint('Open a check first: runs, then open NUMBER.', 'err');
+      const s = r.summary || {}, c = s.counts || {};
+      return termPrint(`${repoName(r.link)}  ${r.status}${r.status === 'done' ? `\nreadiness ${s.score != null ? s.score + '/100' : 'not graded'}${s.grade ? ' (' + s.grade + ')' : ''}${releaseWord(s.release) ? '\nrelease decision: ' + releaseWord(s.release) : ''}\nopen problems: ${RANKS.slice(0, 4).map(k => `${c[k] || 0} ${k}`).join(', ')}` : '\n' + lastLine(r)}`);
+    }
+    if (verb === 'findings') {
+      if (!termDone(r)) return;
+      const only = rest.map(x => x.toLowerCase()).filter(x => RANKS.includes(x));
+      const links = await viewLinks(r);
+      if (!links.findings) return termPrint('This server did not give a findings file.', 'err');
+      const res = await fetch(links.findings, {credentials: 'same-origin'}); if (!res.ok) throw new Error('The findings did not load. Try again in a moment.');
+      const d = await res.json(), all = (Array.isArray(d.findings) ? d.findings : []).filter(f => f && typeof f === 'object' && f.status !== 'accepted');
+      const list = all.filter(f => !only.length || only.includes(String(f.rank))).sort((a, b) => RANKS.indexOf(a.rank) - RANKS.indexOf(b.rank));
+      if (!list.length) return termPrint(only.length ? 'No open findings of that rank.' : 'No open findings.', 'ok');
+      list.slice(0, 60).forEach(f => termPrint(`${String(f.id || '').slice(0, 12)}  ${String(f.rank || '').toUpperCase().padEnd(8)}  ${f.title || f.rule || ''}${f.file ? '  ' + f.file + (f.line ? ':' + f.line : '') : ''}`, f.rank === 'critical' || f.rank === 'high' ? 'err' : ''));
+      return termPrint(`${list.length} open${list.length > 60 ? ', the first 60 shown' : ''}. Click an id to see it.`, 'sys');
+    }
+    if (verb === 'explain') { if (!termDone(r)) return; return explainClick(r); }
+    if (verb === 'share') { if (!termDone(r)) return; return shareSheet(r); }
+    if (verb === 'delete') { if (!r) return termPrint('Open a check first: runs, then open NUMBER. delete asks before it deletes anything.', 'err'); return deleteSheet(r); }
+    if (verb === 'ask') { if (!rest.length) return termPrint('Type ask and your question, for example ask what should I fix first?', 'err'); ASK.open = true; renderAsk(); return askSend(rest.join(' ')); }
+    termPrint(`'${w[0]}' is not a Lantern command. Type help for the list. This terminal never runs a shell or anybody's code.`, 'err');
+  } catch (e) { termPrint(e.message || String(e), 'err'); }
+}
+function termLink(a) {
+  const doc = () => { try { return S.frame && S.frame.el.contentDocument; } catch (e) { return null; } };
+  if (a.dataset.fid && S.view === 'run') {
+    const show = d => { d.querySelector('#tabs [data-t="findings"]')?.click(); const c = d.getElementById('f-' + a.dataset.fid); if (c) { c.scrollIntoView({block: 'center'}); c.classList.add('flash'); } return !!c; };
+    if (S.tab !== 'findings') { S.tab = 'findings'; render(); }
+    let tries = 0; const t = setInterval(() => { const d = doc(); if ((d && d.querySelector('#tabs') && show(d)) || ++tries > 40) clearInterval(t); }, 250);
+  }
+  if (a.dataset.file) { const d = doc(), s = d && d.querySelector('#q'); if (s) { s.value = a.dataset.file.split('/').pop().replace(/\.\w+$/, ''); s.dispatchEvent(new Event('input')); } }
+}
+
 const FAQ = [
   ['Privacy', 'What happens to my code?', 'Lantern copies the repository, or the files you upload, into a sealed box on its server, reads it without installing or running anything, and deletes the copy when the check ends. What stays is the result: the map, the findings and the grade. With <b>Map and findings only</b> no code is kept at all; with <b>Include code snippets</b> the short lines the report talks about are kept too.'],
   ['Privacy', 'Who can see my results?', 'Only you, while you are signed in. Each report opens through a link that works for an hour and only for your account. Nothing is shared unless you click <b>Share</b> on a run; that makes a link anyone holding it can open, and <b>Stop sharing</b> turns it off again.'],
@@ -967,7 +1071,7 @@ const FAQ = [
   ['Using it', 'Which links work?', 'The https link of a public repository on GitHub, GitLab, Bitbucket, Codeberg and other public code hosts, like <code>https://github.com/owner/name</code>. A link to a branch (<code>/tree/branch</code>) checks that branch.'],
   ['Using it', 'How long does a check take, and how many can I run?', 'Usually about a minute, up to a few minutes for a very large app. Each account can run 50 checks a day and one at a time; the number left today is under your name, top right.'],
   ['Using it', 'Does Lantern run my app or my tests?', 'No. In the cloud Lantern only reads the code. To watch your tests run, use the Lantern app on your own computer: <code>pip install lantern</code> then <code>lantern serve</code>.'],
-  ['Results', 'What do the grade and the colours mean?', 'The grade (A to F) and the readiness number come from ten checks a senior engineer would make before launch. Red means a serious problem, orange and yellow smaller ones, green means it passed. Every colour sits next to a word, so you never have to guess.'],
+  ['Results', 'What do the grade and the colours mean?', 'The grade (A to F) and the readiness number come from ten checks a senior engineer would make before launch. Red means a serious problem, orange and yellow smaller ones, green means it passed. Every colour sits next to a word, so you never have to guess. Beside them stands the release decision: <b>Blocked</b> (something that must hold does not, such as an open critical or high finding), <b>Incomplete</b> (nothing found blocks a release, but part of the proof is missing) or <b>Passed</b>. Here in the cloud Lantern never runs your tests, so a check made here reads Incomplete at best; the Lantern app on your own computer can run them.'],
   ['Results', 'What does “Explain in plain words” do with my code?', 'It asks a language model to describe what each function on your app’s main paths does, in everyday words, with every phrase tied to a real line or name in your code (a phrase that is not is thrown away). For that, Lantern copies the repository again for a moment, sends the code of up to 40 functions to the model through your free allowance, and deletes the copy. It asks you first, says exactly where the code goes, and you can turn it off in Settings. Ask Lantern sends your question and the check’s results, not your code. A screenshot you add is read by Lantern for its text and never kept; only that text goes with your question.'],
   ['Using it', 'Does it read phone apps?', 'Yes. Android (Java or Kotlin), iPhone (Swift), Flutter, React Native and .NET MAUI apps get an <b>On the phone</b> card with the screens, the links other apps can open, and every permission with a plain-words meaning and whether the code uses it, plus phone-specific checks (a link that reaches a database query, a secret in plain storage, cleartext traffic). An app with a server side gets both in one map.'],
   ['Terms', 'What are the terms of use?', 'One page in plain words: <a href="https://github.com/LittleHenderson/Lantern/blob/main/docs/terms.md" target="_blank" rel="noopener">docs/terms.md</a>. In short: check code you own or may read, do not multiply accounts, your code copy is deleted when the check ends, your results stay until you delete them, nothing goes to a model unless you ask and agree, and the service is a preview with no warranty. The Lantern software itself is MIT-licensed.'],
@@ -1059,7 +1163,7 @@ function route() {
 function dock(inRun) {
   const top = document.querySelector('header.top'), brand = document.getElementById('home'), nav = document.getElementById('nav');
   const a = inRun && document.querySelector('.sub [data-dock="brand"]'), b = inRun && document.querySelector('.sub [data-dock="end"]');
-  const rest = ['viewmode', 'theme', 'acct'].map(i => document.getElementById(i));
+  const rest = ['viewmode', 'guidebtn', 'theme', 'acct'].map(i => document.getElementById(i));
   document.body.classList.toggle('inproj', !!(a && b));
   if (a && b) { a.replaceWith(brand); b.replaceWith(...rest); return; }
   if (brand.parentElement !== top) { top.insertBefore(brand, nav); top.append(...rest); }

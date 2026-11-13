@@ -18,6 +18,7 @@
   lantern packs PATH                                      list and check the analysis packs a project uses
   lantern export PATH --sarif out.sarif                   findings as SARIF (GitHub code scanning and others)
   lantern usage [--on | --off | --show]                   anonymous usage counts (off by default; --show prints the ping)
+  lantern cache [--clear]                                 what Lantern keeps between runs to be faster; --clear removes it
 
 Results live in PATH/.lantern/ (override with --out).
 """
@@ -78,6 +79,15 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
             print(f"fail    {len(broke)} scanner(s) did not finish or did not cover everything; no clean result "
                   "without them", file=sys.stderr)
             return 1
+    if a.require:
+        # The release decision of this very run, never one read back from the results folder (a project can bring
+        # a readiness.json of its own). `not-blocked` stops on Blocked; `passed` stops on Incomplete too.
+        decision = res.get("release")
+        if decision != "Passed" and (a.require == "passed" or decision != "Incomplete"):
+            words = str(res.get("release_words") or "")
+            print(f"fail    the release decision is {decision or 'not made'}"
+                  + (f" ({_printable(words)})" if words else ""), file=sys.stderr)
+            return 1
     return 0
 
 
@@ -108,7 +118,8 @@ def cmd_verify(a, trace_cmd: list[str]) -> int:
         print("give --digest sha256:... or --report evidence.html", file=sys.stderr)
         return 2
     repo = Path(a.path).resolve()
-    r = evidence.verify(repo, want, old, trace_cmd, a.no_scan, a.offline)
+    r = evidence.verify(repo, want, old, trace_cmd, a.no_scan, a.offline,
+                        beside=Path(a.report).resolve().parent if a.report else None)
     if r.get("refused"):
         print(r["refused"] + "\n  lantern verify " + (a.path or ".") + f" --report {a.report} -- "
               + " ".join(r["trace_command"]), file=sys.stderr)
@@ -143,6 +154,34 @@ def cmd_packs(a) -> int:
         print("no packs: built-in packs live in lantern/packs/, a project's in lantern-packs/*.json, "
               "yours in ~/.lantern/packs/")
     return 1 if problems else 0
+
+
+def _size(n: int) -> str:
+    return f"{n / 1e6:.1f} MB" if n >= 100_000 else f"{n / 1e3:.1f} KB"
+
+
+def cmd_cache(a) -> int:
+    """What is kept between runs (`lantern/kept.py`): how much, where, and how to do without it."""
+    from . import kept
+    where = kept.home()
+    if a.clear:
+        n, size = kept.size()
+        _, stayed = kept.clear()
+        print(f"removed {n} kept answers ({_size(size)}) from {where}" if n else f"nothing is kept in {where}")
+        if stayed:
+            print(f"{stayed} files could not be removed", file=sys.stderr)
+        return 1 if stayed else 0
+    n, size = kept.size()
+    if not n:
+        print(f"nothing is kept in {where}")
+    else:
+        print(f"{n} kept answers ({_size(size)}) in {where}")
+        print("  how each file of a project reads and what the outside scanner said about a set of files, by their content;")
+        print("  never a finding, a rank or a score: those are worked out in every run")
+    print(f"  kept work is {'on' if kept.on() else 'off'}: LANTERN_CACHE=off runs without it, "
+          f"LANTERN_CACHE_MB sets how much may be kept (now {kept.cap_bytes() // (1024 * 1024)} MB), "
+          "`lantern cache --clear` removes it")
+    return 0
 
 
 def cmd_export(a) -> int:
@@ -484,6 +523,9 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--privacy", choices=["full", "structure"], default="full",
                     help="full embeds function source in the report; structure leaves it out")
     sp.add_argument("--fail-on", choices=RANKS, help="exit 1 if any open finding is at this rank or worse (for CI)")
+    sp.add_argument("--require", choices=["not-blocked", "passed"],
+                    help="exit 1 unless this run's release decision is good enough (for CI): not-blocked stops on "
+                         "Blocked; passed also stops on Incomplete, so it needs the tests run (--trace) and passing")
 
     sp = sub.add_parser("trace", help="run a command and mark calls that actually happen")
     common(sp)
@@ -551,6 +593,9 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--on", action="store_true")
     sp.add_argument("--off", action="store_true")
     sp.add_argument("--show", action="store_true")
+
+    sp = sub.add_parser("cache", help="what Lantern keeps between runs to be faster, on this computer only")
+    sp.add_argument("--clear", action="store_true", help="remove everything that is kept")
 
     sp = sub.add_parser("learn", help="list starter apps, create one to learn Lantern, or check your progress")
     sp.add_argument("name", nargs="?", help="starter to create (omit to list them)")
@@ -624,6 +669,8 @@ def _main(argv: list[str]) -> int:
             usage.set_enabled(False)
         print(usage.describe())
         return 0
+    if a.cmd == "cache":
+        return cmd_cache(a)
     if a.cmd == "packs":
         return cmd_packs(a)
     if a.cmd == "export":

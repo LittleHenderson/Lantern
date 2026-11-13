@@ -477,7 +477,7 @@ def test_only_these_tests_may_try_the_network(request):
 # ----------------------------------------------------------------------------- benchmarks and the audit script
 BENCHMARKS = ("bench/run_bench.py", "bench/mobile/run_mobile.py", "bench/heldout/run_heldout.py", "bench/fuzz.py",
               "bench/manifests.py", "bench/links.py", "bench/behaviour/run_behaviour.py", "tools/large_apps.py",
-              "tools/mutation.py", "tools/load_test.py")
+              "tools/mutation.py", "tools/load_test.py", "bench/speed.py")
 LIVE_SUITE = ("bench/explain_eval.py", "bench/ask_eval.py")          # they go through bench/live.py's gate instead
 
 
@@ -545,7 +545,7 @@ def test_the_dependency_audit_asks_only_the_addresses_it_names():
     from lantern import depaudit
     host = lambda url: urllib.parse.urlsplit(url).hostname      # noqa: E731
     assert host(depaudit.NPM_REGISTRY) in depaudit.AUDIT_HOSTS and host(depaudit.OSV_API) in depaudit.AUDIT_HOSTS
-    source = (ROOT / "lantern" / "depaudit.py").read_text(encoding="utf-8")
+    source = Path(depaudit.__file__).read_text(encoding="utf-8")   # the module Python loaded, wherever it is installed
     named = {host(u) for u in re.findall(r"https://[A-Za-z0-9.-]+", source)}
     assert named <= {*depaudit.AUDIT_HOSTS, "osv.dev"}, named      # osv.dev: the link a finding shows, never requested
     assert '"--disable-pip"' in source and '"--no-deps"' in source  # pip-audit downloads no package: pypi.org only

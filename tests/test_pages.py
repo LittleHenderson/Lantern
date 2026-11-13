@@ -6,14 +6,13 @@ nothing (the browser job in CI caught it). This reads each page's script with th
 and names every plain call (`f()` or `new F()`) whose function the page declares nowhere and that is not one of the
 browser's own. guide.html and the cloud website are left out: they are put together from parts of app.html when the
 server starts, so their files alone are not the whole script."""
-from pathlib import Path
-
 import pytest
 from tree_sitter import Parser
 
+import lantern_files
 from lantern.js_frontend import LANGS, inline_script
 
-VIEWER = Path(__file__).resolve().parent.parent / "lantern" / "viewer"
+VIEWER = lantern_files.VIEWER                # the package Python loaded: a release tests the installed one
 # the browser's and the language's own functions and classes, which a page calls without defining them
 BROWSER = frozenset("""
     fetch setTimeout clearTimeout setInterval clearInterval requestAnimationFrame cancelAnimationFrame queueMicrotask

@@ -48,7 +48,25 @@ async function appSmoke(url, out, image, expectText, slowTests) {
       step(name, `keyboard: ${(await a11y.keyboard(p, `${name} home`, errs, 8)).join(' > ')}`);
       if (name === 'desk') await api('/api/settings', { view_mode: 'advanced' });
       await p.reload(); await p.waitForSelector('[data-open]');
-      await p.click('[data-open]'); await p.waitForTimeout(1500);
+      // the terminal is pulled up from the tab at the bottom of every screen (here, before any project is open):
+      // drag the tab up, list the projects, and open the first one from it
+      {
+        const tb = await (await p.$('#termtab')).boundingBox();
+        await p.mouse.move(tb.x + tb.width / 2, tb.y + 8); await p.mouse.down();
+        await p.mouse.move(tb.x + tb.width / 2, tb.y - 260, { steps: 8 }); await p.mouse.up();
+        const h = await p.$eval('#term', t => t.hidden ? 0 : t.getBoundingClientRect().height);
+        if (h < 200) errs.push(`${name}: dragging the Terminal tab up did not pull the terminal up (${h} px)`);
+        await p.fill('#tcmd', 'projects'); await p.press('#tcmd', 'Enter');
+        await until(p, () => /^\s*1\s/m.test(document.getElementById('tout').innerText), 10000);
+        await a11y.axe(p, `${name} terminal`, errs);
+        await p.screenshot({ path: `${out}-${name}-terminal-home.png` });
+        await p.fill('#tcmd', 'open 1'); await p.press('#tcmd', 'Enter');
+        await until(p, () => S.view === 'project', 10000);
+        step(name, `terminal pulled up to ${Math.round(h)} px, projects listed, open 1 → project`);
+        await p.click('#termclose');
+        if (!(await p.$eval('#term', t => t.hidden))) errs.push(`${name}: the terminal did not close`);
+        await p.waitForTimeout(1500);
+      }
       await p.screenshot({ path: `${out}-${name}-project.png` });
       await a11y.axe(p, `${name} project`, errs, { frames: true });
       {
@@ -118,7 +136,7 @@ async function appSmoke(url, out, image, expectText, slowTests) {
           await p.screenshot({ path: `${out}-${name}-tests-not-ended.png` });
         }
         // 2. the terminal drawer: a Lantern command runs, a shell command is refused
-        await p.click('#termbtn'); await p.waitForSelector('#tcmd');
+        await p.click('#termtab'); await p.waitForSelector('#tcmd');
         await p.fill('#tcmd', 'analyze --offline'); await p.press('#tcmd', 'Enter');
         await until(p, () => /ready\s+\d+\/100/.test(document.getElementById('tout').innerText), 180000);
         allow400 = true;
@@ -245,6 +263,21 @@ async function appSmoke(url, out, image, expectText, slowTests) {
         const filled = await p.evaluate(() => { const v = document.querySelector('#graph .vp').getBoundingClientRect(), s = document.querySelector('#graph svg').getBoundingClientRect(), c = document.querySelector('#center').getBoundingClientRect(); return Math.abs(v.width - s.width) < 2 && Math.abs(v.height - s.height) < 2 && v.width >= c.width - 2 && (innerWidth < 720 || v.bottom >= c.bottom - 2); });
         if (!filled) errs.push(`${name}: the graph does not fill its panel`);
         await p.screenshot({ path: `${out}-${name}-graph.png` });
+        // the breadcrumb says where you are, and the minimap shows the whole map with the screen's box on it
+        if (!await p.$('.crumbs [aria-current="location"]')) errs.push(`${name}: the map has no breadcrumb saying where you are`);
+        if (!await p.$('#graph .mmap .mmview')) errs.push(`${name}: the graph has no minimap`);
+        else {
+          await p.click('#graph .mmhead [data-o="30"]'); await p.waitForTimeout(60);
+          if (await p.evaluate(() => getComputedStyle(document.querySelector('#graph .mmsvg')).opacity) !== '0.3') errs.push(`${name}: the minimap's 30% button did not make it see-through`);
+          await p.click('#graph .mmhead [data-o="off"]'); await p.waitForTimeout(60);
+          if (await p.evaluate(() => getComputedStyle(document.querySelector('#graph .mmap')).display) !== 'none') errs.push(`${name}: the minimap did not hide`);
+          await p.click('#graph .mmshow'); await p.waitForTimeout(60);
+          if (await p.evaluate(() => getComputedStyle(document.querySelector('#graph .mmap')).display) === 'none') errs.push(`${name}: the minimap did not come back`);
+          await p.click('#graph .mmhead [data-o="100"]'); await p.waitForTimeout(60);
+          const before = await view(), m = await (await p.$('#graph .mmsvg')).boundingBox();
+          await p.mouse.click(m.x + 6, m.y + m.height - 6); await p.waitForTimeout(80);
+          if (await view() === before) errs.push(`${name}: a click on the minimap did not move the map`);
+        }
         if (name === 'desk') {
           const r = await (await p.$('#graph .vp')).boundingBox(), cx = r.x + r.width / 2, cy = r.y + r.height / 2;
           await p.click('#graph [data-z="fit"]'); await p.waitForTimeout(80);

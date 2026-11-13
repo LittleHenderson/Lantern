@@ -33,6 +33,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, skipped
 
@@ -156,6 +157,8 @@ class CFile:
 
 
 class Model:
+    left = None     # (map, reader) once the reader has a map: where a piece that was not read is written down
+
     def __init__(self):
         self.classes: dict[tuple[str, str], CClass] = {}
         self.funs: dict[tuple[str, str], CFun] = {}
@@ -246,25 +249,29 @@ def _params(plist) -> dict[str, str]:
 def _collect(model: Model, f: CFile, root) -> None:
     def walk(n, ns: str, outer: CClass | None):
         for c in n.children:
-            if c.type == "namespace_declaration":
-                name = _t(c.child_by_field_name("name"))
-                inner = f"{ns}.{name}" if ns else name
-                f.namespaces.add(inner)
-                walk(_kid(c, "declaration_list") or c, inner, None)
-            elif c.type == "file_scoped_namespace_declaration":
-                name = _t(c.child_by_field_name("name"))
-                f.namespaces.add(name)
-                ns = name                                   # applies to everything after it in the file
-                walk(c, ns, None)
-            elif c.type in TYPE_DECLS:
-                _class(c, ns, outer)
-            elif c.type in ("method_declaration", "constructor_declaration", "local_function_statement") \
-                    and outer is not None:
-                _fun(c, ns, outer)
-            elif c.type == "global_statement" and outer is None:
-                f.top_level.append(c)
-            elif c.type in ("declaration_list", "ERROR"):
-                walk(c, ns, outer)
+            try:
+                if c.type == "namespace_declaration":
+                    name = _t(c.child_by_field_name("name"))
+                    inner = f"{ns}.{name}" if ns else name
+                    f.namespaces.add(inner)
+                    walk(_kid(c, "declaration_list") or c, inner, None)
+                elif c.type == "file_scoped_namespace_declaration":
+                    name = _t(c.child_by_field_name("name"))
+                    f.namespaces.add(name)
+                    ns = name                                   # applies to everything after it in the file
+                    walk(c, ns, None)
+                elif c.type in TYPE_DECLS:
+                    _class(c, ns, outer)
+                elif c.type in ("method_declaration", "constructor_declaration", "local_function_statement") \
+                        and outer is not None:
+                    _fun(c, ns, outer)
+                elif c.type == "global_statement" and outer is None:
+                    f.top_level.append(c)
+                elif c.type in ("declaration_list", "ERROR"):
+                    walk(c, ns, outer)
+            except RecursionError:
+                # declared inside more declarations than this walk follows: left where it stands and written down
+                deep.leave(model.left, f.rel, c)
 
     def _class(c, ns, outer):
         name_n = c.child_by_field_name("name")
@@ -371,11 +378,13 @@ class Ref:
 
 
 class Linker:
+    left = None     # (map, "csharp") once the reader has a map: where a piece that was not read is written down
+
     def __init__(self, model: Model):
         self.m = model
         self.http: list[dict] = []
 
-    def _type_of(self, f, ns, cls, env, e) -> str | None:
+    def _type_of(self, f, ns, cls, env, e, memo=None) -> str | None:
         if e is None:
             return None
         if e.type == "identifier":
@@ -398,23 +407,37 @@ class Linker:
             if e.type == "cast_expression":
                 return _type_name(e.child_by_field_name("type"))
             inner = next((c for c in reversed(e.children) if c.is_named), None)
-            return self._type_of(f, ns, cls, env, inner)
+            return self._type_of(f, ns, cls, env, inner, memo)
         if e.type == "member_access_expression":
             obj, name = e.child_by_field_name("expression"), _t(e.child_by_field_name("name"))
-            tn = self._type_of(f, ns, cls, env, obj)
+            tn = self._type_of(f, ns, cls, env, obj, memo)
             hit = self.m.find_class(f, ns, cls, tn) if tn else None
             return hit[1].props.get(name) if hit else None
         if e.type == "invocation_expression":
-            res = self._target(f, ns, cls, env, e.child_by_field_name("function"))
+            res = self._target(f, ns, cls, env, e.child_by_field_name("function"), memo)
             if res and res[2]:
                 fn = self.m.funs.get(res[2])
                 return fn.returns if fn else None
         return None
 
-    def _target(self, f, ns, cls, env, fn_n):
-        """(target id, via, (ns, local) of the repo method, confidence, extra targets) for a call's function part."""
+    def _target(self, f, ns, cls, env, fn_n, memo=None):
+        """(target id, via, (ns, local) of the repo method, confidence, extra targets) for a call's function part.
+
+        `memo` holds what this one question has worked out, link by link. In a chain `a.B().C().D()` a link whose
+        type is not known is asked about twice, once for its type and once for what the chain hangs on, and each of
+        the two asked the link before it twice again: every link more doubled the work, and a chain of thirty calls
+        after a library call (`sb.Append(a).Append(b)…`, a query, a builder) was not read in hours (2026-11-13).
+        With it each link is worked out once."""
         if fn_n is None:
             return None
+        if memo is None:
+            memo = {}
+        elif fn_n.id in memo:
+            return memo[fn_n.id]
+        res = memo[fn_n.id] = self._target_of(f, ns, cls, env, fn_n, memo)
+        return res
+
+    def _target_of(self, f, ns, cls, env, fn_n, memo):
         if fn_n.type == "generic_name":
             fn_n = _kid(fn_n, "identifier")
         if fn_n is not None and fn_n.type == "identifier":
@@ -445,7 +468,7 @@ class Linker:
                 return (nid(*r), "assoc", r, RESOLVED, []) if r else None
             if _t(recv)[:1].isupper():                         # Console.WriteLine(), File.ReadAllText()
                 return (f"ext:{_t(recv)}.{name}", "import", None, RESOLVED, [])
-        tn = self._type_of(f, ns, cls, env, recv)
+        tn = self._type_of(f, ns, cls, env, recv, memo)
         if not tn:
             inner = recv
             while inner is not None and inner.type in ("await_expression", "parenthesized_expression",
@@ -455,7 +478,7 @@ class Linker:
             if inner is None:
                 return None
             if inner.type == "invocation_expression":
-                ir = self._target(f, ns, cls, env, inner.child_by_field_name("function"))
+                ir = self._target(f, ns, cls, env, inner.child_by_field_name("function"), memo)
                 if ir is None or (ir[0] or "").startswith("ext:"):
                     return None                                # a chain on a library call: not counted
         if tn:
@@ -560,54 +583,59 @@ class Linker:
         stack = [n]
         while stack:
             x = stack.pop()
-            if x.id in skip and x is not n:
-                continue                                     # a minimal-API lambda: its own node
-            if x.type == "variable_declaration":
-                tn = _type_name(x.child_by_field_name("type"))
-                for d in _kids(x, "variable_declarator"):
-                    pn = _kid(d, "identifier")
-                    if pn is None:
-                        continue
-                    t = tn if tn and tn != "var" else None
-                    if t is None:
-                        val = next((ch for ch in reversed(d.children) if ch.is_named and ch is not pn), None)
-                        t = self._type_of(f, ns, cls, env, val)
-                    env[_t(pn)] = t or ""
-            elif x.type == "parameter" and x is not n:
-                pn, tn = x.child_by_field_name("name"), _type_name(x.child_by_field_name("type"))
-                if pn is not None:
-                    env[_t(pn)] = tn or ""
-            elif x.type == "invocation_expression":
-                self._call(f, ns, cls, x, env, refs, src)
-                self._http_call(f, ns, cls, x, env, src)
-            elif x.type == "object_creation_expression":
-                tn = _type_name(x.child_by_field_name("type"))
-                if tn == "HttpRequestMessage":            # new HttpRequestMessage(HttpMethod.Post, url)
-                    args = [next((c for c in a.children if c.is_named), None)
-                            for a in _kids(_kid(x, "argument_list"), "argument")]
-                    if len(args) >= 2 and args[0] is not None and _t(args[0]).startswith("HttpMethod."):
-                        self._emit_http(f, ns, cls, src, _t(args[0]).split(".")[-1].upper(), args[1],
-                                        x.start_point.row + 1)
-                hit = self.m.find_class(f, ns, cls, tn) if tn else None
-                if hit:
-                    ctor = self.m.fun_in(f, hit[0], hit[1], hit[1].name.split(".")[-1])
-                    if ctor:
-                        refs.append(Ref(nid(*ctor), x.start_point.row + 1, RESOLVED, "constructor"))
-            elif x.type == "assignment_expression":
-                op = x.child_by_field_name("operator")
-                right = x.child_by_field_name("right")
-                if op is not None and _t(op) == "+=" and right is not None and right.type == "identifier" \
-                        and cls is not None:
-                    r = self.m.fun_in(f, ns, cls, _t(right))
-                    if r:                                    # button.Clicked += OnSave
-                        refs.append(Ref(nid(*r), x.start_point.row + 1, INFERRED, "callback", "callback"))
-            elif x.type == "argument" and cls is not None:
-                v = next((ch for ch in x.children if ch.is_named), None)
-                if v is not None and v.type == "identifier" and _t(v) not in env and not self._is_member(ns, cls, _t(v)):
-                    r = self.m.fun_in(f, ns, cls, _t(v))
-                    if r:                                    # app.MapGet("/n", List), Task.Run(Work)
-                        refs.append(Ref(nid(*r), x.start_point.row + 1, INFERRED, "callback", "callback"))
-            elif x.type in TYPE_DECLS and x is not n:
+            try:
+                if x.id in skip and x is not n:
+                    continue                                     # a minimal-API lambda: its own node
+                if x.type == "variable_declaration":
+                    tn = _type_name(x.child_by_field_name("type"))
+                    for d in _kids(x, "variable_declarator"):
+                        pn = _kid(d, "identifier")
+                        if pn is None:
+                            continue
+                        t = tn if tn and tn != "var" else None
+                        if t is None:
+                            val = next((ch for ch in reversed(d.children) if ch.is_named and ch is not pn), None)
+                            t = self._type_of(f, ns, cls, env, val)
+                        env[_t(pn)] = t or ""
+                elif x.type == "parameter" and x is not n:
+                    pn, tn = x.child_by_field_name("name"), _type_name(x.child_by_field_name("type"))
+                    if pn is not None:
+                        env[_t(pn)] = tn or ""
+                elif x.type == "invocation_expression":
+                    self._call(f, ns, cls, x, env, refs, src)
+                    self._http_call(f, ns, cls, x, env, src)
+                elif x.type == "object_creation_expression":
+                    tn = _type_name(x.child_by_field_name("type"))
+                    if tn == "HttpRequestMessage":            # new HttpRequestMessage(HttpMethod.Post, url)
+                        args = [next((c for c in a.children if c.is_named), None)
+                                for a in _kids(_kid(x, "argument_list"), "argument")]
+                        if len(args) >= 2 and args[0] is not None and _t(args[0]).startswith("HttpMethod."):
+                            self._emit_http(f, ns, cls, src, _t(args[0]).split(".")[-1].upper(), args[1],
+                                            x.start_point.row + 1)
+                    hit = self.m.find_class(f, ns, cls, tn) if tn else None
+                    if hit:
+                        ctor = self.m.fun_in(f, hit[0], hit[1], hit[1].name.split(".")[-1])
+                        if ctor:
+                            refs.append(Ref(nid(*ctor), x.start_point.row + 1, RESOLVED, "constructor"))
+                elif x.type == "assignment_expression":
+                    op = x.child_by_field_name("operator")
+                    right = x.child_by_field_name("right")
+                    if op is not None and _t(op) == "+=" and right is not None and right.type == "identifier" \
+                            and cls is not None:
+                        r = self.m.fun_in(f, ns, cls, _t(right))
+                        if r:                                    # button.Clicked += OnSave
+                            refs.append(Ref(nid(*r), x.start_point.row + 1, INFERRED, "callback", "callback"))
+                elif x.type == "argument" and cls is not None:
+                    v = next((ch for ch in x.children if ch.is_named), None)
+                    if v is not None and v.type == "identifier" and _t(v) not in env and not self._is_member(ns, cls, _t(v)):
+                        r = self.m.fun_in(f, ns, cls, _t(v))
+                        if r:                                    # app.MapGet("/n", List), Task.Run(Work)
+                            refs.append(Ref(nid(*r), x.start_point.row + 1, INFERRED, "callback", "callback"))
+                elif x.type in TYPE_DECLS and x is not n:
+                    continue
+            except RecursionError:
+                # nested deeper than the lookup follows: left with all that is written in it, and written down
+                deep.leave(self.left, f.rel, x, env, blank="")
                 continue
             stack.extend(reversed(x.children))
 
@@ -685,6 +713,7 @@ def add_csharp(g: Graph, repo: str | Path) -> dict:
         g.meta.setdefault("skipped_languages", []).append("c# (pip install tree-sitter-c-sharp)")
         return {}
     model = Model()
+    model.left = (g, "csharp")
     files: list[tuple[CFile, object]] = []
     total = 0
     for p in paths:
@@ -709,7 +738,7 @@ def add_csharp(g: Graph, repo: str | Path) -> dict:
             elif q is not None:
                 f.usings.append(_t(q))
         files.append((f, tree))
-        _collect(model, f, root)
+        deep.whole(model.left, f.rel, _collect, model, f, root)
 
     for f, _ in files:
         g.add_node(Node(id=f"cs:{f.rel}", kind=MODULE, name=Path(f.rel).name, qualname=f.rel, file=f.rel,
@@ -733,6 +762,7 @@ def add_csharp(g: Graph, repo: str | Path) -> dict:
         g.add_edge(parent, mid, kind=CONTAINS)
 
     link = Linker(model)
+    link.left = (g, "csharp")
     edges = 0
     routes = 0
 

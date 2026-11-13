@@ -387,7 +387,7 @@ releases.
 
 **Upgrades.** Results saved by an older version open in the newer one, and the lantern-cloud database survives a
 schema change. *Scenario:* a tester's saved v0.9 report shows a blank page after they update to v0.11. ✅
-`tests/fixtures/old_results/` keeps the result files Lantern v0.9.0 and v0.10.0 wrote for the shop sample;
+`tests/fixtures/old_results/` keeps the result files Lantern v0.9.0, v0.10.0 and v0.11.0 wrote for the shop sample;
 `tests/test_old_results.py` opens them with the current code everywhere results are read (the report, evidence and
 badge pages, the Projects screen, Ask Lantern, the SARIF export, the connector's tools, scenarios and lanes, `lantern
 verify`). `tests/test_cloud.py` opens a database made with the v0.10.0 schema and the first cloud schema, checks the

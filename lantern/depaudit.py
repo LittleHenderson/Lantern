@@ -60,15 +60,25 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-from . import manifest, programs, scanresult
+from . import listing, manifest, programs, scanresult
 from .python_frontend import inside_repo, project_text, skipped_dir
 
 NPM_REGISTRY = "https://registry.npmjs.org/"
 TEST_DIR_RE = re.compile(r"(^|/)(tests?|__tests__|fixtures|examples?)/")
 PIN_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._\-]*)(\[[^\]]*\])?\s*==\s*([A-Za-z0-9][A-Za-z0-9.+!_\-]*)\s*(;.*)?$")
 NOTHING_TO_CHECK = ("skipped: no Python dependency files", "skipped: no package.json", "skipped: no Gradle or Maven files",
-                    "skipped: no composer.lock", "skipped: no Gemfile.lock")
-AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit")
+                    "skipped: no composer.lock", "skipped: no Gemfile.lock",
+                    "skipped: no package.json names a library that ships",
+                    "skipped: no software copied into a vendor folder")
+# A project that names libraries in a file with no lock file beside it has no version to ask about, so none of them
+# is looked up. That is not "nothing to check": the record counts them (`unlocked`, the first few in
+# `unlocked_examples`), its status says a lock file is missing, and a release decision counts them as not checked.
+NO_LOCK = "so exact versions are unknown (commit your lock file)"
+UNLOCKED_KEEP = 5
+OTHER_LOCKS = ("pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb")      # npm's lock files Lantern does not read yet
+PLATFORM_PACKAGE = re.compile(r"^(php(-64bit|-ipv6|-zts|-debug)?|hhvm|composer(-plugin-api|-runtime-api)?|"
+                              r"(ext|lib)-[\w.-]+)$", re.I)       # composer.json `require`: PHP itself, no library
+AUDIT_TOOLS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit", "copied-audit")
 OSV_API = "https://api.osv.dev/v1"
 # Every host the audits ask: pip-audit's vulnerability service (it runs with --no-deps --disable-pip, so it downloads
 # no package), the npm registry, OSV. `lantern analyze` reaches nothing else, so a run that may reach only these
@@ -112,6 +122,16 @@ def _short(rel: str) -> str:
     """A file's name for a line of the record: of a long path the end is kept (the file's own name), so what is said
     of the file still fits on the line."""
     return rel if len(rel) <= 100 else "..." + rel[-97:]
+
+
+def _unlocked(found: list[tuple[str, str]]) -> dict:
+    """What an audit's record says of the libraries (file, name) a project names where no lock file says which
+    version is installed: how many, and the first few. Nothing at all when there are none."""
+    found = sorted(set(found))
+    if not found:
+        return {}
+    return {"unlocked": len(found),
+            "unlocked_examples": [_plain(f"{_short(rel)}: {name}") for rel, name in found[:UNLOCKED_KEEP]]}
 
 
 class Odd:
@@ -218,7 +238,7 @@ def precomputed(tool: str) -> tuple[list[dict], dict] | None:
 def audits() -> tuple:
     """Every audit as (tool, function), looked up when asked, so a test's stand-in for one of them is the one run."""
     return (("pip-audit", run_pip_audit), ("npm-audit", run_npm_audit), ("maven-audit", run_maven_audit),
-            ("composer-audit", run_composer_audit), ("gem-audit", run_gem_audit))
+            ("composer-audit", run_composer_audit), ("gem-audit", run_gem_audit), ("copied-audit", run_copied_audit))
 
 
 def guarded(tool: str, fn, repo: Path, no_network: bool | None) -> tuple[list[dict], dict]:
@@ -236,9 +256,10 @@ def guarded(tool: str, fn, repo: Path, no_network: bool | None) -> tuple[list[di
 def run_all(repo: Path) -> dict:
     """All audits with the network on, as {tool: {findings, info}} (what LANTERN_AUDITS_FROM reads)."""
     out = {}
-    for tool, fn in audits():
-        f, info = guarded(tool, fn, repo, False)
-        out[tool] = {"findings": f, "info": info}
+    with listing.one_run(repo):     # the audits ask twelve times which files there are: one walk
+        for tool, fn in audits():
+            f, info = guarded(tool, fn, repo, False)
+            out[tool] = {"findings": f, "info": info}
     return out
 
 
@@ -251,15 +272,25 @@ def _project_files(repo: Path, names: tuple[str, ...] | None = None, pattern: re
     is listed whatever answers to it (a link that leads out of the project, a pipe), so that the audit's record can
     say it was not read: `_read` is the one way such a file is opened, and it opens a file of the project only."""
     out = []
+    for dirpath, fn in listing.once(repo, "dependency-files", lambda: _names(repo)):
+        if (names and fn in names) or (pattern and pattern.search(fn)):
+            p = Path(dirpath) / fn
+            rel = p.relative_to(repo).as_posix()
+            if not TEST_DIR_RE.search(rel):
+                out.append(p)
+    return sorted(out)
+
+
+def _names(repo: Path) -> list[tuple[str, str]]:
+    """Every name in the project's folders, with the folder it is in: not under a folder Lantern leaves out, not
+    under `node_modules`, and a folder that is a link is not walked into. One walk for all the audits of a run
+    (`listing.once`): until 2026-11-12 each of the twelve questions the audits ask walked the whole project, beside
+    the reading of the code."""
+    out = []
     for dirpath, dirnames, filenames in os.walk(repo):
         dirnames[:] = [d for d in dirnames if not skipped_dir(dirpath, d) and d != "node_modules"]
-        for fn in filenames:
-            if (names and fn in names) or (pattern and pattern.search(fn)):
-                p = Path(dirpath) / fn
-                rel = p.relative_to(repo).as_posix()
-                if not TEST_DIR_RE.search(rel):
-                    out.append(p)
-    return sorted(out)
+        out.extend((dirpath, fn) for fn in filenames)
+    return out
 
 
 def _norm(name: str) -> str:
@@ -630,6 +661,61 @@ def _npm_stage(lock: Path, repo: Path, own: Path) -> tuple[Path | None, list[str
     return where, left
 
 
+def _npm_unlocked(manifests: list[Path], repo: Path) -> tuple[list[tuple[str, str]], list[str]]:
+    """Of the package.json files with no package-lock.json beside them: the libraries each names for the shipped app
+    (`dependencies`, `optionalDependencies`) where no lock file of any kind says which versions are installed, as
+    (file, name); and the folders whose versions are in a lock file Lantern does not read yet (pnpm, yarn, bun,
+    beside the file or in a folder above it). A folder that a package-lock.json further up lists among its packages
+    (an npm workspace) is neither: that lock file is checked, and it holds this folder's libraries."""
+    named: list[tuple[str, str]] = []
+    elsewhere: list[str] = []
+    locks: dict[Path, dict | None] = {}
+
+    def lock_of(folder: Path) -> dict | None:
+        if folder not in locks:
+            p = folder / "package-lock.json"
+            text = _read(p, p.name, Odd(), repo) if inside_repo(p, repo) else None
+            locks[folder] = manifest.table(manifest.parse_json(text)) if text is not None else None
+        return locks[folder]
+
+    for m in manifests:
+        folder = m.parent
+        if inside_repo(folder / "package-lock.json", repo):
+            continue
+        rel = m.relative_to(repo).as_posix()
+        covered = other = False
+        at = folder
+        while True:
+            if any((at / x).is_file() for x in OTHER_LOCKS):
+                other = True
+                break
+            if at != folder:
+                lock = lock_of(at)
+                if lock is not None:
+                    inner = folder.relative_to(at).as_posix()
+                    packages = manifest.table(lock.get("packages"))
+                    if inner in packages or (not packages and "workspaces" in manifest.table(
+                            manifest.parse_json(_quiet(at / "package.json", repo) or "{}"))):
+                        covered = True
+                        break
+            if at == repo or repo not in at.parents:
+                break
+            at = at.parent
+        if covered:
+            continue
+        if other:
+            elsewhere.append(folder.relative_to(repo).as_posix() or ".")
+            continue
+        text = _read(m, rel, Odd(), repo)
+        data = manifest.parse_json(text) if text is not None else None
+        if not isinstance(data, dict):
+            named.append((rel, "(what it names could not be read)"))
+            continue
+        for part in ("dependencies", "optionalDependencies"):
+            named += [(rel, _plain(k, 80)) for k in manifest.table(data.get(part)) if isinstance(k, str)]
+    return named, elsewhere
+
+
 def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
     """`npm audit --package-lock-only` per lock file. Exit 0 = nothing known, exit 1 = vulnerabilities (or an error
     npm reports as JSON `{"error": …}`, which is read as a failure). One lock file failing while another was checked
@@ -647,13 +733,19 @@ def run_npm_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     locks = [m.parent / "package-lock.json" for m in manifests if inside_repo(m.parent / "package-lock.json", repo)]
     other = [m.parent.relative_to(repo).as_posix() or "." for m in manifests
              if not inside_repo(m.parent / "package-lock.json", repo)]
+    named, elsewhere = _npm_unlocked(manifests, repo)
+    info |= _unlocked(named)
+    if elsewhere and locks:     # beside folders that are checked: said on the record, which may end as `ok`
+        info["other_locks"] = elsewhere[:10]
     if not locks:
         if any((m.parent / x).is_file() for m in manifests for x in ("pnpm-lock.yaml", "yarn.lock", "bun.lock")):
             # the project's exact versions exist but Lantern cannot read them yet: a gap on Lantern's side
             return [], scanresult.record("npm-audit", "skipped", "pnpm-lock.yaml / yarn.lock / bun.lock aren't read "
                                          "yet; run `pnpm audit` or `yarn npm audit`", applicable=True, **info)
-        return [], scanresult.record("npm-audit", "skipped", "no package-lock.json, so exact versions are unknown "
-                                     "(commit your lock file)", applicable=False, **info)
+        if not named and not elsewhere:
+            return [], scanresult.record("npm-audit", "skipped", "no package.json names a library that ships", **info)
+        return [], scanresult.record("npm-audit", "skipped", f"no package-lock.json, {NO_LOCK}", applicable=False,
+                                     **info)
     if offline() if no_network is None else no_network:
         return [], scanresult.record("npm-audit", "skipped", "offline", applicable=True, **info)
     npm = programs.find("npm")
@@ -1063,6 +1155,24 @@ def composer_pins(repo: Path, odd: Odd | None = None,
     return pins, files
 
 
+def _composer_unlocked(repo: Path) -> list[tuple[str, str]]:
+    """(file, name) of every library a composer.json with no composer.lock beside it asks for in `require` (what
+    ships; `require-dev` does not, and PHP itself and its extensions are no libraries)."""
+    named: list[tuple[str, str]] = []
+    for cj in _project_files(repo, names=("composer.json",)):
+        if not inside_repo(cj, repo) or inside_repo(cj.with_name("composer.lock"), repo):
+            continue
+        rel = cj.relative_to(repo).as_posix()
+        text = _read(cj, rel, Odd(), repo)
+        data = manifest.parse_json(text) if text is not None else None
+        if not isinstance(data, dict):
+            named.append((rel, "(what it names could not be read)"))
+            continue
+        named += [(rel, _plain(k, 80)) for k in manifest.table(data.get("require"))
+                  if isinstance(k, str) and not PLATFORM_PACKAGE.match(k)]
+    return named
+
+
 def run_composer_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
     pre = precomputed("composer-audit")
     if pre is not None:
@@ -1070,6 +1180,10 @@ def run_composer_audit(repo: Path, no_network: bool | None = None) -> tuple[list
     info: dict = {"role": "known-vulnerable PHP libraries (composer.lock, OSV database)", "version": "osv-v1"}
     odd, loose = Odd(), []
     pins, files = composer_pins(repo, odd, loose)
+    info |= _unlocked(_composer_unlocked(repo))
+    if not files and "unlocked" in info:
+        return [], scanresult.record("composer-audit", "skipped", f"no composer.lock, {NO_LOCK}", applicable=False,
+                                     **info)
     if not files:
         return [], scanresult.record("composer-audit", "skipped", "no composer.lock", **info)
     if loose:                           # said only when there are any, so a record without them is as it always was
@@ -1149,6 +1263,23 @@ def gem_pins(repo: Path, odd: Odd | None = None) -> tuple[dict[str, tuple[str, s
     return pins, files
 
 
+def _gem_unlocked(repo: Path) -> list[tuple[str, str]]:
+    """(file, name) of every gem a Gemfile with no Gemfile.lock beside it names outside its development and test
+    groups."""
+    named: list[tuple[str, str]] = []
+    for gf in _project_files(repo, names=("Gemfile",)):
+        if not inside_repo(gf, repo) or inside_repo(gf.with_name("Gemfile.lock"), repo):
+            continue
+        rel = gf.relative_to(repo).as_posix()
+        text = _read(gf, rel, Odd(), repo)
+        if text is None:
+            named.append((rel, "(what it names could not be read)"))
+            continue
+        lines, dev_only = _gemfile_dev_only(text)
+        named += [(rel, _plain(name, 80)) for name in lines if name not in dev_only]
+    return named
+
+
 def run_gem_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
     pre = precomputed("gem-audit")
     if pre is not None:
@@ -1156,6 +1287,9 @@ def run_gem_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
     info: dict = {"role": "known-vulnerable Ruby gems (Gemfile.lock, OSV database)", "version": "osv-v1"}
     odd = Odd()
     pins, files = gem_pins(repo, odd)
+    info |= _unlocked(_gem_unlocked(repo))
+    if not files and "unlocked" in info:
+        return [], scanresult.record("gem-audit", "skipped", f"no Gemfile.lock, {NO_LOCK}", applicable=False, **info)
     if not files:
         return [], scanresult.record("gem-audit", "skipped", "no Gemfile.lock", **info)
     if not pins and odd.count:
@@ -1164,6 +1298,69 @@ def run_gem_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict
         return [], scanresult.record("gem-audit", "skipped", "offline", applicable=True, files=files, **info)
     return _osv_audit("gem-audit", "RubyGems", pins, info | {"files": files, "scope": {"files": files, "packages": len(pins)},
                                                             "checked": len(pins)}, odd)
+
+
+# ---------------------------------------------------------------------------- software copied into the project
+
+NO_COPIES = "no software copied into a vendor folder"
+
+
+def run_copied_audit(repo: Path, no_network: bool | None = None) -> tuple[list[dict], dict]:
+    """Software copied into the project (2026-11-12): what lies under a folder named `vendor`, which every reader
+    leaves out as not the project's own code, and which no dependency file lists. Until this date nothing named it,
+    and a project whose only outside software was such a copy read "lists no libraries". A copy that brings a
+    `package.json` with a published name and one exact version is looked up by what it says it is (OSV, ecosystem
+    npm; `unread.copied`); whether its files are that version, and what is packed inside it, is not checked, and the
+    Evidence Limits say so. Code files under `vendor` with no such file above them cannot be looked up: the record is
+    `partial` and counts them (`unnamed`). A package manager's own `vendor` folder is not a copy."""
+    pre = precomputed("copied-audit")
+    if pre is not None:
+        return pre
+    from . import unread
+    info: dict = {"role": "known problems in software copied into the project (vendor folders, OSV database)",
+                  "version": "osv-v1"}
+    got = unread.copied(repo)
+    if not got:
+        return [], scanresult.record("copied-audit", "skipped", NO_COPIES, **info)
+    named = got["named"]
+    info |= {"copied": len(named), "copied_examples": [f"{c['name']} {c['version']} ({c['at']})" for c in named][:5],
+             "unnamed": got["unnamed"], "unnamed_examples": got["unnamed_examples"],
+             "files": [c["file"] for c in named][:50]}
+    loose = "; ".join(x for x in (
+        f"{got['unnamed']} copied file{'s have' if got['unnamed'] != 1 else ' has'} no name and version to look up"
+        if got["unnamed"] else "",
+        "part of the vendor folders was not looked at (deeper or larger than Lantern reads)" if got["cut_short"] else "") if x)
+    if not named:
+        return [], scanresult.record("copied-audit", "partial", loose, **info)
+    if offline() if no_network is None else no_network:
+        return [], scanresult.record("copied-audit", "skipped", "offline", applicable=True, **info)
+    # a name is asked about once for each version it is copied in: `_osv_findings` takes one version for a name
+    rounds: list[dict[str, tuple[str, str, int]]] = []
+    for c in named:
+        pin = (c["version"], c["file"], c["line"])
+        for pins in rounds:
+            if c["name"] not in pins or pins[c["name"]][0] == c["version"]:
+                pins.setdefault(c["name"], pin)
+                break
+        else:
+            rounds.append({c["name"]: pin})
+    out: list[dict] = []
+    errors: list[str] = []
+    try:
+        for pins in rounds:
+            found, errs = _osv_findings("copied-audit", "npm", pins)
+            out += [f for f in found if f["id"] not in {x["id"] for x in out}]
+            errors += errs
+    except (OSError, ValueError) as exc:
+        state, why = _osv_failure(exc)
+        return [], scanresult.record("copied-audit", state, why, **info)
+    info |= {"findings": len(out), "checked": sum(len(pins) for pins in rounds),
+             "scope": {"files": len(named), "packages": sum(len(pins) for pins in rounds)}}
+    if errors or loose:
+        also = f"{len(errors)} vulnerability detail{'s' if len(errors) != 1 else ''} could not be fetched" if errors else ""
+        return out, scanresult.record("copied-audit", "partial", "; ".join(x for x in (loose, also) if x),
+                                      **(info | {"errors": errors}))
+    return out, scanresult.record("copied-audit", "ok", **info)
 
 
 if __name__ == "__main__":   # python -m lantern.depaudit REPO OUT.json  (the cloud service's audit step)
