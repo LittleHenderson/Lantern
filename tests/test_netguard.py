@@ -241,7 +241,10 @@ def test_this_computer_stays_reachable():
             taken.close()
             c.close()
         assert socket.getaddrinfo("localhost", 80) and socket.getaddrinfo(None, 80)
-        socket.getfqdn()                                       # looks this computer's own name up; must not count
+        # This computer's own name, as `socket.getfqdn()` asks it. The question is put to the guard as Python's own
+        # audit event, not to the resolver: on GitHub's newer Linux machines the name is not in /etc/hosts, so the
+        # real call went to DNS, which the no-network runner counts as a try for outside (2026-11-13).
+        sys.audit("socket.gethostbyaddr", socket.gethostname())  # must not count
     finally:
         server.close()
 
