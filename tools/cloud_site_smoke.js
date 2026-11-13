@@ -166,6 +166,36 @@ async function until(p, fn, timeout) {
     await p.click('#who'); await p.waitForSelector('#signout');
     await p.screenshot({ path: `${out}-${tag}-account.png` });
     await a11y.axe(p, `${tag} account`, errs);
+    if (tag === 'desk-light') {
+      // team workspaces (directive: user first, step 3): make one, invite with a one-time link, add a report;
+      // the second account joins with the link and can open the report, read-only
+      await p.click('.sheet [data-close]');
+      await p.click('#viewmode [data-m="advanced"]');
+      await p.goto(site + '#/team'); await p.waitForSelector('#teamname');
+      await p.fill('#teamname', 'Smoke team'); await p.click('#maketeam'); await p.waitForSelector('#invite');
+      await a11y.axe(p, `${tag} team`, errs);
+      await p.click('#invite'); await p.waitForSelector('#invurl');
+      const inv = await p.$eval('#invurl', i => i.value);
+      if (!/#\/join\/[A-Za-z0-9_-]{20,}$/.test(inv)) errs.push(`${tag}: the invite link looks wrong (${inv})`);
+      await p.screenshot({ path: `${out}-${tag}-invite.png` });
+      await p.click('#invdone');
+      await p.click('#addrun'); await p.click('.sheet [data-add="done1-demo-00000"]'); await p.waitForSelector('.apps [data-open="done1-demo-00000"]');
+      await p.screenshot({ path: `${out}-${tag}-team.png`, fullPage: true });
+      const ctxT = await b.newContext({ viewport, colorScheme: scheme });
+      await outside.watch(ctxT, errs, outside.FONTS);
+      await ctxT.addCookies([{ name: 'lt', value: token2, url: base }]);
+      const t = await ctxT.newPage(); watch(t);
+      await t.goto(site + '#/join/' + inv.split('#/join/')[1]); await t.waitForSelector('#dojoin');
+      if (/join\/[A-Za-z0-9_-]{20,}/.test(await t.evaluate(() => location.href))) errs.push(`${tag}: the invite's secret stayed in the address bar`);
+      await a11y.axe(t, `${tag} join`, errs);
+      await t.click('#dojoin'); await t.waitForSelector('.person + .person');
+      await t.click('[data-open="done1-demo-00000"]');
+      await until(t, () => { try { return !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('#tabs'); } catch (e) { return false; } }, 20000);
+      if (await t.$('#share') || await t.$('.sub [data-del]')) errs.push(`${tag}: a teammate can share or delete someone else's report`);
+      await ctxT.close();
+      await p.click('#viewmode [data-m="simple"]');
+      await p.click('#who'); await p.waitForSelector('#signout');
+    }
     if (name === 'phone' && scheme === 'dark') {   // last pass: delete a run, then the whole account
       await p.click('.sheet [data-close]');
       await p.goto(site + '#/'); await p.waitForSelector('article.app');

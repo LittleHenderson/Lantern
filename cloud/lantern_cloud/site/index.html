@@ -18,6 +18,11 @@
 </style>
 <style>
 /* Website additions: only what the app has no class for, made from the same tokens. */
+.people{display:grid;gap:8px;max-width:720px}
+.person{display:flex;align-items:center;gap:12px;padding:12px 16px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+.person .av{width:30px;height:30px;border-radius:99px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent-ink);font:700 13px var(--font);text-transform:uppercase;flex:none}
+.person .nm{font:600 15px var(--font);color:var(--ink);overflow-wrap:anywhere}
+.sheet .onb .picks{max-width:none}
 /* Where the findings are: the four stack stops (the report's stack strip), one cell each with its count and word.
    The run table gets one more column for it; the columns the app hides on narrower screens shift by one. */
 .ptable .r{grid-template-columns:180px 140px 132px 40px 40px 40px 44px 244px 52px 84px minmax(150px,1fr)}
@@ -134,6 +139,7 @@
   <button class="brand" id="home" aria-label="Lantern home" title="Lantern home"><!--__APP_BRAND__--></button>
   <nav id="nav" class="nav" aria-label="Main">
     <button data-v="home" class="on" aria-label="My runs"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1.6"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1.6"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1.6"/></svg><span>My runs</span></button>
+    <button data-v="team" id="navteam" aria-label="Team" hidden><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="7" r="2.8"/><path d="M2.5 16c.6-2.8 2.6-4.3 5-4.3s4.4 1.5 5 4.3"/><circle cx="14" cy="7.8" r="2.2"/><path d="M13.6 11.8c1.9.1 3.3 1.4 3.9 3.6"/></svg><span>Team</span></button>
     <button data-v="help" aria-label="Help"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 3 1.7c-.6.4-1 .8-1 1.5M10 14h.01"/></svg><span>Help</span></button>
     <button data-v="guide" aria-label="How to use Lantern" title="How to use Lantern: short animated demos"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M8.5 8v4l3.5-2z"/></svg><span>How to use Lantern</span></button>
     <button data-v="settings" aria-label="Settings"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg><span>Settings</span></button>
@@ -337,14 +343,14 @@ async function startSignIn(provider, el) {
   setTimeout(poll, 1500);
 }
 async function afterSignIn() {
-  await loadMe(); await loadRuns(); render();
+  await loadMe(); await Promise.all([loadRuns(), loadTeams()]); render();
   if (S.pending) { const p = S.pending; S.pending = null; startRun(p.link, p.privacy, p.agreed); }
 }
 async function accountSheet() {
   const me = S.me, name = String(me.label || '').split(':').pop(), via = {github: 'GitHub', google: 'Google', token: 'a Lantern token'}[me.account] || me.account;
   const el = sheet(`<div class="sh"><h2>${esc(name)}</h2><button class="x" data-close aria-label="Close">×</button></div>
     <p>Signed in with ${esc(via)}. You have used <b>${esc(me.runs_today)}</b> of today's ${esc(me.limits.runs_per_day)} checks.</p>
-    <p class="muted small">Your results are private to this account and stay until you delete them. Nothing is shared unless you click Share on a run.</p>
+    <p class="muted small">Your results are private to this account and stay until you delete them. Nothing is shared unless you click Share on a run, or put it in a team workspace.</p>
     <div id="ailine"></div>
     <div class="row" style="margin-top:18px"><button class="btn quiet" id="delme">${icon('trash')}Delete my account</button><span class="spacer"></span><button class="btn" id="tosettings">Settings</button><button class="btn primary" id="signout">Sign out</button></div>
     <div class="row" style="margin-top:10px"><span class="spacer"></span><button class="btn quiet sm" id="signoutall">Sign out everywhere</button></div>`);
@@ -361,7 +367,7 @@ async function accountSheet() {
   el.querySelector('#signout').onclick = signOut;
   el.querySelector('#signoutall').onclick = signOutAllSheet;
 }
-async function signOut() { try { await api('/v1/signout', {method: 'POST'}); } catch (e) {} S.me = null; S.runs = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render(); }
+async function signOut() { try { await api('/v1/signout', {method: 'POST'}); } catch (e) {} S.me = null; S.runs = null; S.teams = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render(); }
 // Every place this account is signed in (other computers and phones, the Lantern app, the terminal) is signed out.
 // Results and the allowance stay; each place signs in again when it is next used.
 function signOutAllSheet() {
@@ -374,11 +380,12 @@ function signOutAllSheet() {
     const b = el.querySelector('#soago'); b.disabled = true; b.textContent = 'Signing out…';
     try { await api('/v1/signout', {method: 'POST', body: {everywhere: true}}); }
     catch (e) { b.disabled = false; b.textContent = 'Sign out everywhere'; el.querySelector('#soamsg').innerHTML = note('err', esc(e.message)); return; }
-    S.me = null; S.runs = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render();
+    S.me = null; S.runs = null; S.teams = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render();
   };
 }
 
 // ---- share, delete
+const TEAM_IC = '<svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><circle cx="7.5" cy="7" r="2.8"/><path d="M2.5 16c.6-2.8 2.6-4.3 5-4.3s4.4 1.5 5 4.3"/><circle cx="14" cy="7.8" r="2.2"/><path d="M13.6 11.8c1.9.1 3.3 1.4 3.9 3.6"/></svg>';
 const SHARE_IC = '<svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.8-2.8a3 3 0 0 0-4.2-4.2l-1 1M11.5 8.5a3 3 0 0 0-4.2 0l-2.8 2.8a3 3 0 0 0 4.2 4.2l1-1"/></svg>';
 function patchRun(r) { S.runs = (S.runs || []).map(x => x.id === r.id ? {...x, ...r} : x); if (S.run && S.run.id === r.id) S.run = {...S.run, ...r}; }
 async function shareSheet(r) {
@@ -389,12 +396,14 @@ async function shareSheet(r) {
         : `<p>Lantern makes a link that opens this report, its evidence page and its badge, for anyone who has it. Nobody needs to sign in. You can stop sharing at any time.</p>
           ${note('warn', 'Findings can include passwords or keys Lantern found in your code (partly hidden), and where your app is weakest. Share with people you trust, or fix those first.')}
           <p class="muted small">${r.privacy === 'full' ? 'This run kept short code snippets, so the report shows them.' : 'This run kept no code: the report names files and lines only.'}</p>`}
+      ${teamPick(r)}
       <div id="sharemsg">${msg || ''}</div>
       <div class="row" style="margin-top:18px">${st.shared ? '<button class="btn quiet" id="unshare">Stop sharing</button>' : ''}<span class="spacer"></span><button class="btn" data-close>${st.shared ? 'Done' : 'Cancel'}</button>${st.shared ? '' : `<button class="btn primary" id="doshare">${SHARE_IC}Create link</button>`}</div>`);
     const set = async (on) => {
       try { const n = await api(`/v1/runs/${encodeURIComponent(r.id)}/share`, {method: on ? 'POST' : 'DELETE'}); r.shared = n.shared; patchRun({id: r.id, shared: n.shared}); draw(n, on ? '' : note('ok', 'Sharing is off. The old link no longer opens anything.')); const b = document.querySelector('#share span'); if (b) b.textContent = n.shared ? 'Shared' : 'Share'; }
       catch (e) { el.querySelector('#sharemsg').innerHTML = note('err', esc(e.message)); }
     };
+    teamPickWire(el, r, () => draw(st, note('ok', r.workspace ? `Everyone in ${esc(teamName(r.workspace))} can open this report now.` : 'Only you can open this report now.')));
     const d = el.querySelector('#doshare'); if (d) d.onclick = () => set(true);
     const u = el.querySelector('#unshare'); if (u) u.onclick = () => set(false);
     const c = el.querySelector('#copy'); if (c) c.onclick = async () => {
@@ -701,7 +710,7 @@ function renderHomePro(el) {
   const num = (v, bad) => v == null ? '<span class="num dash">–</span>' : `<span class="num ${bad && v ? 'bad' : ''}">${esc(v)}</span>`;
   const rows = runs.map(r => {
     const s = r.summary || {}, c = r.status === 'done' ? s.counts || {} : null, t = tone(s.grade), run = ACTIVE.includes(r.status);
-    return `<div class="r"><div><div class="n">${esc(repoName(r.link))}${r.privacy === 'full' ? '<span class="tag">SNIPPETS</span>' : ''}${r.shared ? '<span class="tag">SHARED</span>' : ''}</div><div class="p" title="${esc(r.link)}">${esc(r.link)}</div></div>
+    return `<div class="r"><div><div class="n">${esc(repoName(r.link))}${r.privacy === 'full' ? '<span class="tag">SNIPPETS</span>' : ''}${r.shared ? '<span class="tag">SHARED</span>' : ''}${r.workspace ? `<span class="tag">TEAM</span>` : ''}</div><div class="p" title="${esc(r.link)}">${esc(r.link)}</div></div>
       <span class="p" style="font:12px var(--font);color:var(--ink-2)">${esc(r.host)}${r.commit ? ' · ' + esc(String(r.commit).slice(0, 7)) : ''}</span>
       ${r.status === 'done' && s.score != null ? `<div class="rd"${releaseWord(s.release) ? ` title="Release decision: ${releaseWord(s.release)}"` : ''}><span style="font-weight:600;color:var(--ink);width:24px">${esc(s.score)}</span><div class="bar"><i class="bar-${t}" style="width:${Math.max(2, Math.min(100, +s.score || 0))}%"></i></div><span class="g tone-${t}">${esc(s.grade)}</span></div>` : `<div class="rd"><span class="dash">${run ? 'checking' : esc(r.status)}</span></div>`}
       ${num(c ? c.critical : null, true)}${num(c ? c.high : null)}${num(c ? c.medium : null)}${num(c ? c.low : null)}
@@ -751,10 +760,10 @@ function subBar(r, tabs) {
   const W = sm ? {atlas: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', evidence: 'Report'}
                : {atlas: 'Atlas', findings: 'Findings', prot: 'Protections', ready: 'Readiness', evidence: 'Evidence'};
   const tab = t => `<button data-t="${t}" role="tab" aria-selected="${S.tab === t}" class="${S.tab === t ? 'on' : ''}">${W[t]}${t === 'findings' && nf ? `<span class="n ${c.critical ? 'crit' : ''}">${esc(nf)}</span>` : ''}</button>`;
-  return `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="Back to my runs">${icon('back')}<span>My runs</span></button>${sm ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(repoName(r.link))}</span>
+  return `<div class="sub"><span class="dock" data-dock="brand"></span><button class="back" id="back" aria-label="${r.mine === false ? 'Back to the team' : 'Back to my runs'}">${icon('back')}<span>${r.mine === false ? 'Team' : 'My runs'}</span></button>${sm ? '' : '<span class="crumbsep" aria-hidden="true">/</span>'}<span class="title">${esc(repoName(r.link))}</span>
     ${r.status === 'done' && s.grade ? `<span class="gchip ${tone(s.grade)}" title="Readiness ${esc(s.score)}/100${releaseWord(s.release) ? ', release decision ' + releaseWord(s.release) : ''}">${esc(s.grade)}${sm ? '' : ' · ' + esc(s.score)}${releaseWord(s.release) ? ' · ' + releaseWord(s.release) : ''}</span>` : ''}
     ${tabs ? `<div class="tabs" role="tablist">${['atlas', 'findings', 'prot', 'ready', 'evidence'].map(tab).join('')}</div>` : ''}
-    <span class="spacer"></span>${tabs ? `${explainBtn(r)}<button class="btn sm" id="share" aria-label="${r.shared ? 'Shared: manage the link' : 'Share this report'}">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button><a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#" aria-label="Open the report in a new tab">${icon('open')}<span>Open in new tab</span></a><button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}<span class="dock" data-dock="end"></span></div>`;
+    <span class="spacer"></span>${tabs && r.mine === false ? `<span class="tag" title="Checked by ${esc(r.by || 'a teammate')}">${esc(teamName(r.workspace) || 'Team')}</span>` : ''}${tabs && r.mine !== false ? `${explainBtn(r)}<button class="btn sm" id="share" aria-label="${r.shared ? 'Shared: manage the link' : 'Share this report'}">${SHARE_IC}<span>${r.shared ? 'Shared' : 'Share'}</span></button>` : ''}${tabs ? `<a class="btn ghost sm newtab" id="newtab" target="_blank" rel="noopener" href="#" aria-label="Open the report in a new tab">${icon('open')}<span>Open in new tab</span></a>` : ''}${tabs && r.mine !== false ? `<button class="btn quiet sm" data-del="${esc(r.id)}" title="Delete this run and its results" aria-label="Delete this run">${icon('trash')}</button>` : ''}<span class="dock" data-dock="end"></span></div>`;
 }
 async function renderRun(el, id) {
   let r = S.run && S.run.id === id ? S.run : null;
@@ -825,9 +834,9 @@ async function renderReport(el, r) {
   if (!['atlas', 'findings', 'prot', 'ready', 'evidence'].includes(S.tab)) S.tab = 'findings';
   const old = S.frame && S.frame.rid === r.id ? S.frame.el : null;
   dock(false); el.innerHTML = `${subBar(r, true)}<div id="pbody"></div>`; dock(true);
-  el.querySelector('#back').onclick = () => go('home');
-  el.querySelector('#share').onclick = () => shareSheet(r);
-  el.querySelector('#explain').onclick = () => explainClick(r);
+  el.querySelector('#back').onclick = () => r.mine === false && r.workspace ? (location.hash = '#/team/' + encodeURIComponent(r.workspace)) : go('home');
+  const sh = el.querySelector('#share'); if (sh) sh.onclick = () => shareSheet(r);
+  const ex = el.querySelector('#explain'); if (ex) ex.onclick = () => explainClick(r);
   if (ACTIVE.includes((r.explain || {}).status)) watchExplain(r.id);
   addControls(el);
   el.querySelectorAll('.sub [data-t]').forEach(b => b.onclick = () => { S.tab = b.dataset.t; renderReport(el, r); });
@@ -1146,6 +1155,141 @@ function renderHelp(el) {
   el.querySelectorAll('.qa').forEach(d => d.onclick = () => { const i = +d.dataset.i; H.open = H.open === i ? null : i; renderHelp(el); });
 }
 
+// ---- team workspaces (directive: user first, step 3)
+// A few people who can open each other's runs. It lives in Advanced (the Team button), and shows in Simple only
+// once someone is in a workspace. The owner invites with a one-time link (7 days; no email is asked for), and a run
+// joins only when its own owner puts it there (Share, then Your team). Teammates read; they never change, share,
+// explain or delete someone else's run. Each person keeps their own Simple/Advanced and lens: those stay in their
+// browser.
+async function loadTeams() { if (!S.me) { S.teams = null; return; } try { S.teams = (await api('/v1/workspaces')).workspaces; } catch (e) { if (!S.teams) S.teams = []; } }
+function teamName(wid) { const t = (S.teams || []).find(x => x.id === wid); return t ? t.name : ''; }
+function teamPick(r) {
+  if (r.mine === false || !(S.teams || []).length) return '';
+  const opt = (v, label, sub) => `<label class="choice"><input type="radio" name="team" value="${esc(v)}" ${(r.workspace || '') === v ? 'checked' : ''}><span><b>${esc(label)}</b>${esc(sub)}</span></label>`;
+  return why(`<div class="privacy" role="radiogroup" aria-label="Who on your team can open it" style="margin:0">${opt('', 'Just me', 'Only you can open it.')}${(S.teams || []).map(t => opt(t.id, t.name, 'Everyone in it can open the report. They can’t change, share or delete it.')).join('')}</div>`,
+    r.workspace ? `Your team: ${teamName(r.workspace) || 'a workspace'}` : 'Your team');
+}
+function teamPickWire(el, r, done) {
+  el.querySelectorAll('input[name="team"]').forEach(i => i.onchange = async () => {
+    try { const n = await api(`/v1/runs/${encodeURIComponent(r.id)}/workspace`, {method: 'PUT', body: {workspace: i.value || null}}); r.workspace = n.workspace; patchRun({id: r.id, workspace: n.workspace}); await loadTeams(); done(); }
+    catch (e) { el.querySelector('#sharemsg').innerHTML = note('err', esc(e.message)); }
+  });
+}
+function teamRunCard(r) {
+  const run = ACTIVE.includes(r.status);
+  return `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(repoName(r.link))}</div><div class="path">Checked by ${esc(r.mine ? 'you' : r.by)} · ${esc(ago(r.finished || r.created))}</div></div></div>
+    ${r.status === 'done' ? `<p class="sentence">${sentence(r.summary)}</p>` : run ? '<p class="sentence">Checking now.</p>' : note('err', esc(r.error || 'This check stopped before it finished.'))}
+    <div class="actions">${r.status === 'done' ? `<button class="btn primary" data-open="${esc(r.id)}" data-tab="findings">Open the report</button>` : ''}</div></article>`;
+}
+async function renderTeams(el) {
+  if (!S.me) { el.innerHTML = '<main style="max-width:760px"><h1>Team</h1><p class="lede">Sign in to make a workspace and invite people to it.</p></main>'; return signInSheet('Sign in to see your team.'); }
+  await loadTeams(); if (S.view !== 'teams') return;
+  const ts = S.teams || [];
+  el.innerHTML = `<main style="max-width:1080px"><div class="apps-head"><h2>Team workspaces</h2><span>${ts.length ? `${ts.length} workspace${ts.length === 1 ? '' : 's'}` : ''}</span></div>
+    <p class="lede" style="margin-bottom:18px">A workspace is a few people who can open each other’s reports. You choose which of your reports go in, and you can take them out again.</p>
+    ${ts.length ? `<div class="apps">${ts.map(t => `<article class="app"><div class="top"><div style="flex:1;min-width:0"><div class="name">${esc(t.name)}</div><div class="path">${esc(t.people)} ${t.people === 1 ? 'person' : 'people'} · ${esc(t.runs)} report${t.runs === 1 ? '' : 's'}${t.role === 'owner' ? ' · you own it' : ''}</div></div></div><div class="actions"><button class="btn primary" data-team="${esc(t.id)}">Open</button></div></article>`).join('')}</div>`
+      : '<div class="empty"><b>No workspaces yet</b>Make one, then invite the people you build with.</div>'}
+    <div class="field" style="margin-top:22px;max-width:560px">${TEAM_IC}<input type="text" id="teamname" maxlength="60" placeholder="Name a new workspace, like My startup" aria-label="New workspace name" autocomplete="off"><button class="btn primary sm" id="maketeam">Make workspace</button></div>
+    <div id="teammsg"></div></main>`;
+  el.querySelectorAll('[data-team]').forEach(b => b.onclick = () => { location.hash = '#/team/' + encodeURIComponent(b.dataset.team); });
+  const nm = el.querySelector('#teamname'), mk = el.querySelector('#maketeam');
+  nm.onkeydown = e => { if (e.key === 'Enter') mk.click(); };
+  mk.onclick = async () => {
+    if (!nm.value.trim()) { nm.focus(); return; }
+    try { const w = await api('/v1/workspaces', {method: 'POST', body: {name: nm.value}}); await loadTeams(); location.hash = '#/team/' + encodeURIComponent(w.id); }
+    catch (e) { el.querySelector('#teammsg').innerHTML = note('err', esc(e.message)); }
+  };
+}
+async function renderTeam(el, wid) {
+  if (!S.me) return renderTeams(el);
+  let w;
+  try { w = await api('/v1/workspaces/' + encodeURIComponent(wid)); }
+  catch (e) { el.innerHTML = `<main style="max-width:760px">${note('err', esc(e.message))}<p><a href="#/team">Back to your workspaces</a></p></main>`; return; }
+  if (S.view !== 'team' || S.teamId !== wid) return;
+  const owner = w.role === 'owner', mine = (S.runs || []).filter(r => r.status === 'done' && r.workspace !== w.id);
+  el.innerHTML = `<main style="max-width:1080px"><p style="margin:0 0 10px"><a href="#/team">Your workspaces</a></p>
+    <div class="apps-head"><h2>${esc(w.name)}</h2><span>${esc(w.people.length)} ${w.people.length === 1 ? 'person' : 'people'}${owner ? ' · you own it' : ''}</span></div>
+    <div class="row" style="margin:0 0 22px;gap:8px;flex-wrap:wrap">${owner ? '<button class="btn primary" id="invite">Invite someone</button>' : ''}
+      ${mine.length ? '<button class="btn" id="addrun">Add one of my reports</button>' : ''}<span class="spacer"></span>
+      ${owner ? `<button class="btn quiet sm" id="rename">Rename</button><button class="btn quiet sm" id="closeteam">${icon('trash')}Close workspace</button>` : '<button class="btn quiet sm" id="leave">Leave</button>'}</div>
+    <div id="teammsg"></div>
+    <div class="apps-head"><h2>Reports</h2><span>${esc(w.runs.length)}</span></div>
+    ${w.runs.length ? `<div class="apps">${w.runs.map(teamRunCard).join('')}</div>` : `<div class="empty"><b>No reports here yet</b>${mine.length ? 'Press Add one of my reports, or open a report and choose Share.' : 'Check an app first, then add its report here.'}</div>`}
+    <div class="apps-head" style="margin-top:30px"><h2>People</h2></div>
+    <div class="people">${w.people.map(p => `<div class="person"><span class="av">${esc(String(p.name).slice(0, 1))}</span><span class="nm">${esc(p.name)}${p.you ? ' (you)' : ''}</span><span class="tag">${p.role === 'owner' ? 'Owner' : 'Member'}</span><span class="spacer"></span>${owner && !p.you ? `<button class="btn quiet sm" data-out="${esc(p.id)}" data-name="${esc(p.name)}">Take out</button>` : ''}</div>`).join('')}</div>
+    ${owner && w.invites_open ? `<p class="muted small" style="margin-top:12px">${esc(w.invites_open)} invite link${w.invites_open === 1 ? '' : 's'} not used yet. <button class="linkbtn" id="cancelinv">Cancel ${w.invites_open === 1 ? 'it' : 'them'}</button></p>` : ''}</main>`;
+  const msg = html => { el.querySelector('#teammsg').innerHTML = html; };
+  addControls(el);
+  const q = id => el.querySelector(id);
+  if (q('#invite')) q('#invite').onclick = () => inviteSheet(w);
+  if (q('#addrun')) q('#addrun').onclick = () => addRunSheet(w, mine);
+  if (q('#rename')) q('#rename').onclick = () => renameSheet(w);
+  if (q('#closeteam')) q('#closeteam').onclick = () => closeTeamSheet(w);
+  if (q('#cancelinv')) q('#cancelinv').onclick = async () => { try { await api(`/v1/workspaces/${encodeURIComponent(w.id)}/invites`, {method: 'DELETE'}); renderTeam(el, wid); } catch (e) { msg(note('err', esc(e.message))); } };
+  const me = w.people.find(p => p.you);
+  if (q('#leave')) q('#leave').onclick = () => confirmSheet(`Leave ${w.name}?`, 'You won’t see its reports any more, and your reports in it go back to being yours alone. Nothing is deleted.', 'Leave', async () => {
+    await api(`/v1/workspaces/${encodeURIComponent(w.id)}/people/${encodeURIComponent(me.id)}`, {method: 'DELETE'}); await loadTeams(); location.hash = '#/team'; });
+  el.querySelectorAll('[data-out]').forEach(b => b.onclick = () => confirmSheet(`Take ${b.dataset.name} out of ${w.name}?`, 'They won’t see its reports any more, and their reports in it go back to being theirs alone. Nothing is deleted.', 'Take out', async () => {
+    await api(`/v1/workspaces/${encodeURIComponent(w.id)}/people/${encodeURIComponent(b.dataset.out)}`, {method: 'DELETE'}); renderTeam(el, wid); }));
+}
+function confirmSheet(title, text, label, act) {
+  const el = sheet(`<div class="sh"><h2>${esc(title)}</h2><button class="x" data-close aria-label="Close">×</button></div><p>${esc(text)}</p><div id="cmsg"></div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Cancel</button><button class="btn danger" id="cgo">${esc(label)}</button></div>`);
+  el.querySelector('#cgo').onclick = async () => { try { await act(); closeSheet(); } catch (e) { el.querySelector('#cmsg').innerHTML = note('err', esc(e.message)); } };
+}
+async function inviteSheet(w) {
+  const el = sheet(`<div class="sh"><h2>Invite someone to ${esc(w.name)}</h2><button class="x" data-close aria-label="Close">×</button></div><div class="working"><span class="pulse"></span>Making a link…</div>`);
+  let inv;
+  try { inv = await api(`/v1/workspaces/${encodeURIComponent(w.id)}/invites`, {method: 'POST'}); }
+  catch (e) { el.innerHTML = `<div class="sh"><h2>Invite someone</h2><button class="x" data-close aria-label="Close">×</button></div>${note('err', esc(e.message))}`; return; }
+  el.innerHTML = `<div class="sh"><h2>Send this link to one person</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <div class="field" style="margin-top:16px">${SHARE_IC}<input type="text" id="invurl" value="${esc(inv.url)}" readonly aria-label="Invite link"><button class="btn sm" id="copy">${icon('copy')}Copy</button></div>
+    <p class="muted small">It works once, for 7 days. Whoever opens it first and signs in joins ${esc(w.name)}. Lantern can’t show it again, so copy it now. For more people, make one link each.</p>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn primary" id="invdone">Done</button></div>`;
+  el.querySelector('#copy').onclick = async () => { const i = el.querySelector('#invurl'); i.select(); try { await navigator.clipboard.writeText(i.value); el.querySelector('#copy').innerHTML = icon('check') + 'Copied'; } catch (e) { el.querySelector('#copy').innerHTML = 'Press Ctrl+C'; } };
+  el.querySelector('#invdone').onclick = () => { closeSheet(); if (S.view === 'team') render(); };
+}
+function addRunSheet(w, mine) {
+  const el = sheet(`<div class="sh"><h2>Add a report to ${esc(w.name)}</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <p>Everyone in ${esc(w.name)} can open it. They can’t change, share or delete it, and you can take it out again.</p>
+    <div class="onb"><div class="picks" style="margin-top:12px">${mine.slice(0, 20).map(r => `<button class="pick" data-add="${esc(r.id)}"><div><b>${esc(repoName(r.link))}</b><span>${esc(ago(r.finished || r.created))}${r.workspace ? ' · now in ' + esc(teamName(r.workspace) || 'another workspace') : ''}</span></div></button>`).join('')}</div></div><div id="amsg"></div>`);
+  el.querySelectorAll('[data-add]').forEach(b => b.onclick = async () => {
+    try { await api(`/v1/runs/${encodeURIComponent(b.dataset.add)}/workspace`, {method: 'PUT', body: {workspace: w.id}}); patchRun({id: b.dataset.add, workspace: w.id}); closeSheet(); render(); }
+    catch (e) { el.querySelector('#amsg').innerHTML = note('err', esc(e.message)); }
+  });
+}
+function renameSheet(w) {
+  const el = sheet(`<div class="sh"><h2>Rename ${esc(w.name)}</h2><button class="x" data-close aria-label="Close">×</button></div>
+    <div class="field" style="margin-top:12px"><input type="text" id="newname" maxlength="60" value="${esc(w.name)}" aria-label="Workspace name"></div><div id="rmsg"></div>
+    <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="dorename">Save</button></div>`);
+  el.querySelector('#dorename').onclick = async () => {
+    try { await api(`/v1/workspaces/${encodeURIComponent(w.id)}`, {method: 'PATCH', body: {name: el.querySelector('#newname').value}}); await loadTeams(); closeSheet(); render(); }
+    catch (e) { el.querySelector('#rmsg').innerHTML = note('err', esc(e.message)); }
+  };
+}
+function closeTeamSheet(w) {
+  confirmSheet(`Close ${w.name}?`, 'Everyone leaves it, unused invite links stop working, and every report in it goes back to being its owner’s alone. No report is deleted.', 'Close workspace', async () => {
+    await api('/v1/workspaces/' + encodeURIComponent(w.id), {method: 'DELETE'}); await loadTeams(); location.hash = '#/team'; });
+}
+async function renderJoin(el) {
+  const code = S.joinCode;
+  if (!code) { el.innerHTML = `<main style="max-width:640px">${note('warn', 'This invite link is incomplete. Ask for a new one.')}</main>`; return; }
+  let i;
+  try { i = await api('/v1/invites/peek', {method: 'POST', body: {code}}); }
+  catch (e) { el.innerHTML = `<main class="simplehome onb"><h1>This invite doesn’t work any more</h1><p class="lede">${esc(e.message)}</p><div class="go"><a class="btn primary" href="#/">Go to Lantern</a></div></main>`; return; }
+  if (S.view !== 'join') return;
+  el.innerHTML = `<main class="simplehome onb"><h1>Join ${esc(i.name)}</h1>
+    <p class="lede">You’ll see the reports its people put there, and you can add yours. Nobody sees your other runs.</p>
+    <div class="go"><button class="btn primary big" id="dojoin">${S.me ? 'Join' : 'Sign in to join'}</button></div><div id="joinmsg"></div>
+    ${why('<p style="margin:0">This link works once. When you join, it stops working for anyone else. You can leave at any time from the Team page.</p>', 'What does joining do?')}</main>`;
+  const go2 = async () => {
+    try { const w = await api('/v1/invites/accept', {method: 'POST', body: {code}}); S.joinCode = null; await loadTeams(); location.replace('#/team/' + encodeURIComponent(w.id)); }
+    catch (e) { el.querySelector('#joinmsg').innerHTML = note('err', esc(e.message)); }
+  };
+  el.querySelector('#dojoin').onclick = () => { if (S.me) return go2(); S.pendingJoin = true; signInSheet('Sign in, and you join straight after.'); };
+  if (S.me && S.pendingJoin) { S.pendingJoin = false; go2(); }
+}
+
 // ---- settings: the website's own choices (kept in this browser) and the account's (kept on the server)
 function renderSettings(el) {
   const me = S.me, mode = viewMode(), phone = innerWidth <= 760;
@@ -1199,7 +1343,7 @@ function renderSettings(el) {
 }
 
 // ---- routing
-function go(view) { location.hash = view === 'help' ? '#/help' : view === 'settings' ? '#/settings' : '#/'; }
+function go(view) { location.hash = view === 'help' ? '#/help' : view === 'settings' ? '#/settings' : view === 'team' ? '#/team' : '#/'; }
 document.getElementById('nav').onclick = e => { const b = e.target.closest('button'); if (b && b.dataset.v === 'guide') { location.href = '/guide'; return; } if (b) go(b.dataset.v); };
 // The logo is "Lantern home": from any other screen it goes to My runs; on My runs it plays the welcome again
 // (Skip, a click or Escape ends it), the same as opening the site fresh.
@@ -1208,14 +1352,17 @@ document.getElementById('home').onclick = () => {
   if (window.replayIntro) window.replayIntro(); else { scrollTo(0, 0); if (S.me) loadRuns().then(render); }
 };
 function route() {
-  const h = location.hash.replace(/^#\/?/, '');
-  const m = /^run\/([A-Za-z0-9_-]{1,40})$/.exec(h);
+  let h = location.hash.replace(/^#\/?/, '');
+  const j = /^join\/([A-Za-z0-9_-]{20,64})$/.exec(h);
+  if (j) { S.joinCode = j[1]; history.replaceState(null, '', '#/join'); h = 'join'; }   // the invite's secret leaves the address bar and history
+  const m = /^run\/([A-Za-z0-9_-]{1,40})$/.exec(h), t = /^team\/([A-Za-z0-9_-]{1,40})$/.exec(h);
   const prev = S.runId;
-  S.view = m ? 'run' : h === 'help' || h === 'settings' ? h : 'home';
+  S.teamId = t ? t[1] : null;
+  S.view = m ? 'run' : t ? 'team' : h === 'team' ? 'teams' : h === 'join' ? 'join' : h === 'help' || h === 'settings' ? h : 'home';
   S.runId = m ? m[1] : null;
   if (S.runId !== prev) { S.frame = null; if (!S.runId || (S.run && S.run.id !== S.runId)) S.run = null; }
   if (S.view !== 'run') stopFollow();
-  for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (S.view === 'run' ? 'home' : S.view));
+  for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('on', b.dataset.v === (S.view === 'run' ? 'home' : S.view === 'teams' || S.view === 'team' ? 'team' : S.view));
   render(); scrollTo(0, 0);
   if (S.view === 'home' && S.me) loadRuns().then(() => { if (S.view === 'home') render(); });
 }
@@ -1233,8 +1380,12 @@ function render() {
   const el = document.getElementById('view');
   dock(false);
   setBackdrop(); drawViewMode(); drawAcct(); renderAsk();
+  document.getElementById('navteam').hidden = !(S.me && (!simple() || (S.teams || []).length));
   if (S.view === 'run') return renderRun(el, S.runId);
   if (S.view === 'help') return renderHelp(el);
+  if (S.view === 'teams') return renderTeams(el);
+  if (S.view === 'team') return renderTeam(el, S.teamId);
+  if (S.view === 'join') return renderJoin(el);
   if (S.view === 'settings') return renderSettings(el);
   renderHome(el);
 }
@@ -1245,7 +1396,7 @@ setInterval(() => {
 }, 3000);
 addEventListener('hashchange', () => { S.addMsg = null; route(); });
 addEventListener('resize', () => { const m = document.body.dataset.mode; drawViewMode(); if (document.body.dataset.mode !== m) render(); });
-(async () => { await Promise.all([loadMe(), loadSamples()]); await loadRuns(); route(); pickUpSignIn(); })();
+(async () => { await Promise.all([loadMe(), loadSamples()]); await Promise.all([loadRuns(), loadTeams()]); route(); pickUpSignIn(); })();
 </script>
 <script src="/react.production.min.js"></script>
 <script src="/react-dom.production.min.js"></script>
