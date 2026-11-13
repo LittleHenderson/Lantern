@@ -63,6 +63,19 @@ PAGE_SKIP_STMTS = {"namespace_definition", "namespace_use_declaration", "class_d
                    "declare_statement", "comment", "const_declaration", "empty_statement"}
 
 
+# What a statement has to say somewhere for `_routes` or `_wordpress` to read anything from it: the name a route is
+# registered on (`Route`, also in `\Route` and `Illuminate\Support\Facades\Route`; one of the router variables,
+# where the name must end there, or every `$request` would count as `$r`), and the two WordPress functions. The text
+# is only looked at to pass a statement over: one that may say such a name is gone through part by part as before.
+ROUTER_NAMED = re.compile(rb"Route|\$(?:app|router|route|group|api|routes|v1|r)(?![A-Za-z0-9_])")
+HOOK_NAMED = re.compile(rb"add_action|register_rest_route")
+
+
+def _may_say(n, named: re.Pattern) -> bool:
+    text = n.text
+    return text is None or named.search(text) is not None
+
+
 def _parser():
     import tree_sitter as ts
     import tree_sitter_php as tp
@@ -166,6 +179,7 @@ class Model:
         self.funs: dict[str, PFun] = {}       # node id → fun
         self.fun_by_name: dict[str, list[str]] = {}
         self.unresolved: dict[str, int] = {}
+        self._by_low: dict[str, tuple[PClass, int, dict[str, str]]] = {}   # class id → (the class, how many, by name)
 
     def resolve_class(self, name: str, ns: str, uses: dict[str, str]) -> str | None:
         """A class name as written → a repo class id, or None."""
@@ -195,16 +209,28 @@ class Model:
         c = self.classes.get(cid)
         if c is None or depth > 8:
             return None
-        low = name.lower()
-        for f in c.funs:
-            if f.lower() == low:
-                return f"php:{cid}.{f}"
+        f = self._methods(c).get(name.lower())
+        if f is not None:
+            return f"php:{cid}.{f}"
         for s in c.supers:
             if s in self.classes:
                 r = self.fun_in(s, name, depth + 1)
                 if r:
                     return r
         return None
+
+    def _methods(self, c: PClass) -> dict[str, str]:
+        """The method names of a class by their lower-cased form, made once for the class as it stands (asked again
+        when it has more methods, or when another class took its name). Every call used to lower-case every method
+        name of the class and of its parents: 20 million times for the Laravel framework. Where two names differ
+        only in case (no PHP file may say that) the first one the class gives is the one, as before."""
+        kept = self._by_low.get(c.id)
+        if kept is None or kept[0] is not c or kept[1] != len(c.funs):
+            low: dict[str, str] = {}
+            for f in c.funs:
+                low.setdefault(f.lower(), f)
+            kept = self._by_low[c.id] = (c, len(c.funs), low)
+        return kept[2]
 
     def implementers(self, cid: str) -> list[str]:
         """Concrete classes under `cid` (through subclasses). The children index is built once per model, after
@@ -797,7 +823,8 @@ def _routes(model: Model, f: PFile, nodes) -> list[Route]:
             visit(c, prefix, auth)
 
     for s in nodes:
-        visit(s, "/api" if api else "", False)
+        if _may_say(s, ROUTER_NAMED):
+            visit(s, "/api" if api else "", False)
     return out
 
 
@@ -830,7 +857,7 @@ def _php_attr_routes(fn: PFun, cls: PClass | None) -> list[tuple[str, str]]:
 def _wordpress(model: Model, f: PFile, nodes) -> list[tuple[str, object, int]]:
     """(detail, handler node, line) for `add_action('wp_ajax_…')` and `register_rest_route(...)`."""
     out = []
-    stack = list(nodes)
+    stack = [n for n in nodes if _may_say(n, HOOK_NAMED)]
     while stack:
         x = stack.pop()
         if x.type == "function_call_expression":
@@ -981,8 +1008,11 @@ def add_php(g: Graph, repo: str | Path) -> dict:
         return {h.id}
 
     route_skip: dict[str, set] = {}
+    in_file: dict[str, list] = {}                # the functions of each file, in the order the model has them
+    for mid, fn in model.funs.items():
+        in_file.setdefault(fn.file, []).append((mid, [fn.node]))
     for f in files:
-        scopes = [(f"php:{f.rel}", f.top)] + [(mid, [fn.node]) for mid, fn in model.funs.items() if fn.file == f.rel]
+        scopes = [(f"php:{f.rel}", f.top)] + in_file.get(f.rel, [])
         for owner, nodes in scopes:
             for r in _routes(model, f, nodes):
                 detail = f"{r.verb} {r.path}"

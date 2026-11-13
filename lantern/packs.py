@@ -33,8 +33,9 @@ import os
 import re
 from pathlib import Path
 
+from . import listing, quick
 from .graph import Graph
-from .python_frontend import inside_repo, project_text, skipped
+from .python_frontend import inside_repo, project_text
 
 BUILTIN_DIR = Path(__file__).parent / "packs"
 PROJECT_DIR = "lantern-packs"
@@ -239,13 +240,10 @@ def _files(repo: Path, globs: list[str]):
         pats.append(gl)
         if not gl.startswith("**/") and "/" not in gl:
             pats.append("**/" + gl)
-    for p in repo.rglob("*"):
-        if not p.is_file() or not inside_repo(p, repo):
+    for p, parts in listing.files(repo):    # the project's files, walked once for a whole run
+        if PROJECT_DIR in parts[:-1]:
             continue
-        rel = p.relative_to(repo)
-        if skipped(rel.parts[:-1], repo) or PROJECT_DIR in rel.parts[:-1]:
-            continue
-        rp = rel.as_posix()
+        rp = "/".join(parts)
         if any(fnmatch.fnmatchcase(rp, pat) or fnmatch.fnmatchcase(rp, pat.removeprefix("**/")) for pat in pats):
             yield p
 
@@ -285,7 +283,10 @@ def scan_packs(repo: Path, packs: list[dict]) -> tuple[list[dict], list[dict]]:
                 if p.suffix.lower() not in TEXT_EXTS and p.suffix:
                     continue
                 rel = p.relative_to(repo).as_posix()
-                for ln, line in _lines(_read(p, repo)):
+                text = _read(p, repo)
+                if not quick.may_match(rx, text):       # no line of this file can match: none is tried
+                    continue
+                for ln, line in _lines(text):
                     if not rx.search(line) or (unless and unless.search(line)):
                         continue
                     s = line.lstrip()
@@ -304,19 +305,33 @@ def scan_packs(repo: Path, packs: list[dict]) -> tuple[list[dict], list[dict]]:
 
 # ---------------------------------------------------------------------------- entries -> entry points
 
-def _handler_nodes(g: Graph, handler: str, near_file: str) -> list[str]:
-    """Graph nodes a handler name in a registration refers to: `views.index`, `ItemView.as_view`, `index`."""
+VIEW_METHODS = ("dispatch", "get", "post", "put", "patch", "delete", "handle", "__call__")
+
+
+def _handlers(g: Graph) -> tuple[dict, dict]:
+    """The map's functions and classes by the last word of their name, and each class's functions, both in the
+    map's own order: what `_handler_nodes` looks through. Made once for all the registrations of a run (until
+    2026-11-12 every registration line went through every node of the map: 446 times on Django)."""
+    by_last: dict[str, list] = {}
+    inside: dict[str, list] = {}
+    for n in g.nodes.values():
+        if n.kind == "callable" and n.parent:
+            inside.setdefault(n.parent, []).append(n)
+        if n.kind in ("callable", "class") and n.file:
+            q = n.qualname.split(".")
+            by_last.setdefault(q[-1], []).append((n, q))
+    return by_last, inside
+
+
+def _handler_nodes(g: Graph, handler: str, near_file: str, known: tuple[dict, dict] | None = None) -> list[str]:
+    """Graph nodes a handler name in a registration refers to: `views.index`, `ItemView.as_view`, `index`.
+    `known`: what `_handlers(g)` gave, when the caller asks for many names of one map."""
     h = re.sub(r"\.as_view(\(\))?$|\(\)$", "", handler.strip())
     if not h:
         return []
     parts = h.split(".")
-    cands = []
-    for n in g.nodes.values():
-        if n.kind not in ("callable", "class") or not n.file:
-            continue
-        q = n.qualname.split(".")
-        if q[-len(parts):] == parts:
-            cands.append(n)
+    by_last, inside = known if known is not None else _handlers(g)
+    cands = [n for n, q in by_last.get(parts[-1], ()) if q[-len(parts):] == parts]
     if len(cands) > 1:
         folder = near_file.rsplit("/", 1)[0] if "/" in near_file else ""
         same = [n for n in cands if (n.file.rsplit("/", 1)[0] if "/" in n.file else "") == folder]
@@ -325,9 +340,7 @@ def _handler_nodes(g: Graph, handler: str, near_file: str) -> list[str]:
     out = []
     for n in cands:
         if n.kind == "class":   # class-based view: the methods that answer requests
-            methods = [m for m in g.nodes.values() if m.parent == n.id and m.kind == "callable" and
-                       m.name in ("dispatch", "get", "post", "put", "patch", "delete", "handle", "__call__")]
-            out += [m.id for m in methods]
+            out += [m.id for m in inside.get(n.id, ()) if m.name in VIEW_METHODS]
         else:
             out.append(n.id)
     return out
@@ -337,13 +350,17 @@ def apply_entries(g: Graph, repo: Path, packs: list[dict]) -> dict:
     """Mark the functions a pack's registration patterns point at as entry points. Existing entries are kept.
     Ambiguous handler names are counted, not guessed."""
     stats = {"added": 0, "ambiguous": 0, "unresolved": 0, "packs": [p["pack"] for p in packs]}
+    known = None    # the map's names, made when the first registration is found (no node is added in here)
     for pk in packs:
         for e in pk.get("entries", []):
             rx = re.compile(e["pattern"])
             gi = int(e["handler"][1:-1])
             for p in _files(repo, e["files"]):
                 rel = p.relative_to(repo).as_posix()
-                for ln, line in _lines(_read(p, repo)):
+                text = _read(p, repo)
+                if not quick.may_match(rx, text):
+                    continue
+                for ln, line in _lines(text):
                     for m in rx.finditer(line):
                         if gi > (m.lastindex or 0) or not m.group(gi):
                             continue
@@ -352,7 +369,8 @@ def apply_entries(g: Graph, repo: Path, packs: list[dict]) -> dict:
                             detail = detail.replace(f"{{{k}}}", m.group(k) or "")
                         # always words: every reader of an entry point takes its detail for text
                         detail = re.sub(r"/{2,}", "/", detail).strip() or m.group(gi)
-                        ids = _handler_nodes(g, m.group(gi), rel)
+                        known = known or _handlers(g)
+                        ids = _handler_nodes(g, m.group(gi), rel, known)
                         if not ids:
                             stats["unresolved"] += 1
                             continue

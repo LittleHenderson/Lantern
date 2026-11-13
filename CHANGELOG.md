@@ -19,6 +19,72 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   server gets no new route, and every line printed goes through `esc()`. `tools/viewer_smoke.js` drags the tab up on
   the home screen and opens a project from it; `tools/cloud_site_smoke.js` runs the website's commands on the
   poisoned demo and follows a finding's link.
+- Faster, with every check and every result as it was (2026-11-12; point 10 of the 2026-11-09 directive, "Increase
+  performance without dropping checks"). Measured first, then changed: `bench/speed.py` analyzes the sample shop and
+  five public apps at a fixed commit each, three first runs and three repeat runs a side, the unchanged engine and
+  this one back to back on one machine. On Django (481,021 lines) a first run takes 52.05 s where it took
+  115.72 s and a repeat run 41.03 s where it took 113.84 s; on Laravel's framework (415,998 lines)
+  19.38 s where it took 37.83 s and 18.50 s where it took 37.53 s. Django's report is
+  38,050,642 bytes where it was 73,896,338 and opens on a slowed phone in 3548 ms where it took
+  4951 ms. **No result changes.** For all six projects every result file both engines write
+  (`graph.json`, `calls.json`, `security.json`, `readiness.json`, `baseline.json`, the badge) is the same, the
+  times aside, and so is everything the report holds; no file is read less and no check is left out. Every number,
+  what was tried and dropped, and what is still slow: `bench/speed_results.md`.
+  - **One look at the folder for a run** (`lantern/listing.py`). The web rules walked the whole project once per
+    language, the packs once per rule and per manifest name, the dependency audits twelve times, the secret
+    patterns once more. Inside a run the folder is now walked once and the list is shared (`listing.files`,
+    `listing.once`); every reader still opens a file through `project_text`, which asks again at that moment
+    whether the file is the project's own. After the project's own tests have run in its folder the list is
+    looked up anew (`listing.fresh`). Outside a run nothing is kept.
+  - **Scanners beside the map** (`security.Early`). Bandit, the dependency audits and gitleaks read the project's
+    files and nothing of the map, and were started only when the map was finished. They now start with the run
+    and work beside the reading of the code, up to two at a time and none where the computer has one processor
+    (`LANTERN_JOBS`: 0 runs one after another as before, 8 at most); `scan` takes what each gave at the place and
+    in the order it always did, so findings and records are the same either way. A run that fails or is stopped
+    ends every helper program with everything it started (`remote.end_for`).
+  - **Work kept between runs** (`lantern/kept.py`; `lantern cache`, `lantern cache --clear`). How a Python file
+    read, and what Bandit printed for a set of files, is kept in `LANTERN_HOME/cache`: never in the project or its
+    results, folders 0700 and files 0600, 1 GB at most (`LANTERN_CACHE_MB`), an entry nobody asked for in 30 days
+    removed. An entry is found only under one SHA-256 of the whole question: the bytes of the file and the name it
+    is read under, and one digest of every file of Lantern's own code, the Python that runs it and the libraries
+    that do the work (for Bandit also the folder, the exclusions and the installed plug-ins). Change any of them
+    and the work is done anew. An entry that is cut short, another question's, another user's, a link, or of a
+    shape Lantern does not write is no entry. `LANTERN_CACHE=off` runs without it; `lantern verify` and the hosted
+    service never use it. What Lantern makes of the kept readings (links, findings, ranks, the score) is worked
+    out in every run. `run.json` says how much was reused (`kept`), and the run's log has a `kept` line.
+  - **A quick look before line patterns** (`lantern/quick.py`). The paid-API patterns, the secret patterns and the
+    rules of a pack were tried on every line of every file: 14 million searches for Django by the paid-API
+    patterns alone. `quick.needs(rx)` reads a pattern with Python's own pattern parser and names pieces of plain
+    text of which every match holds at least one; a file that holds none of them has no line the pattern can
+    match, and that pattern is left out for that file. Where it cannot tell, the pattern is tried as before.
+  - **Tables where a list was gone through for every question**: the functions a pack's registration line names
+    (`packs._handlers`; every such line went through every node of the map, 446 times on Django), the methods of a
+    PHP class and the functions of a PHP file, the classes below a class
+    (`Resolver.subclasses`), the readiness searches (one reading of a file's name and words, not one per search),
+    the words of a name (`websec.segments`). The saved map is written field by field (`graph.node_dict`,
+    `edge_dict`) where `dataclasses.asdict` copied every text: 2.2 million calls for Laravel, twice a run. While a
+    map is built the full passes of Python's memory collector wait (`engine.building`): 6 of the 26 seconds of
+    Django's map, with the same peak memory.
+  - **The map column by column inside the report** (`lantern/columns.py`). Most of a large report was the map,
+    every node and link written as a table with the name of every field in it. The report now holds the same map
+    by columns, with each repeated value written once and each link naming its two functions by their place in
+    the list; the page turns it back into the same rows before anything looks at it (`unpackGraph`), and so does
+    `report.read_bundle`, so nothing else knows. `graph.json` and every other result file are written as before.
+    A packed map of any other shape is refused by the page and by Python (39 hand-made ones in the tests). A
+    report written by an older Lantern is still read.
+  - **`bench/speed.py`**: the measurement and the proof. Three first runs and three repeat runs of each project,
+    one repeat run with kept work off, one first run on kept work; one SHA-256 per result file with only what a
+    clock put into it taken out; `--engine` measures another checkout, `--compare … --must-match` fails when a
+    result differs from that engine's; `--browser` opens each report on a slowed phone.
+  - Not gained, said plainly: a first run of the 12-file sample is slower, 0.74 s where it took 0.63 s (a run now pays
+    about a tenth of a second for the digests kept work is found under). Work is kept only for the Python reader
+    and Bandit, so a repeat run of a project without Python takes what its first run takes (Laravel 18.50 s and
+    19.38 s), and one edited Python file has Bandit read every file again (Django 45.40 s, against 39.52 s with
+    nothing changed). The taps inside an open report are as fast as before, not faster (Django's findings tab
+    1819 ms on a slowed phone, 1841 ms before). Memory counted with every program a run starts is 2 to 8 MB
+    higher on the four smaller projects, because the scanners now work beside the reader. The hosted service
+    keeps nothing, so every run there is a first run. A computer with one processor, Windows and macOS were not
+    measured.
 
 - The Atlas says where you are, and the Graph and the Flowchart have a minimap (2026-11-12). Above the map a
   breadcrumb runs from the project to the view, the starting point and, along the shortest path of calls, the

@@ -41,6 +41,14 @@ are listed in `docs/deploy.md` ("Free allowance limits as configured").
 Retention (90 days for token hashes and per-day counters, `Store.prune`) is tested in `tests/test_gateway.py`:
 idle and rotated-out hashes and their account mapping go, a hash in use and rows exactly 90 days old stay, an old
 database gains the `last_used` column, and the app prunes at start-up and on the first request of a new day.
+Speed (directive point 10) is measured by hand, not in `tools/audit.sh`: `python bench/speed.py WORK [--only shop]
+[--browser]` analyzes the sample shop and five public apps at a fixed commit each (the clones stay in `WORK`, so a
+later run reads the same code), three first runs and three repeat runs of each, then one repeat run with kept work
+switched off and one first run on kept work, and says for each project whether every result file is the same in all
+of them (`same: yes`); a difference is named and the result is 1. To compare two engines, measure the older checkout
+first (`--engine OTHER --json before.json`) and then this one with `--compare before.json --must-match`: the result
+is 1 when a result file both engines write, or what the two reports hold, differs. It reaches github.com for the
+clones and nothing else (`netguard.begin`). The numbers of the last run are in `bench/speed_results.md`.
 A pushed `v*` tag runs `.github/workflows/release.yml`: build sdist + wheel, the test suite against the built wheel
 with the source folder moved away, the live gateway's `/v1/health`, then a GitHub Release with both files.
 
@@ -78,6 +86,9 @@ with the source folder moved away, the live gateway's `/v1/health`, then a GitHu
 | `tests/test_readiness.py` | Weights, failing and fixed projects, skip logic for libraries, fixtures ignored, accept + `--fail-on`, starter files never overwrite |
 | `tests/test_release.py` | The release decision (30 tests): Passed only for a clean project whose tests ran and passed; a critical or high finding blocks and is not averaged away, also one no path was found to; an accepted finding does not block and is named; tests not run, no tests, a scanner that did not finish, libraries not checked or named with no lock file are missing evidence, never points; the score rules and every sample app (none reads 100 or Passed with a blocking finding or missing evidence); a behaviour plan must have been run on this code, a broken case blocks, a record with no seal, of another plan, of other code or sealed with another computer's key does not count; what the record is tied to; `--require`; a decision read back from a file, the report page, the app's card, the connector and Ask Lantern; Lantern's own check; how the held-out benchmark counts |
 | `tests/test_severity.py` | Rank (10 tests): a finding no path was found to keeps the tool's severity; the same line reached from a route with request data is raised and says what raised it; code only the tests reach is not lowered for that; test code by what runs it, and a guess by method name is no evidence; no finding is under its severity without a reason written on it; the case and the report say "no path was found", never "unreachable" |
+| `tests/test_kept.py` | Work kept between runs (`lantern/kept.py`): what is kept reads back as it was and what is not plain data is not kept; the key is the whole question (one byte of the file, its name, another Lantern, another parser → read anew); an entry cut short, of another shape, of another user or reached through a link is no entry; entries are closed to other users; every sample app gives the same result files with kept work, with an empty cache and with `LANTERN_CACHE=off`, and nothing is written into the project or into a result file but `run.json`'s `kept`; Bandit is not run again on the same files and is run again when a file, the folder or a plug-in differs, a run that did not end as a scan is not kept, a `# nosec` comment is read in every run; `lantern verify` and a cloud run use nothing kept; the folder stays under its cap, old entries go, clearing removes entries and nothing else; a home that cannot be written stops no run |
+| `tests/test_speed.py` | Each speed-up beside the older way of doing the same thing, on the same files, with the same answer: one folder listing per run (and a fresh one after the project's tests ran), the scanners started beside the reading of the code (same findings and records in the same order; a run that stops leaves no scanner going), the quick look before line patterns (never "cannot match" for a file with a match: paid-API calls, secret patterns, packs, readiness searches, the PHP reader's routes and hooks), a node and a link saved as `dataclasses.asdict` saved them, the PHP reader's method index, the full collector passes put back after a map is built. And the measuring script itself (`bench/speed.py`): two runs are the same whatever a clock said, anything else is a difference, a report is marked by the data it holds however the page holds it |
+| `tests/test_columns.py` | The map inside a report (`lantern/columns.py` and the page's `unpackGraph`, run by Node on the function's own text): the samples' maps and 27 maps no Lantern writes (rows that are no tables, ids that are no text, `1` beside `1.0` and `true`, zero beside minus zero, lists and tables that repeat, a field named `__proto__`, a map that says it is packed) come back exactly as they went in, in Python and in the page; 39 packed maps of another shape are refused by both; a report holds the map packed, `read_bundle` gives the bundle back and a page made again from it is the same page; reports older Lantern versions wrote are still read |
 | `tests/test_nosec.py` | `# nosec` (10 tests): a line with the comment is listed and stays open; a critical line blocks whatever comment it carries; a written reason counts as an accepted risk and is named in the decision and the Evidence page; a comment for another rule, the words inside a text, a reason on a line request data was followed to (also through a helper) accept nothing; Bandit is told to skip nothing |
 | `tests/test_webhook_sender.py`, `tests/test_stored_file.py`, `tests/test_list_guard.py` | Three checks the code makes, read as checks, each dangerous shape beside safe twins and look-alikes: a webhook whose sender's signature is checked before anything is paid for; text a request wrote into a file, read back and run as a template (also inside a larger text and in a helper); a check made on every item of a list at once (`any`, `all`, `some`, `every`, a loop of its own) |
 | `tests/test_evidence.py` | Commit pinning, verify match/mismatch, fixed-vs-baseline, narrative escaping, no-git message, remote credential stripping |
@@ -242,6 +253,24 @@ not valid JSON and that npm was not started. In a workspace project
 (`"workspaces": ["packages/*"]`) the libraries of each workspace package must still be found. Not covered: the
 folders above Lantern's own temp folder, which npm looks through for a workspace root; npm versions other than the
 one installed.
+
+4.15 **Kept work and a report that are not Lantern's.** Analyze a Python project twice with a home of your own and
+a new result folder each time (`LANTERN_HOME=/tmp/h lantern analyze . --offline --out /tmp/r1`, then `/tmp/r2`; a
+run into a folder that holds an earlier result says so in its findings): the second run's `kept` line must count
+every Python file as `from kept work`, and its result files must be the first run's (the times aside). Now change what is kept, in
+`/tmp/h/cache/python-file/<two letters>/<name>.json`: cut an entry in half; write `[1]` into one; copy one entry
+over another; replace one by a link to a file of yours; in one, put `["\u0001c", "Path", "/etc/passwd"]` where
+the answer (`"v"`) is. Each time the next run must read that file anew, give the same results, and leave your file
+alone. A file named like an entry outside those folders, or under a folder that is a link, must still be there
+after `lantern cache --clear`. With `LANTERN_CACHE=off`, with `lantern verify`, and with `LANTERN_CLOUD_RUN=1` (what
+the hosted service sets) nothing may be read from the folder or written to it. Then the report: in a copy of a
+`report.html`, change the map inside the data block by hand (`"packed":2`; a column cut short; a place number past
+the end of the list of nodes; a field named `__proto__`). The page must stop before it draws anything (the middle
+keeps its "the report's script did not run" words), `lantern serve` and the hosted service must answer 409 "This
+result file can't be read (ValueError). Analyze the project again." in place of the page, and no script may run
+(`tools/poison_report.py` and `tools/viewer_smoke.js` do the hostile-values half of this on a packed report). Not covered: an entry changed by
+someone who can already write to your own home folder and who knows the stamp of the installed code; that person can
+make a run say what they like, here as in any program that reads its own settings.
 
 ## 5. Pass criteria for a release
 

@@ -284,6 +284,16 @@ that none of the five is held back by a finding. fastapi-template would read Inc
 finding (two scanners could not read one file, its JavaScript libraries are in a lock file Lantern does not read,
 and its tests were not run).
 
+## After point 10 of the directive (measured 2026-11-12 23:46 UTC)
+
+Point 10 is about speed and may change no result, so this measurement has no target but one: nothing moves.
+`after_point10.json` / `.md` (offline) and `after_point10_audits.json` / `.md` (the dependency audits on, which
+now run beside the reading of the code) are the engine of point 10 (3e38b7d) on this definition. Every app's
+record in both files is the same as in the point 6 files, entry for entry: the same 626 findings offline and
+1,196 with the audits on, 55 and 56 of the 79 expected problems found, 0 false alarms on the safe twins, 0 false
+links, the same release decision for each of the 14 apps. Only the label, the engine's commit and the time of the
+run differ. No file of the set was read to make the engine faster.
+
 ## Files
 
 * `cases.json` · the frozen definition: apps, commits, expectations, rules.
@@ -295,3 +305,5 @@ and its tests were not run).
   of the same day); `after_point4_audits.json`, `.md` · the same engine with the dependency audits on.
 * `after_point6.json`, `after_point6.md` · the measurement after point 6 (offline); `after_point6_audits.json`, `.md` · the same
   engine with the dependency audits on.
+* `after_point10.json`, `after_point10.md` · the measurement after point 10 (offline); `after_point10_audits.json`,
+  `.md` · the same engine with the dependency audits on. The same records as after point 6.

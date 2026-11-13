@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 
+from lantern import columns
 from lantern.report import read_bundle, render, safe_json, write_report
 
 HOSTILE = ["</script><script>alert(1)</script>", "<!--<script>", "<!-- <script> -->", "]]>", "  ", "&lt;"]
@@ -15,7 +16,10 @@ def test_data_cannot_change_how_the_page_parses(tmp_path):
     html = render(bundle)
     data_part = html.split('id="lantern-data">', 1)[1].split("</script>", 1)[0]
     assert "<" not in data_part and ">" not in data_part
-    assert json.loads(data_part) == bundle
+    held = json.loads(data_part)
+    assert held["texts"] == bundle["texts"]
+    assert held["graph"] != bundle["graph"], "the map is written column by column in a report"
+    assert columns.unpack_graph(held["graph"]) == bundle["graph"]
     p = tmp_path / "report.html"
     p.write_text(html, encoding="utf-8")
     assert read_bundle(p) == bundle
