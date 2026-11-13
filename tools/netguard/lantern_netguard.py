@@ -500,6 +500,9 @@ def scrub(environ=None) -> list:
     return gone
 
 
+GIT_IDENTITY = "[user]\n\tname = Lantern tests\n\temail = tests@localhost\n"
+
+
 def temp_home(home: str, environ=None) -> dict:
     """Point the home folder, the settings folders and Lantern's own folders at `home` (an empty folder). Tools that
     look under the home folder for saved sign-ins (git, npm, pip, docker, cloud command lines, Lantern) find none.
@@ -538,6 +541,13 @@ def temp_home(home: str, environ=None) -> dict:
         raise RuntimeError("SET_BY_TEMP_HOME does not list what temp_home sets")
     for k in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"):
         os.makedirs(values[k], exist_ok=True)
+    git_settings = j(home, ".gitconfig")
+    if not os.path.exists(git_settings):
+        # A name and an address for git to write in its records. Without them git makes one up from this computer's
+        # name, and asks the network what that name is in full: a name lookup on every clone, branch and reset (git
+        # 2.56.1 on GitHub's Linux machines, 2026-11-12), which the no-network run counts as reaching outside.
+        with open(git_settings, "w", encoding="utf-8") as f:
+            f.write(GIT_IDENTITY)
     env.update(values)
     return values
 

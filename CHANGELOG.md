@@ -19,6 +19,15 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   server gets no new route, and every line printed goes through `esc()`. `tools/viewer_smoke.js` drags the tab up on
   the home screen and opens a project from it; `tools/cloud_site_smoke.js` runs the website's commands on the
   poisoned demo and follows a finding's link.
+- How to use Lantern from every page (2026-11-12). Until now only screens with the main menu linked to the guide. A
+  project's screens in the app and a run's screens on the website hide that menu, so the guide button now sits in
+  their top bar beside Simple/Advanced. A report or an Evidence Report open on its own (a new tab, a shared link, a
+  file on disk) has the link in its top bar too: `/guide` when Lantern serves the page, the website's guide
+  otherwise (a plain link, so a report from disk still fetches nothing); inside the app or the website it stays
+  hidden, because the bar around it has the button. The website's notice pages (expired link, sharing off), the
+  local app's "open the link from your terminal" page, every sign-in page of the free allowance and the public
+  landing page (menu and footer; "Guide" on phones and tablets so the menu fits) link to it as well.
+  `tests/test_guide.py::test_every_page_reaches_the_guide` fails if one of them loses it.
 - Faster, with every check and every result as it was (2026-11-12; point 10 of the 2026-11-09 directive, "Increase
   performance without dropping checks"). Measured first, then changed: `bench/speed.py` analyzes the sample shop and
   five public apps at a fixed commit each, three first runs and three repeat runs a side, the unchanged engine and

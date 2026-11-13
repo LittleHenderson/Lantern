@@ -151,3 +151,34 @@ def test_the_website_sends_the_guide(tmp_path):
     assert f'<script nonce="{nonce}">' in r.text
     assert r.headers["cache-control"] == "no-store"
     assert 'href="/">Open Lantern</a>' in r.text                 # the landing intro still plays on the way in
+
+
+def test_every_page_reaches_the_guide():
+    """How to use Lantern from every page (Wakil, 2026-11-12), not only the screens with the main menu."""
+    site = (ROOT / "cloud" / "lantern_cloud" / "site" / "index.html").read_text(encoding="utf-8")
+    # a project's (or a run's) screens hide the main menu: the button moves into their bar with the logo
+    for page in (APP_HTML, site):
+        assert '<a class="iconbtn" id="guidebtn" href="/guide" aria-label="How to use Lantern"' in page
+    assert "b.replaceWith(vm, gb, th)" in APP_HTML and "top.append(vm, gb, th)" in APP_HTML
+    assert "['viewmode', 'guidebtn', 'theme', 'acct']" in site
+    assert "body:not(.inproj) #guidebtn" in APP_HTML                 # elsewhere the menu already has it
+    # a report and an Evidence Report opened on their own (new tab, shared link, from disk)
+    rep = (guide.VIEWER / "report.html").read_text(encoding="utf-8")
+    assert 'id="guidelink" href="https://lantern-cloud.fly.dev/guide"' in rep and "g.href = '/guide'" in rep
+    ev = (ROOT / "lantern" / "evidence.py").read_text(encoding="utf-8")       # render_html's page template
+    assert 'id="guidelink" href="https://lantern-cloud.fly.dev/guide"' in ev and "gl.setAttribute('href', '/guide')" in ev
+    # the small pages: the local app's locked page, the website's notice pages, the sign-in pages, the landing page
+    from lantern.server import LOCKED_PAGE
+    assert 'href="/guide"' in LOCKED_PAGE
+    sys.path.insert(0, str(ROOT / "cloud"))
+    sys.path.insert(0, str(ROOT / "gateway"))
+    pytest.importorskip("fastapi")
+    from lantern_cloud import app as cloud_app
+    for note in (cloud_app.SHARE_GONE, cloud_app.EXPIRED_PAGE):
+        assert '<a href="/guide"' in note
+    from lantern_gateway import auth
+    for page in (auth.login_page(["github"], "", None), auth.error_page("x"), auth.done_page("t", "github:me", True)):
+        assert 'class="guide" href="https://lantern-cloud.fly.dev/guide"' in page
+    landing = (ROOT / "site" / "index.html").read_text(encoding="utf-8")
+    assert landing.count('href="https://lantern-cloud.fly.dev/guide"') == 2   # the menu ("Guide" on a phone) and the footer
+
