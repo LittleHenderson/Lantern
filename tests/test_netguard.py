@@ -978,6 +978,104 @@ def test_a_record_with_clock_times_reads_the_same(tmp_path):
          "result": "EINPROGRESS"}]
 
 
+def _try(kind, address, port, result, program="node test/tiny.test.js"):
+    return {"kind": kind, "address": address, "port": port, "program": program, "count": 1, "result": result}
+
+
+def test_a_try_a_test_made_on_purpose_is_told_from_every_other():
+    """2026-11-13: a test of the sandbox starts a JavaScript test that calls a computer outside, to see the kernel
+    refuse it. The call is made below Python, so the operating system's record holds it, and the first run of that
+    test in CI ended with every test passed and the runner's result 4 ("1x connect 192.0.2.1:80 (EACCES)"). A test
+    now names such a try before it makes it, and the record keeps it apart. Only the very try that was named, only
+    for an address kept for examples (no computer has one), and only when the kernel refused it."""
+    named = [{"kind": "connect", "address": "192.0.2.1", "port": 80, "why": "the JavaScript twin"},
+             {"kind": "connect", "address": "151.101.0.223", "port": 80, "why": "a real computer's address"},
+             {"kind": "connect", "address": "198.51.100.7", "port": 80, "why": "it got through"},
+             {"kind": "connect", "address": "203.0.113.5", "port": 80, "why": "the answer never came"},
+             {"kind": "connect", "address": "2001:db8::1", "port": 443, "why": "the same over IPv6"},
+             {"kind": "lookup", "address": "192.0.2.53", "port": 53, "why": "a question to a name server"}]
+    tried = [_try("connect", "192.0.2.1", 80, "EACCES"),            # named, kept for examples, refused
+             _try("connect", "2001:db8::1", 443, "ENETUNREACH"),
+             _try("lookup", "192.0.2.53", 53, "ENETUNREACH"),
+             _try("connect", "192.0.2.1", 443, "EACCES"),           # the twins: another port,
+             _try("send", "192.0.2.1", 80, "EACCES"),               # another kind,
+             _try("connect", "192.0.2.2", 80, "EACCES"),            # another address,
+             _try("connect", "151.101.0.223", 80, "ENETUNREACH"),   # an address a computer may have, named or not,
+             _try("connect", "198.51.100.7", 80, "ok"),             # one that got through,
+             _try("connect", "203.0.113.5", 80, "EINPROGRESS"),     # one whose end the record does not show,
+             _try("connect", "203.0.113.5", 80, "")]                # and one that never came back
+    left, meant = netless.sort_out(tried, named)
+    assert meant == [{**tried[0], "why": "the JavaScript twin"}, {**tried[1], "why": "the same over IPv6"},
+                     {**tried[2], "why": "a question to a name server"}]
+    assert left == tried[3:]
+    assert netless.sort_out(tried, []) == (tried, [])               # nothing named: everything counts, as before
+    assert [netless.for_examples(a) for a in ("192.0.2.1", "198.51.100.255", "203.0.113.0", "2001:db8:ffff::1",
+                                              "192.0.3.1", "10.0.0.1", "169.254.169.254", "2001:db9::1", "nonsense")] \
+        == [True, True, True, True, False, False, False, False, False]
+
+
+def test_what_the_tests_named_is_read_line_by_line_and_a_line_that_names_no_try_is_left_out(tmp_path):
+    path = tmp_path / "on-purpose"
+    good = {"kind": "connect", "address": "192.0.2.1", "port": 80, "why": "the JavaScript twin"}
+    path.write_text("\n".join([json.dumps(good), "", "not json", json.dumps([1, 2]), json.dumps({**good, "port": "80"}),
+                               json.dumps({**good, "why": " "}), json.dumps({"kind": "connect", "address": "192.0.2.1"}),
+                               json.dumps({**good, "port": True}), json.dumps({**good, "kind": "anything"}),
+                               json.dumps({**good, "port": 443, "why": "another"})]) + "\n", encoding="utf-8")
+    assert netless.named(str(path)) == [good, {**good, "port": 443, "why": "another"}]
+    assert netless.named(str(tmp_path / "not-there")) == []
+
+
+ON_PURPOSE = ("import json, os, socket\n"
+              "with open(os.environ['LANTERN_NETLESS_ON_PURPOSE'], 'a', encoding='utf-8') as f:\n"
+              "    f.write(json.dumps({'kind': 'connect', 'address': '192.0.2.1', 'port': %d, 'why': 'to see it refused'}) + '\\n')\n"
+              "try:\n    socket.create_connection(('192.0.2.1', 443), timeout=1)\nexcept OSError:\n    pass\n")
+
+
+def test_the_netless_runner_keeps_a_named_try_apart_and_the_run_passes(tmp_path):
+    why = _can_go_netless()
+    if why or not shutil.which("strace"):
+        pytest.skip(why or "the strace program is not installed")
+    if _being_recorded():
+        pytest.skip("this run is itself being recorded by the operating system; a recording cannot hold another one")
+    out = tmp_path / "watch.json"
+    run = [sys.executable, str(ROOT / "tools" / "netless.py"), "--watch", str(out), "--", sys.executable, "-c"]
+    r = subprocess.run([*run, ON_PURPOSE % 443], env=_bare_env(), capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    seen = json.loads(out.read_text(encoding="utf-8"))
+    assert seen["outside"] == []
+    assert [(e["kind"], e["address"], e["port"], e["result"], e["why"]) for e in seen["on_purpose"]] == [
+        ("connect", "192.0.2.1", 443, "ENETUNREACH", "to see it refused")]
+    assert "0 attempts to reach outside it" in r.stderr and "on purpose: 1x connect 192.0.2.1:443 (ENETUNREACH)" in r.stderr
+    assert "to see it refused" in r.stderr
+    # the twin: it names port 80 and tries port 443
+    twin = subprocess.run([*run, ON_PURPOSE % 80], env=_bare_env(), capture_output=True, text=True, timeout=120)
+    assert twin.returncode == 4, twin.stderr
+    seen = json.loads(out.read_text(encoding="utf-8"))
+    assert [(e["address"], e["port"]) for e in seen["outside"]] == [("192.0.2.1", 443)] and seen["on_purpose"] == []
+
+
+def test_a_marked_test_names_its_try_where_the_runner_reads_it(tmp_path, monkeypatch):
+    """`@pytest.mark.tries_outside(kind, address, port, why)`: tests/conftest.py writes the try down before the test
+    starts, in the file the runner named when it started the run; with no runner around nothing is written."""
+    import conftest
+    assert conftest.ON_PURPOSE == netless.ON_PURPOSE == "LANTERN_NETLESS_ON_PURPOSE"
+    path = tmp_path / "on-purpose"
+    assert conftest.name_a_try("connect", "192.0.2.1", 80, "the JavaScript twin", path=str(path)) is True
+    assert conftest.name_a_try("connect", "192.0.2.1", 80, "the JavaScript twin", path="") is False
+    assert netless.named(str(path)) == [{"kind": "connect", "address": "192.0.2.1", "port": 80, "why": "the JavaScript twin"}]
+    for wrong in (("connect", "192.0.2.1", 80, ""), ("connect", "10.0.0.1", 80, "a computer may have it"),
+                  ("anything", "192.0.2.1", 80, "x"), ("connect", "192.0.2.1", "80", "x")):
+        with pytest.raises(ValueError):
+            conftest.name_a_try(*wrong, path=str(path))
+    # which tests are marked: the sandbox's JavaScript twin, and no other
+    marked = {}
+    for f in sorted((ROOT / "tests").glob("test_*.py")):
+        text = f.read_text(encoding="utf-8")
+        if f.name != "test_netguard.py" and "pytest.mark.tries_outside(" in text:
+            marked[f.name] = text.count("pytest.mark.tries_outside(")
+    assert marked == {"test_sandbox_own_network.py": 1}, marked
+
+
 def _being_recorded() -> bool:
     try:
         status = Path("/proc/self/status").read_text(encoding="ascii", errors="replace")

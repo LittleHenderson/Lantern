@@ -446,9 +446,12 @@ def test_javascript_tests_that_start_a_server_on_their_own_computer_run(tmp_path
 
 @needs_node
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the kernel's walls are Linux's")
+@pytest.mark.tries_outside("connect", "192.0.2.1", 80, "the JavaScript twin calls a computer outside to see the kernel refuse it")
 def test_the_javascript_twin_that_reaches_outside_is_refused_and_written_down(tmp_path, others):
     """Until 2026-11-13 the kernel refused the call, the tests failed, and Lantern did not say that the sandbox was
-    the reason (it knew Python's words for it only); and the datagram arrived."""
+    the reason (it knew Python's words for it only); and the datagram arrived. The call is made below Python, so
+    the operating system's record of a run holds it: the mark names it for the no-network runner (CI's first pass
+    ended with every test passed and the runner's result 4 for this one call until it was named)."""
     if not (_own() or sandbox.landlock_abi() >= 4):
         pytest.skip("needs a network of the run's own or Landlock 4: this kernel has neither")
     source = JS_OUTSIDE % json.dumps(others.where())

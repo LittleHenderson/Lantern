@@ -460,7 +460,9 @@ path that was not found lowers no rank),
 `test_file_in_use` (true on a finding in a file named like a test that a page, route or command outside the test
 files runs through links Lantern worked out: it is then the app's code, `in_tests` is false and it is ranked like
 any other), `test_file_guessed` (true where only a guess by method name leads from the app into the test file: it
-stays test code and the reason says so), `ui_path` (node ids from a
+stays test code and the reason says so), `test_file_stood_in` (true where only the recording of the project's own
+test run leads from the app into the test file, a call to a stand-in, a callback or a double that a test handed
+the app: it stays test code, as it is with no test run, and the reason says so), `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`; when a flow was followed to the line,
 `{"via": <the words of the flow's first step>, "flow": true}`), `flow` (optional, `flowscan.py`: request data followed
 to this line across functions and files, on a `lantern-flow` finding or attached to another tool's finding for the same

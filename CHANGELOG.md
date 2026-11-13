@@ -98,10 +98,49 @@ file. New entries go under `## Unreleased`, on top.
     was anything but three wordings of a good one, then said only that it had timed out. It now waits for any
     answer and says one that is no reading at once, in the card's own words (`tools/waiting.js`,
     `tests/test_smoke_waits.py`).
-  - Changed tests: three of Lantern's own tests took for granted that no sandbox is around them (a place in `/tmp`
-    every user may enter, no guard loaded, no kernel rules yet) and now say what they need; the older test of a run
+  - **Test files stay test code after the tests ran.** While a project's tests run, the app's code calls what a
+    test handed it: a stand-in in the place of one of its functions, a callback, a double for one of its objects.
+    The recording of the run holds those calls, from the app's code into the test file, and each of them made the
+    whole test file "the app's own code": its findings were ranked like the app's and counted for the release
+    decision. After "Watch my tests run" on Lantern itself that was 41 of its test files with 3,095 findings, 7 of
+    them high, and the decision read Blocked for them alone; the same findings with no test run are test code, all
+    low. 0.11.0 does the same. A link from outside the test files into one that only the run shows (`runtime-only`,
+    or a guess by method name that the run then saw) now leaves the file test code, and the finding says the tests
+    handed it over (`test_file_stood_in`); a test file the app's own code loads counts as the app's code with the
+    run as without it (`lantern/security.py` `only_the_run_shows`, `reachability(leave=)`;
+    `tests/test_severity.py`, a real recorded run of a small project with the three ways beside that twin).
+  - **The test sheet fits the window, and its buttons stay in view.** The sheet of "Watch my tests run" was laid in
+    the middle of the window with no limit on its height and nothing that scrolled. With the two new fields it was
+    984 px tall: in a window 900 px high "Confirm and run" sat below the window and nobody could press it (CI's
+    browser check found it on the first push of this change: its click waited 30 seconds and gave up). 0.11.0's
+    sheet was 642 px: it fitted a window 720 px high, and had the same fault in one 600 px high and on a phone
+    (1,003 px in a window of 844). A sheet
+    is now never taller than the window and scrolls by itself; the test sheet scrolls only what is above its row
+    of buttons, so Skip and Run are in view as it opens; it lies above Ask Lantern's pill, which on a phone lay on
+    the right end of the Run button; and what the server refuses is written at the end of what scrolls and brought
+    into view. The browser check measures it (`sheetFits` in `tools/viewer_smoke.js`: every button in view as the
+    sheet opens, its middle and both ends, and every field reachable, in windows of 1440×900, 1280×600, 390×844
+    and 360×640, with the accessibility checker on the open sheet), and `tests/test_pages.py` reads the rules for
+    the jobs that open no browser. The website's sheets share the first rule.
+  - **A test may name a try it makes on purpose.** CI's first Linux pass runs the tests where the operating system
+    writes down every address any program tries, and fails for each one (`tools/netless.py --watch`, result 4). A
+    Python test that tries the outside is refused by the guard before the system sees it; the sandbox's new
+    JavaScript twin calls a computer outside below Python, to see the kernel refuse it, and the second run of this
+    change in CI ended with every test passed (4,698) and result 4 for that one call ("1x connect 192.0.2.1:80
+    (EACCES)"). A test now names such a try before it makes it (`@pytest.mark.tries_outside("connect",
+    "192.0.2.1", 80, "why")`; the runner gives the run a file's place in `LANTERN_NETLESS_ON_PURPOSE`), and the
+    record keeps it apart under `on_purpose`, printed with its reason. It is kept apart only when that very try
+    was named (kind, address and port), the address is one kept for examples (RFC 5737, RFC 3849: no computer has
+    one) and the kernel refused it; every other try, one that got through, and one whose end the record does not
+    show still fail the run (`tests/test_netguard.py`, four tests with those twins).
+  - Changed tests: four of Lantern's own tests took for granted that no sandbox is around them (a place in `/tmp`
+    every user may enter, no guard loaded, no kernel rules yet, no limit on processor time already set: the
+    launcher never raises one, and the test of that now expects the smaller of the two and shows it under limits
+    it sets itself) and now say what they need; the older test of a run
     stopped by the clock said `fail` for the score and now says "not finished"; the sandbox's own planted tests
     write to a folder outside the copy, since writing to the copy is no longer refused.
+  - `.env.example` names `LANTERN_TEST_MINUTES`, `LANTERN_TEST_MEMORY_MB` and `LANTERN_SANDBOX_NET` (the last is
+    set by the sandbox itself, never by a person).
   - **CI proves the launcher's own network for an ordinary user.** Root makes the run's network directly; an
     ordinary user needs a user namespace for it, and GitHub's Linux machines refuse an ordinary user that. The
     first run of this change in CI said so in its own words ("this system does not let the tests have a network of
@@ -113,7 +152,9 @@ file. New entries go under `## Unreleased`, on top.
     skipped fails the run and is named (`.github/workflows/ci.yml`; `tests/test_isolation.py` reads the step).
   - Found and not fixed: on a Linux system that refuses an ordinary user a user namespace (GitHub's machines do),
     a Lantern started by an ordinary user with no Docker has no network of the run's own: tests that start their
-    app's server are refused there as before, the log and the sheet say why, and such a run reads Incomplete; the
+    app's server are refused there as before, the log and the sheet say why, and such a run reads Incomplete; a
+    file named like a test that the app loads only by a name built at run time is test code with a recorded test
+    run as without it (the recording cannot tell that from a test handing the file's function over); the
     memory limit of the restricted process on Linux is a watch from outside, a few times a
     second, and no wall; a hostile test can print the launcher's memory line and end with 118, and then reads
     Incomplete where it would have read Blocked (never Passed); the file-size and open-files limits, a kernel that

@@ -745,14 +745,17 @@ def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
 
 
 def reachability(g: Graph, include_tests: bool = False, kinds: set[str] | None = None, where=None,
-                 worked_out: bool = False) -> dict[str, dict]:
+                 worked_out: bool = False, leave=None) -> dict[str, dict]:
     """Multi-source BFS from entry points. Returns node id -> {entry, kind, path}. `where(node)` keeps only the entry
     points it says yes to (`scan` asks for the ones outside test files). `worked_out`: follow only the links Lantern
     worked out to one function, not a guess by method name (`calls.NAME_ONLY_VIA`) and not one of several possible
-    targets (`possible`: every class that has the method, every implementation of an interface)."""
+    targets (`possible`: every class that has the method, every implementation of an interface). `leave(link)`:
+    the links it says yes to are not followed."""
     adj: dict[str, list[str]] = {}
     for e in g.call_edges():
         if worked_out and (e.confidence == "possible" or e.via in NAME_ONLY_VIA):
+            continue
+        if leave is not None and leave(e):
             continue
         adj.setdefault(e.src, []).append(e.dst)
     seen: dict[str, dict] = {}
@@ -874,7 +877,7 @@ def rank_basis(f: dict) -> list[dict]:
     rank the rule or the kind of finding fixes), `test-code`. Read after `rank` and `in_tests` are set."""
     out = _steps(f)
     if f.get("in_tests") and f.get("category") == "code":
-        out.append(_step("test-code", "low", TEST_CODE + (GUESSED_LINK if f.get("test_file_guessed") else "")))
+        out.append(_step("test-code", "low", _test_code(f)))
     elif f.get("rank_note"):
         out.append(_step("lowered", f["rank"], f["rank_note"]))
     return out
@@ -908,6 +911,27 @@ TEST_CODE = "Test code: your users do not run it, so it is ranked low and counte
 GUESSED_LINK = (" A call somewhere in the app might lead into this file by its name alone: a method here has the name "
                 "of one the app calls on something whose type Lantern cannot tell. That is a guess, and Lantern does "
                 "not count a guess as the app running a test file.")
+STOOD_IN = (" The app's code did call a function of this file while the tests ran: a test had handed it over (a "
+            "stand-in for one of the app's own functions, a callback, a double for one of its objects). That shows "
+            "what the tests do, and Lantern does not count it as the app running a test file.")
+# A link whose only evidence of where it leads is the recording of the project's own test run: one the code does not
+# show at all, or a guess (by method name, one of several overrides) that the run then saw.
+SEEN_RUNNING = "runtime-only"
+SEEN_TOO = "+observed"
+GUESSED_VIA = (*NAME_ONLY_VIA, "override")
+
+
+def only_the_run_shows(via: str | None) -> bool:
+    """Is the tests' own run all that says where this link leads? The code shows no such call (`runtime-only`), or
+    Lantern guessed it and the run then saw it (`method-name+observed`). A link read from the code that the run saw
+    too (`import+observed`) is the code's."""
+    via = via or ""
+    return via == SEEN_RUNNING or (via.endswith(SEEN_TOO) and via[: -len(SEEN_TOO)] in GUESSED_VIA)
+
+
+def _test_code(f: dict) -> str:
+    """The words for a finding ranked as test code, with what leads into its file and does not count."""
+    return TEST_CODE + (STOOD_IN if f.get("test_file_stood_in") else GUESSED_LINK if f.get("test_file_guessed") else "")
 
 
 NOSEC_SAYS = {
@@ -930,7 +954,7 @@ def _request_data(f: dict) -> bool:
 def rank_reason(f: dict) -> str:
     """Why `_steps` gave the rank it gave, in words (kept next to `_steps` so the two change together)."""
     if f.get("in_tests") and f.get("category") == "code":
-        return TEST_CODE + (GUESSED_LINK if f.get("test_file_guessed") else "")
+        return _test_code(f)
     if f.get("fixed_rank"):
         return f.get("fixed_why") or f"Lantern gives this rule the rank {f['fixed_rank']} whatever reaches it."
     sev = f.get("tool_severity")
@@ -1189,7 +1213,13 @@ def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> d
     from .js_frontend import TEST_RE as JS_TEST_RE
     from .python_frontend import TEST_FILE_RE
     named_test = lambda file: bool(file and (TEST_FILE_RE.search(file) or JS_TEST_RE.search(file)))
-    own_reach = in_use = guessed = None   # what the entry points outside test files reach; worked out when first asked
+    test_file = lambda nid: nid in g.nodes and named_test(g.nodes[nid].file)        # noqa: E731
+
+    def handed(e) -> bool:
+        """A link from outside the test files into one, which only the tests' own run shows."""
+        return only_the_run_shows(e.via) and test_file(e.dst) and not test_file(e.src)
+
+    own_reach = in_use = stood_in = guessed = None    # what the entry points outside test files reach; worked out when first asked
     for f in findings:
         pin = f.pop("pin", None)          # a manifest finding names the class it is about (android.py)
         f["node"] = (pin if pin in g.nodes else None) or _node_at(g, f["file"], f["line"])
@@ -1201,20 +1231,32 @@ def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> d
         # or one of several classes that have the method, is no evidence of who runs a file: a test double has the
         # methods of what it stands in for, so every project's fakes would count as the app's own code. Such a
         # file stays test code, and the finding says that a guess leads there (`test_file_guessed`).
+        # Nor is what the project's own test run showed (2026-11-13): while the tests run, the app's code calls what
+        # a test handed it, a stand-in in the place of one of its functions, a callback, a double for one of its
+        # objects, and the recording has those calls, from the app's code into the test file. A link from outside
+        # the test files into one that only the run shows (`only_the_run_shows`) is the tests' doing: the file stays
+        # test code, as it is with no test run, and the finding says so (`test_file_stood_in`). After "Watch my
+        # tests run" on Lantern itself such links made 41 of its test files the app's own code, 3,095 findings, 7 of
+        # them high, and the release decision read Blocked for them. A link the code itself shows counts as before,
+        # whether the run saw it or not.
         f["in_tests"] = named_test(f["file"])
         f.pop("test_file_in_use", None)
+        f.pop("test_file_stood_in", None)
         f.pop("test_file_guessed", None)
         if f["in_tests"]:
             if own_reach is None:
                 outside = lambda n: not named_test(n.file)      # noqa: E731
                 files = lambda found: {g.nodes[nid].file for nid in found          # noqa: E731
                                        if nid in g.nodes and named_test(g.nodes[nid].file)}
-                own_reach = reachability(g, where=outside, worked_out=True)
+                own_reach = reachability(g, where=outside, worked_out=True, leave=handed)
                 in_use = files(own_reach)
-                guessed = files(reachability(g, where=outside)) - in_use
+                stood_in = files(reachability(g, where=outside, worked_out=True)) - in_use
+                guessed = files(reachability(g, where=outside)) - in_use - stood_in
             if f["file"] in in_use:
                 r = own_reach.get(f["node"]) or r
                 f["in_tests"], f["test_file_in_use"] = False, True
+            elif f["file"] in stood_in:
+                f["test_file_stood_in"] = True
             elif f["file"] in guessed:
                 f["test_file_guessed"] = True
         f["reachable"] = r

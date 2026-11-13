@@ -64,16 +64,34 @@ def test_the_sheet_says_the_limit_the_tests_will_have(tmp_path, monkeypatch):
 def test_the_launcher_gives_the_tests_processor_time_for_the_whole_limit(tmp_path):
     """Each process of a run is also held to an amount of processor time, so a test that spins is ended even if the
     clock is lost sight of. It was 600 seconds whatever the limit: a longer limit would have ended at ten minutes
-    of work all the same."""
+    of work all the same.
+    A limit that is already set is never raised: where these tests themselves run under one (Lantern's own tests
+    in the sandbox, whose launcher has set theirs), the launcher gives the smaller of the two. Until 2026-11-13
+    this test took for granted that nothing holds it, and failed in the sandbox for that."""
+    import resource
     show = [sys.executable, "-c", "import resource; print('CPU', resource.getrlimit(resource.RLIMIT_CPU)[0])"]
-    for policy, want in (({}, 600), ({"cpu": 1500}, 1500), ({"cpu": 60}, 600), ({"cpu": "many"}, 600),
-                         ({"cpu": 600 * 64}, 38400),                # ten minutes on each of 64 processors
-                         ({"cpu": 240 * 60 * 4096}, 58982400), ({"cpu": 240 * 60 * 4096 + 1}, 600)):
+    held = resource.getrlimit(resource.RLIMIT_CPU)[1]         # what this process may not go over, set by who started it
+
+    def given(policy: dict, under=None) -> str:
         policy = {"writable": [str(tmp_path)], "nobody": False, "python": True, "net": False, "must": True, **policy}
         r = subprocess.run([sys.executable, "-c", "import sys; from lantern._jail import main; main(sys.argv[1:])",
                             json.dumps(policy), "--", *show], capture_output=True, text=True, encoding="utf-8",
-                           timeout=120, cwd=Path(_jail.__file__).resolve().parent.parent)
-        assert f"CPU {want}" in r.stdout, (policy, r.stdout, r.stderr)
+                           timeout=120, cwd=Path(_jail.__file__).resolve().parent.parent,
+                           preexec_fn=None if under is None else lambda: resource.setrlimit(resource.RLIMIT_CPU, (under, under)))
+        return r.stdout + r.stderr
+
+    for policy, want in (({}, 600), ({"cpu": 1500}, 1500), ({"cpu": 60}, 600), ({"cpu": "many"}, 600),
+                         ({"cpu": 600 * 64}, 38400),                # ten minutes on each of 64 processors
+                         ({"cpu": 240 * 60 * 4096}, 58982400), ({"cpu": 240 * 60 * 4096 + 1}, 600)):
+        want = want if held == resource.RLIM_INFINITY else min(want, held)
+        said = given(policy)
+        assert f"CPU {want}\n" in said, (policy, held, said)
+    # ... and the same asked under a limit that is already there: the smaller one stands, whoever set it
+    for under, policy, want in ((900, {"cpu": 1500}, 900), (900, {}, 600), (300, {}, 300), (2000, {"cpu": 1500}, 1500)):
+        if held != resource.RLIM_INFINITY and under > held:
+            continue                                            # this process may not set that much itself
+        said = given(policy, under=under)
+        assert f"CPU {want}\n" in said, (under, policy, said)
 
 
 def _processors(monkeypatch, n: int) -> None:

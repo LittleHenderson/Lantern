@@ -162,6 +162,83 @@ def test_a_guess_by_method_name_does_not_make_a_test_file_the_apps_own_code(tmp_
     assert "test_file_guessed" not in f
 
 
+# What a project's own test run shows is no evidence of who runs a test file either (2026-11-13). While the tests
+# run, the app's code calls what a test handed it: a stand-in put in the place of one of the app's functions, a
+# callback, a double for one of its objects. The recording of the run has those calls, from the app's code into
+# the test file, and until then each of them made the whole test file "the app's own code": after "Watch my tests
+# run" on Lantern itself, 41 of its test files with 3,095 findings were counted as the app's code, 7 of them
+# high, and the release decision read Blocked for them. The same findings with no test run: test code, all low.
+SEEN_RUNNING = {
+    "app.py": "import sys\n\nimport helpers\nfrom tests.test_kept import really_used\n\n\n"
+              "def go(cmd):\n    return helpers.launch(cmd)\n\n\n"
+              "def run(cmd, launch=None):\n    return (launch or helpers.launch)(cmd)\n\n\n"
+              "def work(worker, cmd):\n    return worker.launch(cmd)\n\n\n"
+              "def keep(cmd):\n    return really_used(cmd)\n\n\n"
+              "if __name__ == '__main__':\n    go(sys.argv[1])\n    run(sys.argv[1])\n    work(None, sys.argv[1])\n"
+              "    keep(sys.argv[1])\n",
+    "helpers.py": "def launch(cmd):\n    return cmd\n",
+    "tests/__init__.py": "",
+    # a stand-in a test puts in the place of the app's own function
+    "tests/test_stand_in.py": "import subprocess\n\nimport app\nimport helpers\n\n\n"
+                              "def stand_in(cmd):\n    subprocess.run(cmd, shell=True)\n\n\n"
+                              "def test_go(monkeypatch):\n    monkeypatch.setattr(helpers, 'launch', stand_in)\n"
+                              "    app.go('echo ok')\n",
+    # a callback a test hands the app
+    "tests/test_callback.py": "import subprocess\n\nimport app\n\n\n"
+                              "def test_run():\n    def launch(cmd):\n        subprocess.run(cmd, shell=True)\n\n"
+                              "    app.run('echo ok', launch=launch)\n",
+    # a double for one of the app's objects: the link is a guess by method name, and the run then saw it
+    "tests/test_double.py": "import subprocess\n\nimport app\n\n\n"
+                            "class FakeWorker:\n    def launch(self, cmd):\n        subprocess.run(cmd, shell=True)\n\n\n"
+                            "def test_work():\n    app.work(FakeWorker(), 'echo ok')\n",
+    # the twin that must stay the app's own code: the app itself loads this file, as its code says
+    "tests/test_kept.py": "import subprocess\n\n\n"
+                          "def really_used(cmd):\n    subprocess.run(cmd, shell=True)\n\n\n"
+                          "def test_keep():\n    import app\n    app.keep('echo ok')\n",
+}
+HANDED_OVER = ("tests/test_stand_in.py", "tests/test_callback.py", "tests/test_double.py")
+
+
+def test_what_the_tests_hand_the_app_while_they_run_does_not_make_a_test_file_the_apps_own_code(tmp_path):
+    from lantern.trace import merge_trace, run_trace
+    repo = _write(tmp_path, SEEN_RUNNING)
+    by_file = lambda res: {f["file"]: f for f in res["findings"] if f["rule"] == "B602"}        # noqa: E731
+
+    # with no test run: three test files, and the one the app loads
+    res = scan(build_graph(repo), offline=True)
+    before = by_file(res)
+    assert sorted(before) == sorted([*HANDED_OVER, "tests/test_kept.py"]), sorted(before)
+    assert all(before[name]["in_tests"] is True and before[name]["rank"] == "low" for name in HANDED_OVER)
+    assert before["tests/test_kept.py"]["test_file_in_use"] is True and before["tests/test_kept.py"]["rank"] == "critical"
+    assert res["counts"]["critical"] == 1 and res["counts"]["high"] == 0, res["counts"]
+
+    # the same project after its tests ran and their calls were recorded
+    g = build_graph(repo)
+    data = run_trace(repo, ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"])
+    assert data["returncode"] == 0, data["stderr_tail"]
+    merge_trace(g, data)
+    links = {(e.src, e.dst): (e.confidence, e.via) for e in g.call_edges()}
+    # the recording does hold the calls from the app into each test file
+    assert links[("py:app.go", "py:tests.test_stand_in.stand_in")] == ("observed", "runtime-only")
+    assert links[("py:app.run", "py:tests.test_callback.test_run.launch")] == ("observed", "runtime-only")
+    assert links[("py:app.work", "py:tests.test_double.FakeWorker.launch")] == ("observed", "unique-method-name+observed")
+    res = scan(g, offline=True)
+    after = by_file(res)
+    for name in HANDED_OVER:
+        f = after[name]
+        assert f["in_tests"] is True and f["rank"] == "low" and "test_file_in_use" not in f, (name, f["rank"], f.get("reachable"))
+        # ... and what the run showed is not hidden: the reason says the tests handed it over
+        assert f["test_file_stood_in"] is True and "test_file_guessed" not in f, name
+        assert "while the tests ran" in rank_reason(f) and "handed" in rank_reason(f), rank_reason(f)
+        assert f["rank_basis"][-1]["step"] == "test-code" and "handed" in f["rank_basis"][-1]["why"], f["rank_basis"]
+    # the file the app's own code loads is the app's code, with the run as without it
+    kept = after["tests/test_kept.py"]
+    assert links[("py:app.keep", "py:tests.test_kept.really_used")][0] == "observed"
+    assert kept["in_tests"] is False and kept["test_file_in_use"] is True and kept["rank"] == "critical", kept["rank"]
+    assert "test_file_stood_in" not in kept and "named like a test" in rank_reason(kept)
+    assert res["counts"]["critical"] == 1 and res["counts"]["high"] == 0, res["counts"]
+
+
 # ------------------------------------------------------- every lowering is written down, on every sample app
 SAMPLES = sorted(p.name for p in FIXTURES.iterdir() if p.is_dir() and p.name != "old_results")
 

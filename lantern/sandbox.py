@@ -1499,7 +1499,8 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel=None,
             "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,exec,size=1g,mode=1777",  # nosec B108: the container's own tmpfs
             "-v", f"{app}:/app:rw", "-v", f"{out}:/out:rw", "-v", f"{hook}:/opt/hook:ro",
             "-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", "-e", "CI=true", "-e", "NO_COLOR=1",
-            "-e", "LANTERN_SANDBOX_WRITABLE=" + os.pathsep.join(["/tmp", "/out", "/app"]), "-e", "PYTHONDONTWRITEBYTECODE=1",
+            "-e", "PYTHONDONTWRITEBYTECODE=1",
+            "-e", "LANTERN_SANDBOX_WRITABLE=" + os.pathsep.join(["/tmp", "/out", "/app"]),  # nosec B108: the container's own tmpfs
             "-e", "LANTERN_SANDBOX_NET=container",      # --network none: the container's network is its own
             "-e", "npm_config_cache=/tmp/npm", "-e", "GOCACHE=/tmp/gocache", "-e", "GOFLAGS=-mod=mod",
             "-e", "GOPROXY=off", "-e", "GOTOOLCHAIN=local", "-e", "CARGO_TARGET_DIR=/tmp/target",
