@@ -111,10 +111,17 @@ and refuses, holds; an app that goes on is refused by the sandbox at the connect
 
 ## Limits
 
-* The outcomes are a record of their own. They do not create, close or re-rank a finding, and the report, the
-  Evidence Report and the readiness score do not read them yet.
-* `behaviour.json` lies in the results folder, which is a folder anybody who can write there can change: the record
-  proves what a run on this computer saw, to the person who ran it. Run `lantern behave` yourself.
+* The outcomes are a record of their own. They do not create, close or re-rank a finding. The release decision
+  (`readiness.json` → `release`, criterion `behaviour`) reads them where the project brings a plan: a case that
+  came out broken blocks the release, and a plan that was not run on this code leaves it Incomplete. The points
+  of the readiness checklist do not read them.
+* `behaviour.json` lies in the results folder, which is a folder anybody who can write there can change, and a
+  project may bring one of its own. So the record names the code it was made from (`of.code_sha256`: one SHA-256
+  over every file of the project) and carries this computer's seal (`seal`: an HMAC-SHA256 under a key made on
+  first use, `LANTERN_HOME/seal.key`, readable by its owner only). The release decision counts a record only when
+  the seal holds and the plan and the code are the ones in the project now; otherwise it says what is missing.
+  The seal says which Lantern made the record, not that the record is right, and whoever can read `LANTERN_HOME`
+  can make one. Run `lantern behave` yourself.
 * Only what the plan asks is tried. A plan with one check tells one thing.
 * Not on Windows yet: no app is started there, and the command says why and ends with `3`. Python's event loop on
   Windows makes its connections in a way the sandbox's guard is not told about, so a case could come out held

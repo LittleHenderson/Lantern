@@ -248,16 +248,16 @@ class Store:
         return self._one(sql, args)[0]
 
     def run(self, rid: str) -> dict | None:
-        row = self._one(f"select {', '.join(RUN_FIELDS)} from runs where id = ?", (rid,))   # nosec B608
+        row = self._one(f"select {', '.join(RUN_FIELDS)} from runs where id = ?", (rid,))   # nosec B608 - our own column names
         return self._run_dict(row) if row else None
 
     def runs(self, account: str, limit: int = 100) -> list[dict]:
-        rows = self._all(f"select {', '.join(RUN_FIELDS)} from runs where account = ? "   # nosec B608
+        rows = self._all(f"select {', '.join(RUN_FIELDS)} from runs where account = ? "   # nosec B608 - our own column names
                          "order by created desc limit ?", (account, limit))
         return [self._run_dict(r) for r in rows]
 
     def unfinished(self) -> list[dict]:
-        rows = self._all(f"select {', '.join(RUN_FIELDS)} from runs where status in (?, ?) "   # nosec B608
+        rows = self._all(f"select {', '.join(RUN_FIELDS)} from runs where status in (?, ?) "   # nosec B608 - our own column names
                          "order by created", ACTIVE)
         return [self._run_dict(r) for r in rows]
 
@@ -280,7 +280,7 @@ class Store:
     def run_by_slug(self, slug: str) -> dict | None:
         if not isinstance(slug, str) or not 16 <= len(slug) <= 40:
             return None
-        row = self._one(f"select {', '.join(RUN_FIELDS)} from runs where share_slug = ?", (slug,))   # nosec B608
+        row = self._one(f"select {', '.join(RUN_FIELDS)} from runs where share_slug = ?", (slug,))   # nosec B608 - our own column names
         return self._run_dict(row) if row else None
 
     def delete_run(self, rid: str) -> None:

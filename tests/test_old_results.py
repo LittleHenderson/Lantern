@@ -1,8 +1,10 @@
 """Results saved by an older Lantern open in this one (test checklist, "Upgrades").
 
-tests/fixtures/old_results/<version>/ holds the JSON result files that Lantern v0.9.0 and v0.10.0 wrote for the shop
-sample (graph, security, readiness, evidence, run, baseline; the HTML pages are rebuilt from these, never served as
-stored). Everything that reads results must take them without a crash: the pages `lantern serve` and the cloud service
+tests/fixtures/old_results/<version>/ holds the result files that Lantern v0.9.0, v0.10.0 and v0.11.0 wrote for the
+shop sample (graph, security, readiness, evidence, run, baseline, and from 0.11.0 the call inventory; the HTML pages
+are rebuilt from these, never served as stored). A release that changes a result file's shape adds its folder: the
+sample is copied to a folder named `/home/someone/projects/shop` and analyzed there with `--offline`, so the files
+carry no path of the computer they were made on. Everything that reads results must take them without a crash: the pages `lantern serve` and the cloud service
 build (report, evidence, badge, JSON), the Projects screen's summary, Ask Lantern's facts, the SARIF export, the
 connector's tools, the scenario and lane attachers, and `lantern verify` (which may say DIFFERENT, never fail to run).
 """
@@ -55,6 +57,24 @@ def test_the_projects_screen_and_ask_lantern_read_old_results(project, tmp_path,
     assert s["grade"] in ("A", "B", "C", "D", "F") and isinstance(s.get("counts"), dict)
     facts = ask.facts(project)
     assert "Findings open:" in facts and "Readiness:" in facts and "Routes:" in facts
+
+
+def test_a_release_decision_is_shown_only_where_the_results_hold_one(project, request, tmp_path, monkeypatch):
+    """0.11.0 is the first version that wrote a release decision (Blocked, Incomplete or Passed) into readiness.json.
+    Results from 0.9.0 and 0.10.0 hold none, and this version must not make one up for them: it would be its word on
+    work an older version did. The shop sample has open critical findings, so 0.11.0's own result reads Blocked."""
+    version = request.node.callspec.params["project"]
+    wrote_one = tuple(int(n) for n in version.lstrip("v").split(".")[:2]) >= (0, 11)
+    out = project / ".lantern"
+    rd = json.loads((out / "readiness.json").read_text(encoding="utf-8"))
+    assert ("release" in rd) == wrote_one, version
+    assert (out / "calls.json").exists() == wrote_one, version       # the call inventory is new in 0.11.0 too
+    monkeypatch.setenv("LANTERN_CONFIG_DIR", str(tmp_path / "cfg"))
+    app = App(Store(tmp_path / "home"), "tok", 0)
+    shown = app.summary(app.store.add_project(project))["release"]
+    assert shown == ("Blocked" if wrote_one else None), (version, shown)
+    facts = ask.facts(project)
+    assert ("Release decision: Blocked" in facts) == wrote_one, version
 
 
 def test_exports_connector_and_attachers_take_old_results(project):

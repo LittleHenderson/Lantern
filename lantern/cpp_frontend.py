@@ -31,6 +31,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, MODULE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, skipped
 
@@ -138,6 +139,8 @@ class CClass:
 
 
 class Model:
+    left = None     # (map, reader) once the reader has a map: where a piece that was not read is written down
+
     def __init__(self):
         self.classes: dict[str, CClass] = {}
         self.by_short: dict[str, list[str]] = {}
@@ -225,36 +228,40 @@ class Collector:
 
     def walk(self, nodes, ns: str, cls: CClass | None):
         for c in nodes:
-            t = c.type
-            if t == "namespace_definition":
-                nm = c.child_by_field_name("name")
-                inner = (ns + "." if ns else "") + (_t(nm).replace("::", ".") if nm is not None else "")
-                if nm is None:
-                    inner = ns                                       # anonymous namespace
-                self.m.namespaces.add(inner)
-                self.walk(_named(c.child_by_field_name("body")), inner, None)
-            elif t in ("class_specifier", "struct_specifier") and c.child_by_field_name("body") is not None:
-                self._class(c, ns, cls)
-            elif t in ("declaration", "field_declaration", "type_definition", "template_declaration",
-                       "linkage_specification", "preproc_ifdef", "preproc_if", "preproc_else", "preproc_elif",
-                       "declaration_list"):
-                for x in _named(c):
-                    if x.type in ("class_specifier", "struct_specifier") and x.child_by_field_name("body") is not None:
-                        self._class(x, ns, cls)
-                if t == "field_declaration" and cls is not None:
-                    self._field(c, cls)
-                elif t in ("declaration", "field_declaration") and cls is not None:
-                    fd = _func_decl(c.child_by_field_name("declarator"))
-                    nm = _decl_name(fd) if fd is not None else None
-                    if nm is not None:
-                        cls.methods.add(_t(nm).split("::")[-1])
-                if t in ("template_declaration", "linkage_specification", "preproc_ifdef", "preproc_if",
-                         "preproc_else", "preproc_elif", "declaration_list"):
-                    self.walk([x for x in _named(c) if x.type not in ("class_specifier", "struct_specifier")], ns, cls)
-            elif t == "function_definition":
-                self._fun(c, ns, cls)
-            elif t == "field_declaration_list":
-                self.walk(_named(c), ns, cls)
+            try:
+                t = c.type
+                if t == "namespace_definition":
+                    nm = c.child_by_field_name("name")
+                    inner = (ns + "." if ns else "") + (_t(nm).replace("::", ".") if nm is not None else "")
+                    if nm is None:
+                        inner = ns                                       # anonymous namespace
+                    self.m.namespaces.add(inner)
+                    self.walk(_named(c.child_by_field_name("body")), inner, None)
+                elif t in ("class_specifier", "struct_specifier") and c.child_by_field_name("body") is not None:
+                    self._class(c, ns, cls)
+                elif t in ("declaration", "field_declaration", "type_definition", "template_declaration",
+                           "linkage_specification", "preproc_ifdef", "preproc_if", "preproc_else", "preproc_elif",
+                           "declaration_list"):
+                    for x in _named(c):
+                        if x.type in ("class_specifier", "struct_specifier") and x.child_by_field_name("body") is not None:
+                            self._class(x, ns, cls)
+                    if t == "field_declaration" and cls is not None:
+                        self._field(c, cls)
+                    elif t in ("declaration", "field_declaration") and cls is not None:
+                        fd = _func_decl(c.child_by_field_name("declarator"))
+                        nm = _decl_name(fd) if fd is not None else None
+                        if nm is not None:
+                            cls.methods.add(_t(nm).split("::")[-1])
+                    if t in ("template_declaration", "linkage_specification", "preproc_ifdef", "preproc_if",
+                             "preproc_else", "preproc_elif", "declaration_list"):
+                        self.walk([x for x in _named(c) if x.type not in ("class_specifier", "struct_specifier")], ns, cls)
+                elif t == "function_definition":
+                    self._fun(c, ns, cls)
+                elif t == "field_declaration_list":
+                    self.walk(_named(c), ns, cls)
+            except RecursionError:
+                # declared inside more declarations than this walk follows: left where it stands and written down
+                deep.leave(self.m.left, self.rel, c)
 
     def _class(self, c, ns: str, outer: CClass | None):
         nm = c.child_by_field_name("name")
@@ -353,6 +360,8 @@ def _walk_all(n):
 
 
 class Linker:
+    left = None     # (map, "cpp") once the reader has a map: where a piece that was not read is written down
+
     def __init__(self, model: Model):
         self.m = model
         self.http: list[dict] = []
@@ -471,52 +480,58 @@ class Linker:
 
     def walk(self, body, fn: CFun, env: dict, skip: set) -> list[Ref]:
         refs: list[Ref] = []
-        stack = [body] if body is not None else []
+        # each node with the node it was found in: asking a node for its parent costs a walk from the top of the file
+        stack = [(body, None)] if body is not None else []
         while stack:
-            x = stack.pop()
-            if x.id in skip:
+            x, up = stack.pop()
+            try:
+                if x.id in skip:
+                    continue
+                line = x.start_point.row + 1
+                if x.type in ("declaration", "field_declaration") and (up or x.parent) is not None and \
+                        (up or x.parent).type != "field_declaration_list":
+                    typ = _clean_type(_t(x.child_by_field_name("type")))
+                    for d in x.children_by_field_name("declarator"):
+                        nm = _decl_name(d)
+                        if nm is None or nm.type != "identifier":
+                            continue
+                        t = typ
+                        if d.type == "init_declarator" and (typ in ("auto", "") or typ.endswith("auto")):
+                            t = self._type_of_expr(d.child_by_field_name("value"), fn.ns) or ""
+                        env[_t(nm)] = t
+                        hit = self.m.find(t, fn.ns) if t else None
+                        if hit and d.type == "init_declarator" and d.child_by_field_name("value") is not None and \
+                                d.child_by_field_name("value").type in ("argument_list", "initializer_list"):
+                            r = self.m.fun_in(hit, hit.split(".")[-1])          # T x(...);
+                            if r:
+                                refs.append(Ref(r, line, "constructor"))
+                elif x.type == "new_expression":
+                    hit = self.m.find(_clean_type(_t(x.child_by_field_name("type"))), fn.ns)
+                    r = self.m.fun_in(hit, hit.split(".")[-1]) if hit else None
+                    if r:
+                        refs.append(Ref(r, line, "constructor"))
+                elif x.type == "lambda_expression":
+                    pass
+                elif x.type == "call_expression":
+                    res = self.target(x, fn, env)
+                    if res is not None:
+                        t, via = res
+                        if t:
+                            refs.append(Ref(t, line, via))
+                        elif via == "":
+                            key = f"{fn.id}: {_t(x.child_by_field_name('function'))[:60]}"
+                            self.m.unresolved[key] = self.m.unresolved.get(key, 0) + 1
+                    before = len(self.routes)
+                    self._route(x, fn)
+                    for r in self.routes[before:]:
+                        if not isinstance(r[2], str):
+                            skip.add(r[2].id)                         # a route lambda is its own node
+                    self._http(x, fn, env)
+            except RecursionError:
+                # nested deeper than the lookup follows: left with all that is written in it, and written down
+                deep.leave(self.left, fn.file, x, env, blank="")
                 continue
-            line = x.start_point.row + 1
-            if x.type in ("declaration", "field_declaration") and x.parent is not None and x.parent.type != \
-                    "field_declaration_list":
-                typ = _clean_type(_t(x.child_by_field_name("type")))
-                for d in x.children_by_field_name("declarator"):
-                    nm = _decl_name(d)
-                    if nm is None or nm.type != "identifier":
-                        continue
-                    t = typ
-                    if d.type == "init_declarator" and (typ in ("auto", "") or typ.endswith("auto")):
-                        t = self._type_of_expr(d.child_by_field_name("value"), fn.ns) or ""
-                    env[_t(nm)] = t
-                    hit = self.m.find(t, fn.ns) if t else None
-                    if hit and d.type == "init_declarator" and d.child_by_field_name("value") is not None and \
-                            d.child_by_field_name("value").type in ("argument_list", "initializer_list"):
-                        r = self.m.fun_in(hit, hit.split(".")[-1])          # T x(...);
-                        if r:
-                            refs.append(Ref(r, line, "constructor"))
-            elif x.type == "new_expression":
-                hit = self.m.find(_clean_type(_t(x.child_by_field_name("type"))), fn.ns)
-                r = self.m.fun_in(hit, hit.split(".")[-1]) if hit else None
-                if r:
-                    refs.append(Ref(r, line, "constructor"))
-            elif x.type == "lambda_expression":
-                pass
-            elif x.type == "call_expression":
-                res = self.target(x, fn, env)
-                if res is not None:
-                    t, via = res
-                    if t:
-                        refs.append(Ref(t, line, via))
-                    elif via == "":
-                        key = f"{fn.id}: {_t(x.child_by_field_name('function'))[:60]}"
-                        self.m.unresolved[key] = self.m.unresolved.get(key, 0) + 1
-                before = len(self.routes)
-                self._route(x, fn)
-                for r in self.routes[before:]:
-                    if not isinstance(r[2], str):
-                        skip.add(r[2].id)                         # a route lambda is its own node
-                self._http(x, fn, env)
-            stack.extend(reversed(x.children))
+            stack.extend((c, x) for c in reversed(x.children))
         return refs
 
     # ---- routes and outgoing calls
@@ -625,6 +640,7 @@ def add_cpp(g: Graph, repo: str | Path) -> dict:
         return {}
     has_cpp = any(p.suffix.lower() in CPP_EXTS - {".h"} for p in paths)
     model = Model()
+    model.left = (g, "cpp")
     texts: dict[str, str] = {}
     files = []
     total = 0
@@ -640,7 +656,7 @@ def add_cpp(g: Graph, repo: str | Path) -> dict:
         root = (c_parser if is_c else cpp_parser).parse(src).root_node
         lines = src.count(b"\n") + 1
         total += lines
-        Collector(model, rel, is_c).walk(_named(root), "", None)
+        deep.whole(model.left, rel, Collector(model, rel, is_c).walk, _named(root), "", None)
         files.append((rel, lines))
         texts[rel] = src.decode("utf-8", "replace")
 
@@ -670,6 +686,7 @@ def add_cpp(g: Graph, repo: str | Path) -> dict:
             g.nodes[fid].entry = {"kind": "test", "detail": fn.file}
 
     link = Linker(model)
+    link.left = (g, "cpp")
     edges = 0
 
     def add_refs(src_id, refs):

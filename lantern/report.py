@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-from . import __version__, results
+from . import __version__, columns, results
 from .graph import Graph
 from .python_frontend import project_text
 
@@ -99,8 +99,15 @@ def render(bundle: dict, live: dict | None = None, nonce: str | None = None) -> 
     The page also carries its own Content-Security-Policy in a <meta> tag, listing the SHA-256 of each of our
     scripts. A report opened from disk has no server to send headers, and this makes it hold anyway: someone who
     edits only the data block cannot get script to run (inline handlers, javascript: URLs, and injected scripts
-    are all refused), and only a script that hashes to ours runs at all."""
-    html = TEMPLATE.read_text(encoding="utf-8").replace("/*__LANTERN_DATA__*/null", safe_json(bundle))
+    are all refused), and only a script that hashes to ours runs at all.
+
+    The map is written column by column (`lantern/columns.py`): the same nodes and links in about a third of the
+    room, because most of the time a phone needs to open a large report is the time it needs to take the file in.
+    The page turns it back into the same rows before anything looks at it, and `read_bundle` does so here."""
+    held = bundle
+    if isinstance(bundle, dict) and isinstance(bundle.get("graph"), dict):
+        held = {**bundle, "graph": columns.pack_graph(bundle["graph"])}
+    html = TEMPLATE.read_text(encoding="utf-8").replace("/*__LANTERN_DATA__*/null", safe_json(held))
     if live is not None:
         html = html.replace(DATA_OPEN, "<script>window.LANTERN_LIVE = " + safe_json(live) + ";</script>\n" + DATA_OPEN, 1)
     html = html.replace(CSP_MARK, CSP_MARK + "\n" + CSP_META.format(hashes=" ".join(script_hashes(html))), 1)
@@ -122,5 +129,8 @@ def read_bundle(path: Path) -> dict:
         raise ValueError("this report.html was not written by Lantern; analyze again")
     data = json.loads(text[i + len(DATA_OPEN):j])
     if not isinstance(data, dict) or not isinstance(data.get("graph"), dict):
+        raise ValueError("this report.html has no Lantern data; analyze again")
+    data["graph"] = columns.unpack_graph(data["graph"])     # the rows as they were (ValueError: not packed by Lantern)
+    if not isinstance(data["graph"], dict):
         raise ValueError("this report.html has no Lantern data; analyze again")
     return data

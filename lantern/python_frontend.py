@@ -19,7 +19,7 @@ from pathlib import Path
 import tree_sitter_python as tsp
 from tree_sitter import Language, Node as TSNode, Parser
 
-from . import calls, manifest
+from . import calls, deep, kept, manifest
 from .graph import (CALLABLE, CALLS, CLASS, CONTAINS, IMPLEMENTS, INFERRED, MAY_CALL, MODULE,
                     POSSIBLE, RESOLVED, Graph, Node)
 
@@ -169,6 +169,18 @@ def project_text(p, repo, limit: int | None = None) -> str:
         return f.read() if limit is None else f.read(limit)
 
 
+def project_sha256(p, repo) -> str:
+    """The SHA-256 of what a file of the project holds (see `project_bytes`: FileNotFoundError for a path that is
+    not such a file), read a piece at a time, so a large file is never held whole."""
+    if not inside_repo(p, repo):
+        raise FileNotFoundError(errno.ENOENT, "not a file of the project", os.fspath(p))
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for piece in iter(lambda: f.read(1 << 20), b""):
+            h.update(piece)
+    return h.hexdigest()
+
+
 def discover(repo: Path) -> list[tuple[Path, str]]:
     """Return (path, dotted module name) for every Python file in the repo."""
     repo = repo.resolve()
@@ -273,6 +285,8 @@ class ModuleInfo:
     exports_unknown: bool = False
     has_main_block: bool = False
     main_range: tuple[int, int] | None = None
+    # lines where a statement begins that is nested deeper than the reader follows (`lantern/deep.py`)
+    too_deep: list[int] = field(default_factory=list)
 
 
 def _text(n: TSNode | None) -> str:
@@ -545,6 +559,19 @@ class _Visitor:
 def _visit_body(v: _Visitor, root: TSNode):
     """Walk the module, tracking the class a function is defined in (for `self` resolution)."""
 
+    def each(nodes, scope: str, cls: str | None):
+        """The statements of a block, one by one. One that is nested deeper than Python lets `walk` call itself is
+        left where the reading stopped and written down (`lantern/deep.py`); what the scope knew about the names
+        written in it is forgotten, because the part that was not read may have given any of them a new value."""
+        for c in nodes:
+            try:
+                walk(c, scope, cls)
+            except RecursionError:
+                v.m.too_deep.append(c.start_point[0] + 1)
+                for name in deep.names(c):
+                    v.bind_literal(scope, name, None)
+                    v.m.local_types.get(scope, {}).pop(name, None)
+
     def walk(n: TSNode, scope: str, cls: str | None, decorators=None):
         t = n.type
         if t == "decorated_definition":
@@ -591,16 +618,14 @@ def _visit_body(v: _Visitor, root: TSNode):
                         v.m.returns.setdefault(local, []).append(("ann", ch))
             body = n.child_by_field_name("body")
             if body is not None:
-                for c in body.children:
-                    walk(c, local, None if is_class else method_of)
+                each(body.children, local, None if is_class else method_of)
             return
         if t == "if_statement" and not scope and v._is_main_guard(n):
             v.m.has_main_block = True
             v.m.main_range = (n.start_point[0] + 1, n.end_point[0] + 1)
             body = n.child_by_field_name("consequence")
             if body is not None:
-                for c in body.children:
-                    walk(c, "<main>", None)
+                each(body.children, "<main>", None)
             alt = n.child_by_field_name("alternative")
             if alt is not None:
                 walk(alt, scope, cls)
@@ -690,6 +715,9 @@ def _visit_body(v: _Visitor, root: TSNode):
                 if c.type in ("identifier", "as_pattern_target"):
                     for name in _names_in(c):
                         v.bind_literal(scope, name, None)
+        if t in ("module", "block"):
+            each(n.children, scope, cls)
+            return
         for c in n.children:
             walk(c, scope, cls)
 
@@ -817,14 +845,33 @@ def _def_only(self: _Visitor, n: TSNode, scope: str, method_of: str | None, deco
 _Visitor._def_only = _def_only  # type: ignore[attr-defined]
 
 
+# How one file reads is kept between runs (`lantern/kept.py`): the same bytes under the same name read the same way,
+# so a file that has not changed is not parsed and walked again. The record holds nothing of where the project lies
+# (`path` is put back by the caller's own), and everything that links files is worked out in every run.
+_KEPT = kept.Shelf("python-file", classes=(ModuleInfo, DefInfo, CallSite, ImportBinding),
+                   libraries=("tree_sitter", "tree_sitter_python"))
+
+
 def parse_module(path: Path, modname: str, repo: Path, parser: Parser) -> ModuleInfo:
     src = project_bytes(path, repo)
+    rel = path.relative_to(repo).as_posix()
+    key = _KEPT.key(modname, rel, src)
+    info = _KEPT.get(key)
+    if type(info) is ModuleInfo and info.name == modname and info.rel == rel and info.path is None:
+        info.path = path
+        return info
     tree = parser.parse(src)
-    info = ModuleInfo(name=modname, path=path, rel=path.relative_to(repo).as_posix(),
+    info = ModuleInfo(name=modname, path=path, rel=rel,
                       is_package=path.name == "__init__.py", lines=src.count(b"\n") + 1)
     _visit_body(_Visitor(info), tree.root_node)
     if src.count(b"__all__") != (1 if info.exports is not None else 0):   # `__all__ += …`, `.extend(…)`, a second one
         info.exports_unknown = True
+    if key is not None and not info.too_deep:   # a file read in part (`lantern/deep.py`) is read anew in every run
+        info.path = None        # where the project lies is no part of how the file reads
+        try:
+            _KEPT.put(key, info)
+        finally:
+            info.path = path
     return info
 
 
@@ -879,6 +926,7 @@ class Resolver:
                 b.module = self.canon(b.module, m.name)
         self._star_hits: dict[tuple[str, str], tuple | None] = {}
         self._subclasses: dict[str, list[str]] = {}
+        self._below: dict[str, list[str]] = {}      # a class -> every class below it (`subclasses`)
         self._lib_base: dict[str, tuple[str | None, bool]] = {}
         self._open: set[str] = set()   # classes with a base Lantern cannot look into (`open_base`)
 
@@ -1101,17 +1149,27 @@ class Resolver:
         return None
 
     def subclasses(self, cls_q: str) -> list[str]:
+        """Every class of the repo below `cls_q`, in the order they were always given. The caller reads the list
+        and does not change it: it is worked out once for a class (until 2026-11-12 at every call, and each class
+        was looked for in the list so far: 4.2 of the 30 seconds this reader took on Django, whose `Model`,
+        `Field` and `TestCase` have hundreds of classes below them)."""
         if not self._subclasses:
             for q, (_, d) in self.defs.items():
                 if d.kind == "class":
                     for b in self.bases(q):
                         self._subclasses.setdefault(b, []).append(q)
-        out, stack = [], list(self._subclasses.get(cls_q, []))
-        while stack:
-            c = stack.pop()
-            if c not in out:
-                out.append(c)
-                stack.extend(self._subclasses.get(c, []))
+            if not self._subclasses:
+                return []               # no class of the repo has a base: asked again next time, as before
+        out = self._below.get(cls_q)
+        if out is None:
+            out, seen, stack = [], set(), list(self._subclasses.get(cls_q, []))
+            while stack:
+                c = stack.pop()
+                if c not in seen:
+                    seen.add(c)
+                    out.append(c)
+                    stack.extend(self._subclasses.get(c, []))
+            self._below[cls_q] = out
         return out
 
     def is_class(self, q: str) -> bool:
@@ -1774,7 +1832,9 @@ def _entry_for(d: DefInfo, rel: str, mod: ModuleInfo | None = None, mounts: dict
 # Build
 # --------------------------------------------------------------------------------------------
 
-def build_graph(repo: str | Path) -> Graph:
+def build_graph(repo: str | Path, into: Graph | None = None) -> Graph:
+    """The Python part of a project's map, on a new map or on `into` (the engine's, which keeps what this reader had
+    put there if it stops part-way: `engine._part`)."""
     repo = Path(repo).resolve()
     parser = Parser(PY_LANGUAGE)
     mods: dict[str, ModuleInfo] = {}
@@ -1788,12 +1848,14 @@ def build_graph(repo: str | Path) -> Graph:
             info.name = modname
         mods[modname] = info
 
-    g = Graph(str(repo))
+    g = into if into is not None else Graph(str(repo))
     r = Resolver(mods, g)
     mounts = r.mount_prefixes()
     total_lines = 0
     for m in mods.values():
         total_lines += m.lines
+        for line in m.too_deep:
+            deep.note(g, m.rel, line, "python")
         g.add_node(Node(id=nid(m.name), kind=MODULE, name=m.name.split(".")[-1], qualname=m.name,
                         file=m.rel, start_line=1, end_line=m.lines))
         for d in m.defs.values():

@@ -169,6 +169,131 @@ It stands in `core/handlers.js`; the safe-twin anchor is the route's line in `ro
 above it is not a false alarm on that anchor. Read strictly, as "a finding on a route this set calls safe", it would
 be 1 of 17.
 
+## Point 6 of the directive: targets (written down 2026-11-12 05:33 UTC, before the engine was run on the set)
+
+Point 6 ("fix severity and make 100 mean the required work passed") adds a release decision per app (Blocked,
+Incomplete, Passed) that does not depend on the score, and the runner now records it beside the score. Two targets
+of point 4 were missed and carried into this stage: `pg-ssti`, and the clean apps that were not given a green
+release. On the second the owner decided (2026-11-11) what counts: a clean app is refused only when it reads
+Blocked; one that reads Incomplete (a required piece of evidence is missing: the tests were not run, a library
+check could not be made) is not refused, and is listed with what is missing.
+
+Written before the run, on this exact definition (e6b10d91686f):
+
+| Measure | After point 4 (3e4687c): offline, with audits | Target |
+|---|---|---|
+| Documented problems found at medium or above, of 79 | 54, 55 | not below 54 offline and 55 with the audits |
+| of the 26 `sql`, `shell`, `eval`, `deserialize`, `xxe` ones | 25, 25 | 26: `pg-ssti` found at medium or above where it is documented |
+| Found only as low | 1, 1 | no more than 1 |
+| False alarms on the 17 safe-twin anchors | 0, 0 | 0 |
+| Vulnerable apps that read Passed or score 100, of 8 | (a green release: 0) | 0 |
+| Clean apps that read Blocked, of 6 | (not green: 2, fastapi-template and taxonomy) | 0; each one that reads Incomplete listed with what is missing |
+| Apps that score 100 while Blocked or Incomplete, of 14 | not recorded | 0 |
+| Medium+ findings on clean apps | 10, of which 7 labelled false alarm | every one labelled, and no more than 10 |
+| Found problems with a mapped path | 46 of 55, 46 of 56 | at least 70% |
+| Resolution checks, protection checks | 3 of 3, 3 of 3 | every one |
+
+What was known when these were written, so the numbers can be read for what they are. Three rules of this stage
+were written after a result of this set, each against examples of its own (none copied from the set; the apps'
+code was not read): a payment webhook that checks its sender before it spends (`tests/test_webhook_sender.py`,
+after taxonomy's false alarm, which this set's labels explain in one sentence), text a request wrote into a file
+that is read back and run as a template (`tests/test_stored_file.py`, after the `pg-ssti` miss, known by its line
+numbers and its one-line note), and a check made on a whole list at once (`tests/test_list_guard.py`, after two
+false alarms on the behaviour benchmark's own safe app, which is not part of this set). So taxonomy and `pg-ssti`
+no longer measure those two rules blind. No rule was written for fastapi-template's finding: that a page is made
+only when an account with exactly that address exists is not evidence Lantern can read from the code, and a rank
+is lowered only on evidence.
+
+## After point 6 of the directive (measured 2026-11-12 UTC)
+
+`after_point6.json` / `.md` (offline) and `after_point6_audits.json` / `.md` (the dependency audits on) are the
+engine of point 6 (babe4e6) on this definition, after the targets above were written down. The set was measured
+three times: on 4caaeea, the run the targets were read against, and again after each of the two engine commits
+that followed (bc571fd: text read back from a file is followed into a larger text and into a helper; babe4e6: a
+check written as a loop of its own). Every finding of every app was the same in all three (626 offline, 1,196
+with the audits on), so the numbers below are those of the first run and the files are the last run's.
+
+| Measure | After point 4 (3e4687c): offline, with audits | After point 6 (babe4e6): offline, with audits | Target | Result |
+|---|---|---|---|---|
+| Documented problems found at medium or above, of 79 | 54, 55 | 55, 56 | not below 54 and 55 | met |
+| of the 61 public | 39, 40 | 40, 41 | | |
+| of the 18 local | 15, 15 | 15, 15 | | |
+| of the 26 `sql`, `shell`, `eval`, `deserialize`, `xxe` ones | 25, 25 | 25, 25 | 26 | missed: `pg-ssti` |
+| Found only as low | 1, 1 | 0, 0 | no more than 1 | met |
+| Missed | 24, 23 | 24, 23 | | |
+| False alarms on the 17 safe-twin anchors | 0, 0 | 0, 0 | 0 | met |
+| Vulnerable apps that read Passed, of 8 | 0, 0 (a green release, by the rule of that time) | 0, 0 | 0 | met |
+| Vulnerable apps that read Blocked, of 8 | not recorded | 8, 8 | | |
+| Clean apps that read Blocked, of 6 | (not green: 2, 2) | 1, 1: fastapi-template | 0 | missed |
+| Clean apps that read Incomplete, of 6 | not recorded | 5, 5 | each listed with what is missing | listed below |
+| Apps that score 100 while Blocked or Incomplete, of 14 | not recorded | 0, 0 (the highest score is 63) | 0 | met |
+| Medium+ findings on clean apps | 10: 7 false alarm, 3 intended | 9: 6 false alarm, 3 intended | every one labelled, no more than 10 | met |
+| Found problems with a mapped path | 46 of 55, 46 of 56 | 46 of 55, 46 of 56 | at least 70% | met |
+| Resolution checks, protection checks | 3 of 3, 3 of 3 | 3 of 3, 3 of 3 | every one | met |
+
+What moved, finding by finding (the same in both runs; no app of the set lost or gained any other finding):
+
+* Seven findings rose by one rank and none fell: four from low to medium (one in dvra, three in pygoat) and three
+  from medium to high (one in nodegoat, two in pygoat). Each had been ranked under its tool's severity only
+  because Lantern found no path to its line. One of them is a documented problem, `pg-django-debug` (`config`),
+  which was found only as low and is now found at medium: **the one more problem found at medium or above is that
+  rule, not a new detection.** `pg-django-secret` was found at medium and is found at high.
+* One finding is gone: `LA-WALLET-DRAIN` (high) on taxonomy's Stripe webhook, which checks who sent the message
+  before it spends. It was one of the two false alarms that kept a clean app from a green release.
+
+By class, found at medium or above after point 4 and after point 6 (offline), of the expected: `auth` 3 and 3 of 5,
+`authz` 3 and 3 of 11, `config` 0 and 1 of 4, `csrf` 1 and 1 of 2, `dependency` 0 and 0 of 2 (1 with the audits
+on), `deserialize` 4 and 4 of 4, `eval` 3 and 3 of 4, `exposure` 1 and 1 of 2, `nosql` 1 and 1 of 2, `path` 2 and 2
+of 4, `pollution` 1 and 1 of 1, `redirect` 3 and 3 of 4, `secret` 7 and 7 of 7, `shell` 6 and 6 of 6, `sql` 10 and
+10 of 10, `ssrf` 3 and 3 of 3, `xss` 4 and 4 of 6, `xxe` 2 and 2 of 2. Point 6 added no detection rule for a class
+of this set: the 24 misses are the same 24 as after point 4 (listed above), and `pg-django-debug`, found only as low
+then, is found at medium.
+
+The two targets missed, with where:
+
+* **`pg-ssti` is still not found where the set documents it.** Lantern lists the problem in that file as `LT-EVAL`
+  (medium, a heuristic) at line 44, where what the request sent is written into a file of the templates folder. The
+  documented line is 57 with a window of 6 lines, where the saved files are read for a list of posts. By the
+  definition that is missed, as after point 4. The rule written after that miss (text written into a file, read
+  back and run as a template, `tests/test_stored_file.py`) does not fire in this app: Lantern's own record of that
+  file (line numbers and the names of its rule tables only; the code was not read) shows the write at line 44, a
+  read of files of the same place at line 56, and no line that runs text as a template; the one page rendered
+  from a name the request sends is at line 111. So this app shows the saved file by its name and never reads it
+  back to run it, which is what the finding at line 44 already says. A finding at line 57 would say that text is
+  run where it is only read, and moving the documented line after the result would be changing the count, so
+  neither was done.
+* **One clean app reads Blocked: fastapi-template**, through `LT-XSS` (high) at
+  `backend/app/api/routes/login.py:121`, labelled a false alarm after point 4: the value does reach the page the
+  way Lantern says, but only a superuser reaches the route and the page is made only when an account with
+  exactly that address exists. Neither is evidence Lantern reads from the code today, and a rank is lowered only
+  on evidence, so the finding stays high and a high finding that is open blocks. A project can settle such a
+  finding with `lantern accept ID --reason "..."`, which the decision then names as accepted.
+
+The five clean apps that read Incomplete, each with what is missing (Lantern's own words, with the audits on):
+
+| App | Libraries | Tests |
+|---|---|---|
+| express-boilerplate | not checked: its versions are in a pnpm, yarn or bun lock file, which Lantern does not read yet | not run in this check |
+| taxonomy | not checked: its versions are in a pnpm, yarn or bun lock file, which Lantern does not read yet | the project has no tests |
+| review-safe | 2 libraries have no exact version written down | the project has no tests |
+| flows-safe | 5 libraries have no exact version written down; 2 are named in a `package.json` with no lock file | the project has no tests |
+| express-safe | 3 libraries are named in a `package.json` with no lock file | the project has no tests |
+
+This benchmark never runs an app's own tests, so no app of the set can read Passed here; what the table shows is
+that none of the five is held back by a finding. fastapi-template would read Incomplete too without its one high
+finding (two scanners could not read one file, its JavaScript libraries are in a lock file Lantern does not read,
+and its tests were not run).
+
+## After point 10 of the directive (measured 2026-11-12 23:46 UTC)
+
+Point 10 is about speed and may change no result, so this measurement has no target but one: nothing moves.
+`after_point10.json` / `.md` (offline) and `after_point10_audits.json` / `.md` (the dependency audits on, which
+now run beside the reading of the code) are the engine of point 10 (3e38b7d) on this definition. Every app's
+record in both files is the same as in the point 6 files, entry for entry: the same 626 findings offline and
+1,196 with the audits on, 55 and 56 of the 79 expected problems found, 0 false alarms on the safe twins, 0 false
+links, the same release decision for each of the 14 apps. Only the label, the engine's commit and the time of the
+run differ. No file of the set was read to make the engine faster.
+
 ## Files
 
 * `cases.json` · the frozen definition: apps, commits, expectations, rules.
@@ -178,3 +303,7 @@ be 1 of 17.
 * `baseline.json`, `baseline.md` · the frozen before.
 * `after_point4.json`, `after_point4.md` · the fifth and last measurement after point 4 (offline, like the before
   of the same day); `after_point4_audits.json`, `.md` · the same engine with the dependency audits on.
+* `after_point6.json`, `after_point6.md` · the measurement after point 6 (offline); `after_point6_audits.json`, `.md` · the same
+  engine with the dependency audits on.
+* `after_point10.json`, `after_point10.md` · the measurement after point 10 (offline); `after_point10_audits.json`,
+  `.md` · the same engine with the dependency audits on. The same records as after point 6.
