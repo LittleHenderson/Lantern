@@ -31,7 +31,7 @@ jobs:
           pip install -e ".[scan]" pytest
           python examples/make_demo.py /tmp/demo
           mkdir -p site/demo && cp /tmp/demo/report.html site/demo/report.html
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b  # v5
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6.0.0
         with:
           enablement: true   # turns GitHub Pages on for the repo the first time; no Settings click needed
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3
