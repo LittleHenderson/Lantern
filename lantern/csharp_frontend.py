@@ -375,7 +375,7 @@ class Linker:
         self.m = model
         self.http: list[dict] = []
 
-    def _type_of(self, f, ns, cls, env, e) -> str | None:
+    def _type_of(self, f, ns, cls, env, e, memo=None) -> str | None:
         if e is None:
             return None
         if e.type == "identifier":
@@ -398,23 +398,37 @@ class Linker:
             if e.type == "cast_expression":
                 return _type_name(e.child_by_field_name("type"))
             inner = next((c for c in reversed(e.children) if c.is_named), None)
-            return self._type_of(f, ns, cls, env, inner)
+            return self._type_of(f, ns, cls, env, inner, memo)
         if e.type == "member_access_expression":
             obj, name = e.child_by_field_name("expression"), _t(e.child_by_field_name("name"))
-            tn = self._type_of(f, ns, cls, env, obj)
+            tn = self._type_of(f, ns, cls, env, obj, memo)
             hit = self.m.find_class(f, ns, cls, tn) if tn else None
             return hit[1].props.get(name) if hit else None
         if e.type == "invocation_expression":
-            res = self._target(f, ns, cls, env, e.child_by_field_name("function"))
+            res = self._target(f, ns, cls, env, e.child_by_field_name("function"), memo)
             if res and res[2]:
                 fn = self.m.funs.get(res[2])
                 return fn.returns if fn else None
         return None
 
-    def _target(self, f, ns, cls, env, fn_n):
-        """(target id, via, (ns, local) of the repo method, confidence, extra targets) for a call's function part."""
+    def _target(self, f, ns, cls, env, fn_n, memo=None):
+        """(target id, via, (ns, local) of the repo method, confidence, extra targets) for a call's function part.
+
+        `memo` holds what this one question has worked out, link by link. In a chain `a.B().C().D()` a link whose
+        type is not known is asked about twice, once for its type and once for what the chain hangs on, and each of
+        the two asked the link before it twice again: every link more doubled the work, and a chain of thirty calls
+        after a library call (`sb.Append(a).Append(b)…`, a query, a builder) was not read in hours (2026-11-13).
+        With it each link is worked out once."""
         if fn_n is None:
             return None
+        if memo is None:
+            memo = {}
+        elif fn_n.id in memo:
+            return memo[fn_n.id]
+        res = memo[fn_n.id] = self._target_of(f, ns, cls, env, fn_n, memo)
+        return res
+
+    def _target_of(self, f, ns, cls, env, fn_n, memo):
         if fn_n.type == "generic_name":
             fn_n = _kid(fn_n, "identifier")
         if fn_n is not None and fn_n.type == "identifier":
@@ -445,7 +459,7 @@ class Linker:
                 return (nid(*r), "assoc", r, RESOLVED, []) if r else None
             if _t(recv)[:1].isupper():                         # Console.WriteLine(), File.ReadAllText()
                 return (f"ext:{_t(recv)}.{name}", "import", None, RESOLVED, [])
-        tn = self._type_of(f, ns, cls, env, recv)
+        tn = self._type_of(f, ns, cls, env, recv, memo)
         if not tn:
             inner = recv
             while inner is not None and inner.type in ("await_expression", "parenthesized_expression",
@@ -455,7 +469,7 @@ class Linker:
             if inner is None:
                 return None
             if inner.type == "invocation_expression":
-                ir = self._target(f, ns, cls, env, inner.child_by_field_name("function"))
+                ir = self._target(f, ns, cls, env, inner.child_by_field_name("function"), memo)
                 if ir is None or (ir[0] or "").startswith("ext:"):
                     return None                                # a chain on a library call: not counted
         if tn:

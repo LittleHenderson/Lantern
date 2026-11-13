@@ -35,7 +35,7 @@ from pathlib import Path
 from .flow_rules import READS_TOKEN, VERIFIES
 from .graph import Graph
 from .js_frontend import jwt_role
-from . import listing
+from . import listing, strings
 from .python_frontend import inside_repo, project_text, skipped
 
 PUBLIC_PREFIX = r"(?:NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_|GATSBY_|PUBLIC_|VUE_APP_)"
@@ -731,12 +731,12 @@ def code_only(text: str, js: bool = False) -> str:
     """The text with string literals and comments blanked out, same length, so offsets and line numbers still
     hold. A route path '/auth/refresh', a message, a docstring, or `# TODO: add auth here` is not a login check."""
     if js:
-        text = re.sub(r"`(?:\\.|[^`\\])*`", _blank, text)
+        text = strings.templates(_blank, text)
     else:
         text = re.sub(r"(\"\"\"|''')[\s\S]*?\1", _blank, text)
-    text = re.sub(r"(['\"])(?:\\.|(?!\1).)*\1", _blank, text)
+    text = strings.sub("'\"", _blank, text)      # not with a pattern of its own: lantern/strings.py says why
     if js:
-        text = re.sub(r"/\*[\s\S]*?\*/", _blank, text)
+        text = strings.block_comments(_blank, text)
         text = re.sub(r"//[^\n]*", _blank, text)
     else:
         text = re.sub(r"#[^\n]*", _blank, text)

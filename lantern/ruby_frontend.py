@@ -321,6 +321,13 @@ class Ref:
     via: str
 
 
+def _foot(node):
+    """What a chain hangs on: the receiver at its foot (`a` of `a.b.c`), or the first call that has none."""
+    while node is not None and node.type == "call" and node.child_by_field_name("receiver") is not None:
+        node = node.child_by_field_name("receiver")
+    return node
+
+
 class Linker:
     def __init__(self, model: Model):
         self.m = model
@@ -351,8 +358,36 @@ class Linker:
             return self._type_of(inner, cls, env)
         return None
 
-    def target(self, call, cls: RClass | None, env: dict, fn: RFun | None) -> tuple[str | None, str] | None:
-        """(target id, via) for a call; (None, "") when the receiver is unknown (counted); None when nothing to add."""
+    def target(self, call, cls: RClass | None, env: dict, fn: RFun | None, memo: dict | None = None
+               ) -> tuple[str | None, str] | None:
+        """(target id, via) for a call; (None, "") when the receiver is unknown (counted); None when nothing to add.
+
+        A chain `a.b.c.d` is worked out from its first call outwards, each call once. `memo` keeps the answers (by
+        the call's node) and what each call's chain hangs on, for as long as no name changes what it holds: `walk`
+        hands the same one to every call of a body and empties it where a name is given a value. Until 2026-11-13
+        every call of a chain went down the whole chain again, at each step once more to its foot: twice the links
+        took eight times the time (800 links 26 seconds), and beyond about a thousand links Python stopped it."""
+        if memo is None:
+            memo = {}
+        chain, x = [], call
+        while x.id not in memo:
+            chain.append(x)
+            recv = x.child_by_field_name("receiver")
+            if recv is None or recv.type != "call":
+                break
+            x = recv
+        for x in reversed(chain):
+            recv = x.child_by_field_name("receiver")
+            memo["foot", x.id] = x if recv is None else self._foot_of(recv, memo)
+            memo[x.id] = self._target(x, cls, env, fn, memo)
+        return memo[call.id]
+
+    @staticmethod
+    def _foot_of(recv, memo):
+        key = ("foot", recv.id)
+        return memo[key] if key in memo else _foot(recv)
+
+    def _target(self, call, cls, env, fn, memo):
         name = _t(call.child_by_field_name("method"))
         recv = call.child_by_field_name("receiver")
         if recv is None:
@@ -394,12 +429,10 @@ class Linker:
                 return (f"ext:ActiveRecord.{name}", "receiver-type")
             return None
         if recv.type == "call":                              # a chain on a library call: Note.all.to_a, expect(1).to
-            inner = self.target(recv, cls, env, fn)
+            inner = memo[recv.id]                             # worked out before this call: `target`
             if inner is None or (inner[0] or "").startswith("ext:"):
                 return None
-        base = recv
-        while base is not None and base.type == "call" and base.child_by_field_name("receiver") is not None:
-            base = base.child_by_field_name("receiver")
+        base = self._foot_of(recv, memo)
         if base is not None and base.type in ("constant", "scope_resolution") and not self._const(base, cls):
             return None                                       # a chain on a library (Net::HTTP.get(...).body)
         if recv.type in ("identifier", "instance_variable", "call", "element_reference"):
@@ -408,6 +441,7 @@ class Linker:
 
     def walk(self, nodes, cls: RClass | None, env: dict, src: str, fn: RFun | None, skip: set) -> list[Ref]:
         refs: list[Ref] = []
+        memo: dict = {}                                      # what `target` worked out while `env` was as it is now
         stack = list(reversed(nodes))
         while stack:
             x = stack.pop()
@@ -419,9 +453,11 @@ class Linker:
                 if left is not None and left.type == "identifier":
                     t = self._type_of(right, cls, env) if right is not None else None
                     env[_t(left)] = t or ""
+                    memo.clear()
             elif x.type in ("block_parameters", "lambda_parameters"):
                 for p in _params(x):
                     env[p] = ""
+                memo.clear()
             elif x.type == "identifier" and x.parent is not None and x.parent.type in (
                     "body_statement", "then", "else", "do_block", "block_body", "begin", "parenthesized_statements") \
                     and _t(x) not in env:
@@ -432,7 +468,7 @@ class Linker:
             elif x.type == "subshell":                           # `cmd #{x}`
                 refs.append(Ref("ext:Kernel.`", line, RESOLVED, "import"))
             elif x.type == "call":
-                res = self.target(x, cls, env, fn)
+                res = self.target(x, cls, env, fn, memo)
                 if res is not None:
                     t, via = res
                     if t:
