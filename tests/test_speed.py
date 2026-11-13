@@ -713,9 +713,9 @@ def test_the_collectors_full_passes_wait_while_the_map_is_built(tmp_path, monkey
     seen = []
     real = python_frontend.build_graph
 
-    def reading(folder):
+    def reading(folder, *more):                  # what the engine hands the reader: the folder, and its map
         seen.append((gc.get_threshold(), gc.isenabled()))
-        return real(folder)
+        return real(folder, *more)
 
     monkeypatch.setattr(python_frontend, "build_graph", reading)
     was = gc.get_threshold()
@@ -726,7 +726,7 @@ def test_the_collectors_full_passes_wait_while_the_map_is_built(tmp_path, monkey
         assert gc.get_threshold() == (900, 7, 5)
         assert g.meta["files"] >= 2
 
-        def failing(folder):
+        def failing(folder, *more):
             seen.append((gc.get_threshold(), gc.isenabled()))
             raise RuntimeError("a reader gave up")
 

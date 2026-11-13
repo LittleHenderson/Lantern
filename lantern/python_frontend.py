@@ -19,7 +19,7 @@ from pathlib import Path
 import tree_sitter_python as tsp
 from tree_sitter import Language, Node as TSNode, Parser
 
-from . import calls, kept, manifest
+from . import calls, deep, kept, manifest
 from .graph import (CALLABLE, CALLS, CLASS, CONTAINS, IMPLEMENTS, INFERRED, MAY_CALL, MODULE,
                     POSSIBLE, RESOLVED, Graph, Node)
 
@@ -285,6 +285,8 @@ class ModuleInfo:
     exports_unknown: bool = False
     has_main_block: bool = False
     main_range: tuple[int, int] | None = None
+    # lines where a statement begins that is nested deeper than the reader follows (`lantern/deep.py`)
+    too_deep: list[int] = field(default_factory=list)
 
 
 def _text(n: TSNode | None) -> str:
@@ -557,6 +559,19 @@ class _Visitor:
 def _visit_body(v: _Visitor, root: TSNode):
     """Walk the module, tracking the class a function is defined in (for `self` resolution)."""
 
+    def each(nodes, scope: str, cls: str | None):
+        """The statements of a block, one by one. One that is nested deeper than Python lets `walk` call itself is
+        left where the reading stopped and written down (`lantern/deep.py`); what the scope knew about the names
+        written in it is forgotten, because the part that was not read may have given any of them a new value."""
+        for c in nodes:
+            try:
+                walk(c, scope, cls)
+            except RecursionError:
+                v.m.too_deep.append(c.start_point[0] + 1)
+                for name in deep.names(c):
+                    v.bind_literal(scope, name, None)
+                    v.m.local_types.get(scope, {}).pop(name, None)
+
     def walk(n: TSNode, scope: str, cls: str | None, decorators=None):
         t = n.type
         if t == "decorated_definition":
@@ -603,16 +618,14 @@ def _visit_body(v: _Visitor, root: TSNode):
                         v.m.returns.setdefault(local, []).append(("ann", ch))
             body = n.child_by_field_name("body")
             if body is not None:
-                for c in body.children:
-                    walk(c, local, None if is_class else method_of)
+                each(body.children, local, None if is_class else method_of)
             return
         if t == "if_statement" and not scope and v._is_main_guard(n):
             v.m.has_main_block = True
             v.m.main_range = (n.start_point[0] + 1, n.end_point[0] + 1)
             body = n.child_by_field_name("consequence")
             if body is not None:
-                for c in body.children:
-                    walk(c, "<main>", None)
+                each(body.children, "<main>", None)
             alt = n.child_by_field_name("alternative")
             if alt is not None:
                 walk(alt, scope, cls)
@@ -702,6 +715,9 @@ def _visit_body(v: _Visitor, root: TSNode):
                 if c.type in ("identifier", "as_pattern_target"):
                     for name in _names_in(c):
                         v.bind_literal(scope, name, None)
+        if t in ("module", "block"):
+            each(n.children, scope, cls)
+            return
         for c in n.children:
             walk(c, scope, cls)
 
@@ -850,7 +866,7 @@ def parse_module(path: Path, modname: str, repo: Path, parser: Parser) -> Module
     _visit_body(_Visitor(info), tree.root_node)
     if src.count(b"__all__") != (1 if info.exports is not None else 0):   # `__all__ += …`, `.extend(…)`, a second one
         info.exports_unknown = True
-    if key is not None:
+    if key is not None and not info.too_deep:   # a file read in part (`lantern/deep.py`) is read anew in every run
         info.path = None        # where the project lies is no part of how the file reads
         try:
             _KEPT.put(key, info)
@@ -1816,7 +1832,9 @@ def _entry_for(d: DefInfo, rel: str, mod: ModuleInfo | None = None, mounts: dict
 # Build
 # --------------------------------------------------------------------------------------------
 
-def build_graph(repo: str | Path) -> Graph:
+def build_graph(repo: str | Path, into: Graph | None = None) -> Graph:
+    """The Python part of a project's map, on a new map or on `into` (the engine's, which keeps what this reader had
+    put there if it stops part-way: `engine._part`)."""
     repo = Path(repo).resolve()
     parser = Parser(PY_LANGUAGE)
     mods: dict[str, ModuleInfo] = {}
@@ -1830,12 +1848,14 @@ def build_graph(repo: str | Path) -> Graph:
             info.name = modname
         mods[modname] = info
 
-    g = Graph(str(repo))
+    g = into if into is not None else Graph(str(repo))
     r = Resolver(mods, g)
     mounts = r.mount_prefixes()
     total_lines = 0
     for m in mods.values():
         total_lines += m.lines
+        for line in m.too_deep:
+            deep.note(g, m.rel, line, "python")
         g.add_node(Node(id=nid(m.name), kind=MODULE, name=m.name.split(".")[-1], qualname=m.name,
                         file=m.rel, start_line=1, end_line=m.lines))
         for d in m.defs.values():

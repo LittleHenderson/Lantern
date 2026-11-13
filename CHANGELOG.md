@@ -51,6 +51,10 @@ comment appear in the results for the first time.
   is ranked low, with the reason. A webhook whose sender is checked is not "a route anyone can call". A request
   limit counts only where it is put to work on the route. Every finding outside test code carries its case: the
   claim, the evidence, the conditions and what is not known.
+- **A report says no more than Lantern saw.** "Security headers: in place" is said only when a header is set for
+  every response; a header set for a part of the app reads "check", with the place. Python kept as text
+  (`engine.py.txt`) is handed to the Python scanner. Software copied into a `vendor` folder is named and, where
+  it brings a name and a version, looked up for known security holes.
 
 Measured on the held-out benchmark (`bench/heldout/`: 14 apps, 79 known problems, 17 safe examples that must stay
 clean; no rule was written from their code), before this work and now:
@@ -81,6 +85,10 @@ their tests, and none reads Passed. `bench/heldout/README.md` has every number a
 - The cloud service deletes only what it made, and a delete that fails is written down, said and tried again.
 - The gateway (0.2.6) bounds what anybody can send it without signing in.
 - The opt-in usage counts go to the gateway's own address and nowhere else, and Lantern says where they go.
+- No line of a project keeps a check busy: a quote mark followed by many backslashes, or one long chain of calls
+  in C# or Ruby, could hold a check for hours or days.
+- Code nested about a thousand levels deep no longer stops the whole check with an error and no report. The piece
+  is left, named in the report as not read, and everything around it is read.
 
 ### Faster, with every result as it was
 
@@ -147,6 +155,8 @@ rank, a score or a release decision. The hosted service keeps nothing.
   languages keep the reading inside one function, and their confidence levels are not yet backed by a benchmark
   for each language.
 - A computer with one processor, Windows and macOS were not measured for speed.
+- A Dart type written inside itself thousands of levels deep takes the Dart grammar's own parser very long (10,000
+  levels: 66.33 seconds). Found and not fixed.
 - `CLAUDE.md`, "Known gaps", lists the rest.
 
 ## 0.11.0: every change
@@ -183,6 +193,54 @@ rank, a score or a release decision. The hosted service keeps nothing.
   write a release decision into `readiness.json` and a call inventory, `calls.json`), so the next versions are
   tested on opening it. `tests/test_old_results.py` also holds that a result from 0.9.0 or 0.10.0, which has no
   release decision, is shown with none: this version does not make one up for work an older version did.
+- Three things a report said that were not so, found on a real static site (2026-11-12). The site keeps 17 Python
+  files (12,518 lines) as `<name>.py.txt`, runs them in the browser beside a copy of their runtime in `vendor/`, and
+  is served with no security header. Its report said "Security headers: in place", "bandit: ok" (on 0 files), that
+  every scanner had covered everything, and that the project lists no libraries.
+  - **Security headers** (`lantern/headers.py`): the card reads `in place` only when the code or a hosting file shows
+    a header set for every response (a hosting rule for every path, a library put on the app, the project's own
+    function that runs for every request), `check` with the place when a header is set for a part (a `<meta>` tag in
+    one page, one route's answer, a rule or a library for one path), and `add` when nothing sets one. Until now one
+    of a few words anywhere in the code read "in place": there, a `<meta>` tag in one exported document and the word
+    "helmet" as an HTML tag's name in a search pattern. On that site the card now reads `check` and names the four
+    places. Projects that set a header for part of the app, or only name one, will see `in place` become `check` or
+    `add`: Lantern's own two services read `check` (each page sets its own headers; no one place does for all).
+    A setting counts for the app it is in, not for the one in the folder beside it: helmet on the API sends nothing
+    with the pages of the site, so a project with a site and an API reads `in place` only when each has its own
+    (an app begins at the nearest folder with a `package.json`, a `pyproject.toml` or the like; a rule at the top of
+    the project is for all of it; the card names the folders that are left out). A copy or a template of a hosting
+    file (`next.config.js.tmpl`) is not the settings in force: Lantern's own card read "in place" for the sample of
+    a starter app while this was written. Comments are found in one pass over the text (`headers._not_code`), which
+    no line can keep busy and which no longer takes the closing quotes of a text kept under a name for the start
+    of a docstring.
+  - **Code kept under another name** (`lantern/unread.py`): Python kept as text (`engine.py.txt`) is handed to Bandit
+    by name; on that site it now reads 17 files and reports 8 lines it could not see before. A command there that is
+    handed literals only is ranked `low` with the reason beside it (one of the 8: a line that clears the screen), as
+    in a `.py` file; a command that takes a value keeps its rank. Code kept as text that no scanner reads
+    (`helper.js.txt`) leaves the release decision's `scanners` criterion `missing` and is named. Templates and
+    left-over copies (`.tmpl`, `.bak`) are named in the Evidence Limits, which also say that the map and Lantern's
+    own checks read none of these files. `security.json` has the counts in `not_read`.
+  - **Software copied into the project** (`depaudit.run_copied_audit`, tool `copied-audit`): what lies under a folder
+    named `vendor` is named. A copy that brings a `package.json` with a name and one exact version is looked up
+    through OSV by that name and version, and a known problem is a finding at that file's `version` line; files with
+    no name and version are counted and cannot be looked up; offline the lookup is skipped. In each case the release
+    decision's `dependencies` criterion is `missing` where it used to say the project lists no libraries, and the
+    Evidence Limits name the copies. Only the name and the version leave Lantern. A package manager's own `vendor`
+    folder (Composer, Go modules, Bundler) is not a copy, and neither is one kept for the tests or inside a sample
+    app, nor what a Python environment named `env` holds. Where a `vendor` folder is deeper or larger than Lantern
+    looks into, the record and the Limits say that part of it was not looked at.
+  - Found while checking the new lines one by one: a wildcard in a command (`tar cf out.tar *`, Bandit B609, high) was
+    ranked `low` with the words "only fixed text reaches this line … nothing that comes from outside is put into
+    it", in any Python file. The shell fills the `*` in with the names of the files it finds, and a file's name can
+    be an option. Fixed text no longer lowers that finding (`flow_rules.FILLED_BY_THE_SHELL`); the same command
+    with no wildcard is still lowered (`tests/test_flow.py`, two cases).
+  - The Evidence Limits said "Python built-in calls" about a project with no Python on the map; they say "built-in
+    calls (the language's own functions)".
+  - Tests: `tests/test_headers.py` (45 cases) and `tests/test_unread.py` (38), every wrong answer beside a twin that
+    must read as before. Run against the code before, 17 of the first 30 header cases and 30 of the first 30 of the
+    other file fail. Not done: the map
+    still does not read renamed code, a copy outside a folder named `vendor` is not found, and nothing here runs the
+    site (see Known gaps in `CLAUDE.md`).
 - A terminal you pull up from the bottom of every screen, in the app and on the website (2026-11-12; design 5a/5b,
   which until now was a drawer reached only from a button on an open project's bar or the ` key, and was missing
   from the website). A "Terminal" tab sits at the bottom middle of every screen: a click or a drag up pulls the
@@ -206,6 +264,63 @@ rank, a score or a release decision. The hosted service keeps nothing.
   local app's "open the link from your terminal" page, every sign-in page of the free allowance and the public
   landing page (menu and footer; "Guide" on phones and tablets so the menu fits) link to it as well.
   `tests/test_guide.py::test_every_page_reaches_the_guide` fails if one of them loses it.
+- Code nested very deep no longer stops the check (2026-11-13). The readers go through code by calling themselves
+  once per level of nesting, and Python ends a program about a thousand levels deep. One such piece anywhere in a
+  project, a chain of some hundred calls, a sum of a thousand pieces, an `else if` ladder, brackets inside brackets,
+  functions or classes written inside each other, ended `lantern analyze` with `maximum recursion depth exceeded`
+  and no result at all. Measured with eleven such shapes in each of the thirteen kinds of source file, every case a
+  project of its own: 69 of the 136 cases stopped the check, in 12 of the 13 kinds (Dart was the one that read them
+  all). Now 0 stop. A reader leaves the piece it cannot follow, one statement or one place, reads everything around
+  it, and the piece is written down: `graph.json` `meta.too_deep` (how many, in which files, the line each of the
+  first 40 begins at), a `deep` line in the log and a line in the Evidence Report's Limits. In the 136 cases, 68
+  deep files are named as not read to the end, with the functions before and after the piece and the calls around
+  it on the map, and 68 are read whole; a route that hands the request to a shell in the same project is reported
+  as critical in every one. What a reader knew about a name is not used after an unread piece that writes that
+  name, so no link below it is a guess shown as a fact. Where a reader has no single piece to leave, the file is
+  named (`deep.whole`), and where it has no net of its own the reader is named as stopped and the other readers go
+  on (`engine._part`). It is said, not judged: no finding, rank, score or release decision changes for it. New
+  `lantern/deep.py`. The recursion limit is not raised, which would trade the stop for a crash of Python itself.
+  Three readers were also slow on long lines and are not any more: **Ruby** asked tree-sitter for the parent of
+  every name, which costs a walk from the top of the file each time (one line of 20,000 chained calls 40.39
+  seconds, now 1.09; 100,000 calls were not read after four minutes and take 1.3 seconds); **PHP** worked out every
+  call of a chain anew for each call above it (400 links 2.12 seconds, now 0.04; forty functions with a chain of
+  300 links each 37.6 seconds, now 0.85), with the links and the counts of unplaced calls of 16 written shapes of
+  chain exactly as they were; **C and C++** asked for a parent the same way. Tests first: `tests/test_nested.py`
+  (111 tests) and two new ones in `tests/test_chains.py`; on the code before, 104 of the 133 fail. Nothing changes
+  for ordinary code: the map built before and after is the same, byte for byte, for the 15 sample projects and for
+  five public apps at a fixed commit (Django, Laravel's framework, Hugo, Excalidraw, ripgrep: 89,201 nodes and
+  241,697 links together), and nothing is written down as too deep in any of them. Found with the
+  same measurements and not fixed (`CLAUDE.md`, Known gaps): the Dart grammar's own parser takes far longer than
+  the file grows on a type written inside itself several thousand levels deep (10,000 levels 66.33 seconds, spent
+  before Lantern's reader sees the file, and the same before this change), and most readers follow a method only a
+  few classes up a family of classes.
+- No line of a project keeps the check busy (2026-11-13). Three faults of one kind, all in Lantern for some time,
+  found while checking the fixes for a report on a real static site. **C#:** a line that chains calls, each on what
+  the one before gave (`sb.Append(a).Append(b)…`, a query, a builder), doubled the reading time with every call
+  after a library call: 20 chained calls 5.21 seconds, 30 still being read after 150 seconds. Real C# code holds
+  such lines, so a real app could keep the check busy for hours. Each link is now worked out once (200 chained
+  calls: the whole check in 0.45 seconds). **Ruby:** every call of a chain went down the whole chain again; twice the
+  links took eight times the time (800 links 26.42 seconds, now 0.43), and at 1,500 links the check stopped with
+  an error where it now ends. Short chains of every shape the two readers tell apart give the links and the counts
+  they gave before (`tests/test_chains.py`, 20 tests; every one of the twelve readers is also given a chain of sixty
+  calls; 5 of the 20 fail on the code before, each at its time limit). **Strings:** one line, a quote mark followed by about thirty pairs of
+  backslashes and no closing quote, in a comment or anywhere else of a Python, JavaScript, PHP or other source file,
+  kept `lantern analyze` running for days: four places found string literals with one pattern that had two ways
+  through a backslash, and it tried every way of pairing them (measured: 18 pairs 2.706 seconds, 20 pairs 18.861
+  seconds, about 2.6 times the time for each pair more). A small project with such a line was still being checked
+  after three minutes; it now ends in under a second and reports the same finding below the line. Two patterns
+  beside it took four times the time for twice the text (60,000 characters of `/* ` that nothing closes 5.28 seconds;
+  a JavaScript template of 40,001 characters that does not end 4.87 seconds). New `lantern/strings.py` finds the same
+  strings, templates and comments, match for match, in time that grows with the text (a million pairs of backslashes
+  0.3957 seconds); `websec.code_only`, `security._statements`, `security._php_line` and `aiapp` use it. No result
+  changes: `tests/test_strings.py` keeps the old patterns and compares them with the new functions on 1,716,498
+  short texts, on longer ones made at random, on Lantern's own code and on written cases; each place is run on such
+  text in a child process with a time limit (8 of these tests fail on the code before, 6 of them at their 30-second
+  limit), and a test fails if a module finds strings the old way again. Found while checking the fixes for a report
+  on a real static site; the fault was in Lantern before them. Other patterns that read strings were measured and
+  left as they are (they are slow only on megabytes of text made for it): `CLAUDE.md`, Known gaps. Found by the same
+  look: one expression nested several hundred levels deep (a chain of 400 to 1,500 calls, a sum of 1,200 pieces)
+  stopped the whole check with `maximum recursion depth exceeded` in most readers; that is the entry above.
 - Faster, with every check and every result as it was (2026-11-12; point 10 of the 2026-11-09 directive, "Increase
   performance without dropping checks"). Measured first, then changed: `bench/speed.py` analyzes the sample shop and
   five public apps at a fixed commit each, three first runs and three repeat runs a side, the unchanged engine and

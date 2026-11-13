@@ -19,10 +19,11 @@ import tokenize
 from collections import deque
 from pathlib import Path
 
-from . import context, flowscan, kept, lanes, listing, manifest, programs, quick, results
+from . import context, flowscan, kept, lanes, listing, manifest, programs, quick, results, unread
 from .calls import NAME_ONLY_VIA
 from .graph import Graph
 from .python_frontend import ENV_NAMES, SKIP_DIRS, inside_repo, project_bytes, project_text, skipped_dir
+from .strings import sub as strings_sub
 
 UNTRUSTED_ENTRY_KINDS = {"route", "cli", "main", "script"}
 
@@ -138,6 +139,23 @@ def _bandit_kept(key: str | None):
     return None
 
 
+HANDED_FIT = 6_000        # characters: the files handed to Bandit by name, beside its exclusions (`EXCLUSIONS_FIT`)
+
+
+def _handed(repo: Path, rels: list[str]) -> list[tuple[str, str]]:
+    """The files Bandit is handed by name, as (name in the project, path as Bandit will write it): as many as fit a
+    command line. A name that begins with `-` would be read as a setting and is passed over, and so is one with a
+    comma in it (an exclusion is written with commas)."""
+    out, room = [], HANDED_FIT
+    for rel in rels:
+        path = os.path.join(os.fspath(repo), *rel.split("/"))
+        if rel.startswith("-") or "," in path or len(path) + 1 > room:
+            continue
+        room -= len(path) + 1
+        out.append((rel, path))
+    return out
+
+
 def _under(repo: Path, name) -> str:
     """Where a path lies under the project, by the text of the two paths (nothing is followed): `pkg/tool.py`."""
     try:
@@ -175,6 +193,11 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     excl = sorted(d for d in sorted(SKIP_DIRS) + sorted(ENV_NAMES) if (repo / d).exists() and skipped_dir(repo, d))
     named = _python_named(repo, excl)
     left = _not_the_projects(repo, excl, named)
+    # Python kept as text (`engine.py.txt`, 2026-11-12): Bandit finds its files by their ending and passes these by,
+    # and it reads any file it is handed by name. Until this date no scanner opened them and the record said `ok`.
+    also = _handed(repo, unread.python_as_text(repo))
+    named = named + [(rel, path, True) for rel, path in also]        # part of the question kept work is asked by
+    applicable = applicable or bool(also)
     base: dict = {"role": "Python code patterns", "exclusions": excl + sorted(name for name, _ in left)}
     if importlib.util.find_spec("bandit") is None:
         return [], scanresult.record("bandit", "unavailable", 'pip install "lantern[scan]"', applicable=applicable,
@@ -197,7 +220,8 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
                 # --ignore-nosec: a `# nosec` comment in the project switches a check off for its line, and comes with
                 # the project like the code. Bandit lists the line all the same, and Lantern reads the comment itself
                 # (`nosec_says`): until 2026-11-11 such a line was listed nowhere.
-                cmd = programs.python("bandit", "-r", str(repo), "--ini", str(ini), "-f", "json", "-q", "--ignore-nosec")
+                cmd = programs.python("bandit", "-r", str(repo), *[path for _, path in also],
+                                      "--ini", str(ini), "-f", "json", "-q", "--ignore-nosec")
                 if excl or left:
                     cmd += ["-x", ",".join([str(repo / d) for d in excl] + _only(path for _, path in left))]
                 run = scanresult.run_tool(cmd, timeout=BANDIT_TIMEOUT)
@@ -248,7 +272,9 @@ def run_bandit(repo: Path, applicable: bool = True) -> tuple[list[dict], dict]:
     files = sum(1 for k in metrics if k != "_totals" and ours(k))
     errors = [f"{_rel(repo, e.get('filename') or '?')}: {str(e.get('reason') or 'could not be read')[:160]}"
               for e in (data.get("errors") or []) if isinstance(e, dict) and (not e.get("filename") or ours(e["filename"]))]
-    base |= {"scope": {"files": files}, "findings": len(out)}
+    base |= {"scope": {"files": files} | ({"under_another_name": len(also)} if also else {}), "findings": len(out)}
+    if also:
+        base["read_as_text"] = [rel for rel, _ in also]
     if errors:
         return out, scanresult.record("bandit", "partial", f"{len(errors)} file{'s' if len(errors) != 1 else ''} could "
                                       "not be read", errors=errors, **base)
@@ -497,7 +523,7 @@ BINDS = [   # loops and context managers that bind a name to a value
     re.compile(r"^\s*(?:async\s+)?with\s+(?P<rhs>.+?)\s+as\s+(?P<lhs>\w+)\s*:", re.S),
     re.compile(r"^\s*for\s*\(\s*(?:const|let|var)\s+(?P<lhs>[\w{}\[\], $]+?)\s+(?:of|in)\s+(?P<rhs>[^)]+)\)", re.S),
 ]
-_STRINGS = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
+QUOTES = "'\"`"       # what opens a string in the lines the input check reads (found by lantern/strings.py)
 _TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)|\\\(\s*([A-Za-z_]\w*)|#\{\s*@?([A-Za-z_]\w*)")
 
 
@@ -518,7 +544,7 @@ def _php_line(raw: str) -> str:
         if m.group(1) == "'":
             return "''"
         return "''" + "".join(f" + {r}" for r in re.findall(r"\{?\$([A-Za-z_]\w*)", m.group(0)))
-    t = re.sub(r"(['\"])(?:\\.|(?!\1).)*\1", blank, raw)
+    t = strings_sub("'\"", blank, raw)
     t = t.replace(".=", "+=")
     t = re.sub(r"(?<=[\w'\")\]])\s*\.(?!\.)\s*(?=[$\w'\"(])", " + ", t)
     t = t.replace("->", ".").replace("?.", ".")
@@ -556,7 +582,7 @@ def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple
     out, buf, start, depth = [], [], 0, 0
     for ln in range(first, min(last, len(lines)) + 1):
         raw = lines[ln - 1]
-        code = _STRINGS.sub(_blank_string, raw)
+        code = strings_sub(QUOTES, _blank_string, raw)
         code = re.sub(r"//.*$" if js else r"#.*$", "", code)
         if not buf:
             start = ln
@@ -1076,6 +1102,16 @@ class Early:
         self._pool = None
 
 
+def _scanned_as_text(tools: list[dict]) -> list[str]:
+    """The files kept as text that Bandit was handed and read: none when it did not run to an end."""
+    from . import scanresult
+    for t in tools:
+        if t.get("tool") == "bandit" and scanresult.state_of(t) in ("ok", "partial"):
+            failed = [str(e) for e in t.get("errors") or []]
+            return [rel for rel in t.get("read_as_text") or [] if not any(e.startswith(rel + ":") for e in failed)]
+    return []
+
+
 def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> dict:
     """All scanners. `offline` skips the dependency audits, the only steps that use the network
     (None: follow LANTERN_OFFLINE). `early`: the scanners a run started before the map was built (`Early`), used
@@ -1223,8 +1259,10 @@ def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> d
                 if sq["fixed_only"] and f["input"] and not fl:
                     # the input check reads the whole statement; for SQL only what is spliced into the text counts
                     f["input"] = False
-            fx = flowscan.fixed_evidence(flows, f)
-            if fx:      # every call of the function hands it fixed text: said on the finding, which stays listed
+            # every call of the function hands it fixed text (the data-flow step), or, in Python kept as text, which
+            # that step does not read, the flagged call is handed literals only: said on the finding, which stays listed
+            fx = flowscan.fixed_evidence(flows, f) or context.fixed_command(g, f, py_cache)
+            if fx:
                 ctx["fixed"] = fx
                 f["input"] = False
             if ctx:
@@ -1268,6 +1306,10 @@ def scan(g: Graph, offline: bool | None = None, early: Early | None = None) -> d
             # the scanners that apply to this project and did not finish or did not cover everything (scanresult.py):
             # readiness, the Evidence Report, the badge, the command line and the app all read this list
             "incomplete": scanresult.incomplete(tools),
+            # what the project holds that Lantern takes for code or software and no reader opened (`unread.py`): code
+            # kept under another name, software copied into a vendor folder. The Evidence Limits and the release
+            # decision read it
+            "not_read": unread.survey(repo, scanned=_scanned_as_text(tools)),
             "reachable_nodes": len(reach), "total_callables": sum(1 for n in g.nodes.values() if n.kind == "callable"),
             # the routes whose own code turns away whoever is not signed in, as the flow step read it (`flow.Result.
             # logins`; None when it did not run): the card "Login check on routes that change data" counts them as

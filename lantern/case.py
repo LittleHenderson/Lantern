@@ -124,7 +124,7 @@ def build(f: dict, g: Graph) -> dict:
                 f" and {fx['count'] - 4} more" if fx["count"] > 4 else "")
         else:
             fact = "The text that reaches this line is written in the code itself; nothing from outside is put into it"
-        evidence.append({"fact": fact, "from": "data flow"})
+        evidence.append({"fact": fact, "from": "context (code)" if fx.get("reads") else "data flow"})
     elif fl and fl.get("class") == "record":
         src, snk = fl["source"], fl["sink"]
         evidence.append({"fact": f"An id from the request was followed to the look-up at {snk['file']}:{snk['line']} "
@@ -200,7 +200,8 @@ def build(f: dict, g: Graph) -> dict:
                 conditions[-1] = _cond("What they send becomes part of the SQL text", False,
                                        "only fixed text is spliced; values go to the driver separately")
             elif ctx.get("fixed"):
-                conditions[-1] = _cond("What they send reaches this line", False, "data flow: " + (
+                conditions[-1] = _cond("What they send reaches this line", False, (
+                    "the call on this line: " if ctx["fixed"].get("reads") else "data flow: ") + (
                     f"every call of `{ctx['fixed']['function']}` hands it fixed text" if ctx["fixed"]["calls"] else
                     "the text is written in the code itself"))
         if kind in ("owner", "owner-late"):

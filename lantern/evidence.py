@@ -16,7 +16,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, gitfacts, programs, release, results, scanresult
+from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
@@ -137,12 +137,74 @@ def _call_site_words(c: dict) -> str:
     return (f" Of {c['total']} call sites read: {pct(c.get('resolved_internal'))} linked to repo code for certain, "
             f"{pct(c.get('inferred_internal'))} likely, {pct(c.get('several_possible_targets'))} to one of several "
             f"targets, {pct(c.get('name_only_guess'))} guessed by method name, {pct(c.get('known_external'))} known "
-            f"library calls, {pct(c.get('builtin'))} Python built-in calls, {pct(c.get('unresolved'))} not traced"
+            f"library calls, {pct(c.get('builtin'))} built-in calls (the language's own functions), "
+            f"{pct(c.get('unresolved'))} not traced"
             + (f" ({c['unresolved_in_tests']} of those in test files)" if c.get("unresolved_in_tests") else "") + ".")
 
 
 AUDIT_LANG = {"pip-audit": "Python", "npm-audit": "npm", "maven-audit": "Gradle/Maven", "composer-audit": "PHP (Composer)",
-              "gem-audit": "Ruby (Bundler)"}
+              "gem-audit": "Ruby (Bundler)", "copied-audit": "copied-in software"}
+
+
+def _whole(x) -> int:
+    """A count out of a record that may have been read back from disk: a whole number above 0, else 0."""
+    return x if isinstance(x, int) and not isinstance(x, bool) and x > 0 else 0
+
+
+def _names(x, most: int = 3) -> list[str]:
+    return [str(v)[:120] for v in (x if isinstance(x, list) else []) if isinstance(v, str)][:most]
+
+
+def not_read_lines(sec: dict | None) -> list[str]:
+    """The Limits lines for what the project holds that Lantern takes for code or software and no reader opened
+    (`security.json` `not_read`, `lantern/unread.py`): code kept under another name, software copied into a vendor
+    folder. Counts and the first few names; the record may be one read back from disk."""
+    got = (sec or {}).get("not_read")
+    got = got if isinstance(got, dict) else {}
+    out = []
+    kept = got.get("renamed") if isinstance(got.get("renamed"), dict) else None
+    n = _whole(kept.get("files")) if kept else 0
+    if n:
+        endings = kept.get("endings") if isinstance(kept.get("endings"), dict) else {}
+        kinds = ", ".join(f"`{str(k)[:20]}`" for k in list(endings)[:6])
+        ex = _names(kept.get("examples"))
+        line = (f"{n} file{'s hold' if n != 1 else ' holds'} code under another name"
+                + (f" ({kinds})" if kinds else "") + (f", {_whole(kept.get('lines'))} lines" if _whole(kept.get("lines")) else "")
+                + (f", for example {', '.join(ex)}" if ex else "") + ". Lantern's readers do not open such files: no "
+                "map, no path and none of Lantern's own checks (data flow, login checks, call counts) covers them.")
+        scanned = min(_whole(kept.get("scanned")), n)
+        if scanned == n:
+            line += " Bandit read " + ("it" if n == 1 else "all of them") + " for known Python patterns."
+        elif scanned:
+            line += f" Bandit read {scanned} of them for known Python patterns; no scanner read the other {n - scanned}."
+        else:
+            line += " No scanner read " + ("it" if n == 1 else "them") + " either."
+        out.append(line)
+    cp = got.get("copied") if isinstance(got.get("copied"), dict) else None
+    copies, loose = (_whole(cp.get("copies")), _whole(cp.get("unnamed"))) if cp else (0, 0)
+    cut = bool(cp) and cp.get("cut_short") is True
+    if copies or loose or cut:
+        parts = []
+        if copies:
+            named = _names(cp.get("named"))
+            tools = (sec or {}).get("tools")
+            looked = any(isinstance(x, dict) and x.get("tool") == "copied-audit" and scanresult.state_of(x) in ("ok", "partial")
+                         for x in (tools if isinstance(tools, list) else []))
+            one = copies == 1
+            parts.append(f"{copies} cop{'y says' if one else 'ies say'} what {'it is' if one else 'they are'}"
+                         + (f" ({', '.join(named)})" if named else "") + f" and {'was' if one else 'were'} "
+                         + ("looked up for known problems" if looked else "not looked up for known problems in this check")
+                         + f": the lookup goes by the name and version {'it says it is' if one else 'they say they are'}, "
+                         "so whether the files are that version, and what is packed inside, is not checked")
+        if loose:
+            ex = _names(cp.get("unnamed_examples"))
+            parts.append(f"{loose} file{'s' if loose != 1 else ''} of code there carr{'y' if loose != 1 else 'ies'} no name "
+                         "and version Lantern can look up" + (f" (for example {', '.join(ex)})" if ex else ""))
+        out.append("Software copied into the project (a `vendor` folder). Lantern's readers leave such folders out, so "
+                   "no map and no code scanner covers them." + (" " + "; ".join(parts) + "." if parts else "")
+                   + (" Part of what lies there was not looked at, not even for names: Lantern looks a few folders "
+                      "deep and at a limited number of files." if cut else ""))
+    return out
 
 
 def _reason(t: dict) -> str:
@@ -216,6 +278,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
         out.append(f"{st['guessed_by_method_name']} call edges were linked by method name alone because the object's "
                    "type was unknown. They are marked likely or possible, never confirmed, and can point at the "
                    "wrong function.")
+    out += deep.words(g.meta)    # code nested deeper than a reader follows: left where the reading stopped, and named
     tr = run_meta.get("trace")
     if counted(tr):
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "
@@ -295,6 +358,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    f"(baseline.json in the results folder) could not be used: {str(baseline_unread)[:300]}. It was "
                    "left as it is, and this report compares with nothing. `lantern evidence PATH --reset-baseline` "
                    "starts a new record from today's findings.")
+    out += not_read_lines(sec)
     left = run_meta.get("skipped") if isinstance(run_meta.get("skipped"), dict) else None
     if left and isinstance(left.get("files"), int):
         ex = [str(x)[:120] for x in (left.get("examples") or []) if isinstance(x, str)][:3]

@@ -36,6 +36,7 @@ from pathlib import Path
 import tree_sitter_rust as tsrs
 from tree_sitter import Language, Node as TSNode, Parser
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, project_text, skipped_dir
 
@@ -340,7 +341,7 @@ def _is_test_fn(attrs: list[TSNode]) -> bool:
 
 
 def _collect(mod: RsModule, body: TSNode, mods: dict, crate: str, path: tuple[str, ...], file: str,
-             in_test_mod: bool = False) -> None:
+             in_test_mod: bool = False, left=None) -> None:
     attrs: list[TSNode] = []
     for c in body.children:
         t = c.type
@@ -358,7 +359,11 @@ def _collect(mod: RsModule, body: TSNode, mods: dict, crate: str, path: tuple[st
             if inner is not None:
                 sub = mods.setdefault((crate, path + (name,)), RsModule(crate=crate, path=path + (name,), file=file,
                                                                        is_test=mod.is_test or any("cfg(test)" in _text(a) for a in attrs)))
-                _collect(sub, inner, mods, crate, path + (name,), file, in_test_mod=sub.is_test)
+                try:
+                    _collect(sub, inner, mods, crate, path + (name,), file, in_test_mod=sub.is_test, left=left)
+                except RecursionError:
+                    # a module inside more modules than this walk follows: left where it stands and written down
+                    deep.leave(left, file, c)
         elif t == "function_item":
             fn = _function(c, file, None, None, attrs, mod.is_test or in_test_mod)
             mod.funcs[fn.local] = fn
@@ -443,6 +448,8 @@ class Ref:
 
 
 class Linker:
+    left = None     # (map, "rust") once `add_rust` has a map: where a piece that was not read is written down
+
     def __init__(self, mods: dict[tuple[str, tuple[str, ...]], RsModule], crate_names: set[str]):
         self.mods = mods
         self.crate_names = crate_names
@@ -553,6 +560,13 @@ class Linker:
 
     def _walk(self, mod, fn, src_id, n: TSNode, env, refs):
         t = n.type
+        if t == "block":            # its statements one by one: one nested deeper than this walk follows is left and
+            for c in n.children:    # written down, and the next one is read (`lantern/deep.py`)
+                try:
+                    self._walk(mod, fn, src_id, c, env, refs)
+                except RecursionError:
+                    deep.leave(self.left, fn.file, c, env)
+            return
         if t == "closure_expression":
             inner = dict(env)
             params = n.child_by_field_name("parameters")
@@ -965,7 +979,7 @@ def add_rust(g: Graph, repo: str | Path) -> dict:
             mod = mods[(crate, path)] = RsModule(crate=crate, path=path, file=rel, is_test=is_test)
         files.append((rel, lines, mod, root, tree))
     for rel, _lines, mod, root, _tree in files:
-        _collect(mod, root, mods, mod.crate, mod.path, rel)
+        deep.whole((g, "rust"), rel, _collect, mod, root, mods, mod.crate, mod.path, rel, left=(g, "rust"))
     # a file module declared by `mod x;` whose file exists is a child even when the parent never names it (bins)
     for (crate, path) in list(mods):
         if path:
@@ -974,6 +988,7 @@ def add_rust(g: Graph, repo: str | Path) -> dict:
                 parent.children.add(path[-1])
     crate_names = set(roots.values())
     link = Linker(mods, crate_names)
+    link.left = (g, "rust")
 
     for rel, lines, _mod, _root, _tree in files:
         g.add_node(Node(id=f"rs:{rel}", kind=MODULE, name=Path(rel).name, qualname=rel, file=rel, start_line=1, end_line=lines))

@@ -7,8 +7,8 @@ import gc
 import threading
 from pathlib import Path
 
-from . import bridge, calls, cpp_frontend, csharp_frontend, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, php_frontend, python_frontend, ruby_frontend, rust_frontend, swift_frontend
-from .graph import Graph
+from . import bridge, calls, cpp_frontend, csharp_frontend, dart_frontend, deep, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, php_frontend, python_frontend, ruby_frontend, rust_frontend, swift_frontend
+from .graph import MODULE, Graph
 
 
 HOLD_FULL = 1_000_000       # middle passes of the collector before a full one: none while a map is built
@@ -46,20 +46,40 @@ def build_graph(repo: str | Path) -> Graph:
         return _build_graph(repo)
 
 
+def _python(g: Graph, repo) -> dict:
+    python_frontend.build_graph(repo, g)
+    return {"files": g.meta.get("files", 0), "lines": g.meta.get("lines", 0)}
+
+
+def _part(g: Graph, repo, reader: str, prefix: str, add) -> dict:
+    """One reader's part of the map. A reader leaves a piece of code that is nested deeper than it follows and reads
+    on (`lantern/deep.py`). Where it meets such code, or a line of classes or files linked that deep, in a place where
+    it has no single piece to leave, it stops: what it had put on the map stays, the stop is written down
+    (`deep.stopped`, and from there in the log and the Evidence Report's Limits) and the readers after it run. Until
+    2026-11-13 that ended the whole check with "maximum recursion depth exceeded" and no result."""
+    try:
+        return add(g, repo) or {}
+    except RecursionError:
+        deep.stopped(g, reader)
+        files = [n for n in g.nodes.values() if n.kind == MODULE and n.id.startswith(prefix)]
+        return {"files": len(files), "lines": sum(n.end_line or 0 for n in files)} if files else {}
+
+
 def _build_graph(repo: str | Path) -> Graph:
-    g = python_frontend.build_graph(repo)
-    py = {"files": g.meta.get("files", 0), "lines": g.meta.get("lines", 0)}
-    js = js_frontend.add_js(g, repo)
-    go = go_frontend.add_go(g, repo)
-    rs = rust_frontend.add_rust(g, repo)
-    jv = java_frontend.add_java(g, repo)
-    kt = kotlin_frontend.add_kotlin(g, repo)
-    sw = swift_frontend.add_swift(g, repo)
-    dt = dart_frontend.add_dart(g, repo)
-    cs = csharp_frontend.add_csharp(g, repo)
-    ph = php_frontend.add_php(g, repo)
-    rb = ruby_frontend.add_ruby(g, repo)
-    cc = cpp_frontend.add_cpp(g, repo)
+    g = Graph(str(Path(repo).resolve()))
+    py = _part(g, repo, "python", "py:", _python)
+    py = {"files": py.get("files", 0), "lines": py.get("lines", 0)}
+    js = _part(g, repo, "javascript", "js:", js_frontend.add_js)
+    go = _part(g, repo, "go", "go:", go_frontend.add_go)
+    rs = _part(g, repo, "rust", "rs:", rust_frontend.add_rust)
+    jv = _part(g, repo, "java", "jv:", java_frontend.add_java)
+    kt = _part(g, repo, "kotlin", "kt:", kotlin_frontend.add_kotlin)
+    sw = _part(g, repo, "swift", "sw:", swift_frontend.add_swift)
+    dt = _part(g, repo, "dart", "dt:", dart_frontend.add_dart)
+    cs = _part(g, repo, "csharp", "cs:", csharp_frontend.add_csharp)
+    ph = _part(g, repo, "php", "php:", php_frontend.add_php)
+    rb = _part(g, repo, "ruby", "rb:", ruby_frontend.add_ruby)
+    cc = _part(g, repo, "cpp", "cc:", cpp_frontend.add_cpp)
     langs = {}
     if py["files"]:
         langs["python"] = py

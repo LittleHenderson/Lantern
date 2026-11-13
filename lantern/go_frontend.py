@@ -36,6 +36,7 @@ from pathlib import Path
 import tree_sitter_go as tsgo
 from tree_sitter import Language, Node as TSNode, Parser
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, project_text, skipped_dir
 
@@ -326,6 +327,11 @@ class HttpOut:
     line: int
 
 
+# The node types whose children are statements. `Linker._walk` reads them one by one, so a statement nested deeper than
+# it follows costs that statement and not the rest of the function (`lantern/deep.py`). The grammar has had both.
+STATEMENT_LISTS = ("block", "statement_list")
+
+
 class Linker:
     def __init__(self, pkgs: dict[str, GoPackage], module: str | None):
         self.pkgs = pkgs
@@ -396,6 +402,13 @@ class Linker:
 
     def _walk(self, pkg, f, fn, src_id, n: TSNode, env, prefixes, refs, g, methods_for_inner: list[str] | None = None):
         t = n.type
+        if t in STATEMENT_LISTS:
+            for c in n.children:
+                try:
+                    self._walk(pkg, f, fn, src_id, c, env, prefixes, refs, g)
+                except RecursionError:   # nested deeper than this walk follows: left and written down, the next one read
+                    deep.leave((g, "go"), f.rel, c, env, prefixes)
+            return
         if t == "func_literal":
             inner_env = dict(env) | _params(n.child_by_field_name("parameters"), f)
             body = n.child_by_field_name("body")
@@ -757,7 +770,7 @@ def add_go(g: Graph, repo: str | Path) -> dict:
         pkg.files.append(f)
         files.append((f, root))
     for f, root in files:
-        _collect(pkgs[_pkg_of(f, pkgs)], f, root)
+        deep.whole((g, "go"), f.rel, _collect, pkgs[_pkg_of(f, pkgs)], f, root)
 
     link = Linker(pkgs, module)
     # package-level string constants, for URL building

@@ -87,7 +87,7 @@ def test_one_audit_tool_crashing_does_not_drop_the_others(tmp_path, monkeypatch)
         raise RuntimeError("surprise")
     monkeypatch.setattr(depaudit, "run_pip_audit", boom)
     out = depaudit.run_all(repo)
-    assert set(out) == {"pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit"}
+    assert set(out) == {"pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit", "copied-audit"}
     assert out["pip-audit"]["info"]["status"] == "error: RuntimeError (network needed?)"
     assert out["maven-audit"]["info"]["status"] == "ok"
 
