@@ -94,7 +94,7 @@ class Graph:
         self._edges: dict[tuple[str, str, str], Edge] = {}
         self.unresolved: dict[str, int] = {}   # callee text -> count, for honesty metrics
         self.unresolved_tests: dict[str, int] = {}   # the part of `unresolved` that sits in test files (Python)
-        self.builtin_calls = 0   # Python built-in calls (len, print, x.append on a list): counted, not drawn
+        self.builtin_calls = 0   # built-in calls (Python `len`, `print`, `x.append` on a list; JS DOM and `fetch` results): counted, not drawn
         self.sites: list[dict] = []   # the call-site inventory (calls.py): saved to calls.json, summarised in meta
         self.meta: dict = {}
 

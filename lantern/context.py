@@ -29,6 +29,7 @@ import re
 from pathlib import Path
 
 from .python_frontend import project_text
+from .unread import PYTHON_AS_TEXT
 from .websec import segments
 
 # Whole lower-case words (websec.segments) that say a hash protects something.
@@ -399,6 +400,32 @@ def sql_splice(g, f: dict, py_cache: dict) -> dict | None:
 
 
 # ---------------------------------------------------------------------------- slow password hashing
+
+SHELL_RULES = re.compile(r"^(?:B602|B604|B605)$")     # not B609: a wildcard is filled in by the shell
+
+
+def fixed_command(g, f: dict, py_cache: dict) -> dict | None:
+    """For a command a scanner flagged in Python kept as text (`engine.py.txt`), which the data-flow step does not
+    read: the same table that step gives (`flowscan.fixed_evidence`, with no calls) when every call that starts on
+    the flagged line is handed literals only (a literal, a choice between literals, literals joined). Anything else
+    in an argument (a name, a call, `*args`) and the answer is None: the rank stands."""
+    file = f.get("file") or ""
+    if not SHELL_RULES.match(str(f.get("rule"))) or not file.lower().endswith(PYTHON_AS_TEXT) or not f.get("line"):
+        return None
+    pf = _py(Path(g.repo_root) / file, py_cache, g.repo_root)
+    if pf is None:
+        return None
+    calls = [n for n in ast.walk(pf.tree) if isinstance(n, ast.Call) and n.lineno == f["line"]]
+    if not calls:
+        return None
+    for call in calls:
+        if not all(_const_value(a) for a in call.args) or \
+                not all(k.arg is not None and _const_value(k.value) for k in call.keywords):
+            return None
+    fn = pf.enclosing_function(calls[0])
+    return {"function": fn.name if fn is not None else None, "calls": [], "count": 0, "class": "shell",
+            "reads": "the call on this line"}
+
 
 def password_hash_uses(g, hits: list[tuple[str, int, str]], lines_for, py_cache: dict) -> list[tuple[str, int, str]]:
     """The fast-hash hits (file, line, text) that hash a password-named value, store the result as one, sit in a

@@ -115,7 +115,9 @@ script in the app's origin can act as the user. That makes XSS in the viewers (T
 * Only `explain` sends code, only to the configured provider, and the UI says so in plain words when the provider is
   not local (spec 5.3). `openai-compatible` counts as local only when its base URL is localhost/127.0.0.1.
 * `analyze`, `verify`, scanners, and the server make no network calls except the dependency audits: pip-audit
-  (PyPI/OSV) and `npm audit` (registry.npmjs.org). They send package names and versions, never code. `--offline` or
+  (PyPI/OSV) and `npm audit` (registry.npmjs.org). They send package names and versions, never code (since
+  2026-11-12 also the name and the version that a copy of a package under a `vendor` folder gives in its own
+  `package.json`, to OSV: `unread.NPM_NAME`, `NPM_VERSION`; never for a `private` package). `--offline` or
   `LANTERN_OFFLINE=1` turns them off. The three hosts they ask are `depaudit.AUDIT_HOSTS` (pypi.org,
   registry.npmjs.org, api.osv.dev); CI's self-audit runs with every other address refused and passes.
   `LANTERN_NO_REAL_PROVIDERS=1` refuses every model and gateway address that is not on this computer

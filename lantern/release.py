@@ -39,7 +39,7 @@ BLOCKING_RANKS = ("critical", "high")
 BLOCKED_CAP = 59          # the top of grade F: a release-blocking problem is not averaged away by unrelated points
 NOT_PASSED_CAP = 99       # 100 is for a passed release with complete evidence
 PLAN_NAME = "lantern-behaviour.json"
-AUDITS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit")
+AUDITS = ("pip-audit", "npm-audit", "maven-audit", "composer-audit", "gem-audit", "copied-audit")
 SHOWN = 5                 # how many findings, tools or files a sentence names before it says "and N more"
 
 # The files that say which libraries a project uses. Each gets its own SHA-256 in the record.
@@ -220,6 +220,17 @@ def _scanners(sec: dict | None) -> dict:
                      + _more([scanresult.words(t) for t in inc]) + ". What they would have found is not in the "
                      "results.", "Install the missing scanner or fix what stopped it, then run the check again.",
                      tools=[str(t.get("tool")) for t in inc][:50])
+    # Code kept as text under another name (`helper.js.txt`) that no scanner was handed: it is kept that way to be
+    # loaded, and until 2026-11-12 this criterion read "covered everything" over it (`lantern/unread.py`).
+    kept = (sec.get("not_read") or {}).get("renamed") if isinstance(sec.get("not_read"), dict) else None
+    left = _count(kept.get("as_text_unscanned")) if isinstance(kept, dict) else 0
+    if left:
+        names = [str(x)[:120] for x in kept.get("as_text_unscanned_examples") or [] if isinstance(x, str)]
+        return _crit("scanners", "missing", f"{_n(left, 'file')} hold{'s' if left == 1 else ''} code kept as text "
+                     "under another name" + (f" ({_more(names)})" if names else "") + ", and no scanner read "
+                     f"{'it' if left == 1 else 'them'}. What a scanner would have found there is not in the results.",
+                     "Check them with their language's own tools, or keep a copy under the real name where Lantern "
+                     "and the scanners read it, then run the check again.")
     ran = [str(t.get("tool")) for t in tools if scanresult.state_of(t) == "ok" and scanresult.applicable(t)]
     return _crit("scanners", "passed", f"{_n(len(ran), 'scanner')} finished: {_more(ran)}.")
 

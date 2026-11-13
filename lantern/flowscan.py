@@ -402,8 +402,11 @@ def whole(res: flow.Result | None) -> bool:
 
 
 def fixed_evidence(res: flow.Result | None, f: dict) -> dict | None:
-    """For a finding on a query or a command with no flow: the calls that show only fixed text reaches it, or None."""
+    """For a finding on a query or a command with no flow: the calls that show only fixed text reaches it, or None.
+    Never for a wildcard finding (`R.FILLED_BY_THE_SHELL`): what the shell puts in is not in the command's text."""
     if not whole(res) or f.get("flow") or f.get("category") != "code" or not f.get("file") or not f.get("line"):
+        return None
+    if R.FILLED_BY_THE_SHELL.search(str(f.get("rule"))):
         return None
     for cls in ("sql", "shell"):
         if _same(f, cls):

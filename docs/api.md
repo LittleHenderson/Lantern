@@ -298,7 +298,7 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 
 `{"findings": [...], "tools": [scanner records], "incomplete": [the scanner records that apply and are not ok],
 "counts": {critical, high, medium, low, in_tests, accepted}, "id_version", "reachable_nodes", "total_callables",
-"logins_shown", "ai", "mobile"}`
+"logins_shown", "not_read", "ai", "mobile"}`
 
 `logins_shown`: the node ids of the routes whose own code turns away whoever is not signed in, as the flow step read
 it (a check under any name, one written in place, a hook, a dependency); `null` when that step did not run, and
@@ -306,8 +306,25 @@ absent from results written before 2026-11-11. The protection `route-auth` in `r
 as checked (found: "the code on the way to this route turns away whoever is not signed in"), and names a route an
 `LW-AUTH-MISSING` finding calls open among the open ones, whatever the names around it say.
 
+`not_read` (`lantern/unread.py`, since 2026-11-12; `{}` when the project holds neither kind, absent from older
+results): what the project holds that Lantern takes for code or software and did not read. `renamed`: code kept under
+another name, `<name>.<code ending>.<txt|tmpl|template|bak|orig|old>` (`engine.py.txt`, `main.py.tmpl`):
+`{files, lines, endings: {".py.txt": n}, examples, scanned, as_text_unscanned, as_text_unscanned_examples}`. No reader
+opens such a file, so the map, the paths and Lantern's own checks do not cover it. Python kept as text (`.py.txt`,
+`.pyw.txt`) is handed to Bandit by name (`scanned` counts the files it read without an error; its findings carry the
+file's own name, and a command there that is handed literals only is ranked `low` with the reason, as in a `.py`
+file). Code kept as text that no scanner read (`as_text_unscanned`: text is kept that way to be loaded) leaves the
+release decision's `scanners` criterion `missing`; a template or a left-over copy is named in the Evidence Limits
+only. `copied`: software copied into a folder named `vendor` (which every reader leaves out):
+`{folders, copies, named: ["<name> <version> (<folder>)"], unnamed, unnamed_examples, cut_short}` (`cut_short`: a folder there lay deeper than Lantern looks, or held more names than it reads, so part of it was not looked at). A copy that brings a
+`package.json` with a published name and one exact version is looked up by that name and version (`copied-audit`
+below); code files under `vendor` with no such file above them are `unnamed` and cannot be looked up. A package
+manager's own `vendor` folder (Composer's, Go's, Bundler's) is not a copy: its lock file says what is in it. A
+`vendor` folder under `tests/`, `fixtures/` or `examples/` is not one either (the dependency audits leave such
+folders out the same way). The Evidence Limits name both kinds.
+
 A scanner record (`lantern/scanresult.py`, one per tool run: bandit, gitleaks, lantern-secrets, pip-audit, npm-audit,
-maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, lantern-flow, packs): `tool`, `state` (`ok` | `partial` | `failed` |
+maven-audit, composer-audit, gem-audit, copied-audit, lantern-web, lantern-ai, lantern-flow, packs): `tool`, `state` (`ok` | `partial` | `failed` |
 `timeout` | `unavailable` | `skipped`), `status` (the same as one sentence: `ok`, `ok (…)`, `partial: …`, `error: …`,
 `error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
 `applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
@@ -315,7 +332,13 @@ patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages
 told to skip, and for bandit the Python files it was told to leave out because they are not files of the project: a
 link that leads out of it, a pipe), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
 `fallback_for` (the built-in secret scan when gitleaks did not finish). `partial` keeps the findings the tool did
-produce. The dependency audits (pip-audit, maven-audit, composer-audit, gem-audit) add, when they apply: `files` (the
+produce. Bandit's `scope` has `under_another_name` when Python kept as text was handed to it (how many such files, a
+part of `files`), and the record then names them in `read_as_text`. `copied-audit` (`depaudit.run_copied_audit`: the
+copies under `vendor` that say what they are, asked of OSV as npm packages by the name and version their own
+`package.json` gives, which nothing proves) adds `copied` and `copied_examples` (the copies with a name and a
+version), `unnamed` and `unnamed_examples` (code files that belong to no such copy: the record is then `partial`),
+`checked`, `files`; `skipped` with `applicable: false` where the project has no such folder, `skipped` and applicable
+when offline. The dependency audits (pip-audit, maven-audit, composer-audit, gem-audit) add, when they apply: `files` (the
 dependency files read), `checked` (how many name-and-version pairs were asked about), `unpinned` (how many entries
 have no exact released version to look up: a range, a branch, a link or a folder, no version, a variable) with
 `unpinned_examples` (the first five, as text), `unlocked` (npm-audit, composer-audit, gem-audit: how many libraries
@@ -413,7 +436,7 @@ page), `<Component> screen · <Component>` or `· /<expo router path>` (React Na
 <fn>` (route). Readiness `shape` is `"Flutter app"` or `"React Native app"` for these.
 
 Finding: `id` (stable across moves: tool, rule, file and the flagged line's text), `tool` (`bandit`, `pip-audit`,
-`lantern-flow`, `npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
+`lantern-flow`, `npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `copied-audit` (software copied into a `vendor` folder, looked up through OSV by what its `package.json` says it is; `line` is that file's `version` line), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
 (`LOW` = show "heuristic"), `file`, `line`, `cwe`, `more_info`, `snippet`, `category`, `in_tests`, `node`,
 `reachable` (null or `{"entry", "kind", "path": [node ids]}`), `reachable_from_tests_only`,
 `reachability` (`{"state", "kind"?, "why"}`: what is known about who runs the flagged code, as a fact of its own
@@ -448,7 +471,7 @@ the kind of finding fixes) and `test-code`; the last step's `rank` is the findin
 `context` (optional, `context.py`, read from names around the line: `{"hash": {"purpose": "security"|"non-security"|"unknown", "why", "password", "reads"}}`
 for weak-hash rules, `{"sql": {"fixed_only", "spliced": [{"expr", "fixed", "why"}], "driver_params", "reads"}}` for Python SQL,
 `{"fixed": {"class": "sql"|"shell", "function", "calls": [{"from", "file", "line"}], "count"}}` when a tool flagged a query or a command, no flow
-reaches it, and every call Lantern found hands that function fixed text (only when the flow step read everything; rank `low` with the reason)), `rank_note` and
+reaches it, and every call Lantern found hands that function fixed text (only when the flow step read everything; rank `low` with the reason); in Python kept as text, which the flow step does not read, the same table with no calls and `"reads": "the call on this line"` when every call that starts on the flagged line is handed literals only (`context.fixed_command`); never for the scanner's wildcard finding (B609: the shell fills a `*` in with the names of the files it finds, which the command's text says nothing about)), `rank_note` and
 `rank_before_context` (only when `context` lowered the rank: why, and the rank it would have had; the viewer shows both; a
 non-security hash or SQL splicing only fixed text → `low`, a hash of unknown purpose → at most `medium`),
 `trust` (LW-PUBLIC-SECRET only, `context.public_secret_trust`: `browser` `{exposed, where, sent_as}`, `server_trusts`
@@ -487,7 +510,13 @@ evidence, found, how}]`; for `rate-limit` (`lantern/ratelimit.py`) `in place` me
 limit that covers it (on the route, or put on the app before the route in the same file), `check` that a limit exists
 and the code does not show that for each of them (a default limit for the whole app, a limiter in another file, the
 project's own limiter in which nothing visibly counts), `add` that nothing puts a limit to work, whatever is
-installed; `evidence` lists the routes without one first, `found` what covers the others), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
+installed; `evidence` lists the routes without one first, `found` what covers the others; for `security-headers`
+(`lantern/headers.py`, since 2026-11-12) `in place` means the code or a hosting file shows a header set for every
+response (a hosting rule for every path, a library put on the app, the project's own function that runs for every
+request) of every app of the project that has pages or routes of its own, `check` that a header is set and the code
+does not show every response gets it (a `<meta>` tag in one page, one route's own answer, a rule or a library for one
+path, a table of headers nothing visibly sends, a setting for one app of several: `why` names the folders left out), `add` that
+nothing sets one, whatever words stand in the code; `found` lists the places as `<file>:<line> (<what>)`), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
 `sec-scanners` check in Security findings fails when one `failed` or timed out, is partial for a gap the run knew
 about, and passes only when every applicable scanner finished), `advice` (deployment advice strings for the shape),
 `hotspots`, `env_vars`, `starter` (`{filename: {content, snippet?}}`).
@@ -526,9 +555,11 @@ average (the shop sample, shortened):
 (every required criterion passed). Five criteria, each with `state` `passed`, `failed`, `missing` or
 `not-applicable`, a `why` and, when it is not passed, a `fix`: `findings` (failed while a critical or high finding is
 open outside test code; an accepted one does not block and is named in `why`), `scanners` (missing while a scanner
-that applies did not finish or did not cover everything), `dependencies` (missing while a listed library was not
+that applies did not finish or did not cover everything, or while the project keeps code as text that no scanner
+read: `security.json` `not_read`), `dependencies` (missing while a listed library was not
 looked up, or the project lists libraries of a kind Lantern has no check for yet: Go, Rust, Dart and Flutter, .NET,
-Swift, C and C++; `not-applicable` and not required where the project lists none), `tests` (passed only when the
+Swift, C and C++, or software copied into a `vendor` folder was not looked up (`copied-audit`: offline, or files with
+no name and version); `not-applicable` and not required where the project lists none and holds no such copy), `tests` (passed only when the
 project's tests ran in this check and ended with 0; failed when they ended with anything else; missing when the
 project has none, they were not run, the sandbox could not be set up or stopped them, or it refused something they
 tried), `behaviour` (not required where the project has no `lantern-behaviour.json`; else passed only when

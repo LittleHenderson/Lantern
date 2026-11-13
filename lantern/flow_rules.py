@@ -542,6 +542,10 @@ SAME_PROBLEM = {
     "path": re.compile(r"^(B202)"),
     "ssrf": re.compile(r"^(B310|LW-SSRF)"),
 }
+# A wildcard in a command (`tar cf out.tar *`) is filled in by the shell with the names of the files it finds, and a
+# name can be an option (`--checkpoint-action=...`). That only fixed text reaches the command says nothing about it:
+# until 2026-11-13 it lowered the scanner's finding to low ("nothing that comes from outside is put into it").
+FILLED_BY_THE_SHELL = re.compile(r"^B609$")
 
 # ---------------------------------------------------------------------------------------------- what a check proves
 DIGIT_METHODS = {"isdigit", "isdecimal", "isnumeric"}
