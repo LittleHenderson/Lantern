@@ -23,6 +23,7 @@ from . import context, flowscan, kept, lanes, listing, manifest, programs, quick
 from .calls import NAME_ONLY_VIA
 from .graph import Graph
 from .python_frontend import ENV_NAMES, SKIP_DIRS, inside_repo, project_bytes, project_text, skipped_dir
+from .strings import sub as strings_sub
 
 UNTRUSTED_ENTRY_KINDS = {"route", "cli", "main", "script"}
 
@@ -522,7 +523,7 @@ BINDS = [   # loops and context managers that bind a name to a value
     re.compile(r"^\s*(?:async\s+)?with\s+(?P<rhs>.+?)\s+as\s+(?P<lhs>\w+)\s*:", re.S),
     re.compile(r"^\s*for\s*\(\s*(?:const|let|var)\s+(?P<lhs>[\w{}\[\], $]+?)\s+(?:of|in)\s+(?P<rhs>[^)]+)\)", re.S),
 ]
-_STRINGS = re.compile(r"(['\"`])(?:\\.|(?!\1).)*\1")
+QUOTES = "'\"`"       # what opens a string in the lines the input check reads (found by lantern/strings.py)
 _TEMPLATE_REF = re.compile(r"\$\{\s*([A-Za-z_$][\w$]*)|\$([A-Za-z_]\w*)|\\\(\s*([A-Za-z_]\w*)|#\{\s*@?([A-Za-z_]\w*)")
 
 
@@ -543,7 +544,7 @@ def _php_line(raw: str) -> str:
         if m.group(1) == "'":
             return "''"
         return "''" + "".join(f" + {r}" for r in re.findall(r"\{?\$([A-Za-z_]\w*)", m.group(0)))
-    t = re.sub(r"(['\"])(?:\\.|(?!\1).)*\1", blank, raw)
+    t = strings_sub("'\"", blank, raw)
     t = t.replace(".=", "+=")
     t = re.sub(r"(?<=[\w'\")\]])\s*\.(?!\.)\s*(?=[$\w'\"(])", " + ", t)
     t = t.replace("->", ".").replace("?.", ".")
@@ -581,7 +582,7 @@ def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple
     out, buf, start, depth = [], [], 0, 0
     for ln in range(first, min(last, len(lines)) + 1):
         raw = lines[ln - 1]
-        code = _STRINGS.sub(_blank_string, raw)
+        code = strings_sub(QUOTES, _blank_string, raw)
         code = re.sub(r"//.*$" if js else r"#.*$", "", code)
         if not buf:
             start = ln

@@ -76,6 +76,34 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   local app's "open the link from your terminal" page, every sign-in page of the free allowance and the public
   landing page (menu and footer; "Guide" on phones and tablets so the menu fits) link to it as well.
   `tests/test_guide.py::test_every_page_reaches_the_guide` fails if one of them loses it.
+- No line of a project keeps the check busy (2026-11-13). Three faults of one kind, all in Lantern for some time,
+  found while checking the fixes for a report on a real static site. **C#:** a line that chains calls, each on what
+  the one before gave (`sb.Append(a).Append(b)…`, a query, a builder), doubled the reading time with every call
+  after a library call: 20 chained calls 5.21 seconds, 30 still being read after 150 seconds. Real C# code holds
+  such lines, so a real app could keep the check busy for hours. Each link is now worked out once (200 chained
+  calls: the whole check in 0.45 seconds). **Ruby:** every call of a chain went down the whole chain again; twice the
+  links took eight times the time (800 links 26.42 seconds, now 0.43), and at 1,500 links the check stopped with
+  an error where it now ends. Short chains of every shape the two readers tell apart give the links and the counts
+  they gave before (`tests/test_chains.py`, 20 tests; every one of the twelve readers is also given a chain of sixty
+  calls; 5 of the 20 fail on the code before, each at its time limit). **Strings:** one line, a quote mark followed by about thirty pairs of
+  backslashes and no closing quote, in a comment or anywhere else of a Python, JavaScript, PHP or other source file,
+  kept `lantern analyze` running for days: four places found string literals with one pattern that had two ways
+  through a backslash, and it tried every way of pairing them (measured: 18 pairs 2.706 seconds, 20 pairs 18.861
+  seconds, about 2.6 times the time for each pair more). A small project with such a line was still being checked
+  after three minutes; it now ends in under a second and reports the same finding below the line. Two patterns
+  beside it took four times the time for twice the text (60,000 characters of `/* ` that nothing closes 5.28 seconds;
+  a JavaScript template of 40,001 characters that does not end 4.87 seconds). New `lantern/strings.py` finds the same
+  strings, templates and comments, match for match, in time that grows with the text (a million pairs of backslashes
+  0.3957 seconds); `websec.code_only`, `security._statements`, `security._php_line` and `aiapp` use it. No result
+  changes: `tests/test_strings.py` keeps the old patterns and compares them with the new functions on 1,716,498
+  short texts, on longer ones made at random, on Lantern's own code and on written cases; each place is run on such
+  text in a child process with a time limit (8 of these tests fail on the code before, 6 of them at their 30-second
+  limit), and a test fails if a module finds strings the old way again. Found while checking the fixes for a report
+  on a real static site; the fault was in Lantern before them. Other patterns that read strings were measured and
+  left as they are (they are slow only on megabytes of text made for it): `CLAUDE.md`, Known gaps. Found by the same
+  look and not fixed here: one expression nested several hundred levels deep (a chain of 400 to 1,500 calls, a sum
+  of 1,200 pieces) stops the whole check with `maximum recursion depth exceeded` in most readers; the measured
+  numbers are under Known gaps too.
 - Faster, with every check and every result as it was (2026-11-12; point 10 of the 2026-11-09 directive, "Increase
   performance without dropping checks"). Measured first, then changed: `bench/speed.py` analyzes the sample shop and
   five public apps at a fixed commit each, three first runs and three repeat runs a side, the unchanged engine and
