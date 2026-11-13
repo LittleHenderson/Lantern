@@ -177,6 +177,12 @@
      "state": "skipped"
     },
     {
+     "tool": "copied-audit",
+     "version": "osv-v1",
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
      "tool": "gitleaks",
      "version": null,
      "role": "scanner",

@@ -1385,7 +1385,7 @@
    ],
    "version": "1.9.4",
    "exit_code": 1,
-   "duration_ms": 128,
+   "duration_ms": 1530,
    "scope": {
     "files": 6
    },
@@ -1443,6 +1443,15 @@
    "version": "osv-v1"
   },
   {
+   "tool": "copied-audit",
+   "state": "skipped",
+   "status": "skipped: no software copied into a vendor folder",
+   "why": "no software copied into a vendor folder",
+   "applicable": false,
+   "role": "known problems in software copied into the project (vendor folders, OSV database)",
+   "version": "osv-v1"
+  },
+  {
    "tool": "gitleaks",
    "state": "unavailable",
    "status": "skipped: not installed (built-in patterns ran instead; install gitleaks (github.com/gitleaks/gitleaks) for its full rule set)",
@@ -1482,7 +1491,7 @@
    "applicable": true,
    "version": "1",
    "findings": 0,
-   "duration_ms": 8,
+   "duration_ms": 18,
    "scope": {
     "files": 11,
     "functions": 24,
@@ -1505,6 +1514,7 @@
  },
  "id_version": 2,
  "incomplete": [],
+ "not_read": {},
  "reachable_nodes": 31,
  "total_callables": 28,
  "logins_shown": [],
