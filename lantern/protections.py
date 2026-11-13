@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import ratelimit
+from . import headers, ratelimit
 from .context import code_mentions, handles_passwords, password_hash_uses
 from .graph import Graph
 from .websec import call_adjacency, code_only, is_public_route, login_check, mentions_auth, mutating_route
@@ -22,8 +22,6 @@ from .websec import call_adjacency, code_only, is_public_route, login_check, men
 SENSITIVE_PATH = re.compile(r"(^|/)(login|log-in|signin|sign-in|signup|sign-up|register|auth|token|session|password|"
                             r"reset|forgot|otp|verify|magic-link|2fa|mfa|invite)(/|$|\b)", re.I)
 RATE_LIMIT_LIBS = ratelimit.LIBS      # what a rate-limiting library is called; where one is put to work: ratelimit.py
-HEADER_SIGNS = re.compile(r"helmet|Content-Security-Policy|Strict-Transport-Security|X-Frame-Options|"
-                          r"SecurityMiddleware|secure\.Secure|talisman|frame-ancestors", re.I)
 FAST_HASH = re.compile(r"hashlib\.(md5|sha1|sha224|sha256|sha512)\s*\(|createHash\(\s*['\"](md5|sha1|sha256|sha512)['\"]")
 # Whole words: `\bcrypto` in a regex string reads as "bcrypt" without them. Searched in dependency files and in code
 # with strings and comments blanked (a word in a list of phrases is not a hashing library).
@@ -83,19 +81,6 @@ def _deps_text(repo) -> str:
     return " ".join(repo.text(f) for f in repo.project_files
                     if f.rsplit("/", 1)[-1] in ("pyproject.toml", "package.json", "Pipfile")
                     or re.search(r"(^|/)requirements[^/]*\.txt$", f))
-
-
-def _config_hits(repo, rx: re.Pattern) -> list[tuple[str, int, str]]:
-    """Matches in code plus hosting config files (vercel.json, netlify.toml, _headers, next.config.*)."""
-    hits = repo.grep(rx, limit=5)
-    for f in repo.project_files:
-        name = f.rsplit("/", 1)[-1]
-        if name in ("vercel.json", "netlify.toml", "_headers", "nginx.conf", "Caddyfile") or name.startswith("next.config"):
-            t = repo.text(f)
-            m = rx.search(t)
-            if m:
-                hits.append((f, t.count("\n", 0, m.start()) + 1, ""))
-    return hits
 
 
 def _rate_limit(view, trig: list, what: str) -> tuple[str, str, list[str], list[str]]:
@@ -163,16 +148,22 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
              "Limit requests per user and per IP on these routes: slowapi (FastAPI), Flask-Limiter, express-rate-limit, "
              "or @upstash/ratelimit (Next.js / serverless).", found)
 
-    # 2. Security headers
+    # 2. Security headers. "in place" only where the code or a hosting file shows a header set for every response;
+    # a header for one page, one route or one path is "check"; a word is nothing (lantern/headers.py). Until
+    # 2026-11-12 one of a few words anywhere in the code read "in place": a `<meta>` tag in one exported document,
+    # the word "helmet" as the name of an HTML tag in a search pattern.
     if web:
-        hh = _config_hits(repo, HEADER_SIGNS)
-        item("security-headers", "Security headers", "in place" if hh else "add",
+        status, more, places, notes = headers.read(g, repo)
+        item("security-headers", "Security headers", status,
              "Browsers protect your users from clickjacking, mixed content, and injected scripts only when the app "
-             "sends headers such as Content-Security-Policy, Strict-Transport-Security, and X-Frame-Options.",
-             [f"{shape}; no header setup found in code or hosting config"] if not hh else [],
+             "sends headers such as Content-Security-Policy, Strict-Transport-Security, and X-Frame-Options."
+             + (" " + more if more else ""),
+             [] if status == "in place" else
+             [f"{shape}; " + ("no setting found that covers every response" if status == "check" else
+                              "no header setup found in code or hosting config")] + notes,
              "Set them once for every response: helmet (Express), the headers() block in next.config.js, "
              "a vercel.json/netlify.toml headers rule, or a small middleware in FastAPI/Flask.",
-             _where(hh))
+             places)
 
     # 3. SSRF: the server fetches a URL that isn't a fixed string
     if routes:

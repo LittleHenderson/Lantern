@@ -31,7 +31,7 @@ import platform
 import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from . import __version__, gitfacts, manifest, results, sandbox
+from . import __version__, gitfacts, manifest, release, results, sandbox, seal
 from .python_frontend import project_text
 
 PLAN_NAME = "lantern-behaviour.json"
@@ -535,6 +535,11 @@ def _faults(case: dict, check: dict, probe: dict, quiet, may_reach=()) -> list:
 
 
 # ------------------------------------------------------------------------------------------------ the run
+def plan_sha256(plan: dict) -> str:
+    """The SHA-256 a checked plan is known by, in the record of its run and in the release decision."""
+    return hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def summary(outcomes: list) -> dict:
     count = {"held": 0, "broken": 0, "inconclusive": 0, "not-run": 0}
     for o in outcomes:
@@ -559,8 +564,10 @@ def run(repo: Path, out: Path | None = None, log=print, timeout: float = sandbox
         record["why_not"] = f"the project has no {PLAN_NAME}"
         record["no_plan"] = True
     else:
-        record["of"]["plan_sha256"] = hashlib.sha256(
-            json.dumps(plan, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        record["of"]["plan_sha256"] = plan_sha256(plan)
+        # the code the app is started from, as the release decision names it (`release.code_digest`), taken before
+        # the run: a record counts only for exactly this code
+        record["of"]["code_sha256"] = release.code_digest(repo, leave_out=out)["sha256"]
         inside, cases = scene(plan)
         log(f"behave: {len(cases)} cases of {len(plan['checks'])} checks, in the sandbox")
         try:
@@ -588,6 +595,13 @@ def run(repo: Path, out: Path | None = None, log=print, timeout: float = sandbox
             record["not_ended"] = res["not_ended"]
         log("behave: " + (", ".join(f"{n} {word}" for word, n in record["summary"].items()) if record["ran"]
                           else "not run: " + str(record["why_not"])))
+    # This computer's seal (seal.py): the release decision counts a record only when it carries it, because the
+    # results folder usually lies in the project, and a project can bring a record of its own.
+    made = seal.sign(record)
+    if made is None:
+        log("behave: this record carries no seal (LANTERN_HOME cannot be written), so a release decision will not count it")
+    else:
+        record["seal"] = made
     if out is not None:
         results.write(Path(out) / RESULT_NAME, json.dumps(record, indent=2) + "\n")
     return record

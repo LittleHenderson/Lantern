@@ -55,7 +55,7 @@ GUARD_FILES = ("lantern_netguard.py", "sitecustomize.py")    # all a program nee
 # of these that is safe to load a program from. Named places, not the temporary folder the run's environment points
 # at: that one is its user's alone. /run first: only root can write there, and nothing clears it while the computer
 # is running (it starts empty at every boot).
-PUBLIC_PLACES = ("/run", "/tmp", "/var/tmp")
+PUBLIC_PLACES = ("/run", "/tmp", "/var/tmp")   # nosec B108: named on purpose, each checked before use (guard_folder)
 NO_PROXY = "localhost,127.0.0.1,::1"
 PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 LOCAL_NAMES = frozenset({"", "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"})
@@ -500,6 +500,9 @@ def scrub(environ=None) -> list:
     return gone
 
 
+GIT_IDENTITY = "[user]\n\tname = Lantern tests\n\temail = tests@localhost\n"
+
+
 def temp_home(home: str, environ=None) -> dict:
     """Point the home folder, the settings folders and Lantern's own folders at `home` (an empty folder). Tools that
     look under the home folder for saved sign-ins (git, npm, pip, docker, cloud command lines, Lantern) find none.
@@ -538,6 +541,13 @@ def temp_home(home: str, environ=None) -> dict:
         raise RuntimeError("SET_BY_TEMP_HOME does not list what temp_home sets")
     for k in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA"):
         os.makedirs(values[k], exist_ok=True)
+    git_settings = j(home, ".gitconfig")
+    if not os.path.exists(git_settings):
+        # A name and an address for git to write in its records. Without them git makes one up from this computer's
+        # name, and asks the network what that name is in full: a name lookup on every clone, branch and reset (git
+        # 2.56.1 on GitHub's Linux machines, 2026-11-12), which the no-network run counts as reaching outside.
+        with open(git_settings, "w", encoding="utf-8") as f:
+            f.write(GIT_IDENTITY)
     env.update(values)
     return values
 

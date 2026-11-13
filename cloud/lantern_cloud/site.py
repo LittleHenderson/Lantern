@@ -29,6 +29,8 @@ JS_BLOCKS = (
     ("const esc = ", "\n"),                                                         # the escaper, one line
     ("// Icons: fixed markup, never data.", "document.getElementById('theme').onclick"),  # icons, ring, appearance
     ("// ---------------------------------------------------------------- backdrop", "function setBackdrop"),
+    ("// ---------------------------------------------------------------- Terminal drawer (design 5a/5b)",  # the drawer
+     "// ---------------------------------------------------------------- Terminal drawer: the app's commands"),
 )
 
 

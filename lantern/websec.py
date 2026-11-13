@@ -26,6 +26,7 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import re
@@ -34,6 +35,7 @@ from pathlib import Path
 from .flow_rules import READS_TOKEN, VERIFIES
 from .graph import Graph
 from .js_frontend import jwt_role
+from . import listing, strings
 from .python_frontend import inside_repo, project_text, skipped
 
 PUBLIC_PREFIX = r"(?:NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|NUXT_PUBLIC_|GATSBY_|PUBLIC_|VUE_APP_)"
@@ -158,12 +160,9 @@ def _fid(*parts) -> str:
 
 
 def _files(repo: Path, exts=None, names=None):
-    for p in repo.rglob("*"):
-        if not p.is_file() or not inside_repo(p, repo):
-            continue
-        parts = p.relative_to(repo).parts
-        if skipped(parts[:-1], repo):   # a file named .env is not the .env/ venv folder
-            continue
+    # the project's files, not under a folder that is left out (a file named .env is not the .env/ venv folder):
+    # `listing.files`, which walks the folder once for a whole run
+    for p, _ in listing.files(repo):
         if p.name.endswith((".min.js", ".map", ".d.ts")) or p.name in ("package-lock.json", "bun.lock"):
             continue
         if (exts and p.suffix in exts) or (names and (p.name in names or any(p.name.startswith(n) for n in names))):
@@ -663,12 +662,19 @@ def database_rules(repo: Path) -> list[dict]:
     return out
 
 
+_NOT_IN_A_NAME = re.compile(r"[^A-Za-z0-9]+")
+_WORD_OF_A_NAME = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+
+
+@functools.lru_cache(maxsize=65536)
 def segments(ident: str) -> str:
     """A name as whole lower-case words: `getServerSession` -> "get server session", `load_permissions` ->
-    "load permissions", `OAuth2PasswordBearer` -> "o auth 2 password bearer", `tokenize` -> "tokenize"."""
+    "load permissions", `OAuth2PasswordBearer` -> "o auth 2 password bearer", `tokenize` -> "tokenize". The same
+    names come again and again (every name of every file is asked by the password check alone), so the answers
+    for the last 65,536 are kept."""
     parts = []
-    for chunk in re.split(r"[^A-Za-z0-9]+", ident):
-        parts += re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+", chunk)
+    for chunk in _NOT_IN_A_NAME.split(ident):
+        parts += _WORD_OF_A_NAME.findall(chunk)
     return " ".join(p.lower() for p in parts)
 
 
@@ -725,12 +731,12 @@ def code_only(text: str, js: bool = False) -> str:
     """The text with string literals and comments blanked out, same length, so offsets and line numbers still
     hold. A route path '/auth/refresh', a message, a docstring, or `# TODO: add auth here` is not a login check."""
     if js:
-        text = re.sub(r"`(?:\\.|[^`\\])*`", _blank, text)
+        text = strings.templates(_blank, text)
     else:
         text = re.sub(r"(\"\"\"|''')[\s\S]*?\1", _blank, text)
-    text = re.sub(r"(['\"])(?:\\.|(?!\1).)*\1", _blank, text)
+    text = strings.sub("'\"", _blank, text)      # not with a pattern of its own: lantern/strings.py says why
     if js:
-        text = re.sub(r"/\*[\s\S]*?\*/", _blank, text)
+        text = strings.block_comments(_blank, text)
         text = re.sub(r"//[^\n]*", _blank, text)
     else:
         text = re.sub(r"#[^\n]*", _blank, text)

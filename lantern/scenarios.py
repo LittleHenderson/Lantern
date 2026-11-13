@@ -6,7 +6,7 @@ a story than from a rule name.
 
 Every part of the story comes from the analysis, never from a model and never from running anything:
   * where the person starts: the finding's `ui_path` (a page, then the clicks the map recorded) or its `reachable`
-    entry (a route, a command); nothing reaches it → the story says nobody can do this yet;
+    entry (a route, a command); no path found → the story says so, and that this does not prove nobody can get there;
   * whether what they type matters: the finding's `input` (`{"via": ...}`, `false`, or not checked);
   * what goes wrong and what the fix changes: a fixed sentence per kind of problem, chosen by rule id, then CWE, then
     category. A rule Lantern has no story for gets a plain generic one, never an invented harm;
@@ -553,9 +553,11 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
             steps.append(f"{who} runs your program ({route}).")
             basis.append("the command comes from the map of your app")
         elif not reached:
-            steps.append("Today no page, route or command in your app leads to this code, so nobody can do this yet. "
-                         f"Here is what happens the day something does: {who} reaches it through that new page.")
-            basis.append("nothing in the map reaches this code")
+            # no path found is not "nobody can": the story says what Lantern looked for and did not find
+            steps.append("Lantern found no page, route or command in your app that leads to this code. That does not "
+                         "prove nobody can get here: something Lantern does not see may run it. Here is what happens "
+                         f"when something does: {who} reaches it that way.")
+            basis.append("Lantern found no path to this code, which is not proof that nothing runs it")
         if kind in ("auth", "wallet") and route:
             steps.append(f"They are not signed in, and they send {route} again and again."
                          if kind == "wallet" else f"They are not signed in when they send {route}.")

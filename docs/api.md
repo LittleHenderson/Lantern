@@ -49,7 +49,9 @@ All JSON. Errors are `{"error": "message"}` with 4xx/5xx. Long work returns a **
 | `GET /api/fs?path=` | Folder listing for the Browse dialog: `{"path", "parent", "dirs": [names]}` |
 
 **Project summary** (one per project): `id`, `path`, `name`, `added`, `exists`, `has_report`, `score` (0–100 or null),
-`grade` (A–F or null), `shape` (deployment shape string), `counts` `{critical, high, medium, low, accepted}` or null,
+`grade` (A–F or null), `release` (`"Blocked"`, `"Incomplete"`, `"Passed"` or null: the release decision of
+`readiness.json`, taken only as one of those three words; null for results an older Lantern wrote),
+`shape` (deployment shape string), `counts` `{critical, high, medium, low, accepted}` or null,
 `finished_at`, `explained` (number of explained functions), `job` (running job id or null), `starter` (starter id
 when the project came from Learn).
 
@@ -105,6 +107,28 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 The Atlas page gets all of these in one bundle (`DATA` in `report.html`: `graph`, `security`, `readiness`,
 `explanations`, `sources`, `stats`). The CLI writes the same files, so a UI can also be built on them directly.
 
+**How a report holds the map (since 2026-11-12).** Inside `report.html`, and only there, `graph.nodes` and
+`graph.edges` are written column by column (`lantern/columns.py`), because most of the time a phone needs to open a
+large report is the time it needs to take the file in (Django's report: 73,896,338 bytes before, 38,050,642 after,
+the same data). `graph.json` is unchanged. The page's first lines (`unpackGraph`) and `lantern.report.read_bundle`
+turn the map back into the rows described under `graph.json`, with the fields in the same order and every value of
+the same kind, before anything else looks at it; anything that reads a report's data block by itself must do the same
+or, simpler, read `graph.json`:
+
+| In the data block | Meaning |
+|---|---|
+| `graph.packed` = `1` | the map's last entry: `nodes` and `edges` are written as below. No such entry: they are lists of rows, as every earlier Lantern wrote them (still read) |
+| `nodes`, `edges` = `{"keys": [...], "n": N, "cols": [...]}` | `keys`: the fields in the rows' own order; `n`: how many rows; `cols`: one column for each field. A list that could not be written this way (rows that are not all tables with the same fields in the same order) stays a list of rows |
+| a column `["v", [values]]` | the value of every row, as it is |
+| `["c", value]` | every row has this one value (text, a number, yes/no or nothing; never a list or a table) |
+| `["t", [values], [places]]` | few different values, each written once; `places[i]` is the place of row `i`'s value in `values` |
+| `["r", [places]]` | for `parent`, `src` and `dst`: the id of a node, written as that node's place in `nodes` (counted from 0). A value that is no such id stands in a list of its own: `["ext:os.path"]`, `[null]` |
+| `{"as_it_was": {...}, "packed": 1}` | a map that came with an entry `packed` of its own (none Lantern writes has one) is not packed and stands whole under this name |
+
+A packed map of any other shape is refused, by the page (it draws nothing) and by `read_bundle` (`ValueError`, "this
+report's map is not written the way this Lantern writes it; analyze again"): another value of `packed`, a count of
+rows that no column's list has, a place outside its list, a field named `__proto__`.
+
 ### `graph.json`
 
 `{"schema", "repo_root", "meta", "nodes": [...], "edges": [...], "unresolved": {text: count}}`
@@ -142,7 +166,17 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
 * Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.name>`; external `ext:<pkg.member>`
   or `ext:HTTP <METHOD> <path>`.
 * `meta`: `files`, `lines`, `languages`, `bridge` (link counts), `http_calls`, `packs` (`{added, ambiguous, unresolved, packs}`),
-  `lanes` (`{browser, frontend, server, data}` node counts), `calls` (the summary of `calls.json`, below).
+  `lanes` (`{browser, frontend, server, data}` node counts), `calls` (the summary of `calls.json`, below),
+  `too_deep` (since 2026-11-13, only when a reader left something: `{pieces: n, files: [path, …],
+  where: [{file, line, reader}, …], readers: [reader, …]}`. A reader goes through code by calling itself once per
+  level and leaves a piece that is nested deeper than Python follows: `pieces` counts them, `files` names every
+  file that holds one, `where` gives the line each of the first 40 begins at and the reader that left it
+  (`python`, `javascript`, `go`, `rust`, `java`, `kotlin`, `swift`, `dart`, `csharp`, `php`, `ruby`, `cpp`), and
+  `readers` names a reader that stopped before it was through with the project, with what it had read by then
+  still on the map. The calls written in such a piece are not on the map. The run's log has a line
+  `deep    <n> pieces of code nested deeper than Lantern follows were not read to the end (<files>)`, the Evidence
+  Report's Limits name the files and the readers; `lantern/deep.py`. Until then such a piece ended the run with
+  `maximum recursion depth exceeded` and no result file).
 * JavaScript `via` values added in stage 3 (2026-11-09): `require-call` (`require('./x')(...)`), `route-handler` and
   `middleware` (a function handed to an Express router by name: resolved when it is named straight from a module,
   inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),
@@ -274,7 +308,7 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 
 `{"findings": [...], "tools": [scanner records], "incomplete": [the scanner records that apply and are not ok],
 "counts": {critical, high, medium, low, in_tests, accepted}, "id_version", "reachable_nodes", "total_callables",
-"logins_shown", "ai", "mobile"}`
+"logins_shown", "not_read", "ai", "mobile"}`
 
 `logins_shown`: the node ids of the routes whose own code turns away whoever is not signed in, as the flow step read
 it (a check under any name, one written in place, a hook, a dependency); `null` when that step did not run, and
@@ -282,8 +316,25 @@ absent from results written before 2026-11-11. The protection `route-auth` in `r
 as checked (found: "the code on the way to this route turns away whoever is not signed in"), and names a route an
 `LW-AUTH-MISSING` finding calls open among the open ones, whatever the names around it say.
 
+`not_read` (`lantern/unread.py`, since 2026-11-12; `{}` when the project holds neither kind, absent from older
+results): what the project holds that Lantern takes for code or software and did not read. `renamed`: code kept under
+another name, `<name>.<code ending>.<txt|tmpl|template|bak|orig|old>` (`engine.py.txt`, `main.py.tmpl`):
+`{files, lines, endings: {".py.txt": n}, examples, scanned, as_text_unscanned, as_text_unscanned_examples}`. No reader
+opens such a file, so the map, the paths and Lantern's own checks do not cover it. Python kept as text (`.py.txt`,
+`.pyw.txt`) is handed to Bandit by name (`scanned` counts the files it read without an error; its findings carry the
+file's own name, and a command there that is handed literals only is ranked `low` with the reason, as in a `.py`
+file). Code kept as text that no scanner read (`as_text_unscanned`: text is kept that way to be loaded) leaves the
+release decision's `scanners` criterion `missing`; a template or a left-over copy is named in the Evidence Limits
+only. `copied`: software copied into a folder named `vendor` (which every reader leaves out):
+`{folders, copies, named: ["<name> <version> (<folder>)"], unnamed, unnamed_examples, cut_short}` (`cut_short`: a folder there lay deeper than Lantern looks, or held more names than it reads, so part of it was not looked at). A copy that brings a
+`package.json` with a published name and one exact version is looked up by that name and version (`copied-audit`
+below); code files under `vendor` with no such file above them are `unnamed` and cannot be looked up. A package
+manager's own `vendor` folder (Composer's, Go's, Bundler's) is not a copy: its lock file says what is in it. A
+`vendor` folder under `tests/`, `fixtures/` or `examples/` is not one either (the dependency audits leave such
+folders out the same way). The Evidence Limits name both kinds.
+
 A scanner record (`lantern/scanresult.py`, one per tool run: bandit, gitleaks, lantern-secrets, pip-audit, npm-audit,
-maven-audit, composer-audit, gem-audit, lantern-web, lantern-ai, lantern-flow, packs): `tool`, `state` (`ok` | `partial` | `failed` |
+maven-audit, composer-audit, gem-audit, copied-audit, lantern-web, lantern-ai, lantern-flow, packs): `tool`, `state` (`ok` | `partial` | `failed` |
 `timeout` | `unavailable` | `skipped`), `status` (the same as one sentence: `ok`, `ok (…)`, `partial: …`, `error: …`,
 `error: timed out …`, `skipped: not installed (…)`, `skipped: …`; records from before 0.11 have only this), `why`,
 `applicable` (false when the tool had nothing to do here: no Python dependency files, gitleaks absent but the built-in
@@ -291,10 +342,20 @@ patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages
 told to skip, and for bandit the Python files it was told to leave out because they are not files of the project: a
 link that leads out of it, a pipe), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
 `fallback_for` (the built-in secret scan when gitleaks did not finish). `partial` keeps the findings the tool did
-produce. The dependency audits (pip-audit, maven-audit, composer-audit, gem-audit) add, when they apply: `files` (the
+produce. Bandit's `scope` has `under_another_name` when Python kept as text was handed to it (how many such files, a
+part of `files`), and the record then names them in `read_as_text`. `copied-audit` (`depaudit.run_copied_audit`: the
+copies under `vendor` that say what they are, asked of OSV as npm packages by the name and version their own
+`package.json` gives, which nothing proves) adds `copied` and `copied_examples` (the copies with a name and a
+version), `unnamed` and `unnamed_examples` (code files that belong to no such copy: the record is then `partial`),
+`checked`, `files`; `skipped` with `applicable: false` where the project has no such folder, `skipped` and applicable
+when offline. The dependency audits (pip-audit, maven-audit, composer-audit, gem-audit) add, when they apply: `files` (the
 dependency files read), `checked` (how many name-and-version pairs were asked about), `unpinned` (how many entries
 have no exact released version to look up: a range, a branch, a link or a folder, no version, a variable) with
-`unpinned_examples` (the first five, as text), and `not_read` (how many parts of the dependency files are no package
+`unpinned_examples` (the first five, as text), `unlocked` (npm-audit, composer-audit, gem-audit: how many libraries
+a `package.json`, `composer.json` or `Gemfile` names for the shipped app where no lock file beside it says which
+version is installed, so none of them could be looked up) with `unlocked_examples` (the first five, as
+`<file>: <name>`), `other_locks` (npm-audit: up to ten folders whose versions are in a pnpm, yarn or bun lock file,
+which Lantern does not read yet; written also on a record that ends `ok` for the folders it did check), and `not_read` (how many parts of the dependency files are no package
 name and version, or no dependency file at all: a list where a table belongs, a number where a name belongs, a file
 that is not valid TOML or JSON, a pipe, a file over 32 MB). With `not_read` the state is `partial` and `errors` names
 the first 20, each as `<file>: <what>` on one line of printable ASCII of at most 200 characters (of a path over
@@ -302,7 +363,12 @@ the first 20, each as `<file>: <what>` on one line of printable ASCII of at most
 audit that is skipped (`--offline`, tool not installed) carries `not_read` only when nothing in the files could be
 used. `incomplete` is read by readiness (`sec-scanners`), the Evidence Report, the badge (`scan incomplete`), the
 command line (`--fail-on` exits 1 for any state but `skipped`) and the app's project cards; a run with `--offline`
-lists its skipped audits there without failing the gate.
+lists its skipped audits there without failing the gate. Libraries that were not looked up are not "none found":
+`unpinned`, `unlocked`, `other_locks` and a skipped or failed audit each make the release decision's `dependencies`
+criterion `missing` (`readiness.json`), and the readiness check of the same name earns nothing for them.
+
+Bandit is started with `--ignore-nosec` (since 2026-11-11): a `# nosec` comment in the project's code no longer takes
+a line out of the results. Lantern reads the comment itself and writes what it found on the finding (`nosec`, below).
 
 `lantern-flow` (`lantern/flowscan.py`, Python and JS/TS; `applicable` false for a project with neither) is the step
 that follows request data across functions and files. Its record has `version` and `scope` `{files, functions,
@@ -310,7 +376,9 @@ flows` (request values followed to a sensitive action), `on_other_findings` (flo
 tool made on the same line), `not_followed_further` (calls where a value that still carried request data was handed
 to code Lantern does not read), `login_read_from_code` (findings "no login check was found" that were not kept
 because the route's own code turns away whoever is not signed in), `token_check_lets_on` (routes that change data
-on whose way a login token is read and nothing turns away a request whose token does not hold)`}`; `partial` when a file could not be read, a function could not be followed or the
+on whose way a login token is read and nothing turns away a request whose token does not hold), `sender_checked`
+(`LA-WALLET-DRAIN` findings that were not kept because the route goes on only with a message its provider signed
+and pays for nothing before that check)`}`; `partial` when a file could not be read, a function could not be followed or the
 time limit was reached, with `errors` naming the first 20. Its own findings have `tool: "lantern-flow"` and a rule
 `LT-<KIND>`: `LT-SQL` (CWE-89), `LT-SHELL` (78), `LT-EVAL` (94), `LT-DESERIALIZE` (502), `LT-XXE` (611), `LT-PATH`
 (22), `LT-SSRF` (918), `LT-XSS` (79), `LT-REDIRECT` (601), `LT-NOSQL` (943), `LT-POLLUTION` (1321), and four about
@@ -378,9 +446,17 @@ page), `<Component> screen · <Component>` or `· /<expo router path>` (React Na
 <fn>` (route). Readiness `shape` is `"Flutter app"` or `"React Native app"` for these.
 
 Finding: `id` (stable across moves: tool, rule, file and the flagged line's text), `tool` (`bandit`, `pip-audit`,
-`lantern-flow`, `npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
+`lantern-flow`, `npm-audit`, `maven-audit` (Gradle/Maven libraries through OSV; `line` is where the library is written), `composer-audit` (PHP libraries from `composer.lock` through OSV; `line` is where `composer.json` asks for it, else its `composer.lock` entry), `gem-audit` (Ruby gems from `Gemfile.lock` through OSV; `line` is the Gemfile's `gem` line, else the lock entry), `copied-audit` (software copied into a `vendor` folder, looked up through OSV by what its `package.json` says it is; `line` is that file's `version` line), `secrets`, `lantern-web`, `lantern-pack:<name>`), `rule`, `title`, `tool_severity`, `tool_confidence`
 (`LOW` = show "heuristic"), `file`, `line`, `cwe`, `more_info`, `snippet`, `category`, `in_tests`, `node`,
-`reachable` (null or `{"entry", "kind", "path": [node ids]}`), `reachable_from_tests_only`, `ui_path` (node ids from a
+`reachable` (null or `{"entry", "kind", "path": [node ids]}`), `reachable_from_tests_only`,
+`reachability` (`{"state", "kind"?, "why"}`: what is known about who runs the flagged code, as a fact of its own
+beside the rank. `reached` (with the `kind` of entry point), `tests-only`, `unknown` (no path was found, or the
+line is in no function of the map: never to be shown as "nothing runs it") or `not-code` (a library in a list). A
+path that was not found lowers no rank),
+`test_file_in_use` (true on a finding in a file named like a test that a page, route or command outside the test
+files runs through links Lantern worked out: it is then the app's code, `in_tests` is false and it is ranked like
+any other), `test_file_guessed` (true where only a guess by method name leads from the app into the test file: it
+stays test code and the reason says so), `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`; when a flow was followed to the line,
 `{"via": <the words of the flow's first step>, "flow": true}`), `flow` (optional, `flowscan.py`: request data followed
 to this line across functions and files, on a `lantern-flow` finding or attached to another tool's finding for the same
@@ -398,10 +474,14 @@ the record is, but only after it changed the record, ran a command, removed a fi
 change something for it; the scenario's `kind` is then `owner-late`),
 `fixed_why` (optional, on a rule Lantern gives one rank whatever reaches it: the sentence shown as the reason for
 the rank, `case.severity.why`), `rank` (`critical`|`high`|`medium`|`low`),
+`rank_basis` (how the rank came about, in order: `[{"step", "rank", "why"}]` with `step` one of `severity` (the
+tool's own severity, where every rank starts), `raised` (request data was followed to the line; an entry point from
+outside reaches it), `lowered` (evidence from the code around the line, the `rank_note`), `fixed` (a rank the rule or
+the kind of finding fixes) and `test-code`; the last step's `rank` is the finding's; also in `case.severity.basis`),
 `context` (optional, `context.py`, read from names around the line: `{"hash": {"purpose": "security"|"non-security"|"unknown", "why", "password", "reads"}}`
 for weak-hash rules, `{"sql": {"fixed_only", "spliced": [{"expr", "fixed", "why"}], "driver_params", "reads"}}` for Python SQL,
 `{"fixed": {"class": "sql"|"shell", "function", "calls": [{"from", "file", "line"}], "count"}}` when a tool flagged a query or a command, no flow
-reaches it, and every call Lantern found hands that function fixed text (only when the flow step read everything; rank `low` with the reason)), `rank_note` and
+reaches it, and every call Lantern found hands that function fixed text (only when the flow step read everything; rank `low` with the reason); in Python kept as text, which the flow step does not read, the same table with no calls and `"reads": "the call on this line"` when every call that starts on the flagged line is handed literals only (`context.fixed_command`); never for the scanner's wildcard finding (B609: the shell fills a `*` in with the names of the files it finds, which the command's text says nothing about)), `rank_note` and
 `rank_before_context` (only when `context` lowered the rank: why, and the rank it would have had; the viewer shows both; a
 non-security hash or SQL splicing only fixed text → `low`, a hash of unknown purpose → at most `medium`),
 `trust` (LW-PUBLIC-SECRET only, `context.public_secret_trust`: `browser` `{exposed, where, sent_as}`, `server_trusts`
@@ -409,7 +489,14 @@ non-security hash or SQL splicing only fixed text → `low`, a hash of unknown p
 `other_controls` `[{route, login_check, why}]`, `conditions` (settings the checking code branches on), `stranger_access`
 (always `not determined`), `unknown` [plain sentences]; never changes the rank),
 `case` (every finding outside test code, `case.py`, version 1: `where` `{file, line, function, revision, revision_note?}` (revision = the analyzed folder's git commit, `null` outside git; `revision_note` when the folder has uncommitted changes, or the header's `note` when git could not compare the files), `claim` (the tool's words, never stronger than the evidence), `evidence` `[{fact, from}]` (`from`: the tool, `map`, `input check`, `context (names)`/`context (code)`), `conditions` `[{need, met, why}]` (what has to be true for harm; `met` true = Lantern saw it, false = saw it is not, null = cannot check), `impact` (the scenario's harm), `severity` `{rank, tool_severity, why, before_context?, context_note?}`, `confidence` `{level: high|medium|low|unknown, why, about}` (the tool's own confidence, one step lower when the path has a `likely`/`possible` link; about the pattern being there and reached, never about exploitability), `unknown` [plain sentences], `status` `[{word, done, why}]` for `reported`, `reproduced` (the id was in this folder's previous `security.json` or `baseline.json`; null on a first run), `fixed` (false while listed), `tested` and `independently reviewed` (always null: Lantern keeps no such record; an accepted risk is a review by the builder, not an independent one)),
-`status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted), `hot_lane` (the lane the problem
+`status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted; with `"how": "nosec"`, and `by`
+and `date` null, when the acceptance is a `# nosec` comment with a written reason on the line),
+`nosec` (Bandit findings only, when the line carries a `# nosec` comment about this finding: `{"state", "reason"}`.
+`accepted`: a reason is written and Lantern followed no request data to the line, so the finding counts as a risk
+the project accepted, shown and counted like one accepted with `lantern accept`, its rank as it was. `bare`: no
+reason that reads as one, `reason` null, the finding stays open. `overruled`: a reason is written and Lantern
+followed request data to the line, so the finding stays open. The reason is the project's own text, on one line,
+at most 300 characters: escape it like any other value), `hot_lane` (the lane the problem
 lives on: the pinned node's `lane`, or from the file for a finding with no node, e.g. a secret in `settings.py` →
 `server`), `lanes` (every lane the finding's path crosses, in strip order, de-duplicated: the `ui_path` (or `reachable`
 path) nodes' lanes, plus `hot_lane`, plus `data` when the pinned node calls a data-lane external — the glyph fills these
@@ -423,17 +510,81 @@ shown, also show `title` as "<tool> says: …"), `scenario` (`{"kind", "who", "s
 
 ### `readiness.json`
 
-`version`, `score`, `grade`, `shape`, `stack` (`{frameworks, …}`), `categories` (`[{key, title, weight, score, percent,
-checks: [{id, title, points, earned, status: pass|fail|partial|skip, evidence, fix, how}]}]`), `next_steps` (the
+`version` (2 since 2026-11-11), `score`, `grade`, `checklist`, `release`, `shape`, `stack` (`{frameworks, …}`),
+`categories` (`[{key, title, weight, score, percent, checks: [{id, title, points, earned, status:
+pass|fail|partial|skip, evidence, fix, how, required?}]}]`; a skipped check leaves the sum, except one with
+`required: true`: the release needs it and the work was not done (the tests were not run, listed libraries were not
+looked up), so its points stay in the sum and it earns none), `next_steps` (the
 highest-gain failed checks, with `gain` and `category`), `protections` (`[{id, title, status: add|check|in place, why,
 evidence, found, how}]`; for `rate-limit` (`lantern/ratelimit.py`) `in place` means every route in question shows a
 limit that covers it (on the route, or put on the app before the route in the same file), `check` that a limit exists
 and the code does not show that for each of them (a default limit for the whole app, a limiter in another file, the
 project's own limiter in which nothing visibly counts), `add` that nothing puts a limit to work, whatever is
-installed; `evidence` lists the routes without one first, `found` what covers the others), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
+installed; `evidence` lists the routes without one first, `found` what covers the others; for `security-headers`
+(`lantern/headers.py`, since 2026-11-12) `in place` means the code or a hosting file shows a header set for every
+response (a hosting rule for every path, a library put on the app, the project's own function that runs for every
+request) of every app of the project that has pages or routes of its own, `check` that a header is set and the code
+does not show every response gets it (a `<meta>` tag in one page, one route's own answer, a rule or a library for one
+path, a table of headers nothing visibly sends, a setting for one app of several: `why` names the folders left out), `add` that
+nothing sets one, whatever words stand in the code; `found` lists the places as `<file>:<line> (<what>)`), `incomplete` (the scanner records from `security.json` that apply and are not `ok`; the
 `sec-scanners` check in Security findings fails when one `failed` or timed out, is partial for a gap the run knew
 about, and passes only when every applicable scanner finished), `advice` (deployment advice strings for the shape),
 `hotspots`, `env_vars`, `starter` (`{filename: {content, snippet?}}`).
+
+`checklist` is the weighted average of the categories (what `score` was in version 1). `score` is that number held
+down by the release decision: never above 59 while the decision is Blocked, never 100 unless it is Passed. A
+version 1 file has neither `checklist` nor `release`; show its `score` as before and no decision.
+
+`release` (`lantern/release.py`) is the answer to "can this ship", made from required criteria and never from the
+average (the shop sample, shortened):
+
+```json
+{"decision": "Blocked",
+ "words": "Blocked: 3 critical and 1 high findings open outside test code: B602 at shop/app.py:16, …",
+ "profile": {"name": "full-stack web app", "required": ["findings", "scanners", "dependencies", "tests"],
+             "not_required": [{"id": "behaviour", "why": "The project has no behaviour plan …"}]},
+ "criteria": [{"id": "findings", "title": "No critical or high finding is open", "required": true,
+               "state": "failed", "why": "3 critical and 1 high findings open outside test code: …",
+               "fix": "Fix each one …", "ids": ["57fa455f7b3b", "…"]},
+              {"id": "tests", "title": "The project's tests were run and passed", "required": true,
+               "state": "missing", "why": "The tests were not run in this check. …", "fix": "Run them under Lantern: …"},
+              {"id": "behaviour", "title": "The behaviour checks held when the app was started", "required": false,
+               "state": "not-applicable", "why": "The project has no behaviour plan …", "fix": ""}],
+ "blocking": ["findings"], "missing": ["dependencies", "tests"],
+ "bound_to": {"commit": "1a2b3c…", "uncommitted_changes": false,
+              "code": {"files": 15, "sha256": "40c2…", "not_read": 0, "left_out": "the folders no reader …"},
+              "dependencies": {"files": {"pyproject.toml": "0ca7…", "web/package.json": "9de9…"}, "count": 2,
+                               "sha256": "ad5c…"},
+              "settings": {"scan": true, "trace": null, "offline": false, "place": "local", "packs_off": [],
+                           "accepted_sha256": null, "plan_sha256": null, "plan_unusable": null},
+              "tools": [{"tool": "bandit", "version": "1.9.4", "role": "…", "state": "ok"}, …],
+              "lantern": "0.11.0", "python": "3.13.1", "system": "Linux"}}
+```
+
+`decision`: `Blocked` (a required criterion `failed`), `Incomplete` (none failed and one is `missing`) or `Passed`
+(every required criterion passed). Five criteria, each with `state` `passed`, `failed`, `missing` or
+`not-applicable`, a `why` and, when it is not passed, a `fix`: `findings` (failed while a critical or high finding is
+open outside test code; an accepted one does not block and is named in `why`), `scanners` (missing while a scanner
+that applies did not finish or did not cover everything, or while the project keeps code as text that no scanner
+read: `security.json` `not_read`), `dependencies` (missing while a listed library was not
+looked up, or the project lists libraries of a kind Lantern has no check for yet: Go, Rust, Dart and Flutter, .NET,
+Swift, C and C++, or software copied into a `vendor` folder was not looked up (`copied-audit`: offline, or files with
+no name and version); `not-applicable` and not required where the project lists none and holds no such copy), `tests` (passed only when the
+project's tests ran in this check and ended with 0; failed when they ended with anything else; missing when the
+project has none, they were not run, the sandbox could not be set up or stopped them, or it refused something they
+tried), `behaviour` (not required where the project has no `lantern-behaviour.json`; else passed only when
+`behaviour.json` carries this computer's seal, is of this plan and this code, and every case held; failed when a
+case came out broken). `blocking` and `missing` name the required criteria in those states. `bound_to` is what the
+decision is about: `code.sha256` is one SHA-256 over every file of the project by path and content (the folders no
+reader looks into, and this run's results folder, are not in it), `dependencies.files` has one SHA-256 for each of
+the first 200 files that list libraries and `dependencies.sha256` one over all of them, `settings` holds the run's
+options with the SHA-256 of `lantern-accepted.json` and of the behaviour plan (`plan_unusable`: why a plan that is
+there cannot be used), `tools` every tool with its version and how its run ended. The file lies in the results
+folder, which may come with a project: a page, a card or the connector shows the decision only when it is one of
+the three words, takes the texts beside it as plain text of a bounded length, and works out `blocking` and
+`missing` anew from the criteria (`release.shown`). `lantern analyze PATH --require not-blocked|passed` ends with 1
+unless the decision of that very run is good enough (`not-blocked` stops on Blocked, `passed` on Incomplete too);
+the run's log has a line `release <decision>: <first reason>`.
 
 ### `explanations.json`
 
@@ -454,7 +605,12 @@ the scenario of the function's finding, else a one-line sketch from the map.
 git folder was not read: it is a link, it is kept in a place that does not name the folder back, or it lies outside
 the folder and is not the current user's) or when git could not compare the files with the commit, in which case
 `dirty` is `true`: `lantern/gitfacts.py`),
-`scorecard` (`readiness`, `now` counts, `before` counts, `baseline_date`, `baseline_commit`), `architecture`,
+`scorecard` (`readiness` (with `checklist` beside `score`), `now` counts, `before` counts, `baseline_date`,
+`baseline_commit`), `release` (the whole `release` of `readiness.json`, or null for a readiness file an older Lantern
+wrote; the Scorecard section shows the decision, every criterion, the profile and what the decision is tied to; the
+digest takes in the decision, each criterion's state and the SHA-256s of the code, the dependency files, the plan
+and the accepted risks, so `lantern verify` fails when one of them differs; the badge is green only for `Passed`
+and otherwise ends in `blocked` or `incomplete`), `architecture`,
 `security` (`open`, `accepted`, `fixed`, `changed`, `in_tests`, `protections`, `incomplete`: `[{tool, state, status,
 why, role, version}]`, the scanners that did not finish or did not cover everything; while it is not empty the memo, a
 notice under the tiles and the badge say `scan incomplete`, and the badge is never green), `understanding`,
@@ -462,18 +618,27 @@ notice under the tiles and the badge say `scan incomplete`, and the badge is nev
 (strings: what the report does not prove; one line per incomplete scanner; one line per kind of project for the
 dependency entries that were not checked because they have no exact version, whatever state that audit ended in; one
 line when the baseline in the results folder could not be used, in which case `scorecard.before`, `baseline_date` and
-`baseline_commit` are null and `security.fixed` and `changed` are empty), `digest` (`sha256:…`), `payload`.
+`baseline_commit` are null and `security.fixed` and `changed` are empty; one line per kind of project for libraries
+named where no lock file says which version is installed, one for folders whose versions are in a pnpm, yarn or bun
+lock file, one saying that the release decision is about exactly the files, libraries, settings and tools it names,
+and one saying that no app was started where the project has no behaviour plan), `digest` (`sha256:…`), `payload`.
+An accepted finding whose `accepted.how` is `nosec` is shown as "Accepted in the code (a # nosec comment on the
+line)" with its reason, and has no name and no date.
 
 ### `behaviour.json`
 
 Written by `lantern behave PATH` (`lantern/behave.py`), which starts the project's app in the test sandbox and runs
 the project's own plan, `lantern-behaviour.json` (its shape, the kinds of check and the limits: `docs/behaviour.md`).
-Nothing else reads this file yet: no finding, score or page changes with it.
+No finding changes with it. Since 2026-11-11 the release decision reads it (`readiness.json`, criterion
+`behaviour`), and counts it only when it carries this computer's seal and is of the plan and the code that are in
+the project now.
 
 ```json
 {"version": 1,
  "from": "running the project's code in Lantern's test sandbox, with no network",
- "of": {"plan_sha256": "9f2c…", "commit": "1a2b3c…", "dirty": false, "lantern": "0.10.0", "python": "3.13.1", "system": "Linux"},
+ "of": {"plan_sha256": "9f2c…", "code_sha256": "c41e…", "commit": "1a2b3c…", "dirty": false, "lantern": "0.11.0",
+        "python": "3.13.1", "system": "Linux"},
+ "seal": "…",
  "ran": true, "why_not": null,
  "summary": {"held": 3, "broken": 1, "inconclusive": 0, "not-run": 0},
  "outcomes": [
@@ -496,12 +661,22 @@ folders), `tried` (what the sandbox refused, or what the app began where this co
 (`[name, address]` the app asked about and the runner answered), `outside` (files outside the app's folders that
 were made, removed or changed, as paths from the sandbox's temp folder; at most five), `died`. `tried` and `outside`
 hold text a request may have chosen: escape them like any other value. `of` says what was run: the plan's SHA-256,
-the commit and whether files differed from it (`gitfacts.info`), Lantern's version, Python and the system.
+the SHA-256 over every file of the project as the release decision counts it (`code_sha256`, taken before the app
+is started), the commit and whether files differed from it (`gitfacts.info`), Lantern's version, Python and the
+system. `seal` (`lantern/seal.py`) is an HMAC-SHA256 of the record under a key this computer's Lantern made on
+first use and keeps in `LANTERN_HOME/seal.key`; it is absent when that folder cannot be written. The results folder
+usually lies in the project, so a project can bring a `behaviour.json` of its own: without a seal that holds, the
+record counts for nothing. The seal says which Lantern made the record, not that the record is right.
 
 ### Other files
 
 `calls.json` (above), `run.json` (timings, privacy, offline, trace, `incomplete` `[{tool, state, status, why, role}]`,
-finished_at; `trace`, when a test command was asked for = `{command, returncode, observed_edges, recall, stderr_tail,
+finished_at; `kept`, since 2026-11-12 and only when the run asked for kept work = `{"<kind>": {"reused": n, "anew": n}}`
+for the kinds `python-file` (how a Python file reads) and `bandit` (what Bandit said about a set of files): how much
+of the work this run took from `LANTERN_HOME/cache` and how much it worked out anew, also said in the log as
+`kept    bandit: 1 from kept work, 0 anew; python-file: 2788 from kept work, 0 anew`; it is about the run, like its
+timings, and in no other result file, and a run with `LANTERN_CACHE=off`, a `lantern verify` and a cloud run have
+none; `trace`, when a test command was asked for = `{command, returncode, observed_edges, recall, stderr_tail,
 backend, language, traced, timed_out, blocked, not_ended, ran}`, or `{command, ran: false, unavailable: "<why>",
 returncode: null, observed_edges: 0, …}` when the sandbox could not be set up and the tests were not run;
 `lantern.trace.counted` says whether anything of the run is in the results; tests the person stopped leave no record,
@@ -622,9 +797,12 @@ A **run** = `{id, link, host, privacy, status, stage, error, created, started, f
 log_tail, step, explain, workspace}`. `workspace` is null, or the id of the team workspace its owner put it in. `status`: `queued` → `running` → `done` | `error` | `blocked` (the sandbox stopped the analysis from
 reaching the network or writing outside its folder). `stage` is a plain sentence for the current step. `error` is a
 plain sentence (never a traceback or a server path). `summary` (when done) = `{score, grade, shape, counts:
-{critical, high, medium, low}, files, lanes: {browser|frontend|server|data: {critical, high, medium, low}}, phone}`, read from the
+{critical, high, medium, low}, files, lanes: {browser|frontend|server|data: {critical, high, medium, low}}, phone,
+release}`, read from the
 result files (`lanes`: open findings outside tests by `hot_lane`; a finding with no lane is left out; `phone`: the
-platform is a phone app, so the website says Screen and App; a run saved before `lanes` existed gets them on the next
+platform is a phone app, so the website says Screen and App; `release`: `"Blocked"`, `"Incomplete"`, `"Passed"` or
+null, the run's release decision. The cloud service never runs a project's tests, so a run there reads Incomplete
+at best; a run saved before `lanes` existed gets them on the next
 `GET /v1/runs`). `shared` is false until the person clicks Share
 (`POST /v1/runs/{id}/share`). `log_tail`: the last 40 log lines, server paths removed. `explain`: `{status: null|queued|running|done|error, error, summary: {functions, validated, failed, stopped}, log}` (`log`: the explain job's last lines while it runs). `step`: `clone` | `audit` | `analyze` |
 `save` while running (the key of `stage`), else null. `hint`: `"upload"` when the repository could not be opened (private, or no such repository; git asked for a password, or Connect GitHub refused: the person cannot read it, or signed in with Google), so the website offers "Upload your code instead"; `"connect"` when Connect GitHub is on and the app is not installed on that repository, so it offers "Connect GitHub" (`/v1/me` `connect_url`) and Upload; else null. `summary` values are checked when read (score and files whole
@@ -679,7 +857,9 @@ disabled token. A hand-minted token has `account: "token:<16 hex>"`. Never retur
   with the legend once above the list.
 * **Findings / Finding**: ranked list with filters; click path from the page; "uses outside input"; heuristic tag;
   Open function; Accept risk asks for a reason and shows it afterwards; **Send to…** with Claude, ChatGPT, Copy.
-* **Readiness / Protections**: score ring, categories, "do first" list, protections with add / check / in place,
+* **Readiness / Protections**: the release decision above the score (one of three words with its tone and beside a
+  word, why, each criterion with its state in words, what it is tied to; nothing when the file has none), score
+  ring, categories, "do first" list, protections with add / check / in place,
   starter files written with one click and never overwriting.
 * **Explanations**: plan (count and cost) before running; consent text with the provider's data notice; three
   lenses with anchored pairs; validation failures shown as such; allowance remaining and the clean stop.

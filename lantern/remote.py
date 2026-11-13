@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from . import programs, removal, results
@@ -382,6 +383,30 @@ def _git(args: list[str], cwd: Path | None, timeout: int = 900, env: dict | None
         raise RuntimeError(f"git took longer than {timeout} seconds; try again, or clone it yourself and add the folder.") from None
 
 
+# Helper programs that run beside the analysis (`security.Early`) are waited for in threads of their own. A run
+# that stops must leave none of them going: `end_for` ends what those threads wait for and has them start nothing
+# more, `forget` is for when the threads have ended (the system hands a thread's number out again).
+_WAITED: dict[int, list] = {}     # a thread -> the helper programs it is waiting for
+_TOLD: set[int] = set()           # the threads that were told to stop
+_WAIT_LOCK = threading.Lock()
+
+
+def end_for(threads) -> None:
+    """End every helper program these threads are waiting for, with everything it started, and have the threads
+    start no other: `run_bounded` raises OSError in a thread that was told to stop."""
+    threads = set(threads)
+    with _WAIT_LOCK:
+        _TOLD.update(threads)
+        going = [p for t in threads for p in _WAITED.get(t, ())]
+    for proc in going:
+        _kill_tree(proc)
+
+
+def forget(threads) -> None:
+    with _WAIT_LOCK:
+        _TOLD.difference_update(set(threads))
+
+
 def run_bounded(cmd: list[str], cwd: Path | None = None, env: dict | None = None,
                 timeout: float = 900) -> subprocess.CompletedProcess:
     """`subprocess.run(capture_output=True, text=True, timeout=...)`, except that the timeout bounds the call. git
@@ -396,8 +421,29 @@ def run_bounded(cmd: list[str], cwd: Path | None = None, env: dict | None = None
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kw["start_new_session"] = True
+    me = threading.get_ident()
+    with _WAIT_LOCK:
+        if me in _TOLD:
+            raise OSError("the run was stopped; no helper program is started for it any more")
     proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **kw)
+    with _WAIT_LOCK:
+        _WAITED.setdefault(me, []).append(proc)
+        told = me in _TOLD
+    try:
+        if told:    # told to stop between the look above and the start
+            _kill_tree(proc)
+        return _waited_for(proc, cmd, timeout)
+    finally:
+        with _WAIT_LOCK:
+            mine = _WAITED.get(me, [])
+            if proc in mine:
+                mine.remove(proc)
+            if not mine:
+                _WAITED.pop(me, None)
+
+
+def _waited_for(proc: subprocess.Popen, cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:

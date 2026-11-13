@@ -1289,12 +1289,36 @@ def test_fixed_text_from_every_caller_lowers_a_finding_and_a_near_miss_does_not(
         assert f["input"] is False and [c["from"] for c in f["context"]["fixed"]["calls"]] == ["disk", "up"], f
 
 
+WILDCARD = {
+    # the shell puts the names of the files it finds into the command, and the command's own text says nothing about
+    # them: until 2026-11-13 "only fixed text reaches this line" lowered the scanner's wildcard finding to low
+    "kept: a wildcard in fixed text":
+        ("def pack():\n    os.system('tar cf /tmp/out.tar *')\n", "B609", "high"),
+    "lowered: the same command with no wildcard, one of two literals":
+        ("def pack():\n    os.system('tar cf /tmp/out.tar docs' if os.name == 'nt' else 'tar cf /tmp/out.tar ./docs')\n",
+         "B605", "low"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(WILDCARD))
+def test_fixed_text_does_not_lower_a_wildcard_the_shell_fills_in(tmp_path, case):
+    body, rule, want = WILDCARD[case]
+    fs = _scan(tmp_path, {"app/main.py": FASTAPI + body})
+    f = next(f for f in fs if f["rule"] == rule)
+    assert f["rank"] == want, (f["rank"], f.get("rank_note"))
+    if want == "high":
+        assert "rank_note" not in f and "fixed" not in (f.get("context") or {}), f
+    else:
+        assert f["rank_before_context"] == "high" and "fixed text" in f["rank_note"], f
+
+
 def test_the_viewer_escapes_every_step_of_a_flow():
     # the steps are text from the analyzed code (a file name, a line, the words of a call): none of it may reach the
     # page as markup. `at()` is the box's own helper, which escapes the file and the line.
     import re
-    from pathlib import Path
-    html = (Path(__file__).parents[1] / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+
+    import lantern_files
+    html = lantern_files.page("report.html")
     body = html[html.index("function flowBox(f)"):html.index("// Every call site Lantern read")]
     assert "esc(s.file)" in body and "esc(s.line)" in body, "at() has to escape what it shows"
     seen = 0
