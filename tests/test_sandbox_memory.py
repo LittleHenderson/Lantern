@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -339,26 +340,44 @@ def test_on_the_command_line_the_limit_is_given_in_megabytes(tmp_path, monkeypat
 # ------------------------------------------------------------------------------------------------------- Docker
 FAKE_DOCKER = '''#!/bin/sh
 # a stand-in for the docker program: "run" writes down what it was asked and ends as run.mode says; "inspect"
-# answers what inspect.mode says; "rm" removes
+# answers the line of inspect.mode that belongs to this ask (the first ask the first line, and so on; the last
+# line for every ask after it) and ends as inspect.rc says, when that file is there; "rm" removes
 here=$(dirname "$0")
 case "$1" in
   run) echo "$@" > "$here/run.log"; exit "$(cat "$here/run.mode")" ;;
-  inspect) echo "$@" >> "$here/inspect.log"; cat "$here/inspect.mode"; exit 0 ;;
+  inspect) echo "$@" >> "$here/inspect.log"
+    n=$(wc -l < "$here/inspect.log")
+    said=$(sed -n "${n}p" "$here/inspect.mode")
+    [ -n "$said" ] || said=$(tail -n 1 "$here/inspect.mode")
+    echo "$said"
+    if [ -f "$here/inspect.rc" ]; then exit "$(cat "$here/inspect.rc")"; fi
+    exit 0 ;;
   rm) echo "$@" >> "$here/rm.log"; echo "$3"; exit 0 ;;
 esac
 exit 0
 '''
 
 
-def _fake_docker(tmp_path, monkeypatch, run: str, inspect: str) -> Path:
+def _fake_docker(tmp_path, monkeypatch, run: str, inspect: str, killed: float = 0.6, other: float = 0.3) -> Path:
+    """`inspect` is what Docker answers, one line for each time it is asked. How long Lantern goes on asking is
+    made short here (`killed` seconds after a 137, `other` after any other error), so that a test of a "false"
+    that stays does not wait the seconds a real run waits."""
     where = tmp_path / "bin"
-    where.mkdir()
+    where.mkdir(parents=True)
     (where / "docker").write_text(FAKE_DOCKER, encoding="utf-8")
     (where / "docker").chmod(0o755)
     (where / "run.mode").write_text(run, encoding="utf-8")
     (where / "inspect.mode").write_text(inspect + "\n", encoding="utf-8")
     monkeypatch.setenv("PATH", str(where) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr(sandbox, "OOM_WAIT_KILLED", killed, raising=False)
+    monkeypatch.setattr(sandbox, "OOM_WAIT", other, raising=False)
+    monkeypatch.setattr(sandbox, "OOM_ASK_AGAIN", 0.05, raising=False)
     return where
+
+
+def _asked(where: Path) -> int:
+    log = where / "inspect.log"
+    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
 @pytest.mark.skipif(os.name != "posix", reason="the stand-in for the docker program is a shell script")
@@ -380,6 +399,88 @@ def test_a_container_stopped_for_its_memory_is_said_and_no_failure(code, answer,
         assert any("more memory than their limit (512 MB)" in x for x in lines), lines
     else:
         assert r["returncode"] == int(code)
+
+
+DOCKER_ONLY = pytest.mark.skipif(os.name != "posix", reason="the stand-in for the docker program is a shell script")
+
+
+@DOCKER_ONLY
+@pytest.mark.parametrize("code, answers, asks", [("137", "false\nfalse\ntrue", 3), ("137", "false\ntrue", 2),
+                                                  ("1", "false\nfalse\nfalse\ntrue", 4), ("2", "false\ntrue", 2)])
+def test_dockers_answer_about_the_memory_may_come_after_the_containers_end(code, answers, asks, tmp_path, monkeypatch):
+    """Docker learns that the kernel ended a program for the container's memory from a message of its own, and that
+    message may arrive after the container has ended. Asked once, right at the end, Docker said "false" in CI on
+    2026-11-13 (the third push of #186, Python 3.13), and tests stopped for their memory read as tests that failed:
+    "Blocked" where "Incomplete" is true. So a "false" is asked again for a while; a "true" is believed at once."""
+    where = _fake_docker(tmp_path, monkeypatch, code, answers, killed=5.0, other=5.0)
+    repo = _tiny(tmp_path / "tiny", "def test_ok():\n    assert True\n")
+    lines = []
+    began = time.monotonic()
+    r = sandbox.run(repo, PYTEST, log=lines.append, backend="docker", memory=512)
+    took = time.monotonic() - began
+    assert r["over_memory"] is True and r["returncode"] is None and r["cancelled"] is False, (r["returncode"], lines)
+    assert any("more memory than their limit (512 MB)" in x for x in lines), lines
+    assert _asked(where) == asks                                 # and no more once Docker has said yes
+    assert took < 4.0, took                                      # the yes ends the waiting: not the 5 s it may take
+    assert (where / "rm.log").read_text(encoding="utf-8").startswith("rm -f lantern-sbx-")
+
+
+@DOCKER_ONLY
+@pytest.mark.parametrize("code, wait", [("137", 0.6), ("1", 0.3)])
+def test_a_no_that_stays_is_believed_after_a_wait_that_ends(code, wait, tmp_path, monkeypatch):
+    """The twin: tests that failed, or were ended by a kill that was not for the container's memory. Docker goes on
+    saying "false", Lantern stops asking when the wait is over, and the run is what it was: ended with that number.
+    After a kill (137) the log says that Docker was asked and did not name the memory."""
+    where = _fake_docker(tmp_path, monkeypatch, code, "false")
+    repo = _tiny(tmp_path / "tiny", "def test_ok():\n    assert True\n")
+    lines = []
+    began = time.monotonic()
+    r = sandbox.run(repo, PYTEST, log=lines.append, backend="docker", memory=512)
+    took = time.monotonic() - began
+    assert r["over_memory"] is False and r["returncode"] == int(code), lines
+    assert _asked(where) >= 3, _asked(where)                     # asked again, every 0.05 s here
+    assert took < wait + 3.0, took                               # and the asking ends
+    said = [x for x in lines if "did not say" in x]
+    if code == "137":
+        assert len(said) == 1 and "137" in said[0] and f"asked {_asked(where)} times" in said[0], lines
+        assert "failure of the tests" in said[0]
+    else:
+        assert not said, lines
+    assert (where / "rm.log").read_text(encoding="utf-8").startswith("rm -f lantern-sbx-")
+
+
+@DOCKER_ONLY
+def test_a_kill_is_asked_about_longer_than_any_other_error(tmp_path, monkeypatch):
+    """The kernel ends a program over its memory with a kill, which Docker reports as 137: that is where a late
+    answer matters most. A test runner that lost a child to the limit reports a failure of its own (1, 2, ...)
+    some time after the kill, when Docker has usually heard."""
+    assert 0 < sandbox.OOM_ASK_AGAIN < sandbox.OOM_WAIT < sandbox.OOM_WAIT_KILLED <= 10
+    asks = {}
+    for code in ("137", "1"):
+        where = _fake_docker(tmp_path / code, monkeypatch, code, "false", killed=1.0, other=0.2)
+        repo = _tiny(tmp_path / code / "tiny", "def test_ok():\n    assert True\n")
+        assert sandbox.run(repo, PYTEST, log=QUIET, backend="docker", memory=512)["returncode"] == int(code)
+        asks[code] = _asked(where)
+    assert asks["137"] > asks["1"] >= 2, asks
+
+
+@DOCKER_ONLY
+@pytest.mark.parametrize("code, answers, rc, asks", [("137", "true", None, 1),       # a yes: asked once
+                                                      ("0", "true", None, 0),         # tests that passed: not asked
+                                                      ("125", "true", None, 0),       # Docker itself failed: not asked
+                                                      ("137", "<b>", None, 1),        # no answer of Docker's: no waiting
+                                                      ("137", "", None, 1),
+                                                      ("137", "false", "1", 1)])      # docker inspect ended with an error
+def test_docker_is_asked_no_more_often_than_it_takes(code, answers, rc, asks, tmp_path, monkeypatch):
+    where = _fake_docker(tmp_path, monkeypatch, code, answers, killed=5.0, other=5.0)
+    if rc:
+        (where / "inspect.rc").write_text(rc, encoding="utf-8")
+    repo = _tiny(tmp_path / "tiny", "def test_ok():\n    assert True\n")
+    began = time.monotonic()
+    r = sandbox.run(repo, PYTEST, log=QUIET, backend="docker", memory=512)
+    assert _asked(where) == asks, (_asked(where), r["returncode"])
+    assert time.monotonic() - began < 4.0
+    assert r["over_memory"] is (code == "137" and answers == "true" and not rc)
 
 
 @pytest.mark.parametrize("backend", BACKENDS)

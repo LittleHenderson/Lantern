@@ -70,7 +70,9 @@ program can run out of while it uses little (a file mapped, threads, an allocato
 were refused memory after 302 of them, and the refusal read as "the tests failed". Tests stopped for their
 memory did not finish (`over_memory`): the release decision is "Incomplete", never passed or failed. The words
 come from the launcher's own line and result (`_over_memory`) or from Docker's answer about the container
-(`_docker_oom`); a test that prints the line and ends with that result says of itself that it was stopped, and
+(`_docker_oom`: Docker may hear of the kill after the container's end, so a "false" is asked again for
+`OOM_WAIT_KILLED` seconds after a kill and `OOM_WAIT` after any other error; a kill Docker never names reads as
+failed tests); a test that prints the line and ends with that result says of itself that it was stopped, and
 gains "Incomplete" where it would have had "Blocked", never a pass. On macOS the limit is put on the address
 space as before, and on Windows it is the job's limit for each process: there tests that go over fail in their
 own way, and are reported as failed.
@@ -1187,15 +1189,39 @@ def _over_memory(rc, output: str) -> bool:
     return False
 
 
-def _docker_oom(docker: str, name: str) -> bool:
-    """Whether Docker ended a program of this container because the container was over its memory. Docker's own
-    answer about the container, asked after its command ended with an error; anything but a plain yes is a no."""
-    try:
-        r = subprocess.run([docker, "inspect", "--format", "{{.State.OOMKilled}}", name], capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=30, env=programs.env())
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return r.returncode == 0 and r.stdout.strip() == "true"
+# How long Docker is asked whether a container was over its memory, in seconds: after a command that was ended by
+# a kill (137, the way the kernel ends a program over its memory), after any other error (a test runner that lost
+# a child to the limit reports a failure of its own, some time after the kill), and between two asks.
+OOM_WAIT_KILLED = 5.0
+OOM_WAIT = 1.0
+OOM_ASK_AGAIN = 0.2
+
+
+def _docker_oom(docker: str, name: str, wait: float = 0.0) -> tuple[bool, int]:
+    """Whether Docker ended a program of this container because the container was over its memory, and how many
+    times Docker was asked. Docker's own answer about the container, asked after its command ended with an error.
+
+    Docker hears of the kill in a message of its own, which may arrive after the container's end: asked once,
+    right at the end, it said "false" about tests the kernel had just ended for their memory (CI, 2026-11-13), and
+    the run read as failed tests. So a "false" is asked again every `OOM_ASK_AGAIN` seconds until `wait` seconds
+    have passed, and a "true" is believed at once. Anything else ends the asking as a no: Docker cannot be asked,
+    ends with an error (the container is gone) or says other words."""
+    until = time.monotonic() + max(0.0, wait)
+    asked = 0
+    while True:
+        asked += 1
+        try:
+            r = subprocess.run([docker, "inspect", "--format", "{{.State.OOMKilled}}", name], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=30, env=programs.env())
+        except (OSError, subprocess.SubprocessError):
+            return False, asked
+        said = r.stdout.strip()
+        if r.returncode != 0 or said not in ("true", "false"):
+            return False, asked
+        left = until - time.monotonic()
+        if said == "true" or left <= 0:
+            return said == "true", asked
+        time.sleep(min(OOM_ASK_AGAIN, left))
 
 
 def _over_words(mb: int) -> str:
@@ -1545,7 +1571,12 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel=None,
     why = _unavailable(rc, output)
     if why:
         raise Unavailable(why)
-    over = rc not in (None, 0, 125) and _docker_oom(docker, name)
+    over = False
+    if rc not in (None, 0, 125):
+        over, asked = _docker_oom(docker, name, OOM_WAIT_KILLED if rc == 137 else OOM_WAIT)
+        if rc == 137 and not over:
+            log(f"sandbox: the tests' program was ended by a kill (137). Docker, asked {asked} times, did not say "
+                "that the container was over its memory, so this reads as a failure of the tests")
     if rc is not None:      # ended by itself: the container is still there (a stopped run's was removed by `_stream`)
         problem = remove()
         if problem:

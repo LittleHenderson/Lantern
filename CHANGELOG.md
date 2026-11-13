@@ -54,8 +54,16 @@ file. New entries go under `## Unreleased`, on top.
     arenas): Lantern's own tests were refused memory after 302 of them, and that read as "the tests failed". Tests
     stopped for their memory did not finish (`trace.over_memory`, `trace.memory_limit`): Incomplete, with the way
     to give more. On macOS the limit is still on the address space and on Windows it is the job's limit for each
-    process; there tests that go over fail in their own way. `tests/test_sandbox_memory.py` (37 tests: on 0.11.0
-    36 failed and 1 needs Docker; now 36 pass).
+    process; there tests that go over fail in their own way. Docker is asked about the container more than once: it
+    hears that the kernel ended a program for the container's memory in a message of its own, which may arrive
+    after the container's end. Asked once, right at the end, it said "false" in CI on this change's third push (the
+    Python 3.13 job; the same test passed in the Python 3.11 job of that push and on the push before), and tests
+    stopped for their memory read as tests that failed: Blocked where Incomplete is true. A "false" is now asked
+    again every 0.2 s, for 5 s after a command ended by a kill (137) and 1 s after any other error; a "true" is
+    believed at once; tests that passed are not asked about; and when a kill is never named as memory, the log says
+    that Docker was asked and how often. `tests/test_sandbox_memory.py` (50 tests: on 0.11.0 49 failed and 1 needs
+    Docker; now 49 pass; 13 of them are new with this correction and use a stand-in for the docker program, and 7
+    of the 13 failed on the code that asked once).
   - **The command line runs the tests the way the app does.** `lantern analyze PATH --trace --sandbox -- <test
     command>` runs them in the sandbox (only a test command, started in the folder the app would start it in);
     without `--sandbox` the command runs in the project's folder as the person, as before, with 15 minutes unless
@@ -159,7 +167,9 @@ file. New entries go under `## Unreleased`, on top.
     second, and no wall; a hostile test can print the launcher's memory line and end with 118, and then reads
     Incomplete where it would have read Blocked (never Passed); the file-size and open-files limits, a kernel that
     ends a process for the computer's own memory, Windows's per-process memory limit and a test runner that is not
-    installed all read as "the tests failed"; the copy the tests run on leaves out `.git`; a Lantern ended by force
+    installed all read as "the tests failed", and so does a memory stop in Docker's container that Docker never
+    names (its message lost, or more than 5 s late: the log then says that Docker was asked); the copy the tests
+    run on leaves out `.git`; a Lantern ended by force
     leaves the run's temp copy and, under Docker (no longer started with `--rm`, so that Docker can be asked why a
     command ended), the ended container; Landlock stacks at most 16 rule sets, and a sandbox inside the sandbox
     gets no network of its own; a project's own audit hook that asks to be traced is called with tracing off;
