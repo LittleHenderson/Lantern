@@ -176,6 +176,11 @@ rank, a score or a release decision. The hosted service keeps nothing.
   tab). Such a rehearsal builds the package, runs every test against it and looks at the live gateway exactly as a
   tag does, and ends before the one job that publishes (`if: github.event_name == 'push'`, the only job that may
   write to the repository). `docs/deploy.md` has the order: merge, rehearsal, deploy lantern-cloud, tag.
+
+  `tests/fixtures/old_results/v0.11.0/` holds what this version writes for the shop sample (0.11.0 is the first to
+  write a release decision into `readiness.json` and a call inventory, `calls.json`), so the next versions are
+  tested on opening it. `tests/test_old_results.py` also holds that a result from 0.9.0 or 0.10.0, which has no
+  release decision, is shown with none: this version does not make one up for work an older version did.
 - Faster, with every check and every result as it was (2026-11-12; point 10 of the 2026-11-09 directive, "Increase
   performance without dropping checks"). Measured first, then changed: `bench/speed.py` analyzes the sample shop and
   five public apps at a fixed commit each, three first runs and three repeat runs a side, the unchanged engine and

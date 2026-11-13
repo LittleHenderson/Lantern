@@ -1,0 +1,851 @@
+{
+ "version": 2,
+ "score": 26,
+ "grade": "F",
+ "checklist": 26,
+ "release": {
+  "decision": "Blocked",
+  "words": "Blocked: 3 critical and 1 high findings open outside test code: B602 at shop/app.py:16, B324 at shop/auth.py:18, B608 at shop/repo.py:15, LW-PUBLIC-SECRET at web/src/pages/Admin.tsx:4",
+  "profile": {
+   "name": "full-stack web app",
+   "required": [
+    "findings",
+    "scanners",
+    "dependencies",
+    "tests"
+   ],
+   "not_required": [
+    {
+     "id": "behaviour",
+     "why": "The project has no behaviour plan (lantern-behaviour.json), so no app was started: nothing in this decision says what the app does when it runs."
+    }
+   ]
+  },
+  "criteria": [
+   {
+    "id": "findings",
+    "title": "No critical or high finding is open",
+    "required": true,
+    "state": "failed",
+    "why": "3 critical and 1 high findings open outside test code: B602 at shop/app.py:16, B324 at shop/auth.py:18, B608 at shop/repo.py:15, LW-PUBLIC-SECRET at web/src/pages/Admin.tsx:4",
+    "fix": "Fix each one (the Findings tab says how), or record why the risk is acceptable with `lantern accept ID --reason \"...\"`.",
+    "ids": [
+     "57fa455f7b3b",
+     "12771352490c",
+     "271ac69ef170",
+     "3009f20c07ea"
+    ]
+   },
+   {
+    "id": "scanners",
+    "title": "Every scanner that applies finished and covered everything",
+    "required": true,
+    "state": "passed",
+    "why": "5 scanners finished: bandit, lantern-secrets, lantern-web, lantern-ai, lantern-flow.",
+    "fix": ""
+   },
+   {
+    "id": "dependencies",
+    "title": "Every library was checked against the advisory databases",
+    "required": true,
+    "state": "missing",
+    "why": "4 libraries are named in a file with no lock file beside it, so no version is known and they were not checked (web/package.json: axios, web/package.json: react, web/package.json: react-dom, web/package.json: react-router-dom).",
+    "fix": "Run the check with the network on, commit a lock file with exact versions, and check the libraries Lantern cannot check with that language's own audit tool."
+   },
+   {
+    "id": "tests",
+    "title": "The project's tests were run and passed",
+    "required": true,
+    "state": "missing",
+    "why": "The tests were not run in this check. Lantern runs a project's code only when asked, and tests that were not run prove nothing.",
+    "fix": "Run them under Lantern: `lantern analyze PATH --trace -- <your test command>`, or \u201cWatch my tests run\u201d in the app."
+   },
+   {
+    "id": "behaviour",
+    "title": "The behaviour checks held when the app was started",
+    "required": false,
+    "state": "not-applicable",
+    "why": "The project has no behaviour plan (lantern-behaviour.json), so no app was started: nothing in this decision says what the app does when it runs.",
+    "fix": ""
+   }
+  ],
+  "blocking": [
+   "findings"
+  ],
+  "missing": [
+   "dependencies",
+   "tests"
+  ],
+  "bound_to": {
+   "commit": null,
+   "uncommitted_changes": null,
+   "code": {
+    "files": 15,
+    "sha256": "40c2245411ef9d5236827dc7008c65ba0b4fcb22e112ecfe61dd2e858a098c33",
+    "not_read": 0,
+    "left_out": "the folders no reader of Lantern looks into: version control, installed libraries, build output, Python environments and Lantern's own results"
+   },
+   "dependencies": {
+    "files": {
+     "pyproject.toml": "0ca715e73e5bfae88a019ebec00676487e1ce6df88b2bdaff7b5903ade26c1e8",
+     "web/package.json": "9de93565203c5cf87ce060ae1e5e8692e1eb8395bce30f944c770ff6dc6c6f8c"
+    },
+    "count": 2,
+    "sha256": "ad5c68bf1d3aa306890293fb1b09206a6317c19b013dd3cb17fde32d3bca6771"
+   },
+   "settings": {
+    "scan": true,
+    "trace": null,
+    "offline": true,
+    "place": "local",
+    "packs_off": [],
+    "accepted_sha256": null,
+    "plan_sha256": null,
+    "plan_unusable": null
+   },
+   "tools": [
+    {
+     "tool": "lantern",
+     "version": "0.11.0",
+     "role": "graph, bridge, web rules, readiness",
+     "state": null
+    },
+    {
+     "tool": "python",
+     "version": "3.13.18",
+     "role": "runtime",
+     "state": null
+    },
+    {
+     "tool": "tree-sitter",
+     "version": "0.26.1",
+     "role": "parser",
+     "state": null
+    },
+    {
+     "tool": "tree-sitter-python",
+     "version": "0.25.0",
+     "role": "parser",
+     "state": null
+    },
+    {
+     "tool": "tree-sitter-typescript",
+     "version": "0.23.2",
+     "role": "parser",
+     "state": null
+    },
+    {
+     "tool": "tree-sitter-javascript",
+     "version": "0.25.0",
+     "role": "parser",
+     "state": null
+    },
+    {
+     "tool": "bandit",
+     "version": "1.9.4",
+     "role": "scanner",
+     "state": "ok"
+    },
+    {
+     "tool": "pip-audit",
+     "version": "2.10.1",
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "npm-audit",
+     "version": null,
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "maven-audit",
+     "version": "osv-v1",
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "composer-audit",
+     "version": "osv-v1",
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "gem-audit",
+     "version": "osv-v1",
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "gitleaks",
+     "version": null,
+     "role": "scanner",
+     "state": "unavailable"
+    },
+    {
+     "tool": "lantern-secrets",
+     "version": "2",
+     "role": "scanner",
+     "state": "ok"
+    },
+    {
+     "tool": "lantern-web",
+     "version": "0.1",
+     "role": "scanner",
+     "state": "ok"
+    },
+    {
+     "tool": "lantern-ai",
+     "version": "0.1",
+     "role": "scanner",
+     "state": "ok"
+    },
+    {
+     "tool": "lantern-flow",
+     "version": "1",
+     "role": "scanner",
+     "state": "ok"
+    }
+   ],
+   "lantern": "0.11.0",
+   "python": "3.13.18",
+   "system": "Linux"
+  }
+ },
+ "categories": [
+  {
+   "key": "security",
+   "title": "Security findings",
+   "weight": 20,
+   "score": 4.0,
+   "percent": 20,
+   "checks": [
+    {
+     "id": "sec-critical",
+     "title": "No open critical findings",
+     "points": 10,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "3 open critical findings",
+     "fix": "Fix them (see the Findings tab), or record why the risk is acceptable with `lantern accept ID --reason \"...\"`.",
+     "how": "scanners + reachability"
+    },
+    {
+     "id": "sec-high",
+     "title": "No open high findings",
+     "points": 6,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "1 open high finding",
+     "fix": "Fix them (see the Findings tab), or record why the risk is acceptable with `lantern accept ID --reason \"...\"`.",
+     "how": "scanners + reachability"
+    },
+    {
+     "id": "sec-medium",
+     "title": "No open medium findings",
+     "points": 4,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "3 open medium findings",
+     "fix": "Fix them (see the Findings tab), or record why the risk is acceptable with `lantern accept ID --reason \"...\"`.",
+     "how": "scanners + reachability"
+    },
+    {
+     "id": "sec-scanners",
+     "title": "Every security scanner finished",
+     "points": 5,
+     "earned": 5,
+     "status": "pass",
+     "evidence": "5 scanners finished: bandit, lantern-secrets, lantern-web, lantern-ai, lantern-flow",
+     "fix": "",
+     "how": "scanner records"
+    }
+   ]
+  },
+  {
+   "key": "secrets",
+   "title": "Secrets and config",
+   "weight": 12,
+   "score": 3.6,
+   "percent": 30,
+   "checks": [
+    {
+     "id": "secrets-none",
+     "title": "No secrets in code",
+     "points": 5,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "1 possible secret: web/src/pages/Admin.tsx:4",
+     "fix": "Move each value to an environment variable and rotate it; anything committed should be treated as leaked.",
+     "how": "secret scanner"
+    },
+    {
+     "id": "secrets-env",
+     "title": "Config read from the environment",
+     "points": 3,
+     "earned": 3,
+     "status": "pass",
+     "evidence": "reads 1 variable: VITE_ADMIN_SECRET",
+     "fix": "",
+     "how": "pattern: os.environ / os.getenv / process.env / import.meta.env"
+    },
+    {
+     "id": "secrets-example",
+     "title": ".env.example documents every variable",
+     "points": 2,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no .env.example",
+     "fix": "Lantern can generate one: see Starter files below.",
+     "how": "file check + pattern"
+    },
+    {
+     "id": "secrets-gitignore",
+     "title": ".env files are git-ignored",
+     "points": 2,
+     "earned": 0,
+     "status": "skip",
+     "evidence": "no .env files present",
+     "fix": "",
+     "how": "file check"
+    }
+   ]
+  },
+  {
+   "key": "input",
+   "title": "Input and error handling",
+   "weight": 10,
+   "score": 10.0,
+   "percent": 100,
+   "checks": [
+    {
+     "id": "input-bare-except",
+     "title": "No bare `except:`",
+     "points": 4,
+     "earned": 4,
+     "status": "pass",
+     "evidence": "none found",
+     "fix": "",
+     "how": "pattern"
+    },
+    {
+     "id": "input-validation",
+     "title": "Request input is validated by a schema",
+     "points": 3,
+     "earned": 3,
+     "status": "pass",
+     "evidence": "schema library in use (shop/app.py)",
+     "fix": "",
+     "how": "pattern: pydantic / FastAPI / marshmallow / zod / yup / joi / valibot"
+    },
+    {
+     "id": "input-debug",
+     "title": "Debug mode is off (no stack traces to users)",
+     "points": 3,
+     "earned": 3,
+     "status": "pass",
+     "evidence": "no debug=True found",
+     "fix": "",
+     "how": "pattern"
+    }
+   ]
+  },
+  {
+   "key": "deps",
+   "title": "Dependencies",
+   "weight": 10,
+   "score": 2.0,
+   "percent": 20,
+   "checks": [
+    {
+     "id": "deps-lock",
+     "title": "Lockfile committed",
+     "points": 4,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no lockfile for Python, web/package.json",
+     "fix": "Commit the lockfile your package manager writes (package-lock.json, pnpm-lock.yaml, uv.lock, poetry.lock, go.sum, Cargo.lock, gradle.lockfile, composer.lock, Gemfile.lock) so every install gets the same versions.",
+     "how": "file check"
+    },
+    {
+     "id": "deps-vuln",
+     "title": "No known-vulnerable versions",
+     "points": 4,
+     "earned": 0,
+     "status": "skip",
+     "evidence": "not checked: npm-audit (skipped: no package-lock.json, so exact versions are unknown (commit your lock file))",
+     "fix": "Run the check with the network on, and commit a lock file so exact versions can be checked.",
+     "how": "pip-audit, npm audit, OSV (Gradle/Maven)",
+     "required": true
+    },
+    {
+     "id": "deps-pinned",
+     "title": "Versions are bounded (no `*`, `latest`, or bare names)",
+     "points": 2,
+     "earned": 2,
+     "status": "pass",
+     "evidence": "every dependency has a version constraint",
+     "fix": "",
+     "how": "file check"
+    }
+   ]
+  },
+  {
+   "key": "tests",
+   "title": "Tests",
+   "weight": 10,
+   "score": 4.0,
+   "percent": 40,
+   "checks": [
+    {
+     "id": "tests-exist",
+     "title": "Tests exist",
+     "points": 4,
+     "earned": 4,
+     "status": "pass",
+     "evidence": "1 test file",
+     "fix": "",
+     "how": "file check"
+    },
+    {
+     "id": "tests-entries",
+     "title": "Tests touch every entry point",
+     "points": 4,
+     "earned": 0.0,
+     "status": "fail",
+     "evidence": "0 of 5 reached from tests; not reached: GET /users/{user_id}, POST /backup, click.command(), /admin",
+     "fix": "Add a test that calls each untested route or command.",
+     "how": "call graph from test functions (static), plus route paths written in test files"
+    },
+    {
+     "id": "tests-pass",
+     "title": "Tests pass",
+     "points": 2,
+     "earned": 0,
+     "status": "skip",
+     "evidence": "not run (Lantern never runs your code unless you pass --trace)",
+     "fix": "Run them under Lantern: `lantern analyze PATH --trace -- <your test command>`, or \u201cWatch my tests run\u201d in the app.",
+     "how": "file check",
+     "required": true
+    }
+   ]
+  },
+  {
+   "key": "observability",
+   "title": "Observability",
+   "weight": 8,
+   "score": 2.0,
+   "percent": 25,
+   "checks": [
+    {
+     "id": "obs-logging",
+     "title": "Uses a logging library",
+     "points": 3,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no logging library found",
+     "fix": "Use the `logging` module (Python) or pino (Node) so logs have levels and context.",
+     "how": "pattern"
+    },
+    {
+     "id": "obs-health",
+     "title": "Health-check endpoint",
+     "points": 3,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "none among 2 routes",
+     "fix": "Add GET /health returning 200, so your host can tell when the app is up. See Starter files.",
+     "how": "route table"
+    },
+    {
+     "id": "obs-print",
+     "title": "No print debugging in server code",
+     "points": 2,
+     "earned": 2,
+     "status": "pass",
+     "evidence": "none",
+     "fix": "",
+     "how": "pattern"
+    }
+   ]
+  },
+  {
+   "key": "packaging",
+   "title": "Packaging",
+   "weight": 8,
+   "score": 0.0,
+   "percent": 0,
+   "checks": [
+    {
+     "id": "pkg-docker",
+     "title": "Container definition (Dockerfile)",
+     "points": 3,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no Dockerfile",
+     "fix": "See Starter files for a Dockerfile.",
+     "how": "file check"
+    },
+    {
+     "id": "pkg-user",
+     "title": "Container runs as a non-root user",
+     "points": 2,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no Dockerfile",
+     "fix": "",
+     "how": "file check"
+    },
+    {
+     "id": "pkg-slim",
+     "title": "Slim base image",
+     "points": 1,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no Dockerfile",
+     "fix": "",
+     "how": "file check"
+    },
+    {
+     "id": "pkg-tag",
+     "title": "Base image tag pinned",
+     "points": 1,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no Dockerfile",
+     "fix": "",
+     "how": "file check"
+    },
+    {
+     "id": "pkg-dockerignore",
+     "title": ".dockerignore present",
+     "points": 1,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no Dockerfile",
+     "fix": "",
+     "how": "file check"
+    }
+   ]
+  },
+  {
+   "key": "ci",
+   "title": "CI/CD",
+   "weight": 8,
+   "score": 0.0,
+   "percent": 0,
+   "checks": [
+    {
+     "id": "ci-exists",
+     "title": "CI workflow exists",
+     "points": 3,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "none",
+     "fix": "See Starter files for a GitHub Actions workflow.",
+     "how": "file check"
+    },
+    {
+     "id": "ci-tests",
+     "title": "CI runs the tests",
+     "points": 3,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no test command found in CI",
+     "fix": "",
+     "how": "pattern"
+    },
+    {
+     "id": "ci-scan",
+     "title": "CI runs a security scanner",
+     "points": 2,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no scanner in CI",
+     "fix": "Add `lantern analyze` (or bandit / npm audit) to CI.",
+     "how": "pattern"
+    }
+   ]
+  },
+  {
+   "key": "resilience",
+   "title": "Resilience",
+   "weight": 8,
+   "score": 0.0,
+   "percent": 0,
+   "checks": [
+    {
+     "id": "res-timeout",
+     "title": "Outbound HTTP calls have timeouts",
+     "points": 4,
+     "earned": 0.0,
+     "status": "fail",
+     "evidence": "3 of 3 calls without a timeout (no AbortSignal/timeout in frontend code)",
+     "fix": "Pass timeout= to requests/httpx; use AbortSignal.timeout(ms) with fetch.",
+     "how": "pattern"
+    },
+    {
+     "id": "res-retry",
+     "title": "Retries with backoff on outbound calls",
+     "points": 2,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no retry helper found",
+     "fix": "Retry idempotent calls with backoff (tenacity, p-retry).",
+     "how": "pattern"
+    },
+    {
+     "id": "res-shutdown",
+     "title": "Graceful shutdown",
+     "points": 2,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no SIGTERM handling",
+     "fix": "Handle SIGTERM so in-flight requests finish on deploy.",
+     "how": "pattern"
+    }
+   ]
+  },
+  {
+   "key": "docs",
+   "title": "Documentation",
+   "weight": 6,
+   "score": 0.0,
+   "percent": 0,
+   "checks": [
+    {
+     "id": "docs-readme",
+     "title": "README with run instructions",
+     "points": 3,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no README",
+     "fix": "Explain how to install and run the project in a code block.",
+     "how": "file check"
+    },
+    {
+     "id": "docs-license",
+     "title": "License",
+     "points": 2,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "no LICENSE file",
+     "fix": "Pick a license (choosealicense.com) so others know how they may use the code.",
+     "how": "file check"
+    },
+    {
+     "id": "docs-security",
+     "title": "SECURITY.md",
+     "points": 1,
+     "earned": 0,
+     "status": "fail",
+     "evidence": "missing",
+     "fix": "See Starter files.",
+     "how": "file check"
+    }
+   ]
+  }
+ ],
+ "shape": "full-stack web app",
+ "stack": {
+  "frameworks": [
+   "React",
+   "Vite"
+  ],
+  "entries": {
+   "route": 2,
+   "cli": 1,
+   "main": 2,
+   "test": 1,
+   "page": 2
+  },
+  "languages": [
+   "python",
+   "typescript/javascript"
+  ],
+  "deploy_targets": [],
+  "platform": null
+ },
+ "advice": [
+  "Deploy the frontend and the API as two pieces: the frontend as static files or on a platform such as Vercel or Netlify, the API as a container (Fly.io, Render, Railway, Cloud Run).",
+  "Keep all configuration in environment variables, with an .env.example listing every name.",
+  "Use a managed database with automatic backups, and connect through a pooled connection string.",
+  "Put the API behind HTTPS only, and allow your frontend's origin in CORS (not `*`)."
+ ],
+ "hotspots": [],
+ "protections": [
+  {
+   "id": "rate-limit",
+   "title": "Rate limiting",
+   "status": "add",
+   "why": "1 route(s) that change data can be called as fast as an attacker likes: password guessing, sign-up spam, or running up your bill.",
+   "evidence": [
+    "POST /backup (shop/app.py:14)"
+   ],
+   "how": "Limit requests per user and per IP on these routes: slowapi (FastAPI), Flask-Limiter, express-rate-limit, or @upstash/ratelimit (Next.js / serverless).",
+   "found": [],
+   "heuristic": true
+  },
+  {
+   "id": "security-headers",
+   "title": "Security headers",
+   "status": "add",
+   "why": "Browsers protect your users from clickjacking, mixed content, and injected scripts only when the app sends headers such as Content-Security-Policy, Strict-Transport-Security, and X-Frame-Options.",
+   "evidence": [
+    "full-stack web app; no header setup found in code or hosting config"
+   ],
+   "how": "Set them once for every response: helmet (Express), the headers() block in next.config.js, a vercel.json/netlify.toml headers rule, or a small middleware in FastAPI/Flask.",
+   "found": [],
+   "heuristic": true
+  },
+  {
+   "id": "password-hashing",
+   "title": "Slow password hashing",
+   "status": "add",
+   "why": "A fast hash (MD5/SHA) is applied to a password-named value: a leaked database could be cracked in hours.",
+   "evidence": [
+    "shop/auth.py:18"
+   ],
+   "how": "Store only argon2 or bcrypt hashes (passlib/pwdlib/bcrypt in Python, bcrypt or argon2 in Node), or use a managed auth service so you never store passwords.",
+   "found": [],
+   "heuristic": true
+  },
+  {
+   "id": "route-auth",
+   "title": "Login check on routes that change data",
+   "status": "add",
+   "why": "1 route(s) change data with no sign of a login check in the handler, in what it calls, or in app-wide middleware, so anyone on the internet can call them.",
+   "evidence": [
+    "POST /backup (shop/app.py:14)"
+   ],
+   "how": "Check the signed-in user at the top of each handler (or in shared middleware), and check they may act on this record, not just that they are signed in.",
+   "found": [],
+   "heuristic": true
+  }
+ ],
+ "incomplete": [],
+ "env_vars": [
+  "VITE_ADMIN_SECRET"
+ ],
+ "next_steps": [
+  {
+   "id": "sec-critical",
+   "title": "No open critical findings",
+   "points": 10,
+   "earned": 0,
+   "status": "fail",
+   "evidence": "3 open critical findings",
+   "fix": "Fix them (see the Findings tab), or record why the risk is acceptable with `lantern accept ID --reason \"...\"`.",
+   "how": "scanners + reachability",
+   "category": "Security findings",
+   "gain": 8.0
+  },
+  {
+   "id": "secrets-none",
+   "title": "No secrets in code",
+   "points": 5,
+   "earned": 0,
+   "status": "fail",
+   "evidence": "1 possible secret: web/src/pages/Admin.tsx:4",
+   "fix": "Move each value to an environment variable and rotate it; anything committed should be treated as leaked.",
+   "how": "secret scanner",
+   "category": "Secrets and config",
+   "gain": 6.0
+  },
+  {
+   "id": "sec-high",
+   "title": "No open high findings",
+   "points": 6,
+   "earned": 0,
+   "status": "fail",
+   "evidence": "1 open high finding",
+   "fix": "Fix them (see the Findings tab), or record why the risk is acceptable with `lantern accept ID --reason \"...\"`.",
+   "how": "scanners + reachability",
+   "category": "Security findings",
+   "gain": 4.8
+  },
+  {
+   "id": "deps-lock",
+   "title": "Lockfile committed",
+   "points": 4,
+   "earned": 0,
+   "status": "fail",
+   "evidence": "no lockfile for Python, web/package.json",
+   "fix": "Commit the lockfile your package manager writes (package-lock.json, pnpm-lock.yaml, uv.lock, poetry.lock, go.sum, Cargo.lock, gradle.lockfile, composer.lock, Gemfile.lock) so every install gets the same versions.",
+   "how": "file check",
+   "category": "Dependencies",
+   "gain": 4.0
+  },
+  {
+   "id": "deps-vuln",
+   "title": "No known-vulnerable versions",
+   "points": 4,
+   "earned": 0,
+   "status": "skip",
+   "evidence": "not checked: npm-audit (skipped: no package-lock.json, so exact versions are unknown (commit your lock file))",
+   "fix": "Run the check with the network on, and commit a lock file so exact versions can be checked.",
+   "how": "pip-audit, npm audit, OSV (Gradle/Maven)",
+   "required": true,
+   "category": "Dependencies",
+   "gain": 4.0
+  },
+  {
+   "id": "tests-entries",
+   "title": "Tests touch every entry point",
+   "points": 4,
+   "earned": 0.0,
+   "status": "fail",
+   "evidence": "0 of 5 reached from tests; not reached: GET /users/{user_id}, POST /backup, click.command(), /admin",
+   "fix": "Add a test that calls each untested route or command.",
+   "how": "call graph from test functions (static), plus route paths written in test files",
+   "category": "Tests",
+   "gain": 4.0
+  },
+  {
+   "id": "res-timeout",
+   "title": "Outbound HTTP calls have timeouts",
+   "points": 4,
+   "earned": 0.0,
+   "status": "fail",
+   "evidence": "3 of 3 calls without a timeout (no AbortSignal/timeout in frontend code)",
+   "fix": "Pass timeout= to requests/httpx; use AbortSignal.timeout(ms) with fetch.",
+   "how": "pattern",
+   "category": "Resilience",
+   "gain": 4.0
+  },
+  {
+   "id": "sec-medium",
+   "title": "No open medium findings",
+   "points": 4,
+   "earned": 0,
+   "status": "fail",
+   "evidence": "3 open medium findings",
+   "fix": "Fix them (see the Findings tab), or record why the risk is acceptable with `lantern accept ID --reason \"...\"`.",
+   "how": "scanners + reachability",
+   "category": "Security findings",
+   "gain": 3.2
+  }
+ ],
+ "starter": {
+  ".env.example": {
+   "why": "Lists every environment variable the code reads, so a new machine or host can be configured without reading the source.",
+   "content": "# Copy to .env and fill in. Never commit .env.\n\n# used at web/src/pages/Admin.tsx:4 (sent to the browser: must not be secret)\nVITE_ADMIN_SECRET=\n"
+  },
+  "Dockerfile": {
+   "why": "A slim image that runs as a non-root user, with a health check.",
+   "content": "FROM python:3.12-slim\nENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\nWORKDIR /app\nCOPY . .\nRUN pip install --no-cache-dir .\nCOPY . .\nRUN useradd --create-home app\nUSER app\nEXPOSE 8000\nHEALTHCHECK CMD python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)\"\nCMD [\"gunicorn\", \"-b\", \"0.0.0.0:8000\", \"shop.app:app\"]\n"
+  },
+  ".dockerignore": {
+   "why": "Keeps secrets and bulky folders out of the image.",
+   "content": ".git\n.env\n.env.*\n!.env.example\nnode_modules\n__pycache__\n*.pyc\n.venv\nvenv\n.lantern\ndist\nbuild\n.next\ncoverage\n"
+  },
+  ".github/workflows/ci.yml": {
+   "why": "Runs your tests and Lantern's scanners on every push, so problems are caught before deploy.",
+   "content": "name: ci\non: [push, pull_request]\npermissions:\n  contents: read\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-python@v5\n        with:\n          python-version: \"3.12\"\n      - run: pip install -e . pytest\n      - run: python -m pytest -q\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 20\n      - run: npm install\n        working-directory: web\n      - run: npm test --if-present\n        working-directory: web\n      - name: Lantern security and readiness audit\n        run: |\n          pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern\"\n          lantern analyze . --out /tmp/lantern --fail-on high\n"
+  },
+  "SECURITY.md": {
+   "why": "Tells people how to report a vulnerability privately.",
+   "content": "# Security policy\n\nPlease report security problems privately to <your email> rather than in a public issue. We aim to reply within 3 working days.\n\nSupported versions: the latest release.\n"
+  }
+ }
+}

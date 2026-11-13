@@ -1,0 +1,886 @@
+{
+ "evidence_version": 1,
+ "header": {
+  "repo": "shop",
+  "name": "shop",
+  "commit": null,
+  "note": "not a git repository",
+  "generated_at": "2026-11-13 06:01 UTC",
+  "mode": "local",
+  "privacy": "full",
+  "engine": "929adba497e6d27d813df42ec8811b8338852c75"
+ },
+ "scorecard": {
+  "readiness": {
+   "score": 26,
+   "grade": "F",
+   "shape": "full-stack web app",
+   "checklist": 26,
+   "categories": [
+    {
+     "title": "Security findings",
+     "weight": 20,
+     "score": 4.0,
+     "percent": 20
+    },
+    {
+     "title": "Secrets and config",
+     "weight": 12,
+     "score": 3.6,
+     "percent": 30
+    },
+    {
+     "title": "Input and error handling",
+     "weight": 10,
+     "score": 10.0,
+     "percent": 100
+    },
+    {
+     "title": "Dependencies",
+     "weight": 10,
+     "score": 2.0,
+     "percent": 20
+    },
+    {
+     "title": "Tests",
+     "weight": 10,
+     "score": 4.0,
+     "percent": 40
+    },
+    {
+     "title": "Observability",
+     "weight": 8,
+     "score": 2.0,
+     "percent": 25
+    },
+    {
+     "title": "Packaging",
+     "weight": 8,
+     "score": 0.0,
+     "percent": 0
+    },
+    {
+     "title": "CI/CD",
+     "weight": 8,
+     "score": 0.0,
+     "percent": 0
+    },
+    {
+     "title": "Resilience",
+     "weight": 8,
+     "score": 0.0,
+     "percent": 0
+    },
+    {
+     "title": "Documentation",
+     "weight": 6,
+     "score": 0.0,
+     "percent": 0
+    }
+   ]
+  },
+  "now": {
+   "critical": 3,
+   "high": 1,
+   "medium": 3,
+   "low": 1
+  },
+  "before": {
+   "critical": 3,
+   "high": 1,
+   "medium": 3,
+   "low": 1
+  },
+  "baseline_date": "2026-11-13",
+  "baseline_commit": null,
+  "baseline_readiness": {
+   "score": 26,
+   "grade": "F",
+   "categories": {
+    "Security findings": 4.0,
+    "Secrets and config": 3.6,
+    "Input and error handling": 10.0,
+    "Dependencies": 2.0,
+    "Tests": 4.0,
+    "Observability": 2.0,
+    "Packaging": 0.0,
+    "CI/CD": 0.0,
+    "Resilience": 0.0,
+    "Documentation": 0.0
+   }
+  },
+  "new": []
+ },
+ "architecture": {
+  "languages": {
+   "python": {
+    "files": 6,
+    "lines": 106
+   },
+   "typescript/javascript": {
+    "files": 6,
+    "lines": 75,
+    "unresolved": 2,
+    "components": 5,
+    "http_calls": 3
+   }
+  },
+  "files": 12,
+  "lines": 181,
+  "entries": [
+   {
+    "kind": "route",
+    "detail": "GET /users/{user_id}",
+    "name": "shop.app.read_user",
+    "file": "shop/app.py"
+   },
+   {
+    "kind": "route",
+    "detail": "POST /backup",
+    "name": "shop.app.backup",
+    "file": "shop/app.py"
+   },
+   {
+    "kind": "cli",
+    "detail": "click.command()",
+    "name": "shop.cli.admin",
+    "file": "shop/cli.py"
+   },
+   {
+    "kind": "main",
+    "detail": "python shop/cli.py",
+    "name": "shop.cli.<main>",
+    "file": "shop/cli.py"
+   },
+   {
+    "kind": "main",
+    "detail": "app start (web/src/main.tsx)",
+    "name": "web/src/main",
+    "file": "web/src/main.tsx"
+   },
+   {
+    "kind": "page",
+    "detail": "/admin",
+    "name": "web/src/pages/Admin::Admin",
+    "file": "web/src/pages/Admin.tsx"
+   },
+   {
+    "kind": "page",
+    "detail": "/users/:id",
+    "name": "web/src/pages/UserPage::UserPage",
+    "file": "web/src/pages/UserPage.tsx"
+   }
+  ],
+  "bridge": {
+   "http_calls": 3,
+   "routes": 2,
+   "matched": 2,
+   "exact": 1,
+   "suffix": 1,
+   "unknown-prefix": 0,
+   "exact-path-only": 0,
+   "ambiguous": 0,
+   "external": 1,
+   "unmatched": 0,
+   "unmatched_examples": []
+  },
+  "advice": [
+   "Deploy the frontend and the API as two pieces: the frontend as static files or on a platform such as Vercel or Netlify, the API as a container (Fly.io, Render, Railway, Cloud Run).",
+   "Keep all configuration in environment variables, with an .env.example listing every name.",
+   "Use a managed database with automatic backups, and connect through a pooled connection string.",
+   "Put the API behind HTTPS only, and allow your frontend's origin in CORS (not `*`)."
+  ],
+  "shape": "full-stack web app",
+  "frameworks": [
+   "React",
+   "Vite"
+  ],
+  "edges": {
+   "resolved": 29,
+   "inferred": 9,
+   "possible": 1
+  }
+ },
+ "security": {
+  "open": [
+   {
+    "id": "57fa455f7b3b",
+    "rank": "critical",
+    "rule": "B602",
+    "tool": "bandit",
+    "title": "subprocess call with shell=True identified, security issue.",
+    "file": "shop/app.py",
+    "line": 16,
+    "tool_confidence": "HIGH",
+    "hot_lane": "server",
+    "lanes": [
+     "browser",
+     "frontend",
+     "server",
+     "data"
+    ],
+    "path": [
+     "js:web/src/pages/Admin::Admin",
+     "js:web/src/pages/Admin::BackupButton",
+     "js:web/src/pages/Admin::BackupButton.start",
+     "js:web/src/api::runBackup",
+     "py:shop.app.backup"
+    ]
+   },
+   {
+    "id": "12771352490c",
+    "rank": "critical",
+    "rule": "B324",
+    "tool": "bandit",
+    "title": "Use of weak MD5 hash for security. Consider usedforsecurity=False",
+    "file": "shop/auth.py",
+    "line": 18,
+    "tool_confidence": "HIGH",
+    "hot_lane": "server",
+    "lanes": [
+     "browser",
+     "frontend",
+     "server"
+    ],
+    "path": [
+     "js:web/src/pages/UserPage::UserPage",
+     "js:web/src/api::getUser",
+     "py:shop.app.read_user",
+     "py:shop.auth.Session.login",
+     "py:shop.auth.check_password"
+    ]
+   },
+   {
+    "id": "271ac69ef170",
+    "rank": "critical",
+    "rule": "B608",
+    "tool": "bandit",
+    "title": "Possible SQL injection vector through string-based query construction.",
+    "file": "shop/repo.py",
+    "line": 15,
+    "tool_confidence": "MEDIUM",
+    "hot_lane": "server",
+    "lanes": [
+     "browser",
+     "frontend",
+     "server"
+    ],
+    "path": [
+     "js:web/src/pages/UserPage::UserPage",
+     "js:web/src/api::getUser",
+     "py:shop.app.read_user",
+     "py:shop.auth.Session.login",
+     "py:shop.repo.UserRepo.get"
+    ]
+   },
+   {
+    "id": "3009f20c07ea",
+    "rank": "high",
+    "rule": "LW-PUBLIC-SECRET",
+    "tool": "lantern-web",
+    "title": "Secret-looking setting VITE_ADMIN_SECRET is sent to every visitor's browser",
+    "file": "web/src/pages/Admin.tsx",
+    "line": 4,
+    "tool_confidence": "HIGH",
+    "hot_lane": "frontend",
+    "lanes": [
+     "frontend"
+    ],
+    "path": null
+   },
+   {
+    "id": "27105c2e3afc",
+    "rank": "medium",
+    "rule": "LW-AUTH-MISSING",
+    "tool": "lantern-web",
+    "title": "POST /backup changes data, is called by the app, and no login check was found",
+    "file": "shop/app.py",
+    "line": 14,
+    "tool_confidence": "LOW",
+    "hot_lane": "server",
+    "lanes": [
+     "browser",
+     "frontend",
+     "server",
+     "data"
+    ],
+    "path": [
+     "js:web/src/pages/Admin::Admin",
+     "js:web/src/pages/Admin::BackupButton",
+     "js:web/src/pages/Admin::BackupButton.start",
+     "js:web/src/api::runBackup",
+     "py:shop.app.backup"
+    ]
+   },
+   {
+    "id": "cb19d1c15090",
+    "rank": "medium",
+    "rule": "LW-SECRET-INLINE",
+    "tool": "lantern-web",
+    "title": "A signing secret is written in the code: anyone who can read the code can forge a session or a login token; read it from a setting kept outside the code",
+    "file": "shop/auth.py",
+    "line": 5,
+    "tool_confidence": "LOW",
+    "hot_lane": "server",
+    "lanes": [
+     "server"
+    ],
+    "path": null
+   },
+   {
+    "id": "408d05131176",
+    "rank": "medium",
+    "rule": "LJ-XSS-HTML",
+    "tool": "lantern-web",
+    "title": "Inserts raw HTML into the page (cross-site scripting risk)",
+    "file": "web/src/components/Bio.tsx",
+    "line": 3,
+    "tool_confidence": "HIGH",
+    "hot_lane": "frontend",
+    "lanes": [
+     "browser",
+     "frontend"
+    ],
+    "path": [
+     "js:web/src/pages/UserPage::UserPage",
+     "js:web/src/components/Bio::Bio"
+    ]
+   },
+   {
+    "id": "6715dbeeddd8",
+    "rank": "low",
+    "rule": "B404",
+    "tool": "bandit",
+    "title": "Consider possible security implications associated with the subprocess module.",
+    "file": "shop/app.py",
+    "line": 1,
+    "tool_confidence": "HIGH",
+    "hot_lane": "server",
+    "lanes": [
+     "server"
+    ],
+    "path": null
+   }
+  ],
+  "accepted": [],
+  "fixed": [],
+  "changed": [],
+  "in_tests": 1,
+  "protections": [
+   {
+    "id": "rate-limit",
+    "title": "Rate limiting",
+    "status": "add",
+    "why": "1 route(s) that change data can be called as fast as an attacker likes: password guessing, sign-up spam, or running up your bill.",
+    "evidence": [
+     "POST /backup (shop/app.py:14)"
+    ],
+    "how": "Limit requests per user and per IP on these routes: slowapi (FastAPI), Flask-Limiter, express-rate-limit, or @upstash/ratelimit (Next.js / serverless).",
+    "found": []
+   },
+   {
+    "id": "security-headers",
+    "title": "Security headers",
+    "status": "add",
+    "why": "Browsers protect your users from clickjacking, mixed content, and injected scripts only when the app sends headers such as Content-Security-Policy, Strict-Transport-Security, and X-Frame-Options.",
+    "evidence": [
+     "full-stack web app; no header setup found in code or hosting config"
+    ],
+    "how": "Set them once for every response: helmet (Express), the headers() block in next.config.js, a vercel.json/netlify.toml headers rule, or a small middleware in FastAPI/Flask.",
+    "found": []
+   },
+   {
+    "id": "password-hashing",
+    "title": "Slow password hashing",
+    "status": "add",
+    "why": "A fast hash (MD5/SHA) is applied to a password-named value: a leaked database could be cracked in hours.",
+    "evidence": [
+     "shop/auth.py:18"
+    ],
+    "how": "Store only argon2 or bcrypt hashes (passlib/pwdlib/bcrypt in Python, bcrypt or argon2 in Node), or use a managed auth service so you never store passwords.",
+    "found": []
+   },
+   {
+    "id": "route-auth",
+    "title": "Login check on routes that change data",
+    "status": "add",
+    "why": "1 route(s) change data with no sign of a login check in the handler, in what it calls, or in app-wide middleware, so anyone on the internet can call them.",
+    "evidence": [
+     "POST /backup (shop/app.py:14)"
+    ],
+    "how": "Check the signed-in user at the top of each handler (or in shared middleware), and check they may act on this record, not just that they are signed in.",
+    "found": []
+   }
+  ],
+  "incomplete": []
+ },
+ "release": {
+  "decision": "Blocked",
+  "words": "Blocked: 3 critical and 1 high findings open outside test code: B602 at shop/app.py:16, B324 at shop/auth.py:18, B608 at shop/repo.py:15, LW-PUBLIC-SECRET at web/src/pages/Admin.tsx:4",
+  "profile": {
+   "name": "full-stack web app",
+   "required": [
+    "findings",
+    "scanners",
+    "dependencies",
+    "tests"
+   ],
+   "not_required": [
+    {
+     "id": "behaviour",
+     "why": "The project has no behaviour plan (lantern-behaviour.json), so no app was started: nothing in this decision says what the app does when it runs."
+    }
+   ]
+  },
+  "criteria": [
+   {
+    "id": "findings",
+    "title": "No critical or high finding is open",
+    "required": true,
+    "state": "failed",
+    "why": "3 critical and 1 high findings open outside test code: B602 at shop/app.py:16, B324 at shop/auth.py:18, B608 at shop/repo.py:15, LW-PUBLIC-SECRET at web/src/pages/Admin.tsx:4",
+    "fix": "Fix each one (the Findings tab says how), or record why the risk is acceptable with `lantern accept ID --reason \"...\"`.",
+    "ids": [
+     "57fa455f7b3b",
+     "12771352490c",
+     "271ac69ef170",
+     "3009f20c07ea"
+    ]
+   },
+   {
+    "id": "scanners",
+    "title": "Every scanner that applies finished and covered everything",
+    "required": true,
+    "state": "passed",
+    "why": "5 scanners finished: bandit, lantern-secrets, lantern-web, lantern-ai, lantern-flow.",
+    "fix": ""
+   },
+   {
+    "id": "dependencies",
+    "title": "Every library was checked against the advisory databases",
+    "required": true,
+    "state": "missing",
+    "why": "4 libraries are named in a file with no lock file beside it, so no version is known and they were not checked (web/package.json: axios, web/package.json: react, web/package.json: react-dom, web/package.json: react-router-dom).",
+    "fix": "Run the check with the network on, commit a lock file with exact versions, and check the libraries Lantern cannot check with that language's own audit tool."
+   },
+   {
+    "id": "tests",
+    "title": "The project's tests were run and passed",
+    "required": true,
+    "state": "missing",
+    "why": "The tests were not run in this check. Lantern runs a project's code only when asked, and tests that were not run prove nothing.",
+    "fix": "Run them under Lantern: `lantern analyze PATH --trace -- <your test command>`, or \u201cWatch my tests run\u201d in the app."
+   },
+   {
+    "id": "behaviour",
+    "title": "The behaviour checks held when the app was started",
+    "required": false,
+    "state": "not-applicable",
+    "why": "The project has no behaviour plan (lantern-behaviour.json), so no app was started: nothing in this decision says what the app does when it runs.",
+    "fix": ""
+   }
+  ],
+  "blocking": [
+   "findings"
+  ],
+  "missing": [
+   "dependencies",
+   "tests"
+  ],
+  "bound_to": {
+   "commit": null,
+   "uncommitted_changes": null,
+   "code": {
+    "files": 15,
+    "sha256": "40c2245411ef9d5236827dc7008c65ba0b4fcb22e112ecfe61dd2e858a098c33",
+    "not_read": 0,
+    "left_out": "the folders no reader of Lantern looks into: version control, installed libraries, build output, Python environments and Lantern's own results"
+   },
+   "dependencies": {
+    "files": {
+     "pyproject.toml": "0ca715e73e5bfae88a019ebec00676487e1ce6df88b2bdaff7b5903ade26c1e8",
+     "web/package.json": "9de93565203c5cf87ce060ae1e5e8692e1eb8395bce30f944c770ff6dc6c6f8c"
+    },
+    "count": 2,
+    "sha256": "ad5c68bf1d3aa306890293fb1b09206a6317c19b013dd3cb17fde32d3bca6771"
+   },
+   "settings": {
+    "scan": true,
+    "trace": null,
+    "offline": true,
+    "place": "local",
+    "packs_off": [],
+    "accepted_sha256": null,
+    "plan_sha256": null,
+    "plan_unusable": null
+   },
+   "tools": [
+    {
+     "tool": "lantern",
+     "version": "0.11.0",
+     "role": "graph, bridge, web rules, readiness",
+     "state": null
+    },
+    {
+     "tool": "python",
+     "version": "3.13.18",
+     "role": "runtime",
+     "state": null
+    },
+    {
+     "tool": "tree-sitter",
+     "version": "0.26.1",
+     "role": "parser",
+     "state": null
+    },
+    {
+     "tool": "tree-sitter-python",
+     "version": "0.25.0",
+     "role": "parser",
+     "state": null
+    },
+    {
+     "tool": "tree-sitter-typescript",
+     "version": "0.23.2",
+     "role": "parser",
+     "state": null
+    },
+    {
+     "tool": "tree-sitter-javascript",
+     "version": "0.25.0",
+     "role": "parser",
+     "state": null
+    },
+    {
+     "tool": "bandit",
+     "version": "1.9.4",
+     "role": "scanner",
+     "state": "ok"
+    },
+    {
+     "tool": "pip-audit",
+     "version": "2.10.1",
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "npm-audit",
+     "version": null,
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "maven-audit",
+     "version": "osv-v1",
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "composer-audit",
+     "version": "osv-v1",
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "gem-audit",
+     "version": "osv-v1",
+     "role": "scanner",
+     "state": "skipped"
+    },
+    {
+     "tool": "gitleaks",
+     "version": null,
+     "role": "scanner",
+     "state": "unavailable"
+    },
+    {
+     "tool": "lantern-secrets",
+     "version": "2",
+     "role": "scanner",
+     "state": "ok"
+    },
+    {
+     "tool": "lantern-web",
+     "version": "0.1",
+     "role": "scanner",
+     "state": "ok"
+    },
+    {
+     "tool": "lantern-ai",
+     "version": "0.1",
+     "role": "scanner",
+     "state": "ok"
+    },
+    {
+     "tool": "lantern-flow",
+     "version": "1",
+     "role": "scanner",
+     "state": "ok"
+    }
+   ],
+   "lantern": "0.11.0",
+   "python": "3.13.18",
+   "system": "Linux"
+  }
+ },
+ "understanding": null,
+ "provenance": {
+  "tools": [
+   {
+    "tool": "lantern",
+    "version": "0.11.0",
+    "role": "graph, bridge, web rules, readiness"
+   },
+   {
+    "tool": "python",
+    "version": "3.13.18",
+    "role": "runtime"
+   },
+   {
+    "tool": "tree-sitter",
+    "version": "0.26.1",
+    "role": "parser"
+   },
+   {
+    "tool": "tree-sitter-python",
+    "version": "0.25.0",
+    "role": "parser"
+   },
+   {
+    "tool": "tree-sitter-typescript",
+    "version": "0.23.2",
+    "role": "parser"
+   },
+   {
+    "tool": "tree-sitter-javascript",
+    "version": "0.25.0",
+    "role": "parser"
+   },
+   {
+    "tool": "bandit",
+    "version": "1.9.4",
+    "role": "scanner",
+    "status": "ok",
+    "state": "ok"
+   },
+   {
+    "tool": "pip-audit",
+    "version": "2.10.1",
+    "role": "scanner",
+    "status": "skipped: no Python dependency files",
+    "state": "skipped"
+   },
+   {
+    "tool": "npm-audit",
+    "version": null,
+    "role": "scanner",
+    "status": "skipped: no package-lock.json, so exact versions are unknown (commit your lock file)",
+    "state": "skipped"
+   },
+   {
+    "tool": "maven-audit",
+    "version": "osv-v1",
+    "role": "scanner",
+    "status": "skipped: no Gradle or Maven files",
+    "state": "skipped"
+   },
+   {
+    "tool": "composer-audit",
+    "version": "osv-v1",
+    "role": "scanner",
+    "status": "skipped: no composer.lock",
+    "state": "skipped"
+   },
+   {
+    "tool": "gem-audit",
+    "version": "osv-v1",
+    "role": "scanner",
+    "status": "skipped: no Gemfile.lock",
+    "state": "skipped"
+   },
+   {
+    "tool": "gitleaks",
+    "version": null,
+    "role": "scanner",
+    "status": "skipped: not installed (built-in patterns ran instead; install gitleaks (github.com/gitleaks/gitleaks) for its full rule set)",
+    "state": "unavailable"
+   },
+   {
+    "tool": "lantern-secrets",
+    "version": "2",
+    "role": "scanner",
+    "status": "ok (built-in patterns; install gitleaks for full coverage)",
+    "state": "ok"
+   },
+   {
+    "tool": "lantern-web",
+    "version": "0.1",
+    "role": "scanner",
+    "status": "ok",
+    "state": "ok"
+   },
+   {
+    "tool": "lantern-ai",
+    "version": "0.1",
+    "role": "scanner",
+    "status": "ok (no model, vector or paid API calls found)",
+    "state": "ok"
+   },
+   {
+    "tool": "lantern-flow",
+    "version": "1",
+    "role": "scanner",
+    "status": "ok",
+    "state": "ok"
+   }
+  ],
+  "models": [],
+  "rules": [
+   "bandit default profile",
+   "lantern-web LW-*/LJ-* rules",
+   "lantern secret patterns",
+   "readiness checks v2",
+   "graph schema ucg-0.2"
+  ]
+ },
+ "limits": [
+  "Business-logic flaws. Scanners and graph checks find known patterns; they can't tell whether your rules (who may see what, what a price should be) are right.",
+  "Calls Lantern could not trace. 3 call sites were left unresolved rather than guessed, mostly calls into libraries or very dynamic code (getattr, plugins, hooks returning objects). Of 46 call sites read: 47.8% linked to repo code for certain, 10.9% likely, 2.2% to one of several targets, 0.0% guessed by method name, 23.9% known library calls, 8.7% Python built-in calls, 6.5% not traced.",
+  "Runtime behavior. No code was run for this report, so every edge is from static analysis and tests were not executed.",
+  "Frontend call edges are static only (no JavaScript runtime tracing yet).",
+  "4 npm libraries are named in a package.json with no lock file beside it, so no exact version is known and they were not checked for known vulnerabilities. Committing the lock file fixes this.",
+  "2 findings are from heuristic checks that can misfire; they are labeled as such.",
+  "The readiness score uses file and pattern checks. A check passing means the thing exists, not that it is configured well.",
+  "The release decision is about exactly the files, libraries, settings and tools it names, on the computer it was made on. A change to any of them needs a new check, and a file in a folder Lantern does not read (installed libraries, build output) is not part of it.",
+  "What the app does when it runs. The project has no behaviour plan (lantern-behaviour.json), so no app was started: nothing in this decision says what the app does when it runs."
+ ],
+ "digest": "sha256:c70adf309e3c96e890c7e6d17f4ac11c496eb30f29cf65bb5892465b4724223a",
+ "payload": {
+  "evidence_version": 1,
+  "schema": "ucg-0.2",
+  "lantern": "0.11.0",
+  "commit": null,
+  "uncommitted_changes": false,
+  "run": {
+   "scan": true,
+   "trace": null,
+   "offline": true
+  },
+  "graph": {
+   "files": 12,
+   "lines": 181,
+   "nodes": {
+    "module": 12,
+    "callable": 28,
+    "class": 5,
+    "external": 11
+   },
+   "call_edges": 39,
+   "entry_points": [
+    "cli:click.command()",
+    "main:app start (web/src/main.tsx)",
+    "main:python shop/cli.py",
+    "page:/admin",
+    "page:/users/:id",
+    "route:GET /users/{user_id}",
+    "route:POST /backup",
+    "test:test_check_password"
+   ],
+   "bridge": {
+    "http_calls": 3,
+    "routes": 2,
+    "matched": 2,
+    "exact": 1,
+    "suffix": 1,
+    "unknown-prefix": 0,
+    "exact-path-only": 0,
+    "ambiguous": 0,
+    "external": 1,
+    "unmatched": 0
+   }
+  },
+  "findings": [
+   "12771352490c:B324:critical:open",
+   "27105c2e3afc:LW-AUTH-MISSING:medium:open",
+   "271ac69ef170:B608:critical:open",
+   "3009f20c07ea:LW-PUBLIC-SECRET:high:open",
+   "408d05131176:LJ-XSS-HTML:medium:open",
+   "57fa455f7b3b:B602:critical:open",
+   "6715dbeeddd8:B404:low:open",
+   "b4dd2b0afe1e:B101:low:open",
+   "cb19d1c15090:LW-SECRET-INLINE:medium:open"
+  ],
+  "scanners": [
+   "bandit:1.9.4:ok",
+   "composer-audit:osv-v1:sk",
+   "gem-audit:osv-v1:sk",
+   "gitleaks:None:sk",
+   "lantern-ai:0.1:ok",
+   "lantern-flow:1:ok",
+   "lantern-secrets:2:ok",
+   "lantern-web:0.1:ok",
+   "maven-audit:osv-v1:sk",
+   "npm-audit:None:sk",
+   "pip-audit:2.10.1:sk"
+  ],
+  "readiness": {
+   "score": 26,
+   "checks": [
+    "ci-exists:fail",
+    "ci-scan:fail",
+    "ci-tests:fail",
+    "deps-lock:fail",
+    "deps-pinned:pass",
+    "deps-vuln:skip",
+    "docs-license:fail",
+    "docs-readme:fail",
+    "docs-security:fail",
+    "input-bare-except:pass",
+    "input-debug:pass",
+    "input-validation:pass",
+    "obs-health:fail",
+    "obs-logging:fail",
+    "obs-print:pass",
+    "pkg-docker:fail",
+    "pkg-dockerignore:fail",
+    "pkg-slim:fail",
+    "pkg-tag:fail",
+    "pkg-user:fail",
+    "res-retry:fail",
+    "res-shutdown:fail",
+    "res-timeout:fail",
+    "sec-critical:fail",
+    "sec-high:fail",
+    "sec-medium:fail",
+    "sec-scanners:pass",
+    "secrets-env:pass",
+    "secrets-example:fail",
+    "secrets-gitignore:skip",
+    "secrets-none:fail",
+    "tests-entries:fail",
+    "tests-exist:pass",
+    "tests-pass:skip"
+   ],
+   "protections": [
+    "password-hashing:add",
+    "rate-limit:add",
+    "route-auth:add",
+    "security-headers:add"
+   ],
+   "release": {
+    "decision": "Blocked",
+    "criteria": [
+     "behaviour:not-applicable",
+     "dependencies:missing",
+     "findings:failed",
+     "scanners:passed",
+     "tests:missing"
+    ],
+    "code": "40c2245411ef9d5236827dc7008c65ba0b4fcb22e112ecfe61dd2e858a098c33",
+    "dependencies": "ad5c68bf1d3aa306890293fb1b09206a6317c19b013dd3cb17fde32d3bca6771",
+    "plan": null,
+    "accepted": null
+   }
+  }
+ }
+}
