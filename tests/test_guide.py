@@ -10,6 +10,7 @@ from html.parser import HTMLParser
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+import lantern_files
 import pytest
 
 from lantern import guide
@@ -165,7 +166,7 @@ def test_every_page_reaches_the_guide():
     # a report and an Evidence Report opened on their own (new tab, shared link, from disk)
     rep = (guide.VIEWER / "report.html").read_text(encoding="utf-8")
     assert 'id="guidelink" href="https://lantern-cloud.fly.dev/guide"' in rep and "g.href = '/guide'" in rep
-    ev = (ROOT / "lantern" / "evidence.py").read_text(encoding="utf-8")       # render_html's page template
+    ev = (lantern_files.PACKAGE / "evidence.py").read_text(encoding="utf-8")   # render_html's page template
     assert 'id="guidelink" href="https://lantern-cloud.fly.dev/guide"' in ev and "gl.setAttribute('href', '/guide')" in ev
     # the small pages: the local app's locked page, the website's notice pages, the sign-in pages, the landing page
     from lantern.server import LOCKED_PAGE

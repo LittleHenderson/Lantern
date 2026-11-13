@@ -1,10 +1,10 @@
 {
  "timings": {
   "graph": 0.04,
-  "scan": 0.17
+  "scan": 0.15
  },
  "privacy": "full",
  "offline": true,
  "incomplete": [],
- "finished_at": "2026-11-13 06:01"
+ "finished_at": "2026-11-13 06:32"
 }

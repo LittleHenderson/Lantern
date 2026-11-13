@@ -1385,7 +1385,7 @@
    ],
    "version": "1.9.4",
    "exit_code": 1,
-   "duration_ms": 138,
+   "duration_ms": 128,
    "scope": {
     "files": 6
    },
@@ -1482,7 +1482,7 @@
    "applicable": true,
    "version": "1",
    "findings": 0,
-   "duration_ms": 7,
+   "duration_ms": 8,
    "scope": {
     "files": 11,
     "functions": 24,
