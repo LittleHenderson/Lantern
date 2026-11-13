@@ -15,7 +15,15 @@ file. New entries go under `## Unreleased`, on top.
   does it. On 0.11.0 they got no answer: the run was stopped at ten minutes whatever anybody wanted, and of the 109
   test files run there one by one 85 passed and 24 did not, each for something a test has at home and the sandbox
   refused or took away. Every cause was fixed after a test that failed, and stands beside twins that reach outside
-  and must stay refused.
+  and must stay refused. With the change the whole suite run that way gets its answer (`pipeline.analyze` with the
+  tests as its trace command, `sandbox=True`, 240 minutes and 8,192 MB; Linux with no Docker, Lantern as root, so
+  the restricted process in a network of its own, the tests as `nobody`): 4,682 passed, 50 skipped (18 need Docker,
+  15 Windows, 7 root, 3 a network of their own inside the sandbox, and 7 more each with its reason), 0 failed in
+  3,046.04 s, and the release decision on Lantern's own code is Passed, 100 of 100. The first whole run, on this
+  change's first push, ended Blocked (4,675 passed, 2 failed, 49 skipped in 2,973.34 s): two wrong tests of the
+  change, a high finding in it, and the false alarm about test files below. The passing run was made on the third
+  push; the one test file changed after it (the Docker answer below) was run in the sandbox by itself on the final
+  code: 49 passed, 1 skipped.
   - **The tests may change their own copy.** The sandbox runs the tests on a copy of the project that is thrown
     away afterwards, and until now the copy could not be changed either (every write bit taken off it; under Docker
     the project itself was mounted read-only). A test that writes a file beside the code (a coverage record, a
@@ -91,7 +99,8 @@ file. New entries go under `## Unreleased`, on top.
     installed in a folder closed to others started Python, which found no `lantern`: "the tests failed". Now the
     launcher asks, as that user, for what the run is made of before anything starts, and if something cannot be
     read the tests are not started and the results say why (`sandbox.Unavailable`, the launcher's word
-    `unreadable`). Ten more tests in `tests/test_sandbox_safety.py` (on 0.11.0 7 failed, 3 passed; now 10 pass).
+    `unreadable`). Five more cases in `tests/test_sandbox_safety.py` (on 0.11.0 4 failed and 1 passed, the twin
+    in a folder the tests' user may enter; now 5 pass).
   - **A file its parser is not through with in time** is given up and named, and the check goes on. The parsers
     are tree-sitter's and the time one takes over a file is its own; tree-sitter-dart's grows far faster than the
     file on a type written inside itself (10,000 levels, a file of 60,245 bytes: 66 seconds; 40,000 levels: not
