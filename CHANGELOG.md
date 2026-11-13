@@ -131,9 +131,11 @@ rank, a score or a release decision. The hosted service keeps nothing.
 - New result files `calls.json` and `behaviour.json`; `readiness.json` is version 2 (`release`, `checklist`); a
   finding carries `reachability`, `rank_basis`, its `case` and, where one was followed, its `flow`. Results that
   0.9.0 and 0.10.0 wrote still open. `docs/api.md` has every shape.
-- The release itself: release notes longer than GitHub takes now stop the release before anything is built
-  (`tools/changelog_section.py`), and five release tests that were dropped by mistake on 2026-11-12 are back
-  (`tests/test_release_plumbing.py`).
+- The release itself can be rehearsed: the release workflow, started by hand, builds the package and runs every
+  test against it, and publishes nothing. Release notes longer than GitHub takes stop a release before anything is
+  built. Tests that read Lantern's own files read the installed package (`tests/lantern_files.py`): twelve failed
+  against the built package in a trial of this release. Five release tests that were dropped by mistake on
+  2026-11-12 are back (`tests/test_release_plumbing.py`).
 
 ### Known limits
 
@@ -147,6 +149,33 @@ rank, a score or a release decision. The hosted service keeps nothing.
 
 ## 0.11.0: every change
 
+- The release is tried before the tag, and its own tests are whole again (2026-11-12; found while preparing 0.11.0).
+  Three things would each have ended a pushed tag in a failed release, or let a wrong one out:
+  - **The text of the Release was too long.** GitHub takes 125,000 characters as the text of a Release and refuses
+    more at the workflow's last step, after the build and the tests. The section waiting to be released was 193,835
+    characters. `tools/changelog_section.py` now ends with 1 and says the length when a section is over `LIMIT`
+    (the workflow's second step, before anything is built), and a release with a long list keeps a summary under
+    `## <version>` and the whole list under `## <version>: every change`, which the tool leaves out.
+  - **Twelve tests failed against the built package.** The release's `test-wheel` job moves the checkout's
+    `lantern/` folder away and runs every test against the installed package. Twelve tests read a page of
+    `lantern/viewer/` or a module's source through the checkout's path and found no file (a trial run on 84d5c1e:
+    4,276 passed, 27 skipped, 12 failed), and three more walked a `lantern/` folder that was gone and passed having
+    read none of Lantern's modules (`test_no_program_is_started_any_other_way`,
+    `test_no_name_is_given_twice_at_the_top_of_a_module`,
+    `test_every_loader_of_a_saved_map_says_which_folder_it_means`). Lantern itself was not at fault: every file is
+    in the package. The same happened to one test at 0.10.0, after the tag (#88). Such a test now asks
+    `tests/lantern_files.py` where the package is (`PACKAGE`, `VIEWER`, `page`, `named`, and `modules`, which
+    fails on a walk that finds no file), and `test_no_test_looks_for_lanterns_own_files_in_the_checkout` reads
+    every test file.
+  - **Five release tests were gone.** `tests/test_release.py` was written anew on 2026-11-12 for the release
+    decision, and the five tests it held went with the old text by mistake: one version in `pyproject.toml` and
+    `lantern/__init__.py`, a CHANGELOG section per tag, `serve --check`, Bandit missing said, the testers' guide and
+    its one pinned install command. They are back unchanged as `tests/test_release_plumbing.py` and pass.
+
+  `.github/workflows/release.yml` can now be started by hand (`workflow_dispatch`, "Run workflow" on the Actions
+  tab). Such a rehearsal builds the package, runs every test against it and looks at the live gateway exactly as a
+  tag does, and ends before the one job that publishes (`if: github.event_name == 'push'`, the only job that may
+  write to the repository). `docs/deploy.md` has the order: merge, rehearsal, deploy lantern-cloud, tag.
 - Faster, with every check and every result as it was (2026-11-12; point 10 of the 2026-11-09 directive, "Increase
   performance without dropping checks"). Measured first, then changed: `bench/speed.py` analyzes the sample shop and
   five public apps at a fixed commit each, three first runs and three repeat runs a side, the unchanged engine and

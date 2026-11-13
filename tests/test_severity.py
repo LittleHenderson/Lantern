@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import lantern_files
 from lantern.engine import build_graph
 from lantern.security import RANK_ORDER, rank, rank_reason, scan
 
@@ -211,6 +212,6 @@ def test_the_case_says_an_unknown_path_is_unknown_not_safe(tmp_path):
 
 
 def test_the_report_does_not_call_a_finding_unreachable_when_no_path_was_found():
-    html = (Path(__file__).parents[1] / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+    html = lantern_files.page("report.html")
     assert "Not reachable from any" not in html
     assert "No path found" in html

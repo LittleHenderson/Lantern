@@ -590,6 +590,14 @@ reports what's left. Screen states and copy for Settings, consent, and errors ar
 * A library a new test needs goes in the `dev` extra in `pyproject.toml` and, pinned, in `requirements-lock.txt`
   (its header says how to refresh it; put the hand-written header back afterwards). CI installs `.[scan,dev]` and
   fails a run in which a test was skipped for a missing library; never work round that with a skip.
+* A test that reads Lantern's own files (a page of `lantern/viewer/`, a module's source, a walk over the modules)
+  takes them from `tests/lantern_files.py` (`PACKAGE`, `VIEWER`, `page(name)`, `modules(deep=)`, `named(path)`), never
+  from the checkout's `lantern/` folder: the release runs every test against the installed package with that folder
+  moved away (`release.yml`, job `test-wheel`), where twelve such tests failed in a trial of 0.11.0 and three more
+  passed having read nothing. `tests/test_release_plumbing.py` reads every test file for it. Before a tag, run the
+  `release` workflow by hand (a rehearsal: everything a tag does, nothing published; `docs/deploy.md`, "Releases").
+  `CHANGELOG.md`: new entries under `## Unreleased`; a release with a long list keeps a summary under `## <version>`
+  (the text of the GitHub Release, 125,000 characters at most) and the list under `## <version>: every change`.
 * Tests and benchmarks never reach a real model provider or the internet and never see the developer's keys
   (`tools/netguard/`, `tests/conftest.py`). A new test gets a stand-in (`FixtureProvider`, `tools/fake_model.py`, a
   server on 127.0.0.1); a new benchmark's `main` starts with `netguard.begin(allow=[the hosts it must reach])` and ends

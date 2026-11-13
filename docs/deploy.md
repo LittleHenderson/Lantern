@@ -405,9 +405,20 @@ and `tests/test_release_plumbing.py` fails long before a tag when this version's
 with a long list of changes keeps a summary under `## <version>` and the whole list under
 `## <version>: every change` (0.11.0 is written that way).
 
-Order for a release, so that the health check does not mail in between: merge the release pull request, deploy
-lantern-cloud from it, then push the tag. `tools/uptime.py` fails while lantern-cloud's engine is older than the
-latest GitHub Release, so a tag pushed before the deploy makes it fail until the deploy is done.
+**Rehearse before the tag.** The same workflow can be started by hand: Actions tab, "release", "Run workflow" on
+`main` (or `gh workflow run release.yml --ref main`). A rehearsal does everything a tag does, the build, every
+test against the built wheel with the checkout's `lantern/` folder moved away, the look at the live gateway, and
+ends before the one job that publishes: no Release, no tag, nothing written to the repository. Twice the tests
+against the built wheel failed where every other check was green (one test at 0.10.0, after the tag; twelve in a
+trial of 0.11.0, before it): tests that read Lantern's own files through the checkout. Such a test asks
+`tests/lantern_files.py` where the package is, and a test reads every test file for it, but only the rehearsal
+runs the release as it will run. By hand on your own computer it is: `python -m build`, a new venv,
+`pip install "dist/<the wheel>[scan,dev]"`, the `lantern/` folder moved out of the checkout, and
+`LANTERN_TESTS_COMPLETE=required python -m pytest -q -rs`.
+
+Order for a release: merge the release pull request, run the rehearsal on `main` and see it green, deploy
+lantern-cloud from `main`, then push the tag. The deploy comes before the tag so that the health check does not
+mail in between: `tools/uptime.py` fails while lantern-cloud's engine is older than the latest GitHub Release.
 
 TODO (not in wave 1): publish to PyPI so the command becomes `pip install lantern`.
 1. Create a PyPI account (pypi.org → Register) with two-factor sign-in, and check the name `lantern` is free

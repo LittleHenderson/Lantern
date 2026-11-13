@@ -1293,8 +1293,9 @@ def test_the_viewer_escapes_every_step_of_a_flow():
     # the steps are text from the analyzed code (a file name, a line, the words of a call): none of it may reach the
     # page as markup. `at()` is the box's own helper, which escapes the file and the line.
     import re
-    from pathlib import Path
-    html = (Path(__file__).parents[1] / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+
+    import lantern_files
+    html = lantern_files.page("report.html")
     body = html[html.index("function flowBox(f)"):html.index("// Every call site Lantern read")]
     assert "esc(s.file)" in body and "esc(s.line)" in body, "at() has to escape what it shows"
     seen = 0
