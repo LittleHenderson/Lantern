@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+import lantern_files
 from lantern import security, strings, websec
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -198,17 +199,20 @@ CODE = (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".html", ".php", ".
 
 
 def _own_code():
-    """Lantern's own code and its samples: (path from the top, text)."""
-    for top in ("lantern", "gateway", "cloud", "tests", "tools", "bench", "examples", "site"):
-        for p in sorted((ROOT / top).rglob("*")):
+    """Lantern's own code and its samples: (path from the top, text). Lantern itself is read where Python loaded it
+    from (`tests/lantern_files.py`): a release's tests run on the installed package, with the checkout's folder gone."""
+    for place in [lantern_files.PACKAGE] + [ROOT / top for top in ("gateway", "cloud", "tests", "tools", "bench",
+                                                                   "examples", "site")]:
+        for p in sorted(place.rglob("*")):
             name = p.name[:-5] if p.name.endswith(".tmpl") else p.name
             if p.is_file() and name.endswith(CODE) and "node_modules" not in p.parts and p.stat().st_size < 400_000:
-                yield p.relative_to(ROOT).as_posix(), name, p.read_text(encoding="utf-8", errors="replace")
+                yield lantern_files.named(p), name, p.read_text(encoding="utf-8", errors="replace")
 
 
 def test_lanterns_own_code_is_read_as_before():
-    files = lines = passed_over = 0
+    files = lines = passed_over = own = 0
     for rel, name, text in _own_code():
+        own += rel.startswith("lantern/")
         few = all(line.count("\\") <= FEW for line in text.split("\n"))
         if few:
             js = not name.endswith(".py")
@@ -228,6 +232,7 @@ def test_lanterns_own_code_is_read_as_before():
             lines += 1
     # the comparison is of most of the code, not of a corner of it
     assert files > 400 and lines > 100_000 and passed_over < files // 10, (files, lines, passed_over)
+    assert own > lantern_files.FEWEST, f"{own} files of Lantern itself in {lantern_files.PACKAGE}"
 
 
 WRITTEN = [
@@ -275,8 +280,8 @@ def test_no_module_finds_a_string_the_old_way():
     """Two ways through one backslash in a repeated group: `(?:\\\\.|(?!\\1).)*`. A new reader of strings uses
     `lantern/strings.py`."""
     shape = re.compile(r"\(\?:\\\\\.\|\(\?!\\1\)\.\)[*+]")
-    found = [f"{p.relative_to(ROOT).as_posix()}:{i}" for top in ("lantern", "gateway", "cloud", "tools", "bench")
-             for p in sorted((ROOT / top).rglob("*.py"))
+    others = [p for top in ("gateway", "cloud", "tools", "bench") for p in sorted((ROOT / top).rglob("*.py"))]
+    found = [f"{lantern_files.named(p)}:{i}" for p in lantern_files.modules(deep=True) + others
              for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1) if shape.search(line)]
     assert found == [], found
     assert shape.search(OLD_STRING["'\""].pattern)          # the shape it looks for is the old pattern's

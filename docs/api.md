@@ -558,7 +558,7 @@ average (the shop sample, shortened):
               "settings": {"scan": true, "trace": null, "offline": false, "place": "local", "packs_off": [],
                            "accepted_sha256": null, "plan_sha256": null, "plan_unusable": null},
               "tools": [{"tool": "bandit", "version": "1.9.4", "role": "…", "state": "ok"}, …],
-              "lantern": "0.10.0", "python": "3.13.1", "system": "Linux"}}
+              "lantern": "0.11.0", "python": "3.13.1", "system": "Linux"}}
 ```
 
 `decision`: `Blocked` (a required criterion `failed`), `Incomplete` (none failed and one is `missing`) or `Passed`
@@ -636,7 +636,7 @@ the project now.
 ```json
 {"version": 1,
  "from": "running the project's code in Lantern's test sandbox, with no network",
- "of": {"plan_sha256": "9f2c…", "code_sha256": "c41e…", "commit": "1a2b3c…", "dirty": false, "lantern": "0.10.0",
+ "of": {"plan_sha256": "9f2c…", "code_sha256": "c41e…", "commit": "1a2b3c…", "dirty": false, "lantern": "0.11.0",
         "python": "3.13.1", "system": "Linux"},
  "seal": "…",
  "ran": true, "why_not": null,

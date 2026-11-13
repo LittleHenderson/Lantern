@@ -2,9 +2,197 @@
 
 Each release has a section headed `## <version>`. The release workflow (`.github/workflows/release.yml`) puts the
 section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses `## 0.9.0-rc1` if present, else `## 0.9.0`).
+GitHub takes 125,000 characters there and no more, and `tools/changelog_section.py` stops a release before anything
+is built when a section is longer. So a release with a long list has two sections: a summary under `## <version>`,
+which is what the release page shows, and the whole list under `## <version>: every change`, which stays in this
+file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+## 0.11.0
+
+Lantern as a release reviewer: a release decision the score cannot speak over, problems followed across the whole
+app, an app's behaviour tested by running it, a safer and a faster engine, seven more languages and phone apps.
+
+This is the summary. Every change in full, with the names in the code, each measurement and what was found and not
+fixed, is the section "0.11.0: every change" of
+[CHANGELOG.md](https://github.com/LittleHenderson/Lantern/blob/v0.11.0/CHANGELOG.md).
+
+**If you used 0.10.0: results change, on purpose.** A project now gets a release decision beside its score: Blocked,
+Incomplete or Passed. Scores go down where required work was skipped (tests that were not run, libraries that were
+not looked up). The score is held at 59 while the decision is Blocked and at 99 until it is Passed, so 100 means the
+required work passed. A badge that was green may now say "blocked" or "incomplete". Some findings rise by one rank,
+because a finding is no longer ranked lower when Lantern found no path to its line. Lines that carry a `# nosec`
+comment appear in the results for the first time.
+
+### Finds more, and tells you how sure it is
+
+- **The release decision.** Blocked: a critical or high finding is open, the project's tests failed, or a behaviour
+  check came out broken. Incomplete: nothing failed and something required is missing (a scanner did not finish,
+  libraries were not checked, the tests were not run). Passed: everything required for this kind of project passed.
+  It is on the report, the Evidence page, the badge, the app, the website, the connector and
+  `lantern analyze --require not-blocked|passed` for CI.
+- **Follow the data** (Python and JavaScript/TypeScript). A value that arrives with a request is followed across
+  functions and files to where it does something sensitive: a query, a command, a file path, a page, a redirect, an
+  outgoing request. A check counts for what its code proves, whatever the function is called. The finding shows
+  every step of the way with file and line.
+- **Who may reach what** (heuristic, and marked as such). A record reached by an id from the request with nobody
+  asking whose it is, an admin path that asks for no role, a whole request body written onto a stored record, a role
+  read from a cookie or header the caller writes. A login is read from what the code does, not from a name.
+- **Behaviour checks.** `lantern behave PATH` starts the project's app in the test sandbox, with no network, and
+  tests what really happened: twelve kinds of check from a plan the project carries (`lantern-behaviour.json`,
+  guide `docs/behaviour.md`). A refused request that changed something all the same is a failure of its own kind.
+- **Every call is counted once** (`calls.json`, Python and JavaScript/TypeScript): one record per call, with one
+  outcome and, where Lantern cannot follow it, the reason in plain words. Far more calls are followed: `require()`
+  and `module.exports`, Express routers and middleware, star imports, library base classes.
+- **A scanner that fails can no longer read as a clean result.** Every scanner writes down how its run ended, and a
+  failed or partial run is said on the report, on the Evidence page and in the release decision.
+- **Fewer false alarms, nothing hidden.** A weak hash is ranked by what it is for. SQL that splices only fixed text
+  is ranked low, with the reason. A webhook whose sender is checked is not "a route anyone can call". A request
+  limit counts only where it is put to work on the route. Every finding outside test code carries its case: the
+  claim, the evidence, the conditions and what is not known.
+- **A report says no more than Lantern saw.** "Security headers: in place" is said only when a header is set for
+  every response; a header set for a part of the app reads "check", with the place. Python kept as text
+  (`engine.py.txt`) is handed to the Python scanner. Software copied into a `vendor` folder is named and, where
+  it brings a name and a version, looked up for known security holes.
+
+Measured on the held-out benchmark (`bench/heldout/`: 14 apps, 79 known problems, 17 safe examples that must stay
+clean; no rule was written from their code), before this work and now:
+
+| | before | now |
+|---|---:|---:|
+| Known problems found at medium or higher, of 79 | 28 | 55 (56 with the library checks on) |
+| False alarms on the 17 safe examples | 3 | 0 |
+| Vulnerable apps given a green result, of 8 | 2 | 0 (all 8 read Blocked) |
+| Clean apps refused a green result, of 6 | 3 | 1 |
+
+Not reached: 24 of the 79 known problems are still missed (23 with the library checks on), and one of the six clean
+apps reads Blocked through one false alarm. The other five read Incomplete, because the benchmark does not run
+their tests, and none reads Passed. `bench/heldout/README.md` has every number and how to run it.
+
+### Safer to run on a stranger's project
+
+- A link in a project that leads out of the project is not read and not shown, and Lantern's results are written
+  into the results folder and nowhere else.
+- Lantern starts only the person's own programs, never one that lies in the folder it reads. The git settings of
+  that folder are not obeyed, npm takes no settings from the project it audits, and a settings file in a project
+  does not steer the Python scanner.
+- What a project's dependency files say is checked before it is used, and a project file of the wrong shape no
+  longer stops the analysis.
+- A project's tests are not run without their sandbox, nothing they start is left running, and the app has a
+  "Stop the tests" button.
+- A git folder that is not yours no longer puts its commit on your report.
+- The cloud service deletes only what it made, and a delete that fails is written down, said and tried again.
+- The gateway (0.2.6) bounds what anybody can send it without signing in.
+- The opt-in usage counts go to the gateway's own address and nowhere else, and Lantern says where they go.
+- No line of a project keeps a check busy: a quote mark followed by many backslashes, or one long chain of calls
+  in C# or Ruby, could hold a check for hours or days.
+- Code nested about a thousand levels deep no longer stops the whole check with an error and no report. The piece
+  is left, named in the report as not read, and everything around it is read.
+
+### Faster, with every result as it was
+
+Measured with `bench/speed.py` on six projects, the engine before the change and after it back to back on one
+machine, every result file compared and the same:
+
+| | before | now |
+|---|---:|---:|
+| Django (481,021 lines), first check | 115.72 s | 52.05 s |
+| Django, a second check with nothing changed | 113.84 s | 41.03 s |
+| Laravel's framework (415,998 lines), first check | 37.83 s | 19.38 s |
+| Django's report | 73,896,338 bytes | 38,050,642 bytes |
+| The 12-file sample, first check | 0.63 s | 0.74 s |
+
+The last row is slower, and stays in the record as that. Work is kept between runs only for Python files and for
+the Python scanner (`lantern cache [--clear]`, `LANTERN_CACHE=off`), never in the project, and never a finding, a
+rank, a score or a release decision. The hosted service keeps nothing.
+
+### More languages, and phone apps
+
+- Kotlin, Swift, Dart, C#, PHP, Ruby and C/C++ are read and mapped: functions, calls, routes and line rules, each
+  with a sample app.
+- Android, iOS, Flutter, React Native and .NET MAUI apps are read as phone apps: the screens, the parts other apps
+  can start, links into the app, permissions, and rules for each platform (the "On the phone" card).
+- The libraries of Android and Java (Gradle, Maven), PHP (Composer) and Ruby (Bundler) projects are checked for
+  known security holes.
+- Script written inside HTML pages is read.
+
+### The app and the website
+
+- A terminal you pull up from the bottom of every screen, in the app and on the website. It runs Lantern's own
+  commands and never a shell or anybody's code.
+- "How to use Lantern": a guide with a tour and a section for each task, reachable from every page.
+- The map: the Graph and the Flowchart fill the whole panel as an endless canvas, with a breadcrumb that says where
+  you are and a minimap (100%, 60%, 30% or hidden). The Graph says what its lines mean.
+- Every function has its three lenses from the moment a check ends.
+- Website: upload an app from your computer, Connect GitHub for private repositories, a Settings page, the intro on
+  every visit, and a check in progress always shows that it is working.
+- Signing in somewhere new no longer signs you out everywhere else (up to 8 places per account), and there is a
+  "Sign out everywhere" button.
+- Big projects' reports open again, and a repository over the size limit is checked without its pictures, video
+  and other bulk files.
+- The cloud service allows 300 runs per person per day and 1000 for everyone together.
+
+### For people who work on Lantern
+
+- Tests and benchmarks cannot reach a real AI provider or the internet and never see the developer's keys
+  (`tools/netguard/`). CI runs every test, and its log names each test it skips.
+- New commands: `lantern behave`, `lantern cache`, `lantern analyze --require`.
+- New result files `calls.json` and `behaviour.json`; `readiness.json` is version 2 (`release`, `checklist`); a
+  finding carries `reachability`, `rank_basis`, its `case` and, where one was followed, its `flow`. Results that
+  0.9.0 and 0.10.0 wrote still open. `docs/api.md` has every shape.
+- The release itself can be rehearsed: the release workflow, started by hand, builds the package and runs every
+  test against it, and publishes nothing. Release notes longer than GitHub takes stop a release before anything is
+  built. Tests that read Lantern's own files read the installed package (`tests/lantern_files.py`): twelve failed
+  against the built package in a trial of this release. Five release tests that were dropped by mistake on
+  2026-11-12 are back (`tests/test_release_plumbing.py`).
+
+### Known limits
+
+- On Windows a test that starts an event loop (an async test, a FastAPI test client) fails in the test sandbox, and
+  `lantern behave` starts no app there. Found and not fixed.
+- Follow the data, who may reach what and the call inventory cover Python and JavaScript/TypeScript. The other
+  languages keep the reading inside one function, and their confidence levels are not yet backed by a benchmark
+  for each language.
+- A computer with one processor, Windows and macOS were not measured for speed.
+- A Dart type written inside itself thousands of levels deep takes the Dart grammar's own parser very long (10,000
+  levels: 66.33 seconds). Found and not fixed.
+- `CLAUDE.md`, "Known gaps", lists the rest.
+
+## 0.11.0: every change
+
+- The release is tried before the tag, and its own tests are whole again (2026-11-12; found while preparing 0.11.0).
+  Three things would each have ended a pushed tag in a failed release, or let a wrong one out:
+  - **The text of the Release was too long.** GitHub takes 125,000 characters as the text of a Release and refuses
+    more at the workflow's last step, after the build and the tests. The section waiting to be released was 193,835
+    characters. `tools/changelog_section.py` now ends with 1 and says the length when a section is over `LIMIT`
+    (the workflow's second step, before anything is built), and a release with a long list keeps a summary under
+    `## <version>` and the whole list under `## <version>: every change`, which the tool leaves out.
+  - **Twelve tests failed against the built package.** The release's `test-wheel` job moves the checkout's
+    `lantern/` folder away and runs every test against the installed package. Twelve tests read a page of
+    `lantern/viewer/` or a module's source through the checkout's path and found no file (a trial run on 84d5c1e:
+    4,276 passed, 27 skipped, 12 failed), and three more walked a `lantern/` folder that was gone and passed having
+    read none of Lantern's modules (`test_no_program_is_started_any_other_way`,
+    `test_no_name_is_given_twice_at_the_top_of_a_module`,
+    `test_every_loader_of_a_saved_map_says_which_folder_it_means`). Lantern itself was not at fault: every file is
+    in the package. The same happened to one test at 0.10.0, after the tag (#88). Such a test now asks
+    `tests/lantern_files.py` where the package is (`PACKAGE`, `VIEWER`, `page`, `named`, and `modules`, which
+    fails on a walk that finds no file), and `test_no_test_looks_for_lanterns_own_files_in_the_checkout` reads
+    every test file.
+  - **Five release tests were gone.** `tests/test_release.py` was written anew on 2026-11-12 for the release
+    decision, and the five tests it held went with the old text by mistake: one version in `pyproject.toml` and
+    `lantern/__init__.py`, a CHANGELOG section per tag, `serve --check`, Bandit missing said, the testers' guide and
+    its one pinned install command. They are back unchanged as `tests/test_release_plumbing.py` and pass.
+
+  `.github/workflows/release.yml` can now be started by hand (`workflow_dispatch`, "Run workflow" on the Actions
+  tab). Such a rehearsal builds the package, runs every test against it and looks at the live gateway exactly as a
+  tag does, and ends before the one job that publishes (`if: github.event_name == 'push'`, the only job that may
+  write to the repository). `docs/deploy.md` has the order: merge, rehearsal, deploy lantern-cloud, tag.
+
+  `tests/fixtures/old_results/v0.11.0/` holds what this version writes for the shop sample (0.11.0 is the first to
+  write a release decision into `readiness.json` and a call inventory, `calls.json`), so the next versions are
+  tested on opening it. `tests/test_old_results.py` also holds that a result from 0.9.0 or 0.10.0, which has no
+  release decision, is shown with none: this version does not make one up for work an older version did.
 - Three things a report said that were not so, found on a real static site (2026-11-12). The site keeps 17 Python
   files (12,518 lines) as `<name>.py.txt`, runs them in the browser beside a copy of their runtime in `vendor/`, and
   is served with no security header. Its report said "Security headers: in place", "bandit: ok" (on 0 files), that

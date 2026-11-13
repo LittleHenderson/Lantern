@@ -545,7 +545,7 @@ def test_the_dependency_audit_asks_only_the_addresses_it_names():
     from lantern import depaudit
     host = lambda url: urllib.parse.urlsplit(url).hostname      # noqa: E731
     assert host(depaudit.NPM_REGISTRY) in depaudit.AUDIT_HOSTS and host(depaudit.OSV_API) in depaudit.AUDIT_HOSTS
-    source = (ROOT / "lantern" / "depaudit.py").read_text(encoding="utf-8")
+    source = Path(depaudit.__file__).read_text(encoding="utf-8")   # the module Python loaded, wherever it is installed
     named = {host(u) for u in re.findall(r"https://[A-Za-z0-9.-]+", source)}
     assert named <= {*depaudit.AUDIT_HOSTS, "osv.dev"}, named      # osv.dev: the link a finding shows, never requested
     assert '"--disable-pip"' in source and '"--no-deps"' in source  # pip-audit downloads no package: pypi.org only

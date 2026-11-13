@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import lantern_files
 from lantern import behave, release, seal
 from lantern.engine import build_graph
 from lantern.readiness import assess, grade
@@ -479,7 +480,7 @@ def test_the_command_line_says_the_decision_and_can_demand_one(tmp_path, capsys)
 
 def test_the_report_page_draws_the_decision_from_fixed_words_and_ci_poisons_the_rest():
     root = Path(__file__).parents[1]
-    html = (root / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+    html = lantern_files.page("report.html")
     assert "const DECISION_TONE = {Blocked: 'critical', Incomplete: 'warning', Passed: 'good'};" in html
     assert "function releaseBox(" in html and "lantern readiness . --json" not in html     # no such command exists
     audit = (root / "tools" / "audit.sh").read_text(encoding="utf-8")
@@ -545,7 +546,7 @@ def test_the_apps_card_carries_the_decision_and_only_one_of_the_three_words(tmp_
     rd["release"]["decision"] = "<img src=x onerror=alert(1)>"
     (out / "readiness.json").write_text(json.dumps(rd), encoding="utf-8")
     assert app.summary(p)["release"] is None
-    page = (Path(__file__).parents[1] / "lantern" / "viewer" / "app.html").read_text(encoding="utf-8")
+    page = lantern_files.page("app.html")
     assert "const RELEASE_TONE = {Blocked: 'critical', Incomplete: 'warning', Passed: 'good'};" in page
 
 

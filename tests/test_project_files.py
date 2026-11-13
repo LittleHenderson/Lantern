@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+import lantern_files
 from lantern import ask, depaudit, evidence, learn, pipeline, remote, results, sandbox, scanresult, security
 from lantern.cli import main
 from lantern.graph import Graph
@@ -209,7 +210,7 @@ def test_no_file_is_opened_any_other_way():
     own (OWN_FILES says which). A new reader that opens a project's file with a plain `open` or `read_text` fails
     here, before any sweep is run."""
     found = {}
-    for path in sorted((ROOT / "lantern").glob("*.py")):
+    for path in lantern_files.modules():
         for function, line in _opens(ast.parse(path.read_text(encoding="utf-8"))):
             found.setdefault((path.name, function), []).append(line)
     new = {f"{module}:{lines[0]} {function}" for (module, function), lines in found.items() if (module, function) not in OWN_FILES}
@@ -225,8 +226,11 @@ def test_no_name_is_given_twice_at_the_top_of_a_module():
     top level. The test files are held to the same rule: the same day a new constant `FIND` in `tests/test_flow.py`
     was replaced by an older one further down, and the new test read the wrong text."""
     twice = []
-    for folder in ("lantern", "cloud/lantern_cloud", "gateway/lantern_gateway", "tests"):
-        for path in sorted((ROOT / folder).glob("*.py")):
+    places = [("lantern", lantern_files.modules())] + [
+        (folder, sorted((ROOT / folder).glob("*.py"))) for folder in ("cloud/lantern_cloud", "gateway/lantern_gateway", "tests")]
+    assert all(files for _, files in places), [folder for folder, files in places if not files]
+    for folder, files in places:
+        for path in files:
             seen: dict[str, int] = {}
             for node in ast.parse(path.read_text(encoding="utf-8")).body:
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -916,7 +920,7 @@ def test_every_loader_of_a_saved_map_says_which_folder_it_means():
     """In `lantern/`, a map is loaded with the project folder beside it. A `Graph.load(path)` alone would go on to
     read wherever the file says the project is."""
     alone = []
-    for path in sorted((ROOT / "lantern").glob("*.py")):
+    for path in lantern_files.modules():
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "load"
                     and isinstance(node.func.value, ast.Name) and node.func.value.id == "Graph"

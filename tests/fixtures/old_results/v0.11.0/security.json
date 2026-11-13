@@ -1,0 +1,1530 @@
+{
+ "findings": [
+  {
+   "id": "57fa455f7b3b",
+   "tool": "bandit",
+   "rule": "B602",
+   "title": "subprocess call with shell=True identified, security issue.",
+   "tool_severity": "HIGH",
+   "tool_confidence": "HIGH",
+   "file": "shop/app.py",
+   "line": 16,
+   "cwe": 78,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b602_subprocess_popen_with_shell_equals_true.html",
+   "snippet": "15 def backup(name: str):\n16     subprocess.call(\"tar czf \" + name + \".tgz data/\", shell=True)\n17     r = make_repo()",
+   "category": "code",
+   "flow": {
+    "class": "shell",
+    "confidence": "HIGH",
+    "severity": "HIGH",
+    "source": {
+     "file": "shop/app.py",
+     "line": 15,
+     "what": "`name` arrives with the request (a parameter of `backup`, POST /backup)"
+    },
+    "sink": {
+     "file": "shop/app.py",
+     "line": 16,
+     "what": "subprocess.call()"
+    },
+    "steps": [
+     {
+      "file": "shop/app.py",
+      "line": 15,
+      "what": "`name` arrives with the request (a parameter of `backup`, POST /backup)"
+     },
+     {
+      "file": "shop/app.py",
+      "line": 16,
+      "what": "`subprocess.call()`: here it is run as part of a command on the server"
+     }
+    ],
+    "others": [],
+    "count": 1
+   },
+   "node": "py:shop.app.backup",
+   "in_tests": false,
+   "reachable": {
+    "entry": "py:shop.app.backup",
+    "kind": "route",
+    "path": [
+     "py:shop.app.backup"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/Admin::Admin",
+    "js:web/src/pages/Admin::BackupButton",
+    "js:web/src/pages/Admin::BackupButton.start",
+    "js:web/src/api::runBackup",
+    "py:shop.app.backup"
+   ],
+   "hot_lane": "server",
+   "lanes": [
+    "browser",
+    "frontend",
+    "server",
+    "data"
+   ],
+   "input": {
+    "via": "`name` arrives with the request (a parameter of `backup`, POST /backup)",
+    "flow": true
+   },
+   "rank": "critical",
+   "reachability": {
+    "state": "reached",
+    "kind": "route",
+    "why": "route code reaches it on Lantern's map."
+   },
+   "rank_basis": [
+    {
+     "step": "severity",
+     "rank": "high",
+     "why": "bandit rates the pattern high."
+    },
+    {
+     "step": "raised",
+     "rank": "critical",
+     "why": "route code reaches it, using request data."
+    }
+   ],
+   "status": "open",
+   "scenario": {
+    "kind": "shell",
+    "who": "Priya, a tester",
+    "steps": [
+     "Priya, who is testing your app, opens the /admin page.",
+     "They click the backup button.",
+     "In the box that fills in `name` they type: report; whoami"
+    ],
+    "harm": "The server pastes those words into a command and runs it, so the part after the semicolon runs too. Whoever types it can run any program your server can, with your server's permissions.",
+    "after_fix": "The value is passed as a separate argument (no shell), so the whole thing is just an odd file name and nothing extra runs.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B602); the page and clicks come from the map of your app; what they type reaching this line comes from Lantern following the data from where the request is read (`name` arrives with the request (a parameter of `backup`, POST /backup)). An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "The backup button can run shell commands on your server",
+   "case": {
+    "version": 1,
+    "where": {
+     "file": "shop/app.py",
+     "line": 16,
+     "function": "shop.app.backup",
+     "revision": null
+    },
+    "claim": "bandit says: subprocess call with shell=True identified, security issue. A pattern in the code, not a confirmed attack.",
+    "evidence": [
+     {
+      "fact": "bandit rule B602 matched at line 16: subprocess call with shell=True identified, security issue.",
+      "from": "bandit"
+     },
+     {
+      "fact": "It is an entry point itself: route POST /backup",
+      "from": "map"
+     },
+     {
+      "fact": "A click path from the page /admin reaches it; the least certain link on that path is certain",
+      "from": "map"
+     },
+     {
+      "fact": "Request data was followed to this line in 2 steps, starting at shop/app.py:15: `name` arrives with the request (a parameter of `backup`, POST /backup)",
+      "from": "data flow"
+     }
+    ],
+    "conditions": [
+     {
+      "need": "Someone outside can reach this code",
+      "met": true,
+      "why": "reached from route POST /backup"
+     },
+     {
+      "need": "What they send reaches this line",
+      "met": true,
+      "why": "data flow: followed in 2 steps from `name` arrives with the request (a parameter of `backup`, POST /backup)"
+     }
+    ],
+    "impact": "The server pastes those words into a command and runs it, so the part after the semicolon runs too. Whoever types it can run any program your server can, with your server's permissions.",
+    "severity": {
+     "rank": "critical",
+     "tool_severity": "HIGH",
+     "why": "bandit rates the pattern high, and route code reaches it, using request data.",
+     "basis": [
+      {
+       "step": "severity",
+       "rank": "high",
+       "why": "bandit rates the pattern high."
+      },
+      {
+       "step": "raised",
+       "rank": "critical",
+       "why": "route code reaches it, using request data."
+      }
+     ]
+    },
+    "confidence": {
+     "level": "high",
+     "why": "bandit rates its own match high",
+     "about": "How sure Lantern is that the flagged pattern is there and reached, not that it is exploitable"
+    },
+    "unknown": [
+     "Lantern read the code; it did not run the app or see production settings"
+    ],
+    "status": [
+     {
+      "word": "reported",
+      "done": true,
+      "why": "raised in this run"
+     },
+     {
+      "word": "reproduced",
+      "done": null,
+      "why": "no earlier run to compare"
+     },
+     {
+      "word": "fixed",
+      "done": false,
+      "why": "still flagged"
+     },
+     {
+      "word": "tested",
+      "done": null,
+      "why": "Lantern keeps no record of a test for this finding"
+     },
+     {
+      "word": "independently reviewed",
+      "done": null,
+      "why": "no review recorded"
+     }
+    ]
+   }
+  },
+  {
+   "id": "12771352490c",
+   "tool": "bandit",
+   "rule": "B324",
+   "title": "Use of weak MD5 hash for security. Consider usedforsecurity=False",
+   "tool_severity": "HIGH",
+   "tool_confidence": "HIGH",
+   "file": "shop/auth.py",
+   "line": 18,
+   "cwe": 327,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b324_hashlib.html",
+   "snippet": "17 def check_password(password, user):\n18     return hashlib.md5(password.encode()).hexdigest() == user\n19",
+   "category": "code",
+   "node": "py:shop.auth.check_password",
+   "in_tests": false,
+   "reachable": {
+    "entry": "py:shop.app.read_user",
+    "kind": "route",
+    "path": [
+     "py:shop.app.read_user",
+     "py:shop.auth.Session.login",
+     "py:shop.auth.check_password"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/UserPage::UserPage",
+    "js:web/src/api::getUser",
+    "py:shop.app.read_user",
+    "py:shop.auth.Session.login",
+    "py:shop.auth.check_password"
+   ],
+   "hot_lane": "server",
+   "lanes": [
+    "browser",
+    "frontend",
+    "server"
+   ],
+   "input": {
+    "via": "parameter `password`"
+   },
+   "context": {
+    "hash": {
+     "purpose": "security",
+     "why": "`password` in the value hashed",
+     "password": true,
+     "reads": "names"
+    }
+   },
+   "rank": "critical",
+   "reachability": {
+    "state": "reached",
+    "kind": "route",
+    "why": "route code reaches it on Lantern's map."
+   },
+   "rank_basis": [
+    {
+     "step": "severity",
+     "rank": "high",
+     "why": "bandit rates the pattern high."
+    },
+    {
+     "step": "raised",
+     "rank": "critical",
+     "why": "route code reaches it, using request data."
+    }
+   ],
+   "status": "open",
+   "scenario": {
+    "kind": "weak-hash",
+    "who": "Leo, a tester",
+    "steps": [
+     "Leo, who is testing your app, opens the /users/:id page.",
+     "They use that part of the app the normal way, which runs the flagged line (shop/auth.py, line 18)."
+    ],
+    "harm": "If the stored fingerprints ever leak (a backup left open, a bug somewhere else), MD5 and SHA-1 are fast and old enough that common passwords or tokens can be worked back out in minutes.",
+    "after_fix": "A slow password hash (bcrypt or argon2) is used, which makes the same work take years.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B324); the page and clicks come from the map of your app. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "A weak scrambling method (such as MD5) is used",
+   "case": {
+    "version": 1,
+    "where": {
+     "file": "shop/auth.py",
+     "line": 18,
+     "function": "shop.auth.check_password",
+     "revision": null
+    },
+    "claim": "bandit says: Use of weak MD5 hash for security. Consider usedforsecurity=False. A pattern in the code, not a confirmed attack.",
+    "evidence": [
+     {
+      "fact": "bandit rule B324 matched at line 18: Use of weak MD5 hash for security. Consider usedforsecurity=False",
+      "from": "bandit"
+     },
+     {
+      "fact": "Reached from route GET /users/{user_id} in 2 steps; the least certain link on that path is likely",
+      "from": "map"
+     },
+     {
+      "fact": "A click path from the page /users/:id reaches it; the least certain link on that path is likely",
+      "from": "map"
+     },
+     {
+      "fact": "The hash looks like it is for protection: `password` in the value hashed",
+      "from": "context (names)"
+     },
+     {
+      "fact": "Request data reaches this line (parameter `password`)",
+      "from": "input check"
+     }
+    ],
+    "conditions": [
+     {
+      "need": "Someone outside can reach this code",
+      "met": true,
+      "why": "reached from route GET /users/{user_id}"
+     },
+     {
+      "need": "The hash protects a password, token or signature",
+      "met": true,
+      "why": "`password` in the value hashed"
+     }
+    ],
+    "impact": "If the stored fingerprints ever leak (a backup left open, a bug somewhere else), MD5 and SHA-1 are fast and old enough that common passwords or tokens can be worked back out in minutes.",
+    "severity": {
+     "rank": "critical",
+     "tool_severity": "HIGH",
+     "why": "bandit rates the pattern high, and route code reaches it, using request data.",
+     "basis": [
+      {
+       "step": "severity",
+       "rank": "high",
+       "why": "bandit rates the pattern high."
+      },
+      {
+       "step": "raised",
+       "rank": "critical",
+       "why": "route code reaches it, using request data."
+      }
+     ]
+    },
+    "confidence": {
+     "level": "medium",
+     "why": "bandit rates its own match high; lowered: the path depends on a likely link",
+     "about": "How sure Lantern is that the flagged pattern is there and reached, not that it is exploitable"
+    },
+    "unknown": [
+     "Lantern read the code; it did not run the app or see production settings",
+     "one link on the path is only likely, so the path itself may not exist"
+    ],
+    "status": [
+     {
+      "word": "reported",
+      "done": true,
+      "why": "raised in this run"
+     },
+     {
+      "word": "reproduced",
+      "done": null,
+      "why": "no earlier run to compare"
+     },
+     {
+      "word": "fixed",
+      "done": false,
+      "why": "still flagged"
+     },
+     {
+      "word": "tested",
+      "done": null,
+      "why": "Lantern keeps no record of a test for this finding"
+     },
+     {
+      "word": "independently reviewed",
+      "done": null,
+      "why": "no review recorded"
+     }
+    ]
+   }
+  },
+  {
+   "id": "271ac69ef170",
+   "tool": "bandit",
+   "rule": "B608",
+   "title": "Possible SQL injection vector through string-based query construction.",
+   "tool_severity": "MEDIUM",
+   "tool_confidence": "MEDIUM",
+   "file": "shop/repo.py",
+   "line": 15,
+   "cwe": 89,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+   "snippet": "14         # deliberately unsafe: string-built SQL\n15         return self.execute(\"SELECT * FROM users WHERE id = '%s'\" % user_id)\n16",
+   "category": "code",
+   "flow": {
+    "class": "sql",
+    "confidence": "HIGH",
+    "severity": "HIGH",
+    "source": {
+     "file": "shop/app.py",
+     "line": 9,
+     "what": "`user_id` arrives with the request (a parameter of `read_user`, GET /users/{user_id})"
+    },
+    "sink": {
+     "file": "shop/repo.py",
+     "line": 9,
+     "what": "self.conn.execute()"
+    },
+    "steps": [
+     {
+      "file": "shop/app.py",
+      "line": 9,
+      "what": "`user_id` arrives with the request (a parameter of `read_user`, GET /users/{user_id})"
+     },
+     {
+      "file": "shop/app.py",
+      "line": 11,
+      "what": "handed to `login()` as `user_id`"
+     },
+     {
+      "file": "shop/auth.py",
+      "line": 13,
+      "what": "handed to `get()` as `user_id`"
+     },
+     {
+      "file": "shop/repo.py",
+      "line": 15,
+      "what": "put into the text of a database query"
+     },
+     {
+      "file": "shop/repo.py",
+      "line": 15,
+      "what": "handed to `execute()` as `sql`"
+     },
+     {
+      "file": "shop/repo.py",
+      "line": 9,
+      "what": "`self.conn.execute()`: here it is run as part of the database query"
+     }
+    ],
+    "others": [],
+    "count": 1
+   },
+   "node": "py:shop.repo.UserRepo.get",
+   "in_tests": false,
+   "reachable": {
+    "entry": "py:shop.app.read_user",
+    "kind": "route",
+    "path": [
+     "py:shop.app.read_user",
+     "py:shop.auth.Session.login",
+     "py:shop.repo.UserRepo.get"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/UserPage::UserPage",
+    "js:web/src/api::getUser",
+    "py:shop.app.read_user",
+    "py:shop.auth.Session.login",
+    "py:shop.repo.UserRepo.get"
+   ],
+   "hot_lane": "server",
+   "lanes": [
+    "browser",
+    "frontend",
+    "server"
+   ],
+   "input": {
+    "via": "`user_id` arrives with the request (a parameter of `read_user`, GET /users/{user_id})",
+    "flow": true
+   },
+   "context": {
+    "sql": {
+     "fixed_only": false,
+     "spliced": [
+      {
+       "expr": "user_id",
+       "fixed": false,
+       "why": "`user_id` is a parameter"
+      }
+     ],
+     "driver_params": false,
+     "reads": "this function and module constants"
+    }
+   },
+   "rank": "critical",
+   "reachability": {
+    "state": "reached",
+    "kind": "route",
+    "why": "route code reaches it on Lantern's map."
+   },
+   "rank_basis": [
+    {
+     "step": "severity",
+     "rank": "medium",
+     "why": "bandit rates the pattern medium."
+    },
+    {
+     "step": "raised",
+     "rank": "high",
+     "why": "Lantern followed request data to the line, which makes the pattern high."
+    },
+    {
+     "step": "raised",
+     "rank": "critical",
+     "why": "route code reaches it, using request data."
+    }
+   ],
+   "status": "open",
+   "scenario": {
+    "kind": "sql",
+    "who": "Maria, a tester",
+    "steps": [
+     "Maria, who is testing your app, opens the /users/:id page.",
+     "In the box that fills in `user_id` they type: ' OR '1'='1"
+    ],
+    "harm": "Those characters are pasted into the database question, which changes its meaning from \"this one record\" to \"every record\". The same trick can read, change or delete other people's data.",
+    "after_fix": "The value goes in as a parameter, so the database treats it as plain text to look for, and finds nothing.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B608); the page and clicks come from the map of your app; what they type reaching this line comes from Lantern following the data from where the request is read (`user_id` arrives with the request (a parameter of `read_user`, GET /users/{user_id})). An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "The /users/:id page can change what your database is asked",
+   "case": {
+    "version": 1,
+    "where": {
+     "file": "shop/repo.py",
+     "line": 15,
+     "function": "shop.repo.UserRepo.get",
+     "revision": null
+    },
+    "claim": "bandit says: Possible SQL injection vector through string-based query construction. A pattern in the code, not a confirmed attack.",
+    "evidence": [
+     {
+      "fact": "bandit rule B608 matched at line 15: Possible SQL injection vector through string-based query construction.",
+      "from": "bandit"
+     },
+     {
+      "fact": "Reached from route GET /users/{user_id} in 2 steps; the least certain link on that path is likely",
+      "from": "map"
+     },
+     {
+      "fact": "A click path from the page /users/:id reaches it; the least certain link on that path is likely",
+      "from": "map"
+     },
+     {
+      "fact": "Text that is not fixed is spliced into the SQL: user_id (`user_id` is a parameter)",
+      "from": "context (code)"
+     },
+     {
+      "fact": "Request data was followed to this line in 6 steps, starting at shop/app.py:9: `user_id` arrives with the request (a parameter of `read_user`, GET /users/{user_id})",
+      "from": "data flow"
+     }
+    ],
+    "conditions": [
+     {
+      "need": "Someone outside can reach this code",
+      "met": true,
+      "why": "reached from route GET /users/{user_id}"
+     },
+     {
+      "need": "What they send reaches this line",
+      "met": true,
+      "why": "data flow: followed in 6 steps from `user_id` arrives with the request (a parameter of `read_user`, GET /users/{user_id})"
+     }
+    ],
+    "impact": "Those characters are pasted into the database question, which changes its meaning from \"this one record\" to \"every record\". The same trick can read, change or delete other people's data.",
+    "severity": {
+     "rank": "critical",
+     "tool_severity": "MEDIUM",
+     "why": "bandit rates the pattern medium; Lantern followed request data to it, which makes it high, and route code reaches it, using request data.",
+     "basis": [
+      {
+       "step": "severity",
+       "rank": "medium",
+       "why": "bandit rates the pattern medium."
+      },
+      {
+       "step": "raised",
+       "rank": "high",
+       "why": "Lantern followed request data to the line, which makes the pattern high."
+      },
+      {
+       "step": "raised",
+       "rank": "critical",
+       "why": "route code reaches it, using request data."
+      }
+     ]
+    },
+    "confidence": {
+     "level": "medium",
+     "why": "bandit rates its own match medium",
+     "about": "How sure Lantern is that the flagged pattern is there and reached, not that it is exploitable"
+    },
+    "unknown": [
+     "Lantern read the code; it did not run the app or see production settings",
+     "one link on the path is only likely, so the path itself may not exist"
+    ],
+    "status": [
+     {
+      "word": "reported",
+      "done": true,
+      "why": "raised in this run"
+     },
+     {
+      "word": "reproduced",
+      "done": null,
+      "why": "no earlier run to compare"
+     },
+     {
+      "word": "fixed",
+      "done": false,
+      "why": "still flagged"
+     },
+     {
+      "word": "tested",
+      "done": null,
+      "why": "Lantern keeps no record of a test for this finding"
+     },
+     {
+      "word": "independently reviewed",
+      "done": null,
+      "why": "no review recorded"
+     }
+    ]
+   }
+  },
+  {
+   "id": "3009f20c07ea",
+   "tool": "lantern-web",
+   "rule": "LW-PUBLIC-SECRET",
+   "title": "Secret-looking setting VITE_ADMIN_SECRET is sent to every visitor's browser",
+   "tool_severity": "HIGH",
+   "tool_confidence": "HIGH",
+   "file": "web/src/pages/Admin.tsx",
+   "line": 4,
+   "cwe": 200,
+   "more_info": "Variables starting with NEXT_PUBLIC_, VITE_, REACT_APP_ and similar are copied into the JavaScript that browsers download. Keep secrets in server-only variables and call them from server code.",
+   "snippet": "VITE_ADMIN_SECRET",
+   "category": "exposure",
+   "fixed_rank": "high",
+   "node": "js:web/src/pages/Admin",
+   "in_tests": false,
+   "reachable": null,
+   "reachable_from_tests_only": false,
+   "ui_path": null,
+   "hot_lane": "frontend",
+   "lanes": [
+    "frontend"
+   ],
+   "input": null,
+   "trust": {
+    "browser": {
+     "exposed": true,
+     "where": "web/src/pages/Admin.tsx:4",
+     "sent_as": null
+    },
+    "server_trusts": "not-seen-on-server",
+    "server_checks": [],
+    "server_reads": [],
+    "routes": [],
+    "other_controls": [],
+    "conditions": [],
+    "stranger_access": "not determined",
+    "unknown": [
+     "whether a request carrying this value can reach anything protected: Lantern does not run the app"
+    ],
+    "reads": "names and strings in this repository"
+   },
+   "rank": "high",
+   "reachability": {
+    "state": "unknown",
+    "why": "Lantern found no path to this code from a page, route, command or script, which is not proof that nothing runs it: a scheduler, another program, a framework that calls by name or a call Lantern could not follow would not show."
+   },
+   "rank_basis": [
+    {
+     "step": "fixed",
+     "rank": "high",
+     "why": "Lantern gives this rule the rank high whatever reaches it."
+    }
+   ],
+   "status": "open",
+   "scenario": {
+    "kind": "secret",
+    "who": "Sam, a tester",
+    "steps": [
+     "Sam opens your site and looks at the files their browser downloaded (anyone can, with the browser's developer tools).",
+     "They search them for \u201ckey\u201d and find the value of this setting, sent to every visitor."
+    ],
+    "harm": "They copy the key and use it from their own computer. Whatever the key unlocks (your database, your paid AI account, your email service) now works for them, and the bill or the data is yours.",
+    "after_fix": "The key lives only on the server in an environment variable, and you replace (rotate) the old one, because anyone may already have a copy.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (LW-PUBLIC-SECRET); the setting has a prefix that ships it to the browser. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "A secret setting is sent to every visitor's browser",
+   "case": {
+    "version": 1,
+    "where": {
+     "file": "web/src/pages/Admin.tsx",
+     "line": 4,
+     "function": "web/src/pages/Admin",
+     "revision": null
+    },
+    "claim": "Secret-looking setting VITE_ADMIN_SECRET is sent to every visitor's browser. Visible in the browser; that alone is not proof anyone can get in.",
+    "evidence": [
+     {
+      "fact": "lantern-web rule LW-PUBLIC-SECRET matched at line 4: Secret-looking setting VITE_ADMIN_SECRET is sent to every visitor's browser",
+      "from": "lantern-web"
+     }
+    ],
+    "conditions": [
+     {
+      "need": "The value reaches the browser",
+      "met": true,
+      "why": "set in web/src/pages/Admin.tsx:4"
+     },
+     {
+      "need": "The server accepts it as proof of who is calling",
+      "met": false,
+      "why": "no server code in this repository reads it"
+     },
+     {
+      "need": "Nothing else on the server stops a stranger",
+      "met": null,
+      "why": "depends on production settings Lantern cannot see"
+     }
+    ],
+    "impact": "They copy the key and use it from their own computer. Whatever the key unlocks (your database, your paid AI account, your email service) now works for them, and the bill or the data is yours.",
+    "severity": {
+     "rank": "high",
+     "tool_severity": "HIGH",
+     "why": "Lantern gives this rule the rank high whatever reaches it.",
+     "basis": [
+      {
+       "step": "fixed",
+       "rank": "high",
+       "why": "Lantern gives this rule the rank high whatever reaches it."
+      }
+     ]
+    },
+    "confidence": {
+     "level": "high",
+     "why": "lantern-web rates its own match high; at least one condition for harm is not met; 1 condition Lantern cannot check",
+     "about": "How sure Lantern is that the flagged pattern is there and reached, not that it is exploitable"
+    },
+    "unknown": [
+     "whether a request carrying this value can reach anything protected: Lantern does not run the app",
+     "Lantern read the code; it did not run the app or see production settings"
+    ],
+    "status": [
+     {
+      "word": "reported",
+      "done": true,
+      "why": "raised in this run"
+     },
+     {
+      "word": "reproduced",
+      "done": null,
+      "why": "no earlier run to compare"
+     },
+     {
+      "word": "fixed",
+      "done": false,
+      "why": "still flagged"
+     },
+     {
+      "word": "tested",
+      "done": null,
+      "why": "Lantern keeps no record of a test for this finding"
+     },
+     {
+      "word": "independently reviewed",
+      "done": null,
+      "why": "no review recorded"
+     }
+    ]
+   }
+  },
+  {
+   "id": "27105c2e3afc",
+   "tool": "lantern-web",
+   "rule": "LW-AUTH-MISSING",
+   "title": "POST /backup changes data, is called by the app, and no login check was found",
+   "tool_severity": "MEDIUM",
+   "tool_confidence": "LOW",
+   "file": "shop/app.py",
+   "line": 14,
+   "cwe": 306,
+   "more_info": "Heuristic: Lantern looked three calls deep for anything named like an auth check (current_user, auth, login_required, token, permission...) and read the handler's own lines for the same words. If this route is meant to be public, ignore it.",
+   "snippet": "POST /backup",
+   "category": "code",
+   "fixed_rank": "medium",
+   "node": "py:shop.app.backup",
+   "in_tests": false,
+   "reachable": {
+    "entry": "py:shop.app.backup",
+    "kind": "route",
+    "path": [
+     "py:shop.app.backup"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/Admin::Admin",
+    "js:web/src/pages/Admin::BackupButton",
+    "js:web/src/pages/Admin::BackupButton.start",
+    "js:web/src/api::runBackup",
+    "py:shop.app.backup"
+   ],
+   "hot_lane": "server",
+   "lanes": [
+    "browser",
+    "frontend",
+    "server",
+    "data"
+   ],
+   "input": false,
+   "rank": "medium",
+   "reachability": {
+    "state": "reached",
+    "kind": "route",
+    "why": "route code reaches it on Lantern's map."
+   },
+   "rank_basis": [
+    {
+     "step": "fixed",
+     "rank": "medium",
+     "why": "Lantern gives this rule the rank medium whatever reaches it."
+    }
+   ],
+   "status": "open",
+   "scenario": {
+    "kind": "auth",
+    "who": "Sam, a tester",
+    "steps": [
+     "Sam, who is testing your app, opens the /admin page.",
+     "They click the backup button.",
+     "They are not signed in when they send POST /backup."
+    ],
+    "harm": "The server does what they asked, because nothing checks who they are first. They do not need an account, a password, or your page at all. This check is a heuristic: look at the code before you act, Lantern may be wrong about this one.",
+    "after_fix": "The route first checks that the request comes from a signed-in user who is allowed to do this, and answers \"not allowed\" otherwise.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (LW-AUTH-MISSING); the page and clicks come from the map of your app. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "POST /backup works without checking who is signed in",
+   "case": {
+    "version": 1,
+    "where": {
+     "file": "shop/app.py",
+     "line": 14,
+     "function": "shop.app.backup",
+     "revision": null
+    },
+    "claim": "lantern-web says: POST /backup changes data, is called by the app, and no login check was found. A pattern in the code, not a confirmed attack.",
+    "evidence": [
+     {
+      "fact": "lantern-web rule LW-AUTH-MISSING matched at line 14: POST /backup changes data, is called by the app, and no login check was found",
+      "from": "lantern-web"
+     },
+     {
+      "fact": "It is an entry point itself: route POST /backup",
+      "from": "map"
+     },
+     {
+      "fact": "A click path from the page /admin reaches it; the least certain link on that path is certain",
+      "from": "map"
+     },
+     {
+      "fact": "Nothing from the request reaches this line inside its function",
+      "from": "input check"
+     }
+    ],
+    "conditions": [
+     {
+      "need": "Someone outside can reach this code",
+      "met": true,
+      "why": "reached from route POST /backup"
+     }
+    ],
+    "impact": "The server does what they asked, because nothing checks who they are first. They do not need an account, a password, or your page at all. This check is a heuristic: look at the code before you act, Lantern may be wrong about this one.",
+    "severity": {
+     "rank": "medium",
+     "tool_severity": "MEDIUM",
+     "why": "Lantern gives this rule the rank medium whatever reaches it.",
+     "basis": [
+      {
+       "step": "fixed",
+       "rank": "medium",
+       "why": "Lantern gives this rule the rank medium whatever reaches it."
+      }
+     ]
+    },
+    "confidence": {
+     "level": "low",
+     "why": "lantern-web rates its own match low",
+     "about": "How sure Lantern is that the flagged pattern is there and reached, not that it is exploitable"
+    },
+    "unknown": [
+     "Lantern read the code; it did not run the app or see production settings",
+     "this check is a pattern match (heuristic) and can misfire"
+    ],
+    "status": [
+     {
+      "word": "reported",
+      "done": true,
+      "why": "raised in this run"
+     },
+     {
+      "word": "reproduced",
+      "done": null,
+      "why": "no earlier run to compare"
+     },
+     {
+      "word": "fixed",
+      "done": false,
+      "why": "still flagged"
+     },
+     {
+      "word": "tested",
+      "done": null,
+      "why": "Lantern keeps no record of a test for this finding"
+     },
+     {
+      "word": "independently reviewed",
+      "done": null,
+      "why": "no review recorded"
+     }
+    ]
+   }
+  },
+  {
+   "id": "cb19d1c15090",
+   "tool": "lantern-web",
+   "rule": "LW-SECRET-INLINE",
+   "title": "A signing secret is written in the code: anyone who can read the code can forge a session or a login token; read it from a setting kept outside the code",
+   "tool_severity": "HIGH",
+   "tool_confidence": "LOW",
+   "file": "shop/auth.py",
+   "line": 5,
+   "cwe": 798,
+   "more_info": null,
+   "snippet": "SECRET = \"[redacted]\"",
+   "category": "code",
+   "fixed_rank": "medium",
+   "secret_kind": "signing",
+   "node": "py:shop.auth",
+   "in_tests": false,
+   "reachable": null,
+   "reachable_from_tests_only": false,
+   "ui_path": null,
+   "hot_lane": "server",
+   "lanes": [
+    "server"
+   ],
+   "input": null,
+   "rank": "medium",
+   "reachability": {
+    "state": "unknown",
+    "why": "Lantern found no path to this code from a page, route, command or script, which is not proof that nothing runs it: a scheduler, another program, a framework that calls by name or a call Lantern could not follow would not show."
+   },
+   "rank_basis": [
+    {
+     "step": "fixed",
+     "rank": "medium",
+     "why": "Lantern gives this rule the rank medium whatever reaches it."
+    }
+   ],
+   "status": "open",
+   "scenario": {
+    "kind": "secret",
+    "who": "Aisha, a tester",
+    "steps": [
+     "Your code is shared or pushed somewhere others can read (a public GitHub repository, a zip sent to a contractor). Aisha opens shop/auth.py at line 5.",
+     "They find the password or key written there in plain text."
+    ],
+    "harm": "They copy the key and use it from their own computer. Whatever the key unlocks (your database, your paid AI account, your email service) now works for them, and the bill or the data is yours. This check is a heuristic: look at the code before you act, Lantern may be wrong about this one.",
+    "after_fix": "The key lives only on the server in an environment variable, and you replace (rotate) the old one, because anyone may already have a copy.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (LW-SECRET-INLINE); the key is written in the file. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "A password or key is written in the code",
+   "case": {
+    "version": 1,
+    "where": {
+     "file": "shop/auth.py",
+     "line": 5,
+     "function": "shop.auth",
+     "revision": null
+    },
+    "claim": "lantern-web says: A signing secret is written in the code: anyone who can read the code can forge a session or a login token; read it from a setting kept outside the code. A pattern in the code, not a confirmed attack.",
+    "evidence": [
+     {
+      "fact": "lantern-web rule LW-SECRET-INLINE matched at line 5: A signing secret is written in the code: anyone who can read the code can forge a session or a login token; read it from a setting kept outside the code",
+      "from": "lantern-web"
+     },
+     {
+      "fact": "Lantern found no path to this code from a page, route or command",
+      "from": "map"
+     }
+    ],
+    "conditions": [
+     {
+      "need": "Someone outside can reach this code",
+      "met": null,
+      "why": "Lantern found no path to it, which is not proof that there is none"
+     }
+    ],
+    "impact": "They copy the key and use it from their own computer. Whatever the key unlocks (your database, your paid AI account, your email service) now works for them, and the bill or the data is yours. This check is a heuristic: look at the code before you act, Lantern may be wrong about this one.",
+    "severity": {
+     "rank": "medium",
+     "tool_severity": "HIGH",
+     "why": "Lantern gives this rule the rank medium whatever reaches it.",
+     "basis": [
+      {
+       "step": "fixed",
+       "rank": "medium",
+       "why": "Lantern gives this rule the rank medium whatever reaches it."
+      }
+     ]
+    },
+    "confidence": {
+     "level": "low",
+     "why": "lantern-web rates its own match low; 1 condition Lantern cannot check",
+     "about": "How sure Lantern is that the flagged pattern is there and reached, not that it is exploitable"
+    },
+    "unknown": [
+     "whether anything runs this code: Lantern found no path to it, which is not proof that nothing does (a scheduler, another program, a framework that calls by name or a call Lantern could not follow would not show)",
+     "Lantern read the code; it did not run the app or see production settings",
+     "this check is a pattern match (heuristic) and can misfire"
+    ],
+    "status": [
+     {
+      "word": "reported",
+      "done": true,
+      "why": "raised in this run"
+     },
+     {
+      "word": "reproduced",
+      "done": null,
+      "why": "no earlier run to compare"
+     },
+     {
+      "word": "fixed",
+      "done": false,
+      "why": "still flagged"
+     },
+     {
+      "word": "tested",
+      "done": null,
+      "why": "Lantern keeps no record of a test for this finding"
+     },
+     {
+      "word": "independently reviewed",
+      "done": null,
+      "why": "no review recorded"
+     }
+    ]
+   }
+  },
+  {
+   "id": "408d05131176",
+   "tool": "lantern-web",
+   "rule": "LJ-XSS-HTML",
+   "title": "Inserts raw HTML into the page (cross-site scripting risk)",
+   "tool_severity": "MEDIUM",
+   "tool_confidence": "HIGH",
+   "file": "web/src/components/Bio.tsx",
+   "line": 3,
+   "cwe": 79,
+   "more_info": null,
+   "snippet": "return <section dangerouslySetInnerHTML={{ __html: html }} />",
+   "category": "code",
+   "node": "js:web/src/components/Bio::Bio",
+   "in_tests": false,
+   "reachable": {
+    "entry": "js:web/src/pages/UserPage::UserPage",
+    "kind": "page",
+    "path": [
+     "js:web/src/pages/UserPage::UserPage",
+     "js:web/src/components/Bio::Bio"
+    ]
+   },
+   "reachable_from_tests_only": false,
+   "ui_path": [
+    "js:web/src/pages/UserPage::UserPage",
+    "js:web/src/components/Bio::Bio"
+   ],
+   "hot_lane": "frontend",
+   "lanes": [
+    "browser",
+    "frontend"
+   ],
+   "input": null,
+   "rank": "medium",
+   "reachability": {
+    "state": "reached",
+    "kind": "page",
+    "why": "page code reaches it on Lantern's map."
+   },
+   "rank_basis": [
+    {
+     "step": "severity",
+     "rank": "medium",
+     "why": "lantern-web rates the pattern medium."
+    }
+   ],
+   "status": "open",
+   "scenario": {
+    "kind": "xss",
+    "who": "Tom, a tester",
+    "steps": [
+     "Tom, who is testing your app, opens the /users/:id page.",
+     "If what they type reaches this line, they type: <img src=x onerror=alert(document.cookie)>"
+    ],
+    "harm": "The page puts those characters into the screen as real HTML, so the browser runs the script inside. Everyone who later views that page runs it too, signed in as themselves.",
+    "after_fix": "The text is shown as text (escaped), so visitors see the odd characters and nothing runs.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (LJ-XSS-HTML); the page and clicks come from the map of your app. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "Text is put into the page as HTML",
+   "case": {
+    "version": 1,
+    "where": {
+     "file": "web/src/components/Bio.tsx",
+     "line": 3,
+     "function": "web/src/components/Bio::Bio",
+     "revision": null
+    },
+    "claim": "lantern-web says: Inserts raw HTML into the page (cross-site scripting risk). A pattern in the code, not a confirmed attack.",
+    "evidence": [
+     {
+      "fact": "lantern-web rule LJ-XSS-HTML matched at line 3: Inserts raw HTML into the page (cross-site scripting risk)",
+      "from": "lantern-web"
+     },
+     {
+      "fact": "Reached from page /users/:id in 1 step; the least certain link on that path is certain",
+      "from": "map"
+     },
+     {
+      "fact": "A click path from the page /users/:id reaches it; the least certain link on that path is certain",
+      "from": "map"
+     }
+    ],
+    "conditions": [
+     {
+      "need": "Someone outside can reach this code",
+      "met": true,
+      "why": "reached from page /users/:id"
+     },
+     {
+      "need": "What they send reaches this line",
+      "met": null,
+      "why": "input check: not checked (input is followed from server routes, commands and scripts only)"
+     }
+    ],
+    "impact": "The page puts those characters into the screen as real HTML, so the browser runs the script inside. Everyone who later views that page runs it too, signed in as themselves.",
+    "severity": {
+     "rank": "medium",
+     "tool_severity": "MEDIUM",
+     "why": "lantern-web rates the pattern medium, reached from page code (not a server route, command or script).",
+     "basis": [
+      {
+       "step": "severity",
+       "rank": "medium",
+       "why": "lantern-web rates the pattern medium."
+      }
+     ]
+    },
+    "confidence": {
+     "level": "high",
+     "why": "lantern-web rates its own match high; 1 condition Lantern cannot check",
+     "about": "How sure Lantern is that the flagged pattern is there and reached, not that it is exploitable"
+    },
+    "unknown": [
+     "Lantern read the code; it did not run the app or see production settings"
+    ],
+    "status": [
+     {
+      "word": "reported",
+      "done": true,
+      "why": "raised in this run"
+     },
+     {
+      "word": "reproduced",
+      "done": null,
+      "why": "no earlier run to compare"
+     },
+     {
+      "word": "fixed",
+      "done": false,
+      "why": "still flagged"
+     },
+     {
+      "word": "tested",
+      "done": null,
+      "why": "Lantern keeps no record of a test for this finding"
+     },
+     {
+      "word": "independently reviewed",
+      "done": null,
+      "why": "no review recorded"
+     }
+    ]
+   }
+  },
+  {
+   "id": "6715dbeeddd8",
+   "tool": "bandit",
+   "rule": "B404",
+   "title": "Consider possible security implications associated with the subprocess module.",
+   "tool_severity": "LOW",
+   "tool_confidence": "HIGH",
+   "file": "shop/app.py",
+   "line": 1,
+   "cwe": 78,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_imports.html#b404-import-subprocess",
+   "snippet": "1 import subprocess\n2 from fastapi import FastAPI\n3 from .auth import Session, make_repo",
+   "category": "code",
+   "node": "py:shop.app",
+   "in_tests": false,
+   "reachable": null,
+   "reachable_from_tests_only": false,
+   "ui_path": null,
+   "hot_lane": "server",
+   "lanes": [
+    "server"
+   ],
+   "input": null,
+   "rank": "low",
+   "reachability": {
+    "state": "unknown",
+    "why": "Lantern found no path to this code from a page, route, command or script, which is not proof that nothing runs it: a scheduler, another program, a framework that calls by name or a call Lantern could not follow would not show."
+   },
+   "rank_basis": [
+    {
+     "step": "severity",
+     "rank": "low",
+     "why": "bandit rates the pattern low."
+    }
+   ],
+   "status": "open",
+   "scenario": {
+    "kind": "subprocess-note",
+    "who": "Leo, a tester",
+    "steps": [
+     "Nothing for Leo to do here: this is a note about what the code is able to do."
+    ],
+    "harm": "Nothing happens on its own. This note says the code can start other programs, which matters only where a value from outside reaches one of those calls.",
+    "after_fix": "Nothing to change here unless another finding points at the same call.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B404). An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "This file starts other programs (a note, not a problem)",
+   "case": {
+    "version": 1,
+    "where": {
+     "file": "shop/app.py",
+     "line": 1,
+     "function": "shop.app",
+     "revision": null
+    },
+    "claim": "bandit says: Consider possible security implications associated with the subprocess module. A pattern in the code, not a confirmed attack.",
+    "evidence": [
+     {
+      "fact": "bandit rule B404 matched at line 1: Consider possible security implications associated with the subprocess module.",
+      "from": "bandit"
+     },
+     {
+      "fact": "Lantern found no path to this code from a page, route or command",
+      "from": "map"
+     }
+    ],
+    "conditions": [
+     {
+      "need": "Someone outside can reach this code",
+      "met": null,
+      "why": "Lantern found no path to it, which is not proof that there is none"
+     }
+    ],
+    "impact": "Nothing happens on its own. This note says the code can start other programs, which matters only where a value from outside reaches one of those calls.",
+    "severity": {
+     "rank": "low",
+     "tool_severity": "LOW",
+     "why": "bandit rates the pattern low. Lantern found no path to it from a page, route or command, which is not proof that nothing runs it, so the rank stays at the tool's own severity.",
+     "basis": [
+      {
+       "step": "severity",
+       "rank": "low",
+       "why": "bandit rates the pattern low."
+      }
+     ]
+    },
+    "confidence": {
+     "level": "high",
+     "why": "bandit rates its own match high; 1 condition Lantern cannot check",
+     "about": "How sure Lantern is that the flagged pattern is there and reached, not that it is exploitable"
+    },
+    "unknown": [
+     "whether anything runs this code: Lantern found no path to it, which is not proof that nothing does (a scheduler, another program, a framework that calls by name or a call Lantern could not follow would not show)",
+     "Lantern read the code; it did not run the app or see production settings"
+    ],
+    "status": [
+     {
+      "word": "reported",
+      "done": true,
+      "why": "raised in this run"
+     },
+     {
+      "word": "reproduced",
+      "done": null,
+      "why": "no earlier run to compare"
+     },
+     {
+      "word": "fixed",
+      "done": false,
+      "why": "still flagged"
+     },
+     {
+      "word": "tested",
+      "done": null,
+      "why": "Lantern keeps no record of a test for this finding"
+     },
+     {
+      "word": "independently reviewed",
+      "done": null,
+      "why": "no review recorded"
+     }
+    ]
+   }
+  },
+  {
+   "id": "b4dd2b0afe1e",
+   "tool": "bandit",
+   "rule": "B101",
+   "title": "Use of assert detected. The enclosed code will be removed when compiling to optimised byte code.",
+   "tool_severity": "LOW",
+   "tool_confidence": "HIGH",
+   "file": "tests/test_auth.py",
+   "line": 5,
+   "cwe": 703,
+   "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b101_assert_used.html",
+   "snippet": "4 def test_check_password():\n5     assert not check_password(\"x\", \"y\")",
+   "category": "code",
+   "node": "py:tests.test_auth.test_check_password",
+   "in_tests": true,
+   "reachable": null,
+   "reachable_from_tests_only": true,
+   "ui_path": null,
+   "hot_lane": "server",
+   "lanes": [
+    "server"
+   ],
+   "input": null,
+   "rank": "low",
+   "reachability": {
+    "state": "tests-only",
+    "why": "Only the test suite was found to reach this code, which is not proof that nothing runs it: a scheduler, another program, a framework that calls by name or a call Lantern could not follow would not show."
+   },
+   "rank_basis": [
+    {
+     "step": "severity",
+     "rank": "low",
+     "why": "bandit rates the pattern low."
+    },
+    {
+     "step": "test-code",
+     "rank": "low",
+     "why": "Test code: your users do not run it, so it is ranked low and counted apart."
+    }
+   ],
+   "status": "open",
+   "scenario": {
+    "kind": "assert",
+    "who": "Priya, a tester",
+    "steps": [
+     "This line is in test code. Priya never gets to it: your users do not run your tests."
+    ],
+    "harm": "Python skips `assert` lines when it runs in optimised mode, so this check quietly disappears and nothing stops the bad case. In test code this is normal and fine.",
+    "after_fix": "A real `if` check that raises an error, which always runs.",
+    "basis": "Built by Lantern from what it found: the kind of problem comes from the rule (B101); the file is test code. An illustration: Lantern read your code and did not try any of this."
+   },
+   "headline": "A safety check uses assert, which can be switched off"
+  }
+ ],
+ "tools": [
+  {
+   "tool": "bandit",
+   "state": "ok",
+   "status": "ok",
+   "why": "",
+   "applicable": true,
+   "role": "Python code patterns",
+   "exclusions": [
+    ".lantern"
+   ],
+   "version": "1.9.4",
+   "exit_code": 1,
+   "duration_ms": 1530,
+   "scope": {
+    "files": 6
+   },
+   "findings": 6
+  },
+  {
+   "tool": "pip-audit",
+   "state": "skipped",
+   "status": "skipped: no Python dependency files",
+   "why": "no Python dependency files",
+   "applicable": false,
+   "role": "known-vulnerable Python packages",
+   "version": "2.10.1"
+  },
+  {
+   "tool": "npm-audit",
+   "state": "skipped",
+   "status": "skipped: no package-lock.json, so exact versions are unknown (commit your lock file)",
+   "why": "no package-lock.json, so exact versions are unknown (commit your lock file)",
+   "applicable": false,
+   "role": "known-vulnerable npm packages (production dependencies)",
+   "unlocked": 4,
+   "unlocked_examples": [
+    "web/package.json: axios",
+    "web/package.json: react",
+    "web/package.json: react-dom",
+    "web/package.json: react-router-dom"
+   ]
+  },
+  {
+   "tool": "maven-audit",
+   "state": "skipped",
+   "status": "skipped: no Gradle or Maven files",
+   "why": "no Gradle or Maven files",
+   "applicable": false,
+   "role": "known-vulnerable Gradle/Maven libraries (OSV database)",
+   "version": "osv-v1"
+  },
+  {
+   "tool": "composer-audit",
+   "state": "skipped",
+   "status": "skipped: no composer.lock",
+   "why": "no composer.lock",
+   "applicable": false,
+   "role": "known-vulnerable PHP libraries (composer.lock, OSV database)",
+   "version": "osv-v1"
+  },
+  {
+   "tool": "gem-audit",
+   "state": "skipped",
+   "status": "skipped: no Gemfile.lock",
+   "why": "no Gemfile.lock",
+   "applicable": false,
+   "role": "known-vulnerable Ruby gems (Gemfile.lock, OSV database)",
+   "version": "osv-v1"
+  },
+  {
+   "tool": "copied-audit",
+   "state": "skipped",
+   "status": "skipped: no software copied into a vendor folder",
+   "why": "no software copied into a vendor folder",
+   "applicable": false,
+   "role": "known problems in software copied into the project (vendor folders, OSV database)",
+   "version": "osv-v1"
+  },
+  {
+   "tool": "gitleaks",
+   "state": "unavailable",
+   "status": "skipped: not installed (built-in patterns ran instead; install gitleaks (github.com/gitleaks/gitleaks) for its full rule set)",
+   "why": "built-in patterns ran instead; install gitleaks (github.com/gitleaks/gitleaks) for its full rule set",
+   "applicable": false,
+   "role": "secrets in files",
+   "version": null
+  },
+  {
+   "tool": "lantern-secrets",
+   "state": "ok",
+   "status": "ok (built-in patterns; install gitleaks for full coverage)",
+   "why": "built-in patterns; install gitleaks for full coverage",
+   "applicable": true,
+   "role": "secrets in files (built-in patterns)",
+   "version": "2",
+   "scope": {
+    "files": 15
+   },
+   "findings": 0
+  },
+  {
+   "tool": "lantern-web",
+   "status": "ok",
+   "version": "0.1"
+  },
+  {
+   "tool": "lantern-ai",
+   "status": "ok (no model, vector or paid API calls found)",
+   "version": "0.1"
+  },
+  {
+   "tool": "lantern-flow",
+   "state": "ok",
+   "status": "ok",
+   "why": "",
+   "applicable": true,
+   "version": "1",
+   "findings": 0,
+   "duration_ms": 18,
+   "scope": {
+    "files": 11,
+    "functions": 24,
+    "flows": 2,
+    "on_other_findings": 2,
+    "not_followed_further": 7,
+    "login_read_from_code": 0,
+    "token_check_lets_on": 0,
+    "sender_checked": 0
+   }
+  }
+ ],
+ "counts": {
+  "critical": 3,
+  "high": 1,
+  "medium": 3,
+  "low": 1,
+  "in_tests": 1,
+  "accepted": 0
+ },
+ "id_version": 2,
+ "incomplete": [],
+ "not_read": {},
+ "reachable_nodes": 31,
+ "total_callables": 28,
+ "logins_shown": [],
+ "ai": {
+  "calls": [],
+  "by_node": {},
+  "kinds": [],
+  "providers": [],
+  "notebooks": [],
+  "is_ai_app": false
+ },
+ "mobile": null
+}

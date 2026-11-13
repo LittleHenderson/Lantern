@@ -250,7 +250,7 @@ def test_zooming_in_keeps_every_tab_reachable_and_every_tab_scrollable():
     map takes off its full-panel class, whose overflow:hidden stopped Readiness and Protections from scrolling."""
     html, _ = site.page("t")
     assert "function fitSub()" in html and ".sub.two" in html and "--subh" in html
-    report = (Path(__file__).resolve().parents[1] / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+    report = (site._viewer() / "report.html").read_text(encoding="utf-8")
     render = report[report.index("function render() {"):]
     assert "classList.remove('dotted', 'gfull')" in render[:400]
     assert ".ftable{" in report and "overflow-x:auto" in report.split(".ftable{", 1)[1].split("}", 1)[0]

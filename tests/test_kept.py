@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+import lantern_files
 from lantern import cli, evidence, kept, pipeline, python_frontend, scanresult, security
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
@@ -362,10 +363,12 @@ def test_a_write_the_system_refuses_beside_another_writer_is_not_kept_and_breaks
 
 # ------------------------------------------------------------------------------------------- the Python reader
 def _python_files() -> list[Path]:
-    """Every Python file of this repository: the sample apps, Lantern itself, its services, tools and tests."""
-    root = Path(python_frontend.__file__).parent.parent
-    return [p for folder in ("lantern", "gateway", "cloud", "tools", "bench", "examples", "tests")
-            for p in sorted((root / folder).rglob("*.py")) if "old_results" not in p.parts]
+    """Every Python file of this repository: Lantern itself (the package Python loaded, wherever it is installed),
+    and from the checkout the sample apps, its services, tools and tests."""
+    root = Path(__file__).resolve().parents[1]
+    return lantern_files.modules(deep=True) + [
+        p for folder in ("gateway", "cloud", "tools", "bench", "examples", "tests")
+        for p in sorted((root / folder).rglob("*.py")) if "old_results" not in p.parts]
 
 
 def test_a_python_file_reads_the_same_from_kept_work(tmp_path):

@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 
+import lantern_files
 from lantern import columns
 from lantern.report import read_bundle, render, safe_json, write_report
 
@@ -82,8 +83,7 @@ def test_written_report_hashes_match_its_bytes(tmp_path):
 
 
 def test_graph_lights_up_the_chosen_steps_lines_and_says_what_a_line_means():
-    from pathlib import Path
-    page = (Path(__file__).resolve().parents[1] / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+    page = lantern_files.page("report.html")
     # the chosen function's lines glow slowly and carry dots the way the call goes; motion stops when asked
     assert "@keyframes gpulse" in page and "@keyframes gflow" in page
     assert "@media (prefers-reduced-motion: reduce){ #graph .gflow{display:none}" in page
