@@ -3,6 +3,8 @@ import hashlib
 import json
 import re
 
+import lantern_files
+from lantern import columns
 from lantern.report import read_bundle, render, safe_json, write_report
 
 HOSTILE = ["</script><script>alert(1)</script>", "<!--<script>", "<!-- <script> -->", "]]>", "  ", "&lt;"]
@@ -15,7 +17,10 @@ def test_data_cannot_change_how_the_page_parses(tmp_path):
     html = render(bundle)
     data_part = html.split('id="lantern-data">', 1)[1].split("</script>", 1)[0]
     assert "<" not in data_part and ">" not in data_part
-    assert json.loads(data_part) == bundle
+    held = json.loads(data_part)
+    assert held["texts"] == bundle["texts"]
+    assert held["graph"] != bundle["graph"], "the map is written column by column in a report"
+    assert columns.unpack_graph(held["graph"]) == bundle["graph"]
     p = tmp_path / "report.html"
     p.write_text(html, encoding="utf-8")
     assert read_bundle(p) == bundle
@@ -78,8 +83,7 @@ def test_written_report_hashes_match_its_bytes(tmp_path):
 
 
 def test_graph_lights_up_the_chosen_steps_lines_and_says_what_a_line_means():
-    from pathlib import Path
-    page = (Path(__file__).resolve().parents[1] / "lantern" / "viewer" / "report.html").read_text(encoding="utf-8")
+    page = lantern_files.page("report.html")
     # the chosen function's lines glow slowly and carry dots the way the call goes; motion stops when asked
     assert "@keyframes gpulse" in page and "@keyframes gflow" in page
     assert "@media (prefers-reduced-motion: reduce){ #graph .gflow{display:none}" in page

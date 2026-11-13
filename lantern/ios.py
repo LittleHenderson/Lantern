@@ -380,7 +380,7 @@ def _line(text: str, line: int) -> str:
 
 KEY_VALUE = re.compile(r"AIza[0-9A-Za-z_\-]{35}|sk_live_[0-9A-Za-z]{16,}|xox[bp]-[0-9A-Za-z-]{20,}|"
                        r"(?:ghp|github_pat)_[0-9A-Za-z_]{30,}|AKIA[0-9A-Z]{16}")
-LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}   # nosec B104: names a URL's host is compared with, nothing is bound
 
 
 def plist_findings(repo: Path, app: App) -> list[dict]:

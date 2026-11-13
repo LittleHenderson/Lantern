@@ -60,7 +60,7 @@ def _entry_text(g: Graph, r: dict | None) -> str:
 
 def build(f: dict, g: Graph) -> dict:
     from .scenarios import TYPED, kind_of
-    from .security import UNTRUSTED_ENTRY_KINDS, rank_reason
+    from .security import rank_reason
     kind = kind_of(f)
     node = g.nodes.get(f.get("node") or "")
     where = {"file": f.get("file"), "line": f.get("line"), "function": node.qualname if node is not None else None,
@@ -87,9 +87,15 @@ def build(f: dict, g: Graph) -> dict:
                                   f"Reached from {_entry_text(g, r)} in {hops} step{'s' if hops != 1 else ''}"
                                   + sure(link_r)), "from": "map"})
     elif f.get("reachable_from_tests_only"):
-        evidence.append({"fact": "Only the test suite reaches this code", "from": "map"})
+        # what was looked for and not found is written as that, and as a thing not known: never as "nothing runs it"
+        evidence.append({"fact": "Only the test suite was found to reach this code", "from": "map"})
+        unknown.append("whether anything besides the tests runs this code: Lantern found no other path to it, which "
+                       "is not proof that there is none")
     elif node is not None and f.get("category") == "code":
-        evidence.append({"fact": "No page, route or command in the map reaches this code", "from": "map"})
+        evidence.append({"fact": "Lantern found no path to this code from a page, route or command", "from": "map"})
+        unknown.append("whether anything runs this code: Lantern found no path to it, which is not proof that nothing "
+                       "does (a scheduler, another program, a framework that calls by name or a call Lantern could not "
+                       "follow would not show)")
     ui = f.get("ui_path") or []
     ui_start = g.nodes.get(ui[0]) if ui else None
     ui_kind = ((ui_start.entry or {}).get("kind") if ui_start is not None else None)
@@ -118,7 +124,7 @@ def build(f: dict, g: Graph) -> dict:
                 f" and {fx['count'] - 4} more" if fx["count"] > 4 else "")
         else:
             fact = "The text that reaches this line is written in the code itself; nothing from outside is put into it"
-        evidence.append({"fact": fact, "from": "data flow"})
+        evidence.append({"fact": fact, "from": "context (code)" if fx.get("reads") else "data flow"})
     elif fl and fl.get("class") == "record":
         src, snk = fl["source"], fl["sink"]
         evidence.append({"fact": f"An id from the request was followed to the look-up at {snk['file']}:{snk['line']} "
@@ -179,10 +185,9 @@ def build(f: dict, g: Graph) -> dict:
                 why_reach = (f"reached only from {_entry_text(g, r)}, which runs when someone runs the program; "
                              "whether outsiders can start it is not known")
             else:
-                why_reach = "no entry point leads here today"
-            conditions.append(_cond("Someone outside can reach this code",
-                                    True if outside else (None if r and r.get("kind") in UNTRUSTED_ENTRY_KINDS else False),
-                                    why_reach))
+                why_reach = "Lantern found no path to it, which is not proof that there is none"
+            # no path found is "not known" (None), never "no": only a path seen says anything
+            conditions.append(_cond("Someone outside can reach this code", True if outside else None, why_reach))
         if kind in TYPED:
             conditions.append(_cond("What they send reaches this line", f.get("input") and True,
                                     "input check: " + (f["input"].get("via") if f.get("input") else
@@ -195,7 +200,8 @@ def build(f: dict, g: Graph) -> dict:
                 conditions[-1] = _cond("What they send becomes part of the SQL text", False,
                                        "only fixed text is spliced; values go to the driver separately")
             elif ctx.get("fixed"):
-                conditions[-1] = _cond("What they send reaches this line", False, "data flow: " + (
+                conditions[-1] = _cond("What they send reaches this line", False, (
+                    "the call on this line: " if ctx["fixed"].get("reads") else "data flow: ") + (
                     f"every call of `{ctx['fixed']['function']}` hands it fixed text" if ctx["fixed"]["calls"] else
                     "the text is written in the code itself"))
         if kind in ("owner", "owner-late"):
@@ -251,6 +257,8 @@ def build(f: dict, g: Graph) -> dict:
 
     # 5. how bad, how sure
     sev = {"rank": f.get("rank"), "tool_severity": f.get("tool_severity"), "why": rank_reason(f)}
+    if f.get("rank_basis"):
+        sev["basis"] = f["rank_basis"]
     if f.get("rank_before_context"):
         sev["before_context"] = f["rank_before_context"]
         sev["context_note"] = f.get("rank_note")
@@ -295,7 +303,9 @@ def _status(f: dict, earlier: set | None) -> list[dict]:
         {"word": "fixed", "done": False, "why": "still flagged"},
         {"word": "tested", "done": None, "why": "Lantern keeps no record of a test for this finding"},
         {"word": "independently reviewed", "done": None,
-         "why": (f"accepted by {acc.get('by') or 'the builder'} with a reason; that is not an independent review"
+         "why": ("accepted in the code with a reason (a # nosec comment on the line); that is not an independent "
+                 "review" if f.get("status") == "accepted" and acc.get("how") == "nosec" else
+                 f"accepted by {acc.get('by') or 'the builder'} with a reason; that is not an independent review"
                  if f.get("status") == "accepted" else "no review recorded")},
     ]
     return rows

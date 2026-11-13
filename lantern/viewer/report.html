@@ -104,7 +104,7 @@ header{flex:none;background:var(--surface);border-bottom:1px solid var(--line);z
 .brand .repo{font:12px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 .iconbtn{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;color:var(--muted)}
 .iconbtn:hover{background:var(--hover);color:var(--ink)}
-.iconbtn .ic{width:17px;height:17px}
+.iconbtn .ic{width:17px;height:17px} a.iconbtn{text-decoration:none} #guidelink[hidden]{display:none}
 body.embed>header{display:none} body.embed .brand{display:none} body.embed nav.tabs{display:none} body.embed .seg.mode{display:none} body.embed .xnote{display:none}
 .bar2{display:flex;align-items:center;gap:16px;padding:0 16px;min-height:48px}
 @media (max-width:1100px){.bar2 .chips .chip{display:none}}
@@ -198,6 +198,35 @@ body.gmax main{display:grid;grid-template-columns:minmax(0,1fr)!important}
 /* the zoom buttons stay clear of the Ask Lantern button when the map reaches the window's right edge */
 /* also inside the website's frame, whose own Ask Lantern button sits over the frame's bottom-right corner */
 body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{bottom:80px}
+/* breadcrumb: where you are, from the project down to the chosen function along the path that reaches it */
+.crumbs{display:flex;align-items:center;gap:2px;margin:0 0 8px;font-size:12.5px;color:var(--muted);overflow-x:auto;scrollbar-width:none;white-space:nowrap;min-width:0}
+.crumbs::-webkit-scrollbar{display:none}
+.crumbs ol{display:flex;align-items:center;gap:2px;list-style:none;margin:0;padding:0}
+.crumbs li{display:inline-flex;align-items:center;gap:2px;flex:none}
+.crumbs li+li::before{content:"›";color:var(--faint);padding:0 5px}
+.crumbs li.gap::before{content:"⋯";letter-spacing:0}
+.crumbs button{border:0;background:none;padding:3px 6px;border-radius:6px;color:var(--ink-2);font:500 12.5px var(--font);cursor:pointer;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.crumbs button.fn{font-family:var(--mono);font-size:12px}
+.crumbs button:hover{background:var(--hover);color:var(--ink)}
+.crumbs .here{color:var(--ink);font-weight:600}
+.crumbs button.here{background:var(--accent-soft);color:var(--ink)}
+.crumbs .cv{padding:3px 2px}
+/* minimap: the whole map small, with a box for what the screen shows; 100% / 60% / 30% see-through, or hidden */
+.canvas .mmap{position:absolute;right:12px;bottom:52px;width:200px;border-radius:10px;border:1px solid var(--line);background:var(--surface);box-shadow:0 4px 18px rgba(0,0,0,.08);overflow:hidden;z-index:2}
+.canvas .mmap[data-o="60"]{background:color-mix(in srgb, var(--surface) 60%, transparent);border-color:color-mix(in srgb, var(--line) 60%, transparent)}
+.canvas .mmap[data-o="30"]{background:color-mix(in srgb, var(--surface) 30%, transparent);border-color:color-mix(in srgb, var(--line) 30%, transparent);box-shadow:none}
+.canvas .mmap[data-o="60"] .mmsvg{opacity:.6} .canvas .mmap[data-o="30"] .mmsvg{opacity:.3}
+.canvas .mmap.off,.canvas .mmshow{display:none} .canvas .mmap.off+.mmshow{display:inline-flex}
+.canvas .mmhead{display:flex;align-items:center;gap:2px;padding:3px 4px 3px 9px;border-bottom:1px solid var(--line);background:var(--surface)}
+.canvas .mmhead .ops{display:inline-flex;gap:1px;flex:none} .canvas .mmhead .t{font:600 10.5px var(--font);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:auto}
+.canvas .mmhead button,.canvas .mmshow{border:0;background:none;border-radius:5px;padding:2px 5px;color:var(--ink-2);font:500 11px var(--mono);cursor:pointer;line-height:16px}
+.canvas .mmhead button:hover,.canvas .mmshow:hover{background:var(--hover);color:var(--ink)}
+.canvas .mmhead button[aria-pressed="true"]{background:var(--accent-soft);color:var(--ink)}
+.canvas .mmhead button[data-o="off"]{display:grid;place-items:center;padding:2px 4px}
+.canvas .mmsvg{display:block;width:100%;height:120px;cursor:pointer;touch-action:none}
+.canvas .mmsvg .mmview{fill:color-mix(in srgb, var(--accent) 12%, transparent);stroke:var(--accent);stroke-width:1.6}
+.canvas .mmshow{position:absolute;right:12px;bottom:52px;align-items:center;gap:5px;padding:5px 9px;border:1px solid var(--line);background:var(--surface);border-radius:9px;font:500 11.5px var(--font);z-index:2}
+body.gmax .canvas .mmap,main.rrail .canvas .mmap,main.noright .canvas .mmap,body.gmax .canvas .mmshow,main.rrail .canvas .mmshow,main.noright .canvas .mmshow{bottom:120px}
 #graph svg text{font-family:var(--mono);font-size:11.5px;fill:var(--ink)} #graph svg text.col{font-family:var(--font);font-size:11px;font-weight:600;letter-spacing:.06em;fill:var(--muted)}
 #graph svg text.sub{font-family:var(--font);font-size:10.5px;fill:var(--muted)} #graph svg text.lb{font-size:9px;fill:var(--muted)}
 #graph g[data-id]{cursor:pointer} #graph g[data-id]:hover rect.box{stroke:var(--accent-line)}
@@ -285,6 +314,20 @@ body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{bott
 .linkbtn{background:none;border:0;padding:0;color:var(--accent-ink);font:inherit;font-weight:600;cursor:pointer} .linkbtn:hover{text-decoration:underline} .linkbtn.mono{font-family:var(--mono);font-weight:500}
 .good{display:flex;gap:8px;align-items:center;font-size:13.5px;color:var(--ink-2);padding:6px 0} .good .ic{width:16px;height:16px;color:var(--good);flex:none}
 .strip5{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--line);border-radius:12px;background:var(--surface-2);margin:0 0 16px;overflow:hidden}
+/* the release decision (readiness.json `release`): one word, why, and each criterion with its state in words */
+.relbox{border:1px solid var(--line);border-radius:14px;background:var(--surface);padding:14px 16px;margin:0 0 16px}
+.relbox.t-critical{border-color:var(--critical)} .relbox.t-warning{border-color:var(--warning)} .relbox.t-good{border-color:var(--good)}
+.relbox .rh{display:flex;gap:10px;align-items:center;flex-wrap:wrap} .relbox .rh b{font:650 15px/1.3 var(--display);color:var(--ink)}
+.relbox .rw{margin:8px 0 12px;color:var(--ink-2);font-size:13.5px;line-height:1.5;overflow-wrap:anywhere}
+.relbox .rc{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 12px;font-size:13px;align-items:start}
+.relbox .rc .rst{justify-self:start} .relbox .rc .t{color:var(--ink);font-weight:550} .relbox .rc .w{color:var(--muted);line-height:1.5;overflow-wrap:anywhere}
+.relbox .held{margin-top:10px;font-size:13px;color:var(--muted);line-height:1.5}
+.relbox details{margin-top:12px;font-size:12.5px;color:var(--muted);line-height:1.6} .relbox details summary{cursor:pointer;color:var(--ink-2)} .relbox details code{overflow-wrap:anywhere}
+.rst{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink);padding:2px 9px 2px 7px;border-radius:99px;background:var(--hover);white-space:nowrap}
+.rst i{width:7px;height:7px;border-radius:99px;background:var(--faint);flex:none}
+.rst.t-good{background:var(--good-soft)} .rst.t-good i{background:var(--good)}
+.rst.t-warning{background:var(--warning-soft)} .rst.t-warning i{background:var(--warning)}
+.rst.t-critical{background:var(--critical-soft)} .rst.t-critical i{background:var(--critical)}
 .strip5>div{padding:12px 16px;border-right:1px solid var(--line)} .strip5>div:last-child{border-right:0}
 .strip5 .k{font:500 11px var(--font);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)} .strip5 .v{font:600 22px/1.2 var(--font);color:var(--ink)} .strip5 .v.bad{color:var(--crit-ink)} .strip5 .v small{font:11.5px var(--font);color:var(--muted);margin-left:7px}
 .ctable{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden;overflow-x:auto;font-size:13px}
@@ -623,6 +666,8 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
   body.gmax .canvas{height:auto}
   .canvas .zoom,body.gmax .canvas .zoom,main.rrail .canvas .zoom,main.noright .canvas .zoom{top:10px;bottom:auto;right:10px}   /* on a phone the buttons sit at the top, clear of the legend and the Ask button */
   body:not(.embed) #graph .glegend{right:84px}
+  .canvas .mmap,body.gmax .canvas .mmap,main.rrail .canvas .mmap,main.noright .canvas .mmap,.canvas .mmshow,body.gmax .canvas .mmshow,main.rrail .canvas .mmshow,main.noright .canvas .mmshow{top:50px;bottom:auto;right:10px}   /* under the zoom buttons */
+  .canvas .mmap{width:168px} .canvas .mmsvg{height:90px} .canvas .mmhead{padding-left:4px} .canvas .mmhead .t{font-size:0;margin-right:auto} .canvas .mmhead button{padding:2px 4px}
   aside.right{width:100vw;top:auto;height:86vh;transform:translateY(105%);border-radius:20px 20px 0 0}
   aside.right.open{transform:none}
   .cat summary{grid-template-columns:16px 1fr 70px 52px}
@@ -632,7 +677,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
 </head>
 <body>
 <header>
-  <div class="brand"><button class="home" id="brandhome" title="Back to the start of this report" aria-label="Lantern: back to the start of this report"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b></button><span class="repo" id="repo"></span><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
+  <div class="brand"><button class="home" id="brandhome" title="Back to the start of this report" aria-label="Lantern: back to the start of this report"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="15" fill="#141416"/><path d="M26 13h12M25 51h14" stroke="#F3F3F1" stroke-width="3" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="#F3F3F1" stroke-width="3" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg><b>Lantern</b></button><span class="repo" id="repo"></span><a class="iconbtn" id="guidelink" href="https://lantern-cloud.fly.dev/guide" rel="noopener" aria-label="How to use Lantern" title="How to use Lantern: short animated demos"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M8.5 8v4l3.5-2z"/></svg></a><button class="iconbtn" id="theme" aria-label="Switch appearance"></button></div>
   <div class="bar2">
     <nav class="tabs" id="tabs">
       <button data-t="map" class="on">Map</button><button data-t="findings">Findings</button><button data-t="prot">Protections</button><button data-t="ready">Readiness</button><button data-t="xp">Explanations</button><button data-t="about">About</button><button data-t="fix" hidden aria-label="Fix">Fix</button>
@@ -649,7 +694,66 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
 <div id="ask"></div>
 <script type="application/json" id="lantern-data">/*__LANTERN_DATA__*/null</script>
 <script>
+// The map is written into the report column by column (lantern/columns.py: a third of the room, and a large report
+// opens in the time its file takes to come in). This gives back the rows exactly as they were: the same fields in
+// the same order, the same values. A packed map of any other shape was not written by Lantern and stops the page.
+function unpackGraph(g) {
+  if (!g || typeof g !== 'object' || Array.isArray(g) || !('packed' in g)) return g;
+  const no = () => { throw new Error('this report holds a map that was not written by Lantern'); };
+  if (g.packed !== 1) no();
+  if ('as_it_was' in g) return Object.keys(g).length === 2 ? g.as_it_was : no();
+  const plain = v => v === null || typeof v !== 'object';
+  const whole = (i, below) => Number.isInteger(i) && i >= 0 && i < below;
+  const rows = (p, listed, own) => {
+    if (Array.isArray(p)) return p;
+    if (!p || typeof p !== 'object') no();
+    const keys = p.keys, n = p.n, cols = p.cols;
+    if (!Array.isArray(keys) || !Array.isArray(cols) || !Number.isInteger(n) || n < 0 || !keys.length ||
+        keys.length !== cols.length || keys.some(k => typeof k !== 'string' || k === '__proto__') ||
+        new Set(keys).size !== keys.length) no();
+    let lists = 0;
+    for (const c of cols) {
+      if (!Array.isArray(c)) no();
+      const list = c[0] === 'c' && c.length === 2 ? null
+        : (c[0] === 'v' || c[0] === 'r') && c.length === 2 ? c[1] : c[0] === 't' && c.length === 3 ? c[2] : no();
+      if (list !== null) { if (!Array.isArray(list) || list.length !== n) no(); lists++; }
+    }
+    if (!lists) no();
+    const value = (c, ids) => {
+      if (c[0] === 'c') return plain(c[1]) ? new Array(n).fill(c[1]) : no();
+      if (c[0] === 'v') return c[1];
+      if (c[0] === 't') {
+        const t = c[1];
+        if (!Array.isArray(t) || !t.every(plain)) no();
+        return c[2].map(i => whole(i, t.length) ? t[i] : no());
+      }
+      if (!ids) no();
+      return c[1].map(x => whole(x, ids.length) && ids[x] !== null ? ids[x]
+        : Array.isArray(x) && x.length === 1 ? x[0] : no());
+    };
+    const read = cols.map(c => c[0] === 'r' ? null : value(c, null));
+    if (own) {
+      const at = keys.indexOf('id');
+      listed = at >= 0 && read[at] ? read[at].map(v => typeof v === 'string' ? v : null) : null;
+    }
+    cols.forEach((c, k) => { if (!read[k]) read[k] = value(c, listed); });
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const row = {};
+      for (let k = 0; k < keys.length; k++) row[keys[k]] = read[k][i];
+      out[i] = row;
+    }
+    return out;
+  };
+  const out = {};
+  for (const k of Object.keys(g)) if (k !== 'packed') out[k] = g[k];
+  if ('nodes' in out) out.nodes = rows(out.nodes, null, true);
+  const ids = Array.isArray(out.nodes) ? out.nodes.map(r => r && typeof r === 'object' && !Array.isArray(r) && typeof r.id === 'string' ? r.id : null) : [];
+  if ('edges' in out) out.edges = rows(out.edges, ids, false);
+  return out;
+}
 const DATA = JSON.parse(document.getElementById('lantern-data').textContent);
+if (DATA && DATA.graph) DATA.graph = unpackGraph(DATA.graph);
 const G = DATA.graph, SEC = DATA.security || {}, EXP = (DATA.explanations || {}).explanations || {};
 SEC.findings = Array.isArray(SEC.findings) ? SEC.findings : []; SEC.counts = SEC.counts || {};
 const SRC = DATA.sources || {};
@@ -682,6 +786,14 @@ const cls = (v, set) => set.includes(v) ? v : '';
 const pick = (m, k) => Object.prototype.hasOwnProperty.call(m, k) ? m[k] : '';
 const pct = v => Math.max(0, Math.min(100, +v || 0));
 const arr = a => Array.isArray(a) ? a : [];
+// the release decision's three words and a criterion's four states (lantern/release.py), with the tone and the word shown
+// An accepted risk in one line. A `# nosec` comment in the code has no name and no date (`accepted.how`).
+const acceptedWords = a => (a || {}).how === 'nosec'
+  ? `Accepted in the code (a # nosec comment on the line): ${esc((a || {}).reason)}`
+  : `Accepted by ${esc((a || {}).by)} on ${esc((a || {}).date)}: ${esc((a || {}).reason)}`;
+const DECISION_TONE = {Blocked: 'critical', Incomplete: 'warning', Passed: 'good'};
+const CRIT_STATE = {passed: ['good', 'Passed'], failed: ['critical', 'Failed'], missing: ['warning', 'Missing'], 'not-applicable': ['none', 'Not asked for']};
+const DECISION_SAYS = {Blocked: 'Something that must hold before a release does not.', Incomplete: 'Nothing found blocks a release, but part of the proof is missing, and what was not checked is not known to be fine.', Passed: 'Everything this kind of project is asked for was checked and held.'};
 const short = q => {
   q = q || '';
   if (q.includes('::')) { const local = q.split('::').pop(); const p = local.split('.'); return p.length > 2 ? p.slice(-2).join('.') : local; }
@@ -732,6 +844,12 @@ try { if (window.LANTERN_LIVE && window.self !== window.top) document.body.class
 // Static markup only: nothing from the report's data is ever interpolated here.
 const IN_FRAME = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
 if (IN_FRAME) document.documentElement.classList.add('framed');
+// How to use Lantern: inside the app or the website the bar around this report has the button, so it shows only when
+// the report is open on its own. Served by Lantern (/p/, /r/, /s/) it is this site's own /guide; opened from disk or
+// any other site it is the website's guide. A plain link: nothing is fetched until it is clicked.
+{ const g = document.getElementById('guidelink');
+  if (IN_FRAME) g.hidden = true;
+  else if (/^https?:$/.test(location.protocol) && /^\/(p|r|s)\//.test(location.pathname)) g.href = '/guide'; }
 function backdropHTML() {
   const hex = (cx, cy, r) => Array.from({length: 6}, (_, i) => `${(cx + r * Math.cos(Math.PI / 3 * i - Math.PI / 6)).toFixed(1)},${(cy + r * Math.sin(Math.PI / 3 * i - Math.PI / 6)).toFixed(1)}`).join(' ');
   const st = 'fill="none" stroke-width="1.2" vector-effect="non-scaling-stroke"';
@@ -764,7 +882,7 @@ if (BR && BR.matched) chipHtml += chip(BR.matched, 'frontend→backend links');
 if (AI.is_ai_app) chipHtml += chip((AI.calls || []).filter(c => c.kind === 'model').length, 'model calls') + ((AI.notebooks || []).length ? chip((AI.notebooks || []).length, 'notebooks') : '');
 const nexp = Object.keys(EXP).length;
 chipHtml += nexp ? chip(nexp, 'explained') : '<span class="chip">no explanations yet</span>';
-if (DATA.readiness) chipHtml += `<span class="sev ${toneOf(DATA.readiness.score)}" title="Deployment readiness"><i></i>Readiness ${esc(DATA.readiness.score)}/100 · ${esc(DATA.readiness.grade)}</span>`;
+if (DATA.readiness) { const rel = releaseOf(DATA.readiness), tone = rel && rel.decision !== 'Passed' ? pick(DECISION_TONE, rel.decision) : toneOf(DATA.readiness.score); chipHtml += `<span class="sev ${tone}" title="Deployment readiness${rel ? ' and the release decision' : ''}"><i></i>Readiness ${esc(DATA.readiness.score)}/100 · ${esc(DATA.readiness.grade)}${rel ? ' · ' + esc(rel.decision) : ''}</span>`; }
 document.getElementById('chips').innerHTML = chipHtml;
 const openCount = SEC.findings.filter(f => f.status !== 'accepted' && !f.in_tests).length;   // the app's own, as every other count
 if (openCount) document.querySelector('#tabs [data-t="findings"]').insertAdjacentHTML('beforeend', `<span class="n ${SEC.counts.critical ? 'crit' : ''}">${esc(openCount)}</span>`);
@@ -918,7 +1036,7 @@ function renderChart() {
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use the tree view to go deeper.</div>` : '';
-  return `<div id="chart" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Flowchart. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows all of it, F goes full screen.">${svg}</div>${zoomBar()}</div>${more}`;
+  return `<div id="chart" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Flowchart. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows all of it, F goes full screen, M shows or hides the minimap.">${svg}</div>${zoomBar()}${miniMap()}</div>${more}`;
 }
 
 
@@ -1112,13 +1230,26 @@ function renderGraph() {
     ? `<span><i style="background:var(--critical)"></i>critical</span><span><i style="background:var(--serious)"></i>high</span><span><i style="background:var(--warning)"></i>medium</span><span><i style="background:var(--accent)"></i>seen running</span><span>· ${hidden} hidden</span>`
     : S.mode === 'confidence' ? `<span><i style="background:var(--accent)"></i>seen running</span><span><i style="background:var(--ink)"></i>confirmed</span><span><i style="background:var(--muted)"></i>likely</span><span><i style="background:var(--faint)"></i>possible</span><span>· ${hidden} hidden</span>`
     : `<span><i style="background:color-mix(in srgb, var(--accent) 50%, var(--surface))"></i>many callers</span><span><i style="background:color-mix(in srgb, var(--accent) 8%, var(--surface))"></i>one caller</span><span>· ${hidden} hidden</span>`);
-  return `<div id="graph" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Call graph. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows the whole app, F goes full screen.">${svg}</div><div class="glegend">${legend}</div>${zoomBar()}</div>`;
+  return `<div id="graph" class="canvas"><div class="vp" tabindex="0" role="group" aria-label="Call graph. Drag to move and scroll to zoom. Arrow keys move, plus and minus zoom, 0 shows the whole app, F goes full screen, M shows or hides the minimap.">${svg}</div><div class="glegend">${legend}</div>${zoomBar()}${miniMap()}</div>`;
 }
 /* The graph is a camera over an endless canvas: the svg always fills the frame and its viewBox is what moves, so the
    drawing stays sharp at any zoom. GRAPH_ZOOM is a guard for the numbers (past it, 32-bit drawing coordinates shake),
    not a limit anyone reaches on purpose: at the far end one box is wider than a building, or the whole app is a dot. */
 const GRAPH_ZOOM = [1e-4, 1e4];
 const zoomBar = () => `<div class="zoom"><span class="zlevel" aria-live="off"></span><button data-z="in" title="Zoom in" aria-label="Zoom in">+</button><button data-z="out" title="Zoom out" aria-label="Zoom out">−</button><button data-z="fit" title="Show all of it (0)" aria-label="Show all of it">fit</button><button data-z="max" title="Full screen (F)" aria-label="Full screen" aria-pressed="false"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button></div>`;
+/* the minimap's own controls; what it draws is copied from the map itself in wireCanvas, never from the data as text */
+let MINIMAP = '100';
+try { const v = localStorage.getItem('lantern.minimap'); if (['100', '60', '30', 'off'].includes(v)) MINIMAP = v; } catch (e) {}
+const miniMap = () => `<div class="mmap${MINIMAP === 'off' ? ' off' : ''}" data-o="${MINIMAP === 'off' ? '100' : MINIMAP}"><div class="mmhead"><span class="t">Minimap</span><span class="ops" role="group" aria-label="How see-through the minimap is">${['100', '60', '30'].map(o => `<button data-o="${o}" aria-pressed="${MINIMAP === o}" title="Minimap at ${o}%">${o}%</button>`).join('')}</span><button data-o="off" title="Hide the minimap (M)" aria-label="Hide the minimap"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></div><svg class="mmsvg" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Minimap of the whole map. Click or drag to move there."></svg></div><button class="mmshow" title="Show the minimap (M)"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1.5" y="3" width="13" height="10" rx="2"/><rect x="8" y="7" width="4.5" height="4" rx=".8"/></svg>Minimap</button>`;
+function setMinimap(v) {
+  MINIMAP = v;
+  try { localStorage.setItem('lantern.minimap', v); } catch (e) {}
+  for (const m of document.querySelectorAll('.canvas .mmap')) {
+    m.classList.toggle('off', v === 'off');
+    if (v !== 'off') m.dataset.o = v;
+    m.querySelectorAll('.mmhead [data-o]').forEach(b => { if (b.dataset.o !== 'off') b.setAttribute('aria-pressed', String(b.dataset.o === v)); });
+  }
+}
 function setGraphMax(on) {
   document.body.classList.toggle('gmax', on);
   const root = document.documentElement;
@@ -1138,6 +1269,22 @@ function wireCanvas(g, key) {
   svg.removeAttribute('width'); svg.removeAttribute('height');
   const label = g.querySelector('.zlevel');
   let cam = S.cams[key] && S.cams[key].size === size ? S.cams[key] : null, queued = false;
+  /* the minimap is a copy of the map's own boxes and lines (their shapes and colours only, set one attribute at a time) */
+  const mm = g.querySelector('.mmap'), msvg = mm && mm.querySelector('.mmsvg'), NS = 'http://www.w3.org/2000/svg';
+  let mview = null;
+  if (msvg) {
+    const make = (tag, attrs) => { const el = document.createElementNS(NS, tag); for (const k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]); msvg.appendChild(el); return el; };
+    for (const p of svg.querySelectorAll('path')) {
+      if (p.closest('defs') || p.classList.contains('gglow') || p.classList.contains('gflow')) continue;
+      make('path', {d: p.getAttribute('d'), fill: 'none', stroke: p.getAttribute('stroke'), 'stroke-width': p.closest('.glit') ? 1.6 : .8, 'vector-effect': 'non-scaling-stroke', opacity: p.closest('.glit') ? 1 : .55});
+    }
+    for (const r of svg.querySelectorAll('g[data-id] rect.box')) {
+      const on = S.sel && r.parentNode.dataset.id === S.sel;
+      make('rect', {x: r.getAttribute('x'), y: r.getAttribute('y'), width: r.getAttribute('width'), height: r.getAttribute('height'), rx: r.getAttribute('rx'),
+        fill: on ? 'var(--accent)' : r.getAttribute('fill'), stroke: on ? 'var(--accent)' : r.getAttribute('stroke'), 'stroke-width': 1, 'vector-effect': 'non-scaling-stroke'});
+    }
+    mview = make('rect', {class: 'mmview', 'vector-effect': 'non-scaling-stroke', rx: 2});
+  }
   const draw = () => {
     queued = false;
     const cw = vp.clientWidth, ch = vp.clientHeight;
@@ -1150,6 +1297,15 @@ function wireCanvas(g, key) {
     const pct = cam.z * 100;
     label.textContent = (pct >= 100 ? Math.round(pct).toLocaleString('en-US') : pct >= 1 ? String(Math.round(pct)) : pct.toPrecision(1)) + '%';
     vp.dataset.zoom = cam.z;
+    if (mview) {
+      /* the minimap shows the whole map and the box the screen shows, together: zoomed far out or moved far away, the
+         box stays in sight and the map shrinks beside it, so you can always see where you are */
+      const vw = cw / cam.z, vh = ch / cam.z;
+      const x0 = Math.min(0, cam.x), y0 = Math.min(0, cam.y), x1 = Math.max(w0, cam.x + vw), y1 = Math.max(h0, cam.y + vh);
+      const pad = Math.max(x1 - x0, y1 - y0) * .04;
+      msvg.setAttribute('viewBox', `${x0 - pad} ${y0 - pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}`);
+      mview.setAttribute('x', cam.x); mview.setAttribute('y', cam.y); mview.setAttribute('width', vw); mview.setAttribute('height', vh);
+    }
   };
   const paint = () => { if (!queued) { queued = true; requestAnimationFrame(draw); } };
   const clampZ = z => Math.max(GRAPH_ZOOM[0], Math.min(GRAPH_ZOOM[1], z));
@@ -1168,8 +1324,26 @@ function wireCanvas(g, key) {
     if (w0 * z <= vp.clientWidth) wx = w0 / 2;
     look(z, wx, wy);
   }
+  /* a click on the breadcrumb asks for one function: bring it to the middle, at the zoom you had */
+  if (S.focus) {
+    const on = [...g.querySelectorAll('g[data-id]')].find(x => x.dataset.id === S.focus);
+    if (on) { try { const r = on.getBBox(); look(cam.z, r.x + r.width / 2, r.y + r.height / 2); } catch (e) {} }
+    S.focus = null;
+  }
   draw();
   new ResizeObserver(paint).observe(vp);
+  if (msvg) {
+    mm.querySelectorAll('.mmhead [data-o]').forEach(b => b.onclick = () => { setMinimap(b.dataset.o); paint(); });
+    g.querySelector('.mmshow').onclick = () => { setMinimap(mm.dataset.o || '100'); paint(); };
+    /* click or drag on the minimap to move the screen there */
+    let steer = false;
+    const goTo = e => { const m = msvg.getScreenCTM(); if (!m) return; const pt = msvg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY; const w = pt.matrixTransform(m.inverse()); look(cam.z, w.x, w.y); };
+    msvg.addEventListener('pointerdown', e => { if (e.button) return; steer = true; try { msvg.setPointerCapture(e.pointerId); } catch (err) {} goTo(e); e.preventDefault(); });
+    msvg.addEventListener('pointermove', e => { if (steer) goTo(e); });
+    const stop = () => { steer = false; };
+    msvg.addEventListener('pointerup', stop); msvg.addEventListener('pointercancel', stop);
+    mm.addEventListener('wheel', e => e.stopPropagation(), {passive: true});
+  }
   g.querySelectorAll('[data-z]').forEach(b => b.onclick = () => {
     const z = b.dataset.z;
     if (z === 'max') return setGraphMax(!document.body.classList.contains('gmax'));
@@ -1218,6 +1392,7 @@ function wireCanvas(g, key) {
     else if (e.key === '-' || e.key === '_') zoomAt(...centre(), 1 / 1.25);
     else if (e.key === '0') fit();
     else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) setGraphMax(!document.body.classList.contains('gmax'));
+    else if ((e.key === 'm' || e.key === 'M') && msvg && !e.ctrlKey && !e.metaKey && !e.altKey) { setMinimap(MINIMAP === 'off' ? (mm.dataset.o || '100') : 'off'); paint(); }
     else return;
     e.preventDefault();
   });
@@ -1507,7 +1682,7 @@ function renderMap() {
   if (n.entry && n.entry.kind === 'route') { const [m, p] = routeParts(n.entry.detail); title = `${m ? `<span class="m ${cls(m, METHODS)}">${esc(m)}</span>` : ''}${esc(p)}`; }
   else if (n.entry && n.entry.kind === 'script') title = esc(n.entry.detail);
   const lanesHead = (() => { if (S.view !== 'lanes') return ''; const ls = LANES.filter(l => entryLanes(n.id).has(l)); const eps = G.nodes.filter(x => x.entry && x.entry.kind !== 'test'); const k = eps.findIndex(x => x.id === n.id); return `<div class="lanehead"><span class="eyebrow">${k >= 0 ? `Path ${k + 1} of ${eps.length} · ` : ''}${ls.length > 1 ? `starts in the ${LANE_WORD[ls[0]]}, ends in ${LANE_WORD[ls[ls.length - 1]]}` : ls.length ? `stays on the ${LANE_WORD[ls[0]]}` : 'not placed in the stack'}</span>${(() => { const w = SEC.findings.filter(f => f.status !== 'accepted' && ((f.ui_path && f.ui_path[0] === n.id) || (f.reachable && f.reachable.entry === n.id))).sort((a, b) => RANK[a.rank] - RANK[b.rank])[0]; return w ? `<div class="lanegoal"><span class="badge ${cls(w.rank, RANKS)}"><i></i>${esc(w.rank)}</span> Where this path goes wrong: <b>${esc(w.headline || w.title)}</b></div>` : ''; })()}</div>`; })();
-  el.innerHTML = `${lanesHead}<div class="toolbar"><h2>${title}</h2>
+  el.innerHTML = `${crumbsHtml(n)}${lanesHead}<div class="toolbar"><h2>${title}</h2>
     <div class="seg"><button data-v="lanes" class="${S.view === 'lanes' ? 'on' : ''}" title="One lane per stop of the stack">Lanes</button><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button><button data-v="graph" class="${S.view === 'graph' ? 'on' : ''}">Graph</button></div>
     ${S.view === 'graph' ? `<div class="seg gmode" title="What the colours mean"><button data-m="risk" class="${S.mode === 'risk' ? 'on' : ''}">Risk</button><button data-m="confidence" class="${S.mode === 'confidence' ? 'on' : ''}">Confidence</button><button data-m="fanin" class="${S.mode === 'fanin' ? 'on' : ''}">Fan-in</button></div>` : `<button class="btn" id="expand">${icon('expand')}Expand all</button>`}${helpBtns()}</div>
     ${S.view === 'graph' || S.view === 'lanes' ? '' : `<div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>`}
@@ -1517,9 +1692,63 @@ function renderMap() {
   if (S.view === 'graph') wireGraph(el);
   if (S.view === 'chart') wireCanvas(el.querySelector('#chart.canvas'), 'chart:' + S.entry);
   wireHelp(el);
+  wireCrumbs(el);
   const ex = document.getElementById('expand'); if (ex) ex.onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
   el.querySelectorAll('[data-tog]').forEach(b => b.onclick = ev => { ev.stopPropagation(); const id = b.dataset.tog; S.open.has(id) ? S.open.delete(id) : S.open.add(id); renderMap(); });
   el.querySelectorAll('.node, g[data-id]').forEach(b => b.onclick = () => { const id = b.dataset.id; if (!S.open.has(id)) S.open.add(id); select(id); renderMap(); });
+}
+
+/* The breadcrumb says where you are: project › Atlas › view › starting point › … › the chosen function, along the
+   shortest path of calls from the starting point (the same lines the map draws). A long path keeps its two ends and
+   folds the middle into a button. A function the starting point does not reach is shown after a gap, not joined. */
+function trailTo(from, to) {
+  if (!to || to === from) return [from];
+  const back = {[from]: null}, q = [from];
+  for (let i = 0; i < q.length && q.length < 5000; i++) {
+    for (const e of OUT[q[i]] || []) {
+      if (e.dst in back) continue;
+      back[e.dst] = q[i];
+      if (e.dst === to) { const out = [to]; let c = q[i]; while (c != null) { out.unshift(c); c = back[c]; } return out; }
+      q.push(e.dst);
+    }
+  }
+  return null;
+}
+const VIEW_WORD = {lanes: 'Lanes', tree: 'Path', chart: 'Flowchart', graph: 'Graph'};
+function crumbName(id) {
+  const n = N[id];
+  if (!n) return short(id.startsWith('ext:') ? id.slice(4) : id);
+  if (n.entry && (n.entry.kind === 'route' || n.entry.kind === 'page' || n.entry.kind === 'script') && n.entry.detail) return n.entry.detail.length > 40 ? n.entry.detail.slice(0, 39) + '…' : n.entry.detail;
+  return short(id.startsWith('ext:') ? id.slice(4) : n.qualname);
+}
+function crumbsHtml(n) {
+  const trail = trailTo(n.id, S.sel && S.sel !== n.id ? S.sel : null);
+  const far = !trail;   // the chosen function is not reached from this starting point
+  let fns = far ? [n.id] : trail;
+  const fold = !S.crumbAll && fns.length > 5 ? fns.length - 3 : 0;   // keep the start, and the last two
+  const fn = (id, i, last) => `<li><button class="fn${last ? ' here' : ''}" data-crumb="${esc(id)}" title="${esc((N[id] || {}).qualname || id)}"${last ? ' aria-current="location"' : ''}>${esc(crumbName(id))}</button></li>`;
+  let items = '';
+  fns.forEach((id, i) => {
+    if (fold && i === 1) { items += `<li><button data-crumb-more title="Show every step of the path" aria-label="Show ${fold} more steps">${fold} more</button></li>`; return; }
+    if (fold && i > 1 && i < fns.length - 2) return;
+    items += fn(id, i, !far && i === fns.length - 1);
+  });
+  if (far) items += `<li class="gap"><button class="fn here" data-crumb="${esc(S.sel)}" title="Not reached from this starting point: ${esc((N[S.sel] || {}).qualname || S.sel)}" aria-current="location">${esc(crumbName(S.sel))}</button></li>`;
+  const atlas = S.simple ? 'Paths' : 'Atlas';
+  return `<nav class="crumbs" aria-label="Where you are"><ol><li><button data-crumb-top title="All starting points">${esc(PROJECT)}</button></li><li><span class="cv">${atlas}</span></li><li><span class="cv">${VIEW_WORD[S.view] || ''}</span></li>${items}</ol></nav>`;
+}
+function wireCrumbs(el) {
+  const nav = el.querySelector('.crumbs');
+  if (!nav) return;
+  const top = nav.querySelector('[data-crumb-top]'); if (top) top.onclick = () => { S.entry = null; S.sel = null; renderMap(); renderRight(); };
+  const more = nav.querySelector('[data-crumb-more]'); if (more) more.onclick = () => { S.crumbAll = true; renderMap(); };
+  nav.querySelectorAll('[data-crumb]').forEach(b => b.onclick = () => {
+    const id = b.dataset.crumb;
+    if (S.view === 'tree') { const st = trailTo(S.entry, id) || []; st.forEach(x => S.open.add(x)); }
+    S.focus = id; select(id); renderMap(); S.focus = null;
+    if (S.view === 'tree' || S.view === 'lanes') { const t = [...el.querySelectorAll('[data-id]')].find(x => x.dataset.id === id); if (t && t.scrollIntoView) t.scrollIntoView({block: 'nearest', inline: 'nearest'}); }
+  });
+  nav.scrollLeft = nav.scrollWidth;   // on a narrow screen the end of the trail (where you are) is what shows
 }
 
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
@@ -1535,7 +1764,7 @@ function pathsHtml(f) {
   const uiSame = f.ui_path && f.reachable && f.ui_path.join() === f.reachable.path.join();
   let path = f.ui_path ? chainHtml('From the app', f.ui_path) : '';
   if (f.reachable && !uiSame) path += chainHtml(`Reachable from ${esc(f.reachable.kind)}`, f.reachable.path);
-  return path || `<div class="note" style="margin-top:8px">${f.reachable_from_tests_only ? 'Only reached by tests.' : (f.platform === 'android' || f.platform === 'ios') && f.category !== 'code' ? 'A setting in the app’s ' + (f.platform === 'ios' ? 'Info.plist, entitlements or Xcode project' : 'manifest or build file') + ': it applies to the whole app, wherever it is opened.' : 'Not reachable from any detected entry point.'}</div>`;
+  return path || `<div class="note" style="margin-top:8px">${f.reachable_from_tests_only ? 'Only the tests were found to reach this code. That is not proof that nothing else runs it.' : (f.platform === 'android' || f.platform === 'ios') && f.category !== 'code' ? 'A setting in the app’s ' + (f.platform === 'ios' ? 'Info.plist, entitlements or Xcode project' : 'manifest or build file') + ': it applies to the whole app, wherever it is opened.' : 'No path found from a page, route or command. That is not proof that nothing runs this code.'}</div>`;
 }
 const hops = f => (f.ui_path || (f.reachable || {}).path || []).length;
 const seenHops = f => { const ids = f.ui_path || (f.reachable || {}).path || []; let n = 0; for (let i = 1; i < ids.length; i++) if (((OUT[ids[i - 1]] || []).find(x => x.dst === ids[i]) || {}).confidence === 'observed') n++; return n; };
@@ -1697,7 +1926,7 @@ function findingCard(f) {
   const input = f.input ? ` Uses outside input: ${esc(f.input.via)}.` : f.input === false ? ' Reachable, but no parameter or request data reaches this line inside this function, so it is not ranked critical.' : '';
   return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE\u2011' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
     ${hotLane(f) ? `<div class="top" style="margin-top:8px;gap:10px">${laneGlyph(fLanes(f), hotLane(f), f.rank)}${onLane(f)}</div>` : ''}
-    ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">Accepted by ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</div>` : ''}
+    ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">${acceptedWords(f.accepted)}</div>` : ''}
     <h4>${esc(S.simple && f.headline ? f.headline : f.title)}</h4>${S.simple && f.headline ? `<div class="toolsays">${esc(f.tool)} says: “${esc(f.title)}”</div>` : ''}<p class="fdesc">${where}.${reach}${input}</p>
     ${ctxNote(f)}${trustBox(f)}${flowBox(f)}${caseBox(f)}
     ${pathsHtml(f)}
@@ -1730,6 +1959,7 @@ const PAGE_HELP = {
     'They are labelled “heuristic” because Lantern looks for known patterns and can be wrong; they lower the readiness score a little but are never counted as hard failures.']},
   ready: {t: 'What does the score mean?', p: ['The readiness score is a 0–100 number for “could a senior engineer ship this today?”, made of ten areas such as security findings, secrets, tests, dependencies and deployment files, each with a weight.',
     'Every point has a written reason. A hard failure is a critical finding that a visitor can reach and that uses their input; those cap the grade until fixed.',
+    'Beside the score stands the release decision, one of three words. Blocked: something that must hold does not, such as an open critical or high finding or failing tests. Incomplete: nothing found blocks a release, but part of the proof is missing, such as tests that were not run or libraries that were not looked up. Passed: everything asked of this kind of project was checked and held. A blocked release cannot score above 59, and only a passed one can score 100.',
     'The “moves” list is sorted by how many points each fix is worth, so doing them in order raises the grade fastest. Checks that do not apply to your kind of app are skipped, not counted against you.']},
   xp: {t: 'What are explanations?', p: ['An explanation is a model’s description of one function, written three ways: Technical (for an engineer), Everyday (for anyone, with an example and an analogy) and Mapped (each everyday phrase tied to the exact code it means). A fourth part, Scenario, tells it as a short story of one person using your app.',
     'Lantern checks every phrase against your real code before showing it. If a phrase does not match anything, it is removed and you are told. The model only explains; it can never create, close or accept a finding.',
@@ -1813,9 +2043,9 @@ function renderFindings() {
       <span class="note">Showing ${fs.length} · sorted by rank</span></div>
     <div class="ftable"><div class="r h"><span>Severity</span><span>Finding</span><span>Where</span><span>Reach</span><span>Input</span><span>Id</span></div>
     ${fs.map(f => `<div class="r ${S.fsel === f.id ? 'on' : ''}${f.status === 'accepted' ? ' acc' : ''}" data-f="${esc(f.id)}"><span class="sv"><i class="dot ${cls(f.rank, RANKS)}"></i>${esc(f.rank)}</span>
-      <div><div class="t">${esc(f.title)}</div><div class="d">${f.ui_path ? esc((f.ui_path || []).map(p => N[p] && N[p].entry && N[p].entry.detail ? N[p].entry.detail : short((N[p] || {}).qualname || p)).join(' → ')) : f.reachable ? esc(f.reachable.path.map(p => short((N[p] || {}).qualname || p)).join(' → ')) : f.status === 'accepted' ? 'accepted: ' + esc((f.accepted || {}).reason) : 'not reached from an entry point'}</div></div>
+      <div><div class="t">${esc(f.title)}</div><div class="d">${f.ui_path ? esc((f.ui_path || []).map(p => N[p] && N[p].entry && N[p].entry.detail ? N[p].entry.detail : short((N[p] || {}).qualname || p)).join(' → ')) : f.reachable ? esc(f.reachable.path.map(p => short((N[p] || {}).qualname || p)).join(' → ')) : f.status === 'accepted' ? 'accepted: ' + esc((f.accepted || {}).reason) : 'no path found to it'}</div></div>
       <div><div class="w">${hotLane(f) ? laneGlyph(fLanes(f), hotLane(f), f.rank) : ''}${esc(f.file)}${f.line ? ':' + esc(f.line) : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div><div class="d">${hotLane(f) ? `on the ${LANE_WORD[hotLane(f)]} · ` : ''}${esc(f.tool)} · ${esc(f.rule)}</div></div>
-      <span>${f.ui_path ? `yes · ${esc(entryOf(f))}` : f.reachable ? `yes · ${esc(f.reachable.kind)}` : f.reachable_from_tests_only ? 'tests only' : 'no'}</span><span>${f.input ? 'yes' : f.input === false ? 'no' : '–'}</span><span class="fid">${esc(f.id)}</span></div>`).join('')}</div>`;
+      <span>${f.ui_path ? `yes · ${esc(entryOf(f))}` : f.reachable ? `yes · ${esc(f.reachable.kind)}` : f.reachable_from_tests_only ? 'tests only' : 'no path found'}</span><span>${f.input ? 'yes' : f.input === false ? 'no' : '–'}</span><span class="fid">${esc(f.id)}</span></div>`).join('')}</div>`;
   wireMode(el); wireFindings(el);
   el.querySelector('#freach').onclick = () => { S.freach = !S.freach; renderFindings(); };
   el.querySelector('#finput').onclick = () => { S.finput = !S.finput; renderFindings(); };
@@ -1829,12 +2059,12 @@ function findingPanel(f) {
   return `<div class="detail">${hotLane(f) ? laneStrip(hotLane(f), fLanes(f), {rank: f.rank}) : ''}<div class="top" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE-' + esc(f.cwe) : ''}</span>${f.tool_confidence === 'LOW' ? '<span class="tag">heuristic</span>' : ''}<span class="fid" style="margin-left:auto">${esc(f.id)}</span></div>
     <h3 style="font-family:var(--display);font-size:17px">${esc(f.title)}</h3>
     <div class="meta">${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}${n ? ` · in ${esc(short(n.qualname))}` : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div>
-    <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'no entry point leads here'}</div></div>
+    <div class="tiles"><div><div class="k">Reachable</div><div class="v">${f.ui_path || f.reachable ? `Yes · from ${esc(entryOf(f))}` : f.reachable_from_tests_only ? 'Only by tests' : 'No path found'}</div><div class="d">${f.ui_path || f.reachable ? `${hops(f)} hops${seenHops(f) ? `, ${seenHops(f)} seen running` : ''}` : 'not proof that nothing runs it'}</div></div>
       <div><div class="k">Uses input</div><div class="v">${f.input ? 'Yes' : f.input === false ? 'No' : 'Unknown'}</div><div class="d">${f.input ? esc(f.input.via) : f.input === false ? 'nothing from the request reaches this line' : 'not tracked for this rule'}</div></div></div>
     ${ctxNote(f)}${trustBox(f)}${flowBox(f)}${caseBox(f)}
     ${f.ui_path || f.reachable ? `<div class="k2">Path from the app</div>${chainHtml('', f.ui_path || f.reachable.path)}` : ''}
     ${n ? srcBlock(n) : ''}
-    ${f.status === 'accepted' ? `<div class="k2">Accepted</div><p>By ${esc(f.accepted.by)} on ${esc(f.accepted.date)}: ${esc(f.accepted.reason)}</p>` : ''}
+    ${f.status === 'accepted' ? `<div class="k2">Accepted</div><p>${acceptedWords(f.accepted)}</p>` : ''}
     <div class="k2">What ${esc(f.tool)} says</div><p>${esc(f.title)}${f.tool_confidence ? ` Confidence ${esc(f.tool_confidence)}` : ''}${f.tool_severity ? `, severity ${esc(f.tool_severity)}` : ''}.${raised ? ' Lantern ranks it critical because the line uses request data and a page reaches it.' : f.tool_confidence === 'LOW' ? ' A pattern-based check: review before acting.' : ''}</p>
     ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}
     ${findingScenario(f, ex) ? `<div class="k2">Scenario · see it happen</div>${findingScenario(f, ex)}` : ''}
@@ -1913,8 +2143,33 @@ function gauge(score, size = 112, grade = null) {
     <div class="v">${grade ? `<b>${esc(grade)}</b>` : `<b>${esc(score)}</b><span>of 100</span>`}</div></div>`;
 }
 const hardFailures = () => SEC.findings.filter(f => f.status !== 'accepted' && f.rank === 'critical' && f.input && (f.reachable || f.ui_path));
+// The release decision (readiness.json `release`, since readiness version 2). Results an older Lantern wrote have
+// none: releaseOf is then null and the page reads as it did. The three words and the four states are fixed lists;
+// every other value of it is shown through esc().
+function releaseOf(R) { const r = R && R.release; return r && typeof r === 'object' && !Array.isArray(r) && pick(DECISION_TONE, r.decision) ? r : null; }
+function releaseBox(R, brief) {       // brief (the Simple page): what is failed or missing in full, the rest in one line
+  const rel = releaseOf(R); if (!rel) return '';
+  const all = arr(rel.criteria).filter(c => c && typeof c === 'object'), open = c => c.state === 'failed' || c.state === 'missing';
+  const rows = all.filter(c => !brief || open(c)).map(c => {
+    const st = pick(CRIT_STATE, c.state) || ['none', 'Not known'];
+    return `<span class="rst t-${st[0]}"><i></i>${st[1]}</span><div><div class="t">${esc(c.title)}${c.required === false ? ' <span class="note">· not asked of this kind of project</span>' : ''}</div><div class="w">${esc(c.why)}</div>${c.fix && c.state !== 'passed' ? `<div class="w">${esc(c.fix)}</div>` : ''}</div>`;
+  }).join('');
+  const held = brief ? all.filter(c => c.state === 'passed').map(c => esc(c.title)) : [];
+  const b = rel.bound_to && typeof rel.bound_to === 'object' ? rel.bound_to : null, code = (b && b.code) || {}, deps = (b && b.dependencies) || {};
+  const tied = b && !brief ? `<details><summary>What this decision is tied to</summary>Commit <code>${esc(String(b.commit || 'none').slice(0, 12))}</code>${b.uncommitted_changes ? ', with changes that are not committed' : ''}. Code: ${esc(code.files)} files, SHA-256 <code>${esc(code.sha256)}</code>${code.not_read ? ` (${esc(code.not_read)} could not be read)` : ''}. Library lists: ${esc(deps.count)} file${deps.count === 1 ? '' : 's'}${deps.sha256 ? `, SHA-256 <code>${esc(deps.sha256)}</code>` : ''}. Tools: ${esc(arr(b.tools).length)}, each with its version on the Evidence page. The decision is for exactly this code, these library lists, these settings and these tools; change one and it has to be made again.</details>` : '';
+  return `<section class="relbox t-${pick(DECISION_TONE, rel.decision)}" aria-label="Release decision"><div class="rh"><span class="rst t-${pick(DECISION_TONE, rel.decision)}"><i></i>${esc(rel.decision)}</span><b>Release decision${rel.profile && rel.profile.name ? ` for a ${esc(rel.profile.name)}` : ''}</b></div><div class="rw">${pick(DECISION_SAYS, rel.decision)} The decision does not come from the score: one failed criterion blocks a release whatever the other points are.</div>${rows ? `<div class="rc">${rows}</div>` : ''}${held.length ? `<div class="held">Checked and held: ${held.join('; ')}.</div>` : ''}${tied}</section>`;
+}
+function scoreNote(R) {
+  const rel = releaseOf(R), grades = `Grade ${esc(R.grade)} now; C at 70, B at 80, A at 90.`;
+  if (!rel) return `Fix the list below in order and the grade follows. ${grades}`;
+  if (rel.decision === 'Blocked') return `While a release is blocked the score cannot go above 59, whatever else is in order${R.checklist > R.score ? ` (the checklist alone comes to ${esc(R.checklist)})` : ''}. ${grades}`;
+  if (rel.decision === 'Incomplete') return `100 is kept for a release whose proof is complete; until then the score stops at 99. ${grades}`;
+  return `Fix the list below in order and the grade follows. ${grades}`;
+}
 function readyHeadline(R) {
-  const hard = hardFailures().length, g = R.grade;
+  const hard = hardFailures().length, g = R.grade, rel = releaseOf(R);
+  if (rel && rel.decision === 'Blocked' && !hard) { const n = arr(rel.blocking).length || 1; return `Not yet. ${countWord(n)} thing${n > 1 ? 's' : ''} that must hold before a release ${n > 1 ? 'do' : 'does'} not.`; }
+  if (rel && rel.decision === 'Incomplete') { const n = arr(rel.missing).length || 1; return `Not decided yet. Nothing found blocks a release, but ${n > 1 ? countWord(n).toLowerCase() + ' pieces' : 'one piece'} of the proof ${n > 1 ? 'are' : 'is'} missing.`; }
   if (hard) return `Not yet. ${countWord(hard)} thing${hard > 1 ? 's' : ''} ${visitor()} can reach would stop a senior engineer from shipping this.`;
   if (g === 'A') return 'Yes. A senior engineer would ship this; keep the list below green.';
   if (g === 'B') return `Close. Nothing ${visitor()} can reach is critical; a few things below would make a reviewer comfortable.`;
@@ -1934,7 +2189,7 @@ function renderReady() {
   const moveTitle = k => { const f = firstFinding(k); if (f) { const n = SEC.findings.filter(x => x.rank === f.rank && x.status !== 'accepted' && !x.in_tests).length; const what = (f.headline || f.title).replace(/\.$/, ''); return n > 1 ? `Fix the ${n} ${f.rank} findings, starting with: ${what}` : `Fix: ${what}`; } const fx = (k.fix || '').split(/(?<=\.)\s/)[0].replace(/\.$/, ''); return fx && fx.length < 120 ? fx : k.title; };
   const stepMeta = k => {
     const f = firstFinding(k);
-    if (f) return `<b class="${esc(f.rank)}">${esc(f.rank)}</b> · <code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${lang(f.file)} · ${f.ui_path ? `${visitor()} on ${esc(entryOf(f))} can reach it` : f.reachable ? `reachable from ${esc(f.reachable.kind)} ${esc(entryOf(f))}` : 'not reached from an entry point'}`;
+    if (f) return `<b class="${esc(f.rank)}">${esc(f.rank)}</b> · <code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${lang(f.file)} · ${f.ui_path ? `${visitor()} on ${esc(entryOf(f))} can reach it` : f.reachable ? `reachable from ${esc(f.reachable.kind)} ${esc(entryOf(f))}` : 'no path found to it'}`;
     const m = /(\S+\.\w+):(\d+)/.exec(k.evidence || '');
     const sev = /critical/.test(k.id) ? 'critical' : /high/.test(k.id) ? 'high' : /medium/.test(k.id) ? 'medium' : null;
     return `${sev ? `<b class="${sev}">${sev}</b> · ` : `${esc(k.category.toLowerCase())} · `}${m ? `<code>${esc(m[1])}:${esc(m[2])}</code>${lang(m[1])} · ` : ''}${esc(k.evidence || '')}`;
@@ -1944,13 +2199,13 @@ function renderReady() {
   if (S.simple) {
     const top = steps.slice(0, 3), rest = steps.slice(3, 6);
     el.innerHTML = `<div class="psplit readysimple"><div class="smain"><div class="toolbar" style="justify-content:flex-end">${modeSeg()}</div>
-      <div class="rhero">${gauge(R.score, 108, ['A', 'B', 'C', 'D', 'F'].includes(R.grade) ? R.grade : null)}<div><div class="k">Ready to ship? · ${esc(R.score)} of 100</div><h1>${readyHeadline(R)}</h1><div class="note">Fix the list below in order and the grade follows. Grade ${esc(R.grade)} now; C at 70, B at 80, A at 90.</div></div></div>
-        <div class="k2">What moves the needle most</div>
+      <div class="rhero">${gauge(R.score, 108, ['A', 'B', 'C', 'D', 'F'].includes(R.grade) ? R.grade : null)}<div><div class="k">Ready to ship? · ${esc(R.score)} of 100</div><h1>${readyHeadline(R)}</h1><div class="note">${scoreNote(R)}</div></div></div>
+        ${releaseBox(R, true)}<div class="k2">What moves the needle most</div>
         <div class="moves">${top.map(k => `<div class="move"><span class="gain">+${esc(Math.round(k.gain))}</span><div><div class="t">${esc(moveTitle(k))}</div><div class="d">${stepMeta(k)}</div></div>${stepAct(k)}</div>`).join('')}
           ${rest.length ? `<div class="more">${rest.map(k => `<span class="mi"><span class="gain sm">+${esc(Math.round(k.gain))}</span><span>${esc(moveTitle(k))}</span></span>`).join('')}<button class="linkbtn" data-go="advanced">All ten areas</button></div>` : ''}</div>
         </div><aside class="rside">
         <div class="k2" style="margin-top:0">Already good · keep it that way</div>${passed.length ? passed.slice(0, 6).map(k => `<div class="good"><span class="pic good">${icon('check')}</span><span>${esc(k.title)}</span></div>`).join('') : '<div class="note">Nothing has passed yet.</div>'}${passed.length > 6 ? `<div class="note">and ${passed.length - 6} more</div>` : ''}
-        <div class="howscore"><b>How the score works.</b> Ten areas, each weighted. Every point has a written reason, and heuristic checks never count as hard failures. <button class="linkbtn" data-go="advanced">Read the rubric</button></div>
+        <div class="howscore"><b>How the score works.</b> Ten areas, each weighted. Every point has a written reason, and heuristic checks never count as hard failures.${releaseOf(R) ? ' The release decision is made apart from the points: Blocked holds the score at 59 or under, and 100 needs a passed release.' : ''} <button class="linkbtn" data-go="advanced">Read the rubric</button></div>
         <div class="note pfoot dashed">Lantern never overwrites a file you already have. Starter files land next to your code${LIVE ? '' : ' with <code>lantern starter . --write NAME</code>'}.</div>
       </aside></div>`;
   } else {
@@ -1966,11 +2221,11 @@ function renderReady() {
       return `<div class="r"><span class="cn">${esc(c.title)}</span><span class="num">${esc(c.weight)}</span><div class="sc"><span>${c.score === null ? 'n/a' : esc(c.score) + '/' + esc(c.weight)}</span><div class="bar"><i class="bar-${c.percent === null ? 'none' : toneOf(c.percent)}" style="width:${pct(c.percent)}%"></i></div></div><span class="why">${esc(why)}</span><span class="fix">${fix}</span></div>`;
     }).join('');
     const files = Object.entries(R.starter || {});
-    el.innerHTML = `<div class="page readypro wide"><div class="toolbar"><h2>Deployment readiness</h2>${modeSeg()}<code class="cmd">lantern readiness . --json</code></div>
-      <div class="strip5"><div><div class="k">Score</div><div class="v">${esc(R.score)}<small>of 100</small></div></div><div><div class="k">Grade</div><div class="v">${esc(R.grade)}<small>${R.grade === 'A' ? 'top grade' : `${R.grade === 'F' ? 'D at 60 · ' : ''}${R.grade <= 'C' ? '' : 'C at 70 · '}B at 80 · A at 90`.replace(/ · $/, '')}</small></div></div><div><div class="k">Hard failures</div><div class="v ${hard ? 'bad' : ''}">${hard}<small>reachable + input</small></div></div><div><div class="k">Heuristic warnings</div><div class="v">${heur}<small>not counted</small></div></div><div><div class="k">Routes seen running</div><div class="v">${seen ? Math.round(100 * seen[1] / Math.max(1, seen[2])) + '%' : '–'}<small>${tr ? 'traced test run' : 'tests not run'}</small></div></div></div>
+    el.innerHTML = `<div class="page readypro wide"><div class="toolbar"><h2>Deployment readiness</h2>${modeSeg()}<code class="cmd">lantern analyze . --require passed</code></div>
+      ${releaseBox(R)}<div class="strip5"><div><div class="k">Score</div><div class="v">${esc(R.score)}<small>of 100</small></div></div><div><div class="k">Grade</div><div class="v">${esc(R.grade)}<small>${R.grade === 'A' ? 'top grade' : `${R.grade === 'F' ? 'D at 60 · ' : ''}${R.grade <= 'C' ? '' : 'C at 70 · '}B at 80 · A at 90`.replace(/ · $/, '')}</small></div></div><div><div class="k">Hard failures</div><div class="v ${hard ? 'bad' : ''}">${hard}<small>reachable + input</small></div></div><div><div class="k">Heuristic warnings</div><div class="v">${heur}<small>not counted</small></div></div><div><div class="k">Routes seen running</div><div class="v">${seen ? Math.round(100 * seen[1] / Math.max(1, seen[2])) + '%' : '–'}<small>${tr ? 'traced test run' : 'tests not run'}</small></div></div></div>
       <div class="split wide"><section class="ctable"><div class="r h"><span>Category</span><span class="num">Weight</span><span>Score</span><span>Why</span><span>Fix</span></div>${cats}</section>
       <div><section class="card"><b>Starter files</b><div class="note" style="margin:4px 0 8px">Written next to your code, never over an existing file.</div>${files.map(([n, f]) => `<label class="chk2"><input type="checkbox" data-sf="${esc(n)}" checked> ${esc(n)}<span class="note"> · ${esc(f.why)}</span></label>`).join('') || '<div class="note">Nothing to write: the usual files are already here.</div>'}${files.length ? (LIVE ? `<button class="btn primary" id="writesel" style="margin-top:10px">Write ${files.length} files</button>` : `<pre class="cmdbox">lantern starter . --write ${files.map(([n]) => n.split('/').pop().replace(/^\./, '').split('.')[0].toLowerCase()).join(' ')}</pre>`) : ''}<div id="writemsg" class="note"></div></section>
-      <section class="card" style="margin-top:12px"><b>Rubric</b><div class="note" style="margin-top:4px">Weighted sum over ten categories; hard failures are findings that are reachable and use input, and they cap the grade. Heuristic rules (labelled) never count as hard failures. Checks that don't apply are skipped, not counted against you. Low findings don't lower the score; critical, high and medium ones do. Score and reasons are written to <code>.lantern/readiness.json</code>.</div></section>
+      <section class="card" style="margin-top:12px"><b>Rubric</b><div class="note" style="margin-top:4px">Weighted sum over ten categories; hard failures are findings that are reachable and use input, and they cap the grade. Heuristic rules (labelled) never count as hard failures. Checks that don't apply are skipped, not counted against you. Low findings don't lower the score; critical, high and medium ones do.${releaseOf(R) ? ` The release decision (Blocked, Incomplete, Passed) is made apart from the sum, from the criteria above. A required check that was not run (tests that were not run, libraries that were not looked up) earns no points instead of leaving the sum. While the decision is Blocked the score is held at 59 or under, and only a passed release can read 100. The weighted sum alone comes to ${esc(R.checklist)}.` : ''} Score and reasons are written to <code>.lantern/readiness.json</code>.</div></section>
       ${arr(R.advice).length ? `<section class="card" style="margin-top:12px"><b>Recommended deployment</b><div class="note" style="margin-top:4px">Read as a <b>${esc(R.shape)}</b>${arr((R.stack || {}).frameworks).length ? ' using ' + esc(R.stack.frameworks.join(', ')) : ''}.</div><ul class="ready-list">${arr(R.advice).map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
       ${arr(R.hotspots).length ? `<section class="card" style="margin-top:12px"><b>Hotspots</b><div class="note" style="margin-top:4px">Functions many others depend on.</div>${arr(R.hotspots).map(h => `<div class="good"><button class="linkbtn mono" data-id="${esc(h.node)}">${esc(short(h.name))}</button><span class="note">called from ${esc(h.callers)} places</span></div>`).join('')}</section>` : ''}
       </div></div>
@@ -2171,7 +2426,7 @@ const RFAQ = [
   ['reachable|reach', 'Reachable means Lantern found a path from a place a visitor can start (a page, a route, a command) to the function holding the finding. The path is drawn on the finding.'],
   ['likely|possible|dashed|dotted|confidence|sure', 'Teal lines were seen running under tests. Solid lines are confirmed by reading the code. Dashed means likely (about 90% right across the benchmark). Dotted means possible. What Lantern could not follow is counted on the About page, never guessed.'],
   ['hop', 'A hop is one step along a path: a click handler, a function call, an HTTP request from the browser to a route, a call into a library.'],
-  ['score|readiness|grade', 'Readiness is a 0–100 score over ten weighted areas (security findings, secrets, input handling, dependencies, tests, observability, packaging, CI, resilience, documentation). Every point has a written reason; checks that do not apply are skipped. Hard failures (critical, reachable, uses input) cap the grade.'],
+  ['score|readiness|grade', 'Readiness is a 0–100 score over ten weighted areas (security findings, secrets, input handling, dependencies, tests, observability, packaging, CI, resilience, documentation). Every point has a written reason; checks that do not apply are skipped. Hard failures (critical, reachable, uses input) cap the grade. The release decision stands beside the score: Blocked (something that must hold does not; the score stays at 59 or under), Incomplete (part of the proof is missing; the score stops at 99) or Passed.'],
   ['heuristic', 'Heuristic checks look for known patterns (missing login check, CORS, rate limit) and can misfire. They say so, never count as hard failures, and ask you to look before acting.'],
   ['accept', 'Accept risk with a reason records that you decided a finding is fine, with the reason written down. It is committed in lantern-accepted.json and shown in the Evidence Report; it is never silent.'],
   ['explain|explanation|lens|anchor', 'An explanation is a model’s description of one function, written three ways (Technical, Everyday, Mapped), plus a Scenario: a short story of someone using it. Every finding also has a scenario Lantern builds from its own facts, with no model. Lantern checks every phrase against the real code; unmatched phrases are removed. The model only explains, never creates or closes a finding.'],

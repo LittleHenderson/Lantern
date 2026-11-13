@@ -214,6 +214,10 @@ EOF
   # the same for the steps of a followed value (the box "How the value gets there" on a finding): files, lines, words
   check "viewer: poisoned flow steps stay text (How the value gets there)" \
     bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-fl/report.html' --only flow && node tools/viewer_smoke.js '$W/poison-fl/report.html' '$W/flshot'"
+  # the same for the release decision's box on the readiness page. The decision's own word is kept: it is one of
+  # three fixed words and the box is drawn only for one of them, so a poisoned word would hide what is to be proved
+  check "viewer: a poisoned release decision stays text (criteria, profile, what it is tied to)" \
+    bash -c "'$PY' tools/poison_report.py '$W/shop-src/.lantern/report.html' '$W/poison-rel/report.html' --only criteria,profile,bound_to,blocking,missing && node tools/viewer_smoke.js '$W/poison-rel/report.html' '$W/relshot'"
   # an Android app: the "On the phone" card, phone stories and entry details, poisoned, with the platform kept
   check "viewer: poisoned Android data stays text (On the phone card, screens, stories)" \
     bash -c "'$PY' tools/poison_report.py '$W/aa/report.html' '$W/poison-aa/report.html' --only mobile,detail,headline,scenario && node tools/viewer_smoke.js '$W/poison-aa/report.html' '$W/ashot'"

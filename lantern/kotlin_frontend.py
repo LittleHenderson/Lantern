@@ -30,6 +30,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, skipped
 
@@ -136,6 +137,8 @@ class KFile:
 
 
 class Model:
+    left = None     # (map, reader) once the reader has a map: where a piece that was not read is written down
+
     def __init__(self):
         self.classes: dict[tuple[str, str], KClass] = {}       # (pkg, local) -> class
         self.funs: dict[tuple[str, str], KFun] = {}            # (pkg, "Class.f" or "f") -> fun
@@ -207,16 +210,20 @@ def discover(repo: Path) -> list[Path]:
 def _collect(model: Model, f: KFile, root) -> None:
     def walk(n, outer: KClass | None):
         for c in n.children:
-            if c.type == "class_declaration" or c.type == "object_declaration":
-                _class(c, outer)
-            elif c.type == "companion_object" and outer is not None:
-                body = _kid(c, "class_body")
-                if body is not None:
-                    walk(body, outer)                  # a companion's functions belong to the class
-            elif c.type == "function_declaration":
-                _fun(c, outer)
-            elif c.type in ("ERROR", "class_body", "enum_class_body", "statements"):
-                walk(c, outer)
+            try:
+                if c.type == "class_declaration" or c.type == "object_declaration":
+                    _class(c, outer)
+                elif c.type == "companion_object" and outer is not None:
+                    body = _kid(c, "class_body")
+                    if body is not None:
+                        walk(body, outer)                  # a companion's functions belong to the class
+                elif c.type == "function_declaration":
+                    _fun(c, outer)
+                elif c.type in ("ERROR", "class_body", "enum_class_body", "statements"):
+                    walk(c, outer)
+            except RecursionError:
+                # declared inside more declarations than this walk follows: left where it stands and written down
+                deep.leave(model.left, f.rel, c)
 
     def _class(c, outer):
         name_n = _kid(c, "identifier", "type_identifier")
@@ -327,6 +334,8 @@ class Ref:
 
 
 class Linker:
+    left = None     # (map, "kotlin") once the reader has a map: where a piece that was not read is written down
+
     def __init__(self, model: Model):
         self.m = model
         self.top: dict[tuple[str, str], KFun] = {k: v for k, v in model.funs.items() if v.cls is None}
@@ -434,30 +443,35 @@ class Linker:
         stack = [n]
         while stack:
             x = stack.pop()
-            if x.type == "property_declaration":
-                vd = _kid(x, "variable_declaration")
-                pn = _kid(vd, "identifier") if vd is not None else None
-                if pn is not None:
-                    tn = _type_name(next((ch for ch in vd.children if ch.type in ("user_type", "nullable_type")), None))
-                    if tn is None:
-                        val = next((ch for ch in x.children if ch.is_named and ch.type not in
-                                    ("variable_declaration", "modifiers")), None)
-                        tn = self._type_of(f, cls, env, val)
-                    env[_t(pn)] = tn or ""
-            elif x.type == "call_expression" and x.children:
-                self._call(f, cls, x, env, refs, src)
-            elif x.type == "callable_reference":
-                ids = _kids(x, "identifier")
-                if ids and cls is not None and len(ids) == 1:
-                    r = self.m.fun_in(f, f.pkg, cls, _t(ids[-1]))
-                    if r:
-                        refs.append(Ref(nid(*r), x.start_point.row + 1, INFERRED, "callback", "callback"))
-                elif ids and len(ids) == 1:
-                    tf = self._top_fun(f, _t(ids[0]))
-                    if tf:
-                        refs.append(Ref(nid(tf[0], tf[1]), x.start_point.row + 1, INFERRED, "callback", "callback"))
-            elif x.type in ("class_declaration", "object_declaration", "function_declaration") and x is not n:
-                continue                                         # a local class or function is its own scope
+            try:
+                if x.type == "property_declaration":
+                    vd = _kid(x, "variable_declaration")
+                    pn = _kid(vd, "identifier") if vd is not None else None
+                    if pn is not None:
+                        tn = _type_name(next((ch for ch in vd.children if ch.type in ("user_type", "nullable_type")), None))
+                        if tn is None:
+                            val = next((ch for ch in x.children if ch.is_named and ch.type not in
+                                        ("variable_declaration", "modifiers")), None)
+                            tn = self._type_of(f, cls, env, val)
+                        env[_t(pn)] = tn or ""
+                elif x.type == "call_expression" and x.children:
+                    self._call(f, cls, x, env, refs, src)
+                elif x.type == "callable_reference":
+                    ids = _kids(x, "identifier")
+                    if ids and cls is not None and len(ids) == 1:
+                        r = self.m.fun_in(f, f.pkg, cls, _t(ids[-1]))
+                        if r:
+                            refs.append(Ref(nid(*r), x.start_point.row + 1, INFERRED, "callback", "callback"))
+                    elif ids and len(ids) == 1:
+                        tf = self._top_fun(f, _t(ids[0]))
+                        if tf:
+                            refs.append(Ref(nid(tf[0], tf[1]), x.start_point.row + 1, INFERRED, "callback", "callback"))
+                elif x.type in ("class_declaration", "object_declaration", "function_declaration") and x is not n:
+                    continue                                         # a local class or function is its own scope
+            except RecursionError:
+                # nested deeper than the lookup follows: left with all that is written in it, and written down
+                deep.leave(self.left, f.rel, x, env, kinds=("identifier", "simple_identifier"), blank="")
+                continue
             stack.extend(reversed(x.children))
 
     def _call(self, f, cls, x, env, refs, src):
@@ -508,6 +522,7 @@ def add_kotlin(g: Graph, repo: str | Path) -> dict:
         g.meta.setdefault("skipped_languages", []).append("kotlin (pip install tree-sitter-kotlin)")
         return {}
     model = Model()
+    model.left = (g, "kotlin")
     files: list[tuple[KFile, object]] = []      # trees kept alive for as long as their nodes are used
     total = 0
     for p in paths:
@@ -539,7 +554,7 @@ def add_kotlin(g: Graph, repo: str | Path) -> dict:
                 alias = re.search(r"\bas\s+(\w+)\s*$", text)
                 f.imports[alias.group(1) if alias else fq.rsplit(".", 1)[-1]] = fq
         files.append((f, tree))
-        _collect(model, f, root)
+        deep.whole(model.left, f.rel, _collect, model, f, root)
 
     by_rel = {f.rel: f for f, _ in files}
     for f, _ in files:
@@ -563,6 +578,7 @@ def add_kotlin(g: Graph, repo: str | Path) -> dict:
                         decorators=[f"@{fn.route[0]} {fn.route[1]}"] if fn.route else []))
         g.add_edge(parent, mid, kind=CONTAINS)
     link = Linker(model)
+    link.left = (g, "kotlin")
     edges = 0
     for (pkg, local), fn in model.funs.items():
         src = nid(pkg, local)

@@ -2,13 +2,18 @@
 
     python tools/changelog_section.py v0.9.0-rc1      # '## 0.9.0-rc1' if present, else '## 0.9.0'
 
-Exits 1 when neither heading exists, so a release never goes out with an empty body.
+Exits 1 when neither heading exists, so a release never goes out with an empty body, and when the section is longer
+than GitHub takes as the text of a Release (LIMIT), so a release stops here and not at its last step. A long release
+keeps a summary under `## <version>` and the whole list under a heading of its own, `## <version>: every change`,
+which this does not print.
 """
 from __future__ import annotations
 
 import re
 import sys
 from pathlib import Path
+
+LIMIT = 125_000      # characters: GitHub refuses a Release whose text is longer ("body is too long")
 
 
 def section(text: str, version: str) -> str | None:
@@ -26,6 +31,11 @@ def main(argv: list[str]) -> int:
     body = section(path.read_text(encoding="utf-8"), argv[0])
     if body is None:
         print(f"CHANGELOG.md has no section for {argv[0]}", file=sys.stderr)
+        return 1
+    if len(body) > LIMIT:
+        print(f"CHANGELOG.md's section for {argv[0]} is {len(body):,} characters and GitHub takes {LIMIT:,} as the text "
+              f"of a Release. Keep a summary under `## <version>` and move the whole list under "
+              f"`## <version>: every change`.", file=sys.stderr)
         return 1
     sys.stdout.write(body)
     return 0

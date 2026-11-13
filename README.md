@@ -30,7 +30,7 @@ You need Python 3.11 or newer. Testing v0.9? Follow **[docs/try-lantern.md](docs
 what to look at, what runs where, how to report, and how to uninstall. Then:
 
 ```bash
-pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.10.0"
+pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.11.0"
 lantern serve path/to/your/app          # any existing project, new or years old
 lantern serve https://github.com/you/your-app   # or a GitHub link: cloned into ~/.lantern/repos, then analyzed
 ```
@@ -47,7 +47,8 @@ Your browser opens Lantern. The app is analyzed on first open (a few seconds), a
   Click any function for what it does; "Explain with …" asks your model for the three lenses.
 * **Findings**: security problems ranked by severity and by whether a user can reach them. "Accept risk…" records a
   written reason instead of hiding the finding.
-* **Readiness**: a 0–100 grade across ten areas with what to fix first, a deployment recommendation, and starter files
+* **Readiness**: a release decision (Blocked, Incomplete or Passed, with what blocks it or what is missing) above a
+  0–100 grade across ten areas with what to fix first, a deployment recommendation, and starter files
   (Dockerfile, CI workflow, `.env.example`, SECURITY.md) you can write with one click. Lantern never overwrites a file.
 * **Evidence Report**: a commit-pinned summary for a reviewer, with a "Save as PDF" button.
 * **Settings**: choose a model (Anthropic, OpenAI, OpenRouter, Mistral, Gemini, DeepSeek, or a local Ollama / LM Studio model) and
@@ -122,7 +123,11 @@ lantern verify path/to/repo --report evidence.html   # re-runs the analysis on t
 ```
 
 Attach your own walkthroughs of key flows by writing `lantern-narratives.md` at the repo root.
-`.lantern/badge.svg` is a README badge with the score.
+`.lantern/badge.svg` is a README badge with the commit, the open critical findings and the date. It is green only
+for a release that Passed; otherwise it ends in "blocked" or "incomplete".
+
+In CI, `lantern analyze . --require not-blocked` (or `--require passed`) ends with 1 unless this run's own release
+decision is good enough. Passed needs the project's tests run in the same command (`--trace -- <test command>`).
 
 Record what actually runs (Python): `lantern analyze path/to/repo --trace -- python -m pytest -q`
 
@@ -209,6 +214,14 @@ in Settings (off by default; then it sends a random install id, the version, you
 counts, at most once a day, and `lantern usage --show` prints exactly what). See [`docs/analytics.md`](docs/analytics.md). `report.html` embeds function source by default; use
 `lantern analyze --privacy structure` to leave it out. With a cloud model, the source of each explained
 function is sent to that provider; use a local model to keep it on your machine.
+
+To make the next check of a project faster, Lantern keeps on this computer how each Python file read last time
+and what the Bandit scanner printed for the same set of files (in `~/.lantern/cache`, files only your user can
+read; they hold names and lines of your code, and never lie inside the project's own folder). What Lantern makes
+of them, every finding, rank and score, is worked out again in every run. A file that changed by one byte is read
+again. `lantern cache` shows how much is kept, `lantern cache --clear` removes it, and `LANTERN_CACHE=off` runs
+without it. The hosted service keeps nothing of this kind, and `lantern verify` never uses it: it exists to do the
+work again.
 
 ## Status and limits
 

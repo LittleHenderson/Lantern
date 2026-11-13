@@ -1,0 +1,2901 @@
+{
+ "what": "bench/speed_results.md: the numbers behind its tables",
+ "before": {
+  "engine": "main",
+  "engine_commit": "8f517f2",
+  "runs": 3,
+  "machine": {
+   "processors": 4,
+   "system": "Linux-6.18.44-fc-v378-x86_64-with-glibc2.39",
+   "python": "3.13.18"
+  },
+  "when": "2026-11-12 23:25 UTC",
+  "projects": [
+   {
+    "name": "shop",
+    "size": "small",
+    "commit": null,
+    "first": [
+     {
+      "seconds": 0.62,
+      "cpu_seconds": 0.62,
+      "exit": 0,
+      "peak_mb": 39,
+      "peak_all_mb": 47,
+      "phases": {
+       "start-up": 0.18,
+       "map": 0.05,
+       "scan": 0.34,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.03
+      },
+      "report_mb": 0.34,
+      "results_mb": 0.53
+     },
+     {
+      "seconds": 0.66,
+      "cpu_seconds": 0.66,
+      "exit": 0,
+      "peak_mb": 39,
+      "peak_all_mb": 46,
+      "phases": {
+       "start-up": 0.19,
+       "map": 0.05,
+       "scan": 0.36,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.03
+      },
+      "report_mb": 0.34,
+      "results_mb": 0.53
+     },
+     {
+      "seconds": 0.63,
+      "cpu_seconds": 0.63,
+      "exit": 0,
+      "peak_mb": 39,
+      "peak_all_mb": 47,
+      "phases": {
+       "start-up": 0.19,
+       "map": 0.05,
+       "scan": 0.34,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.03
+      },
+      "report_mb": 0.34,
+      "results_mb": 0.53
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 0.62,
+      "cpu_seconds": 0.61,
+      "exit": 0,
+      "peak_mb": 39,
+      "peak_all_mb": 42,
+      "phases": {
+       "start-up": 0.18,
+       "map": 0.05,
+       "scan": 0.33,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.03
+      },
+      "report_mb": 0.34,
+      "results_mb": 0.53
+     },
+     {
+      "seconds": 0.65,
+      "cpu_seconds": 0.65,
+      "exit": 0,
+      "peak_mb": 39,
+      "peak_all_mb": 47,
+      "phases": {
+       "start-up": 0.19,
+       "map": 0.05,
+       "scan": 0.35,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.03
+      },
+      "report_mb": 0.34,
+      "results_mb": 0.53
+     },
+     {
+      "seconds": 0.63,
+      "cpu_seconds": 0.62,
+      "exit": 0,
+      "peak_mb": 39,
+      "peak_all_mb": 47,
+      "phases": {
+       "start-up": 0.17,
+       "map": 0.05,
+       "scan": 0.35,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.03
+      },
+      "report_mb": 0.34,
+      "results_mb": 0.53
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 0.74,
+     "peak_mb": 39,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 0.64,
+     "peak_mb": 38,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "9257b713834ffde845fa39a8792f3b70c6bdbff4b40afecfc3c6d74e147eabe3",
+      "calls.json": "779651b9e3e2d442bc61371e851b7c39f61a94d1bc1bdd24f70d420e88203ee9",
+      "baseline.json": "6cdf74668d70b600b2c0407aebcaf37d19325106fcac9f369e68de71c4491902",
+      "readiness.json": "e9d558f64b9741a780a36041248d2080494290ba53e6554afecc9c302dba5cbb",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "d2d0bcca125c309175317e583369ad9aeb5f1bb0702ff93ef594bea937cc17ef",
+      "report.html": "579a07921d04913f36397a0b39395efe32885ddf0e2dbee2c105b577603f0b13",
+      "evidence.json": "729c95336f8d6970b768fa67cd723945154c733ba74ffdd55ff6dfb3074ddfdb",
+      "evidence.html": "28b52757f35df5cd98cc00964bd4d09ed79f73d2dbdcd6ca9ddc045fcf4fa188",
+      "badge.svg": "93e8756d019f0251c45b85db22c31ae21adfba355a68ec01d9bddba80ded3a4b",
+      "report.html: its data": "aa9176bc56e32ccecb81654b9a64acf06cf482f3aefee874c7eba5f24ab6199a"
+     },
+     "repeat": {
+      "graph.json": "9257b713834ffde845fa39a8792f3b70c6bdbff4b40afecfc3c6d74e147eabe3",
+      "calls.json": "779651b9e3e2d442bc61371e851b7c39f61a94d1bc1bdd24f70d420e88203ee9",
+      "baseline.json": "6cdf74668d70b600b2c0407aebcaf37d19325106fcac9f369e68de71c4491902",
+      "readiness.json": "e9d558f64b9741a780a36041248d2080494290ba53e6554afecc9c302dba5cbb",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "b324360092b464ffd54fa670636a0a4682f3771bf446b8d53b734cd759207ff5",
+      "report.html": "c564f949d5c7372a59f86c324cc368603cfa4f376f76c2b38b8e1845e8f7fb8f",
+      "evidence.json": "729c95336f8d6970b768fa67cd723945154c733ba74ffdd55ff6dfb3074ddfdb",
+      "evidence.html": "28b52757f35df5cd98cc00964bd4d09ed79f73d2dbdcd6ca9ddc045fcf4fa188",
+      "badge.svg": "93e8756d019f0251c45b85db22c31ae21adfba355a68ec01d9bddba80ded3a4b",
+      "report.html: its data": "bfa3e7c5829955e87b7a21171d16c1a85d38dffe11ac002075716005fdc53b14"
+     }
+    },
+    "files": 12,
+    "lines": 181,
+    "functions": 56,
+    "links": 73,
+    "findings": 9,
+    "languages": "python + typescript/javascript",
+    "first_seconds": 0.63,
+    "repeat_seconds": 0.63,
+    "first_cpu_seconds": 0.63,
+    "repeat_cpu_seconds": 0.62,
+    "first_peak_mb": 39,
+    "repeat_peak_mb": 39,
+    "first_peak_all_mb": 47,
+    "repeat_peak_all_mb": 47,
+    "first_report_mb": 0.34,
+    "repeat_report_mb": 0.34,
+    "first_results_mb": 0.53,
+    "repeat_results_mb": 0.53,
+    "first_range": [
+     0.62,
+     0.66
+    ],
+    "repeat_range": [
+     0.62,
+     0.65
+    ],
+    "phases": {
+     "start-up": 0.19,
+     "map": 0.05,
+     "scan": 0.34,
+     "readiness": 0.02,
+     "report": 0.01,
+     "evidence": 0.03
+    },
+    "repeat_phases": {
+     "start-up": 0.18,
+     "map": 0.05,
+     "scan": 0.35,
+     "readiness": 0.02,
+     "report": 0.01,
+     "evidence": 0.03
+    },
+    "phone": {
+     "firstPaintMs": 348,
+     "findingsMs": 317,
+     "detailMs": 230,
+     "mapMs": 245,
+     "jsHeapMb": 10,
+     "errors": 0
+    },
+    "ref": "tests/fixtures/shop"
+   },
+   {
+    "name": "ripgrep",
+    "size": "small",
+    "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+    "first": [
+     {
+      "seconds": 2.81,
+      "cpu_seconds": 2.8,
+      "exit": 0,
+      "peak_mb": 128,
+      "peak_all_mb": 115,
+      "phases": {
+       "start-up": 0.19,
+       "map": 0.82,
+       "scan": 1.44,
+       "readiness": 0.1,
+       "report": 0.15,
+       "evidence": 0.09
+      },
+      "report_mb": 4.27,
+      "results_mb": 7.78
+     },
+     {
+      "seconds": 2.72,
+      "cpu_seconds": 2.68,
+      "exit": 0,
+      "peak_mb": 126,
+      "peak_all_mb": 113,
+      "phases": {
+       "start-up": 0.2,
+       "map": 0.8,
+       "scan": 1.39,
+       "readiness": 0.09,
+       "report": 0.13,
+       "evidence": 0.08
+      },
+      "report_mb": 4.27,
+      "results_mb": 7.78
+     },
+     {
+      "seconds": 2.83,
+      "cpu_seconds": 2.82,
+      "exit": 0,
+      "peak_mb": 126,
+      "peak_all_mb": 114,
+      "phases": {
+       "start-up": 0.18,
+       "map": 0.89,
+       "scan": 1.42,
+       "readiness": 0.09,
+       "report": 0.14,
+       "evidence": 0.09
+      },
+      "report_mb": 4.27,
+      "results_mb": 7.78
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 2.66,
+      "cpu_seconds": 2.62,
+      "exit": 0,
+      "peak_mb": 126,
+      "peak_all_mb": 114,
+      "phases": {
+       "start-up": 0.19,
+       "map": 0.78,
+       "scan": 1.37,
+       "readiness": 0.09,
+       "report": 0.14,
+       "evidence": 0.07
+      },
+      "report_mb": 4.27,
+      "results_mb": 7.78
+     },
+     {
+      "seconds": 2.66,
+      "cpu_seconds": 2.64,
+      "exit": 0,
+      "peak_mb": 127,
+      "peak_all_mb": 109,
+      "phases": {
+       "start-up": 0.18,
+       "map": 0.76,
+       "scan": 1.36,
+       "readiness": 0.09,
+       "report": 0.18,
+       "evidence": 0.07
+      },
+      "report_mb": 4.27,
+      "results_mb": 7.78
+     },
+     {
+      "seconds": 2.78,
+      "cpu_seconds": 2.75,
+      "exit": 0,
+      "peak_mb": 126,
+      "peak_all_mb": 114,
+      "phases": {
+       "start-up": 0.2,
+       "map": 0.79,
+       "scan": 1.45,
+       "readiness": 0.1,
+       "report": 0.15,
+       "evidence": 0.07
+      },
+      "report_mb": 4.27,
+      "results_mb": 7.78
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 2.83,
+     "peak_mb": 127,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 2.79,
+     "peak_mb": 127,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "fd1a70c85679498de3d5d96755d8c64725ae75173a55cd2463d3076c4be027a2",
+      "calls.json": "521344e8eb74fbcd72d4d784853e88b194d651e1f12323afeb5d593c6ecee926",
+      "baseline.json": "01eea32e5337e207d1f7233c93f9e91b7cc9942ff2e0a975ca1b02a4a4285709",
+      "readiness.json": "23989b6d29b14a89520262b17fbb8f22d0a01b43304e229c217ee4eda6437689",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "583dd7976e360460ff86ddcf9fd171ba0c142b05fd18fb17dc4a4ce187fe31d8",
+      "report.html": "1617ceff6c465bda8fdb847d0c40450668b50e9271aaba1faf2f6f500aa0c69a",
+      "evidence.json": "b8acf4f0c3c830ca12a623f7655235980e76d78eeed67984367342ea1a1a1e1a",
+      "evidence.html": "ad0078be4b33248c5f15717456c34b83dfbe21b1830e94041348bdc5598fae08",
+      "badge.svg": "b2a83810389fc43a7ab4af1ab8d79e698ee9c791092e482c7eac5eac78f6ce0e",
+      "report.html: its data": "b4e79143f46632b193aa2dfa160819d2d31e93a700c2c6d19f449175bf002529"
+     },
+     "repeat": {
+      "graph.json": "fd1a70c85679498de3d5d96755d8c64725ae75173a55cd2463d3076c4be027a2",
+      "calls.json": "521344e8eb74fbcd72d4d784853e88b194d651e1f12323afeb5d593c6ecee926",
+      "baseline.json": "01eea32e5337e207d1f7233c93f9e91b7cc9942ff2e0a975ca1b02a4a4285709",
+      "readiness.json": "23989b6d29b14a89520262b17fbb8f22d0a01b43304e229c217ee4eda6437689",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "6e4e20ff425076b056c1d3d872b205337763462ad9a170ac1bf9a14e02316009",
+      "report.html": "7a9c4142c142460470bb6cbee80ce617632760d622b0781853c14b72d95ab5e2",
+      "evidence.json": "b8acf4f0c3c830ca12a623f7655235980e76d78eeed67984367342ea1a1a1e1a",
+      "evidence.html": "ad0078be4b33248c5f15717456c34b83dfbe21b1830e94041348bdc5598fae08",
+      "badge.svg": "b2a83810389fc43a7ab4af1ab8d79e698ee9c791092e482c7eac5eac78f6ce0e",
+      "report.html: its data": "85062220b0b646c4d518280e537f9f183548c10a2b9df8e1624813e271a5dece"
+     }
+    },
+    "files": 99,
+    "lines": 50397,
+    "functions": 3685,
+    "links": 7657,
+    "findings": 4,
+    "languages": "rust + ruby",
+    "first_seconds": 2.81,
+    "repeat_seconds": 2.66,
+    "first_cpu_seconds": 2.8,
+    "repeat_cpu_seconds": 2.64,
+    "first_peak_mb": 126,
+    "repeat_peak_mb": 126,
+    "first_peak_all_mb": 114,
+    "repeat_peak_all_mb": 114,
+    "first_report_mb": 4.27,
+    "repeat_report_mb": 4.27,
+    "first_results_mb": 7.78,
+    "repeat_results_mb": 7.78,
+    "first_range": [
+     2.72,
+     2.83
+    ],
+    "repeat_range": [
+     2.66,
+     2.78
+    ],
+    "phases": {
+     "start-up": 0.19,
+     "map": 0.82,
+     "scan": 1.42,
+     "readiness": 0.09,
+     "report": 0.14,
+     "evidence": 0.09
+    },
+    "repeat_phases": {
+     "start-up": 0.19,
+     "map": 0.78,
+     "scan": 1.37,
+     "readiness": 0.09,
+     "report": 0.15,
+     "evidence": 0.07
+    },
+    "phone": {
+     "firstPaintMs": 699,
+     "findingsMs": 308,
+     "detailMs": 246,
+     "mapMs": 309,
+     "jsHeapMb": 14,
+     "errors": 0
+    },
+    "ref": "14.1.1"
+   },
+   {
+    "name": "excalidraw",
+    "size": "medium",
+    "commit": "0dbd2a39319d41fda37b2945dea0dcbd58d6a564",
+    "first": [
+     {
+      "seconds": 10.4,
+      "cpu_seconds": 10.27,
+      "exit": 0,
+      "peak_mb": 125,
+      "peak_all_mb": 116,
+      "phases": {
+       "start-up": 0.18,
+       "map": 3.14,
+       "scan": 5.19,
+       "readiness": 1.32,
+       "report": 0.13,
+       "evidence": 0.34
+      },
+      "report_mb": 3.77,
+      "results_mb": 15.19
+     },
+     {
+      "seconds": 10.39,
+      "cpu_seconds": 10.27,
+      "exit": 0,
+      "peak_mb": 125,
+      "peak_all_mb": 102,
+      "phases": {
+       "start-up": 0.18,
+       "map": 3.03,
+       "scan": 5.29,
+       "readiness": 1.32,
+       "report": 0.13,
+       "evidence": 0.35
+      },
+      "report_mb": 3.77,
+      "results_mb": 15.19
+     },
+     {
+      "seconds": 10.33,
+      "cpu_seconds": 10.22,
+      "exit": 0,
+      "peak_mb": 125,
+      "peak_all_mb": 116,
+      "phases": {
+       "start-up": 0.19,
+       "map": 3.11,
+       "scan": 5.11,
+       "readiness": 1.33,
+       "report": 0.13,
+       "evidence": 0.37
+      },
+      "report_mb": 3.77,
+      "results_mb": 15.19
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 10.05,
+      "cpu_seconds": 9.98,
+      "exit": 0,
+      "peak_mb": 126,
+      "peak_all_mb": 116,
+      "phases": {
+       "start-up": 0.18,
+       "map": 3.07,
+       "scan": 5.09,
+       "readiness": 1.24,
+       "report": 0.12,
+       "evidence": 0.26
+      },
+      "report_mb": 3.77,
+      "results_mb": 15.19
+     },
+     {
+      "seconds": 10.51,
+      "cpu_seconds": 10.42,
+      "exit": 0,
+      "peak_mb": 126,
+      "peak_all_mb": 106,
+      "phases": {
+       "start-up": 0.2,
+       "map": 3.02,
+       "scan": 5.42,
+       "readiness": 1.39,
+       "report": 0.12,
+       "evidence": 0.26
+      },
+      "report_mb": 3.77,
+      "results_mb": 15.19
+     },
+     {
+      "seconds": 10.32,
+      "cpu_seconds": 10.2,
+      "exit": 0,
+      "peak_mb": 126,
+      "peak_all_mb": 116,
+      "phases": {
+       "start-up": 0.2,
+       "map": 3.05,
+       "scan": 5.31,
+       "readiness": 1.27,
+       "report": 0.13,
+       "evidence": 0.27
+      },
+      "report_mb": 3.77,
+      "results_mb": 15.19
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 10.54,
+     "peak_mb": 126,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 10.53,
+     "peak_mb": 125,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "809bebcca9fea32e484e80d5605a164e6503e1972426da64562751949f2ce975",
+      "calls.json": "c700b4ef7c319a900b09c158b4a2bb999144a26ce70bbb4db88c97ecdc188a4a",
+      "baseline.json": "409e02027711c83037302615b371454cfefb0a49dd3f9759ea78c1f2a9f9aed8",
+      "readiness.json": "65bd0065d5ff76793e6ebdb49b8ef208d26e8a1224c8cca23a1773d70cde980a",
+      "run.json": "aabb4044cf0d63462d9b2dce6dad12109961198706cffdb652df014c1cb392b0",
+      "security.json": "255737200cb15b71d8da2976ce8d9d6162b98264d2311bbb20abdd04ddea5ab3",
+      "report.html": "40b1abc5ca9e4f0ff5c09e74d510b5b7f8c2db6ff3ec81b805fdae8d6b7e7f86",
+      "evidence.json": "d3023024a4431c1ef1bafdc9ccda0afba6faf71e7371dfdeae80b7e636fd9682",
+      "evidence.html": "a3d151edd3de5611999b3dee23ae220b6883ba456a4173013d049fb055d86100",
+      "badge.svg": "999fe7d38e5c85301ec9e0534272e21d0179879786f8149251e813c5ec5f8616",
+      "report.html: its data": "965d7581b6639e1c45b209fcc59a8d683450db566ba960e86b909411a960a936"
+     },
+     "repeat": {
+      "graph.json": "809bebcca9fea32e484e80d5605a164e6503e1972426da64562751949f2ce975",
+      "calls.json": "c700b4ef7c319a900b09c158b4a2bb999144a26ce70bbb4db88c97ecdc188a4a",
+      "baseline.json": "409e02027711c83037302615b371454cfefb0a49dd3f9759ea78c1f2a9f9aed8",
+      "readiness.json": "65bd0065d5ff76793e6ebdb49b8ef208d26e8a1224c8cca23a1773d70cde980a",
+      "run.json": "aabb4044cf0d63462d9b2dce6dad12109961198706cffdb652df014c1cb392b0",
+      "security.json": "418cd14858e291c4aad2084995ad336d7dd4813b4adf6e47387321cb5862bfb1",
+      "report.html": "d04adb902910d63b1cc88d735ab6f5fba83d3d5b27b4e502e243c1e055829a5d",
+      "evidence.json": "d3023024a4431c1ef1bafdc9ccda0afba6faf71e7371dfdeae80b7e636fd9682",
+      "evidence.html": "a3d151edd3de5611999b3dee23ae220b6883ba456a4173013d049fb055d86100",
+      "badge.svg": "999fe7d38e5c85301ec9e0534272e21d0179879786f8149251e813c5ec5f8616",
+      "report.html: its data": "13f9fc4c460b6254d9478a20edde148b51d9d6a98868f4aa10be5552f4ea8b8e"
+     }
+    },
+    "files": 378,
+    "lines": 86777,
+    "functions": 2219,
+    "links": 6178,
+    "findings": 13,
+    "languages": "typescript/javascript",
+    "first_seconds": 10.39,
+    "repeat_seconds": 10.32,
+    "first_cpu_seconds": 10.27,
+    "repeat_cpu_seconds": 10.2,
+    "first_peak_mb": 125,
+    "repeat_peak_mb": 126,
+    "first_peak_all_mb": 116,
+    "repeat_peak_all_mb": 116,
+    "first_report_mb": 3.77,
+    "repeat_report_mb": 3.77,
+    "first_results_mb": 15.19,
+    "repeat_results_mb": 15.19,
+    "first_range": [
+     10.33,
+     10.4
+    ],
+    "repeat_range": [
+     10.05,
+     10.51
+    ],
+    "phases": {
+     "start-up": 0.18,
+     "map": 3.11,
+     "scan": 5.19,
+     "readiness": 1.32,
+     "report": 0.13,
+     "evidence": 0.35
+    },
+    "repeat_phases": {
+     "start-up": 0.2,
+     "map": 3.05,
+     "scan": 5.31,
+     "readiness": 1.27,
+     "report": 0.12,
+     "evidence": 0.26
+    },
+    "phone": {
+     "firstPaintMs": 724,
+     "findingsMs": 323,
+     "detailMs": 235,
+     "mapMs": 295,
+     "jsHeapMb": 11,
+     "errors": 0
+    },
+    "ref": "v0.17.6"
+   },
+   {
+    "name": "hugo",
+    "size": "medium",
+    "commit": "dacef0df92a9a20072b4eaa42003e1a63ace8f41",
+    "first": [
+     {
+      "seconds": 16.98,
+      "cpu_seconds": 16.82,
+      "exit": 0,
+      "peak_mb": 401,
+      "peak_all_mb": 353,
+      "phases": {
+       "start-up": 0.21,
+       "map": 6.92,
+       "scan": 7.32,
+       "readiness": 1.15,
+       "report": 0.53,
+       "evidence": 0.59
+      },
+      "report_mb": 14.43,
+      "results_mb": 27.28
+     },
+     {
+      "seconds": 16.95,
+      "cpu_seconds": 16.81,
+      "exit": 0,
+      "peak_mb": 401,
+      "peak_all_mb": 381,
+      "phases": {
+       "start-up": 0.2,
+       "map": 6.87,
+       "scan": 7.46,
+       "readiness": 1.15,
+       "report": 0.52,
+       "evidence": 0.52
+      },
+      "report_mb": 14.43,
+      "results_mb": 27.28
+     },
+     {
+      "seconds": 18.61,
+      "cpu_seconds": 18.47,
+      "exit": 0,
+      "peak_mb": 401,
+      "peak_all_mb": 353,
+      "phases": {
+       "start-up": 0.27,
+       "map": 6.87,
+       "scan": 8.6,
+       "readiness": 1.36,
+       "report": 0.55,
+       "evidence": 0.68
+      },
+      "report_mb": 14.43,
+      "results_mb": 27.28
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 17.07,
+      "cpu_seconds": 16.89,
+      "exit": 0,
+      "peak_mb": 401,
+      "peak_all_mb": 353,
+      "phases": {
+       "start-up": 0.25,
+       "map": 7.15,
+       "scan": 7.33,
+       "readiness": 1.19,
+       "report": 0.61,
+       "evidence": 0.32
+      },
+      "report_mb": 14.43,
+      "results_mb": 27.28
+     },
+     {
+      "seconds": 16.46,
+      "cpu_seconds": 16.28,
+      "exit": 0,
+      "peak_mb": 402,
+      "peak_all_mb": 364,
+      "phases": {
+       "start-up": 0.23,
+       "map": 6.81,
+       "scan": 7.23,
+       "readiness": 1.14,
+       "report": 0.51,
+       "evidence": 0.33
+      },
+      "report_mb": 14.43,
+      "results_mb": 27.28
+     },
+     {
+      "seconds": 16.94,
+      "cpu_seconds": 16.78,
+      "exit": 0,
+      "peak_mb": 402,
+      "peak_all_mb": 394,
+      "phases": {
+       "start-up": 0.22,
+       "map": 6.77,
+       "scan": 7.79,
+       "readiness": 1.03,
+       "report": 0.51,
+       "evidence": 0.39
+      },
+      "report_mb": 14.43,
+      "results_mb": 27.28
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 17.74,
+     "peak_mb": 401,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 18.11,
+     "peak_mb": 402,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "699be5ad2d81a0c5265ebeea5c23684baaa88c6cdabe64de1967022a1063271d",
+      "calls.json": "59d815b102cace4849107f1d28d055ba6a17333deccba237ade65480ea62c3dc",
+      "baseline.json": "c253663614e42034d374028ff0dd419c02c82b25898dcc3768bba86ce0edcdb4",
+      "readiness.json": "e19e8b30c90b8eee07917c30b0028a74c8bef0391a8082d3a4d7115862a2160d",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "9a6103ee9842d49fd1e3862869fbced280d0d4cdbc79239f6f6573fcf8e924ec",
+      "report.html": "b9f9c1c036da19cba76c0c9094c263afba7750fd3c5dd2ae61799f742493a9a9",
+      "evidence.json": "981ac6c5f9351b46da8b1c6f9d97fb88f38879fb47722ac704be8161415ffbcf",
+      "evidence.html": "54619103f929b356cd23f96867e09d8287da9fa5d9ec0a026df943b71480a7a0",
+      "badge.svg": "c931e7e9aa6db4f16d79b0569ff1c63f021db88551a2f780cc92ac5c9341fb37",
+      "report.html: its data": "deef4f31513aeeafa3c44a5e358d2882c67166719b9fed143e57facb95aaa8f8"
+     },
+     "repeat": {
+      "graph.json": "699be5ad2d81a0c5265ebeea5c23684baaa88c6cdabe64de1967022a1063271d",
+      "calls.json": "59d815b102cace4849107f1d28d055ba6a17333deccba237ade65480ea62c3dc",
+      "baseline.json": "c253663614e42034d374028ff0dd419c02c82b25898dcc3768bba86ce0edcdb4",
+      "readiness.json": "e19e8b30c90b8eee07917c30b0028a74c8bef0391a8082d3a4d7115862a2160d",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "dfa365228db86a3e6919528e1e61eb2be791415d7e86f2d22701e6ff6931ef93",
+      "report.html": "aa860cc1e160b80bb47c550a551dcde016f6c13e06a5a0752f94fb6fccf93da8",
+      "evidence.json": "981ac6c5f9351b46da8b1c6f9d97fb88f38879fb47722ac704be8161415ffbcf",
+      "evidence.html": "54619103f929b356cd23f96867e09d8287da9fa5d9ec0a026df943b71480a7a0",
+      "badge.svg": "c931e7e9aa6db4f16d79b0569ff1c63f021db88551a2f780cc92ac5c9341fb37",
+      "report.html: its data": "92c8b80b2fb6890de28ea477b49fe2cff379b4009040e7ca1d435d9a9096ec84"
+     }
+    },
+    "files": 864,
+    "lines": 194912,
+    "functions": 10132,
+    "links": 27948,
+    "findings": 8,
+    "languages": "typescript/javascript + go",
+    "first_seconds": 16.98,
+    "repeat_seconds": 16.94,
+    "first_cpu_seconds": 16.82,
+    "repeat_cpu_seconds": 16.78,
+    "first_peak_mb": 401,
+    "repeat_peak_mb": 402,
+    "first_peak_all_mb": 353,
+    "repeat_peak_all_mb": 364,
+    "first_report_mb": 14.43,
+    "repeat_report_mb": 14.43,
+    "first_results_mb": 27.28,
+    "repeat_results_mb": 27.28,
+    "first_range": [
+     16.95,
+     18.61
+    ],
+    "repeat_range": [
+     16.46,
+     17.07
+    ],
+    "phases": {
+     "start-up": 0.21,
+     "map": 6.87,
+     "scan": 7.46,
+     "readiness": 1.15,
+     "report": 0.53,
+     "evidence": 0.59
+    },
+    "repeat_phases": {
+     "start-up": 0.23,
+     "map": 6.81,
+     "scan": 7.33,
+     "readiness": 1.14,
+     "report": 0.51,
+     "evidence": 0.33
+    },
+    "phone": {
+     "firstPaintMs": 1881,
+     "findingsMs": 369,
+     "detailMs": 247,
+     "mapMs": 355,
+     "jsHeapMb": 36,
+     "errors": 0
+    },
+    "ref": "v0.139.0"
+   },
+   {
+    "name": "django",
+    "size": "large",
+    "commit": "69bf08e3a32492998871eb91ad84b3c8d8117180",
+    "first": [
+     {
+      "seconds": 116.52,
+      "cpu_seconds": 115.22,
+      "exit": 0,
+      "peak_mb": 884,
+      "peak_all_mb": 863,
+      "phases": {
+       "start-up": 0.27,
+       "map": 32.9,
+       "scan": 71.36,
+       "readiness": 6.33,
+       "report": 4.25,
+       "evidence": 1.07
+      },
+      "report_mb": 70.47,
+      "results_mb": 211.22
+     },
+     {
+      "seconds": 115.72,
+      "cpu_seconds": 114.68,
+      "exit": 0,
+      "peak_mb": 885,
+      "peak_all_mb": 858,
+      "phases": {
+       "start-up": 0.39,
+       "map": 32.14,
+       "scan": 70.2,
+       "readiness": 7.04,
+       "report": 4.58,
+       "evidence": 1.09
+      },
+      "report_mb": 70.47,
+      "results_mb": 211.22
+     },
+     {
+      "seconds": 113.6,
+      "cpu_seconds": 112.59,
+      "exit": 0,
+      "peak_mb": 886,
+      "peak_all_mb": 740,
+      "phases": {
+       "start-up": 0.26,
+       "map": 31.84,
+       "scan": 69.48,
+       "readiness": 6.38,
+       "report": 4.41,
+       "evidence": 1.04
+      },
+      "report_mb": 70.47,
+      "results_mb": 211.22
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 116.25,
+      "cpu_seconds": 114.91,
+      "exit": 0,
+      "peak_mb": 881,
+      "peak_all_mb": 750,
+      "phases": {
+       "start-up": 0.33,
+       "map": 33.13,
+       "scan": 69.91,
+       "readiness": 6.79,
+       "report": 5.09,
+       "evidence": 0.77
+      },
+      "report_mb": 70.48,
+      "results_mb": 211.23
+     },
+     {
+      "seconds": 113.84,
+      "cpu_seconds": 112.72,
+      "exit": 0,
+      "peak_mb": 886,
+      "peak_all_mb": 853,
+      "phases": {
+       "start-up": 0.3,
+       "map": 33.2,
+       "scan": 68.64,
+       "readiness": 6.46,
+       "report": 4.37,
+       "evidence": 0.66
+      },
+      "report_mb": 70.48,
+      "results_mb": 211.23
+     },
+     {
+      "seconds": 107.39,
+      "cpu_seconds": 106.48,
+      "exit": 0,
+      "peak_mb": 881,
+      "peak_all_mb": 773,
+      "phases": {
+       "start-up": 0.26,
+       "map": 31.07,
+       "scan": 64.97,
+       "readiness": 6.29,
+       "report": 3.95,
+       "evidence": 0.61
+      },
+      "report_mb": 70.48,
+      "results_mb": 211.23
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 107.04,
+     "peak_mb": 883,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 109.64,
+     "peak_mb": 884,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "c9e025b59e3741fa932ff9d89af5ec249971b0924a23a2629e5ffd87387c7623",
+      "calls.json": "91f07def0aec26765f295bb560bf70fd0f4c59fd741158dc94725c8acd56e992",
+      "baseline.json": "dc19f502ced44de18cc2d08a5fdaff3da7cb948937e0051bf03740025fdd69c1",
+      "readiness.json": "9271d114667631925654610d0d3064b07057e018d404bc5e74ad208c6051fc50",
+      "run.json": "dc8bcf7491d4f83064c4344fc93f8436feb8cf0f7c020cfcb0f51537bc1a642b",
+      "security.json": "67eaa9e4ab33398203887d3372d70e22281e9b7a9a9f02b9be84e83d73b9442b",
+      "report.html": "23c730edeb80452fa236b48007b67d210a9be69efd3d9c2dac6c8b6f533687d4",
+      "evidence.json": "f553b2e3f12af9beaf1d78bb6483e667c638072d2346446123955a7d72a74b38",
+      "evidence.html": "69566cf8788af42fb752a22ed72c3d3441cb6c7cca7ef66bf856893c44501351",
+      "badge.svg": "fbe1ee43f95dafddb3a81a6e8786768a55273d66f21bab7926e962593108dec9",
+      "report.html: its data": "924294fca39dcdeff19f0ff8d28d5a737e9a92ec54bd17ff92b3eaadc9bb1af6"
+     },
+     "repeat": {
+      "graph.json": "c9e025b59e3741fa932ff9d89af5ec249971b0924a23a2629e5ffd87387c7623",
+      "calls.json": "91f07def0aec26765f295bb560bf70fd0f4c59fd741158dc94725c8acd56e992",
+      "baseline.json": "dc19f502ced44de18cc2d08a5fdaff3da7cb948937e0051bf03740025fdd69c1",
+      "readiness.json": "9271d114667631925654610d0d3064b07057e018d404bc5e74ad208c6051fc50",
+      "run.json": "dc8bcf7491d4f83064c4344fc93f8436feb8cf0f7c020cfcb0f51537bc1a642b",
+      "security.json": "6524db5f2dcac3f4d64cfdbd8ccca9cbd48d4b955317155c4fc08c40a3640569",
+      "report.html": "b24aa9977b1fa90dedde0510b8cd22d5c7a404c8c8da28ee9a7596d1af4f4e1a",
+      "evidence.json": "f553b2e3f12af9beaf1d78bb6483e667c638072d2346446123955a7d72a74b38",
+      "evidence.html": "69566cf8788af42fb752a22ed72c3d3441cb6c7cca7ef66bf856893c44501351",
+      "badge.svg": "fbe1ee43f95dafddb3a81a6e8786768a55273d66f21bab7926e962593108dec9",
+      "report.html: its data": "7a3d0e9c9a7c9c71f6ac502ab80d103b0caa095c54514621d985626cac18b32a"
+     }
+    },
+    "files": 2839,
+    "lines": 481021,
+    "functions": 43457,
+    "links": 130080,
+    "findings": 1268,
+    "languages": "python + typescript/javascript",
+    "first_seconds": 115.72,
+    "repeat_seconds": 113.84,
+    "first_cpu_seconds": 114.68,
+    "repeat_cpu_seconds": 112.72,
+    "first_peak_mb": 885,
+    "repeat_peak_mb": 881,
+    "first_peak_all_mb": 858,
+    "repeat_peak_all_mb": 773,
+    "first_report_mb": 70.47,
+    "repeat_report_mb": 70.48,
+    "first_results_mb": 211.22,
+    "repeat_results_mb": 211.23,
+    "first_range": [
+     113.6,
+     116.52
+    ],
+    "repeat_range": [
+     107.39,
+     116.25
+    ],
+    "phases": {
+     "start-up": 0.27,
+     "map": 32.14,
+     "scan": 70.2,
+     "readiness": 6.38,
+     "report": 4.41,
+     "evidence": 1.07
+    },
+    "repeat_phases": {
+     "start-up": 0.3,
+     "map": 33.13,
+     "scan": 68.64,
+     "readiness": 6.46,
+     "report": 4.37,
+     "evidence": 0.66
+    },
+    "phone": {
+     "firstPaintMs": 4951,
+     "findingsMs": 1698,
+     "detailMs": 507,
+     "mapMs": 726,
+     "jsHeapMb": 159,
+     "errors": 0
+    },
+    "ref": "5.1.3"
+   },
+   {
+    "name": "laravel",
+    "size": "large",
+    "commit": "dff716442d9c229d716be82ccc9a7de52eb97193",
+    "first": [
+     {
+      "seconds": 37.34,
+      "cpu_seconds": 36.8,
+      "exit": 0,
+      "peak_mb": 999,
+      "peak_all_mb": 990,
+      "phases": {
+       "start-up": 0.32,
+       "map": 16.74,
+       "scan": 12.12,
+       "readiness": 5.26,
+       "report": 1.8,
+       "evidence": 0.9
+      },
+      "report_mb": 41.54,
+      "results_mb": 77.52
+     },
+     {
+      "seconds": 37.83,
+      "cpu_seconds": 37.38,
+      "exit": 0,
+      "peak_mb": 999,
+      "peak_all_mb": 991,
+      "phases": {
+       "start-up": 0.33,
+       "map": 16.24,
+       "scan": 12.76,
+       "readiness": 5.55,
+       "report": 1.81,
+       "evidence": 0.96
+      },
+      "report_mb": 41.54,
+      "results_mb": 77.52
+     },
+     {
+      "seconds": 39.34,
+      "cpu_seconds": 38.78,
+      "exit": 0,
+      "peak_mb": 999,
+      "peak_all_mb": 990,
+      "phases": {
+       "start-up": 0.33,
+       "map": 17.12,
+       "scan": 13.15,
+       "readiness": 5.73,
+       "report": 1.86,
+       "evidence": 0.96
+      },
+      "report_mb": 41.54,
+      "results_mb": 77.52
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 37.38,
+      "cpu_seconds": 36.67,
+      "exit": 0,
+      "peak_mb": 999,
+      "peak_all_mb": 990,
+      "phases": {
+       "start-up": 0.33,
+       "map": 16.52,
+       "scan": 12.24,
+       "readiness": 5.53,
+       "report": 1.83,
+       "evidence": 0.74
+      },
+      "report_mb": 41.54,
+      "results_mb": 77.53
+     },
+     {
+      "seconds": 37.53,
+      "cpu_seconds": 36.98,
+      "exit": 0,
+      "peak_mb": 1000,
+      "peak_all_mb": 994,
+      "phases": {
+       "start-up": 0.37,
+       "map": 16.58,
+       "scan": 12.19,
+       "readiness": 5.38,
+       "report": 1.98,
+       "evidence": 0.81
+      },
+      "report_mb": 41.54,
+      "results_mb": 77.53
+     },
+     {
+      "seconds": 37.99,
+      "cpu_seconds": 37.43,
+      "exit": 0,
+      "peak_mb": 999,
+      "peak_all_mb": 990,
+      "phases": {
+       "start-up": 0.33,
+       "map": 16.69,
+       "scan": 12.49,
+       "readiness": 5.52,
+       "report": 1.96,
+       "evidence": 0.81
+      },
+      "report_mb": 41.54,
+      "results_mb": 77.53
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 37.9,
+     "peak_mb": 999,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 37.97,
+     "peak_mb": 999,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "8d0140458e42836a9101cb49e2bf65fe0a5f5cffae16bc46ec80b53a9a47e4b4",
+      "calls.json": "85ba1f595cd195803998b961d947a01a4e9ae3685f91a7a5b2cf662885cd3675",
+      "baseline.json": "21b1b05e8d9cbe5e4c43043b09992a3d96004d83f26893addeed9af962ecb0c1",
+      "readiness.json": "af797af92016d4e9053eee62e74b947e8447626d0f5ad15f65d4de39e268f0c7",
+      "run.json": "94479900001e816f1a8abd6781c597433894435d3c0845b230ab816cb6003f7b",
+      "security.json": "2b07609774457ea7c11037fd728ba91da7b3cc293a95e8cfe58f63fea9da0aed",
+      "report.html": "c463f929c2783ec74cebe55728f70de90627fcb56b9a6a7f47699803c618a3fa",
+      "evidence.json": "28f686cbf9ce8eaeb16738d08488354c7b23a88defa7d3e692d124db8c9e3e09",
+      "evidence.html": "7a116b9a787bafd159ba97503a453927d3c3a39e7b13a3ca39f2e2ba77fc0947",
+      "badge.svg": "5fe682b50c85a805e65a010b41c415612b4f10900f39705421cc82b8d28c747a",
+      "report.html: its data": "9253a72d034a0f0812151fbb7333dee76743b3b296ac1f30562f412507a1cfbb"
+     },
+     "repeat": {
+      "graph.json": "8d0140458e42836a9101cb49e2bf65fe0a5f5cffae16bc46ec80b53a9a47e4b4",
+      "calls.json": "85ba1f595cd195803998b961d947a01a4e9ae3685f91a7a5b2cf662885cd3675",
+      "baseline.json": "21b1b05e8d9cbe5e4c43043b09992a3d96004d83f26893addeed9af962ecb0c1",
+      "readiness.json": "af797af92016d4e9053eee62e74b947e8447626d0f5ad15f65d4de39e268f0c7",
+      "run.json": "94479900001e816f1a8abd6781c597433894435d3c0845b230ab816cb6003f7b",
+      "security.json": "0af707cda29835c3fe631ee5daf2264ca06b2f6e1c997d64ff361a20920f7cc7",
+      "report.html": "d37f935f9cddfd74f0e5e6b5c2de09bcf24d1672ce80e1cbaa2f61388ad64bc3",
+      "evidence.json": "28f686cbf9ce8eaeb16738d08488354c7b23a88defa7d3e692d124db8c9e3e09",
+      "evidence.html": "7a116b9a787bafd159ba97503a453927d3c3a39e7b13a3ca39f2e2ba77fc0947",
+      "badge.svg": "5fe682b50c85a805e65a010b41c415612b4f10900f39705421cc82b8d28c747a",
+      "report.html: its data": "8598b5f7e64d2d8732426cefb9c502be383c12679e445415e6b3ab01cd64fc91"
+     }
+    },
+    "files": 2241,
+    "lines": 415998,
+    "functions": 29708,
+    "links": 69834,
+    "findings": 126,
+    "languages": "typescript/javascript + php",
+    "first_seconds": 37.83,
+    "repeat_seconds": 37.53,
+    "first_cpu_seconds": 37.38,
+    "repeat_cpu_seconds": 36.98,
+    "first_peak_mb": 999,
+    "repeat_peak_mb": 999,
+    "first_peak_all_mb": 990,
+    "repeat_peak_all_mb": 990,
+    "first_report_mb": 41.54,
+    "repeat_report_mb": 41.54,
+    "first_results_mb": 77.52,
+    "repeat_results_mb": 77.53,
+    "first_range": [
+     37.34,
+     39.34
+    ],
+    "repeat_range": [
+     37.38,
+     37.99
+    ],
+    "phases": {
+     "start-up": 0.33,
+     "map": 16.74,
+     "scan": 12.76,
+     "readiness": 5.55,
+     "report": 1.81,
+     "evidence": 0.96
+    },
+    "repeat_phases": {
+     "start-up": 0.33,
+     "map": 16.58,
+     "scan": 12.24,
+     "readiness": 5.52,
+     "report": 1.96,
+     "evidence": 0.81
+    },
+    "phone": {
+     "firstPaintMs": 3307,
+     "findingsMs": 664,
+     "detailMs": 262,
+     "mapMs": 489,
+     "jsHeapMb": 51,
+     "errors": 0
+    },
+    "ref": "v11.30.0"
+   }
+  ]
+ },
+ "after": {
+  "engine": "this branch",
+  "engine_commit": null,
+  "runs": 3,
+  "machine": {
+   "processors": 4,
+   "system": "Linux-6.18.44-fc-v378-x86_64-with-glibc2.39",
+   "python": "3.13.18"
+  },
+  "when": "2026-11-12 23:39 UTC",
+  "projects": [
+   {
+    "name": "shop",
+    "size": "small",
+    "commit": null,
+    "first": [
+     {
+      "seconds": 0.72,
+      "cpu_seconds": 0.85,
+      "exit": 0,
+      "peak_mb": 45,
+      "peak_all_mb": 55,
+      "phases": {
+       "start-up": 0.23,
+       "map": 0.19,
+       "scan": 0.24,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.04
+      },
+      "report_mb": 0.33,
+      "results_mb": 0.52
+     },
+     {
+      "seconds": 0.74,
+      "cpu_seconds": 0.85,
+      "exit": 0,
+      "peak_mb": 45,
+      "peak_all_mb": 54,
+      "phases": {
+       "start-up": 0.24,
+       "map": 0.18,
+       "scan": 0.23,
+       "readiness": 0.03,
+       "report": 0.01,
+       "evidence": 0.05
+      },
+      "report_mb": 0.33,
+      "results_mb": 0.52
+     },
+     {
+      "seconds": 0.83,
+      "cpu_seconds": 0.92,
+      "exit": 0,
+      "peak_mb": 45,
+      "peak_all_mb": 55,
+      "phases": {
+       "start-up": 0.24,
+       "map": 0.24,
+       "scan": 0.27,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.04
+      },
+      "report_mb": 0.33,
+      "results_mb": 0.52
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 0.46,
+      "cpu_seconds": 0.47,
+      "exit": 0,
+      "peak_mb": 45,
+      "peak_all_mb": 37,
+      "phases": {
+       "start-up": 0.2,
+       "map": 0.16,
+       "scan": 0.03,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.04
+      },
+      "report_mb": 0.33,
+      "results_mb": 0.52
+     },
+     {
+      "seconds": 0.52,
+      "cpu_seconds": 0.52,
+      "exit": 0,
+      "peak_mb": 45,
+      "peak_all_mb": 39,
+      "phases": {
+       "start-up": 0.22,
+       "map": 0.18,
+       "scan": 0.04,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.05
+      },
+      "report_mb": 0.33,
+      "results_mb": 0.52
+     },
+     {
+      "seconds": 0.5,
+      "cpu_seconds": 0.5,
+      "exit": 0,
+      "peak_mb": 45,
+      "peak_all_mb": 36,
+      "phases": {
+       "start-up": 0.23,
+       "map": 0.16,
+       "scan": 0.03,
+       "readiness": 0.02,
+       "report": 0.01,
+       "evidence": 0.04
+      },
+      "report_mb": 0.33,
+      "results_mb": 0.52
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 0.55,
+     "peak_mb": 40,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 0.64,
+     "peak_mb": 45,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "9257b713834ffde845fa39a8792f3b70c6bdbff4b40afecfc3c6d74e147eabe3",
+      "calls.json": "779651b9e3e2d442bc61371e851b7c39f61a94d1bc1bdd24f70d420e88203ee9",
+      "baseline.json": "6cdf74668d70b600b2c0407aebcaf37d19325106fcac9f369e68de71c4491902",
+      "readiness.json": "e9d558f64b9741a780a36041248d2080494290ba53e6554afecc9c302dba5cbb",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "d2d0bcca125c309175317e583369ad9aeb5f1bb0702ff93ef594bea937cc17ef",
+      "report.html": "2fcb9c57690c33d80a468b7e617db9f5155c0774157e4eabb2e7c812ec7e52e8",
+      "evidence.json": "f687ee94c79473045ac7bc9451f20a39befe3096df748cc9766d8b416b3866af",
+      "evidence.html": "28b52757f35df5cd98cc00964bd4d09ed79f73d2dbdcd6ca9ddc045fcf4fa188",
+      "badge.svg": "93e8756d019f0251c45b85db22c31ae21adfba355a68ec01d9bddba80ded3a4b",
+      "report.html: its data": "aa9176bc56e32ccecb81654b9a64acf06cf482f3aefee874c7eba5f24ab6199a"
+     },
+     "repeat": {
+      "graph.json": "9257b713834ffde845fa39a8792f3b70c6bdbff4b40afecfc3c6d74e147eabe3",
+      "calls.json": "779651b9e3e2d442bc61371e851b7c39f61a94d1bc1bdd24f70d420e88203ee9",
+      "baseline.json": "6cdf74668d70b600b2c0407aebcaf37d19325106fcac9f369e68de71c4491902",
+      "readiness.json": "e9d558f64b9741a780a36041248d2080494290ba53e6554afecc9c302dba5cbb",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "b324360092b464ffd54fa670636a0a4682f3771bf446b8d53b734cd759207ff5",
+      "report.html": "f844679ef441f291d350d10d5655f8deab134683a91352c2725345b3a0b626f9",
+      "evidence.json": "f687ee94c79473045ac7bc9451f20a39befe3096df748cc9766d8b416b3866af",
+      "evidence.html": "28b52757f35df5cd98cc00964bd4d09ed79f73d2dbdcd6ca9ddc045fcf4fa188",
+      "badge.svg": "93e8756d019f0251c45b85db22c31ae21adfba355a68ec01d9bddba80ded3a4b",
+      "report.html: its data": "bfa3e7c5829955e87b7a21171d16c1a85d38dffe11ac002075716005fdc53b14"
+     }
+    },
+    "files": 12,
+    "lines": 181,
+    "functions": 56,
+    "links": 73,
+    "findings": 9,
+    "languages": "python + typescript/javascript",
+    "first_seconds": 0.74,
+    "repeat_seconds": 0.5,
+    "first_cpu_seconds": 0.85,
+    "repeat_cpu_seconds": 0.5,
+    "first_peak_mb": 45,
+    "repeat_peak_mb": 45,
+    "first_peak_all_mb": 55,
+    "repeat_peak_all_mb": 37,
+    "first_report_mb": 0.33,
+    "repeat_report_mb": 0.33,
+    "first_results_mb": 0.52,
+    "repeat_results_mb": 0.52,
+    "first_range": [
+     0.72,
+     0.83
+    ],
+    "repeat_range": [
+     0.46,
+     0.52
+    ],
+    "phases": {
+     "start-up": 0.24,
+     "map": 0.19,
+     "scan": 0.24,
+     "readiness": 0.02,
+     "report": 0.01,
+     "evidence": 0.04
+    },
+    "repeat_phases": {
+     "start-up": 0.22,
+     "map": 0.16,
+     "scan": 0.03,
+     "readiness": 0.02,
+     "report": 0.01,
+     "evidence": 0.04
+    },
+    "phone": {
+     "firstPaintMs": 356,
+     "findingsMs": 309,
+     "detailMs": 256,
+     "mapMs": 248,
+     "jsHeapMb": 10,
+     "errors": 0
+    },
+    "ref": "tests/fixtures/shop"
+   },
+   {
+    "name": "ripgrep",
+    "size": "small",
+    "commit": "4649aa9700619f94cf9c66876e9549d83420e16c",
+    "first": [
+     {
+      "seconds": 1.74,
+      "cpu_seconds": 2.03,
+      "exit": 0,
+      "peak_mb": 121,
+      "peak_all_mb": 115,
+      "phases": {
+       "start-up": 0.24,
+       "map": 0.9,
+       "scan": 0.25,
+       "readiness": 0.07,
+       "report": 0.12,
+       "evidence": 0.13
+      },
+      "report_mb": 2.33,
+      "results_mb": 5.84
+     },
+     {
+      "seconds": 1.92,
+      "cpu_seconds": 2.24,
+      "exit": 0,
+      "peak_mb": 122,
+      "peak_all_mb": 116,
+      "phases": {
+       "start-up": 0.31,
+       "map": 0.99,
+       "scan": 0.29,
+       "readiness": 0.07,
+       "report": 0.13,
+       "evidence": 0.11
+      },
+      "report_mb": 2.33,
+      "results_mb": 5.84
+     },
+     {
+      "seconds": 1.88,
+      "cpu_seconds": 2.18,
+      "exit": 0,
+      "peak_mb": 130,
+      "peak_all_mb": 125,
+      "phases": {
+       "start-up": 0.23,
+       "map": 1.05,
+       "scan": 0.26,
+       "readiness": 0.08,
+       "report": 0.13,
+       "evidence": 0.12
+      },
+      "report_mb": 2.33,
+      "results_mb": 5.84
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 1.78,
+      "cpu_seconds": 1.78,
+      "exit": 0,
+      "peak_mb": 130,
+      "peak_all_mb": 117,
+      "phases": {
+       "start-up": 0.24,
+       "map": 0.93,
+       "scan": 0.26,
+       "readiness": 0.09,
+       "report": 0.14,
+       "evidence": 0.09
+      },
+      "report_mb": 2.33,
+      "results_mb": 5.84
+     },
+     {
+      "seconds": 1.91,
+      "cpu_seconds": 1.9,
+      "exit": 0,
+      "peak_mb": 127,
+      "peak_all_mb": 113,
+      "phases": {
+       "start-up": 0.3,
+       "map": 0.99,
+       "scan": 0.27,
+       "readiness": 0.08,
+       "report": 0.15,
+       "evidence": 0.1
+      },
+      "report_mb": 2.33,
+      "results_mb": 5.84
+     },
+     {
+      "seconds": 2.1,
+      "cpu_seconds": 2.11,
+      "exit": 0,
+      "peak_mb": 125,
+      "peak_all_mb": 111,
+      "phases": {
+       "start-up": 0.22,
+       "map": 1.17,
+       "scan": 0.29,
+       "readiness": 0.12,
+       "report": 0.16,
+       "evidence": 0.1
+      },
+      "report_mb": 2.33,
+      "results_mb": 5.84
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 1.59,
+     "peak_mb": 124,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 1.9,
+     "peak_mb": 126,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "fd1a70c85679498de3d5d96755d8c64725ae75173a55cd2463d3076c4be027a2",
+      "calls.json": "521344e8eb74fbcd72d4d784853e88b194d651e1f12323afeb5d593c6ecee926",
+      "baseline.json": "01eea32e5337e207d1f7233c93f9e91b7cc9942ff2e0a975ca1b02a4a4285709",
+      "readiness.json": "23989b6d29b14a89520262b17fbb8f22d0a01b43304e229c217ee4eda6437689",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "583dd7976e360460ff86ddcf9fd171ba0c142b05fd18fb17dc4a4ce187fe31d8",
+      "report.html": "a42db1cd07e26ea679b8fb7e405bd914a56d689fa3ff9ff43d3a6dc8b26d494f",
+      "evidence.json": "9ef6ccd249f723a7650513c5512a2bf0f37006eb598dfe60005a9db44a1f5a7d",
+      "evidence.html": "7ca171d33d5faf1018a18078582e6a9a74e824989a98d5945ab3f0fbb3032e36",
+      "badge.svg": "b2a83810389fc43a7ab4af1ab8d79e698ee9c791092e482c7eac5eac78f6ce0e",
+      "report.html: its data": "b4e79143f46632b193aa2dfa160819d2d31e93a700c2c6d19f449175bf002529"
+     },
+     "repeat": {
+      "graph.json": "fd1a70c85679498de3d5d96755d8c64725ae75173a55cd2463d3076c4be027a2",
+      "calls.json": "521344e8eb74fbcd72d4d784853e88b194d651e1f12323afeb5d593c6ecee926",
+      "baseline.json": "01eea32e5337e207d1f7233c93f9e91b7cc9942ff2e0a975ca1b02a4a4285709",
+      "readiness.json": "23989b6d29b14a89520262b17fbb8f22d0a01b43304e229c217ee4eda6437689",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "6e4e20ff425076b056c1d3d872b205337763462ad9a170ac1bf9a14e02316009",
+      "report.html": "03033d8ba47248c4c5a5286881a6b939dba940f2f3c4c76d86e9f93e17f9d1b1",
+      "evidence.json": "9ef6ccd249f723a7650513c5512a2bf0f37006eb598dfe60005a9db44a1f5a7d",
+      "evidence.html": "7ca171d33d5faf1018a18078582e6a9a74e824989a98d5945ab3f0fbb3032e36",
+      "badge.svg": "b2a83810389fc43a7ab4af1ab8d79e698ee9c791092e482c7eac5eac78f6ce0e",
+      "report.html: its data": "85062220b0b646c4d518280e537f9f183548c10a2b9df8e1624813e271a5dece"
+     }
+    },
+    "files": 99,
+    "lines": 50397,
+    "functions": 3685,
+    "links": 7657,
+    "findings": 4,
+    "languages": "rust + ruby",
+    "first_seconds": 1.88,
+    "repeat_seconds": 1.91,
+    "first_cpu_seconds": 2.18,
+    "repeat_cpu_seconds": 1.9,
+    "first_peak_mb": 122,
+    "repeat_peak_mb": 127,
+    "first_peak_all_mb": 116,
+    "repeat_peak_all_mb": 113,
+    "first_report_mb": 2.33,
+    "repeat_report_mb": 2.33,
+    "first_results_mb": 5.84,
+    "repeat_results_mb": 5.84,
+    "first_range": [
+     1.74,
+     1.92
+    ],
+    "repeat_range": [
+     1.78,
+     2.1
+    ],
+    "phases": {
+     "start-up": 0.24,
+     "map": 0.99,
+     "scan": 0.26,
+     "readiness": 0.07,
+     "report": 0.13,
+     "evidence": 0.12
+    },
+    "repeat_phases": {
+     "start-up": 0.24,
+     "map": 0.99,
+     "scan": 0.27,
+     "readiness": 0.09,
+     "report": 0.15,
+     "evidence": 0.1
+    },
+    "phone": {
+     "firstPaintMs": 655,
+     "findingsMs": 311,
+     "detailMs": 252,
+     "mapMs": 338,
+     "jsHeapMb": 11,
+     "errors": 0
+    },
+    "ref": "14.1.1"
+   },
+   {
+    "name": "excalidraw",
+    "size": "medium",
+    "commit": "0dbd2a39319d41fda37b2945dea0dcbd58d6a564",
+    "first": [
+     {
+      "seconds": 8.75,
+      "cpu_seconds": 9.0,
+      "exit": 0,
+      "peak_mb": 130,
+      "peak_all_mb": 122,
+      "phases": {
+       "start-up": 0.35,
+       "map": 3.26,
+       "scan": 3.74,
+       "readiness": 0.64,
+       "report": 0.11,
+       "evidence": 0.53
+      },
+      "report_mb": 2.42,
+      "results_mb": 13.83
+     },
+     {
+      "seconds": 8.88,
+      "cpu_seconds": 9.22,
+      "exit": 0,
+      "peak_mb": 130,
+      "peak_all_mb": 122,
+      "phases": {
+       "start-up": 0.25,
+       "map": 3.49,
+       "scan": 3.78,
+       "readiness": 0.65,
+       "report": 0.13,
+       "evidence": 0.48
+      },
+      "report_mb": 2.42,
+      "results_mb": 13.83
+     },
+     {
+      "seconds": 9.48,
+      "cpu_seconds": 9.8,
+      "exit": 0,
+      "peak_mb": 130,
+      "peak_all_mb": 123,
+      "phases": {
+       "start-up": 0.24,
+       "map": 3.6,
+       "scan": 4.11,
+       "readiness": 0.82,
+       "report": 0.11,
+       "evidence": 0.48
+      },
+      "report_mb": 2.42,
+      "results_mb": 13.83
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 8.79,
+      "cpu_seconds": 8.75,
+      "exit": 0,
+      "peak_mb": 130,
+      "peak_all_mb": 124,
+      "phases": {
+       "start-up": 0.32,
+       "map": 3.4,
+       "scan": 3.74,
+       "readiness": 0.76,
+       "report": 0.13,
+       "evidence": 0.35
+      },
+      "report_mb": 2.42,
+      "results_mb": 13.83
+     },
+     {
+      "seconds": 8.88,
+      "cpu_seconds": 8.83,
+      "exit": 0,
+      "peak_mb": 130,
+      "peak_all_mb": 123,
+      "phases": {
+       "start-up": 0.24,
+       "map": 3.58,
+       "scan": 3.74,
+       "readiness": 0.77,
+       "report": 0.14,
+       "evidence": 0.28
+      },
+      "report_mb": 2.42,
+      "results_mb": 13.83
+     },
+     {
+      "seconds": 9.13,
+      "cpu_seconds": 9.07,
+      "exit": 0,
+      "peak_mb": 130,
+      "peak_all_mb": 123,
+      "phases": {
+       "start-up": 0.23,
+       "map": 3.95,
+       "scan": 3.61,
+       "readiness": 0.71,
+       "report": 0.12,
+       "evidence": 0.41
+      },
+      "report_mb": 2.42,
+      "results_mb": 13.83
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 8.74,
+     "peak_mb": 123,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 8.97,
+     "peak_mb": 130,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "809bebcca9fea32e484e80d5605a164e6503e1972426da64562751949f2ce975",
+      "calls.json": "c700b4ef7c319a900b09c158b4a2bb999144a26ce70bbb4db88c97ecdc188a4a",
+      "baseline.json": "409e02027711c83037302615b371454cfefb0a49dd3f9759ea78c1f2a9f9aed8",
+      "readiness.json": "65bd0065d5ff76793e6ebdb49b8ef208d26e8a1224c8cca23a1773d70cde980a",
+      "run.json": "aabb4044cf0d63462d9b2dce6dad12109961198706cffdb652df014c1cb392b0",
+      "security.json": "255737200cb15b71d8da2976ce8d9d6162b98264d2311bbb20abdd04ddea5ab3",
+      "report.html": "b86aa4d9cf1726c4e3a26279b8b2c9dadae27a35c65c35a5a1b6c64915f73018",
+      "evidence.json": "a8464564d964bd0e18e4c5df0373a35e4b38ecf419cdd27233608d48bc9e967f",
+      "evidence.html": "d9806ac3d0d595c78f7853edf3c8cfe0e4f84036d846d876a55af96996b7a4ac",
+      "badge.svg": "999fe7d38e5c85301ec9e0534272e21d0179879786f8149251e813c5ec5f8616",
+      "report.html: its data": "965d7581b6639e1c45b209fcc59a8d683450db566ba960e86b909411a960a936"
+     },
+     "repeat": {
+      "graph.json": "809bebcca9fea32e484e80d5605a164e6503e1972426da64562751949f2ce975",
+      "calls.json": "c700b4ef7c319a900b09c158b4a2bb999144a26ce70bbb4db88c97ecdc188a4a",
+      "baseline.json": "409e02027711c83037302615b371454cfefb0a49dd3f9759ea78c1f2a9f9aed8",
+      "readiness.json": "65bd0065d5ff76793e6ebdb49b8ef208d26e8a1224c8cca23a1773d70cde980a",
+      "run.json": "aabb4044cf0d63462d9b2dce6dad12109961198706cffdb652df014c1cb392b0",
+      "security.json": "418cd14858e291c4aad2084995ad336d7dd4813b4adf6e47387321cb5862bfb1",
+      "report.html": "ce201edbc9cac26c876ccd17f97aa8dbb0fa24a54df74bee066bd341a6f8eed4",
+      "evidence.json": "a8464564d964bd0e18e4c5df0373a35e4b38ecf419cdd27233608d48bc9e967f",
+      "evidence.html": "d9806ac3d0d595c78f7853edf3c8cfe0e4f84036d846d876a55af96996b7a4ac",
+      "badge.svg": "999fe7d38e5c85301ec9e0534272e21d0179879786f8149251e813c5ec5f8616",
+      "report.html: its data": "13f9fc4c460b6254d9478a20edde148b51d9d6a98868f4aa10be5552f4ea8b8e"
+     }
+    },
+    "files": 378,
+    "lines": 86777,
+    "functions": 2219,
+    "links": 6178,
+    "findings": 13,
+    "languages": "typescript/javascript",
+    "first_seconds": 8.88,
+    "repeat_seconds": 8.88,
+    "first_cpu_seconds": 9.22,
+    "repeat_cpu_seconds": 8.83,
+    "first_peak_mb": 130,
+    "repeat_peak_mb": 130,
+    "first_peak_all_mb": 122,
+    "repeat_peak_all_mb": 123,
+    "first_report_mb": 2.42,
+    "repeat_report_mb": 2.42,
+    "first_results_mb": 13.83,
+    "repeat_results_mb": 13.83,
+    "first_range": [
+     8.75,
+     9.48
+    ],
+    "repeat_range": [
+     8.79,
+     9.13
+    ],
+    "phases": {
+     "start-up": 0.25,
+     "map": 3.49,
+     "scan": 3.78,
+     "readiness": 0.65,
+     "report": 0.11,
+     "evidence": 0.48
+    },
+    "repeat_phases": {
+     "start-up": 0.24,
+     "map": 3.58,
+     "scan": 3.74,
+     "readiness": 0.76,
+     "report": 0.13,
+     "evidence": 0.35
+    },
+    "phone": {
+     "firstPaintMs": 737,
+     "findingsMs": 350,
+     "detailMs": 264,
+     "mapMs": 308,
+     "jsHeapMb": 10,
+     "errors": 0
+    },
+    "ref": "v0.17.6"
+   },
+   {
+    "name": "hugo",
+    "size": "medium",
+    "commit": "dacef0df92a9a20072b4eaa42003e1a63ace8f41",
+    "first": [
+     {
+      "seconds": 10.74,
+      "cpu_seconds": 11.11,
+      "exit": 0,
+      "peak_mb": 374,
+      "peak_all_mb": 361,
+      "phases": {
+       "start-up": 0.24,
+       "map": 6.39,
+       "scan": 1.89,
+       "readiness": 0.94,
+       "report": 0.46,
+       "evidence": 0.55
+      },
+      "report_mb": 7.31,
+      "results_mb": 20.16
+     },
+     {
+      "seconds": 10.15,
+      "cpu_seconds": 10.44,
+      "exit": 0,
+      "peak_mb": 377,
+      "peak_all_mb": 357,
+      "phases": {
+       "start-up": 0.33,
+       "map": 5.92,
+       "scan": 1.8,
+       "readiness": 0.76,
+       "report": 0.44,
+       "evidence": 0.68
+      },
+      "report_mb": 7.31,
+      "results_mb": 20.16
+     },
+     {
+      "seconds": 9.95,
+      "cpu_seconds": 10.24,
+      "exit": 0,
+      "peak_mb": 377,
+      "peak_all_mb": 350,
+      "phases": {
+       "start-up": 0.27,
+       "map": 6.0,
+       "scan": 1.66,
+       "readiness": 0.75,
+       "report": 0.46,
+       "evidence": 0.61
+      },
+      "report_mb": 7.31,
+      "results_mb": 20.16
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 10.67,
+      "cpu_seconds": 10.64,
+      "exit": 0,
+      "peak_mb": 376,
+      "peak_all_mb": 356,
+      "phases": {
+       "start-up": 0.25,
+       "map": 6.55,
+       "scan": 1.88,
+       "readiness": 0.8,
+       "report": 0.47,
+       "evidence": 0.4
+      },
+      "report_mb": 7.31,
+      "results_mb": 20.16
+     },
+     {
+      "seconds": 10.03,
+      "cpu_seconds": 10.02,
+      "exit": 0,
+      "peak_mb": 376,
+      "peak_all_mb": 356,
+      "phases": {
+       "start-up": 0.23,
+       "map": 6.06,
+       "scan": 1.85,
+       "readiness": 0.86,
+       "report": 0.49,
+       "evidence": 0.34
+      },
+      "report_mb": 7.31,
+      "results_mb": 20.16
+     },
+     {
+      "seconds": 9.96,
+      "cpu_seconds": 9.98,
+      "exit": 0,
+      "peak_mb": 376,
+      "peak_all_mb": 356,
+      "phases": {
+       "start-up": 0.3,
+       "map": 6.09,
+       "scan": 1.73,
+       "readiness": 0.8,
+       "report": 0.47,
+       "evidence": 0.36
+      },
+      "report_mb": 7.31,
+      "results_mb": 20.16
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 10.14,
+     "peak_mb": 368,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 9.71,
+     "peak_mb": 376,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "699be5ad2d81a0c5265ebeea5c23684baaa88c6cdabe64de1967022a1063271d",
+      "calls.json": "59d815b102cace4849107f1d28d055ba6a17333deccba237ade65480ea62c3dc",
+      "baseline.json": "c253663614e42034d374028ff0dd419c02c82b25898dcc3768bba86ce0edcdb4",
+      "readiness.json": "e19e8b30c90b8eee07917c30b0028a74c8bef0391a8082d3a4d7115862a2160d",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "9a6103ee9842d49fd1e3862869fbced280d0d4cdbc79239f6f6573fcf8e924ec",
+      "report.html": "6d355b804e4dabfbb19c7cff740933e4b1302f1e9b0f2dac631d9b3234bfe747",
+      "evidence.json": "c32420a3c6ede00f6500d08c7ea75fe99f1e6bd4d9c79d60b890b4a7191381ce",
+      "evidence.html": "8cdfa905d9a4ea4f2ff299142d87a9d16555a0bcde382cb91cb20e53cd534809",
+      "badge.svg": "c931e7e9aa6db4f16d79b0569ff1c63f021db88551a2f780cc92ac5c9341fb37",
+      "report.html: its data": "deef4f31513aeeafa3c44a5e358d2882c67166719b9fed143e57facb95aaa8f8"
+     },
+     "repeat": {
+      "graph.json": "699be5ad2d81a0c5265ebeea5c23684baaa88c6cdabe64de1967022a1063271d",
+      "calls.json": "59d815b102cace4849107f1d28d055ba6a17333deccba237ade65480ea62c3dc",
+      "baseline.json": "c253663614e42034d374028ff0dd419c02c82b25898dcc3768bba86ce0edcdb4",
+      "readiness.json": "e19e8b30c90b8eee07917c30b0028a74c8bef0391a8082d3a4d7115862a2160d",
+      "run.json": "15f4a5ec74ebd00acce616dd1a0ce329f933b82d260b2c87aacdba9d83103e73",
+      "security.json": "dfa365228db86a3e6919528e1e61eb2be791415d7e86f2d22701e6ff6931ef93",
+      "report.html": "15a130ede8562051bf1ec403f366fce0beddc2e94fe8d4d957c8a7c61475658b",
+      "evidence.json": "c32420a3c6ede00f6500d08c7ea75fe99f1e6bd4d9c79d60b890b4a7191381ce",
+      "evidence.html": "8cdfa905d9a4ea4f2ff299142d87a9d16555a0bcde382cb91cb20e53cd534809",
+      "badge.svg": "c931e7e9aa6db4f16d79b0569ff1c63f021db88551a2f780cc92ac5c9341fb37",
+      "report.html: its data": "92c8b80b2fb6890de28ea477b49fe2cff379b4009040e7ca1d435d9a9096ec84"
+     }
+    },
+    "files": 864,
+    "lines": 194912,
+    "functions": 10132,
+    "links": 27948,
+    "findings": 8,
+    "languages": "typescript/javascript + go",
+    "first_seconds": 10.15,
+    "repeat_seconds": 10.03,
+    "first_cpu_seconds": 10.44,
+    "repeat_cpu_seconds": 10.02,
+    "first_peak_mb": 377,
+    "repeat_peak_mb": 376,
+    "first_peak_all_mb": 357,
+    "repeat_peak_all_mb": 356,
+    "first_report_mb": 7.31,
+    "repeat_report_mb": 7.31,
+    "first_results_mb": 20.16,
+    "repeat_results_mb": 20.16,
+    "first_range": [
+     9.95,
+     10.74
+    ],
+    "repeat_range": [
+     9.96,
+     10.67
+    ],
+    "phases": {
+     "start-up": 0.27,
+     "map": 6.0,
+     "scan": 1.8,
+     "readiness": 0.76,
+     "report": 0.46,
+     "evidence": 0.61
+    },
+    "repeat_phases": {
+     "start-up": 0.25,
+     "map": 6.09,
+     "scan": 1.85,
+     "readiness": 0.8,
+     "report": 0.47,
+     "evidence": 0.36
+    },
+    "phone": {
+     "firstPaintMs": 1435,
+     "findingsMs": 324,
+     "detailMs": 235,
+     "mapMs": 390,
+     "jsHeapMb": 26,
+     "errors": 0
+    },
+    "ref": "v0.139.0"
+   },
+   {
+    "name": "django",
+    "size": "large",
+    "commit": "69bf08e3a32492998871eb91ad84b3c8d8117180",
+    "first": [
+     {
+      "seconds": 52.0,
+      "cpu_seconds": 81.86,
+      "exit": 0,
+      "peak_mb": 740,
+      "peak_all_mb": 699,
+      "phases": {
+       "start-up": 0.29,
+       "map": 20.7,
+       "scan": 20.23,
+       "readiness": 6.3,
+       "report": 3.32,
+       "evidence": 0.97
+      },
+      "report_mb": 36.29,
+      "results_mb": 177.04
+     },
+     {
+      "seconds": 52.05,
+      "cpu_seconds": 82.99,
+      "exit": 0,
+      "peak_mb": 743,
+      "peak_all_mb": 694,
+      "phases": {
+       "start-up": 0.28,
+       "map": 21.4,
+       "scan": 20.01,
+       "readiness": 6.2,
+       "report": 3.04,
+       "evidence": 0.85
+      },
+      "report_mb": 36.29,
+      "results_mb": 177.04
+     },
+     {
+      "seconds": 52.59,
+      "cpu_seconds": 82.27,
+      "exit": 0,
+      "peak_mb": 740,
+      "peak_all_mb": 672,
+      "phases": {
+       "start-up": 0.3,
+       "map": 21.14,
+       "scan": 20.54,
+       "readiness": 6.3,
+       "report": 3.21,
+       "evidence": 0.91
+      },
+      "report_mb": 36.29,
+      "results_mb": 177.04
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 41.98,
+      "cpu_seconds": 41.95,
+      "exit": 0,
+      "peak_mb": 754,
+      "peak_all_mb": 666,
+      "phases": {
+       "start-up": 0.31,
+       "map": 11.53,
+       "scan": 19.38,
+       "readiness": 6.47,
+       "report": 3.33,
+       "evidence": 0.73
+      },
+      "report_mb": 36.29,
+      "results_mb": 177.05
+     },
+     {
+      "seconds": 41.03,
+      "cpu_seconds": 41.03,
+      "exit": 0,
+      "peak_mb": 755,
+      "peak_all_mb": 696,
+      "phases": {
+       "start-up": 0.3,
+       "map": 11.18,
+       "scan": 19.27,
+       "readiness": 6.2,
+       "report": 3.13,
+       "evidence": 0.66
+      },
+      "report_mb": 36.29,
+      "results_mb": 177.05
+     },
+     {
+      "seconds": 39.45,
+      "cpu_seconds": 39.51,
+      "exit": 0,
+      "peak_mb": 756,
+      "peak_all_mb": 667,
+      "phases": {
+       "start-up": 0.35,
+       "map": 10.25,
+       "scan": 18.59,
+       "readiness": 6.25,
+       "report": 3.21,
+       "evidence": 0.61
+      },
+      "report_mb": 36.29,
+      "results_mb": 177.05
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 47.88,
+     "peak_mb": 733,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 40.66,
+     "peak_mb": 756,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "c9e025b59e3741fa932ff9d89af5ec249971b0924a23a2629e5ffd87387c7623",
+      "calls.json": "91f07def0aec26765f295bb560bf70fd0f4c59fd741158dc94725c8acd56e992",
+      "baseline.json": "dc19f502ced44de18cc2d08a5fdaff3da7cb948937e0051bf03740025fdd69c1",
+      "readiness.json": "9271d114667631925654610d0d3064b07057e018d404bc5e74ad208c6051fc50",
+      "run.json": "dc8bcf7491d4f83064c4344fc93f8436feb8cf0f7c020cfcb0f51537bc1a642b",
+      "security.json": "67eaa9e4ab33398203887d3372d70e22281e9b7a9a9f02b9be84e83d73b9442b",
+      "report.html": "b8917839c7cd7541831ce19bc0d45893d3247a37bba3d9774b316081788285f5",
+      "evidence.json": "e9fac5d570d9415fd4e8ea5d2e4b7a71e3564188c614d8d4fa646dee1ca08c61",
+      "evidence.html": "3bde1c2fdddb19de11d11b80b3a289d3b1e162252c1e406895638f6a04ea195a",
+      "badge.svg": "fbe1ee43f95dafddb3a81a6e8786768a55273d66f21bab7926e962593108dec9",
+      "report.html: its data": "924294fca39dcdeff19f0ff8d28d5a737e9a92ec54bd17ff92b3eaadc9bb1af6"
+     },
+     "repeat": {
+      "graph.json": "c9e025b59e3741fa932ff9d89af5ec249971b0924a23a2629e5ffd87387c7623",
+      "calls.json": "91f07def0aec26765f295bb560bf70fd0f4c59fd741158dc94725c8acd56e992",
+      "baseline.json": "dc19f502ced44de18cc2d08a5fdaff3da7cb948937e0051bf03740025fdd69c1",
+      "readiness.json": "9271d114667631925654610d0d3064b07057e018d404bc5e74ad208c6051fc50",
+      "run.json": "dc8bcf7491d4f83064c4344fc93f8436feb8cf0f7c020cfcb0f51537bc1a642b",
+      "security.json": "6524db5f2dcac3f4d64cfdbd8ccca9cbd48d4b955317155c4fc08c40a3640569",
+      "report.html": "fcbcb1dbf7794331163e827bd8c9393d8a35f82c5e61eef3a30d3284e28a9108",
+      "evidence.json": "e9fac5d570d9415fd4e8ea5d2e4b7a71e3564188c614d8d4fa646dee1ca08c61",
+      "evidence.html": "3bde1c2fdddb19de11d11b80b3a289d3b1e162252c1e406895638f6a04ea195a",
+      "badge.svg": "fbe1ee43f95dafddb3a81a6e8786768a55273d66f21bab7926e962593108dec9",
+      "report.html: its data": "7a3d0e9c9a7c9c71f6ac502ab80d103b0caa095c54514621d985626cac18b32a"
+     }
+    },
+    "files": 2839,
+    "lines": 481021,
+    "functions": 43457,
+    "links": 130080,
+    "findings": 1268,
+    "languages": "python + typescript/javascript",
+    "first_seconds": 52.05,
+    "repeat_seconds": 41.03,
+    "first_cpu_seconds": 82.27,
+    "repeat_cpu_seconds": 41.03,
+    "first_peak_mb": 740,
+    "repeat_peak_mb": 755,
+    "first_peak_all_mb": 694,
+    "repeat_peak_all_mb": 667,
+    "first_report_mb": 36.29,
+    "repeat_report_mb": 36.29,
+    "first_results_mb": 177.04,
+    "repeat_results_mb": 177.05,
+    "first_range": [
+     52.0,
+     52.59
+    ],
+    "repeat_range": [
+     39.45,
+     41.98
+    ],
+    "phases": {
+     "start-up": 0.29,
+     "map": 21.14,
+     "scan": 20.23,
+     "readiness": 6.3,
+     "report": 3.21,
+     "evidence": 0.91
+    },
+    "repeat_phases": {
+     "start-up": 0.31,
+     "map": 11.18,
+     "scan": 19.27,
+     "readiness": 6.25,
+     "report": 3.21,
+     "evidence": 0.66
+    },
+    "phone": {
+     "firstPaintMs": 3757,
+     "findingsMs": 1819,
+     "detailMs": 470,
+     "mapMs": 678,
+     "jsHeapMb": 78,
+     "errors": 0
+    },
+    "ref": "5.1.3"
+   },
+   {
+    "name": "laravel",
+    "size": "large",
+    "commit": "dff716442d9c229d716be82ccc9a7de52eb97193",
+    "first": [
+     {
+      "seconds": 19.38,
+      "cpu_seconds": 19.49,
+      "exit": 0,
+      "peak_mb": 678,
+      "peak_all_mb": 639,
+      "phases": {
+       "start-up": 0.36,
+       "map": 9.15,
+       "scan": 3.8,
+       "readiness": 3.03,
+       "report": 1.83,
+       "evidence": 1.01
+      },
+      "report_mb": 21.83,
+      "results_mb": 57.82
+     },
+     {
+      "seconds": 18.31,
+      "cpu_seconds": 18.45,
+      "exit": 0,
+      "peak_mb": 695,
+      "peak_all_mb": 662,
+      "phases": {
+       "start-up": 0.39,
+       "map": 8.53,
+       "scan": 3.57,
+       "readiness": 3.0,
+       "report": 1.47,
+       "evidence": 1.12
+      },
+      "report_mb": 21.83,
+      "results_mb": 57.82
+     },
+     {
+      "seconds": 20.01,
+      "cpu_seconds": 20.15,
+      "exit": 0,
+      "peak_mb": 690,
+      "peak_all_mb": 638,
+      "phases": {
+       "start-up": 0.38,
+       "map": 9.3,
+       "scan": 3.97,
+       "readiness": 3.35,
+       "report": 1.61,
+       "evidence": 1.1
+      },
+      "report_mb": 21.83,
+      "results_mb": 57.82
+     }
+    ],
+    "repeat": [
+     {
+      "seconds": 18.5,
+      "cpu_seconds": 18.22,
+      "exit": 0,
+      "peak_mb": 691,
+      "peak_all_mb": 641,
+      "phases": {
+       "start-up": 0.36,
+       "map": 8.61,
+       "scan": 3.77,
+       "readiness": 3.12,
+       "report": 1.66,
+       "evidence": 0.8
+      },
+      "report_mb": 21.84,
+      "results_mb": 57.82
+     },
+     {
+      "seconds": 18.34,
+      "cpu_seconds": 18.16,
+      "exit": 0,
+      "peak_mb": 689,
+      "peak_all_mb": 637,
+      "phases": {
+       "start-up": 0.4,
+       "map": 8.63,
+       "scan": 3.46,
+       "readiness": 3.1,
+       "report": 1.71,
+       "evidence": 0.85
+      },
+      "report_mb": 21.84,
+      "results_mb": 57.82
+     },
+     {
+      "seconds": 19.53,
+      "cpu_seconds": 19.31,
+      "exit": 0,
+      "peak_mb": 689,
+      "peak_all_mb": 637,
+      "phases": {
+       "start-up": 0.43,
+       "map": 9.28,
+       "scan": 3.89,
+       "readiness": 3.12,
+       "report": 1.75,
+       "evidence": 0.86
+      },
+      "report_mb": 21.84,
+      "results_mb": 57.82
+     }
+    ],
+    "repeat_without_kept_work": {
+     "seconds": 18.65,
+     "peak_mb": 677,
+     "exit": 0,
+     "failed": null
+    },
+    "repeat_differs": [],
+    "first_on_kept_work": {
+     "seconds": 18.45,
+     "peak_mb": 694,
+     "exit": 0,
+     "failed": null
+    },
+    "first_differs": [],
+    "runs_differ": [],
+    "marks": {
+     "first": {
+      "graph.json": "8d0140458e42836a9101cb49e2bf65fe0a5f5cffae16bc46ec80b53a9a47e4b4",
+      "calls.json": "85ba1f595cd195803998b961d947a01a4e9ae3685f91a7a5b2cf662885cd3675",
+      "baseline.json": "21b1b05e8d9cbe5e4c43043b09992a3d96004d83f26893addeed9af962ecb0c1",
+      "readiness.json": "af797af92016d4e9053eee62e74b947e8447626d0f5ad15f65d4de39e268f0c7",
+      "run.json": "94479900001e816f1a8abd6781c597433894435d3c0845b230ab816cb6003f7b",
+      "security.json": "2b07609774457ea7c11037fd728ba91da7b3cc293a95e8cfe58f63fea9da0aed",
+      "report.html": "d1e402f4310929954e8dc3bd5dc6d274a7062e10c3af9497fbe4a8d23e1c7ae3",
+      "evidence.json": "db0f12e9a10a4ea2abf36cf465a1394d88e6c631f0d2e5618feb6147d6d346c8",
+      "evidence.html": "4ceef16c24a65de2cf3dcac759224d659ca37f3e0cff7a74de9846604738b9ea",
+      "badge.svg": "5fe682b50c85a805e65a010b41c415612b4f10900f39705421cc82b8d28c747a",
+      "report.html: its data": "9253a72d034a0f0812151fbb7333dee76743b3b296ac1f30562f412507a1cfbb"
+     },
+     "repeat": {
+      "graph.json": "8d0140458e42836a9101cb49e2bf65fe0a5f5cffae16bc46ec80b53a9a47e4b4",
+      "calls.json": "85ba1f595cd195803998b961d947a01a4e9ae3685f91a7a5b2cf662885cd3675",
+      "baseline.json": "21b1b05e8d9cbe5e4c43043b09992a3d96004d83f26893addeed9af962ecb0c1",
+      "readiness.json": "af797af92016d4e9053eee62e74b947e8447626d0f5ad15f65d4de39e268f0c7",
+      "run.json": "94479900001e816f1a8abd6781c597433894435d3c0845b230ab816cb6003f7b",
+      "security.json": "0af707cda29835c3fe631ee5daf2264ca06b2f6e1c997d64ff361a20920f7cc7",
+      "report.html": "c764fbceb23997d887531931dabdc0675c8187768859b3dd6e2ea8028c108e1f",
+      "evidence.json": "db0f12e9a10a4ea2abf36cf465a1394d88e6c631f0d2e5618feb6147d6d346c8",
+      "evidence.html": "4ceef16c24a65de2cf3dcac759224d659ca37f3e0cff7a74de9846604738b9ea",
+      "badge.svg": "5fe682b50c85a805e65a010b41c415612b4f10900f39705421cc82b8d28c747a",
+      "report.html: its data": "8598b5f7e64d2d8732426cefb9c502be383c12679e445415e6b3ab01cd64fc91"
+     }
+    },
+    "files": 2241,
+    "lines": 415998,
+    "functions": 29708,
+    "links": 69834,
+    "findings": 126,
+    "languages": "typescript/javascript + php",
+    "first_seconds": 19.38,
+    "repeat_seconds": 18.5,
+    "first_cpu_seconds": 19.49,
+    "repeat_cpu_seconds": 18.22,
+    "first_peak_mb": 690,
+    "repeat_peak_mb": 689,
+    "first_peak_all_mb": 639,
+    "repeat_peak_all_mb": 637,
+    "first_report_mb": 21.83,
+    "repeat_report_mb": 21.84,
+    "first_results_mb": 57.82,
+    "repeat_results_mb": 57.82,
+    "first_range": [
+     18.31,
+     20.01
+    ],
+    "repeat_range": [
+     18.34,
+     19.53
+    ],
+    "phases": {
+     "start-up": 0.38,
+     "map": 9.15,
+     "scan": 3.8,
+     "readiness": 3.03,
+     "report": 1.61,
+     "evidence": 1.1
+    },
+    "repeat_phases": {
+     "start-up": 0.4,
+     "map": 8.63,
+     "scan": 3.77,
+     "readiness": 3.12,
+     "report": 1.71,
+     "evidence": 0.85
+    },
+    "phone": {
+     "firstPaintMs": 2612,
+     "findingsMs": 829,
+     "detailMs": 289,
+     "mapMs": 634,
+     "jsHeapMb": 43,
+     "errors": 0
+    },
+    "ref": "v11.30.0"
+   }
+  ]
+ },
+ "phone_openings": {
+  "before shop": [
+   {
+    "firstPaintMs": 348,
+    "findingsMs": 317,
+    "detailMs": 230,
+    "mapMs": 245,
+    "jsHeapMb": 10,
+    "errors": 0
+   },
+   {
+    "sizeMb": 0.3,
+    "firstPaintMs": 345,
+    "findingsMs": 314,
+    "detailMs": 231,
+    "mapMs": 248,
+    "jsHeapMb": 10,
+    "errors": 0
+   },
+   {
+    "sizeMb": 0.3,
+    "firstPaintMs": 305,
+    "findingsMs": 302,
+    "detailMs": 236,
+    "mapMs": 277,
+    "jsHeapMb": 10,
+    "errors": 0
+   }
+  ],
+  "after shop": [
+   {
+    "firstPaintMs": 356,
+    "findingsMs": 309,
+    "detailMs": 256,
+    "mapMs": 248,
+    "jsHeapMb": 10,
+    "errors": 0
+   },
+   {
+    "sizeMb": 0.3,
+    "firstPaintMs": 372,
+    "findingsMs": 349,
+    "detailMs": 261,
+    "mapMs": 274,
+    "jsHeapMb": 10,
+    "errors": 0
+   },
+   {
+    "sizeMb": 0.3,
+    "firstPaintMs": 404,
+    "findingsMs": 353,
+    "detailMs": 232,
+    "mapMs": 244,
+    "jsHeapMb": 10,
+    "errors": 0
+   }
+  ],
+  "before ripgrep": [
+   {
+    "firstPaintMs": 699,
+    "findingsMs": 308,
+    "detailMs": 246,
+    "mapMs": 309,
+    "jsHeapMb": 14,
+    "errors": 0
+   },
+   {
+    "sizeMb": 4.3,
+    "firstPaintMs": 766,
+    "findingsMs": 306,
+    "detailMs": 233,
+    "mapMs": 325,
+    "jsHeapMb": 14,
+    "errors": 0
+   },
+   {
+    "sizeMb": 4.3,
+    "firstPaintMs": 803,
+    "findingsMs": 278,
+    "detailMs": 237,
+    "mapMs": 314,
+    "jsHeapMb": 13,
+    "errors": 0
+   }
+  ],
+  "after ripgrep": [
+   {
+    "firstPaintMs": 655,
+    "findingsMs": 311,
+    "detailMs": 252,
+    "mapMs": 338,
+    "jsHeapMb": 11,
+    "errors": 0
+   },
+   {
+    "sizeMb": 2.3,
+    "firstPaintMs": 701,
+    "findingsMs": 312,
+    "detailMs": 266,
+    "mapMs": 358,
+    "jsHeapMb": 11,
+    "errors": 0
+   },
+   {
+    "sizeMb": 2.3,
+    "firstPaintMs": 840,
+    "findingsMs": 318,
+    "detailMs": 242,
+    "mapMs": 406,
+    "jsHeapMb": 11,
+    "errors": 0
+   }
+  ],
+  "before excalidraw": [
+   {
+    "firstPaintMs": 724,
+    "findingsMs": 323,
+    "detailMs": 235,
+    "mapMs": 295,
+    "jsHeapMb": 11,
+    "errors": 0
+   },
+   {
+    "sizeMb": 3.8,
+    "firstPaintMs": 669,
+    "findingsMs": 316,
+    "detailMs": 256,
+    "mapMs": 286,
+    "jsHeapMb": 11,
+    "errors": 0
+   },
+   {
+    "sizeMb": 3.8,
+    "firstPaintMs": 708,
+    "findingsMs": 380,
+    "detailMs": 252,
+    "mapMs": 277,
+    "jsHeapMb": 11,
+    "errors": 0
+   }
+  ],
+  "after excalidraw": [
+   {
+    "firstPaintMs": 737,
+    "findingsMs": 350,
+    "detailMs": 264,
+    "mapMs": 308,
+    "jsHeapMb": 10,
+    "errors": 0
+   },
+   {
+    "sizeMb": 2.4,
+    "firstPaintMs": 679,
+    "findingsMs": 426,
+    "detailMs": 244,
+    "mapMs": 299,
+    "jsHeapMb": 10,
+    "errors": 0
+   },
+   {
+    "sizeMb": 2.4,
+    "firstPaintMs": 634,
+    "findingsMs": 380,
+    "detailMs": 254,
+    "mapMs": 290,
+    "jsHeapMb": 10,
+    "errors": 0
+   }
+  ],
+  "before hugo": [
+   {
+    "firstPaintMs": 1881,
+    "findingsMs": 369,
+    "detailMs": 247,
+    "mapMs": 355,
+    "jsHeapMb": 36,
+    "errors": 0
+   },
+   {
+    "sizeMb": 14.4,
+    "firstPaintMs": 1862,
+    "findingsMs": 288,
+    "detailMs": 248,
+    "mapMs": 344,
+    "jsHeapMb": 36,
+    "errors": 0
+   },
+   {
+    "sizeMb": 14.4,
+    "firstPaintMs": 1762,
+    "findingsMs": 304,
+    "detailMs": 243,
+    "mapMs": 320,
+    "jsHeapMb": 36,
+    "errors": 0
+   }
+  ],
+  "after hugo": [
+   {
+    "firstPaintMs": 1435,
+    "findingsMs": 324,
+    "detailMs": 235,
+    "mapMs": 390,
+    "jsHeapMb": 26,
+    "errors": 0
+   },
+   {
+    "sizeMb": 7.3,
+    "firstPaintMs": 1477,
+    "findingsMs": 339,
+    "detailMs": 267,
+    "mapMs": 444,
+    "jsHeapMb": 26,
+    "errors": 0
+   },
+   {
+    "sizeMb": 7.3,
+    "firstPaintMs": 1344,
+    "findingsMs": 359,
+    "detailMs": 242,
+    "mapMs": 373,
+    "jsHeapMb": 26,
+    "errors": 0
+   }
+  ],
+  "before django": [
+   {
+    "firstPaintMs": 4951,
+    "findingsMs": 1698,
+    "detailMs": 507,
+    "mapMs": 726,
+    "jsHeapMb": 159,
+    "errors": 0
+   },
+   {
+    "sizeMb": 70.5,
+    "firstPaintMs": 4994,
+    "findingsMs": 2333,
+    "detailMs": 583,
+    "mapMs": 920,
+    "jsHeapMb": 159,
+    "errors": 0
+   },
+   {
+    "sizeMb": 70.5,
+    "firstPaintMs": 4949,
+    "findingsMs": 1841,
+    "detailMs": 516,
+    "mapMs": 809,
+    "jsHeapMb": 159,
+    "errors": 0
+   }
+  ],
+  "after django": [
+   {
+    "firstPaintMs": 3757,
+    "findingsMs": 1819,
+    "detailMs": 470,
+    "mapMs": 678,
+    "jsHeapMb": 78,
+    "errors": 0
+   },
+   {
+    "sizeMb": 36.3,
+    "firstPaintMs": 3362,
+    "findingsMs": 1828,
+    "detailMs": 493,
+    "mapMs": 671,
+    "jsHeapMb": 78,
+    "errors": 0
+   },
+   {
+    "sizeMb": 36.3,
+    "firstPaintMs": 3548,
+    "findingsMs": 1672,
+    "detailMs": 520,
+    "mapMs": 725,
+    "jsHeapMb": 78,
+    "errors": 0
+   }
+  ],
+  "before laravel": [
+   {
+    "firstPaintMs": 3307,
+    "findingsMs": 664,
+    "detailMs": 262,
+    "mapMs": 489,
+    "jsHeapMb": 51,
+    "errors": 0
+   },
+   {
+    "sizeMb": 41.5,
+    "firstPaintMs": 3187,
+    "findingsMs": 821,
+    "detailMs": 259,
+    "mapMs": 514,
+    "jsHeapMb": 51,
+    "errors": 0
+   },
+   {
+    "sizeMb": 41.5,
+    "firstPaintMs": 3362,
+    "findingsMs": 787,
+    "detailMs": 269,
+    "mapMs": 612,
+    "jsHeapMb": 51,
+    "errors": 0
+   }
+  ],
+  "after laravel": [
+   {
+    "firstPaintMs": 2612,
+    "findingsMs": 829,
+    "detailMs": 289,
+    "mapMs": 634,
+    "jsHeapMb": 43,
+    "errors": 0
+   },
+   {
+    "sizeMb": 21.8,
+    "firstPaintMs": 2274,
+    "findingsMs": 702,
+    "detailMs": 259,
+    "mapMs": 527,
+    "jsHeapMb": 43,
+    "errors": 0
+   },
+   {
+    "sizeMb": 21.8,
+    "firstPaintMs": 2355,
+    "findingsMs": 702,
+    "detailMs": 267,
+    "mapMs": 500,
+    "jsHeapMb": 43,
+    "errors": 0
+   }
+  ]
+ },
+ "after_one_file_was_edited": [
+  {
+   "run": "first",
+   "seconds": 53.58,
+   "peak_mb": 740,
+   "failed": null,
+   "kept": {
+    "bandit": {
+     "reused": 0,
+     "anew": 1
+    },
+    "python-file": {
+     "reused": 0,
+     "anew": 2788
+    }
+   },
+   "phases": {
+    "start-up": 0.31,
+    "map": 22.64,
+    "scan": 19.96,
+    "readiness": 6.51,
+    "report": 3.49,
+    "evidence": 0.65
+   }
+  },
+  {
+   "run": "again-nothing-changed",
+   "seconds": 39.52,
+   "peak_mb": 753,
+   "failed": null,
+   "kept": {
+    "bandit": {
+     "reused": 1,
+     "anew": 0
+    },
+    "python-file": {
+     "reused": 2788,
+     "anew": 0
+    }
+   },
+   "phases": {
+    "start-up": 0.29,
+    "map": 10.47,
+    "scan": 19.25,
+    "readiness": 6.2,
+    "report": 2.78,
+    "evidence": 0.5
+   }
+  },
+  {
+   "run": "after-one-file-edited",
+   "seconds": 45.4,
+   "peak_mb": 757,
+   "failed": null,
+   "kept": {
+    "bandit": {
+     "reused": 0,
+     "anew": 1
+    },
+    "python-file": {
+     "reused": 2787,
+     "anew": 1
+    }
+   },
+   "phases": {
+    "start-up": 0.3,
+    "map": 9.58,
+    "scan": 25.57,
+    "readiness": 6.29,
+    "report": 3.12,
+    "evidence": 0.51
+   }
+  }
+ ]
+}

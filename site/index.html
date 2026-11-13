@@ -49,9 +49,12 @@ header nav a{color:var(--ink-2);font:500 14px var(--font);padding:7px 10px;borde
 header nav a:hover{background:var(--hover);color:var(--ink);text-decoration:none}
 .ghost{height:34px;padding:0 12px;border-radius:9px;border:1px solid var(--line-2);background:transparent;color:var(--ink-2);cursor:pointer;font:500 13px var(--font);white-space:nowrap}
 .ghost:hover{background:var(--hover);color:var(--ink)}
+header nav .short{display:none}
+@media (max-width:820px){header nav .long{display:none}header nav .short{display:inline}}
+@media (max-width:760px){header nav a.md{display:none}}
 @media (max-width:640px){header nav a.hide{display:none}}
 /* phones: the header fits 390 px (nothing wider than the screen, so the page and the intro's end card are not pushed sideways) */
-@media (max-width:440px){header{gap:6px;padding:0 16px}header nav{gap:0}header nav a{padding:7px 7px}header .name{font-size:17px}#replay{padding:0 10px;font-size:13px}}
+@media (max-width:440px){header nav a.xs{display:none}header{gap:6px;padding:0 16px}header nav{gap:0}header nav a{padding:7px 7px}header .name{font-size:17px}#replay{padding:0 10px;font-size:13px}}
 
 main{flex:1;display:flex;flex-direction:column;align-items:center;text-align:center;padding:clamp(72px,14vh,160px) 24px 96px;position:relative}
 .halo{position:absolute;left:50%;top:-240px;width:min(900px,100%);height:520px;transform:translateX(-50%);background:radial-gradient(closest-side,var(--glow),transparent);pointer-events:none}
@@ -161,9 +164,10 @@ if (location.hash || new URLSearchParams(location.search).get('intro') === '0') 
   <nav>
     <a class="hide" href="#how">How it works</a>
     <a class="hide" href="demo/report.html">Live example</a>
+    <a href="https://lantern-cloud.fly.dev/guide" rel="noopener" aria-label="How to use Lantern"><span class="long">How to use Lantern</span><span class="short">Guide</span></a>
     <a href="#get">Get Lantern</a>
-    <a href="#privacy">Privacy</a>
-    <a class="hide" href="https://github.com/LittleHenderson/Lantern" rel="noopener">GitHub</a>
+    <a class="xs" href="#privacy">Privacy</a>
+    <a class="hide md" href="https://github.com/LittleHenderson/Lantern" rel="noopener">GitHub</a>
   </nav>
   <button class="ghost" id="replay">Replay intro</button>
 </header>
@@ -197,7 +201,7 @@ if (location.hash || new URLSearchParams(location.search).get('intro') === '0') 
       <div class="card dest" id="getapp" tabindex="-1">
         <h3>Open the app on your computer</h3>
         <p>One install, then <code style="font-family:var(--mono);font-size:13px">lantern serve</code> opens Lantern in your browser. Add a folder or a GitHub link and press Analyze.</p>
-        <pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.10.0"
+        <pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.11.0"
 <span>$ </span>lantern serve</pre>
         <div class="langs"><span>TypeScript</span><span>JavaScript</span><span>Python</span><span>Go</span><span>Rust</span><span>Java</span></div>
         <div class="sp"></div>
@@ -228,7 +232,7 @@ if (location.hash || new URLSearchParams(location.search).get('intro') === '0') 
         <p>Everything Lantern does by itself (the map of your app, the security findings, the readiness grade, the evidence report) runs on your own machine. No account, no upload, no server of ours ever sees your code. This is the recommended way to use Lantern, and the only way we can promise that nothing leaves your computer.</p>
         <ol class="howto">
           <li><b>Install Python 3.11 or newer</b> from <a href="https://www.python.org/downloads/" rel="noopener">python.org</a> (on Windows, tick "Add python.exe to PATH").</li>
-          <li><b>Install Lantern</b> in a terminal (PowerShell on Windows, Terminal on Mac):<pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.10.0"</pre></li>
+          <li><b>Install Lantern</b> in a terminal (PowerShell on Windows, Terminal on Mac):<pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.11.0"</pre></li>
           <li><b>Open it:</b><pre class="cmd"><span>$ </span>lantern serve</pre>Your browser opens Lantern at a local address (127.0.0.1) that only your computer can reach.</li>
           <li><b>Add your app</b>: Browse… to its folder, or paste a GitHub link. A link is cloned onto <em>your</em> computer, not onto a server, and analyzed there.</li>
         </ol>
@@ -266,6 +270,7 @@ if (location.hash || new URLSearchParams(location.search).get('intro') === '0') 
   <a href="https://github.com/LittleHenderson/Lantern" rel="noopener">Source</a>
   <a href="https://github.com/LittleHenderson/Lantern/issues" rel="noopener">Report a problem</a>
   <a href="demo/report.html">Live example</a>
+  <a href="https://lantern-cloud.fly.dev/guide" rel="noopener">How to use Lantern</a>
   <a href="#privacy">Privacy</a>
 </footer>
 </div>
