@@ -102,7 +102,19 @@ file. New entries go under `## Unreleased`, on top.
     every user may enter, no guard loaded, no kernel rules yet) and now say what they need; the older test of a run
     stopped by the clock said `fail` for the score and now says "not finished"; the sandbox's own planted tests
     write to a folder outside the copy, since writing to the copy is no longer refused.
-  - Found and not fixed: the memory limit of the restricted process on Linux is a watch from outside, a few times a
+  - **CI proves the launcher's own network for an ordinary user.** Root makes the run's network directly; an
+    ordinary user needs a user namespace for it, and GitHub's Linux machines refuse an ordinary user that. The
+    first run of this change in CI said so in its own words ("this system does not let the tests have a network of
+    their own (error 13)"): there the restricted process fell back to refusing every address, which is right, a
+    test's own server answered only in Docker's container, and the one test that needs the launcher's own network
+    was skipped with that reason. CI's Linux jobs now run `tests/test_sandbox_own_network.py` a second time, as the
+    ordinary user, with the machine's rule (`kernel.apparmor_restrict_unprivileged_userns`) taken away for that one
+    command and put back after it, and under `LANTERN_TESTS_COMPLETE=no-skips`, so a test of that file that is
+    skipped fails the run and is named (`.github/workflows/ci.yml`; `tests/test_isolation.py` reads the step).
+  - Found and not fixed: on a Linux system that refuses an ordinary user a user namespace (GitHub's machines do),
+    a Lantern started by an ordinary user with no Docker has no network of the run's own: tests that start their
+    app's server are refused there as before, the log and the sheet say why, and such a run reads Incomplete; the
+    memory limit of the restricted process on Linux is a watch from outside, a few times a
     second, and no wall; a hostile test can print the launcher's memory line and end with 118, and then reads
     Incomplete where it would have read Blocked (never Passed); the file-size and open-files limits, a kernel that
     ends a process for the computer's own memory, Windows's per-process memory limit and a test runner that is not

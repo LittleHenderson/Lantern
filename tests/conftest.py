@@ -29,6 +29,15 @@ isolation itself cannot run in the first pass (two need root, one starts the no-
 started inside itself without root, one needs a way out for the refusal to show). Until 2026-11-10 three of them
 ran nowhere in CI, and the fourth only in the one-command audit of the Python 3.13 job.
 
+Since 2026-11-13 a third pass runs tests/test_sandbox_own_network.py that way too, as the ordinary user. In the test
+sandbox a project's tests get a network of their own; root makes it directly, an ordinary user through a user
+namespace, and GitHub's Linux machines refuse an ordinary user that (the first pass of commit 9e6696f: "this system
+does not let the tests have a network of their own (error 13)"). So in the first pass the restricted process fell
+back to refusing every address, which is right there and is what that pass tests, a test's own server answered only
+in Docker's container, and the one test that needs the launcher's own network was skipped with that reason. The
+third pass takes the machine's rule (kernel.apparmor_restrict_unprivileged_userns) away for its one command and
+puts it back after.
+
 A run under any of these rules names them in its last lines ("rules of this run: ..."), and CI looks for them there.
 That second pass, on its first run in CI, showed why: both of CI's Linux passes start through sudo, the sudo of
 GitHub's machines hands a command none of the caller's variables (`-E` is ignored there, and sudo says so), and so,

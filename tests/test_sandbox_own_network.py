@@ -650,6 +650,9 @@ def test_where_no_network_of_its_own_can_be_made_nothing_on_this_computer_is_let
     assert {b["kind"] for b in r["blocked"]} == {"network"}, r["blocked"]
     said = [line for line in lines if "network of their own" in line]
     assert len(said) == 1 and why in said[0] and "tests that start a server" in said[0], lines
+    # the sheet of the same backend the run above was given: where Docker is there (GitHub's Linux machines), the
+    # sheet would otherwise be the container's, which has a network of its own whatever this system allows
+    monkeypatch.setenv("LANTERN_SANDBOX", "subprocess")
     details = " ".join(sandbox.describe(tmp_path / "tiny", "python")["details"])
     assert why in details and "a network of its own:" not in details, details
     if sys.platform.startswith("linux") and sandbox.landlock_abi() >= 6:

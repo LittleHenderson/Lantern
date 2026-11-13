@@ -837,14 +837,24 @@ def test_the_launcher_starts_nothing_that_the_tests_user_cannot_read(tmp_path):
     try:
         base = {"writable": [], "nobody": os.geteuid() == 0, "python": True, "net": True, "must": True, "parent": os.getpid()}
         ran = [sys.executable, "-c", "print('COMMAND-RAN')"]
-        for policy in ({"readable": [str(closed / "lib.py")]}, {"readable": [str(closed)]},
-                       {"readable": [os.path.dirname(os.__file__), str(closed / "lib.py")]},
-                       {"readable": [str(tmp_path / "not-there")]}, {"runs": str(closed / "lib.py")},
-                       {"runs": os.__file__}):                           # there, readable, and nothing one can run
+        refused = [{"readable": [str(closed / "lib.py")]}, {"readable": [str(closed)]},
+                   {"readable": [os.path.dirname(os.__file__), str(closed / "lib.py")]},
+                   {"readable": [str(tmp_path / "not-there")]}, {"runs": str(closed / "lib.py")},
+                   {"runs": os.path.dirname(os.__file__)}]      # there, every user may enter it, and a folder is no program
+        if os.geteuid() != 0:
+            # There, readable, and no program: a file of this test's own with no right to run it. (Until 2026-11-13
+            # the example was Python's own `os.py`, which GitHub's machines install with that right for everyone.)
+            # Only where the command runs as this user: `nobody` cannot enter pytest's temp folder at all.
+            plain = tmp_path / "plain.py"
+            plain.write_text("x = 1\n", encoding="utf-8")
+            plain.chmod(0o644)
+            refused.append({"runs": str(plain)})
+        for policy in refused:
             r = subprocess.run([sys.executable, "-I", "-c", PLAIN_LAUNCH.format(root=str(ROOT)), json.dumps({**base, **policy}),
                                 "--", *ran], capture_output=True, text=True, encoding="utf-8", timeout=120)
             assert r.returncode == _jail.UNAVAILABLE and "COMMAND-RAN" not in r.stdout, (policy, r)
             assert (_jail.MARK + " unreadable") in r.stderr, (policy, r.stderr)
+            assert ("cannot start " if "runs" in policy else "cannot read ") in r.stderr, (policy, r.stderr)
         # the safe twins: everything named can be read and run, or nothing is named (the cloud service's steps)
         for policy in ({"readable": [os.path.dirname(os.__file__), os.__file__], "runs": sys.executable}, {}, {"readable": []}):
             r = subprocess.run([sys.executable, "-I", "-c", PLAIN_LAUNCH.format(root=str(ROOT)), json.dumps({**base, **policy}),
