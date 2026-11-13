@@ -19,10 +19,11 @@ import tokenize
 from collections import deque
 from pathlib import Path
 
-from . import context, flowscan, kept, lanes, listing, manifest, programs, quick, results, strings
+from . import context, flowscan, kept, lanes, listing, manifest, programs, quick, results
 from .calls import NAME_ONLY_VIA
 from .graph import Graph
 from .python_frontend import ENV_NAMES, SKIP_DIRS, inside_repo, project_bytes, project_text, skipped_dir
+from .strings import sub as strings_sub
 
 UNTRUSTED_ENTRY_KINDS = {"route", "cli", "main", "script"}
 
@@ -518,7 +519,7 @@ def _php_line(raw: str) -> str:
         if m.group(1) == "'":
             return "''"
         return "''" + "".join(f" + {r}" for r in re.findall(r"\{?\$([A-Za-z_]\w*)", m.group(0)))
-    t = strings.sub("'\"", blank, raw)
+    t = strings_sub("'\"", blank, raw)
     t = t.replace(".=", "+=")
     t = re.sub(r"(?<=[\w'\")\]])\s*\.(?!\.)\s*(?=[$\w'\"(])", " + ", t)
     t = t.replace("->", ".").replace("?.", ".")
@@ -556,7 +557,7 @@ def _statements(lines: list[str], first: int, last: int, js: bool) -> list[tuple
     out, buf, start, depth = [], [], 0, 0
     for ln in range(first, min(last, len(lines)) + 1):
         raw = lines[ln - 1]
-        code = strings.sub(QUOTES, _blank_string, raw)
+        code = strings_sub(QUOTES, _blank_string, raw)
         code = re.sub(r"//.*$" if js else r"#.*$", "", code)
         if not buf:
             start = ln
