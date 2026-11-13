@@ -254,3 +254,56 @@ def test_zooming_in_keeps_every_tab_reachable_and_every_tab_scrollable():
     render = report[report.index("function render() {"):]
     assert "classList.remove('dotted', 'gfull')" in render[:400]
     assert ".ftable{" in report and "overflow-x:auto" in report.split(".ftable{", 1)[1].split("}", 1)[0]
+
+
+def _block(text: str, start: str, end: str) -> str:
+    i = text.index(start)
+    return text[i:text.index(end, i)]
+
+
+def test_the_terminal_is_pulled_up_from_every_screen_of_the_website_and_the_app():
+    """Design 5a/5b: a tab at the bottom of every screen pulls the terminal up. The drawer itself is the app's own
+    code, taken into the website whole, so the two cannot drift apart."""
+    html, _ = site.page("1")
+    page = (Path(site.__file__).parent / "site" / "index.html").read_text(encoding="utf-8")
+    for doc in (APP_HTML, html):
+        body = doc.split("<body", 1)[1]
+        # the tab and the drawer are fixed markup of the page, outside every screen that render() draws
+        assert '<button id="termtab"' in body and '<div id="term" hidden' in body
+        assert body.index('id="termtab"') < body.index("function termToggle(")
+        for i in ("tgrip", "tout", "tcmd", "termclose", "termop"):
+            assert f'id="{i}"' in body
+    shared = site.app_parts(APP_HTML)["js"]
+    for piece in ("function termToggle(", "function termDrag(", "function termPrint(", "function termWords(",
+                  "addEventListener('pointerdown'", "lantern.termh"):
+        assert piece in shared and piece in html
+    # the app's own commands stay in the app; the website brings its own
+    assert "/api/projects/" not in shared
+    assert "function termRun(" in APP_HTML and "function termRun(" in page
+    # the stylesheet that draws the tab is the app's, so the website gets it too
+    assert "#termtab{" in site.app_parts(APP_HTML)["style"]
+
+
+def test_the_websites_terminal_does_what_the_buttons_do_and_nothing_else():
+    page = (Path(site.__file__).parent / "site" / "index.html").read_text(encoding="utf-8")
+    code = _block(page, "// ---- terminal: the drawer is the app's own", "const FAQ = [")
+    # nothing typed is run as code or written into the page as markup: every line goes out through termPrint (esc)
+    for never in ("eval(", "new Function", "innerHTML", "insertAdjacentHTML", "document.write", "setTimeout('"):
+        assert never not in code, never
+    # the only request of its own is the findings file of a run's own view links (same origin, as the report reads it)
+    assert code.count("fetch(") == 1 and "fetch(links.findings, {credentials: 'same-origin'})" in code
+    # what cannot be undone or makes something public opens the same window the button opens, which asks first
+    assert "return deleteSheet(r);" in code and "return shareSheet(r);" in code and "return explainClick(r);" in code
+    assert "api('/v1/runs/' + encodeURIComponent(r.id), {method: 'DELETE'})" not in code
+    # keeping code snippets needs the same agreement the tick box asks for, typed out
+    assert "snip && !agree" in code
+    # a word it does not know is refused with words, never passed on
+    assert "is not a Lantern command" in code
+
+
+def test_the_apps_terminal_works_before_a_project_is_open():
+    code = _block(APP_HTML, "// ---------------------------------------------------------------- Terminal drawer: the app's commands",
+                  "// Keyboard (listed under Help")
+    assert "argv[0] === 'projects'" in code and "argv[0] === 'open'" in code and "go('project', {project: q.id})" in code
+    # everything else still goes to the one allow-listed route, as a list of words, never a shell line
+    assert code.count("api(`/api/projects/${p.id}/cmd`, {method: 'POST', body: {argv}})") == 1

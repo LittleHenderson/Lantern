@@ -93,7 +93,7 @@ Honest list, screen by screen. "Verify" means I believe it is partly there and y
 
 **Ask Lantern** — pill + window, suggestion chips per page, screenshot chip with local OCR, footer line. Opacity slider: verify. Standalone report has a built-in guide version without a model.
 
-**Terminal drawer (5a)** — built; Lantern commands only; ids/paths as links: verify. Phone bottom sheet at 46%: not built as designed.
+**Terminal drawer (5a)** — built, on every screen of the app and the website: a "Terminal" tab at the bottom middle pulls it up (click or drag), its top edge resizes it, half the screen on a phone; Lantern commands only; ids/paths as links. Verify the tab's look against 5a.
 
 **Watch my tests run (8f)** — sheet, rewards, success toast and failure toast (exit code, last lines, Try again / Change the command / Skip) exist. Not in the mockups (added 2026-11-10, plain styling): a "Stop the tests" button on the running message, and the messages "You stopped the tests." and "Your tests were not run." (the sandbox could not be set up). Runs in the sandbox (`lantern/sandbox.py`); the sheet names the backend and its limits. JavaScript, Go, Rust and Java tests run but only Python calls are recorded yet ("Tests run; your map upgrades for Python only for now").
 
