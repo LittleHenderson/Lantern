@@ -204,6 +204,7 @@ def home_url() -> str:
 
 def _page(title: str, inner: str) -> str:
     home = html.escape(home_url(), quote=True)
+    guide = html.escape(urllib.parse.urljoin(home_url(), "guide"), quote=True)   # the website's How to use Lantern
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)} · Lantern</title>
 {FONTS}
@@ -214,6 +215,7 @@ def _page(title: str, inner: str) -> str:
 body{{margin:0;min-height:100vh;background:var(--bg);color:var(--ink-2);font:15px/1.6 "DM Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}}
 header{{display:flex;align-items:center;height:56px;padding:0 20px;border-bottom:1px solid var(--line)}}
 .home{{display:inline-flex;align-items:center;gap:10px;margin-left:-8px;padding:6px 8px;border-radius:12px;font:600 16px "DM Sans",-apple-system,sans-serif;color:var(--ink);letter-spacing:-.02em;text-decoration:none}}
+.guide{{margin-left:auto;display:inline-flex;align-items:center;min-height:44px;padding:0 10px;border-radius:10px;font-weight:600;font-size:14px;text-decoration:none}}.guide:hover{{background:var(--sunken)}}.guide:focus-visible{{outline:2px solid var(--accent);outline-offset:2px}}
 .home:hover{{background:var(--sunken)}}.home:focus-visible{{outline:2px solid var(--accent);outline-offset:2px}}
 .mark{{width:28px;height:28px;border-radius:9px;background:#141416;display:inline-block;box-shadow:0 0 0 1px var(--line),0 4px 14px -4px rgba(255,170,60,.5)}}.mark svg{{width:100%;height:100%;display:block}}
 main{{position:relative;max-width:520px;margin:9vh auto;padding:28px 28px 24px;background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:0 1px 2px rgba(16,16,20,.04),0 6px 20px -6px rgba(16,16,20,.10)}}
@@ -233,7 +235,7 @@ details[open] summary::before{{transform:rotate(45deg)}}summary:hover{{color:var
 summary:focus{{outline:none}}summary:focus-visible{{outline:2px solid var(--accent);outline-offset:2px}}
 code{{font:12.5px "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;background:var(--sunken);padding:1px 6px;border-radius:6px;color:var(--ink)}}
 @media(max-width:560px){{main{{margin:16px;padding:22px 18px}}}}
-</style></head><body><header><a class="home" href="{home}" title="Go to Lantern">{MARK}<span>Lantern</span></a></header><main>{inner}</main></body></html>"""
+</style></head><body><header><a class="home" href="{home}" title="Go to Lantern">{MARK}<span>Lantern</span></a><a class="guide" href="{guide}" title="How to use Lantern: short animated demos">How to use Lantern</a></header><main>{inner}</main></body></html>"""
 
 
 def valid_cli(cli: str | None) -> str:

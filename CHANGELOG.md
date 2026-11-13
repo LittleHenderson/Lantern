@@ -111,7 +111,7 @@ rank, a score or a release decision. The hosted service keeps nothing.
 
 ### The app and the website
 
-- "How to use Lantern": a guide with a tour and a section for each task, at `/guide` and in both main menus.
+- "How to use Lantern": a guide with a tour and a section for each task, reachable from every page.
 - The map: the Graph and the Flowchart fill the whole panel as an endless canvas, with a breadcrumb that says where
   you are and a minimap (100%, 60%, 30% or hidden). The Graph says what its lines mean.
 - Every function has its three lenses from the moment a check ends.
@@ -181,6 +181,15 @@ rank, a score or a release decision. The hosted service keeps nothing.
   write a release decision into `readiness.json` and a call inventory, `calls.json`), so the next versions are
   tested on opening it. `tests/test_old_results.py` also holds that a result from 0.9.0 or 0.10.0, which has no
   release decision, is shown with none: this version does not make one up for work an older version did.
+- How to use Lantern from every page (2026-11-12). Until now only screens with the main menu linked to the guide. A
+  project's screens in the app and a run's screens on the website hide that menu, so the guide button now sits in
+  their top bar beside Simple/Advanced. A report or an Evidence Report open on its own (a new tab, a shared link, a
+  file on disk) has the link in its top bar too: `/guide` when Lantern serves the page, the website's guide
+  otherwise (a plain link, so a report from disk still fetches nothing); inside the app or the website it stays
+  hidden, because the bar around it has the button. The website's notice pages (expired link, sharing off), the
+  local app's "open the link from your terminal" page, every sign-in page of the free allowance and the public
+  landing page (menu and footer; "Guide" on phones and tablets so the menu fits) link to it as well.
+  `tests/test_guide.py::test_every_page_reaches_the_guide` fails if one of them loses it.
 - Faster, with every check and every result as it was (2026-11-12; point 10 of the 2026-11-09 directive, "Increase
   performance without dropping checks"). Measured first, then changed: `bench/speed.py` analyzes the sample shop and
   five public apps at a fixed commit each, three first runs and three repeat runs a side, the unchanged engine and
