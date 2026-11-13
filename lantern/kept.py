@@ -350,6 +350,8 @@ class Shelf:
                          | getattr(os, "O_BINARY", 0), 0o600)
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
+            # Windows refuses the next line while another writer is putting the same entry there (PermissionError):
+            # this answer is then not kept, and the other writer's, which is the same answer, is.
             os.replace(tmp, path)           # whole or not there: a reader never sees half an answer
             return True
         except (OSError, ValueError):

@@ -280,6 +280,15 @@ let go.
 * **One machine, three runs a side.** The spread of the three is in brackets beside every time. Timings of another
   session are not comparable: the unchanged engine's first run of Django was 120.69 s when this work began and
   115.72 s here. Windows and macOS were not measured; neither was a computer with one processor.
+* **On Windows two writers of one kept entry do not both keep it.** The first run of the tests on Windows (GitHub's
+  checks on the pull request) failed in one test, `test_two_writers_of_one_answer_leave_one_whole_entry`: six threads
+  put the same answer under the same key 20 times each, and some writes answered "not kept". Windows refuses to put
+  a finished file in an entry's place while another writer is doing the same (Linux and macOS never refuse). The
+  entry that is there is whole and is the same answer, nothing unfinished is left, and nobody reads what a write
+  answers, so no result depends on it; a later run finds the entry. The test claimed more than holds there. It now
+  says what holds on every system (a write is not kept only when the system refused it that way), keeps the strict
+  claim for Linux and macOS, and a second test plays Windows' answer on every system
+  (`test_a_write_the_system_refuses_beside_another_writer_is_not_kept_and_breaks_nothing`).
 * **Result files are written indented**, as they always were. For Django's map that costs Python 3.11 1.54 s and
   Python 3.12 1.09 s against 0.25 s on Python 3.13 (measured apart, on a busy machine). Left as it is, because the
   result files stay byte for byte what they were.

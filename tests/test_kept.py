@@ -290,21 +290,72 @@ def test_an_entry_of_another_user_is_not_used(monkeypatch):
     assert SHELF.get(key) is kept.NOTHING
 
 
-def test_two_writers_of_one_answer_leave_one_whole_entry():
-    key = SHELF.key("raced")
-    value = Outer("o", [Inner(str(i), (i, i)) for i in range(300)])
+def _race(key, value, writers: int = 6, times: int = 20) -> list[bool]:
+    """What every write said, when `writers` threads each put the same answer under the same key `times` times."""
     done = []
 
     def write():
-        for _ in range(20):
+        for _ in range(times):
             done.append(SHELF.put(key, value))
 
-    threads = [threading.Thread(target=write) for _ in range(6)]
+    threads = [threading.Thread(target=write) for _ in range(writers)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    assert all(done) and len(done) == 120
+    return done
+
+
+def test_two_writers_of_one_answer_leave_one_whole_entry(monkeypatch):
+    """Linux and macOS never refuse to put a finished file in an entry's place, so there every writer keeps its
+    answer. Windows refuses while another writer is putting the same entry there (PermissionError; the first run of
+    this test on Windows showed it, 2026-11-12): that write is not kept and says so, the other writer's is, and it
+    is the same answer. On every system: no write is lost for any other reason, the entry is whole, nothing
+    unfinished is left."""
+    key = SHELF.key("raced")
+    value = Outer("o", [Inner(str(i), (i, i)) for i in range(300)])
+    refused, real = [], os.replace
+
+    def replace(src, dst):
+        try:
+            real(src, dst)
+        except OSError as exc:
+            refused.append(type(exc).__name__)
+            raise
+
+    monkeypatch.setattr(os, "replace", replace)
+    done = _race(key, value)
+    assert len(done) == 120 and any(done)
+    assert done.count(False) == len(refused) and set(refused) <= {"PermissionError"}
+    if os.name == "posix":
+        assert all(done)
+    same(SHELF.get(key), value)
+    assert kept.size()[0] == 1 and not list(kept._entries(left=True))
+
+
+def test_a_write_the_system_refuses_beside_another_writer_is_not_kept_and_breaks_nothing(monkeypatch):
+    """What Windows does to two writers of one entry, played on every system: while one writer is putting its file
+    in the entry's place, the other's is refused. The first writer here holds the place until a second has come and
+    been refused, so the meeting happens in every run."""
+    key = SHELF.key("raced, the way Windows answers")
+    value = Outer("o", [Inner(str(i), (i, i)) for i in range(300)])
+    busy, met, refused, real = threading.Lock(), threading.Event(), [], os.replace
+
+    def replace(src, dst):
+        if not busy.acquire(blocking=False):
+            refused.append(Path(dst).name)
+            met.set()
+            raise PermissionError(13, "Access is denied", str(dst))
+        try:
+            met.wait(10)
+            real(src, dst)
+        finally:
+            busy.release()
+
+    monkeypatch.setattr(os, "replace", replace)
+    done = _race(key, value)
+    assert refused and set(refused) == {kept.Shelf._path(SHELF, key).name}
+    assert len(done) == 120 and any(done) and done.count(False) == len(refused)
     same(SHELF.get(key), value)
     assert kept.size()[0] == 1 and not list(kept._entries(left=True))
 
