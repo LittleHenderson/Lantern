@@ -143,6 +143,8 @@ header.top{position:sticky;top:0;z-index:10;height:56px;display:flex;align-items
 .iconbtn{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;border:0;background:none;color:var(--muted);transition:background var(--t) var(--ease), color var(--t) var(--ease)}
 .iconbtn:hover{background:var(--hover);color:var(--ink)}
 .iconbtn .ic{width:18px;height:18px}
+/* How to use Lantern from every screen: the main menu has it; on a project's screens (no main menu) this button does */
+body:not(.inproj) #guidebtn,#guidebtn[hidden]{display:none} a.iconbtn{text-decoration:none}
 
 /* ---------- layout ---------- */
 main{max-width:1080px;margin:0 auto;padding:40px 24px 80px}
@@ -555,6 +557,7 @@ body[data-mode=simple] .sub.two .tabs{border-radius:0;background:none;padding:4p
     <button data-v="guide" aria-label="How to use Lantern" title="How to use Lantern: short animated demos"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M8.5 8v4l3.5-2z"/></svg><span>How to use Lantern</span></button>
   </nav>
   <div class="seg" id="viewmode" title="Simple: plain sentences and one next action. Advanced: every table and panel."><button data-m="simple">Simple</button><button data-m="advanced">Advanced</button></div>
+  <a class="iconbtn" id="guidebtn" href="/guide" aria-label="How to use Lantern" title="How to use Lantern: short animated demos"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M8.5 8v4l3.5-2z"/></svg></a>
   <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
 </header>
 <div id="view"></div>
@@ -1472,10 +1475,10 @@ function renderHelp(el) {
 // bar on project screens (one header row, as designed). They are moved, not copied, so their listeners stay.
 function dock(inProject) {
   const top = document.querySelector('header.top'), brand = document.getElementById('home'), nav = document.getElementById('nav');
-  const vm = document.getElementById('viewmode'), th = document.getElementById('theme');
+  const vm = document.getElementById('viewmode'), gb = document.getElementById('guidebtn'), th = document.getElementById('theme');
   const a = inProject && document.querySelector('.sub [data-dock="brand"]'), b = inProject && document.querySelector('.sub [data-dock="end"]');
-  if (a && b) { a.replaceWith(brand); b.replaceWith(vm, th); return; }
-  if (brand.parentElement !== top) { top.insertBefore(brand, nav); top.append(vm, th); }
+  if (a && b) { a.replaceWith(brand); b.replaceWith(vm, gb, th); return; }
+  if (brand.parentElement !== top) { top.insertBefore(brand, nav); top.append(vm, gb, th); }
 }
 function render() {
   const el = document.getElementById('view');
