@@ -453,7 +453,7 @@ class Store:
 
     def team_runs(self, account: str, limit: int = 100) -> list[dict]:
         """Runs other people put in a workspace this account is in (its own runs come from `runs`)."""
-        rows = self._all(f"select {', '.join('r.' + f for f in RUN_FIELDS)} from runs r "   # nosec B608
+        rows = self._all(f"select {', '.join('r.' + f for f in RUN_FIELDS)} from runs r "   # nosec B608 - our own column names
                          "join members m on m.workspace = r.workspace and m.account = ? "
                          "where r.account != ? order by r.created desc limit ?", (account, account, limit))
         return [self._run_dict(r) for r in rows]
