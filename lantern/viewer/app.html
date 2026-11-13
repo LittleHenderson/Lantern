@@ -297,16 +297,24 @@ pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--co
 .toastin{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:12px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow-2);font-size:13.5px;color:var(--ink-2)} .toastin.ok{border-color:var(--good);background:var(--good-soft)} .toastin.bad{border-color:var(--critical);background:var(--critical-soft);align-items:flex-start}
 .toastin .ic{width:18px;height:18px;color:var(--good-ink);flex:none} .toastin>div{flex:1;min-width:0} .toastin b{color:var(--ink)}
 
-/* Terminal drawer */
-#term{--tbg:1;position:fixed;left:0;right:0;bottom:0;height:340px;z-index:25;display:flex;flex-direction:column;background:rgba(21,21,23,var(--tbg));color:var(--code-ink);border-top:1px solid rgba(255,255,255,.1);box-shadow:0 -12px 40px -20px rgba(0,0,0,.6);transform:translateY(0);animation:termup .34s cubic-bezier(.2,.8,.2,1)}
-#term[hidden]{display:none}
+/* Terminal drawer (design 5a/5b): a tab at the bottom of every screen pulls it up; its top edge resizes it. Shared with
+   the website (lantern_cloud/site.py takes this stylesheet whole). */
+#term{--tbg:1;position:fixed;left:0;right:0;bottom:0;height:var(--termh,340px);max-height:calc(100vh - 56px);max-height:calc(100dvh - 56px);z-index:25;display:flex;flex-direction:column;background:rgba(21,21,23,var(--tbg));color:var(--code-ink);border-top:1px solid rgba(255,255,255,.1);border-radius:14px 14px 0 0;box-shadow:0 -12px 40px -20px rgba(0,0,0,.6);transform:translateY(0);animation:termup .34s cubic-bezier(.2,.8,.2,1)}
+#term[hidden]{display:none} #term.dragging{animation:none;user-select:none}
 @keyframes termup{from{transform:translateY(100%)}to{transform:translateY(0)}}
-#term .tbar{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.08);font:12.5px var(--font)} #term .tbar b{color:#F3F3F1} #term .tbar .muted{color:#8C8C92} #term .tbar input[type=range]{width:70px;accent-color:#4FC3BA} #term .x{background:none;border:0;color:#8C8C92;font-size:18px;cursor:pointer}
-#term .tout{flex:1;overflow:auto;padding:10px 14px;font:12.5px/1.6 var(--mono)} #term .tl{white-space:pre-wrap;overflow-wrap:anywhere} #term .tl.me{color:#F3F3F1} #term .tl.me::before{content:"$ ";color:#6C6C72} #term .tl.sys{color:#8C8C92} #term .tl.err{color:#FF8A8A}
+@media (prefers-reduced-motion:reduce){#term{animation:none}}
+#term .tgrip{flex:none;height:14px;display:grid;place-items:center;cursor:ns-resize;touch-action:none;border-radius:14px 14px 0 0}
+#term .tgrip i{width:44px;height:4px;border-radius:99px;background:rgba(255,255,255,.28)} #term .tgrip:hover i,#term .tgrip:focus-visible i{background:#4FC3BA} #term .tgrip:focus-visible{outline:none}
+#term .tbar{display:flex;align-items:center;gap:12px;padding:2px 14px 8px;border-bottom:1px solid rgba(255,255,255,.08);font:12.5px var(--font)} #term .tbar b{color:#F3F3F1} #term .tbar .muted{color:#8C8C92;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} #term .tbar input[type=range]{width:70px;accent-color:#4FC3BA} #term .x{background:none;border:0;color:#8C8C92;font-size:18px;cursor:pointer}
+#term .tout{flex:1;overflow:auto;padding:10px 14px;font:12.5px/1.6 var(--mono)} #term .tl{white-space:pre-wrap;overflow-wrap:anywhere} #term .tl.me{color:#F3F3F1} #term .tl.me::before{content:"$ ";color:#6C6C72} #term .tl.sys{color:#8C8C92} #term .tl.err{color:#FF8A8A} #term .tl.ok{color:#7FDBD3}
 #term .tout a{color:#7FDBD3;text-decoration:none;border-bottom:1px dotted #7FDBD3} #term .tout a:hover{border-bottom-style:solid}
-#term .tin{display:flex;align-items:center;gap:8px;padding:8px 14px;border-top:1px solid rgba(255,255,255,.08)} #term .ps{font:600 12.5px var(--mono);color:#4FC3BA} #term input{flex:1;background:transparent;border:0;outline:0;color:#F3F3F1;font:13px var(--mono)}
-body.termopen #ask{bottom:360px}
-@media (max-width:760px){#term{height:46vh}}
+#term .tin{display:flex;align-items:center;gap:8px;padding:8px 14px;border-top:1px solid rgba(255,255,255,.08)} #term .ps{font:600 12.5px var(--mono);color:#4FC3BA} #term input{flex:1;min-width:0;height:auto;padding:0;background:transparent;border:0;outline:0;box-shadow:none;color:#F3F3F1;font:13px var(--mono)} #term input:focus{border:0;box-shadow:none}
+#termtab{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:24;display:flex;align-items:center;gap:7px;height:28px;padding:0 14px 0 11px;border-radius:12px 12px 0 0;border:1px solid var(--line-2);border-bottom:0;background:var(--surface);color:var(--ink-2);font:600 12px var(--font);cursor:pointer;touch-action:none;box-shadow:0 -6px 18px -10px rgba(0,0,0,.35);transition:height var(--t) var(--ease),color var(--t) var(--ease)}
+#termtab:hover,#termtab:focus-visible{height:32px;color:var(--ink)} #termtab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#termtab .ic{width:14px;height:14px} #termtab kbd{font:11px var(--mono);color:var(--faint);border:1px solid var(--line);border-radius:5px;padding:0 4px}
+body.termopen #termtab{display:none}
+body.termopen #ask{bottom:calc(var(--termh,340px) + 20px)}
+@media (max-width:760px){#termtab kbd{display:none}#term .tbar label{display:none}}
 /* ---------- buttons and fields ---------- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 14px;border-radius:var(--r);border:1px solid var(--line-2);background:var(--surface);
   color:var(--ink);font-weight:600;font-size:13.5px;white-space:nowrap;text-decoration:none;transition:background var(--t) var(--ease), border-color var(--t) var(--ease), transform var(--t) var(--ease), box-shadow var(--t) var(--ease)}
@@ -561,7 +569,8 @@ body[data-mode=simple] .sub.two .tabs{border-radius:0;background:none;padding:4p
   <button class="iconbtn" id="theme" aria-label="Switch appearance"></button>
 </header>
 <div id="view"></div>
-<div id="term" hidden><div class="tbar"><b>Terminal</b><span class="muted">Lantern commands only · output links into the app</span><span class="spacer"></span><label class="muted" title="Background opacity"><input type="range" min="0.4" max="1" step="0.05" value="1" id="termop"></label><button class="x" id="termclose" aria-label="Close">×</button></div><div class="tout" id="tout"></div><div class="tin"><span class="ps">lantern</span><input type="text" id="tcmd" placeholder="help · analyze · trace python -m pytest -q · accept ID --reason … · explain · verify · export" autocomplete="off" spellcheck="false"></div></div>
+<button id="termtab" type="button" aria-controls="term" aria-expanded="false" title="Pull up the terminal: click, or drag up (key: `)"><svg class="ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6l3.5 3L4 12M9.5 13H16"/></svg><span>Terminal</span><kbd>`</kbd></button>
+<div id="term" hidden role="region" aria-label="Terminal"><div class="tgrip" id="tgrip" role="separator" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="2000" aria-valuenow="340" aria-label="Terminal height: drag, or use the up and down arrow keys" tabindex="0"><i></i></div><div class="tbar"><b>Terminal</b><span class="muted" id="tsub">Lantern commands only · output links into the app</span><span class="spacer"></span><label class="muted" title="Background opacity"><input type="range" min="0.4" max="1" step="0.05" value="1" id="termop" aria-label="Terminal background opacity"></label><button class="x" id="termclose" aria-label="Close the terminal">×</button></div><div class="tout" id="tout" role="log" aria-live="polite"></div><div class="tin"><span class="ps">lantern</span><input type="text" id="tcmd" aria-label="Type a Lantern command" placeholder="help · projects · open NAME · analyze · trace python -m pytest -q · accept ID --reason …" autocomplete="off" spellcheck="false" autocapitalize="off"></div></div>
 <div id="ask"></div>
 <script>
 const TOKEN = '__LANTERN_TOKEN__';
@@ -701,21 +710,36 @@ document.getElementById('viewmode').addEventListener('click', async e => {
 
 
 // ---------------------------------------------------------------- Terminal drawer (design 5a/5b)
-const TERM = {open: false, hist: [], hi: -1};
+// The drawer itself, shared with the website (lantern_cloud/site.py takes this block as it is): the tab at the bottom of
+// every screen pulls it up (click, or drag up), the grip on its top edge sets its height (drag, or the arrow keys; kept
+// in this browser), drag it down to close. What a typed line does is each side's own `termRun(line)`, and what a link
+// in the output opens is its own `termLink(a)`. Nothing typed here reaches a shell: the line is split into words in the
+// browser and each side accepts only Lantern's own commands. Every line printed goes through esc() first.
+const TERM = {open: false, hist: [], hi: -1, h: 0};
+function termSaved() { try { return Number(localStorage.getItem('lantern.termh')) || 0; } catch (e) { return 0; } }
+function termFit(h) { return Math.round(Math.max(120, Math.min(h, innerHeight - 56))); }
+function termSetH(h, keep) {
+  TERM.h = termFit(h); document.body.style.setProperty('--termh', TERM.h + 'px');
+  const g = document.getElementById('tgrip'); if (g) { g.setAttribute('aria-valuenow', String(TERM.h)); g.setAttribute('aria-valuemax', String(Math.max(120, innerHeight - 56))); g.setAttribute('aria-valuetext', TERM.h + ' pixels high'); }
+  if (keep) { try { localStorage.setItem('lantern.termh', String(TERM.h)); } catch (e) { /* storage off: this visit only */ } }
+}
 function termToggle(force) {
   const t = document.getElementById('term');
-  TERM.open = force === undefined ? !TERM.open : force;
+  TERM.open = force === undefined ? !TERM.open : !!force;
+  if (TERM.open && !TERM.h) termSetH(termSaved() || (innerWidth <= 760 ? innerHeight * 0.46 : 340));
   t.hidden = !TERM.open; document.body.classList.toggle('termopen', TERM.open);
-  if (TERM.open) { if (!document.getElementById('tout').childElementCount) termPrint('Lantern commands only. Type help for the list. Finding ids and file paths in the output are links.', 'sys'); setTimeout(() => document.getElementById('tcmd').focus(), 50); }
+  const tab = document.getElementById('termtab'); tab.setAttribute('aria-expanded', String(TERM.open));
+  if (TERM.open) { if (!document.getElementById('tout').childElementCount) termPrint(TERM_HELLO, 'sys'); setTimeout(() => document.getElementById('tcmd').focus(), 50); }
+  else if (t.contains(document.activeElement)) tab.focus();
 }
 function termPrint(text, cls = '') {
   const out = document.getElementById('tout'); const d = document.createElement('div'); d.className = 'tl ' + cls;
-  // link finding ids and file:line into the app
-  d.innerHTML = esc(text).replace(/\b([0-9a-f]{12})\b/g, '<a href="#" data-fid="$1">$1</a>').replace(/((?:[\w.-]+\/)*[\w.-]+\.(?:py|ts|tsx|js|jsx|go|rs|java))(:\d+)?/g, '<a href="#" data-file="$1">$1$2</a>');
+  // finding ids and file:line become links into the page; only the escaped text's own word characters go into them
+  d.innerHTML = esc(text).replace(/\b([0-9a-f]{12})\b/g, '<a href="#" data-fid="$1">$1</a>').replace(/((?:[\w.-]+\/)*[\w.-]+\.(?:py|ts|tsx|js|jsx|go|rs|java|kt|swift|dart|cs|php|rb|c|cc|cpp|h|hpp))(:\d+)?\b/g, '<a href="#" data-file="$1">$1$2</a>');
   out.appendChild(d); out.scrollTop = out.scrollHeight;
+  while (out.childElementCount > 2000) out.firstElementChild.remove();
 }
-// Split a typed line into words the way a shell would quote them, without ever handing it to a shell: the server
-// receives an argv list and accepts only Lantern's own commands.
+// Split a typed line into words the way a shell would quote them, without ever handing it to a shell.
 function termWords(line) {
   const out = []; let cur = '', q = null, any = false;
   for (const ch of line) {
@@ -727,7 +751,72 @@ function termWords(line) {
   if (cur || any) out.push(cur);
   return out;
 }
-const TERM_HELP = `Lantern commands only (results go to this project's .lantern/):
+// Pull up from the tab, or move the grip: the drawer follows the finger or the pointer. A tap on the tab opens it at
+// the height it had; let go below 90 pixels and it closes.
+function termDrag(ev, fromTab) {
+  if (ev.button > 0) return;
+  const t = document.getElementById('term'), y0 = ev.clientY, h0 = TERM.open ? t.getBoundingClientRect().height : 0;
+  let moved = false;
+  const move = e => {
+    const dy = y0 - e.clientY;
+    if (!moved && Math.abs(dy) < 5) return;
+    if (!moved) { moved = true; t.classList.add('dragging'); if (!TERM.open) termToggle(true); }
+    TERM.h = Math.max(0, Math.min(h0 + dy, innerHeight - 56)); document.body.style.setProperty('--termh', TERM.h + 'px');
+  };
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    t.classList.remove('dragging');
+    if (!moved) { if (fromTab) termToggle(true); return; }
+    if (TERM.h < 90) { TERM.h = 0; termToggle(false); document.body.style.removeProperty('--termh'); TERM.h = 0; return; }
+    termSetH(TERM.h, true);
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  ev.preventDefault();
+}
+document.getElementById('termtab').addEventListener('pointerdown', e => termDrag(e, true));
+document.getElementById('termtab').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); termToggle(true); } });
+document.getElementById('tgrip').addEventListener('pointerdown', e => termDrag(e, false));
+document.getElementById('tgrip').addEventListener('keydown', e => {
+  const step = e.shiftKey ? 120 : 40;
+  if (e.key === 'ArrowUp') { e.preventDefault(); termSetH(TERM.h + step, true); }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); if (TERM.h - step < 120) termToggle(false); else termSetH(TERM.h - step, true); }
+  else if (e.key === 'Escape') termToggle(false);
+});
+addEventListener('resize', () => { if (TERM.open && TERM.h) termSetH(TERM.h); });
+document.getElementById('termclose').onclick = () => termToggle(false);
+document.getElementById('termop').oninput = e => { document.getElementById('term').style.setProperty('--tbg', e.target.value); };
+document.getElementById('tcmd').addEventListener('keydown', e => {
+  const i = e.target;
+  if (e.key === 'Enter') {
+    const v = i.value.trim(); i.value = ''; if (!v) return;
+    if (TERM.hist[TERM.hist.length - 1] !== v) TERM.hist.push(v); TERM.hist = TERM.hist.slice(-100); TERM.hi = TERM.hist.length;
+    const w = termWords(v); if (w[0] === 'lantern') w.shift();
+    if (w[0] === 'clear' || w[0] === 'cls') { document.getElementById('tout').textContent = ''; return; }
+    if (w[0] === 'exit' || w[0] === 'close') { termToggle(false); return; }
+    if (w[0] === 'history') { termPrint('lantern ' + v, 'me'); termPrint(TERM.hist.map((x, n) => `${n + 1}  ${x}`).join('\n'), 'sys'); return; }
+    termRun(v);
+  }
+  else if (e.key === 'ArrowUp') { if (TERM.hi > 0) { TERM.hi--; i.value = TERM.hist[TERM.hi]; } e.preventDefault(); }
+  else if (e.key === 'ArrowDown') { if (TERM.hi < TERM.hist.length - 1) { TERM.hi++; i.value = TERM.hist[TERM.hi]; } else { TERM.hi = TERM.hist.length; i.value = ''; } e.preventDefault(); }
+  else if (e.key === 'Escape') termToggle(false);
+});
+document.getElementById('tout').addEventListener('click', e => { const a = e.target.closest('a'); if (!a) return; e.preventDefault(); termLink(a); });
+// ` opens and closes it from anywhere outside a text box; Ctrl+` from anywhere, as in a code editor.
+document.addEventListener('keydown', e => {
+  if (e.key !== '`' || e.metaKey || e.altKey) return;
+  const t = e.target, typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+  if (typing && !e.ctrlKey) return;
+  e.preventDefault(); termToggle();
+});
+// The common commands a terminal has, answered here on both sides.
+const TERM_ALWAYS = `  clear                                    empty the screen
+  history                                  what you typed (up and down arrows bring it back)
+  exit                                     close the terminal (or Esc, or drag it down)`;
+// ---------------------------------------------------------------- Terminal drawer: the app's commands
+const TERM_HELLO = 'Lantern commands only, never a shell. Type help for the list. Finding ids and file paths in the output are links.';
+const TERM_HELP = `Lantern commands only. Results go to the open project's .lantern/ folder.
+  projects                                 list your projects
+  open NAME | NUMBER                       open a project (open 2, open shop)
   analyze [--offline] [--no-scan]          read the project again
   trace python -m pytest -q                run your tests in the sandbox
   explain [--node ID] [--depth N]          explain functions with the model in Settings
@@ -737,13 +826,31 @@ const TERM_HELP = `Lantern commands only (results go to this project's .lantern/
   packs                                    list analysis packs
   export [--sarif FILE]                    findings as SARIF
   learn [--check]                          a starter app's progress
+${TERM_ALWAYS}
 Shell commands are refused: this drawer never runs a shell or your code.`;
+function termProjects() { return (S.state && S.state.projects) || []; }
+function termPick(word) {
+  const all = termProjects(), n = Number(word);
+  if (Number.isInteger(n) && n >= 1 && n <= all.length) return all[n - 1];
+  const w = String(word || '').toLowerCase();
+  return all.find(p => String(p.name).toLowerCase() === w) || all.filter(p => String(p.name).toLowerCase().includes(w)).length === 1 && all.find(p => String(p.name).toLowerCase().includes(w));
+}
 async function termRun(line) {
-  const p = S.view === 'project' && (S.state.projects || []).find(x => x.id === S.project);
+  const p = S.view === 'project' && termProjects().find(x => x.id === S.project);
   termPrint('lantern ' + line, 'me');
   const argv = termWords(line); if (argv[0] === 'lantern') argv.shift();
   if (!argv.length || argv[0] === 'help' || argv[0] === '?') { termPrint(TERM_HELP, 'sys'); return; }
-  if (!p) { termPrint('Open a project first; the terminal runs against the project on screen.', 'err'); return; }
+  if (argv[0] === 'projects' || argv[0] === 'ls') {
+    const all = termProjects();
+    termPrint(all.length ? all.map((x, n) => `${String(n + 1).padStart(2)}  ${x.name}  ${x.score != null ? `${x.grade || ''} ${x.score}/100` : 'not checked yet'}${releaseWord(x.release) ? ' · ' + releaseWord(x.release) : ''}  ${x.path}`).join('\n') : 'No projects yet. Add one on the Projects page.', all.length ? '' : 'sys');
+    return;
+  }
+  if (argv[0] === 'open' || argv[0] === 'cd') {
+    const q = termPick(argv.slice(1).join(' '));
+    if (!q) { termPrint('No single project matches that. Type projects for the list.', 'err'); return; }
+    go('project', {project: q.id}); termPrint('opened ' + q.name, 'ok'); return;
+  }
+  if (!p) { termPrint('Open a project first (projects, then open NAME); the commands run against the project on screen.', 'err'); return; }
   try {
     const r = await api(`/api/projects/${p.id}/cmd`, {method: 'POST', body: {argv}});
     if (r.output) termPrint(r.output);
@@ -758,26 +865,15 @@ async function termRun(line) {
     }
   } catch (e) { termPrint(e.message, 'err'); }
 }
-document.getElementById('termclose').onclick = () => termToggle(false);
-document.getElementById('termop').oninput = e => { document.getElementById('term').style.setProperty('--tbg', e.target.value); };
-document.getElementById('tcmd').addEventListener('keydown', e => {
-  const i = e.target;
-  if (e.key === 'Enter') { const v = i.value.trim(); i.value = ''; if (v) { TERM.hist.push(v); TERM.hi = TERM.hist.length; termRun(v); } }
-  else if (e.key === 'ArrowUp') { if (TERM.hi > 0) { TERM.hi--; i.value = TERM.hist[TERM.hi]; } e.preventDefault(); }
-  else if (e.key === 'ArrowDown') { if (TERM.hi < TERM.hist.length - 1) { TERM.hi++; i.value = TERM.hist[TERM.hi]; } else { TERM.hi = TERM.hist.length; i.value = ''; } e.preventDefault(); }
-  else if (e.key === 'Escape') termToggle(false);
-});
-document.getElementById('tout').addEventListener('click', e => {
-  const a = e.target.closest('a'); if (!a) return; e.preventDefault();
-  if (a.dataset.fid && S.view === 'project') { S.tab = 'findings'; S.reportTab = 'findings'; S.frame = null; render(); setTimeout(() => { try { const d = S.frame.el.contentDocument; S.frame.el.onload = () => { try { const doc = S.frame.el.contentDocument; doc.querySelector('#tabs [data-t="findings"]').click(); const c = doc.getElementById('f-' + a.dataset.fid); if (c) { c.scrollIntoView({block: 'center'}); c.classList.add('flash'); } } catch (x) {} }; } catch (x) {} }, 0); }
+function termLink(a) {
+  if (a.dataset.fid && S.view === 'project') { S.tab = 'findings'; S.reportTab = 'findings'; S.frame = null; render(); setTimeout(() => { try { S.frame.el.onload = () => { try { const doc = S.frame.el.contentDocument; doc.querySelector('#tabs [data-t="findings"]').click(); const c = doc.getElementById('f-' + a.dataset.fid); if (c) { c.scrollIntoView({block: 'center'}); c.classList.add('flash'); } } catch (x) {} }; } catch (x) {} }, 0); }
   if (a.dataset.file) { const q = a.dataset.file.split('/').pop().replace(/\.\w+$/, ''); try { const doc = S.frame && S.frame.el.contentDocument; const s = doc && doc.querySelector('#q'); if (s) { s.value = q; s.dispatchEvent(new Event('input')); } } catch (x) {} }
-});
+}
 
 // Keyboard (listed under Help → Command line): / search, ? help, 1–6 project tabs, Shift+D appearance.
 document.addEventListener('keydown', e => {
   const t = e.target, typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
   if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === '`') { e.preventDefault(); termToggle(); return; }
   if (e.key === '?') { e.preventDefault(); go('help'); return; }
   if (e.key === 'D' && e.shiftKey) { e.preventDefault(); setTheme(THEMES[(THEMES.indexOf(THEME) + 1) % 3]); return; }
   if (e.key === '/') { e.preventDefault(); const fr = S.view === 'project' && S.frame && S.frame.el.contentDocument; const q = fr ? fr.querySelector('#q, #xq') : document.getElementById('addpath') || document.getElementById('hq'); if (q) q.focus(); return; }

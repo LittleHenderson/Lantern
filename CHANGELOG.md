@@ -5,6 +5,20 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
 
 ## Unreleased
 
+- A terminal you pull up from the bottom of every screen, in the app and on the website (2026-11-12; design 5a/5b,
+  which until now was a drawer reached only from a button on an open project's bar or the ` key, and was missing
+  from the website). A "Terminal" tab sits at the bottom middle of every screen: a click or a drag up pulls the
+  drawer up, its top edge sets the height (drag, or the arrow keys; kept in the browser as `lantern.termh`;
+  half the screen on a phone), a drag down or Esc closes it, and ` (Ctrl+` from inside a text box) opens and closes
+  it from anywhere. The drawer is the app's own code; `lantern_cloud/site.py` takes it into the website whole. In
+  the app it now works before a project is open (`projects`, `open NAME|NUMBER`). On the website each command does
+  what a button does, through the same request: `runs`, `open`, `check LINK` (map and findings only; snippets need
+  `--snippets --agree`, the tick box's words), `samples`, `sample ID`, `status`, `findings [rank]` (ids are links to
+  the finding in the report), `explain`, `share` and `delete` (both open the same window the button opens, which
+  asks first), `ask QUESTION`; `clear`, `history` and `exit` on both. It never runs a shell or anybody's code, the
+  server gets no new route, and every line printed goes through `esc()`. `tools/viewer_smoke.js` drags the tab up on
+  the home screen and opens a project from it; `tools/cloud_site_smoke.js` runs the website's commands on the
+  poisoned demo and follows a finding's link.
 - How to use Lantern from every page (2026-11-12). Until now only screens with the main menu linked to the guide. A
   project's screens in the app and a run's screens on the website hide that menu, so the guide button now sits in
   their top bar beside Simple/Advanced. A report or an Evidence Report open on its own (a new tab, a shared link, a

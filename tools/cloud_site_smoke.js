@@ -96,6 +96,17 @@ async function until(p, fn, timeout) {
     await p.screenshot({ path: `${out}-${tag}-report.png` });
     await a11y.axe(p, `${tag} report`, errs, { frames: true });
     await clean(p, 'report');
+    // the terminal: pulled up from the tab at the bottom; each command does what a button does, a shell command is
+    // refused, and run data printed in it stays text
+    await p.click('#termtab'); await p.waitForSelector('#tcmd');
+    for (const c of ['runs', 'status', 'findings', 'rm -rf /']) { await p.fill('#tcmd', c); await p.press('#tcmd', 'Enter'); }
+    await until(p, () => /not a Lantern command/.test(document.getElementById('tout').innerText) && document.querySelector('#tout a[data-fid]'), 20000);
+    await p.screenshot({ path: `${out}-${tag}-terminal.png` });
+    await a11y.axe(p, `${tag} terminal`, errs);
+    await clean(p, 'terminal');
+    await p.click('#tout a[data-fid]');
+    await until(p, () => { try { return !!document.querySelector('#pbody iframe').contentDocument.querySelector('.flash'); } catch (e) { return false; } }, 20000);
+    await p.click('#termclose');
     await p.click('.sub [data-t="evidence"]'); await p.waitForTimeout(1200);
     await clean(p, 'evidence');
     // Explain: the demo run is explained already; the button says so and opens a summary
