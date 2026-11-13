@@ -27,6 +27,7 @@ import re
 from pathlib import Path
 
 from . import manifest
+from . import quick
 from .python_frontend import project_text
 from .graph import Graph
 
@@ -131,11 +132,16 @@ def find_calls(g: Graph, cache: dict[str, list[str]] | None = None) -> list[dict
         by_file.setdefault(n.file, []).append(n)
     for rel, nodes in by_file.items():
         lines = _lines(repo, rel, cache)
+        # the patterns that can find anything in this file at all (`quick`): the others are not tried on its lines
+        whole = quick.Text("\n".join(lines))
+        patterns = [row for row in CALL_PATTERNS if whole.may_match(row[2])]
+        if not patterns:
+            continue
         for i, raw in enumerate(lines, 1):
             if _comment(raw) or len(raw) > MAX_LINE:
                 continue
             code = STRING_RE.sub("''", raw) if "'" in raw or '"' in raw else raw
-            for kind, provider, rx in CALL_PATTERNS:
+            for kind, provider, rx in patterns:
                 if not (rx.search(code) or (kind == "vector" and rx.search(raw))):
                     continue
                 # the innermost callable holding this line

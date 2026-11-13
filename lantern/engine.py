@@ -2,13 +2,51 @@
 
 from __future__ import annotations
 
+import contextlib
+import gc
+import threading
 from pathlib import Path
 
 from . import bridge, calls, cpp_frontend, csharp_frontend, dart_frontend, go_frontend, java_frontend, js_frontend, kotlin_frontend, lanes, packs, php_frontend, python_frontend, ruby_frontend, rust_frontend, swift_frontend
 from .graph import Graph
 
 
+HOLD_FULL = 1_000_000       # middle passes of the collector before a full one: none while a map is built
+_HELD = threading.Lock()
+_held: list = [0, None]     # how many builds are under way, and the collector's thresholds before the first of them
+
+
+@contextlib.contextmanager
+def building():
+    """While a map is built, the full passes of Python's cycle collector wait (directive point 10, 2026-11-12).
+
+    Nearly everything made then is kept until the map is done: every function, call and link of the project. A full
+    pass looks through all of it again, finds nothing to free, and costs more the more there is: 6 of the 26 seconds
+    the map of Django took. The small and the middle passes go on as they were, so what the reading of one file
+    leaves behind is freed as before, and the most memory a run uses is what it was (measured: 894 MB against 893).
+    When the last build under way ends, however it ends, the thresholds are what they were before the first; a
+    collector the program around Lantern switched off is left off."""
+    with _HELD:
+        if _held[0] == 0:
+            _held[1] = gc.get_threshold()
+            gc.set_threshold(_held[1][0], _held[1][1], HOLD_FULL)
+        _held[0] += 1
+    try:
+        yield
+    finally:
+        with _HELD:
+            _held[0] -= 1
+            if _held[0] == 0:
+                gc.set_threshold(*_held[1])
+                _held[1] = None
+
+
 def build_graph(repo: str | Path) -> Graph:
+    with building():
+        return _build_graph(repo)
+
+
+def _build_graph(repo: str | Path) -> Graph:
     g = python_frontend.build_graph(repo)
     py = {"files": g.meta.get("files", 0), "lines": g.meta.get("lines", 0)}
     js = js_frontend.add_js(g, repo)

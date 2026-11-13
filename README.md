@@ -215,6 +215,14 @@ counts, at most once a day, and `lantern usage --show` prints exactly what). See
 `lantern analyze --privacy structure` to leave it out. With a cloud model, the source of each explained
 function is sent to that provider; use a local model to keep it on your machine.
 
+To make the next check of a project faster, Lantern keeps on this computer how each Python file read last time
+and what the Bandit scanner printed for the same set of files (in `~/.lantern/cache`, files only your user can
+read; they hold names and lines of your code, and never lie inside the project's own folder). What Lantern makes
+of them, every finding, rank and score, is worked out again in every run. A file that changed by one byte is read
+again. `lantern cache` shows how much is kept, `lantern cache --clear` removes it, and `LANTERN_CACHE=off` runs
+without it. The hosted service keeps nothing of this kind, and `lantern verify` never uses it: it exists to do the
+work again.
+
 ## Status and limits
 
 No PWA, cloud mode, or deployment-readiness score yet. Runtime tracing is Python-only. Very dynamic

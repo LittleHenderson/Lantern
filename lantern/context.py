@@ -37,6 +37,9 @@ SECURITY_WORDS = re.compile(
     r"signed|signing|hmac|auth|authenticate|authentication|credential|credentials|session|sessions|otp|totp|salt|"
     r"api key|apikey|cookie|cookies|csrf|xsrf|login|nonce|cnonce|jwt|private key|pin|mac|verify|verification)\b")
 PASSWORD_WORDS = re.compile(r"\b(?:password|passwords|passwd|pwd|pw|pass phrase|passphrase)\b")
+# Every one of those words holds `pass` or `pw`, and a name's words are its own letters in lower case: a file whose
+# text says neither, in any case, has no name the password check could count.
+MAY_NAME_A_PASSWORD = re.compile(r"pass|pw", re.I)
 # Words that say the hash is an identifier, a seed, a cache key or a checksum.
 NON_SECURITY_WORDS = re.compile(
     r"\b(?:id|ids|uid|uuid|guid|seed|seeds|rng|random|cache|cached|etag|checksum|checksums|content md 5|fingerprint|"
@@ -429,7 +432,7 @@ def handles_passwords(code_texts) -> list[tuple[str, int, str]]:
     rx = re.compile(r"[A-Za-z_][\w]*")
     out = []
     for f, t in code_texts:
-        if _bundle(t):
+        if _bundle(t) or not MAY_NAME_A_PASSWORD.search(t):
             continue
         js = not f.endswith(".py")
         code = code_only(t, js)

@@ -6,7 +6,7 @@ import errno
 import json
 import os
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Iterable
 
@@ -50,6 +50,41 @@ class Edge:
     lines: list[int] = field(default_factory=list)  # call-site lines in src's file
     via: str | None = None       # how it was resolved, for debugging and trust
     detail: str | None = None    # e.g. "PUT /api/items/{id}" on an HTTP edge, "onClick" on a UI edge
+
+
+_PLAIN = frozenset((str, int, float, bool, type(None)))
+
+
+def _saved(v):
+    """A value of a node or a link as it is saved: itself when it is text, a number or nothing, and a copy of every
+    list and table in it, which is what `dataclasses.asdict` gave (it is still asked for anything else)."""
+    t = type(v)
+    if t in _PLAIN:
+        return v
+    if t is list:
+        return [_saved(x) for x in v]
+    if t is dict:
+        return {_saved(k): _saved(x) for k, x in v.items()}
+    return asdict(_Box(v))["v"]
+
+
+@dataclass
+class _Box:
+    v: object
+
+
+_NODE_FIELDS = tuple(f.name for f in fields(Node))
+_EDGE_FIELDS = tuple(f.name for f in fields(Edge))
+
+
+def node_dict(n: Node) -> dict:
+    """A node as `dataclasses.asdict(n)` gives it, field by field (asdict copies every piece of text through
+    `copy.deepcopy`: 2.2 million calls for Laravel's map, twice a run, until 2026-11-12)."""
+    return {name: _saved(getattr(n, name)) for name in _NODE_FIELDS}
+
+
+def edge_dict(e: Edge) -> dict:
+    return {name: _saved(getattr(e, name)) for name in _EDGE_FIELDS}
 
 
 class Graph:
@@ -137,8 +172,8 @@ class Graph:
             "schema": SCHEMA_VERSION,
             "repo_root": self.repo_root,
             "meta": self.meta,
-            "nodes": [asdict(n) for n in self.nodes.values()],
-            "edges": [asdict(e) for e in self._edges.values()],
+            "nodes": [node_dict(n) for n in self.nodes.values()],
+            "edges": [edge_dict(e) for e in self._edges.values()],
             # Only the 200 most common texts are kept, but the totals are the true counts.
             "unresolved": dict(sorted(self.unresolved.items(), key=lambda kv: -kv[1])[:200]),
             "unresolved_totals": {"call_sites": sum(self.unresolved.values()), "distinct": len(self.unresolved),
