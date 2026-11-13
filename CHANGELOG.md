@@ -9,6 +9,14 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Simple is simpler (directive: user first). A function's panel opens on the Everyday lens, uses Simple's lens names
+  (Where it sits, not Mapped), and keeps the code and the Called by / Calls lists behind one button; its signature and
+  line range are Advanced only. The map offers Lanes and Path (Flowchart and Graph are Advanced views), and the function
+  list leaves out tests. A finding card shows its severity, where a visitor can reach it, the plain words and Fix this;
+  the rule, file and line, the paths, the scenario and the other actions open with a small Why? button, in place. Each
+  readiness step keeps its evidence behind Why? too, and the Terminal button is Advanced only (the \` key still opens it).
+  Advanced is unchanged.
+
 ## 0.11.0
 
 Lantern as a release reviewer: a release decision the score cannot speak over, problems followed across the whole
