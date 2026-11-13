@@ -867,6 +867,14 @@ async function renderReport(el, r) {
   fr.src = links.report;
 }
 
+// Notes on the map (directive step 5): the report in the frame asks this page for its run's notes. A note is only
+// words for the people who can open the run; the report draws each one as escaped text.
+window.lanternNotes = {
+  list: async () => S.frame && S.me ? (await api(`/v1/runs/${encodeURIComponent(S.frame.rid)}/notes`)).notes : [],
+  add: (node, body) => api(`/v1/runs/${encodeURIComponent(S.frame.rid)}/notes`, {method: 'POST', body: {node, body}}),
+  remove: id => api('/v1/notes/' + encodeURIComponent(id), {method: 'DELETE'}),
+};
+
 // ---- words from a model: consent first, then Explain (a job on the server) and Ask Lantern (an answer now)
 // Nothing goes to a model before the person has read where it goes and agreed; the server checks that too (412).
 const AI = {state: null, watching: {}};

@@ -809,6 +809,81 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         store.set_member_lanes(w["id"], target["account"], None if lanes is None else scope.code(lanes))
         return team_view(in_team(wid, who), who)
 
+    # ---- notes on the map (directive: user first, step 5) ----
+    # Short notes people leave on a function in a run's map, for the others who can open that run. Words only: a
+    # note is never part of the analysis and never reaches a model. Someone who sees only some layers neither sees
+    # nor leaves notes on the rest (each note keeps its function's layer). The author or the run's owner deletes one.
+    graph_cache: dict[str, tuple[float, dict]] = {}
+
+    def lanes_of(rid: str) -> dict:
+        """{node id: layer} for a finished run, from its own report data (cached while the file is unchanged)."""
+        f = Path(s.results_dir) / rid / "report.html"
+        try:
+            m = f.stat().st_mtime
+        except OSError:
+            raise HTTPException(409, "This run has no report yet.") from None
+        hit = graph_cache.get(rid)
+        if hit and hit[0] == m:
+            return hit[1]
+        from lantern.report import read_bundle
+        try:
+            nodes = (read_bundle(f).get("graph") or {}).get("nodes") or []
+        except Exception:  # noqa: BLE001: a damaged result file
+            raise HTTPException(409, "This report can't be read. Check the app again.") from None
+        got = {n["id"]: n.get("lane") for n in nodes if isinstance(n, dict) and isinstance(n.get("id"), str)}
+        if len(graph_cache) > 64:
+            graph_cache.clear()
+        graph_cache[rid] = (m, got)
+        return got
+
+    def may_see(lane, lanes: str) -> bool:
+        return lanes == "all" or lane is None or lane in (scope.decode(lanes) or scope.LANES)
+
+    def note_body(payload: dict) -> str:
+        b = payload.get("body")
+        b = b.strip() if isinstance(b, str) else ""
+        if not b or len(b) > 1000 or any(ord(ch) < 32 and ch not in "\n\t" for ch in b):
+            raise HTTPException(400, "Write a note of up to 1000 characters.")
+        return b
+
+    @app.get("/v1/runs/{rid}/notes")
+    async def list_notes(rid: str, request: Request):
+        who = await signed_in(request)
+        r = readable_run(rid, who)
+        owner = r["account"] == who["account"]
+        return {"notes": [{"id": n["id"], "node": n["node"], "body": n["body"], "created": n["created"],
+                           "by": n["label"].split(":", 1)[-1] or "Someone", "mine": n["account"] == who["account"],
+                           "can_delete": owner or n["account"] == who["account"]}
+                          for n in store.notes(r["id"]) if may_see(n["lane"], r["lanes"])]}
+
+    @app.post("/v1/runs/{rid}/notes", status_code=201)
+    async def add_note(rid: str, payload: dict, request: Request):
+        who = await signed_in(request)
+        r = readable_run(rid, who)
+        if r["status"] != "done":
+            raise HTTPException(409, "This run has no report yet.")
+        node, body = payload.get("node"), note_body(payload)
+        lanes = lanes_of(r["id"])
+        if not isinstance(node, str) or node not in lanes or not may_see(lanes[node], r["lanes"]):
+            raise HTTPException(404, "That function is not on this report's map.")
+        try:
+            nid = store.add_note(r["id"], node, lanes[node], who["account"], body, most=s.notes_per_run)
+        except LimitReached as e:
+            raise HTTPException(429, str(e)) from None
+        return {"id": nid}
+
+    @app.delete("/v1/notes/{nid}")
+    async def delete_note(nid: str, request: Request):
+        who = await signed_in(request)
+        n = store.note(nid) if isinstance(nid, str) and len(nid) <= 40 else None
+        r = readable_run(n["run"], who) if n else None    # 404 for someone who can't open the run
+        if not n or not may_see(n["lane"], r["lanes"]):
+            raise HTTPException(404, "No note with that id.")
+        if n["account"] != who["account"] and r["account"] != who["account"]:
+            raise HTTPException(403, "Only the note's author or the report's owner can delete it.")
+        store.delete_note(n["id"])
+        return {"deleted": n["id"]}
+
     @app.put("/v1/runs/{rid}/workspace")
     async def put_in_workspace(rid: str, payload: dict, request: Request):
         """Put one of your own finished runs in a workspace you are in (its members can then open it), or take it

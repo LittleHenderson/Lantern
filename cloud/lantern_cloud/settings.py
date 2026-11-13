@@ -63,6 +63,8 @@ class Settings:
     workspaces_per_owner: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_WORKSPACES_PER_OWNER", 10))
     workspace_people: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_WORKSPACE_PEOPLE", 25))
     open_invites: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_OPEN_INVITES", 10))
+    # Notes on the map (step 5): the most notes one report holds.
+    notes_per_run: int = field(default_factory=lambda: _env_int("LANTERN_CLOUD_NOTES_PER_RUN", 300))
     # Signs the short-lived links that open a run's report in a browser (a browser tab cannot send the sign-in
     # header). Empty: derived from the admin secret, or random for this process (links then end at a restart).
     view_secret: str = field(default_factory=lambda: os.environ.get("LANTERN_CLOUD_VIEW_SECRET", ""))
