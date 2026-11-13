@@ -45,6 +45,12 @@ async function appSmoke(url, out, image, expectText, slowTests) {
       await p.goto(url);
       await p.waitForSelector('[data-open]', { timeout: 180000 });
       await a11y.axe(p, `${name} home`, errs);
+      // onboarding (directive: user first): one button, then one plain question per screen
+      await p.click('#showus'); await p.waitForSelector('.onb .pick');
+      if (await p.$$eval('.onb .pick', a => a.length) !== 3) errs.push(`${name}: "Show us your project" should offer three places`);
+      await p.click('.onb .pick[data-to="computer"]'); await p.waitForSelector('#pickfolder');
+      await a11y.axe(p, `${name} onboarding`, errs);
+      await p.click('[data-back="where"]'); await p.click('[data-back=""]'); await p.waitForSelector('#showus');
       step(name, `keyboard: ${(await a11y.keyboard(p, `${name} home`, errs, 8)).join(' > ')}`);
       if (name === 'desk') await api('/api/settings', { view_mode: 'advanced' });
       await p.reload(); await p.waitForSelector('[data-open]');

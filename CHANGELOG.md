@@ -9,6 +9,14 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Getting started is one button: Simple's home on Lantern Cloud and in `lantern serve` opens with **Show us your
+  project**, then asks one plain question per screen (is it on this computer, on GitHub, or not sure?). The word
+  repository never shows; "Where do I find the link?" and "Is my code safe?" sit behind small Why? buttons, and
+  "I'm not sure" walks through finding a project an AI builder made, with the practice app as a way out. While a
+  check runs, Simple shows a real progress bar with the step it is on in plain words ("Step 2 of 4: Looking for
+  problems"), read from the pipeline's own log lines; the raw log is one tap away. Advanced keeps its add bar and
+  its log as before (directive: user first, step 2).
+
 ## 0.11.0
 
 Lantern as a release reviewer: a release decision the score cannot speak over, problems followed across the whole

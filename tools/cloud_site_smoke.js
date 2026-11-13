@@ -68,13 +68,21 @@ async function until(p, fn, timeout) {
     await p.screenshot({ path: `${out}-${tag}-runs.png`, fullPage: true });
     await a11y.axe(p, `${tag} my runs`, errs);
     await clean(p, 'my runs');
+    // onboarding (directive: user first): one button, then one plain question per screen, and no jargon on it
+    await p.click('#showus'); await p.waitForSelector('.onb .pick');
+    if (await p.$$eval('.onb .pick', a => a.length) !== 3) errs.push(`${tag}: "Show us your project" should offer three places`);
+    if (/repositor/i.test(await p.$eval('main', m => m.innerText))) errs.push(`${tag}: the word repository shows in Simple onboarding`);
+    await a11y.axe(p, `${tag} onboarding`, errs);
+    await p.click('.onb .pick[data-to="github"]'); await p.waitForSelector('.onb details.why');
+    await p.screenshot({ path: `${out}-${tag}-onboarding-github.png` });
+    await p.click('[data-back="where"]'); await p.click('[data-back=""]'); await p.waitForSelector('#showus');
     if (name === 'desk') {
       await p.click('#viewmode [data-m="advanced"]'); await p.waitForSelector('.ptable');
       await p.screenshot({ path: `${out}-${tag}-runs-advanced.png` });
       await clean(p, 'advanced');
       await p.click('#viewmode [data-m="simple"]'); await p.waitForSelector('article.app');
     }
-    await p.goto(site + '#/run/going1-demo-0000'); await p.waitForSelector('.progress .running-steps'); await p.waitForSelector('.progress .indeterminate');
+    await p.goto(site + '#/run/going1-demo-0000'); await p.waitForSelector('.progress .running-steps'); await p.waitForSelector('.progress .runbar, .progress .indeterminate');
     await p.screenshot({ path: `${out}-${tag}-progress.png` });
     await a11y.axe(p, `${tag} progress`, errs);
     await clean(p, 'progress');
