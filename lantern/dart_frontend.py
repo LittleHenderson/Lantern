@@ -31,6 +31,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, skipped
 
@@ -503,7 +504,7 @@ def add_dart(g: Graph, repo: str | Path) -> dict:
         total += lines
         is_test = bool(TEST_FILE_RE.search(rel))
         files.append((rel, lines, is_test))
-        _collect(model, rel, tree.root_node, is_test)
+        deep.whole((g, "dart"), rel, _collect, model, rel, tree.root_node, is_test)
     for rel, lines, is_test in files:
         g.add_node(Node(id=f"dt:{rel}", kind=MODULE, name=Path(rel).name, qualname=rel, file=rel, start_line=1,
                         end_line=lines))

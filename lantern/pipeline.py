@@ -112,6 +112,9 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
     from .calls import line_words
     if line_words(g.meta.get("calls")):
         log(f"calls   {line_words(g.meta.get('calls'))}")
+    from . import deep
+    if deep.line_words(g.meta):   # code nested deeper than a reader follows was left where the reading stopped
+        log(f"deep    {deep.line_words(g.meta)}")
     run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
     left = remote.skipped(repo) if remote.is_clone(repo) else None
     if left:   # the clone left out files Lantern does not read, to stay under the size cap (remote._checkout)
