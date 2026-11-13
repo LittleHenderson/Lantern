@@ -1195,6 +1195,10 @@ def _over_memory(rc, output: str) -> bool:
 OOM_WAIT_KILLED = 5.0
 OOM_WAIT = 1.0
 OOM_ASK_AGAIN = 0.2
+# The clock that asking goes by, and the wait between two asks. A test puts its own in their place, so that how often
+# Docker is asked is what this code decides and not how fast the machine starts a program.
+_oom_clock = time.monotonic
+_oom_wait = time.sleep
 
 
 def _docker_oom(docker: str, name: str, wait: float = 0.0) -> tuple[bool, int]:
@@ -1206,7 +1210,7 @@ def _docker_oom(docker: str, name: str, wait: float = 0.0) -> tuple[bool, int]:
     the run read as failed tests. So a "false" is asked again every `OOM_ASK_AGAIN` seconds until `wait` seconds
     have passed, and a "true" is believed at once. Anything else ends the asking as a no: Docker cannot be asked,
     ends with an error (the container is gone) or says other words."""
-    until = time.monotonic() + max(0.0, wait)
+    until = _oom_clock() + max(0.0, wait)
     asked = 0
     while True:
         asked += 1
@@ -1218,10 +1222,10 @@ def _docker_oom(docker: str, name: str, wait: float = 0.0) -> tuple[bool, int]:
         said = r.stdout.strip()
         if r.returncode != 0 or said not in ("true", "false"):
             return False, asked
-        left = until - time.monotonic()
+        left = until - _oom_clock()
         if said == "true" or left <= 0:
             return said == "true", asked
-        time.sleep(min(OOM_ASK_AGAIN, left))
+        _oom_wait(min(OOM_ASK_AGAIN, left))
 
 
 def _over_words(mb: int) -> str:

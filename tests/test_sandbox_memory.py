@@ -358,10 +358,30 @@ exit 0
 '''
 
 
-def _fake_docker(tmp_path, monkeypatch, run: str, inspect: str, killed: float = 0.6, other: float = 0.3) -> Path:
-    """`inspect` is what Docker answers, one line for each time it is asked. How long Lantern goes on asking is
-    made short here (`killed` seconds after a 137, `other` after any other error), so that a test of a "false"
-    that stays does not wait the seconds a real run waits."""
+class _Clock:
+    """The clock Lantern asks Docker by, in a test: time passes only while Lantern waits between two asks, and
+    each wait is written down. So how often Docker is asked is what the code decides: the first form of these
+    tests counted asks inside a fifth of a real second, and a stand-in that takes 0.15 s to answer, as on a busy
+    machine, failed one of them with correct code (the browser job of CI, fourth push of #186, had one failed
+    test of 4,745 that its log did not name)."""
+
+    def __init__(self):
+        self.now, self.waits = 0.0, []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def wait(self, seconds: float) -> None:
+        self.waits.append(seconds)
+        self.now += seconds
+
+
+def _fake_docker(tmp_path, monkeypatch, run: str, inspect: str) -> tuple[Path, _Clock]:
+    """`inspect` is what Docker answers, one line for each time it is asked. The asking goes by a clock of the
+    test's own (`_Clock`), with the waits a real run has: nothing here waits a real second."""
+    clock = _Clock()
+    monkeypatch.setattr(sandbox, "_oom_clock", clock, raising=False)
+    monkeypatch.setattr(sandbox, "_oom_wait", clock.wait, raising=False)
     where = tmp_path / "bin"
     where.mkdir(parents=True)
     (where / "docker").write_text(FAKE_DOCKER, encoding="utf-8")
@@ -369,10 +389,7 @@ def _fake_docker(tmp_path, monkeypatch, run: str, inspect: str, killed: float = 
     (where / "run.mode").write_text(run, encoding="utf-8")
     (where / "inspect.mode").write_text(inspect + "\n", encoding="utf-8")
     monkeypatch.setenv("PATH", str(where) + os.pathsep + os.environ["PATH"])
-    monkeypatch.setattr(sandbox, "OOM_WAIT_KILLED", killed, raising=False)
-    monkeypatch.setattr(sandbox, "OOM_WAIT", other, raising=False)
-    monkeypatch.setattr(sandbox, "OOM_ASK_AGAIN", 0.05, raising=False)
-    return where
+    return where, clock
 
 
 def _asked(where: Path) -> int:
@@ -386,7 +403,7 @@ def _asked(where: Path) -> int:
 def test_a_container_stopped_for_its_memory_is_said_and_no_failure(code, answer, over, tmp_path, monkeypatch):
     """Docker counts the memory a container uses and ends a program in it that goes over; asked afterwards, it says
     so. (A stand-in for the docker program; the real one is tried below.)"""
-    where = _fake_docker(tmp_path, monkeypatch, code, answer)
+    where, _ = _fake_docker(tmp_path, monkeypatch, code, answer)
     repo = _tiny(tmp_path / "tiny", "def test_ok():\n    assert True\n")
     lines = []
     r = sandbox.run(repo, PYTEST, log=lines.append, backend="docker", memory=512)
@@ -412,34 +429,32 @@ def test_dockers_answer_about_the_memory_may_come_after_the_containers_end(code,
     message may arrive after the container has ended. Asked once, right at the end, Docker said "false" in CI on
     2026-11-13 (the third push of #186, Python 3.13), and tests stopped for their memory read as tests that failed:
     "Blocked" where "Incomplete" is true. So a "false" is asked again for a while; a "true" is believed at once."""
-    where = _fake_docker(tmp_path, monkeypatch, code, answers, killed=5.0, other=5.0)
+    where, clock = _fake_docker(tmp_path, monkeypatch, code, answers)
     repo = _tiny(tmp_path / "tiny", "def test_ok():\n    assert True\n")
     lines = []
-    began = time.monotonic()
     r = sandbox.run(repo, PYTEST, log=lines.append, backend="docker", memory=512)
-    took = time.monotonic() - began
     assert r["over_memory"] is True and r["returncode"] is None and r["cancelled"] is False, (r["returncode"], lines)
     assert any("more memory than their limit (512 MB)" in x for x in lines), lines
     assert _asked(where) == asks                                 # and no more once Docker has said yes
-    assert took < 4.0, took                                      # the yes ends the waiting: not the 5 s it may take
+    assert clock.waits == [sandbox.OOM_ASK_AGAIN] * (asks - 1)   # the yes ends the waiting: one wait before each ask
     assert (where / "rm.log").read_text(encoding="utf-8").startswith("rm -f lantern-sbx-")
 
 
 @DOCKER_ONLY
-@pytest.mark.parametrize("code, wait", [("137", 0.6), ("1", 0.3)])
+@pytest.mark.parametrize("code, wait", [("137", "OOM_WAIT_KILLED"), ("1", "OOM_WAIT")])
 def test_a_no_that_stays_is_believed_after_a_wait_that_ends(code, wait, tmp_path, monkeypatch):
     """The twin: tests that failed, or were ended by a kill that was not for the container's memory. Docker goes on
     saying "false", Lantern stops asking when the wait is over, and the run is what it was: ended with that number.
     After a kill (137) the log says that Docker was asked and did not name the memory."""
-    where = _fake_docker(tmp_path, monkeypatch, code, "false")
+    where, clock = _fake_docker(tmp_path, monkeypatch, code, "false")
     repo = _tiny(tmp_path / "tiny", "def test_ok():\n    assert True\n")
     lines = []
-    began = time.monotonic()
     r = sandbox.run(repo, PYTEST, log=lines.append, backend="docker", memory=512)
-    took = time.monotonic() - began
     assert r["over_memory"] is False and r["returncode"] == int(code), lines
-    assert _asked(where) >= 3, _asked(where)                     # asked again, every 0.05 s here
-    assert took < wait + 3.0, took                               # and the asking ends
+    seconds = getattr(sandbox, wait)
+    assert sum(clock.waits) == pytest.approx(seconds), clock.waits        # asked for that long, and the asking ends
+    assert _asked(where) == len(clock.waits) + 1 >= seconds / sandbox.OOM_ASK_AGAIN + 1   # again after every wait
+    assert all(0 < w <= sandbox.OOM_ASK_AGAIN for w in clock.waits), clock.waits
     said = [x for x in lines if "did not say" in x]
     if code == "137":
         assert len(said) == 1 and "137" in said[0] and f"asked {_asked(where)} times" in said[0], lines
@@ -455,9 +470,10 @@ def test_a_kill_is_asked_about_longer_than_any_other_error(tmp_path, monkeypatch
     answer matters most. A test runner that lost a child to the limit reports a failure of its own (1, 2, ...)
     some time after the kill, when Docker has usually heard."""
     assert 0 < sandbox.OOM_ASK_AGAIN < sandbox.OOM_WAIT < sandbox.OOM_WAIT_KILLED <= 10
+    assert sandbox._oom_clock is time.monotonic and sandbox._oom_wait is time.sleep   # a real run goes by the real clock
     asks = {}
     for code in ("137", "1"):
-        where = _fake_docker(tmp_path / code, monkeypatch, code, "false", killed=1.0, other=0.2)
+        where, _ = _fake_docker(tmp_path / code, monkeypatch, code, "false")
         repo = _tiny(tmp_path / code / "tiny", "def test_ok():\n    assert True\n")
         assert sandbox.run(repo, PYTEST, log=QUIET, backend="docker", memory=512)["returncode"] == int(code)
         asks[code] = _asked(where)
@@ -472,14 +488,13 @@ def test_a_kill_is_asked_about_longer_than_any_other_error(tmp_path, monkeypatch
                                                       ("137", "", None, 1),
                                                       ("137", "false", "1", 1)])      # docker inspect ended with an error
 def test_docker_is_asked_no_more_often_than_it_takes(code, answers, rc, asks, tmp_path, monkeypatch):
-    where = _fake_docker(tmp_path, monkeypatch, code, answers, killed=5.0, other=5.0)
+    where, clock = _fake_docker(tmp_path, monkeypatch, code, answers)
     if rc:
         (where / "inspect.rc").write_text(rc, encoding="utf-8")
     repo = _tiny(tmp_path / "tiny", "def test_ok():\n    assert True\n")
-    began = time.monotonic()
     r = sandbox.run(repo, PYTEST, log=QUIET, backend="docker", memory=512)
     assert _asked(where) == asks, (_asked(where), r["returncode"])
-    assert time.monotonic() - began < 4.0
+    assert clock.waits == []                                     # and nothing is waited for
     assert r["over_memory"] is (code == "137" and answers == "true" and not rc)
 
 

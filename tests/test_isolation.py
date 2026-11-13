@@ -459,6 +459,45 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert any(d.lower().startswith("pyjwt[crypto]") for d in project["optional-dependencies"]["dev"])
 
 
+FAILED_RUN = """\
+....F...........s....                                                    [100%]
+=================================== FAILURES ===================================
+_________________ test_the_one_that_failed[137-0.6] _________________
+tests/test_x.py:12: in test_the_one_that_failed
+    assert asked >= 3
+E   AssertionError: 1
+E   assert 1 >= 3
+----------------------------- Captured stdout call -----------------------------
+E  this line is the test's own print and still shown: it starts like pytest's
+""" + "".join(f"SKIPPED [1] tests/test_y.py:{n}: needs Windows\n" for n in range(1, 26)) + \
+    "1 failed, 4715 passed, 29 skipped, 4 warnings in 1051.88s (0:17:31)\n"
+
+
+@pytest.mark.skipif(os.name != "posix" or not shutil.which("bash"), reason="the audit is a bash script")
+def test_a_failed_check_of_the_audit_names_what_failed(tmp_path):
+    """CI's browser job, 2026-11-13 (the fourth push of #186): "FAIL  pytest", then the last 20 lines of pytest's
+    output, which were 20 skipped tests (every pytest line carries -rs), then "1 failed, 4715 passed". Which test
+    had failed, and with what, was nowhere in the job's log. A failed check now shows first the names pytest gives
+    what failed and the lines that say why, then its last lines as before; a check that passed shows neither."""
+    audit = (ROOT / "tools" / "audit.sh").read_text(encoding="utf-8")
+    helpers = [line for line in audit.splitlines() if re.match(r"(ok|bad|named|check)\(\) ", line)]
+    assert [line.split("(")[0] for line in helpers] == ["ok", "bad", "named", "check"], [h[:30] for h in helpers]
+    (tmp_path / "run.log").write_text(FAILED_RUN, encoding="utf-8")
+    script = "\n".join(['W="$1"; FAILS=0', *helpers,
+                        'check "pytest" bash -c \'cat "$0"; exit 1\' "$2"', 'echo "fails=$FAILS passed=$PASSED"',
+                        'check "again" bash -c \'cat "$0"\' "$2"', 'echo "fails=$FAILS passed=$PASSED"'])
+    r = subprocess.run(["bash", "-c", script, "bash", str(tmp_path), str(tmp_path / "run.log")], capture_output=True,
+                       text=True, encoding="utf-8", timeout=60)
+    assert r.returncode == 0, r.stderr
+    failed, _, passed = r.stdout.partition("fails=1 passed=0\n")
+    lines = failed.splitlines()
+    assert lines[0] == "FAIL  pytest"
+    assert lines[1] == "_________________ test_the_one_that_failed[137-0.6] _________________"
+    assert lines[2:4] == ["E   AssertionError: 1", "E   assert 1 >= 3"], lines[:6]
+    assert lines[-1].startswith("1 failed, 4715 passed") and len([x for x in lines if x.startswith("SKIPPED")]) == 19
+    assert passed == "PASS  again\nfails=1 passed=1\n", passed   # a check that passed names nothing
+
+
 def test_this_run_is_isolated():
     from lantern import providers
     assert os.environ.get("LANTERN_OFFLINE") == "1" and os.environ.get("LANTERN_NO_REAL_PROVIDERS") == "1"

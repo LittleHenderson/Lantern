@@ -71,7 +71,12 @@ file. New entries go under `## Unreleased`, on top.
     believed at once; tests that passed are not asked about; and when a kill is never named as memory, the log says
     that Docker was asked and how often. `tests/test_sandbox_memory.py` (50 tests: on 0.11.0 49 failed and 1 needs
     Docker; now 49 pass; 13 of them are new with this correction and use a stand-in for the docker program, and 7
-    of the 13 failed on the code that asked once).
+    of the 13 failed on the code that asked once). Those 13 go by a clock of their own (`sandbox._oom_clock` and
+    `_oom_wait`, which a test replaces; a real run goes by the real clock): as first written they counted asks
+    inside a fraction of a real second, so they depended on how fast the machine starts a program. With a stand-in
+    that takes 0.15 s to answer, one of the 13 failed on correct code, and three with 0.3 s (measured here); now all
+    13 pass with a stand-in that takes 0.15 s and with one that takes 0.5 s. That fault was in the tests, not in
+    Lantern.
   - **The command line runs the tests the way the app does.** `lantern analyze PATH --trace --sandbox -- <test
     command>` runs them in the sandbox (only a test command, started in the folder the app would start it in);
     without `--sandbox` the command runs in the project's folder as the person, as before, with 15 minutes unless
@@ -167,6 +172,15 @@ file. New entries go under `## Unreleased`, on top.
     ordinary user, with the machine's rule (`kernel.apparmor_restrict_unprivileged_userns`) taken away for that one
     command and put back after it, and under `LANTERN_TESTS_COMPLETE=no-skips`, so a test of that file that is
     skipped fails the run and is named (`.github/workflows/ci.yml`; `tests/test_isolation.py` reads the step).
+  - **A failed check of the one-command audit names what failed.** `tools/audit.sh` showed the last 20 lines of a
+    failed step. Every pytest line there carries `-rs`, so after a failed test those 20 lines can all be skipped
+    tests: CI's browser job on this change's fourth push ended "FAIL  pytest ... 1 failed, 4715 passed, 29
+    skipped" and its log said nowhere which test had failed, or with what (the same job passed in the other run of
+    that push, so which test it was is not known; the tests of the paragraph on memory above, which depended on the
+    machine's speed, are the ones this change had added). A failed step now shows first the heading pytest gives
+    each test that failed and the lines that say why (`named`, 60 lines at most), then its last 20 lines as before;
+    a step that passed shows neither (`tests/test_isolation.py::test_a_failed_check_of_the_audit_names_what_failed`
+    runs the script's own four helper lines on such a log: it failed before the change).
   - Found and not fixed: on a Linux system that refuses an ordinary user a user namespace (GitHub's machines do),
     a Lantern started by an ordinary user with no Docker has no network of the run's own: tests that start their
     app's server are refused there as before, the log and the sheet say why, and such a run reads Incomplete; a
