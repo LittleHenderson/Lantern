@@ -9,6 +9,111 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- **A project's tests get an answer in the sandbox** (2026-11-13; the first stage of "a firm pass or fail": Lantern
+  runs a project's own tests in a sealed place and the release decision says Passed or Blocked for it). The measure
+  was Lantern itself, its own tests run by Lantern in the sandbox on Linux, the way the app's "Watch my tests run"
+  does it. On 0.11.0 they got no answer: the run was stopped at ten minutes whatever anybody wanted, and of the 109
+  test files run there one by one 85 passed and 24 did not, each for something a test has at home and the sandbox
+  refused or took away. Every cause was fixed after a test that failed, and stands beside twins that reach outside
+  and must stay refused.
+  - **The tests may change their own copy.** The sandbox runs the tests on a copy of the project that is thrown
+    away afterwards, and until now the copy could not be changed either (every write bit taken off it; under Docker
+    the project itself was mounted read-only). A test that writes a file beside the code (a coverage record, a
+    snapshot, a small database), or copies a sample folder and writes into the copy, failed there, as a refused
+    write ("Incomplete") or on the copy's own marks ("Blocked: the tests failed"). Now the copy is the tests' own;
+    the project and everything else on the computer stay out of reach as before, and an app one of Lantern's own
+    drivers starts (`lantern behave`) still gets a copy it cannot change. When Lantern is root the copy is handed to
+    the user the tests run as, no link followed. `tests/test_sandbox_copy.py` (8 tests: on 0.11.0 6 failed and 2
+    need Docker; now 6 pass).
+  - **A project may talk to itself.** Tests that start their app's server and call it are how most web projects are
+    tested, and the sandbox refused every listener and every connection, also on this computer. Now the tests get a
+    network of their own, which holds this computer's own address and nothing else: Docker's container, and on
+    Linux a network namespace the launcher makes for the run (`lantern/_jail.py`, policy `own_net`). No other
+    computer can be reached from it, by any language, and neither can what the other programs of this computer
+    listen at by address or by socket name. The
+    Python guard lets this computer's own addresses through only there (it checks the network's number against its
+    own process) and refuses any other address before it is tried, so the log still says what was reached for.
+    `run.json` says `trace.own_network`. Where no such network can be made (macOS, Windows, a Linux system that
+    refuses the rights it takes) nothing on this computer is let through, as before, and the sheet says which it
+    is. Found on the way and closed: another program's socket file and socket name were let through by the guard.
+    `tests/test_sandbox_own_network.py` (18 tests: on 0.11.0 12 failed, 3 passed, 3 need Docker; now 15 pass).
+  - **The time a run gets is a setting.** Ten minutes unless the person says otherwise, from 1 to 240: the minutes
+    field of the "Watch my tests run" sheet (remembered for the next run), `--test-minutes N` on the command line,
+    `LANTERN_TEST_MINUTES` for an installation. `sandbox.time_limit` is the one place that says how many seconds
+    that is, and anything that is no whole number in the range is refused with a sentence, never quietly replaced.
+    Tests stopped by the clock did not finish: `run.json` says `trace.timed_out` and `trace.time_limit`, the
+    release decision is Incomplete with the way to give more time, and the score's "Tests pass" check is `skip`
+    with `required` (no points, no failure; until now it read `fail` beside a decision that said "not a pass and
+    not a failure"). The processor time a process may use follows the limit on every processor the run may use
+    (tests at work on four processors met the old limit before the clock, which read as a failure).
+  - **The memory a run gets is a setting, and is memory in use.** 2 GB unless the person says otherwise, from 128
+    MB: the memory field of the sheet, `--test-memory MB`, `LANTERN_TEST_MEMORY_MB`. What is counted is what the
+    tests and everything they started have in use together: Docker counts it for the container (with no swap
+    beside it), and on Linux the launcher's supervisor watches it from outside. Until now each Python process had 2
+    GB of address space, which a program runs out of while it uses little (a file mapped, threads, an allocator's
+    arenas): Lantern's own tests were refused memory after 302 of them, and that read as "the tests failed". Tests
+    stopped for their memory did not finish (`trace.over_memory`, `trace.memory_limit`): Incomplete, with the way
+    to give more. On macOS the limit is still on the address space and on Windows it is the job's limit for each
+    process; there tests that go over fail in their own way. `tests/test_sandbox_memory.py` (37 tests: on 0.11.0
+    36 failed and 1 needs Docker; now 36 pass).
+  - **The command line runs the tests the way the app does.** `lantern analyze PATH --trace --sandbox -- <test
+    command>` runs them in the sandbox (only a test command, started in the folder the app would start it in);
+    without `--sandbox` the command runs in the project's folder as the person, as before, with 15 minutes unless
+    `--test-minutes` says otherwise. A command over its limit there, and under `lantern trace`, used to end the
+    whole check with a Python error and no result, and only the first program was ended. Now the command runs in a
+    process group of its own, the group is ended at the limit, on Ctrl-C and when Lantern is told to end, and the
+    check ends with a result that says the tests were stopped. `tests/test_test_time_limit.py` (27 tests: on 0.11.0
+    all 27 failed; now 27 pass).
+  - **The Python guard and a project's own ways** (each found by running Lantern's tests in the sandbox). A project
+    that adds an audit hook of its own (a guard like Lantern's) never saw what the sandbox refuses, because Python
+    calls the sandbox's hook first: now the guard keeps the hooks a program adds and calls them itself, after it
+    has written its own line and before it refuses, so a project's hook may refuse its own way and whatever it lets
+    through is refused as before. An address written as a number is no question to the network
+    (`getaddrinfo("192.0.2.1", 80)` is answered; going there is refused, and a name is still refused before
+    anything is asked). A name beside an open folder nested deeper than the system writes paths is placed by going
+    up from it. A link that is removed, renamed or put in another name's place is judged as the name it is, by the
+    folder it is in: the guard followed it and judged what it names, so a test could not remove a link it had made
+    to anything outside its folders (every virtual environment holds one), nor the folder that held it; a write, a
+    change of rights or dates, a copy and any name ending in a slash still go through the link and are refused
+    when it leads outside. A file outside can no longer be given a second name inside (`os.link`), which mattered
+    where no kernel wall stands behind the guard. Removing a tree 1,100 folders deep under the guard took 8.387
+    seconds and takes 0.129 (0.131 with no guard). `tests/test_sandbox_guards.py` (24 tests: on 0.11.0 13 failed, 7
+    passed, 4 need Docker; now 20 pass).
+  - **Lantern where the tests' user may not enter.** When Lantern is root the tests run as `nobody`, and a Lantern
+    installed in a folder closed to others started Python, which found no `lantern`: "the tests failed". Now the
+    launcher asks, as that user, for what the run is made of before anything starts, and if something cannot be
+    read the tests are not started and the results say why (`sandbox.Unavailable`, the launcher's word
+    `unreadable`). Ten more tests in `tests/test_sandbox_safety.py` (on 0.11.0 7 failed, 3 passed; now 10 pass).
+  - **A file its parser is not through with in time** is given up and named, and the check goes on. The parsers
+    are tree-sitter's and the time one takes over a file is its own; tree-sitter-dart's grows far faster than the
+    file on a type written inside itself (10,000 levels, a file of 60,245 bytes: 66 seconds; 40,000 levels: not
+    through after two minutes), and one such file kept the whole check waiting. A parser now gets 20 seconds for
+    one file (`deep.Timed`, `deep.PARSE_SECONDS`; only the Dart reader's so far, the one grammar this was measured
+    on). The file is on the map as a file, nothing written in it is, and the log and the Evidence Limits name it
+    (`meta.too_deep.slow`). `tests/test_slow_file.py` (14 tests).
+  - **The website's help page, the terms and the tester sheet said 50 checks a day** where the service has been
+    set to 300. The page now names the limits the service runs with (`site.page(version, per_day, everyone)`), and
+    the two documents say 300.
+  - **The browser check of the website waited a blind 90 seconds** for the screenshot's card whenever the answer
+    was anything but three wordings of a good one, then said only that it had timed out. It now waits for any
+    answer and says one that is no reading at once, in the card's own words (`tools/waiting.js`,
+    `tests/test_smoke_waits.py`).
+  - Changed tests: three of Lantern's own tests took for granted that no sandbox is around them (a place in `/tmp`
+    every user may enter, no guard loaded, no kernel rules yet) and now say what they need; the older test of a run
+    stopped by the clock said `fail` for the score and now says "not finished"; the sandbox's own planted tests
+    write to a folder outside the copy, since writing to the copy is no longer refused.
+  - Found and not fixed: the memory limit of the restricted process on Linux is a watch from outside, a few times a
+    second, and no wall; a hostile test can print the launcher's memory line and end with 118, and then reads
+    Incomplete where it would have read Blocked (never Passed); the file-size and open-files limits, a kernel that
+    ends a process for the computer's own memory, Windows's per-process memory limit and a test runner that is not
+    installed all read as "the tests failed"; the copy the tests run on leaves out `.git`; a Lantern ended by force
+    leaves the run's temp copy and, under Docker (no longer started with `--rm`, so that Docker can be asked why a
+    command ended), the ended container; Landlock stacks at most 16 rule sets, and a sandbox inside the sandbox
+    gets no network of its own; a project's own audit hook that asks to be traced is called with tracing off;
+    making a folder nest some thousand levels deep by full path is still slow under the guard (1,100 levels about
+    7.5 seconds, 0.3 with none); tree-sitter 0.23 and 0.24 cannot load tree-sitter-dart 0.1.0, though
+    `pyproject.toml` still allows them.
+
 ## 0.11.0
 
 Lantern as a release reviewer: a release decision the score cannot speak over, problems followed across the whole

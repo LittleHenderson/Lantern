@@ -12,7 +12,7 @@ willing to upload a .zip). One of them should be a working engineer, for task 4.
 ## Before the round (host)
 
 1. Check lantern-cloud is up: open https://lantern-cloud.fly.dev/v1/health (or wait for the next green `uptime` run).
-2. Make sure the day's limits are not spent: each account gets 50 checks a day.
+2. Make sure the day's limits are not spent: each account gets 300 checks a day.
 3. Have the sheet below ready, one row per tester per task, and a timer.
 4. Watch, do not help. When a tester gets stuck for more than three minutes, note what they were trying, then help
    and mark the task **fail**.

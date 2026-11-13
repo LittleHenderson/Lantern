@@ -480,9 +480,24 @@ def public_place():
         yield ""                                    # no such places there, and nothing asks for one
         return
     import tempfile
-    place = tempfile.mkdtemp(prefix="lantern-test-place-", dir=next(p for p in ("/tmp", "/var/tmp") if os.path.isdir(p)))
+    # A sandbox around these tests (Lantern's own, when Lantern runs them) has said where they may write: its temp
+    # folder, which is its user's alone. Nothing is tried outside it, and a place every user may enter is not there.
+    boxed = bool(os.environ.get("LANTERN_SANDBOX_WRITABLE"))
+    place = None
+    for where in ((tempfile.gettempdir(),) if boxed else ("/tmp", "/var/tmp")):
+        try:
+            made = tempfile.mkdtemp(prefix="lantern-test-place-", dir=where)
+        except OSError:
+            continue
+        os.chmod(made, 0o755)
+        if ng._everyone_passes(made):
+            place = made
+            break
+        shutil.rmtree(made, ignore_errors=True)
+    if place is None and boxed:
+        pytest.skip("the sandbox these tests run in gives them no folder that every user of the computer may enter")
+    assert place is not None, "no folder to make a place for the guard's copy in"
     try:
-        os.chmod(place, 0o755)
         yield place
     finally:
         shutil.rmtree(place, ignore_errors=True)

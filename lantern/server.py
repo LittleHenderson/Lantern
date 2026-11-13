@@ -178,6 +178,10 @@ class Store:
         keep["share_usage"] = bool(s.get("share_usage"))
         keep["view_mode"] = "advanced" if s.get("view_mode") == "advanced" else "simple"
         keep["backdrop"] = s.get("backdrop") if s.get("backdrop") in ("off", "subtle", "bold") else "subtle"
+        if _int(s.get("test_minutes")) is not None and 1 <= s["test_minutes"] <= 240:
+            keep["test_minutes"] = s["test_minutes"]     # how long "Watch my tests run" lets the tests take
+        if _int(s.get("test_memory_mb")) is not None and 128 <= s["test_memory_mb"] <= 1 << 20:
+            keep["test_memory_mb"] = s["test_memory_mb"]  # ... and how much memory they may have in use
         pk = s.get("packs") if isinstance(s.get("packs"), dict) else {}
         names = [n for n in pk.get("disabled") or [] if isinstance(n, str) and PACK_NAME.match(n)]
         if names or pk.get("changed_at"):
@@ -514,12 +518,14 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
         app.store.confirm_test(p["id"], " ".join(cmd))   # typed in full by the user: that is the confirmation
         det = sandbox.detect(repo)
         test_cwd = det.get("cwd", "") if det.get("language") == language else ""
+        minutes = test_minutes(app.store)       # the limit set in the sheet of "Watch my tests run", else ten
+        memory = test_memory(app.store)         # ... and the memory set there, else 2 GB
         stop = threading.Event()
 
         def work(log):
             try:
                 return pipeline.analyze(repo, out, privacy_default, trace_cmd=cmd, log=log, sandbox=True,
-                                        test_cwd=test_cwd, cancel=stop)
+                                        test_cwd=test_cwd, cancel=stop, test_minutes=minutes, test_memory=memory)
             except pipeline.Stopped as e:   # asked to (POST /api/jobs/<id>/stop): not an error, and nothing changed
                 return {"cancelled": True, "not_ended": e.not_ended[:10]}
         return {"job": app.jobs.start(p["id"], "trace", work, stop=stop)}
@@ -660,12 +666,38 @@ def packs_list(app, pid: str = "", all_projects: bool = False) -> list[dict]:
     return rows
 
 
-def detect_test_command(repo: Path) -> dict:
-    """The command the sheet shows first (see `sandbox.detect`), plus which sandbox will run it."""
+def test_minutes(store) -> int:
+    """The minutes a test run gets in the app: what the person last wrote in the sheet, else what the installation
+    says (LANTERN_TEST_MINUTES), else ten. A saved value of another shape counts as none."""
+    from . import sandbox
+    try:
+        return sandbox.time_limit(store.settings().get("test_minutes")) // 60
+    except ValueError:
+        return sandbox.time_limit() // 60
+
+
+def test_memory(store) -> int:
+    """The megabytes of memory a test run gets in the app: what the person last wrote in the sheet, else what the
+    installation says (LANTERN_TEST_MEMORY_MB), else 2 GB. A saved value of another shape counts as none."""
+    from . import sandbox
+    try:
+        return sandbox.memory_limit(store.settings().get("test_memory_mb"))
+    except ValueError:
+        return sandbox.memory_limit()
+
+
+def detect_test_command(repo: Path, minutes: int | None = None, memory: int | None = None) -> dict:
+    """The command the sheet shows first (see `sandbox.detect`), plus which sandbox will run it, for how long
+    (`minutes`: the limit the run would have; `minutes_range`: what the person may set instead) and with how much
+    memory (`memory_mb`, `memory_range`, in megabytes)."""
     from . import sandbox
     d = sandbox.detect(repo)
-    d["sandbox"] = sandbox.describe(repo, d["language"])
-    d["leaves"] = "Nothing leaves this computer: the tests run with the network off."
+    d["sandbox"] = sandbox.describe(repo, d["language"], minutes=minutes, memory=memory)
+    d["minutes"] = sandbox.time_limit(minutes) // 60
+    d["minutes_range"] = list(sandbox.MINUTES)
+    d["memory_mb"] = sandbox.memory_limit(memory)
+    d["memory_range"] = list(sandbox.MEGABYTES)
+    d["leaves"] = "Nothing leaves this computer: the tests have no way out to the internet or to your network."
     return d
 
 
@@ -945,7 +977,7 @@ class Handler(BaseHTTPRequestHandler):
             p = app.store.project(m.group(1))
             if not p:
                 return self._err(404, "unknown project")
-            d = detect_test_command(Path(p["path"]))
+            d = detect_test_command(Path(p["path"]), test_minutes(app.store), test_memory(app.store))
             d["confirmed"] = d["command"] in app.store.confirmed_tests(p["id"])
             return self._json(d)
         m = re.fullmatch(r"/api/projects/(\w+)/plan", path)
@@ -1092,10 +1124,19 @@ class Handler(BaseHTTPRequestHandler):
             cmd = str(b.get("command") or "").strip()
             words = sandbox.split(cmd)
             language = sandbox.check_command(words)   # ValueError -> 400 with the accepted runners
+            # How long the tests may take: what the sheet's field says (a whole number from 1 to 240; anything else
+            # -> 400, never quietly another number), else what was set the last time, else ten minutes.
+            minutes = test_minutes(app.store) if b.get("minutes") is None else sandbox.time_limit(b["minutes"]) // 60
+            # How much memory they may have in use, the same way (megabytes, from 128; else the last one set, else 2 GB)
+            memory = test_memory(app.store) if b.get("memory_mb") is None else sandbox.memory_limit(b["memory_mb"])
             canon = " ".join(words)
             if not b.get("confirm") and canon not in app.store.confirmed_tests(p["id"]):
                 return self._err(409, "confirm this command first: the sheet shows what will run and where")
             app.store.confirm_test(p["id"], canon)
+            if b.get("minutes") is not None and app.store.settings().get("test_minutes") != minutes:
+                app.store.save_settings({**app.store.settings(), "test_minutes": minutes})   # remembered for the next run
+            if b.get("memory_mb") is not None and app.store.settings().get("test_memory_mb") != memory:
+                app.store.save_settings({**app.store.settings(), "test_memory_mb": memory})
             det = sandbox.detect(repo)
             test_cwd = det.get("cwd", "") if det.get("language") == language else ""
             privacy = app.store.settings().get("privacy", "full")
@@ -1107,19 +1148,22 @@ class Handler(BaseHTTPRequestHandler):
             def work(log):
                 try:
                     res = pipeline.analyze(repo, out, privacy, trace_cmd=words, log=log, sandbox=True,
-                                           test_cwd=test_cwd, cancel=stop)
+                                           test_cwd=test_cwd, cancel=stop, test_minutes=minutes, test_memory=memory)
                 except pipeline.Stopped as e:
                     # The person pressed Stop. Not an error: the job ends `done`, no result file was written, and
                     # the results are those of the last check that finished.
                     return {"cancelled": True, "ran": True, "unavailable": None, "returncode": None, "observed": 0,
-                            "recall": None, "timed_out": False, "blocked": [], "not_ended": e.not_ended[:10],
-                            "note": None, "score_before": before_score, "score_after": before_score, "summary": None}
+                            "recall": None, "timed_out": False, "over_memory": False, "blocked": [],
+                            "not_ended": e.not_ended[:10], "note": None, "score_before": before_score, "score_after": before_score, "summary": None}
                 run = _load(out / "run.json") or {}
                 tr = run.get("trace") or {}
                 after = _load(out / "readiness.json") or {}
                 return {"returncode": tr.get("returncode"), "observed": tr.get("observed_edges"), "recall": tr.get("recall"),
                         "backend": tr.get("backend"), "language": tr.get("language"), "traced": tr.get("traced"),
                         "timed_out": tr.get("timed_out"), "blocked": tr.get("blocked") or [],
+                        "time_limit": _int(tr.get("time_limit")),      # the seconds the tests had
+                        # stopped because they used more memory than the megabytes they had
+                        "over_memory": tr.get("over_memory") is True, "memory_limit": _int(tr.get("memory_limit")),
                         # the sandbox could not be set up, so the tests were not run (the reason, in Lantern's words)
                         "ran": tr.get("ran") is not False, "unavailable": tr.get("unavailable"), "cancelled": False,
                         # what the tests started and Lantern could not end, in its own words (empty: nothing is left)

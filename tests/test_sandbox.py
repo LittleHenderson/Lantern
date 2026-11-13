@@ -7,6 +7,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -38,9 +39,10 @@ import os, socket, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+OUT = Path((HERE / "where.txt").read_text(encoding="utf-8").strip())    # a folder that is not the tests' own copy
 
-def test_write_to_the_project():
-    (HERE / "planted.txt").write_text("x")
+def test_write_outside_the_copy():
+    (OUT / "planted.txt").write_text("x")
 
 def test_open_a_socket():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -50,8 +52,8 @@ def test_open_a_socket():
 def test_write_below_python():
     if not sys.platform.startswith("linux"):
         return
-    # bypasses Python's own file functions: only the kernel (Landlock, read-only mount) can stop this
-    r = subprocess.run(["sh", "-c", "echo x > " + str(HERE / "planted-sh.txt")], capture_output=True, text=True)
+    # bypasses Python's own file functions: only the kernel (Landlock, a container's read-only files) can stop this
+    r = subprocess.run(["sh", "-c", "echo x > " + str(OUT / "planted-sh.txt")], capture_output=True, text=True)
     print("SH", r.returncode, r.stderr.strip())
     assert r.returncode == 0, r.stderr
 
@@ -64,11 +66,25 @@ def test_environment_is_scrubbed():
 
 
 @pytest.fixture()
-def planted(tmp_path):
+def outside():
+    """A folder that is not the tests' copy and that every user of this computer may come to and write in (a
+    test's tmp_path is its owner's alone, and the sandbox's tests run as `nobody` when Lantern is root): nothing
+    but the sandbox keeps the tests out of it."""
+    folder = Path(tempfile.mkdtemp(prefix="outside-"))
+    folder.chmod(0o777)
+    try:
+        yield folder
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+@pytest.fixture()
+def planted(tmp_path, outside):
     repo = tmp_path / "planted"
     (repo / "tests").mkdir(parents=True)
     (repo / "pyproject.toml").write_text("[project]\nname = 'planted'\n", encoding="utf-8")
     (repo / "tests" / "test_planted.py").write_text(PLANTED, encoding="utf-8")
+    (repo / "tests" / "where.txt").write_text(str(outside), encoding="utf-8")
     return repo
 
 
@@ -103,22 +119,27 @@ def test_at_least_one_edge_becomes_observed(backend, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-def test_planted_tests_cannot_write_reach_the_network_or_read_secrets(backend, planted, monkeypatch):
+def test_planted_tests_cannot_write_reach_the_network_or_read_secrets(backend, planted, outside, monkeypatch):
     monkeypatch.setenv("LANTERN_TEST_SECRET", "s3cret")
     monkeypatch.setenv("FAKE_API_KEY", "k")
+    if backend == "docker":              # a container has its own files: there the place outside is one of its folders
+        (planted / "tests" / "where.txt").write_text("/usr", encoding="utf-8")
     before = sorted(p.name for p in (planted / "tests").iterdir())
     r = sandbox.run(planted, ["python", "-m", "pytest", "-q", "-s", "-p", "no:randomly"], log=lambda m: None, backend=backend)
     out = r["output_tail"]
     assert r["returncode"] == 1, out
-    assert "test_write_to_the_project FAILED" in out or "FAILED tests/test_planted.py::test_write_to_the_project" in out
+    assert "test_write_outside_the_copy FAILED" in out or "FAILED tests/test_planted.py::test_write_outside_the_copy" in out
     assert "FAILED tests/test_planted.py::test_open_a_socket" in out
     assert "test_environment_is_scrubbed" not in out.split("short test summary")[-1], out   # the scrub test passed
     kinds = {b["kind"] for b in r["blocked"]}
     assert kinds == {"write", "network"}, r["blocked"]   # what the toast shows
     if sys.platform.startswith("linux") and (backend == "docker" or sandbox.landlock_abi() >= 1):
         assert "FAILED tests/test_planted.py::test_write_below_python" in out, out
-    # the project itself is untouched
+    # the project itself is untouched, and so is the folder outside
     assert sorted(p.name for p in (planted / "tests").iterdir()) == before
+    if sys.platform.startswith("linux") and (backend == "docker" or sandbox.landlock_abi() >= 1):
+        assert list(outside.iterdir()) == []
+    assert not (outside / "planted.txt").exists()
 
 
 # Tests that tidy up after themselves in their own temp folder. Python removes a folder tree by names beside an
@@ -154,16 +175,17 @@ def test_names_beside_an_open_folder(tmp_path):
     assert list(tmp_path.iterdir()) == []
 '''
 
-# The same way of naming a file, used to reach a file of the project from a folder the tests may write in.
+# The same way of naming a file, used to reach a file outside the tests' copy from a folder the tests may write in.
 REACH = '''
 import os
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+OUT = Path((HERE / "where.txt").read_text(encoding="utf-8").strip())
 
-def test_remove_a_project_file_beside_an_open_folder(tmp_path):
+def test_remove_a_file_outside_beside_an_open_folder(tmp_path):
     os.chdir(tmp_path)
-    fd = os.open(HERE, os.O_RDONLY)
+    fd = os.open(OUT, os.O_RDONLY)
     try:
         os.remove("keep.txt", dir_fd=fd)
     finally:
@@ -192,12 +214,19 @@ def test_tests_that_tidy_their_own_temp_folder_are_not_refused(backend, tmp_path
 
 @pytest.mark.skipif(os.unlink not in os.supports_dir_fd, reason="needs names beside an open folder (not on Windows)")
 @pytest.mark.parametrize("backend", BACKENDS)
-def test_a_project_file_named_beside_an_open_folder_is_refused_and_reported(backend, tmp_path):
-    """The dangerous twin: the name is read where the open folder is, not where the tests happen to stand."""
+def test_a_file_outside_named_beside_an_open_folder_is_refused_and_reported(backend, tmp_path, outside):
+    """The dangerous twin: the name is read where the open folder is, not where the tests happen to stand. (Until
+    2026-11-13 the folder was the project's copy, which the tests could not change either; now it is a folder
+    outside the copy, which is what they still cannot change.)"""
     repo = _tiny(tmp_path / "tiny", REACH)
+    (outside / "keep.txt").write_text("kept", encoding="utf-8")
+    (outside / "keep.txt").chmod(0o666)
+    # a container has its own files: there the folder outside is one of the container's, which holds no such file
+    (repo / "tests" / "where.txt").write_text("/usr" if backend == "docker" else str(outside), encoding="utf-8")
     r = sandbox.run(repo, ["python", "-m", "pytest", "-q", "-p", "no:randomly"], log=lambda m: None, backend=backend)
     assert r["returncode"] == 1, r["output_tail"]
     assert any(b["kind"] == "write" and "keep.txt" in b["what"] for b in r["blocked"]), r["blocked"]
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "kept"
     assert (repo / "tests" / "keep.txt").read_text(encoding="utf-8") == "kept"
 
 
@@ -233,13 +262,18 @@ def test_tests_that_use_an_event_loop_run_except_on_windows_where_the_guard_stil
     assert r["blocked"] == []
 
 
-def _guard_alone(tmp_path, code: str, *args: str, first: str = "") -> subprocess.CompletedProcess:
-    """A Python program with the sandbox's guard and nothing else around it, as on a system with no kernel layer."""
+def _guard_alone(tmp_path, code: str, *args: str, first: str = "", net: str | None = None) -> subprocess.CompletedProcess:
+    """A Python program with the sandbox's guard and nothing else around it, as on a system with no kernel layer.
+    `net` is what a launcher would have said about the network (LANTERN_SANDBOX_NET); nothing is said unless the
+    test says it: when these tests themselves run in a sandbox, the word of the sandbox around them is not theirs."""
     hook, room = tmp_path / "hook", tmp_path / "room"
     hook.mkdir(exist_ok=True)
     room.mkdir(exist_ok=True)
     (hook / "sitecustomize.py").write_text(sandbox.SITECUSTOMIZE, encoding="utf-8")
     env = {**os.environ, "PYTHONPATH": str(hook), "LANTERN_SANDBOX_WRITABLE": str(room)}
+    env.pop("LANTERN_SANDBOX_NET", None)
+    if net is not None:
+        env["LANTERN_SANDBOX_NET"] = net
     return subprocess.run([sys.executable, "-c", first + textwrap.dedent(code), *args], cwd=room, env=env,
                           capture_output=True, text=True, encoding="utf-8", timeout=120)
 
@@ -454,13 +488,13 @@ def test_runaway_tests_are_killed_at_the_wall_clock(backend, tmp_path):
         assert not left.stdout.strip(), "the container was not removed"
 
 
-def test_temp_copy_is_read_only_and_removed(tmp_path, monkeypatch):
+def test_the_tests_get_a_temp_copy_which_is_removed(tmp_path, monkeypatch):
+    """What the tests may and may not change there: `tests/test_sandbox_copy.py`."""
     seen = {}
     real = sandbox._stream
 
     def spy(cmd, cwd, env, timeout, log, **more):
         seen["cwd"], seen["env"] = Path(cwd), env
-        seen["writable"] = os.access(cwd, os.W_OK) if os.name == "posix" and os.geteuid() != 0 else False
         return real(cmd, cwd, env, timeout, log, **more)
     monkeypatch.setattr(sandbox, "_stream", spy)
     monkeypatch.setenv("LANTERN_TEST_SECRET", "s3cret")
@@ -468,7 +502,6 @@ def test_temp_copy_is_read_only_and_removed(tmp_path, monkeypatch):
     shutil.copytree(FIX / "shop", repo, ignore=shutil.ignore_patterns(".lantern", "__pycache__"))
     sandbox.run(repo, ["python", "-m", "pytest", "-q"], log=lambda m: None, backend="subprocess")
     assert seen["cwd"] != repo and "lantern-sandbox-" in str(seen["cwd"])   # a copy, not the project
-    assert not seen["writable"]
     assert "LANTERN_TEST_SECRET" not in seen["env"] and "lantern-sandbox-" in seen["env"]["HOME"]
     assert not seen["cwd"].exists()   # deleted after
 
@@ -476,7 +509,7 @@ def test_temp_copy_is_read_only_and_removed(tmp_path, monkeypatch):
 def test_backend_choice_and_description(monkeypatch, tmp_path):
     monkeypatch.setenv("LANTERN_SANDBOX", "subprocess")
     d = sandbox.describe(tmp_path, "python")
-    assert d["name"] == "subprocess" and any("read-only copy" in x for x in d["details"])
+    assert d["name"] == "subprocess" and any("a fresh copy of your project" in x for x in d["details"])
     assert any("environment variables are not passed on" in x for x in d["details"])
     assert sandbox.blocked_reasons('    msg = "LANTERN-SANDBOX-BLOCKED: " + what\nLANTERN-SANDBOX-BLOCKED: write to /app/x') == \
         [{"kind": "write", "what": "write to /app/x"}]

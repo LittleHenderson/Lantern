@@ -307,3 +307,46 @@ def test_the_apps_terminal_works_before_a_project_is_open():
     assert "argv[0] === 'projects'" in code and "argv[0] === 'open'" in code and "go('project', {project: q.id})" in code
     # everything else still goes to the one allow-listed route, as a list of words, never a shell line
     assert code.count("api(`/api/projects/${p.id}/cmd`, {method: 'POST', body: {argv}})") == 1
+
+
+# ---- the number of checks a day a person is told is the one the service runs with (2026-11-13: the help page, the
+# terms and the tester round's sheet still said 50 where the service had been set to 300 two days before)
+def _site_with(tmp_path, per_day: int, everyone: int) -> str:
+    gw_app = create_gateway(GwSettings(admin_secret="a" * 24, db_path=str(tmp_path / f"gw{per_day}.db"),
+                                       github_client_id="id", github_client_secret="secret"))
+    s = Settings(gateway_url="http://gateway.test/v1", public_url="https://lantern.example",
+                 db_path=str(tmp_path / f"c{per_day}.db"), results_dir=str(tmp_path / f"r{per_day}"),
+                 work_dir=str(tmp_path / f"w{per_day}"), audits=False, runs_per_day=per_day, global_runs_per_day=everyone)
+    app = create_app(s, transport=httpx.ASGITransport(app=gw_app), start_worker=False)
+    r = TestClient(app, base_url="https://lantern.example").get("/")
+    assert r.status_code == 200
+    return r.text
+
+
+@pytest.mark.parametrize("per_day,everyone,said", [(7, 23, "23"), (300, 1000, "1,000"), (1200, 25000, "25,000")])
+def test_the_website_says_the_limits_it_runs_with(tmp_path, per_day, everyone, said):
+    html = _site_with(tmp_path, per_day, everyone)
+    mine = f"{per_day:,}"
+    assert f"Each account can run {mine} checks a day, one at a time, and everyone together {said} a day" in html
+    assert f"Each account can run {mine} checks a day and one at a time" in html
+    assert "__RUNS_PER_DAY__" not in html and "__ALL_RUNS_PER_DAY__" not in html
+    assert set(re.findall(r"can run ([\d,]+) checks a day", html)) == {mine}
+
+
+def test_a_page_built_outside_a_service_names_the_limits_a_service_would_start_with(monkeypatch):
+    monkeypatch.setenv("LANTERN_CLOUD_RUNS_PER_DAY", "41")
+    monkeypatch.setenv("LANTERN_CLOUD_GLOBAL_RUNS_PER_DAY", "4100")
+    html, _ = site.page("1")
+    assert "Each account can run 41 checks a day, one at a time, and everyone together 4,100 a day" in html
+    assert "__RUNS_PER_DAY__" not in html and "__ALL_RUNS_PER_DAY__" not in html
+
+
+def test_the_written_pages_name_the_limit_the_service_is_deployed_with():
+    toml = (ROOT / "cloud" / "fly.toml").read_text(encoding="utf-8")
+    per_day = re.search(r"^\s*LANTERN_CLOUD_RUNS_PER_DAY\s*=\s*'(\d+)'", toml, re.M).group(1)
+    for name in ("docs/terms.md", "docs/tester-round.md"):
+        said = re.findall(r"(\d[\d,]*) checks a day", (ROOT / name).read_text(encoding="utf-8"))
+        assert said and set(said) == {per_day}, (name, said)
+    # the website's own page writes no number of its own: it is given the service's
+    page = (ROOT / "cloud" / "lantern_cloud" / "site" / "index.html").read_text(encoding="utf-8")
+    assert not re.search(r"\d[\d,]* checks a day", page) and page.count("__RUNS_PER_DAY__ checks a day") == 2

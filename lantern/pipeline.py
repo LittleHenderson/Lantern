@@ -57,9 +57,18 @@ class Stopped(Exception):
 
 def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] | None = None,
             no_scan: bool = False, log: Log = print, offline: bool | None = None, sandbox: bool = False,
-            test_cwd: str = "", cancel=None) -> dict:
+            test_cwd: str = "", cancel=None, test_minutes=None, test_memory=None) -> dict:
     """Graph -> (trace) -> scan -> readiness -> report -> evidence. Returns a short summary.
     `sandbox`: run `trace_cmd` (a test command) in `lantern.sandbox` instead of directly (the app always does).
+    `test_minutes`: how long the tests may take, a whole number from 1 to 240 (`sandbox.time_limit`; ValueError
+    for anything else, before anything is read). With no word the sandbox gives ten minutes, or what
+    LANTERN_TEST_MINUTES says, and the older way (in the project's folder) the fifteen it always gave. Tests
+    stopped at the limit are recorded as such (`trace.timed_out`, `trace.time_limit` in `run.json`) and the rest
+    of the check goes on: the release decision is then "Incomplete", never passed or failed.
+    `test_memory`: the megabytes of memory the tests may have in use in the sandbox, with everything they start,
+    from 128 to 1,048,576 (`sandbox.memory_limit`; ValueError for anything else, before anything is read; with no
+    word 2 GB, or what LANTERN_TEST_MEMORY_MB says). Tests stopped for their memory are recorded as such
+    (`trace.over_memory`, `trace.memory_limit`) and are "Incomplete" too.
     When the sandbox cannot be set up the tests are not run, `run.json` says why (`trace.ran` false,
     `trace.unavailable`), and the rest, which only reads the code, is done all the same. `cancel`: a
     threading.Event; set while the tests run, it ends them and everything they started, and `Stopped` is raised
@@ -81,12 +90,18 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
     # And how a file reads is kept between runs (`lantern/kept.py`), so a file that has not changed is not read
     # again; the run counts what it took from there and what it worked out anew, and says so.
     in_its_folder = bool(trace_cmd) and not sandbox
+    from . import sandbox as sbx
+    limit = None                # seconds for the tests; None: the older way's own (`trace.DEFAULT_TIMEOUT`)
+    if test_minutes is not None or (trace_cmd and (sandbox or sbx.time_asked())):
+        limit = sbx.time_limit(test_minutes)
+    room = sbx.memory_limit(test_memory) if test_memory is not None or (trace_cmd and sandbox) else None
     early = None
     with listing.one_run(Path(repo).resolve()), kept.tally():
         try:
             if not no_scan and not in_its_folder:
                 early = Early(Path(repo).resolve(), offline).start()
-            return _analyze(repo, out, privacy, trace_cmd, no_scan, log, offline, sandbox, test_cwd, cancel, early)
+            return _analyze(repo, out, privacy, trace_cmd, no_scan, log, offline, sandbox, test_cwd, cancel, early,
+                            limit, room)
         finally:
             if early is not None:
                 early.close()   # whatever is still going is ended: a run that stops or fails leaves nothing behind
@@ -94,13 +109,14 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
 
 
 def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log: Log, offline: bool, sandbox: bool,
-             test_cwd: str, cancel, early) -> dict:
+             test_cwd: str, cancel, early, limit=None, room=None) -> dict:
     from . import listing, remote
+    from . import sandbox as sbx
+    from . import trace as older
     from .engine import build_graph
     from .readiness import assess
     from .report import write_report
     from .security import scan
-    from .trace import merge_trace, run_trace
 
     timings = {}
     t = time.perf_counter()
@@ -125,10 +141,9 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
         t = time.perf_counter()
         extra: dict = {}
         if sandbox:
-            from . import sandbox as sbx
             nothing = {"returncode": None, "observed_edges": 0, "recall": None, "runtime_only": 0}
             try:
-                data = sbx.run(repo, trace_cmd, log=log, cwd_rel=test_cwd, cancel=cancel)
+                data = sbx.run(repo, trace_cmd, log=log, timeout=limit, cwd_rel=test_cwd, cancel=cancel, memory=room)
             except sbx.Unavailable as e:   # no sandbox, no tests; reading the code needs neither
                 data = None
                 extra = {"ran": False, "unavailable": str(e)}
@@ -138,15 +153,23 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
                 if data.get("cancelled"):   # stopped part-way: what was recorded until then is not a test run
                     log("trace   the tests were stopped before they ended; the results are left as they were")
                     raise Stopped(data.get("not_ended") or [])
-                extra = {k: data.get(k) for k in ("backend", "language", "traced", "timed_out", "blocked", "not_ended")}
+                extra = {k: data.get(k) for k in ("backend", "language", "traced", "timed_out", "blocked", "not_ended",
+                                                  "own_network")}
                 extra["ran"] = True
+                extra["time_limit"] = limit
+                extra["over_memory"] = bool(data.get("over_memory"))
+                extra["memory_limit"] = room
                 if data.get("traced"):
-                    m = merge_trace(g, data)
+                    m = older.merge_trace(g, data)
                 else:
                     m = dict(nothing, returncode=data.get("returncode"))
                 m["stderr_tail"] = data.get("stderr_tail")
         else:
-            m = merge_trace(g, run_trace(repo, trace_cmd))
+            data = older.run_trace(repo, trace_cmd, timeout=limit)   # looked up when it is called, as it always was
+            m = older.merge_trace(g, data)
+            extra = {"time_limit": limit if limit is not None else older.DEFAULT_TIMEOUT}
+            if data.get("timed_out"):
+                extra["timed_out"] = True
             listing.fresh(repo)     # the tests ran in the project's folder: what is listed from here on is looked up anew
             listing.fresh(Path(repo).resolve())
         timings["trace"] = round(time.perf_counter() - t, 2)
@@ -154,6 +177,15 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
                              "recall": m["recall"], "stderr_tail": (m.get("stderr_tail") or "")[-600:], **extra}
         log(f"trace   {m['observed_edges']} calls seen running, recall {m['recall']}, "
             f"{m['runtime_only']} runtime-only (exit {m['returncode']})")
+        if extra.get("timed_out"):   # said in so many words: "exit None" tells nobody what happened
+            had = sbx.minutes_words(extra.get("time_limit"))
+            log("trace   the tests were stopped at the time limit" + (f" ({had})" if had else "") + ": that is not "
+                "a pass and not a failure. They can be given more time (from 1 to 240 minutes).")
+        if extra.get("over_memory"):
+            had = sbx.memory_words(extra.get("memory_limit"))
+            log("trace   the tests were stopped because they used more memory than their limit"
+                + (f" ({had})" if had else "") + ": that is not a pass and not a failure. They can be given more "
+                "memory (--test-memory, in megabytes).")
     from .evidence import git_info
     git = git_info(repo)        # asked once: the findings' cases and the release decision name the same commit
     sec = None
