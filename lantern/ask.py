@@ -12,7 +12,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import programs, results
+from . import programs, release, results
 from .lanes import LANE_WORDS  # the four stack stops: Browser, Frontend, Server, Data
 
 SYSTEM = """You are Lantern's assistant inside the Lantern app. Lantern maps an app's code (every path from a
@@ -49,6 +49,9 @@ def facts(project_dir: Path, focus: dict | None = None, limit: int = 40, out: Pa
     lines = [f"FACTS for project {name or project_dir.name!r} (analysis results on disk):"]
     if rd:
         lines.append(f"Readiness: {rd.get('score')}/100, grade {rd.get('grade')}, shape {rd.get('shape')}.")
+        # The release decision (Blocked, Incomplete, Passed) with each criterion's state and reason: the answer to
+        # "can I ship this" is this, not the number. Results an older Lantern wrote have none.
+        lines += release.said(release.shown(rd))
         fails = [c for c in (rd.get("checks") or []) if isinstance(c, dict) and c.get("status") in ("fail", "partial")][:12]
         if fails:
             lines.append("Readiness checks not passing: " + "; ".join(f"{c.get('title')} ({c.get('status')}: {str(c.get('why') or '')[:80]})" for c in fails))

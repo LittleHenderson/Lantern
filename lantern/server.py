@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, learn, pipeline, remote, results, usage
+from . import __version__, learn, pipeline, release, remote, results, usage
 from .packs import PACK_NAME
 from .providers import DEFAULT_MODEL_NAME, DEFAULT_PROVIDER, PRESETS
 from .readiness import SHAPES
@@ -327,6 +327,7 @@ class App:
                 "languages": languages, "reachable_critical": reach_crit, "top_page": top_page,
                 "functions": _int(sec.get("total_callables")),
                 "score": _int(rd.get("score")), "grade": grade if grade in ("A", "B", "C", "D", "F") else None,
+                "release": (release.shown(rd) or {}).get("decision"),      # one of the three words, or nothing
                 "shape": shape if shape in SHAPES else None,
                 "counts": counts and {k: _int(counts.get(k)) or 0 for k in ("critical", "high", "medium", "low", "accepted")},
                 "finished_at": _str(run.get("finished_at")),
@@ -564,7 +565,7 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
         want, old = evidence.read_digest(ev)
 
         def work(log):
-            r = evidence.verify(repo, want, old, trace_cmd=None, offline=False)
+            r = evidence.verify(repo, want, old, trace_cmd=None, offline=False, beside=ev.parent)
             log(f"{'MATCH' if r.get('match') else 'DIFFERENT'}: report {r.get('report')}  rerun {r.get('rerun')}")
             if not r.get("match"):
                 log(str(r.get("note") or r.get("refused") or ""))
@@ -1201,7 +1202,8 @@ def _list_dir(raw: str) -> dict:
 LOCKED_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Lantern</title><body style="font:15px/1.5 system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 16px">
 <h1 style="font-size:20px">Lantern is running</h1><p>For safety, open the link that <code>lantern serve</code> printed
-in your terminal (it contains a one-time token). Run <code>lantern serve</code> again to get a new link.</p></body>"""
+in your terminal (it contains a one-time token). Run <code>lantern serve</code> again to get a new link.</p>
+<p><a href="/guide">How to use Lantern</a> (short animated demos; no link needed).</p></body>"""
 
 
 def _usage_sender() -> None:

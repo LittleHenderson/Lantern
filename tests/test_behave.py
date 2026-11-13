@@ -605,7 +605,9 @@ def test_the_command_ends_with_0_only_when_every_case_held_and_the_record_says_w
     assert first["ran"] and first["summary"] == {"held": 2, "broken": 0, "inconclusive": 0, "not-run": 0}
     of = first["of"]
     assert of["lantern"] == __version__ and of["commit"] is None and len(of["plan_sha256"]) == 64
-    assert set(of) == {"plan_sha256", "commit", "dirty", "lantern", "python", "system"}
+    # `code_sha256` since point 6: the release decision counts a record only for exactly the code it was run on
+    assert set(of) == {"plan_sha256", "code_sha256", "commit", "dirty", "lantern", "python", "system"}
+    assert len(of["code_sha256"]) == 64 and isinstance(first.get("seal"), str | dict)
 
     late = _repo(tmp_path / "late", DELETES_THEN_ASKS, NOTES_PLAN)
     assert cli.main(["behave", str(late), "--out", str(tmp_path / "o2")]) == 1

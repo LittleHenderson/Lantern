@@ -1,0 +1,1152 @@
+{
+"version": 1,
+"summary": {
+"version": 1,
+"languages": [
+"python",
+"typescript/javascript"
+],
+"not_inventoried": [],
+"written": {
+"total": 52,
+"outcomes": {
+"resolved": 19,
+"likely": 3,
+"possible": 1,
+"name-only": 0,
+"external": 19,
+"builtin": 7,
+"unresolved": 3
+},
+"reasons": {
+"call-result": 1,
+"local-unknown": 1,
+"parameter": 1
+},
+"by_via": {
+"import": 14,
+"name": 7,
+"jsx-render": 5,
+"builtin": 3,
+"constructor": 3,
+"global": 3,
+"self-method": 3,
+"library-result": 2,
+"local-ext-type": 2,
+"local-type": 2,
+"builtin-value": 1,
+"cls-constructor": 1,
+"self-attr-ext-type": 1,
+"self-attr-type": 1,
+"super": 1
+},
+"with_several_targets": 1,
+"lines_with_several_calls": 6
+},
+"handed": {
+"total": 1,
+"outcomes": {
+"resolved": 0,
+"likely": 1,
+"possible": 0,
+"name-only": 0,
+"external": 0,
+"builtin": 0,
+"unresolved": 0
+},
+"reasons": {},
+"by_via": {
+"ui-event": 1
+},
+"with_several_targets": 0,
+"lines_with_several_calls": 0
+},
+"implicit": {
+"total": 0,
+"outcomes": {
+"resolved": 0,
+"likely": 0,
+"possible": 0,
+"name-only": 0,
+"external": 0,
+"builtin": 0,
+"unresolved": 0
+},
+"reasons": {},
+"by_via": {},
+"with_several_targets": 0,
+"lines_with_several_calls": 0
+},
+"in_tests": {
+"total": 1,
+"outcomes": {
+"resolved": 1,
+"likely": 0,
+"possible": 0,
+"name-only": 0,
+"external": 0,
+"builtin": 0,
+"unresolved": 0
+},
+"reasons": {},
+"by_via": {
+"name": 1
+},
+"with_several_targets": 0,
+"lines_with_several_calls": 0
+}
+},
+"outcomes": {
+"resolved": "linked to one function in the repo",
+"likely": "linked to one function in the repo through a type Lantern worked out (not one written at the call)",
+"possible": "one of several functions in the repo; which one runs depends on the object at run time",
+"name-only": "guessed from the method name alone, because the object's type is unknown; can be wrong",
+"external": "a library function",
+"builtin": "a built-in of the language, Node or the browser",
+"unresolved": "not traced; the reason says why"
+},
+"reasons": {
+"parameter": "`{head}` is a parameter whose type Lantern cannot follow (none is written, or one it cannot see into)",
+"callback-parameter": "calls `{head}`, a function passed in as a parameter",
+"local-unknown": "`{head}` holds a value whose type Lantern does not know",
+"call-result": "called on the result of another call whose type Lantern does not know",
+"self-attribute": "`{base}` holds a value whose type Lantern does not know",
+"not-in-class": "neither the class nor a repo class it inherits from defines `{member}`, and it has no other base class that could",
+"unknown-base": "the class has a base class Lantern cannot look into (a library class, a library's star import, a computed base, or a file it cannot find), so `{member}` may be defined there",
+"this-outside-class": "`this` outside a class method",
+"repo-variable": "`{head}` is a variable in the repo whose value Lantern does not know",
+"missing-member": "`{base}` has no `{member}` that Lantern can find in the repo",
+"missing-module": "`{head}` comes from a file the code imports or requires that Lantern cannot find in the repository",
+"missing-export": "`{head}` is imported from a file in the repo that does not export it in a way Lantern can read",
+"not-defined": "`{head}` is not defined in this file or its imports (a global of the environment, a star import Lantern cannot read, or code outside the repo)",
+"computed": "the function is chosen at run time (an index, getattr or another computed expression)",
+"dynamic-require": "`{head}` is loaded by require() or import() of a path built at run time",
+"function-member": "`{member}` is a property of a function, not a function Lantern can follow",
+"global-property": "`{member}` is reached through the global object (`{head}`), which any script can add to, and Lantern does not know it as one of the browser's or Node's own names",
+"library-or-repo": "`{base}` holds a value from a library or the language itself, but the project has its own `{member}` (a method of one of its classes, or a function it puts on an object), so Lantern cannot tell which one this call reaches",
+"not-read": "Lantern's reader skipped this call (a gap in the reader, counted so the total stays complete)"
+},
+"sites": [
+{
+"at": "shop/app.py:5:14",
+"file": "shop/app.py",
+"line": 5,
+"col": 14,
+"callee": "FastAPI",
+"caller": "py:shop.app",
+"lang": "python",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:fastapi.FastAPI"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/app.py:8:9",
+"file": "shop/app.py",
+"line": 8,
+"col": 9,
+"callee": "app.get",
+"caller": "py:shop.app",
+"lang": "python",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:fastapi.FastAPI().get"
+],
+"via": "local-ext-type",
+"confidence": "inferred",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/app.py:10:16",
+"file": "shop/app.py",
+"line": 10,
+"col": 16,
+"callee": "Session",
+"caller": "py:shop.app.read_user",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.auth.Session.__init__"
+],
+"via": "constructor",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/app.py:11:19",
+"file": "shop/app.py",
+"line": 11,
+"col": 19,
+"callee": "s.login",
+"caller": "py:shop.app.read_user",
+"lang": "python",
+"group": "written",
+"outcome": "likely",
+"to": [
+"py:shop.auth.Session.login"
+],
+"via": "local-type",
+"confidence": "inferred",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/app.py:14:10",
+"file": "shop/app.py",
+"line": 14,
+"col": 10,
+"callee": "app.post",
+"caller": "py:shop.app",
+"lang": "python",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:fastapi.FastAPI().post"
+],
+"via": "local-ext-type",
+"confidence": "inferred",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/app.py:16:20",
+"file": "shop/app.py",
+"line": 16,
+"col": 20,
+"callee": "subprocess.call",
+"caller": "py:shop.app.backup",
+"lang": "python",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:subprocess.call"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/app.py:17:18",
+"file": "shop/app.py",
+"line": 17,
+"col": 18,
+"callee": "make_repo",
+"caller": "py:shop.app.backup",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.auth.make_repo"
+],
+"via": "name",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/app.py:18:11",
+"file": "shop/app.py",
+"line": 18,
+"col": 11,
+"callee": "r.save",
+"caller": "py:shop.app.backup",
+"lang": "python",
+"group": "written",
+"outcome": "likely",
+"to": [
+"py:shop.repo.UserRepo.save"
+],
+"via": "local-type",
+"confidence": "inferred",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/app.py:25:17",
+"file": "shop/app.py",
+"line": 25,
+"col": 17,
+"callee": "inner",
+"caller": "py:shop.app.helper",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.app.helper.inner"
+],
+"via": "name",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/auth.py:10:30",
+"file": "shop/auth.py",
+"line": 10,
+"col": 30,
+"callee": "UserRepo",
+"caller": "py:shop.auth.Session.__init__",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.repo.BaseRepo.__init__"
+],
+"via": "constructor",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/auth.py:13:30",
+"file": "shop/auth.py",
+"line": 13,
+"col": 30,
+"callee": "self.users.get",
+"caller": "py:shop.auth.Session.login",
+"lang": "python",
+"group": "written",
+"outcome": "likely",
+"to": [
+"py:shop.repo.UserRepo.get"
+],
+"via": "self-attr-type",
+"confidence": "inferred",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/auth.py:14:30",
+"file": "shop/auth.py",
+"line": 14,
+"col": 30,
+"callee": "check_password",
+"caller": "py:shop.auth.Session.login",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.auth.check_password"
+],
+"via": "name",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/auth.py:18:23",
+"file": "shop/auth.py",
+"line": 18,
+"col": 23,
+"callee": "hashlib.md5",
+"caller": "py:shop.auth.check_password",
+"lang": "python",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:hashlib.md5"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/auth.py:18:39",
+"file": "shop/auth.py",
+"line": 18,
+"col": 39,
+"callee": "password.encode",
+"caller": "py:shop.auth.check_password",
+"lang": "python",
+"group": "written",
+"outcome": "unresolved",
+"to": [],
+"via": null,
+"confidence": null,
+"reason": "parameter",
+"why": "`password` is a parameter whose type Lantern cannot follow (none is written, or one it cannot see into)",
+"test": false
+},
+{
+"at": "shop/auth.py:18:52",
+"file": "shop/auth.py",
+"line": 18,
+"col": 52,
+"callee": "hashlib.md5(password.encode()).hexdigest",
+"caller": "py:shop.auth.check_password",
+"lang": "python",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:hashlib.md5().hexdigest"
+],
+"via": "library-result",
+"confidence": "inferred",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/auth.py:22:29",
+"file": "shop/auth.py",
+"line": 22,
+"col": 29,
+"callee": "repo_mod.UserRepo",
+"caller": "py:shop.auth.make_repo",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.repo.BaseRepo.__init__"
+],
+"via": "constructor",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/cli.py:5:15",
+"file": "shop/cli.py",
+"line": 5,
+"col": 15,
+"callee": "click.command",
+"caller": "py:shop.cli",
+"lang": "python",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:click.command"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/cli.py:7:11",
+"file": "shop/cli.py",
+"line": 7,
+"col": 11,
+"callee": "helper",
+"caller": "py:shop.cli.admin",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.app.helper"
+],
+"via": "name",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/cli.py:11:10",
+"file": "shop/cli.py",
+"line": 11,
+"col": 10,
+"callee": "admin",
+"caller": "py:shop.cli.<main>",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.cli.admin"
+],
+"via": "name",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:6:36",
+"file": "shop/repo.py",
+"line": 6,
+"col": 36,
+"callee": "sqlite3.connect",
+"caller": "py:shop.repo.BaseRepo.__init__",
+"lang": "python",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:sqlite3.connect"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:9:33",
+"file": "shop/repo.py",
+"line": 9,
+"col": 33,
+"callee": "self.conn.execute",
+"caller": "py:shop.repo.BaseRepo.execute",
+"lang": "python",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:sqlite3.connect().execute"
+],
+"via": "self-attr-ext-type",
+"confidence": "inferred",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:15:28",
+"file": "shop/repo.py",
+"line": 15,
+"col": 28,
+"callee": "self.execute",
+"caller": "py:shop.repo.UserRepo.get",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.repo.BaseRepo.execute"
+],
+"via": "self-method",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:18:22",
+"file": "shop/repo.py",
+"line": 18,
+"col": 22,
+"callee": "self.validate",
+"caller": "py:shop.repo.UserRepo.save",
+"lang": "python",
+"group": "written",
+"outcome": "possible",
+"to": [
+"py:shop.repo.UserRepo.validate",
+"py:shop.repo.CachedUserRepo.validate"
+],
+"via": "self-method",
+"confidence": "possible",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:19:28",
+"file": "shop/repo.py",
+"line": 19,
+"col": 28,
+"callee": "self.execute",
+"caller": "py:shop.repo.UserRepo.save",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.repo.BaseRepo.execute"
+],
+"via": "self-method",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:22:20",
+"file": "shop/repo.py",
+"line": 22,
+"col": 20,
+"callee": "bool",
+"caller": "py:shop.repo.UserRepo.validate",
+"lang": "python",
+"group": "written",
+"outcome": "builtin",
+"to": [
+"builtin:bool"
+],
+"via": "builtin",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:27:21",
+"file": "shop/repo.py",
+"line": 27,
+"col": 21,
+"callee": "super",
+"caller": "py:shop.repo.CachedUserRepo.validate",
+"lang": "python",
+"group": "written",
+"outcome": "builtin",
+"to": [
+"builtin:super"
+],
+"via": "builtin",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:27:32",
+"file": "shop/repo.py",
+"line": 27,
+"col": 32,
+"callee": "super().validate",
+"caller": "py:shop.repo.CachedUserRepo.validate",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.repo.UserRepo.validate"
+],
+"via": "super",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:34:6",
+"file": "shop/repo.py",
+"line": 34,
+"col": 6,
+"callee": "classmethod",
+"caller": "py:shop.repo",
+"lang": "python",
+"group": "written",
+"outcome": "builtin",
+"to": [
+"builtin:classmethod"
+],
+"via": "builtin",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "shop/repo.py:36:19",
+"file": "shop/repo.py",
+"line": 36,
+"col": 19,
+"callee": "cls",
+"caller": "py:shop.repo.Settings.default",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.repo.Settings.__init__"
+],
+"via": "cls-constructor",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "tests/test_auth.py:5:30",
+"file": "tests/test_auth.py",
+"line": 5,
+"col": 30,
+"callee": "check_password",
+"caller": "py:tests.test_auth.test_check_password",
+"lang": "python",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"py:shop.auth.check_password"
+],
+"via": "name",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": true
+},
+{
+"at": "web/src/App.tsx:7:6",
+"file": "web/src/App.tsx",
+"line": 7,
+"col": 6,
+"callee": "BrowserRouter",
+"caller": "js:web/src/App::App",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:react-router-dom.BrowserRouter"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/App.tsx:8:8",
+"file": "web/src/App.tsx",
+"line": 8,
+"col": 8,
+"callee": "Routes",
+"caller": "js:web/src/App::App",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:react-router-dom.Routes"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/App.tsx:9:10",
+"file": "web/src/App.tsx",
+"line": 9,
+"col": 10,
+"callee": "Route",
+"caller": "js:web/src/App::App",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:react-router-dom.Route"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/App.tsx:9:44",
+"file": "web/src/App.tsx",
+"line": 9,
+"col": 44,
+"callee": "UserPage",
+"caller": "js:web/src/App::App",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"js:web/src/pages/UserPage::UserPage"
+],
+"via": "jsx-render",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/App.tsx:10:10",
+"file": "web/src/App.tsx",
+"line": 10,
+"col": 10,
+"callee": "Route",
+"caller": "js:web/src/App::App",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:react-router-dom.Route"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/App.tsx:10:40",
+"file": "web/src/App.tsx",
+"line": 10,
+"col": 40,
+"callee": "Admin",
+"caller": "js:web/src/App::App",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"js:web/src/pages/Admin::Admin"
+],
+"via": "jsx-render",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/api.ts:6:26",
+"file": "web/src/api.ts",
+"line": 6,
+"col": 26,
+"callee": "fetch",
+"caller": "js:web/src/api::getUser",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "builtin",
+"to": [
+"builtin:fetch"
+],
+"via": "global",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/api.ts:7:18",
+"file": "web/src/api.ts",
+"line": 7,
+"col": 18,
+"callee": "res.json",
+"caller": "js:web/src/api::getUser",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "builtin",
+"to": [
+"builtin:Promise<Response>.json"
+],
+"via": "builtin-value",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/api.ts:11:20",
+"file": "web/src/api.ts",
+"line": 11,
+"col": 20,
+"callee": "axios.post",
+"caller": "js:web/src/api::runBackup",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:axios.post"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/api.ts:15:15",
+"file": "web/src/api.ts",
+"line": 15,
+"col": 15,
+"callee": "fetch",
+"caller": "js:web/src/api::getWeather",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "builtin",
+"to": [
+"builtin:fetch"
+],
+"via": "global",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/main.tsx:4:11",
+"file": "web/src/main.tsx",
+"line": 4,
+"col": 11,
+"callee": "createRoot",
+"caller": "js:web/src/main",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:react-dom/client.createRoot"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/main.tsx:4:35",
+"file": "web/src/main.tsx",
+"line": 4,
+"col": 35,
+"callee": "document.getElementById",
+"caller": "js:web/src/main",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "builtin",
+"to": [
+"builtin:document.getElementById"
+],
+"via": "global",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/main.tsx:4:52",
+"file": "web/src/main.tsx",
+"line": 4,
+"col": 52,
+"callee": "createRoot(document.getElementById(\"root\")!).render",
+"caller": "js:web/src/main",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:react-dom/client.createRoot().render"
+],
+"via": "library-result",
+"confidence": "inferred",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/main.tsx:4:54",
+"file": "web/src/main.tsx",
+"line": 4,
+"col": 54,
+"callee": "App",
+"caller": "js:web/src/main",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"js:web/src/App::App"
+],
+"via": "jsx-render",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/pages/Admin.tsx:7:32",
+"file": "web/src/pages/Admin.tsx",
+"line": 7,
+"col": 32,
+"callee": "runBackup",
+"caller": "js:web/src/pages/Admin::BackupButton.start",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"js:web/src/api::runBackup"
+],
+"via": "name",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/pages/Admin.tsx:8:27",
+"file": "web/src/pages/Admin.tsx",
+"line": 8,
+"col": 27,
+"callee": "start",
+"caller": "js:web/src/pages/Admin::BackupButton",
+"lang": "typescript/javascript",
+"group": "handed",
+"outcome": "likely",
+"to": [
+"js:web/src/pages/Admin::BackupButton.start"
+],
+"via": "ui-event",
+"confidence": "inferred",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/pages/Admin.tsx:12:35",
+"file": "web/src/pages/Admin.tsx",
+"line": 12,
+"col": 35,
+"callee": "useState",
+"caller": "js:web/src/pages/Admin::Admin",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:react.useState"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/pages/Admin.tsx:15:51",
+"file": "web/src/pages/Admin.tsx",
+"line": 15,
+"col": 51,
+"callee": "setName",
+"caller": "js:web/src/pages/Admin::Admin",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "unresolved",
+"to": [],
+"via": null,
+"confidence": null,
+"reason": "local-unknown",
+"why": "`setName` holds a value whose type Lantern does not know",
+"test": false
+},
+{
+"at": "web/src/pages/Admin.tsx:16:8",
+"file": "web/src/pages/Admin.tsx",
+"line": 16,
+"col": 8,
+"callee": "BackupButton",
+"caller": "js:web/src/pages/Admin::Admin",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"js:web/src/pages/Admin::BackupButton"
+],
+"via": "jsx-render",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/pages/UserPage.tsx:6:40",
+"file": "web/src/pages/UserPage.tsx",
+"line": 6,
+"col": 40,
+"callee": "useState",
+"caller": "js:web/src/pages/UserPage::UserPage",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:react.useState"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/pages/UserPage.tsx:7:12",
+"file": "web/src/pages/UserPage.tsx",
+"line": 7,
+"col": 12,
+"callee": "useEffect",
+"caller": "js:web/src/pages/UserPage::UserPage",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "external",
+"to": [
+"ext:react.useEffect"
+],
+"via": "import",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/pages/UserPage.tsx:8:12",
+"file": "web/src/pages/UserPage.tsx",
+"line": 8,
+"col": 12,
+"callee": "getUser",
+"caller": "js:web/src/pages/UserPage::UserPage",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"js:web/src/api::getUser"
+],
+"via": "name",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+},
+{
+"at": "web/src/pages/UserPage.tsx:8:21",
+"file": "web/src/pages/UserPage.tsx",
+"line": 8,
+"col": 21,
+"callee": "getUser(id).then",
+"caller": "js:web/src/pages/UserPage::UserPage",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "unresolved",
+"to": [],
+"via": null,
+"confidence": null,
+"reason": "call-result",
+"why": "called on the result of another call whose type Lantern does not know",
+"test": false
+},
+{
+"at": "web/src/pages/UserPage.tsx:10:25",
+"file": "web/src/pages/UserPage.tsx",
+"line": 10,
+"col": 25,
+"callee": "Bio",
+"caller": "js:web/src/pages/UserPage::UserPage",
+"lang": "typescript/javascript",
+"group": "written",
+"outcome": "resolved",
+"to": [
+"js:web/src/components/Bio::Bio"
+],
+"via": "jsx-render",
+"confidence": "resolved",
+"reason": null,
+"why": null,
+"test": false
+}
+]
+}

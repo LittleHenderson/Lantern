@@ -55,13 +55,16 @@ def test_same_finding_always_gets_the_same_person(gs):
     assert scenarios.for_finding(f, g)["who"].split(",")[0] in scenarios.NAMES
 
 
-def test_unreached_code_says_nobody_can_do_this_yet(gs):
+def test_code_no_path_was_found_to_says_so_and_never_that_nobody_can_get_there(gs):
+    """Until 2026-11 the story began "Today no page, route or command in your app leads to this code, so nobody can do
+    this yet": a path Lantern did not find, told as safety (directive point 6)."""
     g, _ = gs
     f = {"id": "abc", "rule": "B608", "tool": "bandit", "title": "sql", "file": "x.py", "line": 3, "category": "code",
          "reachable": None, "ui_path": None, "input": None, "in_tests": False}
     sc = scenarios.for_finding(f, g)
-    assert "nobody can do this yet" in sc["steps"][0]
-    assert "nothing in the map reaches this code" in sc["basis"]
+    assert "found no page, route or command" in sc["steps"][0] and "does not prove nobody" in sc["steps"][0]
+    assert "nobody can do this yet" not in " ".join(sc["steps"])
+    assert "found no path" in sc["basis"] and "not proof" in sc["basis"], sc["basis"]
 
 
 def test_input_false_says_typing_does_not_reach_the_line(gs):

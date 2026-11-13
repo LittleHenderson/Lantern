@@ -41,6 +41,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, project_text, skipped
 
@@ -61,6 +62,19 @@ CALLBACK_FUNS = {"add_action", "add_filter", "add_shortcode", "array_map", "arra
 PAGE_SKIP_STMTS = {"namespace_definition", "namespace_use_declaration", "class_declaration", "interface_declaration",
                    "trait_declaration", "enum_declaration", "function_definition", "php_tag", "text_interpolation",
                    "declare_statement", "comment", "const_declaration", "empty_statement"}
+
+
+# What a statement has to say somewhere for `_routes` or `_wordpress` to read anything from it: the name a route is
+# registered on (`Route`, also in `\Route` and `Illuminate\Support\Facades\Route`; one of the router variables,
+# where the name must end there, or every `$request` would count as `$r`), and the two WordPress functions. The text
+# is only looked at to pass a statement over: one that may say such a name is gone through part by part as before.
+ROUTER_NAMED = re.compile(rb"Route|\$(?:app|router|route|group|api|routes|v1|r)(?![A-Za-z0-9_])")
+HOOK_NAMED = re.compile(rb"add_action|register_rest_route")
+
+
+def _may_say(n, named: re.Pattern) -> bool:
+    text = n.text
+    return text is None or named.search(text) is not None
 
 
 def _parser():
@@ -166,6 +180,7 @@ class Model:
         self.funs: dict[str, PFun] = {}       # node id → fun
         self.fun_by_name: dict[str, list[str]] = {}
         self.unresolved: dict[str, int] = {}
+        self._by_low: dict[str, tuple[PClass, int, dict[str, str]]] = {}   # class id → (the class, how many, by name)
 
     def resolve_class(self, name: str, ns: str, uses: dict[str, str]) -> str | None:
         """A class name as written → a repo class id, or None."""
@@ -195,16 +210,28 @@ class Model:
         c = self.classes.get(cid)
         if c is None or depth > 8:
             return None
-        low = name.lower()
-        for f in c.funs:
-            if f.lower() == low:
-                return f"php:{cid}.{f}"
+        f = self._methods(c).get(name.lower())
+        if f is not None:
+            return f"php:{cid}.{f}"
         for s in c.supers:
             if s in self.classes:
                 r = self.fun_in(s, name, depth + 1)
                 if r:
                     return r
         return None
+
+    def _methods(self, c: PClass) -> dict[str, str]:
+        """The method names of a class by their lower-cased form, made once for the class as it stands (asked again
+        when it has more methods, or when another class took its name). Every call used to lower-case every method
+        name of the class and of its parents: 20 million times for the Laravel framework. Where two names differ
+        only in case (no PHP file may say that) the first one the class gives is the one, as before."""
+        kept = self._by_low.get(c.id)
+        if kept is None or kept[0] is not c or kept[1] != len(c.funs):
+            low: dict[str, str] = {}
+            for f in c.funs:
+                low.setdefault(f.lower(), f)
+            kept = self._by_low[c.id] = (c, len(c.funs), low)
+        return kept[2]
 
     def implementers(self, cid: str) -> list[str]:
         """Concrete classes under `cid` (through subclasses). The children index is built once per model, after
@@ -408,6 +435,8 @@ class Ref:
 
 
 class Linker:
+    left = None     # (map, "php") once the reader has a map: where a piece that was not read is written down
+
     def __init__(self, model: Model, repo: Path):
         self.m = model
         self.repo = repo
@@ -418,8 +447,11 @@ class Linker:
     def _cls(self, name: str | None, f: PFile) -> str | None:
         return self.m.resolve_class(name, f.ns, f.uses) if name else None
 
-    def _type_of(self, f, cls: PClass | None, env, e) -> str | None:
-        """A repo class id for an expression, when it can be told."""
+    def _type_of(self, f, cls: PClass | None, env, e, memo: dict | None = None) -> str | None:
+        """A repo class id for an expression, when it can be told. `memo` (from `walk`): what `_target` gave for a
+        call while no name of `env` has changed, by the call's node. Each call of a chain `$a->b()->c()->d()` asks
+        for the one before it; until 2026-11-13 every call of the chain asked again from the top, and twice the
+        links took eight times the time (200 links 0.56 seconds, 400 links 2.67)."""
         if e is None:
             return None
         if e.type == "variable_name":
@@ -430,7 +462,7 @@ class Linker:
         if e.type == "object_creation_expression":
             return self._cls(_t(_kid(e, "name", "qualified_name")), f)
         if e.type in ("member_access_expression", "nullsafe_member_access_expression"):
-            owner = self._type_of(f, cls, env, e.child_by_field_name("object"))
+            owner = self._type_of(f, cls, env, e.child_by_field_name("object"), memo)
             c = self.m.classes.get(owner or "")
             prop = _t(e.child_by_field_name("name"))
             seen: set[str] = set()
@@ -441,10 +473,14 @@ class Linker:
                 c = next((self.m.classes[s] for s in self._supers(c) if s in self.m.classes), None)
             return None
         if e.type == "parenthesized_expression":
-            return self._type_of(f, cls, env, next((x for x in e.children if x.is_named), None))
+            return self._type_of(f, cls, env, next((x for x in e.children if x.is_named), None), memo)
         if e.type in ("member_call_expression", "nullsafe_member_call_expression", "scoped_call_expression",
                       "function_call_expression"):
-            t = self._target(f, cls, env, e)
+            t = memo.get(e.id, memo) if memo is not None else None     # `memo` itself stands for "not there"
+            if memo is None or t is memo:
+                t = self._target(f, cls, env, e, memo)
+                if memo is not None:
+                    memo[e.id] = t
             fn = self.m.funs.get(t[0]) if t and t[0] else None
             if fn and fn.returns:
                 owner = self.m.classes.get(fn.cls or "")
@@ -472,8 +508,9 @@ class Linker:
                         for s in c.supers]
 
     # ---- calls ----
-    def _target(self, f, cls: PClass | None, env, x) -> tuple[str | None, str, str, list[str]] | None:
-        """(target id, via, confidence, extra possible targets) for a call node."""
+    def _target(self, f, cls: PClass | None, env, x, memo: dict | None = None
+                ) -> tuple[str | None, str, str, list[str]] | None:
+        """(target id, via, confidence, extra possible targets) for a call node. `memo`: see `_type_of`."""
         if x.type == "function_call_expression":
             fn = x.child_by_field_name("function")
             if fn is None or fn.type not in ("name", "qualified_name"):
@@ -509,10 +546,10 @@ class Linker:
         if x.type in ("member_call_expression", "nullsafe_member_call_expression"):
             obj = x.child_by_field_name("object")
             name = _t(x.child_by_field_name("name"))
-            if obj is not None and _t(obj) == "$this" and cls is not None:
+            if obj is not None and obj.type == "variable_name" and _t(obj) == "$this" and cls is not None:
                 r = self.m.fun_in(cls.id, name)
                 return (r, "this", RESOLVED, []) if r else None
-            tid = self._type_of(f, cls, env, obj)
+            tid = self._type_of(f, cls, env, obj, memo)
             if tid:
                 k = self.m.classes[tid]
                 r = self.m.fun_in(tid, name)
@@ -539,7 +576,7 @@ class Linker:
                 base = base.child_by_field_name("object") if base.type != "parenthesized_expression" else next(
                     (c for c in base.children if c.is_named), None)
             if base is not None and base.type in ("scoped_call_expression", "function_call_expression"):
-                t = self._target(f, cls, env, base)
+                t = self._target(f, cls, env, base, memo)
                 if t is None or (t[0] or "").startswith("ext:"):
                     return None                                 # a chain on a library call (DB::table()->where())
             return (None, "", "", [])
@@ -547,61 +584,72 @@ class Linker:
 
     def walk(self, f: PFile, cls: PClass | None, nodes, env: dict, src: str, skip: set) -> list[Ref]:
         refs: list[Ref] = []
+        memo: dict = {}                              # what `_target` gave while `env` was as it is now (`_type_of`)
         stack = list(reversed(nodes))
         while stack:
             x = stack.pop()
-            if x.id in skip:
-                continue
-            if x.type in ("class_declaration", "function_definition", "interface_declaration", "trait_declaration"):
-                continue
-            line = x.start_point.row + 1
-            if x.type == "assignment_expression":
-                left, right = x.child_by_field_name("left"), x.child_by_field_name("right")
-                if left is not None and left.type == "variable_name" and right is not None:
-                    t = self._type_of(f, cls, env, right)
-                    if right.type == "object_creation_expression" and not t:
-                        t = _t(_kid(right, "name", "qualified_name")) or None
-                    env[_t(left).lstrip("$")] = t or ""
-            elif x.type in ("simple_parameter",):
-                n = x.child_by_field_name("name")
-                if n is not None:
-                    env[_t(n).lstrip("$")] = _type_name(x.child_by_field_name("type")) or ""
-            elif x.type in ("function_call_expression", "scoped_call_expression", "member_call_expression",
-                            "nullsafe_member_call_expression"):
-                res = self._target(f, cls, env, x)
-                if res is not None:
-                    target, via, conf, extra = res
-                    if target:
-                        refs.append(Ref(target, line, conf or RESOLVED, via))
-                    for e in extra:
-                        refs.append(Ref(e, line, POSSIBLE, via))
-                    if not target and not extra and via == "":
-                        fn_n = x.child_by_field_name("object")
-                        key = f"{src}: {_t(fn_n)[:40]}->{_t(x.child_by_field_name('name'))}"
-                        self.m.unresolved[key] = self.m.unresolved.get(key, 0) + 1
-                self._http(f, cls, env, x, src)
-                if x.type == "function_call_expression" and _t(x.child_by_field_name("function")) in CALLBACK_FUNS:
-                    for a in _kids(x.child_by_field_name("arguments"), "argument"):
-                        s = _string(next((c for c in a.children if c.is_named), None))
-                        if s and re.fullmatch(r"[A-Za-z_]\w*", s):
-                            hits = [h for h in self.m.fun_by_name.get(s.lower(), []) if self.m.funs[h].cls is None]
-                            if len(hits) == 1:
-                                refs.append(Ref(hits[0], line, INFERRED, "callback"))
-            elif x.type == "object_creation_expression":
-                cid = self._cls(_t(_kid(x, "name", "qualified_name")), f)
-                if cid:
-                    r = self.m.fun_in(cid, "__construct")
+            try:
+                if x.id in skip:
+                    continue
+                if x.type in ("class_declaration", "function_definition", "interface_declaration", "trait_declaration"):
+                    continue
+                line = x.start_point.row + 1
+                if x.type == "assignment_expression":
+                    left, right = x.child_by_field_name("left"), x.child_by_field_name("right")
+                    if left is not None and left.type == "variable_name" and right is not None:
+                        t = self._type_of(f, cls, env, right, memo)
+                        if right.type == "object_creation_expression" and not t:
+                            t = _t(_kid(right, "name", "qualified_name")) or None
+                        env[_t(left).lstrip("$")] = t or ""
+                        memo.clear()
+                elif x.type in ("simple_parameter",):
+                    n = x.child_by_field_name("name")
+                    if n is not None:
+                        env[_t(n).lstrip("$")] = _type_name(x.child_by_field_name("type")) or ""
+                        memo.clear()
+                elif x.type in ("function_call_expression", "scoped_call_expression", "member_call_expression",
+                                "nullsafe_member_call_expression"):
+                    res = memo.get(x.id, memo)
+                    if res is memo:
+                        res = memo[x.id] = self._target(f, cls, env, x, memo)
+                    if res is not None:
+                        target, via, conf, extra = res
+                        if target:
+                            refs.append(Ref(target, line, conf or RESOLVED, via))
+                        for e in extra:
+                            refs.append(Ref(e, line, POSSIBLE, via))
+                        if not target and not extra and via == "":
+                            fn_n = x.child_by_field_name("object")
+                            key = f"{src}: {_t(fn_n)[:40]}->{_t(x.child_by_field_name('name'))}"
+                            self.m.unresolved[key] = self.m.unresolved.get(key, 0) + 1
+                    self._http(f, cls, env, x, src)
+                    if x.type == "function_call_expression" and _t(x.child_by_field_name("function")) in CALLBACK_FUNS:
+                        for a in _kids(x.child_by_field_name("arguments"), "argument"):
+                            s = _string(next((c for c in a.children if c.is_named), None))
+                            if s and re.fullmatch(r"[A-Za-z_]\w*", s):
+                                hits = [h for h in self.m.fun_by_name.get(s.lower(), []) if self.m.funs[h].cls is None]
+                                if len(hits) == 1:
+                                    refs.append(Ref(hits[0], line, INFERRED, "callback"))
+                elif x.type == "object_creation_expression":
+                    cid = self._cls(_t(_kid(x, "name", "qualified_name")), f)
+                    if cid:
+                        r = self.m.fun_in(cid, "__construct")
+                        if r:
+                            refs.append(Ref(r, line, RESOLVED, "constructor"))
+                elif x.type == "array_creation_expression":
+                    r = self._callable_array(f, cls, x)
                     if r:
-                        refs.append(Ref(r, line, RESOLVED, "constructor"))
-            elif x.type == "array_creation_expression":
-                r = self._callable_array(f, cls, x)
-                if r:
-                    refs.append(Ref(r, line, INFERRED, "callback"))
-            elif x.type in ("include_expression", "include_once_expression", "require_expression",
-                            "require_once_expression"):
-                target = self._include_target(f, x)
-                if target:
-                    refs.append(Ref(target, line, RESOLVED, "include"))
+                        refs.append(Ref(r, line, INFERRED, "callback"))
+                elif x.type in ("include_expression", "include_once_expression", "require_expression",
+                                "require_once_expression"):
+                    target = self._include_target(f, x)
+                    if target:
+                        refs.append(Ref(target, line, RESOLVED, "include"))
+            except RecursionError:
+                # nested deeper than the lookup follows: left with all that is written in it, and written down
+                deep.leave(self.left, f.rel, x, env, kinds=("name",), blank="")
+                memo.clear()
+                continue
             stack.extend(reversed(x.children))
         return refs
 
@@ -797,7 +845,8 @@ def _routes(model: Model, f: PFile, nodes) -> list[Route]:
             visit(c, prefix, auth)
 
     for s in nodes:
-        visit(s, "/api" if api else "", False)
+        if _may_say(s, ROUTER_NAMED):
+            visit(s, "/api" if api else "", False)
     return out
 
 
@@ -830,7 +879,7 @@ def _php_attr_routes(fn: PFun, cls: PClass | None) -> list[tuple[str, str]]:
 def _wordpress(model: Model, f: PFile, nodes) -> list[tuple[str, object, int]]:
     """(detail, handler node, line) for `add_action('wp_ajax_…')` and `register_rest_route(...)`."""
     out = []
-    stack = list(nodes)
+    stack = [n for n in nodes if _may_say(n, HOOK_NAMED)]
     while stack:
         x = stack.pop()
         if x.type == "function_call_expression":
@@ -890,10 +939,11 @@ def add_php(g: Graph, repo: str | Path) -> dict:
         lines = src.count(b"\n") + 1
         total += lines
         f = PFile(rel=rel, lines=lines, is_test=bool(TEST_FILE_RE.search(rel)))
-        _collect(model, f, root, src.decode("utf-8", "replace").splitlines())
+        deep.whole((g, "php"), f.rel, _collect, model, f, root, src.decode("utf-8", "replace").splitlines())
         f.page = bool(f.top) and not f.is_test and not NOT_PAGES.search(rel) and not _only_setup(f.top)
         files.append(f)
     link = Linker(model, repo)
+    link.left = (g, "php")
     link.resolve_supers()
 
     for f in files:
@@ -981,8 +1031,11 @@ def add_php(g: Graph, repo: str | Path) -> dict:
         return {h.id}
 
     route_skip: dict[str, set] = {}
+    in_file: dict[str, list] = {}                # the functions of each file, in the order the model has them
+    for mid, fn in model.funs.items():
+        in_file.setdefault(fn.file, []).append((mid, [fn.node]))
     for f in files:
-        scopes = [(f"php:{f.rel}", f.top)] + [(mid, [fn.node]) for mid, fn in model.funs.items() if fn.file == f.rel]
+        scopes = [(f"php:{f.rel}", f.top)] + in_file.get(f.rel, [])
         for owner, nodes in scopes:
             for r in _routes(model, f, nodes):
                 detail = f"{r.verb} {r.path}"

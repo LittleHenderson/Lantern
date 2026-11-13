@@ -32,7 +32,7 @@ python -m venv lantern-env
 . lantern-env/bin/activate
 # Windows PowerShell:
 #   lantern-env\Scripts\Activate.ps1
-pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.10.0"
+pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.11.0"
 lantern --version
 ```
 
@@ -42,7 +42,7 @@ runs all of its own rules and prints an `off` line naming what is not installed.
 To read text from screenshots in Ask Lantern (section 6), add the `[ocr]` extra and the Tesseract program:
 
 ```bash
-pip install "lantern[scan,ocr] @ git+https://github.com/LittleHenderson/Lantern@v0.10.0"
+pip install "lantern[scan,ocr] @ git+https://github.com/LittleHenderson/Lantern@v0.11.0"
 # then Tesseract itself:
 #   macOS:    brew install tesseract
 #   Windows:  winget install UB-Mannheim.TesseractOCR

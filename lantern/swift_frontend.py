@@ -30,6 +30,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, skipped
 
@@ -115,6 +116,8 @@ class SFile:
 
 
 class Model:
+    left = None     # (map, reader) once the reader has a map: where a piece that was not read is written down
+
     def __init__(self):
         self.types: dict[str, SType] = {}
         self.funs: dict[str, SFun] = {}           # "Type.f" or "f"
@@ -191,14 +194,18 @@ def _returns(c) -> str | None:
 def _collect(model: Model, f: SFile, root) -> None:
     def walk(n, outer: SType | None):
         for c in n.children:
-            if c.type in ("class_declaration", "protocol_declaration"):
-                _type(c, outer)
-            elif c.type in ("function_declaration", "init_declaration", "protocol_function_declaration"):
-                _fun(c, outer)
-            elif c.type == "property_declaration" and outer is not None:
-                _prop(c, outer)
-            elif c.type in ("ERROR", "class_body", "enum_class_body", "protocol_body", "statements"):
-                walk(c, outer)
+            try:
+                if c.type in ("class_declaration", "protocol_declaration"):
+                    _type(c, outer)
+                elif c.type in ("function_declaration", "init_declaration", "protocol_function_declaration"):
+                    _fun(c, outer)
+                elif c.type == "property_declaration" and outer is not None:
+                    _prop(c, outer)
+                elif c.type in ("ERROR", "class_body", "enum_class_body", "protocol_body", "statements"):
+                    walk(c, outer)
+            except RecursionError:
+                # declared inside more declarations than this walk follows: left where it stands and written down
+                deep.leave(model.left, f.rel, c)
 
     def _type(c, outer):
         kw = next((ch.type for ch in c.children if ch.type in ("class", "struct", "enum", "actor", "extension",
@@ -294,6 +301,9 @@ def _nav_parts(nav):
 
 
 class Linker:
+    left = None     # (map, "swift") once the reader has a map: where a piece that was not read is written down
+    file = ""       # the file of the function `walk` is in
+
     def __init__(self, model: Model):
         self.m = model
 
@@ -374,6 +384,7 @@ class Linker:
     def walk(self, fn: SFun, src: str) -> list[Ref]:
         cls = self.m.types.get(fn.cls) if fn.cls else None
         refs: list[Ref] = []
+        self.file = fn.file
         for node in fn.nodes:
             body = _kid(node, "function_body", "computed_property")
             if body is not None:
@@ -384,31 +395,36 @@ class Linker:
         stack = [n]
         while stack:
             x = stack.pop()
-            if x.type == "property_declaration":
-                pat = _kid(x, "pattern")
-                pn = _kid(pat, "simple_identifier") if pat is not None else None
-                if pn is not None:
-                    tn = _type_name(_kid(x, "type_annotation"))
-                    if tn is None:
-                        val = next((ch for ch in x.children if ch.is_named and ch.type not in
-                                    ("value_binding_pattern", "pattern", "modifiers", "type_annotation")), None)
-                        tn = self._type_of(cls, env, val)
-                    env[_t(pn)] = tn or ""
-            elif x.type == "call_expression" and x.children:
-                self._call(cls, x, env, refs, src)
-            elif x.type == "value_argument":
-                val = [c for c in x.children if c.is_named and c.type != "value_argument_label"]
-                if len(val) == 1 and val[0].type == "simple_identifier" and cls is not None \
-                        and _t(val[0]) not in env:                # Button("Go", action: refresh)
-                    r = self.m.fun_in(cls, _t(val[0]))
+            try:
+                if x.type == "property_declaration":
+                    pat = _kid(x, "pattern")
+                    pn = _kid(pat, "simple_identifier") if pat is not None else None
+                    if pn is not None:
+                        tn = _type_name(_kid(x, "type_annotation"))
+                        if tn is None:
+                            val = next((ch for ch in x.children if ch.is_named and ch.type not in
+                                        ("value_binding_pattern", "pattern", "modifiers", "type_annotation")), None)
+                            tn = self._type_of(cls, env, val)
+                        env[_t(pn)] = tn or ""
+                elif x.type == "call_expression" and x.children:
+                    self._call(cls, x, env, refs, src)
+                elif x.type == "value_argument":
+                    val = [c for c in x.children if c.is_named and c.type != "value_argument_label"]
+                    if len(val) == 1 and val[0].type == "simple_identifier" and cls is not None \
+                            and _t(val[0]) not in env:                # Button("Go", action: refresh)
+                        r = self.m.fun_in(cls, _t(val[0]))
+                        if r:
+                            refs.append(Ref(nid(r), x.start_point.row + 1, INFERRED, "callback", "callback"))
+                elif x.type == "selector_expression" and cls is not None:   # #selector(refresh)
+                    name = re.search(r"#selector\(\s*(?:self\.)?(\w+)", _t(x))
+                    r = self.m.fun_in(cls, name.group(1)) if name else None
                     if r:
                         refs.append(Ref(nid(r), x.start_point.row + 1, INFERRED, "callback", "callback"))
-            elif x.type == "selector_expression" and cls is not None:   # #selector(refresh)
-                name = re.search(r"#selector\(\s*(?:self\.)?(\w+)", _t(x))
-                r = self.m.fun_in(cls, name.group(1)) if name else None
-                if r:
-                    refs.append(Ref(nid(r), x.start_point.row + 1, INFERRED, "callback", "callback"))
-            elif x.type in ("class_declaration", "function_declaration", "protocol_declaration") and x is not n:
+                elif x.type in ("class_declaration", "function_declaration", "protocol_declaration") and x is not n:
+                    continue
+            except RecursionError:
+                # nested deeper than the lookup follows: left with all that is written in it, and written down
+                deep.leave(self.left, self.file, x, env, kinds=("simple_identifier",), blank="")
                 continue
             stack.extend(reversed(x.children))
 
@@ -498,6 +514,7 @@ def add_swift(g: Graph, repo: str | Path) -> dict:
         g.meta.setdefault("skipped_languages", []).append("swift (pip install tree-sitter-swift)")
         return {}
     model = Model()
+    model.left = (g, "swift")
     files: list[tuple[SFile, object]] = []      # trees kept alive for as long as their nodes are used
     total = 0
     for p in paths:
@@ -513,7 +530,7 @@ def add_swift(g: Graph, repo: str | Path) -> dict:
         total += lines
         f = SFile(rel=rel, lines=lines, is_test=bool(TEST_FILE_RE.search(rel)))
         files.append((f, tree))
-        _collect(model, f, tree.root_node)
+        deep.whole(model.left, f.rel, _collect, model, f, tree.root_node)
 
     for f, _ in files:
         g.add_node(Node(id=f"sw:{f.rel}", kind=MODULE, name=Path(f.rel).name, qualname=f.rel, file=f.rel,
@@ -538,6 +555,7 @@ def add_swift(g: Graph, repo: str | Path) -> dict:
                         decorators=[f"@{a}" for a in fn.attrs if a]))
         g.add_edge(parent, mid, kind=CONTAINS)
     link = Linker(model)
+    link.left = (g, "swift")
     for local, fn in model.funs.items():
         src = nid(local)
         for r in link.walk(fn, src):

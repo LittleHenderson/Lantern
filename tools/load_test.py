@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         netguard.end(guard)
         return 2
     req = urllib.request.Request(f"{base}/v1/runs", headers=auth)
-    with urllib.request.urlopen(req, timeout=30) as r:  # nosec B310
+    with urllib.request.urlopen(req, timeout=30) as r:  # nosec B310: local test server
         runs = json.loads(r.read())["runs"]
     done = [r for r in runs if r["status"] == "done"]
     pages: list[tuple[str, dict]] = [(f"{base}/", {}), (f"{base}/v1/health", {}), (f"{base}/v1/runs", auth), (f"{base}/v1/me", auth)]

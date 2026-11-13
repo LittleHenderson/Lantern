@@ -36,6 +36,7 @@ from pathlib import Path
 import tree_sitter_java as tsjv
 from tree_sitter import Language, Node as TSNode, Parser
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, skipped_dir
 
@@ -222,7 +223,7 @@ def nid(pkg: str, local: str | None = None) -> str:
 # Pass 1: declarations
 # --------------------------------------------------------------------------------------------
 
-def _collect_file(pkg: JPackage, f: JFile, root: TSNode) -> None:
+def _collect_file(pkg: JPackage, f: JFile, root: TSNode, left=None) -> None:
     for c in root.children:
         if c.type == "import_declaration":
             path = next((x for x in c.children if x.type in ("scoped_identifier", "identifier")), None)
@@ -239,10 +240,10 @@ def _collect_file(pkg: JPackage, f: JFile, root: TSNode) -> None:
             elif not wildcard:
                 f.imports[fq.rsplit(".", 1)[-1]] = fq
         elif c.type in ("class_declaration", "interface_declaration", "enum_declaration", "record_declaration"):
-            _collect_class(pkg, f, c, None)
+            _collect_class(pkg, f, c, None, left)
 
 
-def _collect_class(pkg: JPackage, f: JFile, c: TSNode, outer: str | None) -> None:
+def _collect_class(pkg: JPackage, f: JFile, c: TSNode, outer: str | None, left=None) -> None:
     name = _text(c.child_by_field_name("name"))
     local = f"{outer}.{name}" if outer else name
     kind = {"class_declaration": "class", "interface_declaration": "interface", "enum_declaration": "enum",
@@ -337,7 +338,11 @@ def _collect_class(pkg: JPackage, f: JFile, c: TSNode, outer: str | None) -> Non
                 is_static=is_static, route=route)
             jc.methods.add(mname)
         elif m.type in ("class_declaration", "interface_declaration", "enum_declaration", "record_declaration"):
-            _collect_class(pkg, f, m, local)
+            try:
+                _collect_class(pkg, f, m, local, left)
+            except RecursionError:
+                # a class inside more classes than this walk follows: left where it stands and written down
+                deep.leave(left, f.rel, m)
 
 
 # --------------------------------------------------------------------------------------------
@@ -353,7 +358,14 @@ class Ref:
     via: str
 
 
+# The node types whose children are statements. `Linker._walk` reads them one by one, so a statement nested deeper than
+# it follows costs that statement and not the rest of the method (`lantern/deep.py`).
+STATEMENT_LISTS = ("block", "constructor_body", "switch_block_statement_group")
+
+
 class Linker:
+    left = None     # (map, "java") once `add_java` has a map: where a piece that was not read is written down
+
     def __init__(self, pkgs: dict[str, JPackage]):
         self.pkgs = pkgs
         self.by_fq: dict[str, tuple[JPackage, JClass]] = {}
@@ -438,6 +450,13 @@ class Linker:
 
     def _walk(self, pkg, f, cls, m, src_id, n: TSNode, env, refs):
         t = n.type
+        if t in STATEMENT_LISTS:
+            for c in n.children:
+                try:
+                    self._walk(pkg, f, cls, m, src_id, c, env, refs)
+                except RecursionError:   # nested deeper than this walk follows: left and written down, the next one read
+                    deep.leave(self.left, f.rel, c, env)
+            return
         if t == "local_variable_declaration":
             tn = _type_name(n.child_by_field_name("type"))
             for d in [x for x in n.children if x.type == "variable_declarator"]:
@@ -771,9 +790,10 @@ def add_java(g: Graph, repo: str | Path) -> dict:
         pkg.files.append(f)
         files.append((f, root, pkg, tree))
     for f, root, pkg, _tree in files:
-        _collect_file(pkg, f, root)
+        deep.whole((g, "java"), f.rel, _collect_file, pkg, f, root, (g, "java"))
 
     link = Linker(pkgs)
+    link.left = (g, "java")
     for f, _root, _pkg, _tree in files:
         g.add_node(Node(id=f"jv:{f.rel}", kind=MODULE, name=Path(f.rel).name, qualname=f.rel, file=f.rel, start_line=1, end_line=f.lines))
         if f.is_test:

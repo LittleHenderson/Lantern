@@ -583,7 +583,7 @@ class Worker:
                 os.chown(dirpath, 65534, 65534)
                 for f in files:
                     os.chown(os.path.join(dirpath, f), 65534, 65534)
-            os.chmod(root, 0o711)
+            os.chmod(root, 0o711)   # nosec B103 - a folder: the analysis user may pass through to its own temp folder, not list
             if not net:   # where root's files are made owner-only (umask 077) the step ran with no guard, unsaid
                 sandbox._others_may_read(hook)
         if os.name == "posix":
@@ -791,7 +791,9 @@ def _summary(out: Path) -> dict:
             return 0
     # The result files were written by the analysis of a stranger's repository: keep only well-formed values.
     shape = rd.get("shape")
+    decision = rd.get("release", {}).get("decision") if isinstance(rd.get("release"), dict) else None
     return {"score": num(rd.get("score")), "grade": rd.get("grade") if rd.get("grade") in ("A", "B", "C", "D", "F") else None,
+            "release": decision if isinstance(decision, str) and decision in ("Blocked", "Incomplete", "Passed") else None,
             "shape": shape[:80] if isinstance(shape, str) else None,
             "counts": {k: count(counts.get(k)) for k in ("critical", "high", "medium", "low")},
             "files": num(meta.get("files")), **lane_summary(sec, meta)}

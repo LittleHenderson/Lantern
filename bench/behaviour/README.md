@@ -84,6 +84,22 @@ the zip import, where every name is checked against the folder before anything i
 (`if any(not t.startswith(inside) for t in targets): raise`): a check written over the whole list is not read as a
 guard yet. The runner's outcomes change no finding, so those two stay until the reading engine is corrected.
 
+Measured again 2026-11-12 (UTC) on the reading engine of point 6 (babe4e6), the same way. That engine reads a check
+made over a whole list as a check on every item of the list (`flow.Engine.each_facts`, written after the result
+above, against examples of its own: `tests/test_list_guard.py`):
+
+| | Engine c5cb7cd | Engine babe4e6 |
+|---|---|---|
+| The safe app | 2 findings at high, both false alarms | no finding |
+| Planted versions told apart from the safe app | 6 of 31 | 7 of 31 |
+
+The seventh is `zip-entry-escapes`, the version whose check on the zip's names was taken out: the two `LT-PATH`
+findings at high that were false alarms on the safe app now stand only there. The other six are told apart by the
+same findings as before; for the other 24 the reading finds nothing, as on the safe app. The release decision
+(`readiness.json` → `release`) reads Blocked for the three versions with an `LT-PATH` at high and Incomplete for the
+other 28 and for the safe app (2 libraries have no exact version written down; the project has no tests): reading the
+code alone refuses 3 of the 31 planted problems, which is why the plan is run.
+
 ## What this does not measure
 
 One app, one framework (FastAPI), one database (SQLite), written by the same hand as the runner. The planted
