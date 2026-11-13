@@ -190,7 +190,7 @@ fly deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile --depot=false
 
 # 5. Check.
 curl https://lantern-cloud.fly.dev/v1/health
-#    -> {"ok": true, "service": "lantern-cloud", "version": "0.1.0", "engine": "0.10.0", "limits": {...}, "hosts": "all"}
+#    -> {"ok": true, "service": "lantern-cloud", "version": "0.1.0", "engine": "0.11.0", "limits": {...}, "hosts": "all"}
 #    Then open https://lantern-cloud.fly.dev/ in a browser, press Sign in, and paste a repository link.
 ```
 
@@ -397,7 +397,17 @@ The Docker image runs the same on any of them; only the steps in this file are F
 A pushed tag `v*` runs `.github/workflows/release.yml`: it builds the sdist and wheel, runs the tests against the
 built wheel in a clean venv, checks `https://lantern-gateway.fly.dev/v1/health`, and creates a GitHub Release with
 both files and the matching `CHANGELOG.md` section. Testers install with
-`pip install "git+https://github.com/LittleHenderson/Lantern@v0.10.0"`.
+`pip install "git+https://github.com/LittleHenderson/Lantern@v0.11.0"`.
+
+The section is the text of the Release, and GitHub takes 125,000 characters there and no more. The workflow's second
+step (`python tools/changelog_section.py <tag>`) ends with 1 when the section is longer, before anything is built,
+and `tests/test_release_plumbing.py` fails long before a tag when this version's section is over 30,000. A release
+with a long list of changes keeps a summary under `## <version>` and the whole list under
+`## <version>: every change` (0.11.0 is written that way).
+
+Order for a release, so that the health check does not mail in between: merge the release pull request, deploy
+lantern-cloud from it, then push the tag. `tools/uptime.py` fails while lantern-cloud's engine is older than the
+latest GitHub Release, so a tag pushed before the deploy makes it fail until the deploy is done.
 
 TODO (not in wave 1): publish to PyPI so the command becomes `pip install lantern`.
 1. Create a PyPI account (pypi.org → Register) with two-factor sign-in, and check the name `lantern` is free

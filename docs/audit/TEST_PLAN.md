@@ -32,7 +32,7 @@ prints the refusal, lists the attempt and ends with a non-zero result. The live 
 `bench/ask_eval.py`, the `model-eval` workflow) is the only place a real provider is used, and only with `--live
 --model … --destination … --max-requests …`; run either script without them to see it refuse.
 The `install` job does what a tester does on Linux, macOS and Windows: a clean venv, `pip install
-"git+https://github.com/LittleHenderson/Lantern@<commit>"` with no extras, then `lantern --version` (0.10.0),
+"git+https://github.com/LittleHenderson/Lantern@<commit>"` with no extras, then `lantern --version` (0.11.0),
 `lantern analyze tests/fixtures/shop --offline` (prints an `off` line naming the scanners that are not installed)
 and `lantern serve tests/fixtures/shop --check` (starts, prints the link, loads the app once, exits 0).
 The `gateway` job curls the live gateway's `/v1/health` (`https://lantern-gateway.fly.dev`) on every push and prints

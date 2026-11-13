@@ -20,7 +20,7 @@ import changelog_section  # noqa: E402
 
 def test_one_version():
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    assert meta["version"] == lantern.__version__ == "0.10.0"
+    assert meta["version"] == lantern.__version__ == "0.11.0"
     assert meta["scripts"]["lantern"] == "lantern.cli:main"
     assert meta["urls"]["Issues"].endswith("/issues") and meta["urls"]["Homepage"].startswith("https://")
     assert set(meta["optional-dependencies"]) >= {"scan", "dev"}
@@ -84,7 +84,7 @@ def test_tester_guide_and_issue_form():
 # Release whose text is over 125,000 characters, and it refuses at the very last step, after the build and the tests
 # against the wheel. On 2026-11-12 the section waiting to be released was 193,835 characters long.
 
-def test_notes_too_long_for_the_release_page_are_refused_at_the_first_step(tmp_path, capsys):
+def test_notes_too_long_for_the_release_page_are_refused_before_anything_is_built(tmp_path, capsys):
     """`tools/changelog_section.py` is the workflow's second step. A section GitHub would refuse ends it with 1 and a
     sentence that says how long it is, so the release stops before anything is built."""
     long = tmp_path / "CHANGELOG.md"

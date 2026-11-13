@@ -2,8 +2,150 @@
 
 Each release has a section headed `## <version>`. The release workflow (`.github/workflows/release.yml`) puts the
 section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses `## 0.9.0-rc1` if present, else `## 0.9.0`).
+GitHub takes 125,000 characters there and no more, and `tools/changelog_section.py` stops a release before anything
+is built when a section is longer. So a release with a long list has two sections: a summary under `## <version>`,
+which is what the release page shows, and the whole list under `## <version>: every change`, which stays in this
+file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
+
+## 0.11.0
+
+Lantern as a release reviewer: a release decision the score cannot speak over, problems followed across the whole
+app, an app's behaviour tested by running it, a safer and a faster engine, seven more languages and phone apps.
+
+This is the summary. Every change in full, with the names in the code, each measurement and what was found and not
+fixed, is the section "0.11.0: every change" of
+[CHANGELOG.md](https://github.com/LittleHenderson/Lantern/blob/v0.11.0/CHANGELOG.md).
+
+**If you used 0.10.0: results change, on purpose.** A project now gets a release decision beside its score: Blocked,
+Incomplete or Passed. Scores go down where required work was skipped (tests that were not run, libraries that were
+not looked up). The score is held at 59 while the decision is Blocked and at 99 until it is Passed, so 100 means the
+required work passed. A badge that was green may now say "blocked" or "incomplete". Some findings rise by one rank,
+because a finding is no longer ranked lower when Lantern found no path to its line. Lines that carry a `# nosec`
+comment appear in the results for the first time.
+
+### Finds more, and tells you how sure it is
+
+- **The release decision.** Blocked: a critical or high finding is open, the project's tests failed, or a behaviour
+  check came out broken. Incomplete: nothing failed and something required is missing (a scanner did not finish,
+  libraries were not checked, the tests were not run). Passed: everything required for this kind of project passed.
+  It is on the report, the Evidence page, the badge, the app, the website, the connector and
+  `lantern analyze --require not-blocked|passed` for CI.
+- **Follow the data** (Python and JavaScript/TypeScript). A value that arrives with a request is followed across
+  functions and files to where it does something sensitive: a query, a command, a file path, a page, a redirect, an
+  outgoing request. A check counts for what its code proves, whatever the function is called. The finding shows
+  every step of the way with file and line.
+- **Who may reach what** (heuristic, and marked as such). A record reached by an id from the request with nobody
+  asking whose it is, an admin path that asks for no role, a whole request body written onto a stored record, a role
+  read from a cookie or header the caller writes. A login is read from what the code does, not from a name.
+- **Behaviour checks.** `lantern behave PATH` starts the project's app in the test sandbox, with no network, and
+  tests what really happened: twelve kinds of check from a plan the project carries (`lantern-behaviour.json`,
+  guide `docs/behaviour.md`). A refused request that changed something all the same is a failure of its own kind.
+- **Every call is counted once** (`calls.json`, Python and JavaScript/TypeScript): one record per call, with one
+  outcome and, where Lantern cannot follow it, the reason in plain words. Far more calls are followed: `require()`
+  and `module.exports`, Express routers and middleware, star imports, library base classes.
+- **A scanner that fails can no longer read as a clean result.** Every scanner writes down how its run ended, and a
+  failed or partial run is said on the report, on the Evidence page and in the release decision.
+- **Fewer false alarms, nothing hidden.** A weak hash is ranked by what it is for. SQL that splices only fixed text
+  is ranked low, with the reason. A webhook whose sender is checked is not "a route anyone can call". A request
+  limit counts only where it is put to work on the route. Every finding outside test code carries its case: the
+  claim, the evidence, the conditions and what is not known.
+
+Measured on the held-out benchmark (`bench/heldout/`: 14 apps, 79 known problems, 17 safe examples that must stay
+clean; no rule was written from their code), before this work and now:
+
+| | before | now |
+|---|---:|---:|
+| Known problems found at medium or higher, of 79 | 28 | 55 (56 with the library checks on) |
+| False alarms on the 17 safe examples | 3 | 0 |
+| Vulnerable apps given a green result, of 8 | 2 | 0 (all 8 read Blocked) |
+| Clean apps refused a green result, of 6 | 3 | 1 |
+
+Not reached: 24 of the 79 known problems are still missed (23 with the library checks on), and one of the six clean
+apps reads Blocked through one false alarm. The other five read Incomplete, because the benchmark does not run
+their tests, and none reads Passed. `bench/heldout/README.md` has every number and how to run it.
+
+### Safer to run on a stranger's project
+
+- A link in a project that leads out of the project is not read and not shown, and Lantern's results are written
+  into the results folder and nowhere else.
+- Lantern starts only the person's own programs, never one that lies in the folder it reads. The git settings of
+  that folder are not obeyed, npm takes no settings from the project it audits, and a settings file in a project
+  does not steer the Python scanner.
+- What a project's dependency files say is checked before it is used, and a project file of the wrong shape no
+  longer stops the analysis.
+- A project's tests are not run without their sandbox, nothing they start is left running, and the app has a
+  "Stop the tests" button.
+- A git folder that is not yours no longer puts its commit on your report.
+- The cloud service deletes only what it made, and a delete that fails is written down, said and tried again.
+- The gateway (0.2.6) bounds what anybody can send it without signing in.
+- The opt-in usage counts go to the gateway's own address and nowhere else, and Lantern says where they go.
+
+### Faster, with every result as it was
+
+Measured with `bench/speed.py` on six projects, the engine before the change and after it back to back on one
+machine, every result file compared and the same:
+
+| | before | now |
+|---|---:|---:|
+| Django (481,021 lines), first check | 115.72 s | 52.05 s |
+| Django, a second check with nothing changed | 113.84 s | 41.03 s |
+| Laravel's framework (415,998 lines), first check | 37.83 s | 19.38 s |
+| Django's report | 73,896,338 bytes | 38,050,642 bytes |
+| The 12-file sample, first check | 0.63 s | 0.74 s |
+
+The last row is slower, and stays in the record as that. Work is kept between runs only for Python files and for
+the Python scanner (`lantern cache [--clear]`, `LANTERN_CACHE=off`), never in the project, and never a finding, a
+rank, a score or a release decision. The hosted service keeps nothing.
+
+### More languages, and phone apps
+
+- Kotlin, Swift, Dart, C#, PHP, Ruby and C/C++ are read and mapped: functions, calls, routes and line rules, each
+  with a sample app.
+- Android, iOS, Flutter, React Native and .NET MAUI apps are read as phone apps: the screens, the parts other apps
+  can start, links into the app, permissions, and rules for each platform (the "On the phone" card).
+- The libraries of Android and Java (Gradle, Maven), PHP (Composer) and Ruby (Bundler) projects are checked for
+  known security holes.
+- Script written inside HTML pages is read.
+
+### The app and the website
+
+- "How to use Lantern": a guide with a tour and a section for each task, at `/guide` and in both main menus.
+- The map: the Graph and the Flowchart fill the whole panel as an endless canvas, with a breadcrumb that says where
+  you are and a minimap (100%, 60%, 30% or hidden). The Graph says what its lines mean.
+- Every function has its three lenses from the moment a check ends.
+- Website: upload an app from your computer, Connect GitHub for private repositories, a Settings page, the intro on
+  every visit, and a check in progress always shows that it is working.
+- Signing in somewhere new no longer signs you out everywhere else (up to 8 places per account), and there is a
+  "Sign out everywhere" button.
+- Big projects' reports open again, and a repository over the size limit is checked without its pictures, video
+  and other bulk files.
+- The cloud service allows 300 runs per person per day and 1000 for everyone together.
+
+### For people who work on Lantern
+
+- Tests and benchmarks cannot reach a real AI provider or the internet and never see the developer's keys
+  (`tools/netguard/`). CI runs every test, and its log names each test it skips.
+- New commands: `lantern behave`, `lantern cache`, `lantern analyze --require`.
+- New result files `calls.json` and `behaviour.json`; `readiness.json` is version 2 (`release`, `checklist`); a
+  finding carries `reachability`, `rank_basis`, its `case` and, where one was followed, its `flow`. Results that
+  0.9.0 and 0.10.0 wrote still open. `docs/api.md` has every shape.
+- The release itself: release notes longer than GitHub takes now stop the release before anything is built
+  (`tools/changelog_section.py`), and five release tests that were dropped by mistake on 2026-11-12 are back
+  (`tests/test_release_plumbing.py`).
+
+### Known limits
+
+- On Windows a test that starts an event loop (an async test, a FastAPI test client) fails in the test sandbox, and
+  `lantern behave` starts no app there. Found and not fixed.
+- Follow the data, who may reach what and the call inventory cover Python and JavaScript/TypeScript. The other
+  languages keep the reading inside one function, and their confidence levels are not yet backed by a benchmark
+  for each language.
+- A computer with one processor, Windows and macOS were not measured for speed.
+- `CLAUDE.md`, "Known gaps", lists the rest.
+
+## 0.11.0: every change
 
 - Faster, with every check and every result as it was (2026-11-12; point 10 of the 2026-11-09 directive, "Increase
   performance without dropping checks"). Measured first, then changed: `bench/speed.py` analyzes the sample shop and

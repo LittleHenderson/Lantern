@@ -30,7 +30,7 @@ You need Python 3.11 or newer. Testing v0.9? Follow **[docs/try-lantern.md](docs
 what to look at, what runs where, how to report, and how to uninstall. Then:
 
 ```bash
-pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.10.0"
+pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.11.0"
 lantern serve path/to/your/app          # any existing project, new or years old
 lantern serve https://github.com/you/your-app   # or a GitHub link: cloned into ~/.lantern/repos, then analyzed
 ```

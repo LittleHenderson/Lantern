@@ -197,7 +197,7 @@ if (location.hash || new URLSearchParams(location.search).get('intro') === '0') 
       <div class="card dest" id="getapp" tabindex="-1">
         <h3>Open the app on your computer</h3>
         <p>One install, then <code style="font-family:var(--mono);font-size:13px">lantern serve</code> opens Lantern in your browser. Add a folder or a GitHub link and press Analyze.</p>
-        <pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.10.0"
+        <pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.11.0"
 <span>$ </span>lantern serve</pre>
         <div class="langs"><span>TypeScript</span><span>JavaScript</span><span>Python</span><span>Go</span><span>Rust</span><span>Java</span></div>
         <div class="sp"></div>
@@ -228,7 +228,7 @@ if (location.hash || new URLSearchParams(location.search).get('intro') === '0') 
         <p>Everything Lantern does by itself (the map of your app, the security findings, the readiness grade, the evidence report) runs on your own machine. No account, no upload, no server of ours ever sees your code. This is the recommended way to use Lantern, and the only way we can promise that nothing leaves your computer.</p>
         <ol class="howto">
           <li><b>Install Python 3.11 or newer</b> from <a href="https://www.python.org/downloads/" rel="noopener">python.org</a> (on Windows, tick "Add python.exe to PATH").</li>
-          <li><b>Install Lantern</b> in a terminal (PowerShell on Windows, Terminal on Mac):<pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.10.0"</pre></li>
+          <li><b>Install Lantern</b> in a terminal (PowerShell on Windows, Terminal on Mac):<pre class="cmd"><span>$ </span>pip install "lantern[scan] @ git+https://github.com/LittleHenderson/Lantern@v0.11.0"</pre></li>
           <li><b>Open it:</b><pre class="cmd"><span>$ </span>lantern serve</pre>Your browser opens Lantern at a local address (127.0.0.1) that only your computer can reach.</li>
           <li><b>Add your app</b>: Browse… to its folder, or paste a GitHub link. A link is cloned onto <em>your</em> computer, not onto a server, and analyzed there.</li>
         </ol>
