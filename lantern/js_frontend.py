@@ -26,7 +26,7 @@ import tree_sitter_javascript as tsj
 import tree_sitter_typescript as tst
 from tree_sitter import Language, Node as TSNode, Parser
 
-from . import calls, manifest
+from . import calls, deep, manifest
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, project_text, skipped_dir
 
@@ -96,6 +96,23 @@ GENERATED_RE = re.compile(r"\.gen\.[jt]sx?$|(^|/)generated/")
 
 def _text(n: TSNode | None) -> str:
     return n.text.decode("utf8", "replace") if n is not None else ""
+
+
+def _head(src: bytes, n: TSNode | None, keep: int = 120) -> str:
+    """The start of a node's text with every run of white space as one space, at least as much of it as the call
+    inventory keeps of a callee (`calls.record`), without taking the whole text first: the callee of the outermost
+    call of a chain is the whole chain, and one chain of a hundred thousand calls, each asked for its callee's text,
+    was megabytes for every call of it."""
+    if n is None:
+        return ""
+    start, end = n.start_byte, n.end_byte
+    size = 4 * keep + 32
+    while True:
+        cut = min(end, start + size)
+        text = re.sub(r"\s+", " ", src[start:cut].decode("utf8", "replace"))
+        if cut >= end or len(text) > keep + 1:
+            return text if cut >= end else text[:keep + 1]
+        size *= 4
 
 
 def _fingerprint(n: TSNode) -> str:
@@ -329,6 +346,8 @@ class JSModule:
     anon_params: dict[str, set[str]] = field(default_factory=dict)  # scope -> parameters of inline functions in it
     declared: dict[str, set[str]] = field(default_factory=dict)  # scope -> names declared there (const/let/var/for)
     unread: list[tuple] = field(default_factory=list)   # (at, line, callee text, "inline"|"require"|"other")
+    too_deep: list[int] = field(default_factory=list)   # lines where a statement begins that is nested deeper than
+    #                                                     the reader follows (`lantern/deep.py`)
     # stage 3 (CommonJS, Express, values): read by JSResolver.resolve_more, never by resolve_parts
     values: dict[str, dict[str, list[str]]] = field(default_factory=dict)   # scope -> name -> chain it was set to
     reassigned: dict[str, set[str]] = field(default_factory=dict)   # scope -> names assigned after they were declared
@@ -366,6 +385,9 @@ class JSModule:
 # --------------------------------------------------------------------------------------------
 
 FUNC_TYPES = {"arrow_function", "function_expression", "function", "generator_function"}
+# The node types whose children are statements, read one by one (`Walker.each`): a statement nested deeper than the
+# reader follows is left alone and the ones after it are still read.
+STATEMENT_LISTS = ("program", "statement_block")
 DEF_DECLS = {"function_declaration", "generator_function_declaration"}
 CLASS_DECLS = {"class_declaration", "abstract_class_declaration", "class"}
 WRAPPERS = {"memo", "forwardRef", "observer", "React.memo", "React.forwardRef", "withRouter", "styled"}
@@ -541,11 +563,32 @@ class Walker:
             return
         if t == "object" and scope == "" or t == "object":
             self._maybe_router_object(n)
+        if t in STATEMENT_LISTS:
+            self.each(n.children, scope, cls, ui)
+            return
         inline = t in FUNC_TYPES
         self.inline += inline
         for c in n.children:
             self.walk(c, scope, cls, ui)
         self.inline -= inline
+
+    def each(self, nodes, scope: str, cls: str | None = None, ui: str | None = None):
+        """The statements of a block, one by one. One that is nested deeper than Python lets `walk` call itself is
+        left where the reading stopped and written down (`lantern/deep.py`). What the scope knew about the names
+        written in it is forgotten: the part that was not read may have declared any of them or given it a new value,
+        so each counts as a name of this scope that was assigned again."""
+        for c in nodes:
+            held = self.inline
+            try:
+                self.walk(c, scope, cls, ui)
+            except RecursionError:
+                self.inline = held
+                self.m.too_deep.append(c.start_point[0] + 1)
+                written = deep.names(c, ("identifier", "shorthand_property_identifier_pattern"))
+                self.m.declared.setdefault(scope, set()).update(written)
+                self.m.reassigned.setdefault(scope, set()).update(written)
+                for name in written:
+                    self.m.local_types.get(scope, {}).pop(name, None)
 
     def _walk_body(self, fn: TSNode, local: str, cls: str | None, ui: str | None):
         outer, self.inline = self.inline, 0     # a named function: its body is its own, however deep it is written
@@ -2154,8 +2197,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         m = JSModule(name=files[rel], rel=rel, path=p, lines=src.count(b"\n") + 1, is_test=bool(TEST_RE.search(rel)),
                      html=html)
         w = Walker(m, lambda s, _p=p: spec.resolve(s, _p))
-        for c in tree.root_node.children:
-            w.walk(c, "")
+        w.each(tree.root_node.children, "")
         covered = {ref.at for ref in m.refs if ref.at}
         for cn in _call_nodes(tree.root_node):
             pos = _site_pos(cn)
@@ -2165,8 +2207,9 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 cn.child_by_field_name("name")
             inner = _unparen(fnode)
             kind = "inline" if inner is not None and inner.type in FUNC_TYPES else \
-                "require" if fnode is not None and _text(fnode) == "require" else "other"
-            m.unread.append((pos, cn.start_point[0] + 1, _text(fnode), kind))
+                "require" if fnode is not None and fnode.end_byte - fnode.start_byte == 7 and \
+                _text(fnode) == "require" else "other"
+            m.unread.append((pos, cn.start_point[0] + 1, _head(src, fnode), kind))
         mods[m.name] = m
 
     express = {m.name for m in mods.values() if "express" in _nearest_package(m.path, repo, pkg_cache)["deps"]}
@@ -2187,6 +2230,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     for m in mods.values():
         g.add_node(Node(id=nid(m.name), kind=MODULE, name=Path(m.rel).name, qualname=m.name, file=m.rel,
                         start_line=1, end_line=m.lines))
+        for line in m.too_deep:
+            deep.note(g, m.rel, line, "javascript")
         for d in m.defs.values():
             parent = nid(m.name, d.parent_local) if d.parent_local else nid(m.name)
             sig = f"class {d.name}" if d.kind == "class" else f"{'component ' if d.jsx else ''}{d.name}{d.params}"

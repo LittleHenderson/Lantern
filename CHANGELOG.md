@@ -76,6 +76,36 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   local app's "open the link from your terminal" page, every sign-in page of the free allowance and the public
   landing page (menu and footer; "Guide" on phones and tablets so the menu fits) link to it as well.
   `tests/test_guide.py::test_every_page_reaches_the_guide` fails if one of them loses it.
+- Code nested very deep no longer stops the check (2026-11-13). The readers go through code by calling themselves
+  once per level of nesting, and Python ends a program about a thousand levels deep. One such piece anywhere in a
+  project, a chain of some hundred calls, a sum of a thousand pieces, an `else if` ladder, brackets inside brackets,
+  functions or classes written inside each other, ended `lantern analyze` with `maximum recursion depth exceeded`
+  and no result at all. Measured with eleven such shapes in each of the thirteen kinds of source file, every case a
+  project of its own: 69 of the 136 cases stopped the check, in 12 of the 13 kinds (Dart was the one that read them
+  all). Now 0 stop. A reader leaves the piece it cannot follow, one statement or one place, reads everything around
+  it, and the piece is written down: `graph.json` `meta.too_deep` (how many, in which files, the line each of the
+  first 40 begins at), a `deep` line in the log and a line in the Evidence Report's Limits. In the 136 cases, 68
+  deep files are named as not read to the end, with the functions before and after the piece and the calls around
+  it on the map, and 68 are read whole; a route that hands the request to a shell in the same project is reported
+  as critical in every one. What a reader knew about a name is not used after an unread piece that writes that
+  name, so no link below it is a guess shown as a fact. Where a reader has no single piece to leave, the file is
+  named (`deep.whole`), and where it has no net of its own the reader is named as stopped and the other readers go
+  on (`engine._part`). It is said, not judged: no finding, rank, score or release decision changes for it. New
+  `lantern/deep.py`. The recursion limit is not raised, which would trade the stop for a crash of Python itself.
+  Three readers were also slow on long lines and are not any more: **Ruby** asked tree-sitter for the parent of
+  every name, which costs a walk from the top of the file each time (one line of 20,000 chained calls 40.39
+  seconds, now 1.09; 100,000 calls were not read after four minutes and take 1.3 seconds); **PHP** worked out every
+  call of a chain anew for each call above it (400 links 2.12 seconds, now 0.04; forty functions with a chain of
+  300 links each 37.6 seconds, now 0.85), with the links and the counts of unplaced calls of 16 written shapes of
+  chain exactly as they were; **C and C++** asked for a parent the same way. Tests first: `tests/test_nested.py`
+  (111 tests) and two new ones in `tests/test_chains.py`; on the code before, 104 of the 133 fail. Nothing changes
+  for ordinary code: the map built before and after is the same, byte for byte, for the 15 sample projects and for
+  five public apps at a fixed commit (Django, Laravel's framework, Hugo, Excalidraw, ripgrep: 89,201 nodes and
+  241,697 links together), and nothing is written down as too deep in any of them. Found with the
+  same measurements and not fixed (`CLAUDE.md`, Known gaps): the Dart grammar's own parser takes far longer than
+  the file grows on a type written inside itself several thousand levels deep (10,000 levels 66.33 seconds, spent
+  before Lantern's reader sees the file, and the same before this change), and most readers follow a method only a
+  few classes up a family of classes.
 - No line of a project keeps the check busy (2026-11-13). Three faults of one kind, all in Lantern for some time,
   found while checking the fixes for a report on a real static site. **C#:** a line that chains calls, each on what
   the one before gave (`sb.Append(a).Append(b)…`, a query, a builder), doubled the reading time with every call
@@ -101,9 +131,8 @@ section matching the pushed tag into the GitHub Release body (`v0.9.0-rc1` uses 
   limit), and a test fails if a module finds strings the old way again. Found while checking the fixes for a report
   on a real static site; the fault was in Lantern before them. Other patterns that read strings were measured and
   left as they are (they are slow only on megabytes of text made for it): `CLAUDE.md`, Known gaps. Found by the same
-  look and not fixed here: one expression nested several hundred levels deep (a chain of 400 to 1,500 calls, a sum
-  of 1,200 pieces) stops the whole check with `maximum recursion depth exceeded` in most readers; the measured
-  numbers are under Known gaps too.
+  look: one expression nested several hundred levels deep (a chain of 400 to 1,500 calls, a sum of 1,200 pieces)
+  stopped the whole check with `maximum recursion depth exceeded` in most readers; that is the entry above.
 - Faster, with every check and every result as it was (2026-11-12; point 10 of the 2026-11-09 directive, "Increase
   performance without dropping checks"). Measured first, then changed: `bench/speed.py` analyzes the sample shop and
   five public apps at a fixed commit each, three first runs and three repeat runs a side, the unchanged engine and

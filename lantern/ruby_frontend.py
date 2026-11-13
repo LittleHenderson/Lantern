@@ -34,6 +34,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import deep
 from .graph import CALLABLE, CALLS, CLASS, CONTAINS, MODULE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, skipped
 
@@ -64,6 +65,19 @@ def _parser():
 
 def _t(n) -> str:
     return n.text.decode("utf-8", "replace") if n is not None else ""
+
+
+def _ends(src: bytes | None, n, keep: int = 200) -> str:
+    """A node's text, or, of one longer than twice `keep` bytes, its first and its last `keep` bytes with a space
+    between, read without taking the whole of it. The last call of a chain has the whole chain before it as what
+    it is made on, so a line of a hundred thousand chained calls, each asked for that text, was megabytes for every
+    call of it (measured 2026-11-13: not through after four minutes). Text of ordinary length is read as before."""
+    if n is None:
+        return ""
+    a, b = n.start_byte, n.end_byte
+    if src is None or b - a <= 2 * keep:
+        return _t(n)
+    return src[a:a + keep].decode("utf-8", "replace") + " " + src[b - keep:b].decode("utf-8", "replace")
 
 
 def _kids(n, *types):
@@ -147,6 +161,8 @@ class RFile:
 
 
 class Model:
+    left = None     # (map, reader) once the reader has a map: where a piece that was not read is written down
+
     def __init__(self):
         self.classes: dict[str, RClass] = {}
         self.by_short: dict[str, list[str]] = {}
@@ -230,48 +246,52 @@ def _params(n) -> list[str]:
 def _collect(model: Model, f: RFile, root) -> None:
     def walk(nodes, scope: str | None, cls: RClass | None):
         for c in nodes:
-            if c.type in ("class", "module"):
-                nm = c.child_by_field_name("name")
-                if nm is None:
-                    continue
-                local = _t(nm).replace("::", ".")
-                cid = (scope + "." if scope else "") + local
-                k = model.classes.get(cid)
-                if k is None:
-                    k = RClass(id=cid, short=local.split(".")[-1], file=f.rel, start=c.start_point.row + 1,
-                               end=c.end_point.row + 1, kind=c.type)
-                    model.classes[cid] = k
-                    model.by_short.setdefault(k.short, []).append(cid)
-                sup = c.child_by_field_name("superclass")
-                if sup is not None:
-                    k.superclass = _t(next((x for x in sup.children if x.is_named), None)) or None
-                body = c.child_by_field_name("body") or next((x for x in c.children if x.type == "body_statement"), None)
-                if body is not None:
-                    walk(body.children, cid, k)
-            elif c.type in ("method", "singleton_method"):
-                _fun(c, cls)
-            elif c.type == "call" and cls is not None and c.child_by_field_name("receiver") is None:
-                m = _t(c.child_by_field_name("method"))
-                args = _args(c)
-                if m in ("include", "extend", "prepend"):
-                    cls.mixins += [_t(a) for a in args if a.type in ("constant", "scope_resolution")]
-                elif m in ("before_action", "skip_before_action", "prepend_before_action", "before_filter"):
-                    kw = _pairs(args)
-                    only, exc = set(_symbols(kw.get("only"))), set(_symbols(kw.get("except")))
-                    cond = "if" in kw or "unless" in kw        # a filter that runs only sometimes is not a login check
-                    for a in args:
-                        s = _str(a)
-                        if s:
-                            kind = "skip" if m.startswith("skip") else "cond" if cond else "add"
-                            cls.filters.append((kind, s, only, exc))
-                elif m in ("attr_accessor", "attr_reader"):
-                    pass
-                else:
-                    f.top.append(c) if cls is None else None
-            elif c.type == "body_statement":
-                walk(c.children, scope, cls)
-            elif cls is None and c.type not in ("comment",):
-                f.top.append(c)
+            try:
+                if c.type in ("class", "module"):
+                    nm = c.child_by_field_name("name")
+                    if nm is None:
+                        continue
+                    local = _t(nm).replace("::", ".")
+                    cid = (scope + "." if scope else "") + local
+                    k = model.classes.get(cid)
+                    if k is None:
+                        k = RClass(id=cid, short=local.split(".")[-1], file=f.rel, start=c.start_point.row + 1,
+                                   end=c.end_point.row + 1, kind=c.type)
+                        model.classes[cid] = k
+                        model.by_short.setdefault(k.short, []).append(cid)
+                    sup = c.child_by_field_name("superclass")
+                    if sup is not None:
+                        k.superclass = _t(next((x for x in sup.children if x.is_named), None)) or None
+                    body = c.child_by_field_name("body") or next((x for x in c.children if x.type == "body_statement"), None)
+                    if body is not None:
+                        walk(body.children, cid, k)
+                elif c.type in ("method", "singleton_method"):
+                    _fun(c, cls)
+                elif c.type == "call" and cls is not None and c.child_by_field_name("receiver") is None:
+                    m = _t(c.child_by_field_name("method"))
+                    args = _args(c)
+                    if m in ("include", "extend", "prepend"):
+                        cls.mixins += [_t(a) for a in args if a.type in ("constant", "scope_resolution")]
+                    elif m in ("before_action", "skip_before_action", "prepend_before_action", "before_filter"):
+                        kw = _pairs(args)
+                        only, exc = set(_symbols(kw.get("only"))), set(_symbols(kw.get("except")))
+                        cond = "if" in kw or "unless" in kw        # a filter that runs only sometimes is not a login check
+                        for a in args:
+                            s = _str(a)
+                            if s:
+                                kind = "skip" if m.startswith("skip") else "cond" if cond else "add"
+                                cls.filters.append((kind, s, only, exc))
+                    elif m in ("attr_accessor", "attr_reader"):
+                        pass
+                    else:
+                        f.top.append(c) if cls is None else None
+                elif c.type == "body_statement":
+                    walk(c.children, scope, cls)
+                elif cls is None and c.type not in ("comment",):
+                    f.top.append(c)
+            except RecursionError:
+                # declared inside more declarations than this walk follows: left where it stands and written down
+                deep.leave(model.left, f.rel, c)
 
     def _fun(c, cls: RClass | None):
         nm = c.child_by_field_name("name")
@@ -329,9 +349,12 @@ def _foot(node):
 
 
 class Linker:
+    left = None     # (map, reader) once the reader has a map: where a piece that was not read is written down
+
     def __init__(self, model: Model):
         self.m = model
         self.http: list[dict] = []
+        self.texts: dict[str, bytes] = {}                    # each file's bytes, for `_ends`
 
     def _const(self, recv, cls: RClass | None) -> str | None:
         return self.m.find(_t(recv), cls.id if cls else None) if recv is not None and recv.type in (
@@ -354,7 +377,9 @@ class Linker:
             cid = self._const(recv.child_by_field_name("receiver"), cls)
             return cid if cid and self.m.is_record(cid) else None
         if recv.type == "parenthesized_statements":
-            inner = next((c for c in recv.children if c.is_named), None)
+            inner = recv                                     # brackets inside brackets: taken off one by one
+            while inner is not None and inner.type == "parenthesized_statements":
+                inner = next((c for c in inner.children if c.is_named), None)
             return self._type_of(inner, cls, env)
         return None
 
@@ -439,53 +464,66 @@ class Linker:
             return (None, "")
         return None
 
-    def walk(self, nodes, cls: RClass | None, env: dict, src: str, fn: RFun | None, skip: set) -> list[Ref]:
+    def walk(self, nodes, cls: RClass | None, env: dict, src: str, fn: RFun | None, skip: set,
+             file: str = "") -> list[Ref]:
         refs: list[Ref] = []
         memo: dict = {}                                      # what `target` worked out while `env` was as it is now
-        stack = list(reversed(nodes))
+        text = self.texts.get(file or (fn.file if fn is not None else ""))
+        # Each node goes on the stack with the node it was found in. Asking a node for its parent costs a walk from
+        # the top of the file down to it, and every name of a chain of 20,000 calls asking was 40 seconds (2026-11-13).
+        stack = [(n, None) for n in reversed(nodes)]
         while stack:
-            x = stack.pop()
+            x, up = stack.pop()
             if x.id in skip or x.type in ("class", "module", "method", "singleton_method"):
                 continue
             line = x.start_point.row + 1
-            if x.type == "assignment":
-                left, right = x.child_by_field_name("left"), x.child_by_field_name("right")
-                if left is not None and left.type == "identifier":
-                    t = self._type_of(right, cls, env) if right is not None else None
-                    env[_t(left)] = t or ""
+            try:
+                if x.type == "assignment":
+                    left, right = x.child_by_field_name("left"), x.child_by_field_name("right")
+                    if left is not None and left.type == "identifier":
+                        t = self._type_of(right, cls, env) if right is not None else None
+                        env[_t(left)] = t or ""
+                        memo.clear()
+                elif x.type in ("block_parameters", "lambda_parameters"):
+                    for p in _params(x):
+                        env[p] = ""
                     memo.clear()
-            elif x.type in ("block_parameters", "lambda_parameters"):
-                for p in _params(x):
-                    env[p] = ""
+                elif x.type == "identifier" and (up or x.parent) is not None and (up or x.parent).type in (
+                        "body_statement", "then", "else", "do_block", "block_body", "begin",
+                        "parenthesized_statements") and _t(x) not in env:
+                    name = _t(x)                                   # a bare call: `helper`
+                    r = (self.m.fun_in(cls.id, name) if cls else None) or self.m.top_funs.get(name)
+                    if r:
+                        refs.append(Ref(r, line, RESOLVED, "name"))
+                elif x.type == "subshell":                           # `cmd #{x}`
+                    refs.append(Ref("ext:Kernel.`", line, RESOLVED, "import"))
+                elif x.type == "call":
+                    res = self.target(x, cls, env, fn, memo)
+                    if res is not None:
+                        t, via = res
+                        if t:
+                            refs.append(Ref(t, line, RESOLVED, via))
+                        elif via == "":
+                            key = (f"{src}: {_ends(text, x.child_by_field_name('receiver'), 160)[:40]}."
+                                   f"{_t(x.child_by_field_name('method'))}")
+                            self.m.unresolved[key] = self.m.unresolved.get(key, 0) + 1
+                    self._http(x, src, text)
+            except RecursionError:
+                # nested deeper than the lookup follows: left with all that is written in it, and written down
+                deep.leave(self.left, file or (fn.file if fn is not None else ""), x, env, blank="")
                 memo.clear()
-            elif x.type == "identifier" and x.parent is not None and x.parent.type in (
-                    "body_statement", "then", "else", "do_block", "block_body", "begin", "parenthesized_statements") \
-                    and _t(x) not in env:
-                name = _t(x)                                   # a bare call: `helper`
-                r = (self.m.fun_in(cls.id, name) if cls else None) or self.m.top_funs.get(name)
-                if r:
-                    refs.append(Ref(r, line, RESOLVED, "name"))
-            elif x.type == "subshell":                           # `cmd #{x}`
-                refs.append(Ref("ext:Kernel.`", line, RESOLVED, "import"))
-            elif x.type == "call":
-                res = self.target(x, cls, env, fn, memo)
-                if res is not None:
-                    t, via = res
-                    if t:
-                        refs.append(Ref(t, line, RESOLVED, via))
-                    elif via == "":
-                        key = f"{src}: {_t(x.child_by_field_name('receiver'))[:40]}.{_t(x.child_by_field_name('method'))}"
-                        self.m.unresolved[key] = self.m.unresolved.get(key, 0) + 1
-                self._http(x, src)
-            stack.extend(reversed(x.children))
+                continue
+            stack.extend((c, x) for c in reversed(x.children))
         return refs
 
-    def _http(self, call, src):
+    def _http(self, call, src, text: bytes | None = None):
         name = _t(call.child_by_field_name("method"))
-        recv = _t(call.child_by_field_name("receiver"))
-        args = _args(call)
-        if not args or name.lower() not in ("get", "post", "put", "patch", "delete", "get_response"):
+        if name.lower() not in ("get", "post", "put", "patch", "delete", "get_response"):
             return
+        args = _args(call)
+        if not args:
+            return
+        recv = _ends(text, call.child_by_field_name("receiver"))
         if not re.search(r"^(HTTParty|Faraday|RestClient|Net::HTTP|HTTP|Excon|Typhoeus)$|conn|client|http|api",
                          recv, re.I):
             return
@@ -634,7 +672,9 @@ def add_ruby(g: Graph, repo: str | Path) -> dict:
         g.meta.setdefault("skipped_languages", []).append("ruby (pip install tree-sitter-ruby)")
         return {}
     model = Model()
+    model.left = (g, "ruby")
     files: list[tuple[RFile, object]] = []
+    texts: dict[str, bytes] = {}
     total = 0
     for p in paths:
         try:
@@ -648,9 +688,12 @@ def add_ruby(g: Graph, repo: str | Path) -> dict:
         lines = src.count(b"\n") + 1
         total += lines
         f = RFile(rel=rel, lines=lines, is_test=bool(TEST_FILE_RE.search(rel)))
-        _collect(model, f, root)
+        deep.whole(model.left, f.rel, _collect, model, f, root)
         files.append((f, root))
+        texts[rel] = src
     link = Linker(model)
+    link.left = model.left
+    link.texts = texts
 
     for f, _ in files:
         g.add_node(Node(id=f"rb:{f.rel}", kind=MODULE, name=Path(f.rel).name, qualname=f.rel, file=f.rel,
@@ -708,7 +751,7 @@ def add_ruby(g: Graph, repo: str | Path) -> dict:
                 g.nodes[lid].entry = {"kind": "route", "detail": detail}
                 routes += 1
                 env = {p: "" for p in _params(blk.child_by_field_name("parameters"))}
-                add_refs(lid, link.walk(_block_body(blk), cls, env, lid, None, set()))
+                add_refs(lid, link.walk(_block_body(blk), cls, env, lid, None, set(), f.rel))
                 skip.setdefault(owner if owner.startswith(f"rb:{f.rel}") else f"rb:{f.rel}", set()).add(
                     blk.parent.id)
 
@@ -716,11 +759,11 @@ def add_ruby(g: Graph, repo: str | Path) -> dict:
         cls = model.classes.get(fn.cls) if fn.cls else None
         body = fn.node.child_by_field_name("body")
         env = {p: "" for p in fn.params}
-        add_refs(mid, link.walk([body] if body is not None else [], cls, env, mid, fn, set()))
+        add_refs(mid, link.walk([body] if body is not None else [], cls, env, mid, fn, set(), fn.file))
     for f, _ in files:
         if f.top:
             mid = f"rb:{f.rel}"
-            add_refs(mid, link.walk(f.top, None, {}, mid, None, skip.get(mid, set())))
+            add_refs(mid, link.walk(f.top, None, {}, mid, None, skip.get(mid, set()), f.rel))
 
     # Rails routes → controller actions
     route_files = [(f, root) for f, root in files if re.search(r"(^|/)config/routes(\.rb|/[^/]+\.rb)$", f.rel)]

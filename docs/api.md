@@ -166,7 +166,17 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
 * Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.name>`; external `ext:<pkg.member>`
   or `ext:HTTP <METHOD> <path>`.
 * `meta`: `files`, `lines`, `languages`, `bridge` (link counts), `http_calls`, `packs` (`{added, ambiguous, unresolved, packs}`),
-  `lanes` (`{browser, frontend, server, data}` node counts), `calls` (the summary of `calls.json`, below).
+  `lanes` (`{browser, frontend, server, data}` node counts), `calls` (the summary of `calls.json`, below),
+  `too_deep` (since 2026-11-13, only when a reader left something: `{pieces: n, files: [path, …],
+  where: [{file, line, reader}, …], readers: [reader, …]}`. A reader goes through code by calling itself once per
+  level and leaves a piece that is nested deeper than Python follows: `pieces` counts them, `files` names every
+  file that holds one, `where` gives the line each of the first 40 begins at and the reader that left it
+  (`python`, `javascript`, `go`, `rust`, `java`, `kotlin`, `swift`, `dart`, `csharp`, `php`, `ruby`, `cpp`), and
+  `readers` names a reader that stopped before it was through with the project, with what it had read by then
+  still on the map. The calls written in such a piece are not on the map. The run's log has a line
+  `deep    <n> pieces of code nested deeper than Lantern follows were not read to the end (<files>)`, the Evidence
+  Report's Limits name the files and the readers; `lantern/deep.py`. Until then such a piece ended the run with
+  `maximum recursion depth exceeded` and no result file).
 * JavaScript `via` values added in stage 3 (2026-11-09): `require-call` (`require('./x')(...)`), `route-handler` and
   `middleware` (a function handed to an Express router by name: resolved when it is named straight from a module,
   inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),

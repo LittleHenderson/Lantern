@@ -16,7 +16,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, gitfacts, programs, release, results, scanresult
+from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph
 from .lanes import LANE_WORDS, LANES
@@ -278,6 +278,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
         out.append(f"{st['guessed_by_method_name']} call edges were linked by method name alone because the object's "
                    "type was unknown. They are marked likely or possible, never confirmed, and can point at the "
                    "wrong function.")
+    out += deep.words(g.meta)    # code nested deeper than a reader follows: left where the reading stopped, and named
     tr = run_meta.get("trace")
     if counted(tr):
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "

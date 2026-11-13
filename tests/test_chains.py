@@ -9,12 +9,18 @@ that what `b()` gives. Two readers asked more than once per link:
 * Ruby: each link walked the rest of the chain again, and that for every link it was asked about, so twice the
   links took eight times the time (800 links: 26 seconds).
 
-Both now read each link once. Three kinds of test:
+Both now read each link once. A third reader was slow in another way and is read each link once since the same day:
+
+* PHP: to say what a call is made on, the reader asked for the call below it, and that one for the one below it,
+  anew for every call of the chain and again for every call it was asked about: twice the links took eight times
+  the time (400 links 2.12 seconds; forty functions with a chain of 300 links each 37.6 seconds, now 0.85).
+
+Three kinds of test:
 
 * the check ends, in a child process with a time limit (on the code before, the C# ones run into the limit and the
   Ruby one does not end in time or stops with an error);
 * every reader is given a chain of sixty calls, so a reader that starts to ask twice is seen;
-* nothing else changed: short chains of every shape the two readers tell apart (the project's own type, a library
+* nothing else changed: short chains of every shape the three readers tell apart (the project's own type, a library
   call, a receiver nobody knows, an awaited or bracketed link) give the links and the count of unknown calls they
   gave, written down from the code before."""
 
@@ -100,6 +106,18 @@ def test_a_long_chain_in_ruby_is_read(tmp_path):
     r = _analyze(tmp_path / "src", tmp_path / "out", limit=20)
     assert r is not None, "a chain of 900 calls was still being read after 20 seconds"
     assert r.returncode == 0, (r.returncode, r.stdout[-400:], r.stderr[-400:])
+
+
+def test_long_chains_in_php_are_read(tmp_path):
+    # forty functions, each with one chain of 300 calls: the code before took 37.6 seconds for the PHP reader alone
+    text = "<?php\n" + "".join(f"function f{i}($x) {{\n    $y = $x" + "->g()" * 300 + ";\n    return $x;\n}}\n" for i in range(40))
+    _write(tmp_path / "src", {"report.php": text})
+    r = _analyze(tmp_path / "src", tmp_path / "out", limit=20)
+    assert r is not None, "forty chains of 300 calls were still being read after 20 seconds"
+    assert r.returncode == 0, (r.returncode, r.stdout[-400:], r.stderr[-400:])
+    graph = json.loads((tmp_path / "out" / "graph.json").read_text(encoding="utf-8"))
+    assert {f"php:f{i}" for i in range(40)} <= {n["id"] for n in graph["nodes"]}
+    assert "too_deep" not in graph["meta"], graph["meta"]["too_deep"]      # read, every call of it, not left out
 
 
 def _chain(n, link=".f()"):
@@ -361,6 +379,247 @@ RB_SEEN = {'calls': {'rb:Svc.bracketed': ['rb:Repo.find (receiver-type)'],
                 'rb:Svc.with_block: xs.map { |n| n.name }.compact.uniq.first': 1}}
 
 
+PHP_SHAPES = {
+    "src/Model.php": '''<?php
+namespace App;
+
+interface Store
+{
+    public function find(int $id): Note;
+}
+
+class Note
+{
+    public function nxt(): Note
+    {
+        return $this;
+    }
+
+    public function name(): string
+    {
+        return "n";
+    }
+
+    public function untyped()
+    {
+        return $this;
+    }
+}
+
+class Repo implements Store
+{
+    public Note $last;
+
+    public function find(int $id): Note
+    {
+        return new Note();
+    }
+
+    public function where(string $q): self
+    {
+        return $this;
+    }
+
+    public static function make(): Repo
+    {
+        return new Repo();
+    }
+}
+
+class Cache implements Store
+{
+    public function find(int $id): Note
+    {
+        return new Note();
+    }
+}
+
+function open_repo(): Repo
+{
+    return new Repo();
+}
+''',
+    "src/Svc.php": '''<?php
+namespace App;
+
+use GuzzleHttp\\Client;
+use Illuminate\\Support\\Facades\\DB;
+
+class Base
+{
+    public function log(string $m): Base
+    {
+        return $this;
+    }
+}
+
+class Svc extends Base
+{
+    private Repo $repo;
+    private Client $client;
+    private Store $store;
+
+    public function own_types(int $id)
+    {
+        return $this->repo->where("a")->where("b")->find($id)->nxt()->nxt()->name();
+    }
+
+    public function through_this()
+    {
+        return $this->log("a")->log("b")->log("c");
+    }
+
+    public function through_parent()
+    {
+        return parent::log("a")->log("b");
+    }
+
+    public function from_static()
+    {
+        return Repo::make()->where("a")->find(1)->name();
+    }
+
+    public function from_function()
+    {
+        return open_repo()->where("a")->find(1)->nxt();
+    }
+
+    public function from_new()
+    {
+        return (new Repo())->where("a")->find(2)->name();
+    }
+
+    public function nullsafe(?Repo $r)
+    {
+        return $r?->where("a")?->find(1)?->name();
+    }
+
+    public function untyped_link(Repo $r)
+    {
+        return $r->find(1)->untyped()->name()->more();
+    }
+
+    public function unknown($x)
+    {
+        return $x->a()->b()->c();
+    }
+
+    public function library_chain()
+    {
+        return DB::table("notes")->where("a", 1)->orderBy("id")->get();
+    }
+
+    public function library_value()
+    {
+        return $this->client->get("https://api.example.com/notes")->getBody()->getContents();
+    }
+
+    public function interface_first(int $id)
+    {
+        return $this->store->find($id)->nxt()->name();
+    }
+
+    public function property_between(Repo $r)
+    {
+        return $r->last->nxt()->name();
+    }
+
+    public function renamed(Repo $r)
+    {
+        $n = $r->find(1);
+        $a = $n->nxt()->name();
+        $n = $n->untyped();
+        $b = $n->nxt()->name();
+        $r = $r->where("x")->where("y");
+        return $r->find(3)->name();
+    }
+
+    public function in_arguments(Repo $r, $xs)
+    {
+        return $r->where($r->find(1)->name())->find(array_map(fn ($x) => $r->find($x)->nxt(), $xs))->name();
+    }
+
+    public function twice(Repo $r)
+    {
+        $r->find(1)->nxt()->name();
+        $r->find(1)->nxt()->name();
+        return $r->find(1)->nxt();
+    }
+}
+''',
+    "page.php": '''<?php
+require __DIR__ . '/src/Model.php';
+
+$repo = new \\App\\Repo();
+$name = $repo->where("a")->find(1)->nxt()->name();
+$repo = $repo->where("b");
+echo $repo->find(2)->name();
+''',
+}
+
+PHP_SEEN = {'calls': {'php:App.Svc.from_function': ['php:App.Repo.where (receiver-type)', 'php:App.open_repo (name)'],
+           'php:App.Svc.from_new': ['php:App.Repo.where (receiver-type)'],
+           'php:App.Svc.from_static': ['php:App.Repo.make (assoc)', 'php:App.Repo.where (receiver-type)'],
+           'php:App.Svc.in_arguments': ['ext:array_map (import)',
+                                        'php:App.Note.name (receiver-type)',
+                                        'php:App.Note.nxt (receiver-type)',
+                                        'php:App.Repo.find (receiver-type)',
+                                        'php:App.Repo.where (receiver-type)'],
+           'php:App.Svc.interface_first': ['php:App.Cache.find (interface)', 'php:App.Repo.find (interface)'],
+           'php:App.Svc.library_chain': ['ext:DB.table (import)'],
+           'php:App.Svc.library_value': ['ext:Client.get (receiver-type)',
+                                         'ext:HTTP GET api.example.com (http-external)'],
+           'php:App.Svc.nullsafe': ['php:App.Repo.where (receiver-type)'],
+           'php:App.Svc.own_types': ['php:App.Repo.where (receiver-type)'],
+           'php:App.Svc.property_between': ['php:App.Note.name (receiver-type)', 'php:App.Note.nxt (receiver-type)'],
+           'php:App.Svc.renamed': ['php:App.Note.name (receiver-type)',
+                                   'php:App.Note.nxt (receiver-type)',
+                                   'php:App.Repo.find (receiver-type)'],
+           'php:App.Svc.through_parent': ['php:App.Base.log (receiver-type)'],
+           'php:App.Svc.through_this': ['php:App.Base.log (receiver-type)'],
+           'php:App.Svc.twice': ['php:App.Note.name (receiver-type)',
+                                 'php:App.Note.nxt (receiver-type)',
+                                 'php:App.Repo.find (receiver-type)'],
+           'php:App.Svc.untyped_link': ['php:App.Note.untyped (receiver-type)', 'php:App.Repo.find (receiver-type)'],
+           'php:page.php': ['php:App.Repo.where (receiver-type)', 'php:src/Model.php (include)']},
+ 'unresolved': {'php:App.Svc.from_function: open_repo()->where("a")->find': 1,
+                'php:App.Svc.from_function: open_repo()->where("a")->find(1)->nxt': 1,
+                'php:App.Svc.from_new: (new Repo())->where("a")->find': 1,
+                'php:App.Svc.from_new: (new Repo())->where("a")->find(2)->name': 1,
+                'php:App.Svc.from_static: Repo::make()->where("a")->find': 1,
+                'php:App.Svc.from_static: Repo::make()->where("a")->find(1)->name': 1,
+                'php:App.Svc.in_arguments: $r->where($r->find(1)->name())->find': 1,
+                'php:App.Svc.in_arguments: $r->where($r->find(1)->name())->find(arr->name': 1,
+                'php:App.Svc.interface_first: $this->store->find($id)->nxt': 1,
+                'php:App.Svc.interface_first: $this->store->find($id)->nxt()->name': 1,
+                'php:App.Svc.library_value: $this->client->get("https://api.example.->getBody': 1,
+                'php:App.Svc.library_value: $this->client->get("https://api.example.->getContents': 1,
+                'php:App.Svc.nullsafe: $r?->where("a")->find': 1,
+                'php:App.Svc.nullsafe: $r?->where("a")?->find(1)->name': 1,
+                'php:App.Svc.own_types: $this->repo->where("a")->where': 1,
+                'php:App.Svc.own_types: $this->repo->where("a")->where("b")->fin->name': 1,
+                'php:App.Svc.own_types: $this->repo->where("a")->where("b")->fin->nxt': 2,
+                'php:App.Svc.own_types: $this->repo->where("a")->where("b")->find': 1,
+                'php:App.Svc.renamed: $n->nxt': 1,
+                'php:App.Svc.renamed: $n->nxt()->name': 1,
+                'php:App.Svc.renamed: $n->untyped': 1,
+                'php:App.Svc.renamed: $r->find': 1,
+                'php:App.Svc.renamed: $r->find(3)->name': 1,
+                'php:App.Svc.renamed: $r->where': 1,
+                'php:App.Svc.renamed: $r->where("x")->where': 1,
+                'php:App.Svc.unknown: $x->a': 1,
+                'php:App.Svc.unknown: $x->a()->b': 1,
+                'php:App.Svc.unknown: $x->a()->b()->c': 1,
+                'php:App.Svc.untyped_link: $r->find(1)->untyped()->name': 1,
+                'php:App.Svc.untyped_link: $r->find(1)->untyped()->name()->more': 1,
+                'php:page.php: $repo->find': 1,
+                'php:page.php: $repo->find(2)->name': 1,
+                'php:page.php: $repo->where': 1,
+                'php:page.php: $repo->where("a")->find': 1,
+                'php:page.php: $repo->where("a")->find(1)->nxt': 1,
+                'php:page.php: $repo->where("a")->find(1)->nxt()->name': 1}}
+
+
 def test_short_chains_in_csharp_are_read_as_before(tmp_path):
     _write(tmp_path, CS_SHAPES)
     assert seen(build_graph(tmp_path)) == CS_SEEN
@@ -369,3 +628,8 @@ def test_short_chains_in_csharp_are_read_as_before(tmp_path):
 def test_short_chains_in_ruby_are_read_as_before(tmp_path):
     _write(tmp_path, RB_SHAPES)
     assert seen(build_graph(tmp_path)) == RB_SEEN
+
+
+def test_short_chains_in_php_are_read_as_before(tmp_path):
+    _write(tmp_path, PHP_SHAPES)
+    assert seen(build_graph(tmp_path)) == PHP_SEEN
