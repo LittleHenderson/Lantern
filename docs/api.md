@@ -625,9 +625,12 @@ notice under the tiles and the badge say `scan incomplete`, and the badge is nev
 `provenance` (`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs, and
 since 2026-11-13 `libraries`: the libraries the project's tests ran on, taken from `run.json` by shape,
 `{state: "fetched"|"installed", store, exact, checked, left_out, above, packages: [{name, version, exact, checked,
-fingerprint}], optional_left?}`, or null when no test run is in the results or the tests ran on no library; the page lists them
+fingerprint, built_from?}], optional_left?, built?}`, or null when no test run is in the results or the tests ran on no library; the page lists them
 under "Libraries the tests ran on"; `optional_left` is there only when optional libraries were left out of the fetch,
-`{groups: [<name>, …], more}` with names of the form a tool writes only, and the Limits then carry a line for it), `limits`
+`{groups: [<name>, …], more}` with names of the form a tool writes only, and the Limits then carry a line for it;
+`built_from` is the fingerprint of the source a package was built from for the run (taken only when it has the shape
+`sha256:<64 hex>`), `built` counts such packages, and the Limits then name them and say that the package was made on
+that computer for that run), `limits`
 (strings: what the report does not prove; one line per incomplete scanner; one line per kind of project for the
 dependency entries that were not checked because they have no exact version, whatever state that audit ended in; one
 line when the baseline in the results folder could not be used, in which case `scorecard.before`, `baseline_date` and
@@ -703,8 +706,8 @@ where something below Python holds it, `sandbox.held_below_python`; false for te
 nothing does, which is macOS and Windows, and a run inside another sandbox whose doorman makes the connections;
 a run before that date has no such entry, which says nothing either way) and `libraries`, what the tests ran on: `{state: "none"}` when the project names no
 library, `{state: "installed"}` when the check was offline and every library named is on this computer, else
-`{state: "fetched", language, store, packages: [{name, version, fingerprint, file, asked, exact, checked}], added,
-notes, exact, checked, reached, refused, walls, locked?, above?, optional?}`: `store` is the host the libraries were fetched
+`{state: "fetched", language, store, packages: [{name, version, fingerprint, file, asked, exact, checked, built?}], added,
+notes, exact, checked, reached, refused, walls, locked?, above?, optional?, built?}`: `store` is the host the libraries were fetched
 from, each package has the fingerprint of the file that was fetched (`sha256:<hex>` for Python, npm's
 `sha512-<base64>` for JavaScript), `asked` says the project names it itself, `exact` that its version was the
 project's own choice (an `==` pin or a lock file, named in `locked`) and `checked` that the fingerprint is one the
@@ -714,6 +717,11 @@ passed over or did not do (an option of pip's it does not take, the libraries th
 whether they were fetched too or left out, install scripts that were not run, a `package.json` with no lock file), `reached` and `refused` are the places the
 fetch reached and how many it was refused, `walls` says what held the fetch to its doorkeeper (`own-network`, `port-rule` or `told`: `lantern/libraries.py`;
 `told` also inside a sandbox whose doorman makes every connection for what runs in it, where no rule of the run's own decides),
+`built` (Python on Linux, since 2026-11-14) is on a package that the store did not have ready-built for this system and that Lantern
+built from its source for this run, in the sandbox with the network off: `{from: <the source package's file name>,
+source_fingerprint: "sha256:<hex>", with: ["<tool> <version>", …]}`; such a package's `fingerprint` is the built file's, which
+nobody names, its `checked` says that the source's fingerprint is one the project names, and `built` at the top counts them (it is
+left out when none was built),
 `optional` (Python, since 2026-11-14, only where the project names libraries under an extra or a group that is not one for tests)
 is `{groups: [<name>, …], more: <how many names are not of the form a tool writes>, fetched: true|false, why?}`: `true` when they
 were fetched beside the rest, `false` when they were left out and the tests ran on what the project always needs: the fetch with
