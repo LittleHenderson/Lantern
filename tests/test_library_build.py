@@ -498,6 +498,44 @@ def test_a_build_that_never_ends_is_ended_and_no_test_is_run(tmp_path, monkeypat
     assert _going(mark) == []
 
 
+# The launcher's own last line when it could not end something a command started (`sandbox._LEFT_BY_LAUNCHER`). Its
+# only way to say it is a line of the output, so a build that prints the line says of itself that it left something.
+LEFT = "    print('sandbox: 2 process(es) the command started could not be ended', flush=True)\n" + HONEST
+
+
+@builds
+def test_what_a_build_started_and_could_not_be_ended_is_not_passed_over(tmp_path, monkeypatch, pystore):
+    """A build is a stranger's code. Where something it started could not be ended, the build may have gone through
+    and its package may be whole: no test is run beside what is still going, and the reason says why."""
+    _online(monkeypatch, python=pystore)
+    digest = pystore.put("stage2mac", *source("stage2mac", "3.0.0", {"stage2mac.py": "N = 3\n"}, body=LEFT))
+    said, lines = _refused(_project(tmp_path / "proj", pystore, "pins", digest))
+    assert "stage2mac 3.0.0" in said and "could not be ended" in said, said
+    # and its twin: the same build that leaves nothing is taken, and the tests run on it
+    digest = pystore.put("stage2twin", *source("stage2twin", "3.0.0", {"stage2twin.py": "N = 3\n"}))
+    res = _run(_project(tmp_path / "twin", pystore, "pins", digest, name="stage2twin",
+                        check="self.assertEqual(stage2twin.N, 3)"))
+    assert res["returncode"] == 0 and res["libraries"]["built"] == 1, res["output_tail"]
+
+
+@builds
+def test_after_a_build_that_left_something_the_fetch_does_not_start_again(tmp_path, monkeypatch, pystore):
+    """An optional library that cannot be had is left out and the fetch starts again without it. Not after a build
+    that left something running: the second fetch, and the tests after it, would run beside it."""
+    _online(monkeypatch, python=pystore)
+    pystore.add("stage2extra", "1.0.0", {"stage2extra.py": "X = 1\n"})
+    pystore.put("stage2built", *source("stage2built", "1.0.0", {"stage2built.py": "X = 1\n"}, body=LEFT))
+    text = OPTIONAL.replace('minify = ["stage2extra"]', 'minify = ["stage2extra", "stage2built==1.0.0"]')
+    repo = _pyproject_project(tmp_path / "proj", text, check=NO_EXTRA)
+    (repo / "test_it.py").write_text("raise SystemExit('PLANTED-RAN: a test file was run')\n", encoding="utf-8")
+    lines: list[str] = []
+    with pytest.raises(sandbox.NoLibraries) as e:
+        _run(repo, lines.append)
+    said = str(e.value)
+    assert "stage2built 1.0.0" in said and "could not be ended" in said and "tests were not run" in said, said
+    assert not any("fetching again without them" in line or "PLANTED-RAN" in line for line in lines), lines
+
+
 @builds
 def test_a_build_that_takes_more_memory_than_the_run_has_is_ended(tmp_path, monkeypatch, pystore):
     _online(monkeypatch, python=pystore)

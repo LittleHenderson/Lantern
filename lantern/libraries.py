@@ -1014,10 +1014,11 @@ class _Fetch:
             self.door.close()
             self.door = None
 
-    def stop(self, why: str, then: str = ""):
+    def stop(self, why: str, then: str = "", final: bool = False):
         stopped = self.sandbox.NoLibraries(f"the project's libraries could not be fetched: {why}, so its tests were "
                                            f"not run{then}")
         stopped.why = why               # the reason alone, for a fetch that goes on without the optional libraries
+        stopped.final = final           # no fetch goes on after this one, with fewer libraries or otherwise (`fetch`)
         raise stopped
 
 
@@ -1450,6 +1451,11 @@ def _build(job: _Fetch, repo: Path, name: str, version: str, number: int, sure: 
             [here / w for w in writable], readable, wall, first, more_env)
         if rc is None and not timed_out:
             return None
+        if job.plan.left:
+            # A build is a stranger's code, and something it started is still going. Whatever the step itself
+            # ended with, nothing more of this run is started beside it: no further step, no second fetch without
+            # the optional libraries, no test.
+            job.stop(f"something the build of {words} started could not be ended", final=True)
         if timed_out:
             job.stop(f"the build of {words} was not through after {_time_words(BUILD_SECONDS)}")
         if sandbox._over_memory(rc, output):
@@ -1805,6 +1811,8 @@ def fetch(found: Plan, repo: Path, app: Path, root: Path, cwd_rel: str, log, can
         try:
             where = _fetch_python(job, repo, app)
         except sandbox.NoLibraries as e:
+            if getattr(e, "final", False):
+                raise                       # something of that fetch is still going: nothing is started beside it
             why = getattr(e, "why", "") or "the fetch did not go through"
             log(f"sandbox: with the optional libraries the fetch did not go through ({why}); fetching again without them")
             found.lines, found.asked, found.pinned = lines, asked, pinned
