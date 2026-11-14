@@ -16,6 +16,7 @@ file. New entries go under `## Unreleased`, on top.
   the rule, file and line, the paths, the scenario and the other actions open with a small Why? button, in place. Each
   readiness step keeps its evidence behind Why? too, and the Terminal button is Advanced only (the \` key still opens it).
   Advanced is unchanged.
+
 - **A project's tests run on the libraries the project names** (2026-11-13; the second stage of "a firm pass or
   fail"). Until now the sandbox ran a project's tests on whatever the Python that runs Lantern had installed, and
   for JavaScript on a `node_modules` folder the project happened to bring. A project whose libraries are not on the
