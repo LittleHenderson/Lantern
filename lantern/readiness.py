@@ -663,11 +663,22 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
         out.append(_check("tests-pass", "Tests pass", 2, "skip",
                           "not run: the sandbox the tests run in could not be set up on this computer", run_them,
                           required=True))
+    elif "returncode" in tr and tr["returncode"] is None and (tr.get("over_memory") is True or tr.get("timed_out")):
+        # Stopped at a limit of the run, its memory or its time: the tests did not finish, which is no failure and no
+        # pass (until 2026-11-13 a run stopped by the clock read "fail" here, beside a release decision that said
+        # "not a pass and not a failure").
+        if tr.get("over_memory") is True:
+            said, more = ("not finished: the sandbox stopped the tests because they used more memory than their limit",
+                          "Give the tests more memory (`--test-memory`, or the memory field of “Watch my tests "
+                          "run”) and run them again.")
+        else:
+            said, more = ("not finished: the tests were stopped at the time limit",
+                          "Give the tests more time (`--test-minutes`, or the minutes field of “Watch my tests "
+                          "run”) and run them again.")
+        out.append(_check("tests-pass", "Tests pass", 2, "skip", said, more, how="lantern analyze --trace", required=True))
     elif "returncode" in tr:
         rc = tr["returncode"]
-        said = (f"traced test run exited {rc}" if rc is not None else
-                "the test run did not end by itself: it was stopped at the time limit" if tr.get("timed_out") else
-                "the test run did not end by itself")
+        said = f"traced test run exited {rc}" if rc is not None else "the test run did not end by itself"
         out.append(_check("tests-pass", "Tests pass", 2, "pass" if rc == 0 else "fail", said, how="lantern analyze --trace"))
     else:
         out.append(_check("tests-pass", "Tests pass", 2, "skip",

@@ -47,7 +47,7 @@ STATE_BASES = {"State", "ConsumerState", "HookState"}
 def _parser():
     import tree_sitter as ts
     import tree_sitter_dart as td
-    return ts.Parser(ts.Language(td.language()))
+    return deep.Timed(ts.Parser(ts.Language(td.language())))   # a limit for one file: the grammar's time is its own
 
 
 def _t(n) -> str:
@@ -499,11 +499,14 @@ def add_dart(g: Graph, repo: str | Path) -> dict:
             continue
         rel = p.relative_to(repo).as_posix()
         tree = parser.parse(src)
-        trees.append(tree)
         lines = src.count(b"\n") + 1
-        total += lines
         is_test = bool(TEST_FILE_RE.search(rel))
         files.append((rel, lines, is_test))
+        if tree is None:        # the parser was not through with it in time: on the map as a file, named as not read
+            deep.slow((g, "dart"), rel)
+            continue
+        trees.append(tree)
+        total += lines
         deep.whole((g, "dart"), rel, _collect, model, rel, tree.root_node, is_test)
     for rel, lines, is_test in files:
         g.add_node(Node(id=f"dt:{rel}", kind=MODULE, name=Path(rel).name, qualname=rel, file=rel, start_line=1,
@@ -539,6 +542,7 @@ def add_dart(g: Graph, repo: str | Path) -> dict:
             node.entry = {"kind": "test", "detail": fn.file}
         elif fn.name == "main" and fn.cls is None:
             node.entry = {"kind": "main", "detail": f"app start ({fn.file})"}
+    read = len(trees)       # the files the parser was through with in time
     del trees
-    return {"files": len(files), "lines": total, "types": len(model.types), "functions": len(model.funs),
+    return {"files": read, "lines": total, "types": len(model.types), "functions": len(model.funs),
             "unresolved": sum(model.unresolved.values())}

@@ -624,7 +624,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
 
     @app.get("/")
     def website():
-        html, nonce = site.page(__version__)
+        html, nonce = site.page(__version__, s.runs_per_day, s.global_runs_per_day)
         from lantern.server import _csp
         return Response(html, 200, media_type="text/html; charset=utf-8", headers={
             "Content-Security-Policy": _csp(nonce), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",

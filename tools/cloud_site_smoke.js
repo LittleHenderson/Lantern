@@ -8,6 +8,7 @@ const chromium = require('playwright')[process.env.PW_BROWSER || 'chromium'];
 const fs = require('fs');
 const a11y = require('./a11y.js');
 const outside = require('./outside.js');   // no page under test reaches the internet
+const waiting = require('./waiting.js');   // a card that fills in later: any answer ends the wait
 
 async function fresh(p, url) { await p.goto('about:blank'); await p.goto(url); await p.waitForLoadState('load'); }
 async function until(p, fn, timeout) {
@@ -126,7 +127,11 @@ async function until(p, fn, timeout) {
     // a screenshot: the attach button, its card with what was read, then Remove
     if (!(await p.$('#askatt'))) errs.push(`${tag}: Ask Lantern has no screenshot button`);
     await p.setInputFiles('#askfile', `${out}-${tag}-report.png`);
-    await until(p, () => /text found|cannot read|text not read/.test(document.querySelector('#ask .shot .sm')?.textContent || ''), 90000);   // Tesseract on a busy CI runner can take over 30 s
+    // Tesseract on a busy CI runner can take over 30 s. Any answer ends the wait; one that is no reading is an error
+    // said at once in the card's own words (it used to wait the whole 90 s and say only that it had timed out)
+    const shot = await waiting.settled(() => p.evaluate(() => document.querySelector('#ask .shot .sm')?.textContent || '').catch(() => ''), 90000, ms => p.waitForTimeout(ms));
+    const unread = waiting.shotProblem(shot, 90000);
+    if (unread) errs.push(`${tag}: ${unread}`);
     await p.screenshot({ path: `${out}-${tag}-ask-screenshot.png` });
     await p.click('#askrm');
     await clean(p, 'ask');

@@ -85,6 +85,40 @@ def test_a_page_calls_only_functions_it_defines(page):
     assert undefined_calls((VIEWER / page).read_bytes()) == {}
 
 
+def test_a_sheet_stays_inside_the_window_and_the_test_sheets_buttons_stay_in_view():
+    """2026-11-13: two new fields made the "Watch my tests run" sheet 984 px tall. In a window 900 px high its
+    "Confirm and run" button sat below the window, and neither the sheet nor what is behind it scrolled, so nobody
+    could press it (the browser job caught it: its click waited 30 seconds and gave up). The released sheet (642 px)
+    fitted a window 720 px high and had the same fault in one 600 px high and on a phone: 1,003 px in a window of
+    844. The Python tests open no browser, so this reads the rules that hold a sheet to the window; the browser job
+    measures the real thing (`sheetFits` in tools/viewer_smoke.js: a desktop, a short laptop and two phones)."""
+    page = lantern_files.page("app.html")
+    wanted = (".sheetwrap", ".sheet", ".sheet.split", ".sheet.split .shbody", ".sheet.split .acts")
+    rules = {}
+    for line in page.split("<style>", 1)[1].split("</style>", 1)[0].splitlines():
+        for selector in wanted:
+            if line.startswith(selector + "{"):
+                rules[selector] = line.split("{", 1)[1].split("}", 1)[0]
+    assert set(rules) == set(wanted), sorted(rules)
+    wrap, sheet, split, body, acts = (dict(d.split(":", 1) for d in rules[s].split(";") if ":" in d) for s in wanted)
+    assert wrap["position"] == "fixed" and wrap["padding"] == "20px"
+    # never taller than the window less the wrap's padding above and below, and it scrolls by itself
+    assert "max-height:calc(100vh - 40px);max-height:calc(100dvh - 40px)" in rules[".sheet"]   # the second where known
+    assert sheet["overflow-y"] == "auto"
+    # a sheet with a row of buttons: a column whose upper part scrolls and whose row of buttons does not
+    assert split["display"] == "flex" and split["flex-direction"] == "column" and split["overflow"] == "hidden"
+    assert body["overflow-y"] == "auto" and body["min-height"] == "0" and acts["flex"] == "none"
+    assert '<div class="sheet split" role="dialog" aria-label="Watch my tests run"><div class="shbody">' in page
+    # and nothing that floats over the page lies on them: Ask Lantern's pill did, on a phone, on the Run button's end
+    ask = int(page.split("#ask{", 1)[1].split("z-index:", 1)[1].split(";", 1)[0])
+    assert ".sheetwrap.top{z-index:%d}" % (ask + 10) in page and "el.className = 'sheetwrap top'; el.id = 'sheet';" in page
+    assert '</div></div>\n    <div class="row acts"><button class="btn" id="shskip">' in page   # the row is outside what scrolls
+    # what the server refuses is written at the end of what scrolls, where it is seen, and brought into view
+    assert "body.insertAdjacentHTML('beforeend', note('err'" in page and "body.lastElementChild.scrollIntoView" in page
+    smoke = (lantern_files.ROOT / "tools" / "viewer_smoke.js").read_text(encoding="utf-8")
+    assert smoke.count("await sheetFits(p, name, errs, step, ") == 2 and "[1280, 600]" in smoke and "[360, 640]" in smoke
+
+
 def test_the_check_sees_a_missing_helper_and_only_that():
     """The check itself: a helper that is not there is named with its line; declared names of every kind, the
     browser's own functions and method calls are not."""

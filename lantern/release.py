@@ -297,8 +297,24 @@ def _tests(tests_exist: bool, run_meta: dict) -> dict:
     if rc == 0:
         return _crit("tests", "passed", "The tests ran in this check and ended with 0 (passed).")
     if rc is None:
-        return _crit("tests", "missing", "The test run did not end by itself"
-                     + (": it was stopped at the time limit." if tr.get("timed_out") else "."), how)
+        from . import sandbox
+        if tr.get("over_memory") is True:
+            had = sandbox.memory_words(tr.get("memory_limit"))    # only a number of this run's own
+            return _crit("tests", "missing", "The test run did not end by itself: the sandbox stopped it because "
+                         "the tests, with what they started, used more memory than their limit"
+                         + (f" ({had})." if had else ".") + " That is not a pass and not a failure.",
+                         "Give the tests more memory and run them again: `lantern analyze PATH --trace --sandbox "
+                         "--test-memory MB -- <your test command>` (megabytes, from 128), or the memory field of "
+                         "“Watch my tests run” in the app. If they take more however much they get, find the "
+                         "test that keeps what it should let go.")
+        if not tr.get("timed_out"):
+            return _crit("tests", "missing", "The test run did not end by itself.", how)
+        had = sandbox.minutes_words(tr.get("time_limit"))     # only a number of this run's own; nothing else is shown
+        return _crit("tests", "missing", "The test run did not end by itself: it was stopped at the time limit"
+                     + (f" ({had})." if had else ".") + " That is not a pass and not a failure.",
+                     "Give the tests more time and run them again: `lantern analyze PATH --trace --test-minutes N "
+                     "-- <your test command>` (N from 1 to 240), or the minutes field of “Watch my tests run” in "
+                     "the app. If they never end, find the test that hangs.")
     if tr.get("blocked"):
         return _crit("tests", "missing", f"The tests ended with {rc} in the sandbox, which refused something they "
                                          "tried (the network, a write outside their folder). That may be the "

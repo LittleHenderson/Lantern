@@ -16,7 +16,12 @@ its stand-in for the download went with it, and the run, still going, asked gith
 next test ran, which was the one that failed.
 
 CI on Linux also runs the suite with no network at all (tools/netless.py) and sets LANTERN_TESTS_NETLESS=required,
-which stops the run when a route to the outside exists.
+which stops the run when a route to the outside exists. There the operating system writes down every address any
+program of the run tries, and a run in which one was tried fails. A test of the sandbox that has a program below
+Python try an address outside, to see the kernel refuse it, names that try first:
+`@pytest.mark.tries_outside("connect", "192.0.2.1", 80, "why")` (`name_a_try`; only an address kept for examples).
+On 2026-11-13 the first such test, a JavaScript test that calls a computer outside, ended CI's pass with every test
+passed and the runner's result 4.
 
 CI also sets LANTERN_TESTS_COMPLETE=required: there every test must run, and a test file or a test that is skipped
 because a library is not installed fails the run. Until 2026-11-10 CI's test jobs installed neither PyJWT nor
@@ -29,6 +34,15 @@ isolation itself cannot run in the first pass (two need root, one starts the no-
 started inside itself without root, one needs a way out for the refusal to show). Until 2026-11-10 three of them
 ran nowhere in CI, and the fourth only in the one-command audit of the Python 3.13 job.
 
+Since 2026-11-13 a third pass runs tests/test_sandbox_own_network.py that way too, as the ordinary user. In the test
+sandbox a project's tests get a network of their own; root makes it directly, an ordinary user through a user
+namespace, and GitHub's Linux machines refuse an ordinary user that (the first pass of commit 9e6696f: "this system
+does not let the tests have a network of their own (error 13)"). So in the first pass the restricted process fell
+back to refusing every address, which is right there and is what that pass tests, a test's own server answered only
+in Docker's container, and the one test that needs the launcher's own network was skipped with that reason. The
+third pass takes the machine's rule (kernel.apparmor_restrict_unprivileged_userns) away for its one command and
+puts it back after.
+
 A run under any of these rules names them in its last lines ("rules of this run: ..."), and CI looks for them there.
 That second pass, on its first run in CI, showed why: both of CI's Linux passes start through sudo, the sudo of
 GitHub's machines hands a command none of the caller's variables (`-E` is ignored there, and sudo says so), and so,
@@ -38,6 +52,7 @@ inside the no-network runner all the same (its own last line says so), but a tes
 would not have failed that pass. CI now writes each rule on the sudo line itself.
 """
 import functools
+import json
 import os
 import re
 import shutil
@@ -73,9 +88,37 @@ _whole: list = []                       # (test file, reason) skipped while it w
 _NOT_INSTALLED = re.compile(r"could not import '([^']+)'")   # pytest.importorskip's own words
 
 
+ON_PURPOSE = "LANTERN_NETLESS_ON_PURPOSE"      # the no-network runner's (tools/netless.py --watch) file for named tries
+_ON_PURPOSE = os.environ.get(ON_PURPOSE, "")   # read here, before a test changes the environment
+
+
+def name_a_try(kind: str, address: str, port: int, why: str, path: str | None = None) -> bool:
+    """Name a try for the outside that a program this test starts makes on purpose, below the Python guard, so that
+    the kernel's refusal is what the test sees (a JavaScript test that calls a computer outside). The guard cannot
+    refuse such a try first, so the operating system's record of the run holds it (tools/netless.py --watch, CI's
+    first Linux pass), and the runner fails a run for every try nobody named. Only an address kept for examples may
+    be named. True when a runner is around this run and the line was written; with none there is nothing to tell."""
+    if kind not in ("connect", "send", "lookup") or type(port) is not int or not str(why).strip():
+        raise ValueError("a try is named by its kind (connect, send or lookup), its address, its port and why")
+    import ipaddress
+    kept = ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32")
+    a = ipaddress.ip_address(address)
+    if not any(a.version == n.version and a in n for n in map(ipaddress.ip_network, kept)):
+        raise ValueError(f"{address} is not an address kept for examples: a test tries no address a computer may have")
+    path = _ON_PURPOSE if path is None else path
+    if not path:
+        return False
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"kind": kind, "address": address, "port": port, "why": str(why).strip()}) + "\n")
+    return True
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "network_refused(reason): this test tries an address outside this computer on "
                             "purpose, to see the refusal (listed in tests/test_isolation.py)")
+    config.addinivalue_line("markers", "tries_outside(kind, address, port, why): a program this test starts tries an "
+                            "address kept for examples on purpose, below the Python guard, to see the kernel refuse "
+                            "it; named for the no-network runner's record (tools/netless.py --watch)")
     config.addinivalue_line("markers", "live: needs a real model provider; never part of a normal run (bench/live.py)")
     if _netless_required() and netguard.has_route_out():
         raise pytest.UsageError("LANTERN_TESTS_NETLESS=required, and this run has a route to the outside. Start it "
@@ -222,6 +265,8 @@ def _watch(item, phase):
     if phase == "setup":
         item.stash[_START] = start
         _keep_work()
+        for mark in item.iter_markers("tries_outside"):
+            name_a_try(*mark.args, **mark.kwargs)
     # Before anything of the test is taken away (pytest undoes its stand-ins inside this phase, after the `yield`).
     left = _finish_work() if phase == "teardown" else []
     failure = None

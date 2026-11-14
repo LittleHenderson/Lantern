@@ -154,6 +154,8 @@ OWN_FILES = {
     ("results.py", "plain"): "the opener for result files", ("gitfacts.py", "_text"): "the opener for git's files",
     ("results.py", "write"): "writes", ("removal.py", "_write"): "writes", ("server.py", "FileLock.__enter__"): "a lock",
     ("_jail.py", "_landlock"): "a folder handle for Landlock", ("_jail.py", "_stat"): "/proc",
+    ("_jail.py", "_holds"): "/proc: the memory a process of the run holds",
+    ("_jail.py", "_share"): "/proc: a process's own share of the memory it holds",
     ("removal.py", "_by_folder"): "a folder handle", ("removal.py", "_empty"): "a folder handle",
     ("removal.py", "_open_dir"): "a folder handle", ("removal.py", "_give_rights"): "a folder handle",
     ("removal.py", "_read"): "LANTERN_HOME", ("usage.py", "_read"): "LANTERN_HOME", ("usage.py", "install_id"): "LANTERN_HOME",

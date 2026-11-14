@@ -367,8 +367,10 @@ def test_a_run_names_the_rules_it_ran_under_and_ci_looks_for_them(tmp_path):
     A run now ends by naming the rules it ran under, CI writes each rule on the sudo line itself, and CI looks for
     the rule in the run's own words afterwards, so a rule that did not arrive is a red run."""
     gates = _rules_gates()
-    assert [where for _, where in gates] == ["pytest.log", '"$RUNNER_TEMP/second-pass.log"'], gates
-    first, second = (re.compile(what, re.M) for what, _ in gates)       # nothing in them that grep and Python read apart
+    assert [where for _, where in gates] == ["pytest.log", '"$RUNNER_TEMP/second-pass.log"',
+                                             '"$RUNNER_TEMP/own-network.log"'], gates
+    first, second, third = (re.compile(what, re.M) for what, _ in gates)    # nothing in them that grep and Python read apart
+    assert third.pattern == second.pattern          # the third pass (a run's own network) is held to the second's rule
     code, out = _missing_library_run(tmp_path / "required", "", complete=True)
     assert code == 0 and "\nrules of this run: LANTERN_TESTS_COMPLETE=required (" in out, out[-3000:]
     assert not first.search(out) and not second.search(out), out[-3000:]       # one rule is not both; nor the other one
@@ -392,7 +394,11 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     the libraries the tests need are what CI installs (`dev`), PyJWT with cryptography among them: the 14 Connect
     GitHub tests need both. CI's Linux jobs run the isolation's own tests a second time, as root and outside the
     no-network runner, where no test may be skipped. Each of those two passes is handed its rules on the sudo line
-    and is checked to have run under them."""
+    and is checked to have run under them. Since 2026-11-13 a third pass runs the tests of a run's own network as
+    the ordinary user, with the machine's rule against user namespaces for ordinary users taken away for that one
+    command and put back after it, and no test may be skipped there either: GitHub's Linux machines refuse an
+    ordinary user a network of its own, so in the first pass the launcher's own network was made nowhere (only
+    Docker's container had one) and the one test that needs it was skipped with that reason."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -402,7 +408,7 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
         assert all(" -rs" in line for line in mine), (path.name, mine)
         assert not mine or "LANTERN_TESTS_COMPLETE: required" in text, path.name
         runs += [(path.name, line) for line in mine]
-    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 4, runs
+    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 5, runs
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "LANTERN_TESTS_COMPLETE: required" in ci[: ci.index("\njobs:")]        # for every job of the workflow
     first = next(line for name, line in runs if name == "ci.yml" and "--cov" in line)     # the pass without a network
@@ -410,7 +416,24 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert again == ['python -m pytest -q -rs -p no:cacheprovider tests/test_netguard.py | tee '
                      '"$RUNNER_TEMP/second-pass.log"'], again
     between = ci[ci.index(first): ci.index(again[0])]              # after the first pass, in the second pass's own step
-    assert ci.count("LANTERN_TESTS_COMPLETE: no-skips") == 1 and "LANTERN_TESTS_COMPLETE: no-skips" in between
+    own = [line for name, line in runs if name == "ci.yml" and "tests/test_sandbox_own_network.py" in line]
+    assert own == ['python -m pytest -q -rs -p no:cacheprovider tests/test_sandbox_own_network.py | tee '
+                   '"$RUNNER_TEMP/own-network.log" || status=$?'], own
+    third = ci[ci.index(again[0]): ci.index(own[0])]               # after the second pass, in the third pass's own step
+    assert ci.count("LANTERN_TESTS_COMPLETE: no-skips") == 2 and "LANTERN_TESTS_COMPLETE: no-skips" in between
+    assert "LANTERN_TESTS_COMPLETE: no-skips" in third and "LANTERN_TESTS_NETLESS" not in third
+    third = third[third.index("LANTERN_TESTS_COMPLETE: no-skips"):]
+    # The third pass is the ordinary user's (that is its point: root makes a network of its own without a user
+    # namespace), so no sudo stands before its tests and the step's own variables reach them. sudo is there only for
+    # the machine's rule, which is taken away before the tests and put back after them whatever they ended with;
+    # their result is kept and is the step's.
+    assert "set -o pipefail" in third and not re.search(r"\bsudo\b[^\n]*\bpython\b", third), third
+    rule = "kernel.apparmor_restrict_unprivileged_userns"
+    after = ci[ci.index(own[0]) + len(own[0]):]
+    after = after[: after.index("\n      - name:")]
+    assert f"rule={rule}" in third and 'sudo sysctl -w "$rule=0"' in third, third
+    assert after.index('sudo sysctl -w "$rule=$was"') < after.index('[ "$status" -eq 0 ] || exit "$status"') \
+        < after.index("grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' \"$RUNNER_TEMP/own-network.log\""), after
     assert "LANTERN_TESTS_NETLESS" not in between[between.index("LANTERN_TESTS_COMPLETE: no-skips"):]
     assert "set -o pipefail" in between[between.index("LANTERN_TESTS_COMPLETE: no-skips"):]    # it pipes into tee too
     # Both passes start through sudo, which hands a command only what is written on its own line (the sudo of GitHub's
@@ -425,6 +448,7 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert "LANTERN_TESTS_NETLESS" not in handed[1] and "netless.py" not in through_sudo[1], through_sudo
     assert [what for what, _ in _rules_gates()] == [
         "^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required",
+        "^rules of this run: LANTERN_TESTS_COMPLETE=no-skips",
         "^rules of this run: LANTERN_TESTS_COMPLETE=no-skips"]
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     step = release[release.index("Tests against the built wheel"):]
@@ -433,6 +457,45 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert 'check "pytest" "$PY" -m pytest -q -rs\nsaid \'^SKIPPED \\[\'' in audit
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     assert any(d.lower().startswith("pyjwt[crypto]") for d in project["optional-dependencies"]["dev"])
+
+
+FAILED_RUN = """\
+....F...........s....                                                    [100%]
+=================================== FAILURES ===================================
+_________________ test_the_one_that_failed[137-0.6] _________________
+tests/test_x.py:12: in test_the_one_that_failed
+    assert asked >= 3
+E   AssertionError: 1
+E   assert 1 >= 3
+----------------------------- Captured stdout call -----------------------------
+E  this line is the test's own print and still shown: it starts like pytest's
+""" + "".join(f"SKIPPED [1] tests/test_y.py:{n}: needs Windows\n" for n in range(1, 26)) + \
+    "1 failed, 4715 passed, 29 skipped, 4 warnings in 1051.88s (0:17:31)\n"
+
+
+@pytest.mark.skipif(os.name != "posix" or not shutil.which("bash"), reason="the audit is a bash script")
+def test_a_failed_check_of_the_audit_names_what_failed(tmp_path):
+    """CI's browser job, 2026-11-13 (the fourth push of #186): "FAIL  pytest", then the last 20 lines of pytest's
+    output, which were 20 skipped tests (every pytest line carries -rs), then "1 failed, 4715 passed". Which test
+    had failed, and with what, was nowhere in the job's log. A failed check now shows first the names pytest gives
+    what failed and the lines that say why, then its last lines as before; a check that passed shows neither."""
+    audit = (ROOT / "tools" / "audit.sh").read_text(encoding="utf-8")
+    helpers = [line for line in audit.splitlines() if re.match(r"(ok|bad|named|check)\(\) ", line)]
+    assert [line.split("(")[0] for line in helpers] == ["ok", "bad", "named", "check"], [h[:30] for h in helpers]
+    (tmp_path / "run.log").write_text(FAILED_RUN, encoding="utf-8")
+    script = "\n".join(['W="$1"; FAILS=0', *helpers,
+                        'check "pytest" bash -c \'cat "$0"; exit 1\' "$2"', 'echo "fails=$FAILS passed=$PASSED"',
+                        'check "again" bash -c \'cat "$0"\' "$2"', 'echo "fails=$FAILS passed=$PASSED"'])
+    r = subprocess.run(["bash", "-c", script, "bash", str(tmp_path), str(tmp_path / "run.log")], capture_output=True,
+                       text=True, encoding="utf-8", timeout=60)
+    assert r.returncode == 0, r.stderr
+    failed, _, passed = r.stdout.partition("fails=1 passed=0\n")
+    lines = failed.splitlines()
+    assert lines[0] == "FAIL  pytest"
+    assert lines[1] == "_________________ test_the_one_that_failed[137-0.6] _________________"
+    assert lines[2:4] == ["E   AssertionError: 1", "E   assert 1 >= 3"], lines[:6]
+    assert lines[-1].startswith("1 failed, 4715 passed") and len([x for x in lines if x.startswith("SKIPPED")]) == 19
+    assert passed == "PASS  again\nfails=1 passed=1\n", passed   # a check that passed names nothing
 
 
 def test_this_run_is_isolated():

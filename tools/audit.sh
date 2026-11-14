@@ -19,7 +19,11 @@ FAILS=0
 step() { printf '\n== %s\n' "$1"; }
 ok()   { printf 'PASS  %s\n' "$1"; }
 bad()  { printf 'FAIL  %s\n' "$1"; FAILS=$((FAILS + 1)); }
-check() { local name="$1"; shift; if "$@" >"$W/log" 2>&1; then ok "$name"; PASSED=1; else bad "$name"; tail -20 "$W/log"; PASSED=0; fi; }
+# What a failed check names before its last lines: the heading pytest gives each test that failed and the lines that say
+# why. The last 20 lines alone may all be skipped tests, since every pytest line carries -rs: CI's browser job of
+# 2026-11-13 said "1 failed, 4715 passed" and nowhere which test (tests/test_isolation.py runs these four lines).
+named() { grep -E '^(FAILED|ERROR) |^_{3,} .+ _{3,}$|^E   ' "$1" | head -60 || true; }
+check() { local name="$1"; shift; if "$@" >"$W/log" 2>&1; then ok "$name"; PASSED=1; else bad "$name"; named "$W/log"; tail -20 "$W/log"; PASSED=0; fi; }
 # After a check that passed: the lines of its output that say what was measured (a failed check has shown its last
 # lines already). The browser checks say what their pages and their browser asked of the outside (tools/outside.js);
 # Firefox and WebKit run only in CI, so CI's log is the one place where their counts can be read.

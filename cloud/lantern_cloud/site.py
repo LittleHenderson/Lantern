@@ -63,10 +63,20 @@ def _template(version: str) -> str:
     return page.replace("__VERSION__", version)
 
 
-def page(version: str) -> tuple[str, str]:
-    """(html, nonce) for the website, with the nonce on every script tag."""
+def page(version: str, per_day: int | None = None, everyone: int | None = None) -> tuple[str, str]:
+    """(html, nonce) for the website, with the nonce on every script tag. The help page says how many checks a day
+    an account gets and how many everyone together: `per_day` and `everyone` are the limits the service runs with
+    (`Settings.runs_per_day`, `global_runs_per_day`), so the page never names a number of its own (until 2026-11-13
+    it said 50 where the service had been set to 300). A page built outside a service names the limits a service
+    started here would have."""
+    if per_day is None or everyone is None:
+        from .settings import Settings
+        s = Settings()
+        per_day = s.runs_per_day if per_day is None else per_day
+        everyone = s.global_runs_per_day if everyone is None else everyone
     nonce = secrets.token_urlsafe(16)
-    html = _template(version).replace("<script>", f'<script nonce="{nonce}">')
+    html = _template(version).replace("__ALL_RUNS_PER_DAY__", f"{int(everyone):,}").replace("__RUNS_PER_DAY__", f"{int(per_day):,}")
+    html = html.replace("<script>", f'<script nonce="{nonce}">')
     return html.replace('<script src="/', f'<script nonce="{nonce}" src="/'), nonce
 
 

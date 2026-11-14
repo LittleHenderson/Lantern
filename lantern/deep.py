@@ -34,10 +34,26 @@ analyze` prints a `deep` line (`line_words`) and the Evidence Report's Limits na
 
 The recursion limit is left as it is: raising it trades this stop for a crash of the Python program itself on a
 computer with a small stack.
+
+**A file its parser is not through with in time** (the same day, `Timed`, `slow`). The parsers are tree-sitter's,
+written in C, and the time one takes over a file is its own. For nearly every file it grows with the file (the
+largest Dart file the reader takes, 1,450,000 bytes of ordinary code, 0.45 seconds); tree-sitter-dart's grows far
+faster on a type written inside itself inside a function (`List<List<…>>`: 2,000 levels 0.9 seconds, 4,000 levels
+7.5, 10,000 levels, a file of 60,245 bytes, 66, 40,000 not through after two minutes), and until then one such file
+kept the whole check waiting. Now a parser gets `PARSE_SECONDS` for one file. A file it is not through with is on
+the map as a file, nothing written in it is, it is written down (`meta["too_deep"]["slow"]`) and said like a piece
+nested too deep, and the files after it are read as before. Only the Dart reader's parser is such a parser so far:
+it is the one grammar this was measured on.
 """
 from __future__ import annotations
 
+import time
+import warnings
+
 MOST = 40           # pieces written down one by one; beyond that only the counts go up
+PARSE_SECONDS = 20  # what a parser gets for one file: forty times what the largest ordinary file takes, and twice
+                    # what the slowest file of ordinary code with mistakes in it took (tree-sitter 0.25.2, measured)
+PIECE = 1 << 16     # bytes handed to a parser at a time where a file is handed over through a function
 # The readers by the names they are written down under, and what a person calls the code each reads.
 READERS = {"python": "Python", "javascript": "JavaScript and TypeScript", "go": "Go", "rust": "Rust", "java": "Java",
            "kotlin": "Kotlin", "swift": "Swift", "dart": "Dart", "csharp": "C#", "php": "PHP", "ruby": "Ruby",
@@ -129,12 +145,102 @@ def read(meta) -> tuple[int, list[str], list[str]]:
     return (n, files, readers) if n and files else (0, [], readers)
 
 
+class Timed:
+    """A parser that gets `PARSE_SECONDS` for one file: `parse(src)` gives the tree, or None when the parser was not
+    through with the file in time.
+
+    How a parse is given a limit differs from version to version of the library, and each way here was measured:
+
+    * up to 0.25 the limit is the parser's own (`timeout_micros`). 0.25 says the attribute will go, and the way it
+      names in its place ends the Python program there with a segmentation fault (0.25.2: a file handed over
+      through a function, with a progress function), so that way is not used where the attribute exists;
+    * from 0.26 the attribute is gone and a parse asks a function as it goes whether to stop, but only when the
+      file is handed over through a function that reads it piece by piece (for a file handed over whole the
+      function is never asked, and the library says so). A tree made that way reads every node's text through
+      that function again (all the texts of a large file: 40 seconds where 1.5 are usual), so the file is parsed
+      once more with the first tree in hand: the parser takes the first tree's nodes as they are, which costs a
+      tenth of a parse, and the tree it gives has the file's own bytes behind it. Node for node, place for place
+      and text for text it is the tree an unlimited parse gives (`tests/test_slow_file.py`).
+
+    A parser that was stopped goes on with the file it was stopped on when it is given the next one (the next file
+    then came out as one error), so it is put back first (`reset`). Only the clock makes a file one the parser was
+    not through with: whatever else the library refuses is raised as it was."""
+
+    def __init__(self, parser):
+        self.parser = parser
+        self.own = hasattr(type(parser), "timeout_micros")    # asked of the class: asking the parser itself warns on 0.25
+        self.given = None
+
+    def _limit(self, micros: int) -> None:
+        if micros != self.given:
+            with warnings.catch_warnings():                    # "Use the progress_callback in parse()": see above
+                warnings.simplefilter("ignore", DeprecationWarning)
+                self.parser.timeout_micros = micros
+            self.given = micros
+
+    def parse(self, src: bytes):
+        seconds = PARSE_SECONDS
+        began, error, tree = time.monotonic(), None, None
+        try:
+            if self.own:
+                self._limit(int(seconds * 1_000_000))
+                tree = self.parser.parse(src)
+            else:
+                end = began + seconds
+                first = self.parser.parse(lambda at, _point: src[at:at + PIECE],
+                                          progress_callback=lambda *_state: time.monotonic() > end)
+                if first is not None:
+                    tree = self.parser.parse(src, old_tree=first)
+        except ValueError as e:             # "Parsing failed": how the library says that a parse was stopped
+            error = e
+        if tree is not None:
+            return tree
+        self.parser.reset()
+        if time.monotonic() - began < seconds * 0.9:           # not the clock
+            raise error if error is not None else ValueError("the parser gave no tree")
+        return None
+
+
+def slow(to, file: str) -> None:
+    """Write down that the parser was not through with `file` in time. `to` is (map, reader), or None where a reader
+    is used with no map."""
+    if to is None:
+        return
+    rec = _record(to[0]).setdefault("slow", {"count": 0, "files": [], "readers": [], "seconds": PARSE_SECONDS})
+    rec["count"] += 1
+    if len(rec["files"]) < MOST:
+        rec["files"].append(file)
+    if to[1] not in rec["readers"]:
+        rec["readers"].append(to[1])
+
+
+def read_slow(meta) -> tuple[int, list[str], int]:
+    """(how many files a parser was not through with in time, the first of them by name, the seconds a parser got)
+    out of a map's `meta`, which may be one read back from disk: 0, no names and 0 when there is none. The seconds
+    are 0 where the record does not say them as a number a limit could be."""
+    rec = meta.get("too_deep") if isinstance(meta, dict) else None
+    rec = rec.get("slow") if isinstance(rec, dict) else None
+    if not isinstance(rec, dict) or not isinstance(rec.get("files"), list):
+        return 0, [], 0
+    files = [f for f in rec["files"] if isinstance(f, str)]
+    n = _whole(rec.get("count"))
+    if not n or not files:
+        return 0, [], 0
+    seconds = _whole(rec.get("seconds"))
+    return max(n, len(files)), files, seconds if seconds <= 3600 else 0
+
+
+def _waited(seconds: int) -> str:
+    return f"longer than {seconds} second{'s' if seconds != 1 else ''}" if seconds else "longer than Lantern waits"
+
+
 def _shown(file: str) -> str:
     return "".join(ch if ch.isprintable() else "?" for ch in file[:120])
 
 
-def _listed(files: list[str]) -> str:
-    return ", ".join(_shown(f) for f in files[:3]) + (f" and {len(files) - 3} more" if len(files) > 3 else "")
+def _listed(files: list[str], of: int = 0) -> str:
+    more = max(of, len(files)) - 3
+    return ", ".join(_shown(f) for f in files[:3]) + (f" and {more} more" if more > 0 else "")
 
 
 def _together(words: list[str]) -> str:
@@ -151,6 +257,10 @@ def line_words(meta) -> str:
     if readers:
         out.append(f"the reading of the project's {_together([READERS[r] for r in readers])} code stopped before it "
                    "was through (nested or linked deeper than Lantern follows)")
+    late, names_, seconds = read_slow(meta)
+    if late:
+        out.append(f"{late} file{'s' if late != 1 else ''} took {'their' if late != 1 else 'its'} parser "
+                   f"{_waited(seconds)} and {'were' if late != 1 else 'was'} not read ({_listed(names_, late)})")
     return "; ".join(out)
 
 
@@ -170,4 +280,12 @@ def words(meta) -> list[str]:
                    f"nested or linked deeper than it follows. What it had read by then is on the map; the rest of the "
                    f"{READERS[r]} code is not, and no path leads through it. The pattern rules and the scanners read "
                    "those files line by line like any other.")
+    late, names_, seconds = read_slow(meta)
+    if late:
+        out.append(f"{late} file{'s' if late != 1 else ''} of the project took {'their' if late != 1 else 'its'} "
+                   f"parser {_waited(seconds)}{' each' if late != 1 else ''}, and Lantern stopped waiting: "
+                   f"{_listed(names_, late)}. Code written by hand is read in a fraction of that time; a type written "
+                   "inside itself some thousand times is not. Nothing written in such a file is on the map and no "
+                   "path leads through it. The pattern rules and the scanners read those files line by line like any "
+                   "other.")
     return out

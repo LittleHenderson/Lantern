@@ -21,8 +21,22 @@ def counted(tr) -> bool:
     return isinstance(tr, dict) and bool(tr) and tr.get("ran") is not False
 
 
-def run_trace(repo: str | Path, command: list[str], timeout: int = 900) -> dict:
-    """Run `command` (a Python invocation) with the hook installed. Returns raw pair data."""
+DEFAULT_TIMEOUT = 900      # seconds: what this way of running a project's tests has always given them
+
+
+def run_trace(repo: str | Path, command: list[str], timeout: float | None = None) -> dict:
+    """Run `command` (a Python invocation) with the hook installed, in the project's own folder and as the person
+    (the command line's older way; `lantern.sandbox.run` is the sealed one). Returns raw pair data with
+    `returncode`, `stderr_tail` and `time_limit` (the seconds it had: `timeout`, or `DEFAULT_TIMEOUT`).
+
+    A run over its limit is ended and the data says so: `returncode` None and `timed_out` True. Until 2026-11-13
+    the limit ended the whole check with a Python error (subprocess.TimeoutExpired) and no result, and only the
+    first program was ended: what the tests had started went on running. The command now runs in a process group
+    of its own, and at the limit, on Ctrl-C and when Lantern is told to end (SIGTERM, a closed terminal) the whole
+    group is ended. A program that moved itself out of that group is not found again; the sealed way finds those
+    too. The group is not the terminal's foreground one, so the command is given no keyboard to read from when
+    Lantern was started at one (its output was never shown, so nothing could be asked of the person before)."""
+    limit = DEFAULT_TIMEOUT if timeout is None else timeout
     repo = str(Path(repo).resolve())
     if command and Path(command[0]).name.startswith("python"):
         command = command[1:]
@@ -34,16 +48,89 @@ def run_trace(repo: str | Path, command: list[str], timeout: int = 900) -> dict:
     pkg_root = str(Path(__file__).resolve().parent.parent)
     env["PYTHONPATH"] = os.pathsep.join(p for p in [pkg_root, repo, env.get("PYTHONPATH", "")] if p)
     cmd = [sys.executable, "-m", "lantern.tracehook", out, repo, "--", *command]
-    proc = subprocess.run(cmd, cwd=repo, env=env, timeout=timeout, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    try:   # the traced program could put anything under this name: only a plain file is read (`results.plain`)
-        data = well_formed(json.loads(results.plain(Path(out))[0] or "{}"))
-    except (ValueError, RecursionError):
-        data = {}
+    try:
+        code, said, timed_out = _run_group(cmd, repo, env, limit)
+        try:   # the traced program could put anything under this name: only a plain file is read (`results.plain`)
+            data = well_formed(json.loads(results.plain(Path(out))[0] or "{}"))
+        except (ValueError, RecursionError):
+            data = {}
     finally:
         Path(out).unlink(missing_ok=True)
-    data["returncode"] = proc.returncode
-    data["stderr_tail"] = proc.stderr[-2000:]
+    data["returncode"] = code
+    data["stderr_tail"] = said[-2000:]
+    data["time_limit"] = limit
+    if timed_out:
+        data["timed_out"] = True
     return data
+
+
+def _run_group(cmd: list[str], cwd: str, env: dict, limit: float) -> tuple[int | None, str, bool]:
+    """Start `cmd` in a process group of its own and wait `limit` seconds for it. Returns (its result, or None when
+    it was ended at the limit; what it wrote to stderr; whether the limit ended it). Left before the command has
+    ended (the limit, Ctrl-C, a signal that ends Lantern, any error), the whole group is ended first; a command
+    that ends by itself leaves what it left, as it always did. What the command writes goes to a file of
+    Lantern's own and not through a pipe: a program the command started and that outlives it would hold a pipe
+    open, and the wait for the pipe's end would be the wait for that program."""
+    import signal
+    import threading
+
+    from .remote import _kill_tree
+    kw: dict = {}
+    if sys.platform == "win32":
+        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kw["process_group"] = 0
+        try:   # in a group that is not the terminal's foreground one, reading the keyboard would stop the command
+            if sys.stdin is not None and sys.stdin.isatty():
+                kw["stdin"] = subprocess.DEVNULL
+        except (ValueError, OSError):
+            pass
+
+    def leave(number, _frame):
+        raise SystemExit(128 + number)
+
+    # Told to end while the tests run, Lantern would end at once and leave their group running: for that time the
+    # signals that end it are answered by leaving through the `finally` below. Only where nobody else answers them
+    # (the default is in place), and only in the main thread, which is where Python lets a handler be set.
+    held = {}
+    if threading.current_thread() is threading.main_thread():
+        for name in ("SIGTERM", "SIGHUP"):
+            number = getattr(signal, name, None)
+            try:
+                if number is not None and signal.getsignal(number) is signal.SIG_DFL:
+                    held[number] = signal.signal(number, leave)
+            except (ValueError, OSError):
+                pass
+    proc = None
+    try:
+        with tempfile.TemporaryFile() as err:
+            proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.DEVNULL, stderr=err, **kw)
+            timed_out = False
+            try:
+                proc.wait(timeout=limit)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+            if timed_out:
+                _kill_tree(proc)
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    pass
+            err.seek(0, os.SEEK_END)
+            err.seek(max(0, err.tell() - 16000))
+            said = err.read().decode("utf-8", errors="replace")
+            code = None if timed_out else proc.returncode
+        return code, said, timed_out
+    except BaseException:
+        if proc is not None and proc.returncode is None:   # not collected yet, so the group's number is still its own
+            _kill_tree(proc)
+        raise
+    finally:
+        for number, before in held.items():
+            try:
+                signal.signal(number, before)
+            except (ValueError, OSError):
+                pass
 
 
 def _entry(e) -> bool:
