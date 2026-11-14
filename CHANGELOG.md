@@ -16,6 +16,7 @@ file. New entries go under `## Unreleased`, on top.
   check runs, Simple shows a real progress bar with the step it is on in plain words ("Step 2 of 4: Looking for
   problems"), read from the pipeline's own log lines; the raw log is one tap away. Advanced keeps its add bar and
   its log as before (directive: user first, step 2).
+
 - **A project's tests run on the libraries the project names** (2026-11-13; the second stage of "a firm pass or
   fail"). Until now the sandbox ran a project's tests on whatever the Python that runs Lantern had installed, and
   for JavaScript on a `node_modules` folder the project happened to bring. A project whose libraries are not on the
