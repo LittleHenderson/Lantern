@@ -36,6 +36,34 @@ def _own(backend: str = "subprocess") -> bool:
     return backend == "docker" or sandbox.own_network() == ""
 
 
+def _udp_made_here() -> bool:
+    """Does whatever stands around this test let a program make a UDP socket at all?"""
+    try:
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM).close()
+    except OSError:
+        return False
+    return True
+
+
+def _datagram_line(backend: str) -> str | None:
+    """What a datagram for another computer leaves in the record of the run that refused it. The guard refuses the
+    send and writes it down. Where the run has no network of its own and stands behind a doorman of its own, the
+    UDP socket itself is not made (there a UDP message would go wherever it is sent), so the test never gets to
+    send and the line is the doorman's: GitHub's Linux machines, where an ordinary user may make no network. Inside
+    another sandbox that makes no UDP socket the refusal is that sandbox's, written in its record and not in this
+    run's (None). Until 2026-11-14 the test asked for the guard's line everywhere, which the doorman of stage 2
+    made untrue on such a machine; on the change's first version another failure in the same test hid it."""
+    send = "network sendto ('192.0.2.1', 53)"
+    if backend == "docker":
+        return send
+    no_doorman = sandbox.own_sockets()
+    if not no_doorman:                                   # a doorman of the run's own
+        return send if _own(backend) else _jail.SAID["udp"]
+    if no_doorman == sandbox.DOORMAN_ABOVE and not _udp_made_here():
+        return None
+    return send
+
+
 def _failed(out: str) -> set[str]:
     """The names of the tests pytest's summary says failed."""
     return {line.split("::", 1)[1].split(" ", 1)[0] for line in out.splitlines()
@@ -193,11 +221,11 @@ def test_the_twin_that_reaches_outside_is_still_refused_and_written_down(backend
     assert _failed(out) == OUTSIDE | (set() if _own(backend) else {"test_it_talks_to_itself"}), out
     assert {b["kind"] for b in r["blocked"]} == {"network"}, r["blocked"]
     what = [b["what"] for b in r["blocked"]]
-    for tried in ("network connect ('192.0.2.1', 80)", "network sendto ('192.0.2.1', 53)",
-                  "network lookup 'example.invalid'"):
-        assert tried in what, what
+    datagram = _datagram_line(backend)
+    for tried in ("network connect ('192.0.2.1', 80)", datagram, "network lookup 'example.invalid'"):
+        assert tried is None or tried in what, what
     if _own(backend):                # and nothing else was refused: the test that talks to itself left no line
-        assert len(what) == 3, what
+        assert len(what) == (2 if datagram is None else 3), what
 
 
 # ------------------------------------------------------------------------------- the other programs of this computer
@@ -371,7 +399,14 @@ def test_below_python_the_tests_have_their_own_address_and_cannot_reach_another_
         return
     # no network of its own: the kernel's older rules, where it has them (none of them is about datagrams)
     if sandbox.landlock_abi() >= 4:
-        assert "OWN LISTENER: refused" in out and "tcp" not in came, out
+        assert "OWN LISTENER: refused" in out, out
+    if not sandbox.held_below_python():
+        # A run inside a run (these tests, run by Lantern): the doorman of the sandbox around it makes every
+        # connection, and the kernel asks its rules of the one that connects. What is reached is that sandbox's
+        # to decide (the other programs here are inside it), and the inner run's log says so.
+        return
+    if sandbox.landlock_abi() >= 4:
+        assert "tcp" not in came, out
     if sandbox.landlock_abi() >= 6:
         assert "name" not in came, out
 
@@ -663,7 +698,9 @@ def test_where_no_network_of_its_own_can_be_made_nothing_on_this_computer_is_let
         r = sandbox.run(_tiny(tmp_path / "below", _below(others.where())), PYTEST, log=QUIET, backend="subprocess",
                         timeout=180)
         assert r["returncode"] == 0, r["output_tail"]
-        assert "OWN LISTENER: refused" in r["output_tail"] and others.came() <= {"udp"}, r["output_tail"]
+        assert "OWN LISTENER: refused" in r["output_tail"], r["output_tail"]
+        # (inside a sandbox that makes the connections, that sandbox decides what a connection reaches)
+        assert others.came() <= {"udp"} or not sandbox.held_below_python(), r["output_tail"]
 
 
 def test_the_sheet_says_what_the_tests_can_reach(tmp_path, monkeypatch):

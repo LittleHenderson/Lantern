@@ -9,6 +9,289 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- **A project's tests run on the libraries the project names** (2026-11-13; the second stage of "a firm pass or
+  fail"). Until now the sandbox ran a project's tests on whatever the Python that runs Lantern had installed, and
+  for JavaScript on a `node_modules` folder the project happened to bring. A project whose libraries are not on the
+  computer failed at its first import, and the release decision read "Blocked: the tests failed" about code nobody
+  had run. Now the libraries a project names are fetched for that one run, in the sandbox, and the tests then run
+  on exactly those, with the network off wherever the sandbox of the system keeps tests from it (the sheet says
+  which before they run). The first measure was a small project whose libraries are not on the
+  computer (15 tests written first, with stand-in stores on 127.0.0.1: 14 failed on the code before). The second
+  was three public projects, each run from its link against the real stores on a computer with none of their
+  libraries (below). 290 tests in nine new files, each thing refused beside a twin that must work; no test reaches
+  the internet. The first version of this change failed the checks it has to pass before it is merged (below:
+  "What the change's own two checks showed"); the numbers here are of the fixed code. Every sandbox and library
+  test of the repository (the nine new files and 16 older ones), on a fixed copy of it, Linux with no Docker
+  daemon: as root 957 passed, 2 failed, 30 skipped (18 need Docker, 12 Windows) in 675.32 s, and the two that
+  failed were the repository's own rules about its code, both right (a name given twice at the top of
+  `lantern/_jail.py`, and a new place that opens a folder handle and was not on the list of such places); with
+  both corrected that test file passed whole (140 tests), and as an ordinary user 954 passed, 0 failed, 35
+  skipped (18 Docker, 12 Windows, 5 root) in 692.03 s. On the third version (2026-11-14: three tests corrected,
+  two added, one line more that the doorman says): as root 961 passed, 0 failed, 30 skipped in 686.51 s; as an
+  ordinary user on a stand-in for GitHub's Linux machines, where a run can be given no network and no memory
+  folder of its own, 945 passed, 0 failed, 46 skipped (18 Docker, 12 Windows, 5 root, 11 that need such a
+  network or memory folder) in 662.85 s. Of the 113 tests of `tests/test_libraries.py` and
+  `tests/test_sandbox_second_look.py`, 47 fail on the code as first pushed.
+  - **What a project asks for is read, never run** (`lantern/libraries.py`, `plan`). Python: `requirements*.txt`
+    at the top of the project (`-r` and `-c` files of the project are followed) and `pyproject.toml`
+    (`dependencies`, the extras and groups named for tests, Poetry's tables), with the exact versions of a lock
+    file beside them (`uv.lock`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`). JavaScript: `package.json` and npm's
+    lock file. `setup.py` is code and is not run. Where libraries come from is the person's setting and never the
+    project's: the official stores (pypi.org, registry.npmjs.org), or the store named in `LANTERN_STORE_PYTHON` /
+    `LANTERN_STORE_NPM`. A line of the project that names another store, a link or a folder is not followed, and
+    the tests are then not run (`sandbox.NoLibraries`; `run.json` says `trace.ran: false` with
+    `trace.not_run_for: "libraries"` and the reason in Lantern's own words; the release decision's `tests`
+    criterion is `missing`, which is neither a pass nor a failure): on other libraries than the project's they
+    would say nothing about the project. Offline (`--offline`) nothing is fetched: the tests run on what is
+    installed when every library the project names is there, and are otherwise not run, with the missing ones
+    named. `tests/test_libraries.py` (80 tests).
+  - **The fetch is a step of its own, in the sandbox, with one way out** (`libraries.fetch`,
+    `lantern/_stores.py`). pip or npm, started by the sandbox's launcher in a folder of Lantern's own with settings
+    Lantern wrote, never in the project. Only ready-built packages are taken (pip `--only-binary=:all:`) and no
+    install script is run (npm `--ignore-scripts`), so no code of any library runs while a network can be reached.
+    The step's one way out is a doorkeeper that lets the store's hosts through and refuses and writes down every
+    other address; on Linux the step runs in a network of its own whose only listener is that doorkeeper.
+    `run.json` says which places the fetch reached, how many it was refused, and what held it to its doorkeeper.
+    Nothing is kept between runs: the folder the libraries are fetched into is the run's temp folder and goes with
+    it. `tests/test_stores.py` (28 tests).
+  - **Every library is on the record with its version and its fingerprint** (`run.json` `trace.libraries`; the
+    Evidence Report's `provenance.libraries` and the page's "Libraries the tests ran on"; the app's message after
+    "Watch my tests run" says how many libraries the tests ran on and from which store). A lock file's versions are
+    the versions taken, and a fingerprint the project's lock file or requirement line carries is the one the
+    fetched file must have: with another, the tests are not run. Each
+    library says whether its version was the project's own choice (`exact`) and whether its fingerprint is one the
+    project names (`checked`). `tests/test_library_versions.py` (57 tests).
+  - **The tests run with the network off on exactly those libraries.** For Python the libraries installed beside
+    Lantern are taken off the path, so a project that forgot to name a library hears of it here and not from its
+    first user. Under Docker the libraries are fetched for the container's system and handed to it to read.
+    `tests/test_libraries_run.py` (28 tests; of the 21 written first, 14 failed on the code before).
+  - **A library is a stranger's code, and in the tests it cannot read the person's own files.** On Linux with
+    Landlock, a Python or JavaScript run is closed to the home folder (keys, shell history, other projects), the
+    temp folder in use and the project's own folder (`sandbox.read_wall`, `persons_own`; the launcher's policy key
+    `read`); what the run is made of stays readable. A read that was refused is in the results (`blocked`, kind
+    `read`), and tests that failed after one are not counted as failed (the `tests` criterion is `missing`, as
+    for a refused write or connection). A library finds no key, token or password in
+    the environment, and nothing of the run is left on the disk. `tests/test_library_hostile.py` (21 tests, each
+    hostile library beside a safe twin; as first written 11 of 22 failed on the code before: a library read the
+    person's own files).
+  - **Tests that start a pool of processes run.** A pool needs the computer's memory folder (`/dev/shm`), which
+    the sandbox closed: 4 of 4 honest tests failed there. A run now gets an empty memory folder of its own, gone
+    with the run, so nothing of another program is in it and nothing of the run stays (`sandbox._own_memory`,
+    policy key `shm`). System V memory has no folder: a program of the tests could read another program's by its
+    key (3 of 3 such tests failed before), and is now refused it where the run has no namespace of its own for it.
+    `tests/test_sandbox_shared_memory.py` (7 tests).
+  - **A program of the tests that is not Python reaches no other program of the computer through a socket
+    file.** The Python guard refuses a socket file outside the run's folders, but a C program, `nc -U` or
+    `curl --unix-socket` that a test starts is not Python, and the kernel's walls have no rule for socket files.
+    Measured on the code before: such a program reached another program of the computer 10 times through socket
+    files outside the run's folders, and 6 times where the run has no network of its own (TCP by the two ways
+    round the kernel's rule, an MPTCP socket and data sent with the connection; UDP; its socket files). Now a doorman
+    stands on Linux (`lantern/_jail.py`, `_doorman`, policy key `sockets`): a seccomp filter with user
+    notification, under which every `connect` of the run is made for it by the launcher's side. A socket file is
+    reached only beneath the run's own folders, no datagram goes to a socket file, and where the run has no network
+    of its own there is no UDP and no other way round the TCP rule. A server the tests started themselves is still
+    reached by its socket file and its address. `run.json` says `trace.own_sockets`, and the sheet and the log say
+    whether a doorman stands (Linux 5.6 or newer, x86-64 or ARM64, a system that lets a parent look into its
+    child; none under Docker, whose container has its own walls, on macOS or on Windows, where such a program is
+    held by the older walls only, as before). `tests/test_sandbox_sockets.py` (20 tests).
+  - **What three public projects showed** (2026-11-13, each from its GitHub link, the real stores). *A Python
+    project:* 19 libraries fetched, each fingerprint its lock file's own, 297 tests passed in the sandbox; the
+    decision is Blocked for 49 known problems, ranked high, in libraries its lock file names, not for its tests.
+    *A JavaScript project:* 214 packages fetched, 1,430 of 1,430 tests passed, decision Passed, 97 of 100; on the
+    first run 4 tests failed, each one Lantern's doing (the first two faults below). *A project with both:* its
+    JavaScript tests ran from the link (710 packages, 208 of 208 passed); its Python tests were not run, because
+    one library its lock file fixes is in the store ready-built for macOS only, and Lantern builds nothing. In a
+    scratch copy in which that library is named for macOS only, as Lantern's reason advises: 66 libraries fetched,
+    541 tests passed, 3 failed, 5 skipped (2 of the 3 need a library the project names as optional, which the store
+    has as source only; 1 needs a part of Python's own library that this computer's Python does not have). So the
+    stage's finish check, "three public projects (Python, JavaScript, both) go from a link to Passed or Blocked",
+    is met for the first two and for the JavaScript half of the third, and is not met for its Python half; building
+    a library in the sandbox with the network off is the step that is still missing. The runs showed eight faults
+    of Lantern's own, each corrected after tests that failed (33 tests: 28 failed on the code before, 5 are twins
+    that pass on both; `tests/test_sandbox_at_home.py`, 14 tests, and cases in `tests/test_library_versions.py`,
+    `tests/test_libraries.py`, `tests/test_trace.py` and `tests/test_release.py`):
+    - *A repository's links were small files in the tests' copy.* Lantern writes its own copy of a repository
+      without links (so that no reader is led out of it), and the tests ran on that: two tests that go through a
+      link of their own project failed. The copy the tests run on, which is thrown away, now gets back each link
+      that stays inside the project (`sandbox._links_again`, `gitfacts.links`); a link that leads out of the
+      project stays the small file, and the run says how many of each. Lantern's own copy is not changed.
+    - *A program that is nowhere read as one that may not be run.* When Lantern is root the tests run as `nobody`
+      with root's PATH, and the system answers "permission denied" for a folder that user may not enter: two tests
+      that expect "not found" failed. Such folders are no longer on the tests' PATH (`sandbox._path_for`), and the
+      log names them.
+    - *A decision that said "at uv.lock:None".* A finding with no line (a known problem of a library, found in a
+      lock file) is now named by its file alone (`release._place`).
+    - *A misleading reason for a library that is not there for this system.* pip's only word for it is that the
+      versions conflict, and Lantern passed that on. Where the project's lock file lists the library's files, the
+      reason now names the library, its version and the systems it is ready-built for, and says how the project
+      can name it for those systems only (`libraries._not_built_for_here`); where the lock file names no files, the
+      reason stays pip's.
+    - *pytest refused the project's own settings.* Lantern started pytest with its cache switched off
+      (`-p no:cacheprovider`), and pytest then does not know `--failed-first`, `--last-failed`, `--cache-clear` or
+      `--new-first`: a project that writes one of them in its settings had no test run at all, which read as "the
+      tests failed". The cache stays on now; what it writes is in the tests' copy and goes with it.
+    - *Reading a test run back ended the whole check with a Python error* where a function bears the name of a
+      file of its own package (`message()` in `views/__init__.py` beside `views/message.py`). The run is now read
+      back (`trace._module_name`); the map itself still has no entry for such a file (Known gaps).
+    - *"ERROR" lines about this computer's libraries in the fetch's log.* pip compared what it fetched with the
+      libraries installed in the Python that runs it, which are not the project's (`--no-warn-conflicts`).
+    - *No word about optional libraries.* The libraries a project names as optional (an extra or a group that is
+      not one for tests) were not fetched, and a test of a part that needs one then failed for that alone: the run
+      said which groups were left out. Since 2026-11-14 they are fetched too (the next point).
+  - **What the change's own two checks showed** (2026-11-14). The first version of this change passed every test
+    on the computer it was written on, and failed both checks it has to pass before it is merged. On GitHub's
+    machines 21 of 4,982 tests failed in the Linux test job, 2 of 4,878 in the Windows job, and two checks of the
+    browser job (its own run of the tests, and the app's page check, which opens "Watch my tests run"). Lantern's
+    own tests, run by Lantern in the sandbox, ended "Incomplete":
+    4,550 passed, 334 failed, 93 skipped, 5 errors (on stage 1's code the same run ended "Passed" with none
+    failed). Nothing was merged. Each cause was fixed after a test that failed on the code before
+    (`tests/test_sandbox_second_look.py`, 33 tests, and cases in `tests/test_libraries.py`):
+    - *A test could not move a file from one of its folders to another.* The rule set that keeps a test's signals
+      from its doorman (`_jail._below`, Linux 6.12 on) said nothing about files, and Linux grants the right to
+      move or link a file from one folder to another only where every rule set over a process grants it: every
+      such `rename` and `link` of the tests failed with "Invalid cross-device link". The rule set now handles that
+      one right and grants it everywhere, which leaves the decision to the rule set above it: a move out of the
+      run's folders is refused as before.
+    - *Lantern's own install record was a refused read.* Where Lantern is installed for editing inside the home
+      folder, as on GitHub's machines, Python reads every install record on its path when a test runner looks for
+      plug-ins. The record lay in a closed folder, so each run had a refused read written down, and a run whose
+      tests fail then reads `missing` and not `failed`. A run may now read the install records beside Lantern's own
+      package and nothing else of that folder (`sandbox._install_records`), and a closed folder this Python has on
+      its path is taken off the tests' path, so Python's own search of it is no refused read
+      (`LANTERN_SANDBOX_SHUT`).
+    - *A run inside a run could not read its libraries.* The libraries fetched for a run lie in the run's temp
+      folder, which is closed to a run started inside it: "No module named pytest". The folders of libraries this
+      Python finds through a path file stay open to read (`sandbox._library_dirs`); a project of the person's own
+      on the path stays closed.
+    - *Optional libraries were not fetched.* Lantern keeps its scanners under an extra of its own, and most of
+      the 334 failures were tests of them. The libraries of every extra or group that is not one for tests are now
+      asked for beside the rest, so that a test of any part of a project can run. Where that fetch does not go
+      through (a library is nowhere, is source only, or wants another version than the rest), Lantern fetches
+      again without them, into folders as empty as the first, the tests run on what the project always needs, and
+      the run says which groups were left out and why (`trace.libraries.optional`, a note, a line in the Evidence
+      Report's Limits). Tests that fail in such a run are not counted as a failure of the code: the `tests`
+      criterion is `missing`, with the groups, because a test of a part that needs one of those libraries fails
+      for that alone. Optional libraries are not asked for where one of them names another store, a link or a
+      folder, or where the project writes fingerprints beside its libraries; what a project always needs is never
+      left out; a project whose only libraries are optional runs on them.
+    - *pip was not among Lantern's own libraries.* The fetch starts pip in the Python that runs Lantern, and an
+      environment made by uv, or the Python of a run of Lantern's own tests in the sandbox, has none: "the Python
+      that runs Lantern has no pip to fetch them with". pip is now named in `pyproject.toml` and pinned in
+      `requirements-lock.txt`, and `tools/licences.py` lists it.
+    - *Inside a sandbox that makes the connections, the fetch claimed a rule that decides nothing there.* Where
+      a run is started inside a run, the doorman of the outer one makes every connection for what runs inside it,
+      and the doorman is not under the inner run's rules: the kernel's rule that lets a fetching program connect to
+      its doorkeeper only did not hold it, and the record said `port-rule`. It says `told` there now, the log says
+      why, and the rule is not written down where it decides nothing (`libraries.walls`, `wall_words`). Nothing
+      leaves the outer sandbox either way; what an inner run may reach is judged by the outer one's walls.
+    - *A cache folder that cannot be looked at ended a container run with a Python error.* A container is lent
+      the caches of Go and Rust from where the person's environment says they are, and Python's `Path.exists`
+      raises for a place this user may not look at (Lantern started as another user with the first user's
+      environment) and for a name the system refuses. Such a place is not there for a run (`sandbox._there`).
+    - *The sheet and the log said the network was closed where nothing closes it.* The second run of Lantern's
+      own tests in the sandbox, on the fixed code, ended with five failures that are one thing. A run started
+      inside a run cannot have a doorman of its own (the kernel takes one for a chain of processes), so the doorman
+      of the sandbox around it makes every connection of the inner run's programs too, and the kernel asks its
+      rules for a connection of the one that connects. The inner run's own rules (no TCP, no socket name of a
+      program outside) therefore decide nothing for a program that is not Python; before there was a doorman they
+      did. Nothing leaves the outer sandbox, and Python code is refused by the guard as everywhere, but the inner
+      run's sheet said "network connections refused" and its log "nothing on this computer is let through". The
+      same sentence has stood since the first stage on the sheet of JavaScript tests on macOS and Windows, where
+      Lantern has no rule of the kernel's to set and a program that is not Python is kept from nothing: GitHub's
+      Windows machine showed it, where such a test reached a listener of the computer. Now
+      `sandbox.held_below_python()` says whether something below Python holds a run's programs to the run's own
+      rules for connections, and the sheet, the log, the line about fetched libraries and the app's message after
+      a run say "refused" or "network off" only where it does; elsewhere they say that such a program is not kept
+      from the network by this run, and why (`NOT_HELD`, `NOT_HELD_BESIDE`, `INSIDE_ANOTHER`). A run says of
+      itself whether its tests were off the network (`off_network` in the result and in `run.json` under `trace`).
+      No wall changed with this; what is said about the walls did.
+    - *On Windows a Python started by its bare name is the computer's own* (found, not fixed). The Python of a
+      run's own is, on Windows, a small program that starts the computer's Python, and Windows looks for a program
+      named without its folder beside the program that asks before it looks in PATH. A test that starts `python`
+      by that name, in an environment it made itself, gets the computer's Python, with the computer's libraries and
+      without Lantern's guard (GitHub's Windows machine: one of the six ways a test starts a second Python). The
+      run's log says so on Windows, and the test says so on Windows itself, so that it fails the day this is
+      fixed. A Python of the run's own that is a whole Python is the Windows stage's.
+    - *Tests that asked this computer and not the run.* Two tests read the sheet of whatever backend the computer
+      has, and failed where Docker is installed; five built a helper program before saying that they do not run
+      inside a sandbox with a doorman; one started the recorder with the outer run's own word that only fetched
+      libraries count; one named the libraries of this Python by the folders Python calls its own, which inside a
+      run are not where they lie; one asked of a fetch that is only told to use its doorkeeper that no other place
+      be reached round it, which nothing promises there; four asked of a run inside a run, and one of Windows, for
+      a closed network below Python. Each now says what it means.
+    The second version, with those causes fixed, was pushed, and its checks were not green either. On GitHub's
+    Linux machines one test job had 1 failed test of 5,042 and a slower machine 2 of 5,042; both Windows jobs
+    had 1 of 4,938; the browser job had the first of these in its own run of the tests, and every other check of
+    it passed (the pages in three browsers, the website, Lantern's check of itself). Three tests, each asking the
+    wrong thing of the machine it ran on, each reproduced here with a stand-in for that machine before it was
+    corrected:
+    - *A test of the first stage asked for the guard's line where the doorman now refuses first.* Where a run has
+      no network of its own and stands behind a doorman (GitHub's Linux machines, where an ordinary user may
+      make no network), no UDP socket is made at all. A Python test then never gets to send its datagram, and the
+      line in the run's record is the doorman's ("a UDP socket was not made"), not the guard's ("network
+      sendto"). The refusal is right and is written down; the test asked for the older line everywhere
+      (`tests/test_sandbox_own_network.py`, `_datagram_line`). On the first version another failure in the same
+      test hid this one.
+    - *A test of the doorman was a test of the computer's speed.* It interrupted a program a thousand times a
+      second by a timer, also the way kernels before 5.19 work, which hand a request back at every signal to be
+      made again. That way, once the doorman takes longer over a request than the next signal takes to come, no
+      request is answered: on the slower of GitHub's machines, with every program of the run being watched, the
+      program had not ended after 180 seconds. Measured here, 1,000 connections the older way: 0.73 to 0.93
+      seconds with a signal every thousandth of a second, 1.10 to 1.36 with one every half of that, 21.79 to
+      113.25 in four runs with one every fifth; with
+      a doorman made to take two thousandths over a request, 3 of the 1,000 in 20 seconds. The way kernels from
+      5.19 work (the signal is held back until the doorman answered): 0.66 seconds with a signal every fifth of a
+      thousandth, 0.72 with one every twentieth. The test
+      (`test_many_connections_at_once_and_under_a_storm_of_signals`) now paces its signals the older way, the
+      next one asked for when the one before was counted (the doorman's answer still found 73 of its 1,000
+      requests handed back, to be made again; 97 under the timer), and keeps the timer where the kernel holds
+      signals back. The limit has a
+      test of its own, with a doorman made slow on purpose
+      (`test_signals_faster_than_the_doorman_answers_hold_a_program_up_on_older_kernels_only`): the older way the
+      program is still asking after three times as long as the same connections take otherwise, and the launcher
+      ends it with everything it started when told to; the newer way it gets every one. On a kernel before 5.19
+      (the 5.15 of Ubuntu 22.04 is one) this is a limit of the doorman, written under Known gaps. So that it is
+      not read as the code's failure, the doorman now says when it happens (the one change to Lantern's own
+      code in this round, written after the limit's test asked for the line and failed): it counts each
+      thread's requests for a connection that were handed back in a row with no answer taken between them, and
+      at 1,000 (`_jail.MOST_HANDED_BACK`, `_Doorman._heard`) writes one line into the run's output, "network
+      connect by a program whose own signals keep taking its request back before the answer is there (a Linux
+      before 5.19 hands a request back at every signal): its connections come late or never". Like every
+      refusal of the sandbox it is in the run's record, and tests that fail in such a run read `missing`, not
+      `failed`; tests that never end run into the run's time limit and read `missing` as before. The number is
+      set on what was measured: a program that still gets through quickly had rows of 3 to 7 (a signal every
+      thousandth of a second) and 86 to 98 (every half of that) and is not told; one that crawls (a signal
+      every fifth of a thousandth) had rows of 2,008 to 2,789 and is told. The counting has a test of its own
+      that asks the kernel for nothing and runs on every system
+      (`test_a_row_of_requests_handed_back_is_said_once_and_any_answer_taken_ends_it`). No wall changed.
+    - *A test asked Windows for Linux's words.* A sandbox that makes the connections of what runs inside it is
+      Linux's. On Windows the fetch is only told to use its doorkeeper as well, and the reason it gives is the
+      system's own; `test_inside_a_sandbox_that_makes_the_connections_the_kernels_rule_is_not_claimed` asked for
+      the sentence about a sandbox around this one there too.
+    On the fixed code, before it was pushed again: the 15 test files with failures in the sandbox, run there by
+    Lantern, 504 passed, 5 failed (the five of "the network was closed where nothing closes it"), 38 skipped; with
+    that corrected, the six files that held them, 235 passed, 0 failed, 16 skipped (no Docker daemon, not root,
+    not Windows), and the decision of that run "Passed". The change is merged only when every check of GitHub's
+    is green and Lantern's own tests as a whole, run by Lantern in the sandbox on the code to be merged, end
+    "Passed"; those numbers are in the pull request and in the commit that merges it.
+  - **Limits** (the whole list is under claim A4j in `docs/audit/CLAIMS.md` and under Known gaps in `CLAUDE.md`).
+    Nothing is built: a library that the store has only as source, or ready-built for other systems, means no test
+    run (an optional one is left out with the rest of the optional ones, and the run says so). Optional libraries
+    are fetched all together or not at all, and only for Python; the extras named in `-e .[x]` and Poetry's
+    `extras` table are not read. A project that has to be built or installed before its tests can run (a version file its build step
+    writes, its own entry points, compiled parts) is run as it lies in the repository, and its tests fail for
+    that. Libraries are fetched for Python and for JavaScript with npm's lock file; a pnpm, yarn or bun lock file
+    is not read, and Go, Rust and Java runs fetch nothing. The Python version a project asks for is not compared
+    with the one the tests run on. A database or another service the tests need is not started. The read wall and
+    the doorman are Linux's; on macOS and Windows a library in the tests is held by the older walls only: Python
+    code by Lantern's guard, and a program that is not Python (tests in JavaScript, a compiled program) by nothing,
+    the network included, which the sheet and the log say. In a run started inside a run every connection of a
+    program that is not Python is decided by the sandbox around it. On Windows a Python the tests start by the
+    bare name `python`, in an environment of their own making, is the computer's own. A
+    fetched file's fingerprint is compared only where the project names one, and the fingerprints are not part of
+    what the release decision is tied to. `lantern behave` still starts the app on the libraries installed beside
+    Lantern, and `lantern verify` repeats a test run the older way.
+
 - **A project's tests get an answer in the sandbox** (2026-11-13; the first stage of "a firm pass or fail": Lantern
   runs a project's own tests in a sealed place and the release decision says Passed or Blocked for it). The measure
   was Lantern itself, its own tests run by Lantern in the sandbox on Linux, the way the app's "Watch my tests run"

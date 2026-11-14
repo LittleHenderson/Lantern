@@ -189,6 +189,15 @@ def _n(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
+def _place(f: dict) -> str:
+    """A finding by its rule and where it stands: `B602 at app.py:7`; one found in a file as a whole (a known
+    problem of a library, in a lock file) has no line and is `PYSEC-… in uv.lock`."""
+    rule, file, line = f.get("rule"), f.get("file"), f.get("line")
+    if not file:
+        return f"{rule}"
+    return f"{rule} at {file}:{line}" if line else f"{rule} in {file}"
+
+
 def _findings(sec: dict | None) -> dict:
     if not sec:
         return _crit("findings", "missing", "No security scan was run, so nobody looked.",
@@ -203,7 +212,7 @@ def _findings(sec: dict | None) -> dict:
         ranks = " and ".join(f"{n} {word}" for n, word in ((crit, "critical"), (len(open_) - crit, "high")) if n)
         return _crit("findings", "failed",
                      f"{ranks} finding{'' if len(open_) == 1 else 's'} open outside test code: "
-                     + _more([f"{f.get('rule')} at {f.get('file')}:{f.get('line')}" for f in open_]) + said,
+                     + _more([_place(f) for f in open_]) + said,
                      "Fix each one (the Findings tab says how), or record why the risk is acceptable with "
                      "`lantern accept ID --reason \"...\"`.", ids=[f.get("id") for f in open_][:50])
     return _crit("findings", "passed", "No critical or high finding is open outside test code, from the scanners "
@@ -290,6 +299,13 @@ def _tests(tests_exist: bool, run_meta: dict) -> dict:
     if not tr:
         return _crit("tests", "missing", "The tests were not run in this check. Lantern runs a project's code only "
                                          "when asked, and tests that were not run prove nothing.", how)
+    if tr.get("ran") is False and tr.get("not_run_for") == "libraries":
+        return _crit("tests", "missing", "The tests were not run: the libraries the project names could not be had "
+                                         "for them, and tests run on other libraries say nothing about this "
+                                         "project.",
+                     "The check's log says which library or file it was. The usual ways out: run the check online; "
+                     "name every library the tests need in a requirements file, pyproject.toml or package.json, "
+                     "with versions the official store has; take libraries from the official store only.")
     if tr.get("ran") is False:
         return _crit("tests", "missing", "The tests were not run: the sandbox they run in could not be set up on "
                                          "this computer.", how)
@@ -317,12 +333,41 @@ def _tests(tests_exist: bool, run_meta: dict) -> dict:
                      "the app. If they never end, find the test that hangs.")
     if tr.get("blocked"):
         return _crit("tests", "missing", f"The tests ended with {rc} in the sandbox, which refused something they "
-                                         "tried (the network, a write outside their folder). That may be the "
-                                         "sandbox and not the code, so it is not counted as a failure.",
-                     "Make the tests run without the network and without writing outside the project, then run "
-                     "them again.")
+                                         "tried (the network, a write outside their folder, a read of one of your "
+                                         "own folders). That may be the sandbox and not the code, so it is not "
+                                         "counted as a failure.",
+                     "Make the tests run without the network and without writing or reading outside the project, "
+                     "then run them again. The check's log says what was refused.")
+    left = _optional_left(tr)
+    if left:
+        return _crit("tests", "missing", f"The tests ended with {rc}, and the libraries the project names as optional "
+                                         f"(under {left}) were not there when they ran: Lantern could not have them "
+                                         "for the tests. A test of a part that needs one of them fails for that "
+                                         "alone, so this is not counted as a failure of the code.",
+                     "The check's log says which libraries were left out and why, and which tests failed. Name "
+                     "optional libraries the official store has ready-built for this system, or have the tests that "
+                     "need one say so and be skipped without it, then run them again.")
     return _crit("tests", "failed", f"The tests ran in this check and ended with {rc} (failed).",
                  "Fix the failing tests, then run them again under Lantern.")
+
+
+_GROUP = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,39}")
+
+
+def _optional_left(tr: dict) -> str:
+    """The groups of libraries the project names as optional that the fetch for this test run left out
+    (`libraries.fetch`, `trace.libraries.optional`), in words: up to six names a tool would write, the rest
+    counted. "" when none was left out."""
+    libs = tr.get("libraries") if isinstance(tr.get("libraries"), dict) else {}
+    opt = libs.get("optional") if isinstance(libs.get("optional"), dict) else {}
+    if libs.get("state") != "fetched" or opt.get("fetched") is not False:
+        return ""
+    groups = opt.get("groups") if isinstance(opt.get("groups"), list) else []
+    shown = [f'"{g}"' for g in groups if isinstance(g, str) and _GROUP.fullmatch(g)][:6]
+    more = len(groups) - len(shown) + (opt["more"] if type(opt.get("more")) is int and 0 <= opt["more"] <= 100_000 else 0)
+    if shown and not more:
+        return ", ".join(shown[:-1]) + (" and " if len(shown) > 1 else "") + shown[-1]
+    return ", ".join(shown) + (" and " if shown else "") + f"{more} more" if more else "groups the record does not name"
 
 
 def _behaviour(record: dict | None, bound: dict, unread: str | None = None) -> dict:

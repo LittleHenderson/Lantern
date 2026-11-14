@@ -777,13 +777,15 @@ def test_no_test_runs_when_the_guard_is_not_in_the_tests_python(tmp_path, monkey
 
 def _no_guard_around(env: dict) -> dict:
     """The environment of a program that is to start with no sandbox guard. When these tests run in a sandbox
-    themselves, its guard's folder is on PYTHONPATH, and every Python they start would load it."""
+    themselves, its guard's folder is on PYTHONPATH, and every Python they start would load it; and that sandbox
+    tells its programs that they run on fetched libraries (LANTERN_SANDBOX_LIBRARIES), which the recorder takes
+    as a reason to start nothing without the guard (2026-11-14: found when Lantern ran these tests itself)."""
     def is_guard(folder: str) -> bool:
         try:
             return "lantern_sandbox_guard" in (Path(folder) / "sitecustomize.py").read_text(encoding="utf-8")
         except (OSError, ValueError):
             return False
-    out = {k: v for k, v in env.items() if k not in ("LANTERN_SANDBOX_GUARD", "PYTHONPATH")}
+    out = {k: v for k, v in env.items() if k not in ("LANTERN_SANDBOX_GUARD", "LANTERN_SANDBOX_LIBRARIES", "PYTHONPATH")}
     keep = [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p and not is_guard(p)]
     if keep:
         out["PYTHONPATH"] = os.pathsep.join(keep)
@@ -940,7 +942,7 @@ def test_lantern_in_a_folder_the_tests_user_cannot_enter_says_so_and_runs_nothin
 
 
 LAUNCH = ("import sys; sys.path.insert(0, {root!r}); import lantern._jail as j; "
-          "j._landlock = lambda writable, net: ('restrict error 1', 'landlock-restrict', 1); j.main(sys.argv[1:])")
+          "j._landlock = lambda *rules: ('restrict error 1', 'landlock-restrict', 1); j.main(sys.argv[1:])")
 
 
 @only_posix

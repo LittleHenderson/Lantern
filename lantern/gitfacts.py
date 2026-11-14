@@ -602,3 +602,23 @@ def deleted(folder: Path | str, timeout: float = 120) -> list[str] | None:
     with _shadow(repo, head(repo)[0]) as ask:
         out = ask(["ls-files", "--deleted", "-z"], timeout=timeout)
     return None if out is None else [p for p in out.split("\0") if p]
+
+
+def links(folder: Path | str, timeout: float = 120) -> list[str] | None:
+    """The files that the index of the repository whose `.git` is in `folder` holds as links (mode 120000 in
+    `git ls-files -s`), by their path in the project, sorted. None when that cannot be told. A repository
+    Lantern copied itself is written without links (`remote.NO_LINKS`): this is how the sandbox knows which of
+    its small files are links in the repository."""
+    repo, _ = _locate(folder, up=False)
+    if repo is None:
+        return None
+    with _shadow(repo, head(repo)[0]) as ask:
+        out = ask(["ls-files", "-s", "-z"], timeout=timeout)
+    if out is None:
+        return None
+    found = []
+    for entry in out.split("\0"):
+        said, tab, path = entry.partition("\t")
+        if tab and path and said.startswith("120000 "):
+            found.append(path)
+    return sorted(found)

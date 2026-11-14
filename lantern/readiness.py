@@ -661,6 +661,8 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
                 "run” in the app.")
     if tr.get("ran") is False:      # no sandbox, no tests: not run is not the same as failed, and it is no pass either
         out.append(_check("tests-pass", "Tests pass", 2, "skip",
+                          "not run: the libraries the project names could not be had for the tests"
+                          if tr.get("not_run_for") == "libraries" else
                           "not run: the sandbox the tests run in could not be set up on this computer", run_them,
                           required=True))
     elif "returncode" in tr and tr["returncode"] is None and (tr.get("over_memory") is True or tr.get("timed_out")):
