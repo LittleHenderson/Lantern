@@ -218,7 +218,9 @@ def test_the_link_is_a_link_in_the_copy_too():
 @pytest.mark.skipif(os.name != "posix", reason="making a link needs a right of its own on Windows")
 def test_a_link_out_of_the_project_is_not_followed_when_the_copy_is_handed_over(tmp_path):
     """The copy is handed to the user the tests run as (when Lantern is root) and never marked: neither goes
-    through a link the project brought to a file or a folder outside it."""
+    through a link the project brought to a file or a folder outside it. (The tests are looked for in the project's
+    `tests` folder only: where the person's own folders are closed to the tests, a linked folder of theirs cannot
+    be looked through for tests, `tests/test_library_hostile.py`.)"""
     repo = _project(tmp_path / "tiny", LINKED)
     others = Path(tempfile.mkdtemp(prefix="others-"))
     others.chmod(0o755)              # where the sandbox's own user can come, unlike a test's tmp_path
@@ -233,7 +235,7 @@ def test_a_link_out_of_the_project_is_not_followed_when_the_copy_is_handed_over(
         os.symlink(folder, repo / "data" / "linked-folder")
         seen = [(p, os.stat(p).st_uid, os.stat(p).st_gid, stat.S_IMODE(os.stat(p).st_mode))
                 for p in (target, folder, folder / "inside.txt")]
-        r = sandbox.run(repo, PYTEST, log=QUIET, backend="subprocess")
+        r = sandbox.run(repo, [*PYTEST, "tests"], log=QUIET, backend="subprocess")
         assert r["returncode"] == 0, r["output_tail"]
         for p, uid, gid, mode in seen:
             st = os.stat(p)

@@ -189,6 +189,15 @@ def _n(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
+def _place(f: dict) -> str:
+    """A finding by its rule and where it stands: `B602 at app.py:7`; one found in a file as a whole (a known
+    problem of a library, in a lock file) has no line and is `PYSEC-… in uv.lock`."""
+    rule, file, line = f.get("rule"), f.get("file"), f.get("line")
+    if not file:
+        return f"{rule}"
+    return f"{rule} at {file}:{line}" if line else f"{rule} in {file}"
+
+
 def _findings(sec: dict | None) -> dict:
     if not sec:
         return _crit("findings", "missing", "No security scan was run, so nobody looked.",
@@ -203,7 +212,7 @@ def _findings(sec: dict | None) -> dict:
         ranks = " and ".join(f"{n} {word}" for n, word in ((crit, "critical"), (len(open_) - crit, "high")) if n)
         return _crit("findings", "failed",
                      f"{ranks} finding{'' if len(open_) == 1 else 's'} open outside test code: "
-                     + _more([f"{f.get('rule')} at {f.get('file')}:{f.get('line')}" for f in open_]) + said,
+                     + _more([_place(f) for f in open_]) + said,
                      "Fix each one (the Findings tab says how), or record why the risk is acceptable with "
                      "`lantern accept ID --reason \"...\"`.", ids=[f.get("id") for f in open_][:50])
     return _crit("findings", "passed", "No critical or high finding is open outside test code, from the scanners "
@@ -290,6 +299,13 @@ def _tests(tests_exist: bool, run_meta: dict) -> dict:
     if not tr:
         return _crit("tests", "missing", "The tests were not run in this check. Lantern runs a project's code only "
                                          "when asked, and tests that were not run prove nothing.", how)
+    if tr.get("ran") is False and tr.get("not_run_for") == "libraries":
+        return _crit("tests", "missing", "The tests were not run: the libraries the project names could not be had "
+                                         "for them, and tests run on other libraries say nothing about this "
+                                         "project.",
+                     "The check's log says which library or file it was. The usual ways out: run the check online; "
+                     "name every library the tests need in a requirements file, pyproject.toml or package.json, "
+                     "with versions the official store has; take libraries from the official store only.")
     if tr.get("ran") is False:
         return _crit("tests", "missing", "The tests were not run: the sandbox they run in could not be set up on "
                                          "this computer.", how)
@@ -317,10 +333,11 @@ def _tests(tests_exist: bool, run_meta: dict) -> dict:
                      "the app. If they never end, find the test that hangs.")
     if tr.get("blocked"):
         return _crit("tests", "missing", f"The tests ended with {rc} in the sandbox, which refused something they "
-                                         "tried (the network, a write outside their folder). That may be the "
-                                         "sandbox and not the code, so it is not counted as a failure.",
-                     "Make the tests run without the network and without writing outside the project, then run "
-                     "them again.")
+                                         "tried (the network, a write outside their folder, a read of one of your "
+                                         "own folders). That may be the sandbox and not the code, so it is not "
+                                         "counted as a failure.",
+                     "Make the tests run without the network and without writing or reading outside the project, "
+                     "then run them again. The check's log says what was refused.")
     return _crit("tests", "failed", f"The tests ran in this check and ended with {rc} (failed).",
                  "Fix the failing tests, then run them again under Lantern.")
 

@@ -143,10 +143,13 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
         if sandbox:
             nothing = {"returncode": None, "observed_edges": 0, "recall": None, "runtime_only": 0}
             try:
-                data = sbx.run(repo, trace_cmd, log=log, timeout=limit, cwd_rel=test_cwd, cancel=cancel, memory=room)
+                data = sbx.run(repo, trace_cmd, log=log, timeout=limit, cwd_rel=test_cwd, cancel=cancel, memory=room,
+                               offline=offline)
             except sbx.Unavailable as e:   # no sandbox, no tests; reading the code needs neither
                 data = None
                 extra = {"ran": False, "unavailable": str(e)}
+                if e.kind != "sandbox":    # the sandbox was there; the project's libraries could not be had
+                    extra["not_run_for"] = e.kind
                 m = dict(nothing)
                 log(f"trace   the tests were not run: {e}. The rest of the check reads the code and goes on.")
             if data is not None:
@@ -154,7 +157,7 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
                     log("trace   the tests were stopped before they ended; the results are left as they were")
                     raise Stopped(data.get("not_ended") or [])
                 extra = {k: data.get(k) for k in ("backend", "language", "traced", "timed_out", "blocked", "not_ended",
-                                                  "own_network")}
+                                                  "own_network", "own_sockets", "libraries")}
                 extra["ran"] = True
                 extra["time_limit"] = limit
                 extra["over_memory"] = bool(data.get("over_memory"))

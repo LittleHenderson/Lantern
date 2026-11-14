@@ -940,7 +940,7 @@ def test_lantern_in_a_folder_the_tests_user_cannot_enter_says_so_and_runs_nothin
 
 
 LAUNCH = ("import sys; sys.path.insert(0, {root!r}); import lantern._jail as j; "
-          "j._landlock = lambda writable, net: ('restrict error 1', 'landlock-restrict', 1); j.main(sys.argv[1:])")
+          "j._landlock = lambda *rules: ('restrict error 1', 'landlock-restrict', 1); j.main(sys.argv[1:])")
 
 
 @only_posix

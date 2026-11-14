@@ -149,8 +149,27 @@ def well_formed(data) -> dict:
     return {"pairs": kept}
 
 
+def _module_name(file: str, names: list[str]) -> str:
+    """The dotted name of the module that `file` is, where the map has no entry for the file itself: the longest
+    ending of its path, written with dots, that the name of every entry of the file begins with (`names`). ""
+    when there is none."""
+    parts = file[:-3].split("/")
+    if parts[-1] == "__init__":
+        parts.pop()
+    for at in range(len(parts)):
+        name = ".".join(parts[at:])
+        if all(n.startswith(name + ".") for n in names):
+            return name
+    return ""
+
+
 def _index(g: Graph):
-    """Map (repo-relative file, local qualname) -> node id, plus main-block ranges."""
+    """Map (repo-relative file, local qualname) -> node id, plus main-block ranges.
+
+    A file may have entries on the map and none of its own: `pkg/views/__init__.py` defines `message()` and
+    `pkg/views/message.py` is a file beside it, both are `pkg.views.message`, and one entry holds that name
+    (2026-11-13, found on a public project: reading a run back ended with a `KeyError` and the whole check with
+    it). The file's module name is then worked out from its path and its entries' names."""
     by_file_qual: dict[tuple[str, str], str] = {}
     module_of_file: dict[str, str] = {}
     mains: dict[str, tuple[int, int, str]] = {}
@@ -161,11 +180,17 @@ def _index(g: Graph):
             module_of_file[n.file] = n.id
         elif n.name == "<main>":
             mains[n.file] = (n.start_line, n.end_line, n.id)
-    for n in g.nodes.values():
-        if n.file and n.file.endswith(".py") and n.kind != "module" and n.name != "<main>":
-            mod = g.nodes[module_of_file[n.file]].qualname
-            local = n.qualname[len(mod) + 1:]
-            by_file_qual[(n.file, local)] = n.id
+    inside = [n for n in g.nodes.values()
+              if n.file and n.file.endswith(".py") and n.kind != "module" and n.name != "<main>"]
+    alone: dict[str, list[str]] = {}
+    for n in inside:
+        if n.file not in module_of_file:
+            alone.setdefault(n.file, []).append(n.qualname)
+    worked_out = {file: _module_name(file, names) for file, names in alone.items()}
+    for n in inside:
+        mod = g.nodes[module_of_file[n.file]].qualname if n.file in module_of_file else worked_out[n.file]
+        if mod:
+            by_file_qual[(n.file, n.qualname[len(mod) + 1:])] = n.id
     return by_file_qual, module_of_file, mains
 
 

@@ -74,6 +74,17 @@ def _dump(out: str):
         json.dump({"pairs": rows}, f)
 
 
+SANDBOX_MARK, SANDBOX_UNAVAILABLE = "LANTERN-SANDBOX-UNAVAILABLE:", 119   # `lantern._jail`'s MARK and UNAVAILABLE
+
+
+def _not_set_up(word: str) -> None:
+    """Say, the way the sandbox's launcher does, that the sandbox is not what it has to be, and start no test. The
+    words are written out here because this file also runs as a copy with no `lantern` beside it (the sandbox's
+    recorder for tests on fetched libraries); a test keeps them equal to the launcher's."""
+    print(f"{SANDBOX_MARK} {word}", file=sys.stderr, flush=True)
+    raise SystemExit(SANDBOX_UNAVAILABLE)
+
+
 def main(argv: list[str]) -> None:
     if len(argv) < 4 or "--" not in argv:
         print(__doc__)
@@ -84,10 +95,17 @@ def main(argv: list[str]) -> None:
         # The test sandbox (lantern.sandbox) counts on its guard, a sitecustomize on PYTHONPATH that refuses writes
         # and network connections, and it is not in this Python: Python leaves a folder it cannot read out of its
         # path without a word. No test runs without it.
-        from lantern._jail import MARK, UNAVAILABLE
-        print(f"{MARK} guard", file=sys.stderr, flush=True)
-        raise SystemExit(UNAVAILABLE)
+        _not_set_up("guard")
+    if os.environ.get("LANTERN_SANDBOX_LIBRARIES") == "fetched" and \
+            getattr(sys, "lantern_sandbox_libraries", None) != "fetched":
+        # The tests were to run on the libraries fetched for them and on no others (lantern.libraries), and the
+        # guard could not take this computer's own off the path. No test runs on libraries nobody named.
+        _not_set_up("libraries")
     atexit.register(_dump, out)
+    if os.environ.get("LANTERN_SANDBOX_GUARD") == "required" and sys.flags.safe_path:
+        # The sandbox started this recorder with -P, so that a file of the project named like it is not run in
+        # its place: the folder the tests are started in goes first on the path here, where `python -m` puts it.
+        sys.path.insert(0, os.getcwd())
     sys.path.insert(0, os.path.realpath(repo))
     _install(repo)
     if rest[0] == "-m":

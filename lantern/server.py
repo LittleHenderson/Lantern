@@ -721,6 +721,15 @@ def _str(v):
     return v[:80] if isinstance(v, str) else None
 
 
+def _libraries_said(v):
+    """What a run's record says its tests ran on, as the page takes it: the state, the store's name, how many
+    libraries, and whether every version was the project's own choice. Anything of another shape is nothing."""
+    if not isinstance(v, dict) or v.get("state") not in ("fetched", "installed", "none"):
+        return None
+    packages = v.get("packages") if isinstance(v.get("packages"), list) else []
+    return {"state": v["state"], "store": _str(v.get("store")), "count": len(packages), "exact": v.get("exact") is True}
+
+
 def _load(p: Path):
     """What a result file holds, or None when there is none or it cannot be used. Only a plain file is read
     (`results.plain`): the results folder lies in the project, and a link there would be read wherever it leads, a
@@ -1166,6 +1175,10 @@ class Handler(BaseHTTPRequestHandler):
                         "over_memory": tr.get("over_memory") is True, "memory_limit": _int(tr.get("memory_limit")),
                         # the sandbox could not be set up, so the tests were not run (the reason, in Lantern's words)
                         "ran": tr.get("ran") is not False, "unavailable": tr.get("unavailable"), "cancelled": False,
+                        # ... or the libraries the project names could not be had for them ("libraries")
+                        "not_run_for": tr.get("not_run_for") if tr.get("not_run_for") == "libraries" else None,
+                        # what the tests ran on: fetched for this run, installed on this computer, or none named
+                        "libraries": _libraries_said(tr.get("libraries")),
                         # what the tests started and Lantern could not end, in its own words (empty: nothing is left)
                         "not_ended": [str(x)[:300] for x in (tr.get("not_ended") or [])][:10],
                         "note": None if tr.get("traced") else sandbox.JS_NOTE,

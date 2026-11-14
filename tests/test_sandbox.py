@@ -221,13 +221,21 @@ def test_a_file_outside_named_beside_an_open_folder_is_refused_and_reported(back
     repo = _tiny(tmp_path / "tiny", REACH)
     (outside / "keep.txt").write_text("kept", encoding="utf-8")
     (outside / "keep.txt").chmod(0o666)
-    # a container has its own files: there the folder outside is one of the container's, which holds no such file
-    (repo / "tests" / "where.txt").write_text("/usr" if backend == "docker" else str(outside), encoding="utf-8")
-    r = sandbox.run(repo, ["python", "-m", "pytest", "-q", "-p", "no:randomly"], log=lambda m: None, backend=backend)
-    assert r["returncode"] == 1, r["output_tail"]
-    assert any(b["kind"] == "write" and "keep.txt" in b["what"] for b in r["blocked"]), r["blocked"]
-    assert (outside / "keep.txt").read_text(encoding="utf-8") == "kept"
-    assert (repo / "tests" / "keep.txt").read_text(encoding="utf-8") == "kept"
+    # A container has its own files: there the folder outside is one of the container's, which holds no such file.
+    # Where the kernel closes the person's own folders to the tests' reads (the temp folder is one of them), the
+    # folder outside cannot even be opened, so the guard's own reading of the name is asked about a folder of the
+    # system's as well, which stays open to reads.
+    closed = backend == "subprocess" and sys.platform.startswith("linux") and sandbox.landlock_abi() >= 1
+    for where in (["/usr"] if backend == "docker" else ["/usr", str(outside)] if closed else [str(outside)]):
+        (repo / "tests" / "where.txt").write_text(where, encoding="utf-8")
+        r = sandbox.run(repo, ["python", "-m", "pytest", "-q", "-p", "no:randomly"], log=lambda m: None, backend=backend)
+        assert r["returncode"] == 1, r["output_tail"]
+        if closed and where != "/usr":
+            assert [b["kind"] for b in r["blocked"]] == ["read"] and str(outside) in r["blocked"][0]["what"], r["blocked"]
+        else:
+            assert any(b["kind"] == "write" and "keep.txt" in b["what"] for b in r["blocked"]), r["blocked"]
+        assert (outside / "keep.txt").read_text(encoding="utf-8") == "kept"
+        assert (repo / "tests" / "keep.txt").read_text(encoding="utf-8") == "kept"
 
 
 LOOP = '''

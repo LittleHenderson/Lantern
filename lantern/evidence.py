@@ -263,6 +263,70 @@ def accepted_words(acc) -> str:
 NO_LOCK_WORDS = {"npm-audit": ("npm", "package.json"), "composer-audit": ("PHP", "composer.json"),
                  "gem-audit": ("Ruby", "Gemfile")}
 
+# The libraries a project's tests ran on (`run.json` `trace.libraries`, written by `lantern.libraries`), as this
+# report shows them. The record may be one read back from the project's own results folder, so it is taken by its
+# shape: a state of two, a store that reads like a host, and for each library a name, a version and a fingerprint
+# of the forms the stores define. Whatever else an entry holds is left out and counted.
+LIBRARY_STATES = ("fetched", "installed")
+LIBRARY_STORE = re.compile(r"[A-Za-z0-9.\-\[\]:]{1,100}")
+LIBRARY_NAME = re.compile(r"(?:@[A-Za-z0-9._\-]{1,100}/)?[A-Za-z0-9._\-]{1,110}")
+LIBRARY_VERSION = re.compile(r"[A-Za-z0-9.+!_\-]{1,100}")
+LIBRARY_PRINT = re.compile(r"sha256:[0-9a-f]{64}|sha(?:1|256|384|512)-[A-Za-z0-9+/]{20,100}={0,2}|")
+MOST_LIBRARIES = 5000
+MOST_ABOVE = 100        # folders above a run's folder: a path is not that deep
+
+
+def libraries_clean(lib) -> dict | None:
+    """`lib` as the report shows it, or None when it is no record of libraries the tests ran on."""
+    if not isinstance(lib, dict) or lib.get("state") not in LIBRARY_STATES or not isinstance(lib.get("packages"), list):
+        return None
+    packages, left_out = [], lib.get("left_out") if isinstance(lib.get("left_out"), int) and lib.get("left_out") > 0 else 0
+    for p in lib["packages"][:MOST_LIBRARIES]:
+        name, version, mark = (p.get(k, "") if isinstance(p, dict) else None for k in ("name", "version", "fingerprint"))
+        if not (isinstance(name, str) and LIBRARY_NAME.fullmatch(name) and isinstance(version, str)
+                and LIBRARY_VERSION.fullmatch(version) and isinstance(mark, str) and LIBRARY_PRINT.fullmatch(mark)):
+            left_out += 1
+            continue
+        packages.append({"name": name, "version": version, "exact": p.get("exact") is True,
+                         "checked": p.get("checked") is True, "fingerprint": mark})
+    left_out += max(0, len(lib["packages"]) - MOST_LIBRARIES)
+    store, above = lib.get("store"), lib.get("above")
+    return {"state": lib["state"], "store": store if isinstance(store, str) and LIBRARY_STORE.fullmatch(store) else "",
+            "exact": bool(packages) and not left_out and lib["state"] == "fetched" and all(p["exact"] for p in packages),
+            "checked": sum(1 for p in packages if p["checked"]), "left_out": left_out, "packages": packages,
+            # folders of packages above the run's own folder, which Node looks in too (JavaScript): a count
+            "above": above if type(above) is int and 0 < above <= MOST_ABOVE else 0}
+
+
+def libraries_shown(tr) -> dict | None:
+    """The libraries of a test run whose results are in the report (`trace.counted`), or None."""
+    return libraries_clean(tr.get("libraries")) if counted(tr) else None
+
+
+def libraries_limits(lib: dict | None) -> list[str]:
+    """What the libraries the tests ran on leave unproven: versions nobody fixed, libraries nobody fetched."""
+    if not lib:
+        return []
+    count = len(lib["packages"]) + lib["left_out"]
+    loose = count - sum(1 for p in lib["packages"] if p["exact"])
+    if lib["state"] == "installed":
+        return ["The libraries the tests ran on. The check was offline, so nothing was fetched for the tests: they ran "
+                "on the libraries installed on this computer, which may not be the versions the project names."]
+    out = []
+    if loose:
+        out.append(f"The libraries the tests ran on. {loose} of the {count} librar{'y' if count == 1 else 'ies'} fetched "
+                   f"for the tests {'is' if loose == 1 else 'are'} at a version the project does not fix: the newest that "
+                   "fits was taken, so the same check on another day may run the tests on other versions. A lock file, "
+                   "or exact versions (==), fixes this.")
+    if lib.get("above"):
+        n = lib["above"]
+        out.append(f"Packages in reach of the tests that the project does not name. {n} folder{'s' if n != 1 else ''} of "
+                   f"packages (node_modules) {'lie' if n != 1 else 'lies'} above the folder the tests ran in, on the "
+                   "computer that ran them. Node looks for a package there too, and Lantern cannot take such a folder "
+                   "out of its way, so a test may have loaded a package from it. Removing the folder, or running the "
+                   "check where the temp folder has none above it, fixes this.")
+    return out
+
 
 def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy: str, exp: dict | None,
            baseline_unread: str | None = None) -> list[str]:
@@ -283,10 +347,13 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
     if counted(tr):
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "
                    "running are marked observed; everything else is static.")
+        out += libraries_limits(libraries_shown(tr))
     elif isinstance(tr, dict) and tr.get("ran") is False:
         why = tr.get("unavailable")
-        out.append("Runtime behavior. The project's tests were asked for and were not run, because the sandbox they "
-                   "run in could not be set up" + (f" ({why[:300]})" if isinstance(why, str) and why else "")
+        out.append("Runtime behavior. The project's tests were asked for and were not run, because "
+                   + ("the libraries the project names could not be had for them" if tr.get("not_run_for") == "libraries"
+                      else "the sandbox they run in could not be set up")
+                   + (f" ({why[:300]})" if isinstance(why, str) and why else "")
                    + ". Every edge is from static analysis.")
     else:
         out.append("Runtime behavior. No code was run for this report, so every edge is from static analysis and "
@@ -441,6 +508,9 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         "release": (rd or {}).get("release") if isinstance((rd or {}).get("release"), dict) else None,
         "understanding": narratives,
         "provenance": {"tools": tool_versions(sec), "models": models,
+                       # the libraries the project's tests ran on, each with its fingerprint (None: no tests, or
+                       # tests that ran on no library of anyone's)
+                       "libraries": libraries_shown(run_meta.get("trace")),
                        "rules": ["bandit default profile", "lantern-web LW-*/LJ-* rules", "lantern secret patterns",
                                  f"readiness checks v{(rd or {}).get('version', '-')}", f"graph schema {SCHEMA_VERSION}"]
                        + [f"analysis pack {t['tool'].split(':', 1)[1]} v{t.get('version', '-')} ({t.get('status', '')})"
@@ -903,6 +973,24 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     models = "".join(f"<tr><td>{E(m['model'] or '')}</td><td>{E(m['task'])}</td><td class='muted'>{E(m.get('validated'))} "
                      f"validated, {E(m.get('failed'))} rejected · prompt {E(m.get('prompt_version') or '-')}</td></tr>"
                      for m in ev["provenance"]["models"]) or "<tr><td colspan=3 class='muted'>No model was used.</td></tr>"
+    libs = libraries_clean(ev["provenance"].get("libraries"))       # the page may be made from a file read back
+    libs_html = ""
+    if libs and libs["state"] == "fetched" and libs["packages"]:
+        count, exact = len(libs["packages"]), sum(1 for p in libs["packages"] if p["exact"])
+        rows = "".join(f"<tr><td>{E(p['name'])}</td><td>{E(p['version'])}"
+                       f"{'' if p['exact'] else ' <span class=muted>(not fixed by the project)</span>'}</td>"
+                       f"<td class='muted'><code>{E(p['fingerprint'])}</code>"
+                       f"{' · named by the project' if p['checked'] else ''}</td></tr>" for p in libs["packages"])
+        libs_html = (f"<h4>Libraries the tests ran on</h4><p class='muted'>Fetched for this run"
+                     f"{' from ' + E(libs['store']) if libs['store'] else ''} into a folder that was deleted after, "
+                     f"and no others: {count} librar{'y' if count == 1 else 'ies'}, {exact} at a version the project "
+                     f"fixes, {libs['checked']} with a fingerprint the project names itself. Each fingerprint is of "
+                     "the file that was fetched."
+                     + (f" {libs['left_out']} more could not be shown." if libs["left_out"] else "")
+                     + f"</p><table>{rows}</table>")
+    elif libs and libs["state"] == "installed":
+        libs_html = ("<h4>Libraries the tests ran on</h4><p class='muted'>The check was offline: the tests ran on the "
+                     "libraries installed on this computer, and nothing was fetched for them.</p>")
     engine = h.get("engine") if isinstance(h.get("engine"), str) and re.fullmatch(r"[0-9a-f]{40}|v[\w.-]+", h["engine"]) else ""
     verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"
               f"{'@' + engine if engine else ''}\" "
@@ -1085,6 +1173,7 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
 
 <section><h2>7 · Provenance</h2><table>{tools}</table>
 <h4>Models</h4><table>{models}</table>
+{libs_html}
 <h4>Rule sets</h4><ul>{''.join(f'<li>{E(r)}</li>' for r in ev['provenance']['rules'])}</ul>
 <p class="muted">Facts (call edges, findings, scores) come from the tools above. Models only explain; they never create or close a finding.</p></section>
 
