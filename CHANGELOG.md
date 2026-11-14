@@ -25,6 +25,39 @@ file. New entries go under `## Unreleased`, on top.
   problems"), read from the pipeline's own log lines; the raw log is one tap away. Advanced keeps its add bar and
   its log as before (directive: user first, step 2).
 
+- **A library's version is one version however it is written, and a store's answer that is no answer reads "could
+  not be reached"** (2026-11-14; two small faults an outside audit found in the build step of 2026-11-14, each
+  checked against the code before it was touched; neither let anything through, both kept a project's tests from
+  running where they could have run). Where pip could not take a library of which the project fixes one exact
+  version, Lantern builds it from its source. It looked for that source on the store's page, and checked the
+  name of the package the build handed back, by comparing the version's letters. A store names its files by one
+  spelling of a version and pip reads many as the same (Python's own rules, PEP 440): a project that fixes
+  `==2024.01.0`, `==1.0.0-rc1` or `==3.0` was told the store has no source of that version, where the store has
+  `2024.1.0`, `1.0.0rc1` or `3.0.0`. And the source is asked of the store with Python's `http.client`, whose word
+  for an answer that is none (a first line that is no HTTP, more than a hundred headers, a header without end,
+  a piece cut off) is not the error the code caught: the step ended with a Python error, and the person read
+  "could not be fetched" over a traceback where "the store could not be reached" is true.
+  - **What changes.** `lantern/_builder.py`: `version(text)` reads a version by those rules (the release's numbers
+    without the noughts at its end, the epoch, `a`/`b`/`rc` under every name they have, post and dev releases, the
+    local part; a leading `v`, capitals and `-`, `_`, `.` between the parts make no difference) and
+    `same_version(a, b)` says whether two texts are one version. `ready`, `pick` (the store's page) and the check
+    of the built package's name (`lantern/libraries.py`) ask it. What is no version by those rules is the same
+    only letter for letter, as before; a text over 200 characters is no version. `pick` also finds a source file an
+    older store named with a dash inside its version. `_source` reads `http.client.HTTPException` the way it reads
+    a connection that failed: `unreachable`.
+  - **One reading changes on purpose.** `3.0` and `3.0.0` are one version: a project that fixes `==3.0` is now
+    handed the store's `3.0.0` source, as pip would be. Another version stays another version: `3.0.1`,
+    `3.0.0.post1`, `3.0.0rc1`, `3.0.0.dev0`, `1!3.0.0`, `3.0.0+local` and `30.0` are each refused for `3.0.0`, and
+    a build that hands back `3.0.1` where `3.0` was asked for is refused as before.
+  - **Measured.** Tests first: 43 new tests in `tests/test_library_build.py` (146 in all), each spelling beside a
+    twin that is another version, each odd answer beside a store that answers as a store does. On the code before,
+    41 failed and 105 passed; on this code, 146 passed. Every sandbox and library test of the repository (26 test
+    files) on a fixed copy of this code, Linux with no Docker daemon: as root 1,138 passed, 0 failed, 31 skipped
+    in 949.84 s; as an ordinary user on a stand-in for GitHub's Linux machines 1,116 passed, 0 failed, 53
+    skipped in 911.66 s.
+  - **Not shown.** The versions were tried against stand-in stores on this computer, never a real one. A version
+    with a local part (`+local`) is compared by these rules too, though a public store carries none.
+
 - **Tests ended for their memory in a container say so even when Docker does not name the kill** (2026-11-14; a
   step of the second stage of "a firm pass or fail", found on GitHub in the checks of a change that touched
   documents only). Tests that go over their memory limit read "Incomplete", never "failed". Under Docker the kernel
