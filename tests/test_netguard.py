@@ -573,21 +573,31 @@ def test_what_is_no_name_in_an_address_is_left_to_the_system_to_refuse(tmp_path)
     assert ng.MARK not in str(said.value)
 
 
-def test_a_declared_name_handed_straight_to_a_socket_is_learned_and_let_on(monkeypatch):
-    """A benchmark's declared host: the name is let through to the system's own lookup, and its addresses are
-    learned first, as for `socket.getaddrinfo`. (Asked of the guard's own step, so that nothing is looked up here.)"""
+DECLARED_NAME = """
+    guard = ng.isolate(tempfile.mkdtemp(), allow=["declared.example"])
     learned = []
-    monkeypatch.setattr(ng._S, "allow", frozenset({"declared.example"}))
-    monkeypatch.setattr(ng, "_learn", learned.append)
+    ng._learn = learned.append          # the name is written down here in place of being looked up
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        assert ng._name_first(s, ("api.declared.example", 443)) is None
-        assert ng._name_first(s, ("127.0.0.1", 443)) is None and ng._name_first(s, ("192.0.2.1", 443)) is None
-        assert ng._name_first(s, ("localhost", 443)) is None and ng._name_first(s, ("", 0)) is None
-        assert ng._name_first(s, ("<broadcast>", 9)) is None
+        gave = [ng._name_first(s, where) for where in (
+            ("api.declared.example", 443), ("127.0.0.1", 443), ("192.0.2.1", 443), ("localhost", 443), ("", 0),
+            ("<broadcast>", 9))]
     finally:
         s.close()
-    assert learned == ["api.declared.example"]
+    print(json.dumps({"gave": gave, "learned": learned, "tried": [[a["kind"], a["host"]] for a in guard.since(0)]}))
+"""
+
+
+def test_a_declared_name_handed_straight_to_a_socket_is_learned_and_let_on():
+    """A benchmark's declared host: the name is let through to the system's own lookup, and its addresses are
+    learned first, as for `socket.getaddrinfo`. Asked of the guard's own step, so that nothing is looked up, and in
+    a program of its own that has this guard and no other: the step tells every guard of its program about the
+    name, and a sandbox around these tests (Lantern's own, when Lantern runs them) refuses a lookup of any name
+    that is not this computer's, a declared one too. Until 2026-11-14 this test asked inside the tests' own program
+    and failed there, in the sandbox only."""
+    seen = _json(_program(DECLARED_NAME))
+    assert seen["gave"] == [None] * 6
+    assert seen["learned"] == ["api.declared.example"] and seen["tried"] == []
 
 
 def _closed_copy_of_the_guard(tmp_path) -> Path:

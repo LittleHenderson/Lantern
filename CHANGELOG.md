@@ -36,6 +36,10 @@ file. New entries go under `## Unreleased`, on top.
     `tests/test_sandbox_own_network.py` (19; 1 new), one line of `tests/test_sandbox.py`. On the code before, 9 of
     the 13 new tests fail and the 4 twins pass (the four files: 9 failed, 187 passed, 16 skipped); now 196 pass and
     16 are skipped. CI has a `macos` job that runs the new tests there; until now no test of the guard ran on macOS.
+    One of the new tests asked the guard of Lantern's own tests about a declared host inside the tests' own
+    program. Run by Lantern in the sandbox it failed, there only: the sandbox around the tests refuses a lookup
+    of any name that is not this computer's, a declared one too, and is right to. The test asks in a program of
+    its own now, as the tests of a benchmark's declared hosts beside it do.
     Not covered: the asking is on `socket.socket` and on classes made from it. Code that takes the socket type
     beneath Python's module, loads the module anew, or is not Python is held by the kernel's walls only, which
     macOS and Windows do not have. `gethostbyaddr("127.0.0.1")` is still answered by the system where the run has
