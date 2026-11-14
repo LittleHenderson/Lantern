@@ -178,6 +178,12 @@ class Outside:
 
 @pytest.fixture()
 def outside():
+    # Every test that asks for this program is one of the doorman's, and says of itself that it is not run where a
+    # run gets no doorman of its own. That is said here first: where this run is itself inside a sandbox that
+    # makes the connections, that sandbox hands out no socket for single messages, so the program cannot even be
+    # made there (2026-11-14, Lantern's own tests run by Lantern: five errors where five tests were not run).
+    if LINUX and sandbox.own_sockets():
+        pytest.skip("this system gives a run no doorman of its own (" + sandbox.own_sockets() + ")")
     program = Outside()
     try:
         yield program

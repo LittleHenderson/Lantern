@@ -50,6 +50,12 @@ Now the tests get a network of their own, which holds this computer's own addres
 Where no such network can be made (macOS, Windows, a Linux system that refuses the rights it takes) nothing on
 this computer is let through, as before: a listener there could be reached by the computer's other programs, and
 a connection there could reach them. The log and the sheet say so (`describe`).
+That refusal is the hook's, inside Python. Whether a program of the tests that is not Python is kept from the
+network there too is another question (`held_below_python`, 2026-11-14): on Linux the kernel's rule for
+connections (Landlock, Linux 6.7) or the doorman below answers it; on macOS and Windows nothing of Lantern's does,
+and neither does a run inside another sandbox whose doorman makes its connections (there the outer sandbox's walls
+decide). Until then the sheet and the log said "nothing on this computer is let through" in all of those places;
+now they say which it is (`NOT_HELD`, `NOT_HELD_BESIDE`, `INSIDE_ANOTHER`), and so does the run (`off_network`).
 
 The time a run gets (2026-11-13) is ten minutes unless the person sets another limit: for one run (`timeout`,
 from the sheet's field in the app or `--test-minutes` on the command line), or for an installation
@@ -116,8 +122,10 @@ the tests ran on whatever the Python that runs Lantern had installed, and a proj
 computer failed at its first import: "Blocked: the tests failed", about code nobody had run. Now `run` asks
 `lantern.libraries` first: what the project names is read (never run) and fetched in a step of its own, whose one
 way out is a doorkeeper that reaches the store and nothing else (`lantern._stores`), ready-built packages only;
-the tests then run with the network off on exactly those libraries (`libraries` in the result and in `run.json`),
-with the ones installed beside Lantern taken off Python's path. Libraries that cannot be had are `NoLibraries`
+the tests then run on exactly those libraries (`libraries` in the result and in `run.json`), with the ones
+installed beside Lantern taken off Python's path, and with the network off wherever this run's own walls keep
+them from it (`off_network`; where they do not, for tests that are not Python on macOS and Windows, the line
+about the libraries says so instead). Libraries that cannot be had are `NoLibraries`
 (an `Unavailable`): the tests are not run, because on other libraries they would say nothing about the project.
 
 What a stranger's library can do in the tests (the same day; each wall after a hostile example that got through,
@@ -143,7 +151,11 @@ beside a twin that does what honest tests do):
   result whether the run had one): a socket file only in the run's own folders, an address only in a network
   of the run's own. What it refuses is said like the hook's refusals. Where no doorman can be made (macOS,
   Windows, Docker's own walls apart, a kernel before 5.6, a run inside a run) the log and the sheet say so
-  (`NO_OWN_SOCKETS`, `DOORMAN_ABOVE`).
+  (`NO_OWN_SOCKETS`, `DOORMAN_ABOVE`). A run inside a run is its own case (`INSIDE_ANOTHER`): the kernel takes
+  one such doorman per chain of filters, so the outer run's doorman makes the inner run's connections too, and
+  the kernel asks its rules of whoever makes a connection. What the inner run would refuse a program that is
+  not Python, a TCP connection or a socket name outside it, is therefore decided by the outer run's walls
+  alone: nothing leaves the outer sandbox, and the inner run does not claim walls of its own for it.
 
 Known and not fixed (found 2026-11-11): on Windows a test that starts an event loop (an async test, a FastAPI test
 client) fails in the sandbox. Windows has no call that makes a pair of connected sockets, so Python builds the pair
@@ -506,11 +518,13 @@ def describe(repo: Path, language: str, minutes=None, memory=None) -> dict:
                       "own address; the internet, your network and the addresses your other programs listen at "
                       "are out of reach")
     else:
-        if sys.platform.startswith("linux") and landlock_abi() >= 1:
-            det.insert(1, "writes allowed only in the copy and its own temp folder" + (", network connections refused" if landlock_abi() >= 4 else ""))
+        if _LINUX and landlock_abi() >= 1:
+            det.insert(1, "writes allowed only in the copy and its own temp folder"
+                          + (", network connections refused" if landlock_abi() >= 4 and held_below_python() else ""))
         if language == "python":
             det.insert(1, "writing outside the copy and its temp folder and opening network connections are refused")
-        det.insert(2 if language == "python" else 1, NO_OWN_NETWORK.format(why=no_own))
+        at = 2 if language == "python" else 1
+        det[at:at] = _no_network_words(no_own, language)
     if sys.platform == "win32":
         det.insert(1, f"inside a Windows job: {room} of memory for each process, and nothing it starts can leave the job")
     if _LINUX:
@@ -527,7 +541,7 @@ def describe(repo: Path, language: str, minutes=None, memory=None) -> dict:
                    "a memory folder of its own for process pools, locks and queues, emptied with the run; what your "
                    "other programs keep in shared memory is out of reach")
         no_doorman = own_sockets()
-        det.append(NO_OWN_SOCKETS.format(why=no_doorman) if no_doorman else
+        det.append(_no_doorman_words(no_doorman) if no_doorman else
                    "every connection of the tests' programs is made for them by Lantern's doorman, which looks "
                    "where it leads first: a socket file outside the tests' own folders (your desktop's message "
                    "bus, a container service, an agent that holds keys) is not reached, by Python or by any "
@@ -539,6 +553,12 @@ def describe(repo: Path, language: str, minutes=None, memory=None) -> dict:
 # ---------------------------------------------------------------------------- a network of the run's own
 NO_OWN_NETWORK = ("{why}, so nothing on this computer is let through either: tests that start a server and call "
                   "it will fail here")
+# Where nothing below Python holds a program (`held_below_python`), the two sentences above would be true of
+# Python code only. For tests that are not Python, in their place; for Python's tests, beside them.
+NOT_HELD = ("{why}. These tests are not Python, and they are not kept from the network by this run: Lantern's guard "
+            "is inside Python only, and {how}")
+NOT_HELD_BESIDE = ("what is refused here is refused inside Python, by Lantern's guard: a program the tests start "
+                   "that is not Python is not kept from the network by this run, because {how}")
 _OWN_NETWORK: list[str] = []          # the answer of `own_network`, asked once
 
 
@@ -572,6 +592,74 @@ def own_network() -> str:
     return why
 
 
+def _own_python_words(windows: bool) -> str:
+    """The log's line about the Python of the run's own (`_own_python`). On Windows that Python is a small
+    program that starts the computer's Python and tells it where its libraries are, and Windows looks for a
+    program named without its folder in the folder of the program that asks before it looks in PATH: so a test
+    that starts `python` by the bare name, in an environment of its own making, gets the computer's own Python,
+    with the computer's libraries and without Lantern's guard (found on GitHub's Windows machine, 2026-11-14;
+    not fixed: a Python of the run's own that is a whole Python is stage 4's)."""
+    line = ("they are started by a Python of the run's own, in which the fetched libraries are the only ones: a "
+            "Python the tests start themselves ")
+    if not windows:
+        return line + "finds the same libraries, whatever it is handed"
+    return line + ("by its full path, or in the tests' own environment, finds the same libraries. Started by the "
+                   "bare name `python` in an environment a test made itself, it is the computer's own Python "
+                   "(Windows looks beside the program that asks before it looks in PATH), with the computer's "
+                   "libraries and without Lantern's guard")
+
+
+def held_below_python() -> bool:
+    """In the restricted subprocess: is a program of the tests that is not Python (Node, a compiled program, a
+    Python started without the guard) held to this run's own rules for connections by something below Python?
+    Yes in a network of the run's own (nothing else is in it), behind a doorman of the run's own (it refuses every
+    address where the run has no network), and under the kernel's rule for TCP (Landlock since Linux 6.7), unless a
+    sandbox around this one makes the connections: the kernel asks that rule of whoever connects, and there that
+    is the outer doorman, which goes by the outer sandbox's walls. No on macOS and Windows, where Lantern has no
+    such rule to set. The sheet and the log say "refused" only where this says yes (2026-11-14; until then they
+    said it everywhere, and inside another sandbox, and for JavaScript tests on Windows, it was not so)."""
+    if not _LINUX:
+        return False
+    if not own_network() or not own_sockets():
+        return True
+    return landlock_abi() >= 4 and own_sockets() != DOORMAN_ABOVE
+
+
+def not_held_how() -> str:
+    """Why `held_below_python` says no here, for a sentence that ends with it."""
+    if not _LINUX:
+        return ("the kernel's rules that hold any other program are Linux's (on this system such a program can "
+                "also read and write what you can)")
+    if own_sockets() == DOORMAN_ABOVE:
+        return ("a sandbox around this one makes every connection for what runs inside it and decides each by "
+                "its own walls, not by this run's (another program inside that sandbox can be reached, nothing "
+                "outside it)")
+    return ("this system gives the run no network of its own and no doorman, and its kernel has no rule for "
+            "connections that Lantern can set (Linux 6.7 brought one)")
+
+
+def _no_network_words(why: str, language: str) -> list[str]:
+    """What the sheet and the log say about a run with no network of its own: one sentence, and for Python's
+    tests a second where nothing below Python holds the programs they start."""
+    if held_below_python():
+        return [NO_OWN_NETWORK.format(why=why)]
+    if language == "python":
+        return [NO_OWN_NETWORK.format(why=why), NOT_HELD_BESIDE.format(how=not_held_how())]
+    return [NOT_HELD.format(why=why, how=not_held_how())]
+
+
+def _was_off_network(backend: str, language: str, own: bool) -> bool:
+    """Were the tests of a run off the network: in a container and in a network of the run's own, any program;
+    elsewhere Python code (the guard), and another program only where something below Python holds it."""
+    return bool(backend == "docker" or own or language == "python" or held_below_python())
+
+
+def tests_off_the_network(language: str) -> bool:
+    """Would the tests of a project in `language` run with the network off in this system's sandbox? For the
+    sheet; a run says it of itself (`off_network` in its result)."""
+    return _was_off_network(backend_for(language), language, not own_network())
+
+
 # ---------------------------------------------------------------------------- a memory folder of the run's own
 NO_OWN_MEMORY = ("{why}, so tests that start a pool of processes, or use a lock or a queue between processes, fail "
                  "here (such a run is not counted as tests that failed)")
@@ -600,7 +688,15 @@ NO_OWN_SOCKETS = ("{why}, so a program the tests start that is not Python can st
                   "another program of this computer, which is how programs on one computer talk to each other")
 DOORMAN_ABOVE = ("a sandbox around this one already makes every connection for what runs inside it, and judges a "
                  "socket file by that sandbox's own folders")
+INSIDE_ANOTHER = (DOORMAN_ABOVE + ": a program the tests start that is not Python reaches what that sandbox lets "
+                  "its own programs reach, a socket file in its folders among them, and nothing outside it")
 _OWN_SOCKETS: list[str] = []          # the answer of `own_sockets`, asked once
+
+
+def _no_doorman_words(why: str) -> str:
+    """The sentence of a run with no doorman of its own. Inside another sandbox the reach of its programs ends at
+    that sandbox; with no doorman at all it ends nowhere on this computer."""
+    return INSIDE_ANOTHER if why == DOORMAN_ABOVE else NO_OWN_SOCKETS.format(why=why)
 
 
 def own_sockets() -> str:
@@ -723,8 +819,10 @@ def read_wall(repo: Path, root: Path, language: str, fetched: bool, program: str
     tests' PATH `path` finds it; each as found and as what a link leads to). Where the libraries are not fetched
     (`fetched` false: the project names none, or the run is offline) the tests run on the ones installed beside
     this Python: their folders, the person's own installed ones (`~/.local/lib`, with the programs in
-    `~/.local/bin`) and Lantern's own package, which holds the recorder. `list`: the folder around that package,
-    whose names Python reads to find it, and no file of which is opened by that.
+    `~/.local/bin`), every other folder of installed libraries this Python has on its path (`_library_dirs`: a
+    run inside a run has the outer run's fetched libraries there) and Lantern's own package, which holds the
+    recorder, with the record of its install where that lies beside it (`_install_records`). `list`: the folder
+    around that package, whose names Python reads to find it, and no file of which is opened by that.
 
     Nothing in `open` is a closed folder or lies around one. What is closed and not opened here stays closed: a
     project of the person's that this Python has on its path, a program in the home folder the tests start by
@@ -749,7 +847,7 @@ def read_wall(repo: Path, root: Path, language: str, fetched: bool, program: str
         add([os.path.dirname(os.__file__), sys.executable])
         if not fetched:
             import sysconfig
-            places = _site_dirs()
+            places = _site_dirs() + _library_dirs()
             for name in ("purelib", "platlib"):
                 try:
                     places.append(sysconfig.get_path(name) or "")
@@ -761,7 +859,7 @@ def read_wall(repo: Path, root: Path, language: str, fetched: bool, program: str
             except (AttributeError, OSError, TypeError):
                 pass
             package = Path(__file__).resolve().parent
-            add([str(package)])
+            add([str(package), *_install_records(package)])
             add([str(package.parent)], listed, but=(_real(repo),))     # the project's names are in its copy anyway
     else:
         for found in (programs.find("node", path), program):
@@ -773,6 +871,53 @@ def read_wall(repo: Path, root: Path, language: str, fetched: bool, program: str
                     add(_tool_folders(os.path.dirname(folder), closed))
                 add([place])
     return {"closed": closed, "open": opened, "list": listed}
+
+
+MOST_NAMES = 20_000         # the entries of one folder that are looked at for the record of an installed library
+
+
+def _records_in(folder: str) -> list[str]:
+    """The records of installed libraries that lie in `folder` as folders of their own, the way pip and
+    setuptools write them (`<name>-<version>.dist-info`, `<name>.egg-info`). A folder only, and never a link."""
+    found = []
+    try:
+        with os.scandir(folder) as entries:
+            for at, entry in enumerate(entries):
+                if at >= MOST_NAMES:
+                    break
+                if entry.name.lower().endswith((".dist-info", ".egg-info")) and entry.is_dir(follow_symlinks=False):
+                    found.append(entry.path)
+    except OSError:
+        pass
+    return found
+
+
+def _library_dirs() -> list[str]:
+    """Folders this Python has on its path that hold installed libraries and are not named as Python names its
+    own (`_site_dirs` has those): a folder pip installed into (`--target`) that a path file or the environment
+    names. It is told by what it holds, the record pip writes for each library it installs (`*.dist-info` with
+    its `METADATA`). A project of the person's own that was installed for editing in place holds no such record
+    (its own is an `.egg-info`, or lies with the installed libraries) and is not one of these."""
+    found = []
+    for place in sys.path:
+        real = _real(place)
+        if not real or real in found or not os.path.isdir(real) or real.rstrip("/").endswith(("site-packages", "dist-packages")):
+            continue
+        if any(name.lower().endswith(".dist-info") and os.path.isfile(os.path.join(name, "METADATA"))
+               for name in _records_in(real)):
+            found.append(real)
+    return found
+
+
+def _install_records(package: Path) -> list[str]:
+    """The records of an install that lie beside Lantern's package: Lantern installed for editing in place (a
+    developer's clone) has `lantern.egg-info` in the folder around its package. Python reads the record of every
+    installed library it finds on its path when a test runner looks for its plug-ins, and that folder is on the
+    tests' path (the recorder is in the package). Until 2026-11-14 the record was closed with the rest of a home
+    folder, and every run in such a place named a read the tests were refused. Every record in that folder is
+    opened, Lantern's or not: Python reads each one it sees there, and a record says what is installed (a name,
+    a version, the names of files), which the folder's own list of names says too."""
+    return _records_in(str(package.parent))
 
 
 def _closed_to_this_python(wall: dict, repo: Path) -> list[str]:
@@ -1050,6 +1195,14 @@ def _block(what):
 def _places(name):
     return [p for p in _os.environ.get(name, "").split(_os.pathsep) if _os.path.isabs(p)]
 _CLOSED, _OPENED, _LISTED = (_places("LANTERN_SANDBOX_" + n) for n in ("CLOSED", "OPENED", "LISTED"))
+# Folders this Python looks for libraries in that are closed now (LANTERN_SANDBOX_SHUT: a project of the person's
+# own, installed for editing in place). Python asks every folder on its path for every module it has not found
+# yet, so each run named a read of such a folder that no test had asked for. They are taken off the path: nothing
+# there can be read anyway, the log names them, and a test that imports what is only there is told "no module".
+_SHUT = [_os.path.realpath(p) for p in _places("LANTERN_SANDBOX_SHUT")]
+if _SHUT:
+    _sys.path[:] = [p for p in _sys.path if not isinstance(p, str) or not p or _os.path.realpath(p) not in _SHUT]
+    _sys.path_importer_cache.clear()
 # The run's memory folder (lantern._jail._own_memory: where Linux keeps named semaphores and shared memory). When
 # the launcher has put an empty one of the run's own in the place of the computer's, it says so with the number
 # the system gives that folder, and the folder is then the run's to write in and read, like its temp folder.
@@ -1414,6 +1567,18 @@ def _retry_left(log) -> None:
         log(f"sandbox: a temp folder an earlier run could not delete is still there: {p}")
 
 
+def _there(path) -> bool:
+    """Is something at `path`, as far as this user can tell? A place this user may not look at (a folder above it
+    that it may not enter) or a name the system refuses is not there for a run. Python's own `Path.exists` raises
+    for both before 3.14, and a run then ended with a Python error: Lantern started as another user with the
+    first user's environment, which is how its own tests run in the sandbox as root."""
+    try:
+        os.stat(path)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _env_base(tmp: Path) -> dict:
     """The allow-list. Nothing else from the user's environment reaches the tests."""
     keep = ["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
@@ -1431,11 +1596,11 @@ def _env_base(tmp: Path) -> dict:
     real = Path.home()
     for var, default in (("GOPATH", real / "go"), ("GOMODCACHE", real / "go" / "pkg" / "mod"),
                          ("CARGO_HOME", real / ".cargo"), ("RUSTUP_HOME", real / ".rustup")):
-        v = os.environ.get(var) or (str(default) if default.exists() else None)
+        v = os.environ.get(var) or (str(default) if _there(default) else None)
         if v:
             env[var] = v
     m2 = real / ".m2" / "repository"
-    if m2.exists():
+    if _there(m2):
         env["MAVEN_OPTS"] = f"-Dmaven.repo.local={m2}"
     return env
 
@@ -1869,13 +2034,16 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
     is left), `own_network` (the tests had a network of their own, where they could listen and call what they
     started), `own_sockets` (every connection of the tests' programs was made for them by Lantern's doorman, so a
     socket file outside their own folders was out of reach for programs that are not Python too; `own_sockets()`
-    says why not), `output_tail`, `stderr_tail`. `memory`: the megabytes for this run (`memory_limit`; ValueError for
+    says why not), `off_network` (this run's own walls kept the tests from the network: Docker, a network of the
+    run's own, Python's tests through the guard, or any other program where `held_below_python()`; False for tests
+    that are not Python where nothing of Lantern's holds them, and the log then says why), `output_tail`,
+    `stderr_tail`. `memory`: the megabytes for this run (`memory_limit`; ValueError for
     anything that is no such number). `cancel`: a threading.Event; once set, the tests and everything they
     started are ended. Raises `Unavailable` when the sandbox cannot be set up: the tests were then not run.
 
     `libraries` in the result says what the tests ran on (`lantern.libraries`): the libraries the project names
-    are fetched first, in a step of their own, and the tests then run on exactly those with the network off
-    (`state: "fetched"`, every library with its version and fingerprint); offline (`offline`, else
+    are fetched first, in a step of their own, and the tests then run on exactly those (`off_network` says whether
+    with the network off; `state: "fetched"`, every library with its version and fingerprint); offline (`offline`, else
     LANTERN_OFFLINE) nothing is fetched and the tests run on what this computer has (`"installed"`) or, when a
     library the project names is not there, are not run (`Unavailable`); `"none"` for a project that names none."""
     from . import libraries
@@ -1908,6 +2076,7 @@ def run(repo: Path, words: list[str], log=print, timeout: float = WALL_CLOCK, ba
                libraries=found.record)
     res.setdefault("own_network", False)
     res.setdefault("own_sockets", False)
+    res["off_network"] = _was_off_network(backend, language, bool(res["own_network"]))
     res.setdefault("over_memory", False)
     res["cancelled"] = res.get("returncode") is None and not res.get("timed_out") and not res.get("over_memory")
     res["blocked"] = blocked_reasons(res.get("output_tail", "") + "\n" + res.pop("_full", ""),
@@ -2179,8 +2348,7 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         log("sandbox: the tests run on the fetched libraries and Python's own, with the network off; the "
             "libraries installed on this computer are not on their path")
         if own is not None:
-            log("sandbox: they are started by a Python of the run's own, in which the fetched libraries are the "
-                "only ones: a Python the tests start themselves finds the same libraries, whatever it is handed")
+            log("sandbox: " + _own_python_words(sys.platform == "win32"))
     elif language == "python":
         made_of = _made_of(pkg_root)
         env["PYTHONPATH"] = os.pathsep.join([str(hook), pkg_root, str(app)])
@@ -2205,10 +2373,14 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         # package has to be one whose names Python can read, or the recorder is not found.
         env["PATH"] = os.pathsep.join([os.path.dirname(sys.executable), *([env["PATH"]] if env.get("PATH") else [])])
         made_of = [*made_of, pkg_root]
+    # folders this Python has on its path that are closed now: the guard takes them off the tests' path
+    shut = _closed_to_this_python(wall, repo) if wall is not None and language == "python" and libs is None else []
     if wall is not None and language == "python" and not any(os.pathsep in p for group in wall.values() for p in group):
         # for the guard, which says what the tests reached for in a closed folder (it refuses nothing there)
         env.update({"LANTERN_SANDBOX_" + name: os.pathsep.join(wall[key])
                     for name, key in (("CLOSED", "closed"), ("OPENED", "open"), ("LISTED", "list"))})
+        if shut and not any(os.pathsep in p for p in shut):
+            env["LANTERN_SANDBOX_SHUT"] = os.pathsep.join(shut)
     if os.name == "posix":
         policy = {"writable": [str(w) for w in writable], "nobody": as_nobody, "python": language == "python",
                   "net": True, "own_net": not no_own, "net_told": inside is None, "must": True,
@@ -2233,11 +2405,14 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
         cmd[2:4] = ["-c", f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])"]
     log(f"sandbox: restricted process, running {' '.join(words)}")
     if no_own and inside is None:
-        log("sandbox: the tests have no network of their own (" + NO_OWN_NETWORK.format(why=no_own) + ")")
+        first, *more = _no_network_words(no_own, language)
+        log("sandbox: the tests have no network of their own (" + first + ")")
+        for line in more:
+            log("sandbox: " + line)
     if no_memory:
         log("sandbox: the tests have no memory folder of their own (" + NO_OWN_MEMORY.format(why=no_memory) + ")")
     if no_doorman:
-        log("sandbox: the tests have no doorman of their own (" + NO_OWN_SOCKETS.format(why=no_doorman) + ")")
+        log("sandbox: the tests have no doorman of their own (" + _no_doorman_words(no_doorman) + ")")
     if inside is not None:
         log("sandbox: the project's app is started by Lantern's own driver, with no network")
     if wall is not None:
@@ -2245,7 +2420,6 @@ def _run_subprocess(repo, words, language, root, log, timeout, cwd_rel, cancel=N
             "too: your home folder, the temp folders, other disks and the project's own folder (what runs is the "
             "copy). The system's folders and the " + ("Python" if language == "python" else "Node")
             + " that runs them stay open")
-        shut = _closed_to_this_python(wall, repo) if language == "python" and libs is None else []
         if shut:
             log(f"sandbox: this Python also looks for libraries in {len(shut)} folder(s) of your own that are "
                 f"closed now ({shut[0][:200]}{', ...' if len(shut) > 1 else ''}): a library that is only there "
@@ -2359,15 +2533,15 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel=None,
     else:
         env = _env_base(root)
         for var, where in (("GOMODCACHE", "/go/pkg/mod"), ("CARGO_HOME", None)):
-            if env.get(var) and Path(env[var]).exists():
+            if env.get(var) and _there(env[var]):
                 if var == "CARGO_HOME":
                     reg = Path(env[var]) / "registry"
-                    if reg.exists():
+                    if _there(reg):
                         args += ["-v", f"{reg}:/usr/local/cargo/registry:ro"]
                 else:
                     args += ["-v", f"{env[var]}:{where}:ro"]
         m2 = Path.home() / ".m2" / "repository"
-        if language == "java" and m2.exists():
+        if language == "java" and _there(m2):
             args += ["-v", f"{m2}:/m2:ro", "-e", "MAVEN_OPTS=-Dmaven.repo.local=/m2"]
         cmd = list(words)
     log(f"sandbox: Docker ({img.split('@')[0]}, network off, a copy of the project), running {' '.join(words)}")

@@ -105,6 +105,9 @@ def test_tests_that_use_process_locks_pools_and_queues_run(tmp_path, monkeypatch
     lines = []
     repo = _project(tmp_path / "tiny", POOLS)
     res = sandbox.run(repo, UNITTEST, log=lines.append, backend="subprocess")
+    # the sheet of the backend the run above used: where Docker is installed the default sheet is the container's
+    # (GitHub's machines have Docker; this test failed there)
+    monkeypatch.setenv("LANTERN_SANDBOX", "subprocess")
     sheet = " ".join(sandbox.describe(repo, "python")["details"])
     if LINUX and not can:
         assert "this test takes the memory folder of its own away, so tests that start a pool of processes" in sheet

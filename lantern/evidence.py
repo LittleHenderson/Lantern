@@ -274,6 +274,22 @@ LIBRARY_VERSION = re.compile(r"[A-Za-z0-9.+!_\-]{1,100}")
 LIBRARY_PRINT = re.compile(r"sha256:[0-9a-f]{64}|sha(?:1|256|384|512)-[A-Za-z0-9+/]{20,100}={0,2}|")
 MOST_LIBRARIES = 5000
 MOST_ABOVE = 100        # folders above a run's folder: a path is not that deep
+LIBRARY_GROUP = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,39}")       # a group of libraries, as a tool would write it
+MOST_GROUPS = 40
+
+
+def _optional_left(lib: dict) -> dict | None:
+    """The groups of libraries the project names as optional that were not there when the tests ran
+    (`libraries.fetch`: they could not be had beside the rest, or were not asked for), or None. By shape: names a
+    tool would write and a count for the rest. Why they were left out is a sentence in a file that may have come
+    with the project, and is not repeated."""
+    opt = lib.get("optional")
+    if not isinstance(opt, dict) or opt.get("fetched") is not False:
+        return None
+    groups = opt.get("groups") if isinstance(opt.get("groups"), list) else []
+    named = [g for g in groups[:MOST_GROUPS] if isinstance(g, str) and LIBRARY_GROUP.fullmatch(g)]
+    more = opt.get("more") if type(opt.get("more")) is int and 0 <= opt.get("more") <= 100_000 else 0
+    return {"groups": named, "more": min(100_000, more + len(groups) - len(named))}
 
 
 def libraries_clean(lib) -> dict | None:
@@ -295,7 +311,9 @@ def libraries_clean(lib) -> dict | None:
             "exact": bool(packages) and not left_out and lib["state"] == "fetched" and all(p["exact"] for p in packages),
             "checked": sum(1 for p in packages if p["checked"]), "left_out": left_out, "packages": packages,
             # folders of packages above the run's own folder, which Node looks in too (JavaScript): a count
-            "above": above if type(above) is int and 0 < above <= MOST_ABOVE else 0}
+            "above": above if type(above) is int and 0 < above <= MOST_ABOVE else 0,
+            # groups of optional libraries that were left out of the fetch (Python); the entry is there only then
+            **({"optional_left": left} if (left := _optional_left(lib)) else {})}
 
 
 def libraries_shown(tr) -> dict | None:
@@ -325,6 +343,16 @@ def libraries_limits(lib: dict | None) -> list[str]:
                    "computer that ran them. Node looks for a package there too, and Lantern cannot take such a folder "
                    "out of its way, so a test may have loaded a package from it. Removing the folder, or running the "
                    "check where the temp folder has none above it, fixes this.")
+    if lib.get("optional_left"):
+        left = lib["optional_left"]
+        shown = [f'"{g}"' for g in left["groups"][:6]]
+        more = left["more"] + len(left["groups"]) - len(shown)
+        words = (", ".join(shown[:-1]) + (" and " if len(shown) > 1 else "") + shown[-1]) if shown and not more else \
+            ", ".join(shown) + (" and " if shown else "") + f"{more} more" if more else "groups the record does not name"
+        out.append(f"Libraries the project names as optional. The ones under {words} were not there when the tests "
+                   "ran: they could not be fetched beside the libraries the project always needs, or were not asked "
+                   "for (the run's log says which, and why). A test of a part that needs one of them fails for that "
+                   "alone, and what that part does was not tested.")
     return out
 
 

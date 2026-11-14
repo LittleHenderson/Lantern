@@ -1,6 +1,7 @@
 # Architecture
 
-Lantern is one Python package (`lantern/`, standard library plus tree-sitter grammars) with two front doors that call
+Lantern is one Python package (`lantern/`, standard library plus tree-sitter grammars, and pip, which it starts to fetch a
+project's libraries for that project's tests) with two front doors that call
 the same functions: the command line (`lantern/cli.py`) and the local app (`lantern/server.py`). There is no hosted
 service. The only network calls are to the model provider the user configures, the dependency audits
 (PyPI/OSV via pip-audit, the npm registry via `npm audit`) and, since 2026-11-13, where the person has a project's

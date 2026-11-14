@@ -169,7 +169,8 @@ _SWEEP = 3.0               # seconds the supervisor spends ending what the comma
 
 # Landlock filesystem rights that change things (reads are not restricted)
 _FS_WRITE = {1: (1 << 1) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10) | (1 << 11) | (1 << 12)}
-_FS_WRITE[2] = _FS_WRITE[1] | (1 << 13)          # REFER
+_FS_REFER = 1 << 13                              # REFER (ABI 2): a move or a second name, from one folder to another
+_FS_WRITE[2] = _FS_WRITE[1] | _FS_REFER
 _FS_WRITE[3] = _FS_WRITE[2] | (1 << 14)          # TRUNCATE
 _FS_LIST = 1 << 3                                # READ_DIR
 _FS_READ_FILE = (1 << 0) | (1 << 2)              # EXECUTE | READ_FILE: what a file can be opened to
@@ -198,6 +199,15 @@ MEMORY_VARIABLE = "LANTERN_SANDBOX_SHM"          # how the command is told that 
 MEMORY_LEAST, MEMORY_MOST = 64 << 20, 1 << 30    # the bytes a run's memory folder holds: never less, never more
 _SIOCGIFFLAGS, _SIOCSIFFLAGS, _IFF_UP = 0x8913, 0x8914, 0x1
 NET_VARIABLE = "LANTERN_SANDBOX_NET"             # how the command is told that its network is its own
+
+
+class _Beneath(ctypes.Structure):
+    """Landlock's rule for everything beneath one folder (`struct landlock_path_beneath_attr`)."""
+    _pack_ = 1
+    _fields_ = [("allowed_access", ctypes.c_uint64), ("parent_fd", ctypes.c_int32)]
+
+
+_O_PATH = 0o10000000       # open(2): a name for an entry, with no right to read it
 
 
 class _Refused(Exception):
@@ -307,10 +317,7 @@ def _landlock(writable: list[str], net: bool, ports=(), read=None) -> tuple[str,
         number = ctypes.get_errno()
         return f"ruleset error {number}", "landlock-ruleset", number
 
-    class Beneath(ctypes.Structure):
-        _pack_ = 1
-        _fields_ = [("allowed_access", ctypes.c_uint64), ("parent_fd", ctypes.c_int32)]
-    O_PATH = 0o10000000
+    Beneath, O_PATH = _Beneath, _O_PATH
 
     def opens(path: str, rights: int) -> bool | None:
         """One entry opened to reads, as itself: never through a link, a file to what a file can be opened to.
@@ -670,7 +677,6 @@ KILLABLE = True       # the kernel (5.19+) is asked to hold a signal that is not
 MOST_TOLD = 20        # the refusals a doorman writes into a run's output, each place once
 MOST_AT_ONCE = 128    # the requests a doorman works on at the same time
 MOST_REMEMBERED = 4096   # the sockets whose last connection a doorman keeps in mind
-_O_PATH = 0o10000000
 _AF_UNIX, _AF_INET, _AF_INET6, _AF_NETLINK = 1, 2, 10, 16
 _RET_ASK, _RET_ALLOW, _RET_ERRNO = 0x7FC00000, 0x7FFF0000, 0x00050000
 _NOTIF_RECV, _NOTIF_SEND, _NOTIF_VALID, _NOTIF_VALID_OLD = 0xC0502100, 0xC0182101, 0x40082102, 0x80082102
@@ -1242,12 +1248,26 @@ def _below(libc) -> int:
     kernel's Landlock has no such rule; 7: sixteen rule sets are on this process already)."""
     if libc.syscall(444, None, 0, 1) < 6:
         return errno.ENOSYS
-    attr = (ctypes.c_uint64 * 3)(0, 0, _SCOPE_SIGNAL)
+    # Linux refuses a move, or a second name, from one folder to another to a process under any Landlock domain
+    # that does not allow it by name (REFER), a domain about something else included: it answers "Invalid
+    # cross-device link". Until 2026-11-14 this domain named no right over files, and tests that moved a file
+    # between two folders of their own failed behind the doorman and passed at home. So it allows that right
+    # everywhere beneath `/`; where a file may be moved to is still decided one domain above, by the rules for
+    # writes, as before there was a doorman.
+    attr = (ctypes.c_uint64 * 3)(_FS_REFER, 0, _SCOPE_SIGNAL)
     rfd = libc.syscall(444, ctypes.byref(attr), ctypes.sizeof(attr), 0)
     if rfd < 0:
         return ctypes.get_errno() or errno.EPERM
     try:
+        top = os.open(os.sep, _O_PATH | os.O_CLOEXEC)
+        try:
+            if libc.syscall(445, rfd, 1, ctypes.byref(_Beneath(_FS_REFER, top)), 0) != 0:   # LANDLOCK_RULE_PATH_BENEATH
+                return ctypes.get_errno() or errno.EPERM
+        finally:
+            os.close(top)
         return 0 if libc.syscall(446, rfd, 0) == 0 else (ctypes.get_errno() or errno.EPERM)
+    except OSError as e:
+        return e.errno or errno.EPERM
     finally:
         os.close(rfd)
 

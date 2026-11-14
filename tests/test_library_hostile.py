@@ -71,7 +71,9 @@ def walls(request, monkeypatch):
     """Both ways a run is held (`tests/test_libraries.py`): with a network of its own, and without one."""
     if request.param == "doorkeeper":
         monkeypatch.setattr(sandbox, "_OWN_NETWORK", ["this test takes the network of its own away"])
-        return "port-rule" if LINUX and sandbox.landlock_abi() >= 4 else "told"
+        # inside a sandbox that makes every connection for what runs in it, that sandbox judges an address
+        held = LINUX and sandbox.landlock_abi() >= 4 and sandbox.own_sockets() != sandbox.DOORMAN_ABOVE
+        return "port-rule" if held else "told"
     return request.param
 
 
@@ -610,10 +612,14 @@ def test_a_javascript_package_is_held_by_the_kernel_alone(tmp_path, monkeypatch,
     assert res["returncode"] == 0, res["output_tail"]
     hostile, twins = _split(_said(res))
     assert hostile.pop("names in the environment") == "got []"
-    assert len(hostile) == 8 and all(v.startswith("refused ") for v in hostile.values()), hostile
+    reached = hostile.pop("another program of this computer")
+    assert len(hostile) == 7 and all(v.startswith("refused ") for v in hostile.values()), hostile
     assert len(twins) == 4 and all(v == "got true" for v in twins.values()), twins
     assert person.secret not in res["output_tail"] and "PLANTED" not in res["output_tail"]
-    assert other.seen == []
+    # A connection is the kernel's to refuse where it is asked of the program itself. Inside a sandbox that makes
+    # the connections (these tests, run by Lantern) that sandbox decides, and the other program is inside it too.
+    if sandbox.held_below_python():
+        assert reached.startswith("refused ") and other.seen == [], reached
     assert _files(person.drop) == {"kept.txt"} and _files(repo) == before
     assert (person.drop / "kept.txt").read_text(encoding="utf-8") == "the person's own\n"
 
@@ -799,6 +805,9 @@ def test_a_sealed_run_started_inside_a_sealed_run_closes_its_own_folders_too():
 
 @kernel
 def test_the_sheet_says_what_the_tests_cannot_read(tmp_path, monkeypatch, pystore):
+    # the restricted process's sheet: where Docker is installed the sheet is the container's by default, which
+    # has none of the person's folders in it at all (GitHub's machines have Docker; this test failed there)
+    monkeypatch.setenv("LANTERN_SANDBOX", "subprocess")
     _online(monkeypatch, python=pystore)
     repo = _project(tmp_path / "proj", "stage2sample")
     said = " ".join(sandbox.describe(repo, "python")["details"])

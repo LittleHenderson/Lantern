@@ -157,7 +157,7 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
                     log("trace   the tests were stopped before they ended; the results are left as they were")
                     raise Stopped(data.get("not_ended") or [])
                 extra = {k: data.get(k) for k in ("backend", "language", "traced", "timed_out", "blocked", "not_ended",
-                                                  "own_network", "own_sockets", "libraries")}
+                                                  "own_network", "own_sockets", "off_network", "libraries")}
                 extra["ran"] = True
                 extra["time_limit"] = limit
                 extra["over_memory"] = bool(data.get("over_memory"))

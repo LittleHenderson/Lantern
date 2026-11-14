@@ -1179,6 +1179,8 @@ class Handler(BaseHTTPRequestHandler):
                         "not_run_for": tr.get("not_run_for") if tr.get("not_run_for") == "libraries" else None,
                         # what the tests ran on: fetched for this run, installed on this computer, or none named
                         "libraries": _libraries_said(tr.get("libraries")),
+                        # were they off the network by this run's own walls (not said by a run before 2026-11-14)
+                        "off_network": tr.get("off_network") if isinstance(tr.get("off_network"), bool) else None,
                         # what the tests started and Lantern could not end, in its own words (empty: nothing is left)
                         "not_ended": [str(x)[:300] for x in (tr.get("not_ended") or [])][:10],
                         "note": None if tr.get("traced") else sandbox.JS_NOTE,

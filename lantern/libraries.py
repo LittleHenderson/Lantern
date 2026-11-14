@@ -10,6 +10,14 @@ had run. Now, before the tests:
   followed) and `pyproject.toml` (`dependencies`, the extras and groups named for tests, Poetry's tables), with
   the exact versions of a lock file beside them (`uv.lock`, `poetry.lock`, `pdm.lock`, `Pipfile.lock`) as the
   versions to take. JavaScript: `package.json` and npm's lock file. `setup.py` is code and is not run.
+* **What the project names as optional is fetched too, and left out when it cannot be had** (2026-11-14; Python).
+  The libraries of every other extra or group of `pyproject.toml` (`Plan.optional`) are asked for beside the
+  rest, so that a test of any part of the project can run. Where that fetch does not go through, it starts again
+  without them (`fetch`), the tests run on what the project always needs and names for its tests, and the run
+  and the record say which groups were left out and why (`record["optional"]`: `groups`, `more`, `fetched`,
+  `why`). They are not asked for at all where one of them names another store, a link or a folder, or where the
+  project writes fingerprints beside its libraries; a project whose only libraries are optional ones runs on
+  them. What the project always needs is never left out.
 * **Where libraries come from is the person's setting, never the project's.** The official store (pypi.org,
   registry.npmjs.org), or the store the person names (LANTERN_STORE_PYTHON, LANTERN_STORE_NPM: `https://…`, or
   `http://` on this computer). A line of the project that names another store, a link or a folder is not
@@ -20,9 +28,11 @@ had run. Now, before the tests:
   (`lantern._stores`), which reaches the store and nothing else; on Linux the step runs in a network of its own
   whose only listener is that doorkeeper. Only ready-built packages are taken (pip: wheels; npm: with install
   scripts off), so no code of any library runs while a network can be reached.
-* **The tests then run with the network off on exactly those libraries**: for Python the libraries installed
-  beside Lantern are taken off the path (`LANTERN_SANDBOX_LIBRARIES=fetched`, the guard file's `_only_fetched`),
-  so a project that forgot to name a library hears of it here. Where the tests run in a container, the libraries
+* **The tests then run on exactly those libraries, with the network off wherever the run's own walls hold**
+  (`sandbox.tests_off_the_network`, `described`: JavaScript tests on macOS and Windows are not kept from the
+  network by anything of Lantern's, and the line about the libraries says so there): for Python the libraries
+  installed beside Lantern are taken off the path (`LANTERN_SANDBOX_LIBRARIES=fetched`, the guard file's
+  `_only_fetched`), so a project that forgot to name a library hears of it here. Where the tests run in a container, the libraries
   are fetched for the container's system (`Plan.platforms`) and handed to it to read.
 * **The record names every library** with its version, the file that was fetched and its fingerprint
   (`sandbox.run(...)["libraries"]`, `run.json` `trace.libraries`), and whether every version was the project's
@@ -145,6 +155,12 @@ class Plan:
         self.hashed = False                 # Python: the project writes fingerprints beside its requirements
         self.platforms: list[str] = []      # Python: the systems ready-built libraries must run on, when that is
                                             # not this one (the tests' container: `sandbox.image_platforms`)
+        # Python: the libraries the project names as optional (`[project.optional-dependencies]`, a group that is
+        # not one for its tests): {"line", "text", "file", "name", "exact"}; `groups`: the names of those groups;
+        # `optional_why`: why they are not asked for at all, when they are not
+        self.optional: list[dict] = []
+        self.groups: list[str] = []
+        self.optional_why = ""
         self.record: dict = {"state": "none", "language": language}
 
     @property
@@ -222,6 +238,31 @@ class _Reader:
             self.plan.asked.append({"text": shown, "file": rel})
             if exact:
                 self.plan.pinned.add(_norm(name))
+
+    def optional(self, text: str, rel: str) -> None:
+        """A library of a group the project names as optional. It is kept apart (`plan.optional`): the fetch asks
+        for these beside the rest, and goes on without them when they cannot be had (`fetch`). A line that takes
+        a library from another store, a link or a folder, or one in a form Lantern does not read, is not followed
+        here either; no optional library is asked for then, and the run says why (`plan.optional_why`)."""
+        if self.plan.optional_why:
+            return
+        if "://" in text or " @ " in text or text.startswith((".", "/", "file:")) or text.endswith((".whl", ".zip", ".tar.gz")):
+            self.plan.optional_why = "one of them " + ELSEWHERE.replace("names", "is named with", 1).replace(
+                " to take libraries from", "")
+            return
+        got = _requirement(text)
+        if got is None:
+            self.plan.optional_why = "one of them is named in a form Lantern does not read"
+            return
+        name, line, shown = got
+        if _norm(name) == self.own or _norm(name) in self.folders or any(o["text"] == shown for o in self.plan.optional):
+            return
+        if len(self.plan.optional) >= MOST_LINES:
+            self.plan.optional_why = f"they are more than {MOST_LINES}"
+            return
+        spec = re.split(r"[ ;]", shown[len(name):].split("]")[-1], maxsplit=1)[0]
+        self.plan.optional.append({"line": line, "text": shown, "file": rel, "name": _norm(name),
+                                   "exact": bool(PINNED.fullmatch(spec or "")) and "*" not in spec})
 
     def file(self, rel: str, depth: int = 0, constraint: bool = False) -> None:
         text = _text(self.repo / rel, self.repo)
@@ -311,7 +352,11 @@ def _pyproject(reader: _Reader) -> None:
             reader.elsewhere(rel)
     for dep in manifest.texts(project.get("dependencies")):
         reader.add(dep, rel)
-    left: set[str] = set()                  # groups of libraries the project names and Lantern does not take
+    # The groups of libraries the project names as optional: every group that is not one for its tests. Their
+    # libraries are asked for beside the rest, so that a test of any part of the project can run (2026-11-14:
+    # Lantern's own tests need the libraries it names under `scan`, and a public project's the ones under
+    # `minify`; until then such tests failed for that alone, and the decision read "the tests failed").
+    left: set[str] = set()
     for table in (manifest.table(project.get("optional-dependencies")), manifest.table(data.get("dependency-groups"))):
         taken = set(TEST_GROUPS)
         for group in TEST_GROUPS:
@@ -322,38 +367,63 @@ def _pyproject(reader: _Reader) -> None:
                     taken.add(dep["include-group"])
                     for inner in manifest.texts(table.get(dep["include-group"])):
                         reader.add(inner, rel)
-        left.update(str(group) for group, deps in table.items() if group not in taken and manifest.rows(deps))
+        for group, deps in table.items():
+            if group in taken or not manifest.rows(deps):
+                continue
+            left.add(str(group))
+            for dep in manifest.rows(deps):
+                if isinstance(dep, str):
+                    reader.optional(dep, rel)
+                elif isinstance(dep, dict) and isinstance(dep.get("include-group"), str):
+                    for inner in manifest.texts(table.get(dep["include-group"])):
+                        reader.optional(inner, rel)
     reader.own = reader.own or _norm(manifest.text(poetry.get("name")))
-    tables = [manifest.table(poetry.get("dependencies")), manifest.table(poetry.get("dev-dependencies"))]
-    tables += [manifest.table(manifest.table(g).get("dependencies"))
-               for name, g in manifest.table(poetry.get("group")).items() if name in TEST_GROUPS]
-    left.update(str(name) for name, g in manifest.table(poetry.get("group")).items()
-                if name not in TEST_GROUPS and manifest.table(manifest.table(g).get("dependencies")))
-    left.update(str(name) for name, deps in manifest.table(poetry.get("extras")).items()
-                if name not in TEST_GROUPS and manifest.rows(deps))
-    if left:
-        # A test of a part that needs an optional library fails for that alone, and the run says which were left
-        # (2026-11-13, a public project: two of its tests need a library it names under `minify`).
-        named = sorted(g for g in left if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,39}", g))
-        shown, more = [f'"{g}"' for g in named[:6]], len(left) - min(len(named), 6)
-        words = ", ".join(shown[:-1]) + (" and " if len(shown) > 1 else "") + shown[-1] if shown and not more else \
-            ", ".join(shown) + (" and " if shown else "") + f"{more} more"
-        reader.plan.notes.append(
-            f"{rel}: the libraries the project names as optional (under {words}) were not fetched. Lantern takes "
-            "what the project always needs and what it names for its tests, so a test of a part that needs an "
-            "optional library fails here for that alone")
-    for table in tables:
+    # Poetry: its own table of libraries (one it marks `optional` is in there, and is taken with the rest, as
+    # before), its groups for tests, and after them every other group, as optional
+    tables = [(manifest.table(poetry.get("dependencies")), False), (manifest.table(poetry.get("dev-dependencies")), False)]
+    for name, g in manifest.table(poetry.get("group")).items():
+        deps = manifest.table(manifest.table(g).get("dependencies"))
+        if name in TEST_GROUPS:
+            tables.append((deps, False))
+        elif deps:
+            left.add(str(name))
+            tables.append((deps, True))
+    reader.plan.groups = sorted(set(reader.plan.groups) | left)
+    for table, optional in tables:
         for name, value in table.items():
             if _norm(name) == "python":
                 continue
             if isinstance(value, dict):
                 if any(k in value for k in ("git", "path", "url", "file")):
-                    reader.elsewhere(rel)
+                    if optional:
+                        reader.optional("./" + _plain(str(name), 60), rel)      # counted as taken from elsewhere
+                    else:
+                        reader.elsewhere(rel)
                     continue
                 extras = manifest.texts(value.get("extras"))    # (`source` names one of the stores read above)
                 name, value = name + (f"[{','.join(extras)}]" if extras else ""), manifest.text(value.get("version"))
             if isinstance(value, str):
-                reader.add(_caret(name, value), rel)
+                (reader.optional if optional else reader.add)(_caret(name, value), rel)
+
+
+def _group_words(groups: list[str]) -> str:
+    """The names of a project's groups for Lantern's own sentences: up to six, each one a name a tool would write;
+    the rest are counted. (They are the project's text: one that is not such a name is not repeated.)"""
+    named = sorted(g for g in groups if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,39}", g))
+    shown, more = [f'"{g}"' for g in named[:6]], len(groups) - min(len(named), 6)
+    if shown and not more:
+        return ", ".join(shown[:-1]) + (" and " if len(shown) > 1 else "") + shown[-1]
+    return ", ".join(shown) + (" and " if shown else "") + f"{more} more"
+
+
+LEFT_OUT = ("Lantern takes what the project always needs and what it names for its tests, so a test of a part that "
+            "needs an optional library fails here for that alone")
+
+
+def _optional_record(plan: Plan, fetched: bool, why: str = "") -> dict:
+    named = sorted(g for g in plan.groups if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,39}", g))
+    return {"groups": named[:40], "more": len(plan.groups) - len(named[:40]), "fetched": fetched,
+            **({"why": why} if why else {})}
 
 
 def _place_of(url: str) -> tuple[str, int] | None:
@@ -486,6 +556,26 @@ def _python(repo: Path, plan: Plan, words: list[str], offline: bool = False) -> 
     _pipfile(reader)
     for rel in REQ_FILES:
         reader.file(rel)
+    # what the project names as optional and also names for good is no optional library
+    plan.optional = [o for o in plan.optional if o["text"] not in reader.seen]
+    if offline or not plan.groups:
+        plan.optional = []                      # offline nothing is fetched: the tests run on what is installed
+    elif plan.hashed and plan.optional and not plan.optional_why:
+        plan.optional_why = ("the project writes fingerprints beside its libraries and none beside these, and no "
+                             "file is taken without a fingerprint then")
+    if plan.groups and not offline and (plan.optional_why or not plan.optional):
+        why = plan.optional_why or "every one of them is the project itself or one it names for good already"
+        if plan.optional_why:
+            plan.notes.append(f"pyproject.toml: the libraries the project names as optional (under "
+                              f"{_group_words(plan.groups)}) were not fetched: {why}. {LEFT_OUT}")
+            plan.record["optional"] = _optional_record(plan, False, why)
+        plan.optional = []
+    if not plan.asked and plan.optional:
+        # the only libraries the project names: they are what its tests run on, and there is no "rest" to go on with
+        for o in plan.optional:
+            reader.add(o["line"], o["file"])
+        plan.record["optional"] = _optional_record(plan, True)
+        plan.optional = []
     if not plan.asked:
         return reader
     head = Path(words[0]).name.lower()
@@ -690,10 +780,15 @@ def described(repo: Path, language: str) -> str:
         store = Store(language)
     except Exception:  # noqa: BLE001 - the sheet says what it can; the run itself says why it cannot start
         return ""
-    return (f"the libraries your project names are fetched first, from {store.host} and nowhere else, "
-            f"{WALL_WORDS[walls()]}, into a folder that is deleted after; only ready-built packages, so no code "
-            "of a library runs while a network can be reached; the tests then run with the network off on "
-            "exactly those libraries")
+    from . import sandbox
+    line = (f"the libraries your project names are fetched first, from {store.host} and nowhere else, "
+            f"{wall_words(walls())}, into a folder that is deleted after; only ready-built packages, so no code "
+            "of a library runs while it is fetched; the tests then run ")
+    if sandbox.tests_off_the_network(language):
+        return line + "with the network off on exactly those libraries"
+    # tests that are not Python, where nothing below Python holds a program (`sandbox.held_below_python`)
+    return line + ("on exactly those libraries, and are not kept from the network by this run (the line about the "
+                   "network says why)")
 
 
 def _own_network_here() -> bool:
@@ -710,15 +805,36 @@ WALL_WORDS = {
 }
 
 
+# Inside a sandbox whose doorman makes every connection for what runs in it (Lantern's own tests, run by Lantern),
+# the kernel's rule for a program's own connections decides nothing: the doorman, which is not under that rule,
+# makes them. What holds the fetching program there is the sandbox around this one.
+TOLD_INSIDE = ("through Lantern's doorkeeper, which the fetching program is told to use (a sandbox around this one "
+               "makes every connection for what runs inside it, so no rule of this run's own holds the program to "
+               "that; the walls of that sandbox stand)")
+
+
+def _doorman_above() -> bool:
+    from . import sandbox
+    return sys.platform.startswith("linux") and sandbox.own_sockets() == sandbox.DOORMAN_ABOVE
+
+
 def walls() -> str:
     """`own-network`: the fetch runs in a network that holds the doorkeeper's listener and nothing else (Linux,
     where the system gives a run one). `port-rule`: the kernel lets the fetching program connect to the
     doorkeeper's port and to no other (Landlock, Linux 6.7 on). `told`: pip or npm is given the doorkeeper as its
-    proxy and nothing in the system holds it to that (macOS, Windows, an older Linux)."""
+    proxy and nothing in the system holds it to that (macOS, Windows, an older Linux, and a run inside a sandbox
+    whose doorman makes its connections: `_doorman_above`)."""
     from . import sandbox
     if _own_network_here():
         return "own-network"
+    if _doorman_above():
+        return "told"
     return "port-rule" if sys.platform.startswith("linux") and sandbox.landlock_abi() >= 4 else "told"
+
+
+def wall_words(held: str) -> str:
+    """The words for what holds the fetching program, for the log and the sheet."""
+    return TOLD_INSIDE if held == "told" and _doorman_above() else WALL_WORDS[held]
 
 
 # ---------------------------------------------------------------------------- the fetch
@@ -772,7 +888,7 @@ class _Fetch:
                       "readable": readable, "runs": cmd[0] if os.path.isabs(cmd[0]) else ""}
             if self.own:
                 policy["door"] = {"port": self.port, "allowed": self.store.allowed, "through": self.store.through}
-            else:
+            elif not _doorman_above():      # there the rule would be written down and decide nothing (`walls`)
                 policy["tcp_ports"] = [self.port]
             pkg_root = str(Path(__file__).resolve().parent.parent)
             cmd = [sys.executable, "-I", "-c",
@@ -804,9 +920,20 @@ class _Fetch:
     def refused(self) -> int:
         return sum(1 for line in self.said if line.startswith(_stores.REFUSED))
 
+    def held_by(self) -> str:
+        """What holds this fetch's program to its doorkeeper, in words."""
+        return wall_words("own-network" if self.own else walls())
+
+    def close(self) -> None:
+        """The doorkeeper of this fetch stops listening (a fetch that stopped before its program ran left it open)."""
+        if self.door is not None:
+            self.door.close()
+
     def stop(self, why: str, then: str = ""):
-        raise self.sandbox.NoLibraries(f"the project's libraries could not be fetched: {why}, so its tests were not "
-                                       f"run{then}")
+        stopped = self.sandbox.NoLibraries(f"the project's libraries could not be fetched: {why}, so its tests were "
+                                           f"not run{then}")
+        stopped.why = why               # the reason alone, for a fetch that goes on without the optional libraries
+        raise stopped
 
 
 _BUILT = re.compile(r"[^/\\]+-([A-Za-z0-9_.]+)-([A-Za-z0-9_.]+)-([A-Za-z0-9_.]+)\.whl")     # …-python-abi-system.whl
@@ -1068,13 +1195,54 @@ def fetch(found: Plan, repo: Path, app: Path, root: Path, cwd_rel: str, log, can
     already beside the copy's `package.json`), or None when the fetch was stopped because it was asked to.
     Raises `sandbox.NoLibraries`, with the reason, when the libraries could not be fetched, and `Unavailable` when
     the sandbox the fetch runs in could not be set up: the tests are then not started."""
-    job = _Fetch(found, root, log, cancel, memory)
+    from . import sandbox
     held = walls()
-    log(f"sandbox: fetching the libraries the project names from {job.store.host}, {WALL_WORDS[held]}")
-    try:
-        where = _fetch_python(job, repo, app) if found.language == "python" else _fetch_node(job, repo, app, cwd_rel)
-    finally:
-        job.sandbox._rm(job.dir)        # what the fetching program left beside the libraries; the run's folder goes later
+    job, where, refused = None, None, 0
+    if found.language == "python" and found.optional:
+        # First with the libraries the project names as optional, so that a test of any part of it can run. Where
+        # they cannot be had beside the rest (one is nowhere, or is not ready-built for this system, or wants
+        # another version of a library than the rest does), the fetch starts again without them, and the run says
+        # which groups were left out and why: they are optional by the project's own word. What the project
+        # always needs is never left out.
+        lines, asked, pinned, words = list(found.lines), list(found.asked), set(found.pinned), _group_words(found.groups)
+        found.lines = lines + [o["line"] for o in found.optional]
+        found.asked = asked + [{"text": o["text"], "file": o["file"]} for o in found.optional]
+        found.pinned = pinned | {o["name"] for o in found.optional if o["exact"]}
+        job = _Fetch(found, root, log, cancel, memory)
+        log(f"sandbox: fetching the libraries the project names from {job.store.host}, {wall_words(held)}; the ones "
+            f"it names as optional (under {words}) too")
+        try:
+            where = _fetch_python(job, repo, app)
+        except sandbox.NoLibraries as e:
+            why = getattr(e, "why", "") or "the fetch did not go through"
+            log(f"sandbox: with the optional libraries the fetch did not go through ({why}); fetching again without them")
+            found.lines, found.asked, found.pinned = lines, asked, pinned
+            found.record["optional"] = _optional_record(found, False, why)
+            found.notes.append(f"pyproject.toml: the libraries the project names as optional (under {words}) could "
+                               f"not be had beside the rest ({why}) and were left out. {LEFT_OUT}")
+            refused = job.refused()         # what the doorkeeper refused then is counted with the rest
+            job.close()
+            job.sandbox._rm(job.dir)        # the second fetch starts in folders of its own, as empty as the first
+            job.sandbox._rm(root / "libs")
+            job = None
+        else:
+            if where is not None:
+                found.record["optional"] = _optional_record(found, True)
+                found.notes.append(f"pyproject.toml: the libraries the project names as optional (under {words}) "
+                                   "were fetched too, so that a test of any part of it can run")
+        finally:
+            found.record["asked"] = found.asked
+            if job is not None:
+                job.close()
+                job.sandbox._rm(job.dir)
+    if job is None:
+        job = _Fetch(found, root, log, cancel, memory)
+        log(f"sandbox: fetching the libraries the project names from {job.store.host}, {wall_words(held)}")
+        try:
+            where = _fetch_python(job, repo, app) if found.language == "python" else _fetch_node(job, repo, app, cwd_rel)
+        finally:
+            job.close()
+            job.sandbox._rm(job.dir)    # what the fetching program left beside the libraries; the run's folder goes later
     if where is None:
         return None
     packages = found.record.get("packages", [])
@@ -1100,7 +1268,7 @@ def fetch(found: Plan, repo: Path, app: Path, root: Path, cwd_rel: str, log, can
                            "the project names no fingerprint: each one above is what the store handed out, written "
                            "down so that a later run can be compared with this one"))
     reached = sorted({line.split(" ", 1)[1] for line in job.said if line.startswith(_stores.OPENED)})
-    found.record.update(exact=not loose, checked=checked, reached=reached, refused=job.refused(), walls=held)
+    found.record.update(exact=not loose, checked=checked, reached=reached, refused=refused + job.refused(), walls=held)
     if found.lock_name:
         found.record["locked"] = found.lock_name
     return where

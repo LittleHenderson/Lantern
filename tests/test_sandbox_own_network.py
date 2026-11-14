@@ -371,7 +371,14 @@ def test_below_python_the_tests_have_their_own_address_and_cannot_reach_another_
         return
     # no network of its own: the kernel's older rules, where it has them (none of them is about datagrams)
     if sandbox.landlock_abi() >= 4:
-        assert "OWN LISTENER: refused" in out and "tcp" not in came, out
+        assert "OWN LISTENER: refused" in out, out
+    if not sandbox.held_below_python():
+        # A run inside a run (these tests, run by Lantern): the doorman of the sandbox around it makes every
+        # connection, and the kernel asks its rules of the one that connects. What is reached is that sandbox's
+        # to decide (the other programs here are inside it), and the inner run's log says so.
+        return
+    if sandbox.landlock_abi() >= 4:
+        assert "tcp" not in came, out
     if sandbox.landlock_abi() >= 6:
         assert "name" not in came, out
 
@@ -663,7 +670,9 @@ def test_where_no_network_of_its_own_can_be_made_nothing_on_this_computer_is_let
         r = sandbox.run(_tiny(tmp_path / "below", _below(others.where())), PYTEST, log=QUIET, backend="subprocess",
                         timeout=180)
         assert r["returncode"] == 0, r["output_tail"]
-        assert "OWN LISTENER: refused" in r["output_tail"] and others.came() <= {"udp"}, r["output_tail"]
+        assert "OWN LISTENER: refused" in r["output_tail"], r["output_tail"]
+        # (inside a sandbox that makes the connections, that sandbox decides what a connection reaches)
+        assert others.came() <= {"udp"} or not sandbox.held_below_python(), r["output_tail"]
 
 
 def test_the_sheet_says_what_the_tests_can_reach(tmp_path, monkeypatch):
