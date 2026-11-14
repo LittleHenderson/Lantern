@@ -43,17 +43,21 @@ the project names is there (`state: "installed"`), and are otherwise not run, wi
 Nothing is kept between runs: the folder the libraries are fetched into is the run's temp folder."""
 from __future__ import annotations
 
+import collections
+import hashlib
 import importlib.metadata
 import importlib.util
 import json
 import os
 import re
 import shutil
+import stat
 import sys
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import _stores, depaudit, manifest, programs, results
+from . import _builder, _stores, depaudit, manifest, programs, results
 
 FETCH_SECONDS = 600                     # the time a fetch gets
 DOOR_PORT = 8118                        # where the doorkeeper listens in a network of the fetch's own
@@ -69,6 +73,12 @@ OTHER_JS_LOCKS = {"pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn", "bun.lockb": "b
 MOST_LINES = 2000                       # requirement lines one project may have
 DEPTH = 4                               # how many `-r` files deep
 SHOWN = 40                              # libraries named one by one in the log
+BUILD_SECONDS = 600                     # the time each step of a build gets (`_build`)
+MOST_BUILT = 5                          # the libraries one run builds from their source
+MOST_SOURCE = 200 << 20                 # the bytes of a source package that are taken
+MOST_PACKAGE = 1 << 30                  # the bytes of the package a build may hand back
+BUILD_LINES = 10                        # the lines of a build step's own output the log takes from its start,
+BUILD_TAIL = 30                         # and from its end (where an error is said); the rest is counted
 
 _NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._\-]{0,98}[A-Za-z0-9])?"
 _VERSION = r"[A-Za-z0-9][A-Za-z0-9.*+!_\-]{0,99}"
@@ -837,6 +847,29 @@ def wall_words(held: str) -> str:
     return TOLD_INSIDE if held == "told" and _doorman_above() else WALL_WORDS[held]
 
 
+# ---------------------------------------------------------------------------- where a library is built
+def cannot_build(platforms=()) -> str:
+    """Why no library is built from its source in this run, in words that end a sentence; "" where one is.
+
+    Building a library runs code it brings, and a build starts what it likes (a compiler), so Python's guard holds
+    nothing of it. A library is built only where the kernel holds any program of the run to the run's walls: the
+    network (`sandbox.held_below_python`) and the folders (Landlock). That is Linux, outside another sandbox.
+    `platforms`: the systems the libraries are fetched for when that is not this one (the tests' container); a
+    library would have to be built there too, which is not done."""
+    from . import sandbox
+    if platforms:
+        return ("the tests run in a container here, and a library is built only where the tests run on this "
+                "computer itself (LANTERN_SANDBOX=subprocess)")
+    if not sandbox.held_below_python():
+        return "a build is a program that Python's guard does not hold, and " + sandbox.not_held_how()
+    if sandbox.landlock_abi() < 1:
+        return ("a build is a program that Python's guard does not hold, and this system's kernel has no rule for "
+                "folders that Lantern can set (Landlock), so a build could read and write what you can")
+    if not sys.platform.startswith("linux"):
+        return "the kernel's rules a build is held by are Linux's"
+    return ""
+
+
 # ---------------------------------------------------------------------------- the fetch
 class _Fetch:
     """One fetch: the folders, the way out, and the launcher around the fetching program."""
@@ -860,12 +893,20 @@ class _Fetch:
         except OSError as e:
             raise sandbox.NoLibraries("the folder the project's libraries are fetched into could not be made "
                                       f"({e.strerror or type(e).__name__})") from e
-        if self.own:
-            self.port = DOOR_PORT
-        else:           # no network of the fetch's own on this system: the doorkeeper listens on this computer
-            listener = _stores.listen(0)
-            self.port = listener.getsockname()[1]
-            self.door = _stores.Door(listener, self.store.allowed, self.store.through, self.said.append).start()
+        self.port, self.proxy = DOOR_PORT, f"http://127.0.0.1:{DOOR_PORT}"
+        self.way_out()
+
+    def way_out(self) -> None:
+        """The way out for the next fetching program: `proxy`. In a network of the fetch's own the launcher makes
+        the doorkeeper there, for each program anew. Where the system gives a run none, the doorkeeper listens on
+        this computer, and each `run` closes its own when its program ends: a fetch that builds a library fetches
+        more than once, and no doorkeeper listens while a build runs. A command line that names `proxy` is
+        written after this."""
+        if self.own or self.door is not None:
+            return
+        listener = _stores.listen(0)
+        self.port = listener.getsockname()[1]
+        self.door = _stores.Door(listener, self.store.allowed, self.store.through, self.said.append).start()
         self.proxy = f"http://127.0.0.1:{self.port}"
 
     def hand_over(self, *folders: Path) -> None:
@@ -909,9 +950,74 @@ class _Fetch:
             rc, output, timed_out = sandbox._stream(cmd, cwd, env, FETCH_SECONDS, said, job=job, cancel=self.cancel,
                                                     ask=ask, left=left)
         finally:
-            if self.door is not None:
-                self.door.close()
+            self.close()
             self.plan.left = left + (sandbox._left_by_launcher(output) if os.name == "posix" else [])
+        why = sandbox._unavailable(rc, output)
+        if why:
+            raise sandbox.Unavailable(why)
+        return rc, output, timed_out
+
+    def behind_walls(self, cmd: list[str], cwd: Path, tmp: Path, writable: list[Path], readable: list[str],
+                     wall: dict | None, first: tuple[str, ...] = (), more_env: dict | None = None):
+        """(result, output, stopped at the time limit) of one step of a build (`_build`), started under the rules
+        a project's tests are started under (`sandbox._run_subprocess`) and with no way out: no doorkeeper and no
+        port it may connect to, a network of its own where the system gives a run one, the doorman, the run's
+        memory, the person's own folders closed to its reads (`wall`), writes in `writable` only, and everything
+        it started ended with it. Not Python's guard: a build starts what it likes, so only what holds any program
+        counts (`cannot_build`, which is asked before any of this). `first`: folders that stand first on PATH."""
+        from . import _jail
+        sandbox = self.sandbox
+        linux = sys.platform.startswith("linux")
+        env = sandbox._env_base(tmp)
+        env.pop("VIRTUAL_ENV", None)
+        env.update(more_env or {})
+        if self.as_nobody and env.get("PATH"):
+            env["PATH"] = sandbox._path_for(env["PATH"], 65534, 65534)[0]
+        env["PATH"] = os.pathsep.join([*first, *([env["PATH"]] if env.get("PATH") else [])])
+        policy = {"writable": [str(w) for w in writable], "nobody": self.as_nobody, "python": False, "net": True,
+                  "own_net": not sandbox.own_network(), "net_told": False, "must": True, "parent": os.getpid(),
+                  "cpu": max(sandbox.WALL_CLOCK, BUILD_SECONDS) * sandbox._processors(), "memory": self.memory << 20,
+                  "readable": readable, "runs": cmd[0] if os.path.isabs(cmd[0]) else "",
+                  "shm": (self.memory << 20) // 4 if linux and not sandbox.own_memory() else 0,
+                  "sockets": linux and not sandbox.own_sockets()}
+        if wall is not None:
+            policy["read"] = wall
+        pkg_root = str(Path(__file__).resolve().parent.parent)
+        cmd = [sys.executable, "-I", "-c",
+               f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])",
+               json.dumps(policy), "--", *cmd]
+
+        lock, last, counts = threading.Lock(), collections.deque(maxlen=BUILD_TAIL), [0, 0, False]
+
+        def said(line: str) -> None:
+            # Every line is taken as the build's own, whatever it begins with. The launcher's lines about its
+            # walls begin with "sandbox:" and are left out: Lantern said once which walls a build runs behind,
+            # and a build that writes such a line itself gains nothing by it. The log takes the first lines of a
+            # step and its last ones; a build may write thousands.
+            if not line.strip() or line.startswith("sandbox:"):
+                return
+            with lock:
+                if counts[2]:
+                    return
+                if counts[0] < BUILD_LINES:
+                    counts[0] += 1
+                    self.log("sandbox: build: " + line[:300])
+                else:
+                    counts[1] += 1
+                    last.append(line[:300])
+        left: list[str] = []
+        output = ""
+        try:
+            rc, output, timed_out = sandbox._stream(cmd, cwd, env, BUILD_SECONDS, said, cancel=self.cancel,
+                                                    ask=_jail.ASK if linux else 0.0, left=left)
+        finally:
+            self.plan.left = left + sandbox._left_by_launcher(output)
+            with lock:
+                counts[2] = True            # whatever still holds the step's output open writes nothing more here
+                if counts[1] > len(last):
+                    self.log(f"sandbox: build: ({counts[1] - len(last)} more lines of this step are left out here)")
+                for line in last:
+                    self.log("sandbox: build: " + line)
         why = sandbox._unavailable(rc, output)
         if why:
             raise sandbox.Unavailable(why)
@@ -928,11 +1034,13 @@ class _Fetch:
         """The doorkeeper of this fetch stops listening (a fetch that stopped before its program ran left it open)."""
         if self.door is not None:
             self.door.close()
+            self.door = None
 
-    def stop(self, why: str, then: str = ""):
+    def stop(self, why: str, then: str = "", final: bool = False):
         stopped = self.sandbox.NoLibraries(f"the project's libraries could not be fetched: {why}, so its tests were "
                                            f"not run{then}")
         stopped.why = why               # the reason alone, for a fetch that goes on without the optional libraries
+        stopped.final = final           # no fetch goes on after this one, with fewer libraries or otherwise (`fetch`)
         raise stopped
 
 
@@ -977,14 +1085,16 @@ def _not_built_for_here(output: str, found: Plan) -> tuple[str, str]:
         if "any" in systems or here in systems or not (systems or source):
             continue
         what = f"{_library_words(name)} {version}, the version the project's lock file fixes, has no ready-built package"
+        why = cannot_build(found.platforms)
+        unbuilt = f"Lantern does not build a library here: {why}" if why else "it was not built"
         if not systems:
             return (what + " (the lock file lists it as source only: it has to be built by running code it brings, "
-                    "and Lantern does not build a library)"), ""
+                    f"and {unbuilt})"), ""
         others = sorted(systems)
         listed = ", ".join(others[:-1]) + (" and " if len(others) > 1 else "") + others[-1]
         mark = _MARKERS.get(others[0]) if len(others) == 1 else None
         return (f"{what} for {here} (the lock file lists it ready-built for {listed} only"
-                + (", and as source, which Lantern does not build" if source else "") + ")",
+                + (f", and as source, and {unbuilt}" if source else "") + ")",
                 f". Where the tests do not need it on {here}, the project can say which systems it is for where it "
                 "names it" + (f' (`{_library_words(name)}; sys_platform == "{mark}"`)' if mark else "")
                 + f": it is then not asked for on {here}, and the tests run on the rest")
@@ -1018,49 +1128,31 @@ def _pip_failure(output: str, store: Store, refused: int) -> str:
     return "pip ended with an error (its last lines are in the log)"
 
 
-def _fetch_python(job: _Fetch, repo: Path, app: Path) -> Path:
-    found, store = job.plan, job.store
-    if getattr(importlib.util.find_spec("pip"), "origin", None) is None:
-        job.stop("the Python that runs Lantern has no pip to fetch them with")
-    libs = job.root / "libs"
-    libs.mkdir()
-    wanted, report = job.dir / "wanted.txt", job.dir / "fetched.json"
-    wanted.write_text("\n".join(found.lines) + "\n", encoding="utf-8")
+def _pip(job: _Fetch, target: Path, wanted: Path, report: Path, *more: str) -> list[str]:
+    """pip's command line for one fetch into `target`: ready-built packages only, from the person's store, through
+    this fetch's doorkeeper (`job.way_out()` comes first)."""
     cmd = programs.python("pip", "install", "--isolated", "--no-input", "--disable-pip-version-check", "--no-cache-dir",
                           "--only-binary=:all:", "--no-compile", "--no-warn-script-location", "--no-warn-conflicts",
                           "--progress-bar", "off",
-                          "--quiet", "--retries", "1", "--timeout", "30", "--target", str(libs),
-                          "--index-url", store.url, "--proxy", job.proxy, "--report", str(report), "-r", str(wanted))
-    if found.constraints:
-        keep = job.dir / "versions.txt"
-        keep.write_text("\n".join(found.constraints) + "\n", encoding="utf-8")
-        cmd += ["-c", str(keep)]
+                          "--quiet", "--retries", "1", "--timeout", "30", "--target", str(target),
+                          "--index-url", job.store.url, "--proxy", job.proxy, "--report", str(report), "-r", str(wanted),
+                          *more)
     if job.cert:
         cmd += ["--cert", str(job.cert)]
-    for system in found.platforms:
-        cmd += ["--platform", system]
-    # `--no-warn-conflicts`: pip otherwise compares what it fetched with the libraries installed in the Python it
-    # runs in (those beside Lantern, which the tests never run on) and writes each one that wants another version
-    # as an "ERROR" of the project's fetch.
-    job.hand_over(libs)
-    pip = importlib.util.find_spec("pip")
-    readable = [os.path.dirname(pip.origin), os.path.dirname(os.__file__)]
-    rc, output, timed_out = job.run(cmd, job.dir, [job.dir, libs], readable)
-    if rc is None and not timed_out:
-        return None
-    if timed_out:
-        job.stop(f"the fetch was not through after {FETCH_SECONDS // 60} minutes")
-    if rc != 0:
-        why, then = _not_built_for_here(output, found)
-        job.stop(why or _pip_failure(output, store, job.refused()), then)
+    return cmd
+
+
+def _reported(report: Path) -> list[dict] | None:
+    """What pip's report says it installed, one row a package: `name`, `version`, `digest` (the SHA-256 of the
+    file), `url` (where the file came from), `asked`. None when the report does not say."""
     text, why = results.plain(report)
     try:
         installed = manifest.rows(manifest.table(json.loads(text or "")).get("install"))
-    except ValueError:
+    except (ValueError, RecursionError):
         installed = None
     if installed is None or why:
-        job.stop("pip did not say what it fetched")
-    packages = []
+        return None
+    rows = []
     for item in installed:
         item = manifest.table(item)
         meta, info = manifest.table(item.get("metadata")), manifest.table(item.get("download_info"))
@@ -1069,19 +1161,549 @@ def _fetch_python(job: _Fetch, repo: Path, app: Path) -> Path:
             or manifest.text(archive.get("hash")).removeprefix("sha256=")
         name, version = _plain(manifest.text(meta.get("name")), 100), _plain(manifest.text(meta.get("version")), 100)
         if not name or not re.fullmatch(r"[0-9a-f]{64}", digest):
-            job.stop("pip did not say what it fetched")
+            return None
+        rows.append({"name": name, "version": version, "digest": digest, "url": manifest.text(info.get("url")),
+                     "asked": bool(item.get("requested"))})
+    return rows
+
+
+# ---------------------------------------------------------------------------- a library that has to be built
+# (2026-11-14.) Until this step only ready-built files were taken, and a library whose one version the project
+# fixes, and that the store has for this system as source only, meant "no test was run". Such a library is built
+# now, one step at a time, by Lantern's own small program (`lantern/_builder.py`, a copy of it in the build's
+# folder) and never by pip or a `setup.py`:
+#
+#   source   the source package of exactly that version, from the store, through the doorkeeper. Nothing of it
+#            is read. Lantern then takes the file's fingerprint itself: it has to be one the project names (its
+#            lock file, or `--hash` beside the requirement), or, where the project names none, the one the
+#            store's page names for the file.
+#   unpack   behind the walls of the tests' run (`_Fetch.behind_walls`), like every step after it that looks
+#            into the package: files and folders beneath one top folder, or nothing; and how it says it is built.
+#   tools    what the build names as its tools: names with versions, asked of the store as the project's
+#            libraries are (ready-built only, through the doorkeeper), into a folder of the build's own. A tool
+#            is never built.
+#   needs    the build is asked what else it needs (the first step that runs code the library brings).
+#   build    it builds. No doorkeeper listens while any of the last two run.
+#
+# What comes back is believed only as far as Lantern can look at it: one plain file in the build's `out` folder,
+# named as a package of that library at that version, copied out by Lantern with its fingerprint taken on the way;
+# what the file says of itself inside is pip's to check when it is asked to take it (inside the fetch's walls).
+# The tests' copy, their libraries, their temp folder and their Python are no folder of a build's.
+_STEP_WHY = {
+    "link": "holds a link, and a source package with a link in it is not unpacked",
+    "outside": "holds a name that leaves its folder",
+    "top": "does not have one folder at its top with everything in it",
+    "kind": "holds something that is neither a file nor a folder",
+    "count": f"holds more than {_builder.MOST_FILES} files",
+    "size": "is larger than Lantern unpacks",
+    "broken": "cannot be read (it is cut short, or is no source package)",
+    "follow": "says how it is built in a form Lantern cannot follow",
+    "outside-code": "names code for its build that lies outside its source",
+}
+BUILDING = ("sandbox: {words} is not in the store ({host}) ready-built for this system: building it from its source, "
+            "behind the walls the tests run behind and with the network off")
+_PACKAGE = re.compile(r"([A-Za-z0-9_.]+)-([A-Za-z0-9_.!+]+)(?:-\d[A-Za-z0-9_.]*)?-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+\.whl")
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+
+
+def _time_words(seconds: int) -> str:
+    return f"{seconds // 60} minutes" if seconds >= 120 else f"{seconds} seconds"
+
+
+def _own_look(path: Path, most: int, into: Path | None = None) -> str | None:
+    """The SHA-256 of the file at `path`, taken by Lantern itself: a plain file with one name, opened as itself
+    and never through a link, of at most `most` bytes. With `into`, the bytes are written to that new file as
+    they are read, so what is kept is what was looked at. None for anything else, and nothing is kept then."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | _NOFOLLOW)
+    except OSError:
+        return None
+    out, done = None, False
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > most:
+            return None
+        if into is not None:
+            out = os.open(into, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o644)
+        digest, left = hashlib.sha256(), info.st_size
+        while left:
+            chunk = os.read(fd, min(1 << 20, left))
+            if not chunk:
+                return None                 # shorter than it was
+            digest.update(chunk)
+            left -= len(chunk)
+            at = 0
+            while out is not None and at < len(chunk):
+                at += os.write(out, chunk[at:])
+        if os.read(fd, 1):
+            return None                     # longer than it was
+        done = True
+        return digest.hexdigest()
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+        if out is not None:
+            os.close(out)
+            if not done:
+                try:
+                    os.unlink(into)
+                except OSError:
+                    pass
+
+
+def _step_said(path: Path) -> dict:
+    """What a step of a build wrote as its result (`_builder._say`): a small plain file that holds a table, or {}."""
+    try:
+        if os.lstat(path).st_size > 1_000_000:
+            return {}
+    except OSError:
+        return {}
+    text, why = results.plain(path)
+    data = manifest.parse_json(text or "") if not why else None
+    return data if isinstance(data, dict) else {}
+
+
+def _fixed(found: Plan, name: str) -> str:
+    """The one version of `name` the project fixes: the only one its lock file names, or the one it writes with
+    `==` beside the library. "" where it fixes none, or more than one: which source to build is the project's
+    word, never Lantern's choice."""
+    key = _norm(name)
+    versions = set(found.locked.get(key, {}))
+    if versions:
+        return next(iter(versions)) if len(versions) == 1 else ""
+    for line in [*found.lines, *found.constraints]:
+        got = _requirement(line)
+        if got and _norm(got[0]) == key:
+            spec = re.split(r"[ ;]", got[2][len(got[0]):].split("]")[-1], maxsplit=1)[0]
+            m = PINNED.fullmatch(spec or "")
+            if m and "*" not in spec:
+                versions.add(m.group(1))
+    return next(iter(versions)) if len(versions) == 1 else ""
+
+
+def _named_prints(found: Plan, name: str, version: str) -> set[str]:
+    """The SHA-256 fingerprints the project names for `name` at `version`: its lock file's, and the ones written
+    beside the library's own requirement (`--hash=sha256:…`)."""
+    key = _norm(name)
+    named = set(found.locked.get(key, {}).get(version, ()))
+    for line in [*found.lines, *found.constraints]:
+        got = _requirement(line)
+        if got and _norm(got[0]) == key:
+            named.update(re.findall(r"--hash=sha256:([0-9a-f]{64})\b", got[1]))
+    return named
+
+
+def _here() -> str:
+    """The system the tests run on, as `_built_for` names systems."""
+    return "Linux" if sys.platform.startswith("linux") else "macOS" if sys.platform == "darwin" else \
+        "Windows" if os.name == "nt" else ""
+
+
+def _to_build(output: str, found: Plan) -> list[tuple[str, str, bool]]:
+    """(name, version, sure) of each library pip could not take that may be built from its source. Sure: pip
+    found no ready-built file of it, at the one version the project fixes; or pip's word is "conflicting
+    dependencies" (what the project asks for against the version its lock file fixes, which names no cause) and
+    the lock file lists that version as source, and ready-built for other systems only. Not sure: that word,
+    about a library whose one version the project fixes in a lock file that lists no files (Pipenv's). Then the
+    store's own page says whether the version is there ready-built for this system, and it is built only when
+    not (`_build`)."""
+    here = "Linux" if found.platforms else _here()
+    wanted: list[tuple[str, str, bool]] = []
+
+    def add(name: str, version: str, sure: bool) -> None:
+        if version and re.fullmatch(_NAME, name) and len(name) <= 60 \
+                and not any(_norm(w[0]) == _norm(name) for w in wanted):
+            wanted.append((name, version, sure))
+    for name in re.findall(r"No matching distribution found for ([^\s(<>=!~;\[]+)", output):
+        add(name, _fixed(found, name), True)
+    m = re.search(r"Cannot install (.{1,2000}?) because these package versions have conflicting dependencies", output)
+    for part in re.split(r",\s*|\s+and\s+", m.group(1)) if m else []:
+        name = re.split(r"[\s(<>=!~;\[]", part.strip(), maxsplit=1)[0]
+        versions = found.listed.get(_norm(name), {})
+        if len(versions) == 1:
+            version, files = next(iter(versions.items()))
+            systems, source = _built_for(files)
+            if source and "any" not in systems and here not in systems and _fixed(found, name) == version:
+                add(name, version, True)
+        elif not versions and len(found.locked.get(_norm(name), {})) == 1:
+            add(name, _fixed(found, name), False)
+    return wanted
+
+
+def _tool_lines(said) -> list[str] | None:
+    """The lines pip is given for the tools a source package names (in its `pyproject.toml`, or when its build is
+    asked): each a library's name with versions, in the form a store defines. None when one is anything else (a
+    link, another store, a folder, an option, a fingerprint) or when they are too many: a stranger's text names no
+    place to fetch from. A tool whose marker says it is for another Python or system is left out."""
+    if not isinstance(said, list) or len(said) > _builder.MOST_TOOLS:
+        return None
+    lines = []
+    for text in said:
+        if not isinstance(text, str) or len(text) > 500:
+            return None
+        text = text.strip()
+        if "://" in text or " @ " in text or text.startswith((".", "/", "file:", "-")) \
+                or text.lower().endswith((".whl", ".zip", ".tar.gz")):
+            return None
+        got = _requirement(text)
+        if got is None or got[1] != got[2]:
+            return None
+        fits = applies(got[2].partition(";")[2])
+        if fits is None:
+            return None
+        if fits and got[1] not in lines:
+            lines.append(got[1])
+    return lines
+
+
+def _fetch_tools(job: _Fetch, here: Path, tools: Path, lines: list[str], words: str, held: list[str], number: int):
+    """Fetch the tools a build names into its `tools` folder: (the "name version" of each, the lines that hold a
+    later fetch for the same build to these versions), or None when the fetch was stopped because it was asked
+    to. They are asked of the store the way the project's libraries are, and a tool is never built."""
+    wanted, report = here / "run" / f"tools-{number}.txt", here / "run" / f"tools-{number}.json"
+    wanted.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    job.log(f"sandbox: build: fetching the tools the build of {words} names from the store ({job.store.host}), "
+            f"ready-built only: {', '.join(_plain(line, 80) for line in lines[:8])}"
+            + (f" and {len(lines) - 8} more" if len(lines) > 8 else ""))
+    more = []
+    if held:
+        keep = here / "run" / f"held-{number}.txt"
+        keep.write_text("\n".join(held) + "\n", encoding="utf-8")
+        more = ["-c", str(keep)]
+    job.way_out()
+    cmd = _pip(job, tools, wanted, report, *more)
+    pip = importlib.util.find_spec("pip")
+    rc, output, timed_out = job.run(cmd, job.dir, [job.dir], [os.path.dirname(pip.origin), os.path.dirname(os.__file__)])
+    if rc is None and not timed_out:
+        return None
+    if timed_out:
+        job.stop(f"the tools the build of {words} names were not fetched after {FETCH_SECONDS // 60} minutes")
+    if rc != 0:
+        job.stop(f"the build of {words} could not get its tools: {_pip_failure(output, job.store, job.refused())}")
+    rows = _reported(report)
+    if rows is None:
+        job.stop(f"the build of {words} could not get its tools: pip did not say what it fetched")
+    if any(urlsplit(row["url"]).scheme == "file" for row in rows):
+        job.stop(f"the build of {words} could not get its tools: one was taken from this computer and not from the store")
+    names = [f"{row['name']} {row['version']}" for row in rows]
+    hold = [f"{row['name']}=={row['version']}" for row in rows
+            if re.fullmatch(_NAME, row["name"]) and re.fullmatch(_VERSION, row["version"]) and "*" not in row["version"]]
+    return names, hold
+
+
+def _build(job: _Fetch, repo: Path, name: str, version: str, number: int, sure: bool = True):
+    """Build `name` at `version` from its source, in a folder of its own under the fetch's (the steps are named
+    above `_STEP_WHY`). Returns what was built: `file` (the package, copied into the fetch's `built` folder),
+    `sha256` (its fingerprint), `from` and `source_sha256` (the source package and its fingerprint), `with` (the
+    tools), `checked` (the source's fingerprint is one the project names); "" when the store has no source
+    package of that version; None when the run was stopped because it was asked to; False where it is not `sure`
+    that the library has to be built (`_to_build`) and the store's page does not show it: the page names a
+    ready-built file of that version for this system, or no source of it. Anything else stops the fetch, with the
+    reason in Lantern's words (`job.stop`)."""
+    found, store, sandbox = job.plan, job.store, job.sandbox
+    words = f"{_library_words(name)} {version}"
+    here = job.dir / "build" / str(number)
+    kept = job.dir / "built"
+    script = here / "run" / "_lantern_builder.py"
+    try:
+        for folder in ("in", "src", "tools", "out", "tmp", "run", "res"):
+            (here / folder).mkdir(parents=True)
+        shutil.copyfile(Path(__file__).resolve().parent / "_builder.py", script)
+        kept.mkdir(exist_ok=True)
+        job.hand_over()
+        if job.as_nobody:               # the packages Lantern copies out of a build are Lantern's own to write
+            os.chown(kept, 0, 0)
+    except OSError as e:
+        job.stop(f"the folder {words} would be built in could not be made ({e.strerror or type(e).__name__})")
+    stdlib = os.path.dirname(os.__file__)
+    archive = here / "in" / "source.tar.gz"
+
+    # -- the source package, from the store
+    job.way_out()
+    given = {"index": store.url, "name": name, "version": version, "into": str(archive), "most": MOST_SOURCE,
+             "result": str(here / "res" / "source.json"), "proxy": job.proxy, "cert": str(job.cert) if job.cert else ""}
+    rc, output, timed_out = job.run([sys.executable, "-I", "-S", str(script), "source", json.dumps(given)], here,
+                                    [here / "in", here / "res"], [str(script), stdlib])
+    if rc is None and not timed_out:
+        return None
+    if timed_out:
+        job.stop(f"the source package of {words} was not fetched after {FETCH_SECONDS // 60} minutes")
+    said = _step_said(here / "res" / "source.json")
+    state = said.get("state")
+    if not sure and state in ("fetched", "no-library", "no-source"):
+        there = said.get("ready")
+        systems = _built_for([f for f in there[:_builder.MOST_READY] if isinstance(f, str)])[0] \
+            if isinstance(there, list) else {"any"}
+        if state != "fetched" or "any" in systems or _here() in systems:
+            sandbox._rm(here)           # pip's word was about something else: nothing is built
+            return False
+    if state in ("no-library", "no-source"):
+        return ""
+    if state == "too-large":
+        job.stop(f"the source package of {words} is larger than Lantern takes ({MOST_SOURCE >> 20} MB)")
+    if state == "refused":
+        job.stop(f"the source package of {words} lies at a place that is not the store, which the doorkeeper refused")
+    if state == "unreachable":
+        job.stop(f"the store ({store.host}) could not be reached for the source package of {words}")
+    file = said.get("file")
+    if rc != 0 or state != "fetched" or not isinstance(file, str) or not _builder.pick(
+            f'<a href="{file}">', name, version) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+!\-]{0,199}", file):
+        job.stop(f"the source package of {words} could not be fetched (the last lines are in the log)")
+    digest = _own_look(archive, MOST_SOURCE)
+    if digest is None:
+        job.stop(f"the source package of {words} could not be fetched (the last lines are in the log)")
+    named = _named_prints(found, name, version)
+    if named and digest not in named:
+        job.stop(f"the source package the store handed out for {words} is not the one the project names (its "
+                 "fingerprint differs) and was not built")
+    if not named and said.get("page_sha256") != digest:
+        job.stop(f"the source package the store handed out for {words} is not the file the store's own page names "
+                 "(its fingerprint differs, or the page names none) and was not built")
+
+    # -- behind the walls from here on
+    wall = sandbox.read_wall(repo, here, "python", True, sys.executable)
+
+    def step(which: str, cmd: list[str], writable: list[str], readable: list[str], first=(), more_env=None):
+        result = here / "res" / f"{which}.json"
+        try:
+            if os.path.lexists(result):
+                os.unlink(result)
+        except OSError:
+            job.stop(f"the build of {words} ended with an error (its last lines are in the log)")
+        rc, output, timed_out = job.behind_walls(
+            [*cmd, str(script), which, json.dumps({**given, "result": str(result)})], here, here / "tmp",
+            [here / w for w in writable], readable, wall, first, more_env)
+        if rc is None and not timed_out:
+            return None
+        if job.plan.left:
+            # A build is a stranger's code, and something it started is still going. Whatever the step itself
+            # ended with, nothing more of this run is started beside it: no further step, no second fetch without
+            # the optional libraries, no test.
+            job.stop(f"something the build of {words} started could not be ended", final=True)
+        if timed_out:
+            job.stop(f"the build of {words} was not through after {_time_words(BUILD_SECONDS)}")
+        if sandbox._over_memory(rc, output):
+            had = sandbox.memory_words(job.memory)
+            job.stop(f"the build of {words} used more memory than the run has" + (f" ({had})" if had else ""))
+        if rc != 0:
+            job.stop(f"the build of {words} ended with an error (its last lines are in the log)")
+        return _step_said(result)
+
+    given = {"archive": str(archive), "into": str(here / "src")}
+    if not sure:
+        job.log(BUILDING.format(words=words, host=store.host))
+    job.log(f"sandbox: build: unpacking {file}")
+    said = step("unpack", [sys.executable, "-I", "-S"], ["src", "tmp", "res"], [str(script), stdlib])
+    if said is None:
+        return None
+    if said.get("state") == "refused":
+        job.stop(f"the source package of {words} {_STEP_WHY.get(said.get('why'), _STEP_WHY['broken'])}, so it was "
+                 "not built")
+    top, backend, path = said.get("top"), said.get("backend"), said.get("path")
+    lines = _tool_lines(said.get("tools"))
+    source = here / "src" / top if isinstance(top, str) and top not in ("", ".", "..") and len(top) <= 200 \
+        and top.isprintable() and not any(c in top for c in "/\\") else None
+    if said.get("state") != "unpacked" or source is None or not stat.S_ISDIR(os.lstat(source).st_mode if
+                                                                             os.path.lexists(source) else 0):
+        job.stop(f"the source package of {words} {_STEP_WHY['broken']}, so it was not built")
+    if not isinstance(backend, str) or len(backend) > 300 or not _builder.BACKEND.fullmatch(backend) \
+            or not isinstance(path, list) or len(path) > 20 or not all(
+                isinstance(p, str) and p and len(p) <= 300 and not os.path.isabs(p) and ".." not in Path(p).parts for p in path):
+        job.stop(f"the source package of {words} {_STEP_WHY['follow']}, so it was not built")
+    tool_words = (f"the source package of {words} names a tool for its build that is not a library's name with "
+                  "versions (a link, another store, a folder, an option), and Lantern fetches a tool by its name, "
+                  "from the store")
+    if lines is None:
+        job.stop(tool_words)
+
+    # -- its tools, and a Python of the build's own that finds them
+    tools, held = here / "tools", []
+    used: list[str] = []
+    if lines:
+        got = _fetch_tools(job, here, tools, lines, words, [], 1)
+        if got is None:
+            return None
+        used, held = got
+    own = sandbox._own_python(here, tools, tools, lambda line: None)
+    if own is None:
+        job.stop(f"a Python for the build of {words} could not be made")
+    python, home, site = own
+    readable = [str(script), stdlib, str(home / "pyvenv.cfg"), str(site / "lantern.pth"), str(tools)]
+
+    def first() -> list[str]:
+        return [os.path.dirname(python), *[str(tools / d) for d in ("bin", "Scripts") if (tools / d).is_dir()]]
+    given = {"source": str(source), "backend": backend, "path": path, "out": str(here / "out")}
+
+    # -- what else the build needs, asked of the build itself
+    said = step("needs", [python, "-P"], ["src", "tmp", "res"], readable, first(), {"VIRTUAL_ENV": str(home)})
+    if said is None:
+        return None
+    more = _tool_lines(said.get("tools")) if said.get("state") == "said" else None
+    if more is None:
+        job.stop(tool_words)
+    if more:
+        got = _fetch_tools(job, here, tools, more, words, held, 2)
+        if got is None:
+            return None
+        used = sorted(set(used) | set(got[0]))
+        sandbox._programs_run_by(tools, python)
+
+    # -- the build
+    if step("build", [python, "-P"], ["src", "tmp", "res", "out"], readable, first(), {"VIRTUAL_ENV": str(home)}) is None:
+        return None
+    left = []
+    try:
+        with os.scandir(here / "out") as entries:
+            for entry in entries:
+                left.append((entry.name, entry.is_file(follow_symlinks=False)))
+                if len(left) > 1:
+                    break
+    except OSError:
+        left = []
+    if len(left) != 1 or not left[0][1]:
+        job.stop(f"the build of {words} did not leave exactly one package (one plain file) where a build leaves it")
+    package = left[0][0]
+    m = _PACKAGE.fullmatch(package) if len(package) <= 200 else None
+    if not m or _norm(m.group(1)) != _norm(name) or m.group(2).lower() != version.lower().replace("-", "_"):
+        job.stop(f"the build of {words} left a package of another name or version than the one asked for")
+    if os.path.lexists(kept / package):
+        job.stop(f"the build of {words} left a package of another name or version than the one asked for")
+    built = _own_look(here / "out" / package, MOST_PACKAGE, kept / package)
+    if built is None:
+        job.stop(f"the build of {words} did not leave exactly one package (one plain file) where a build leaves it")
+    sandbox._rm(here)           # the source, the tools and the build's own Python: nothing of them is used again
+    return {"file": package, "sha256": built, "from": file, "source_sha256": digest, "with": sorted(used),
+            "checked": bool(named)}
+
+
+def _build_what_pip_left(job: _Fetch, repo: Path, output: str, built: dict):
+    """After a fetch pip did not get through: build the libraries it could not take that may be built (`_to_build`),
+    into `built` (by name). True when at least one was built, so that pip is asked again with those beside the
+    store's; False when there is nothing to build here (the caller then says why the fetch failed, as it always
+    did); None when the run was stopped because it was asked to."""
+    found = job.plan
+    wanted = _to_build(output, found)
+    again = [w for w in wanted if _norm(w[0]) in built]
+    if again:
+        name, version = again[0][:2]
+        words = f"{_library_words(name)} {version}"
+        missing = re.findall(r"No matching distribution found for ([^\s(<>=!~;\[]+)", output)
+        if any(_norm(m) == _norm(name) for m in missing) or "inconsistent" in output or "has an invalid wheel" in output:
+            job.stop(f"the package built for {words} was not taken as that by pip (it says another name or version "
+                     "inside, or is not for this Python)")
+        job.stop(_pip_failure(output, job.store, job.refused()) + f" ({words} was built from its source for this "
+                 "run, and pip could still not take it beside the rest)")
+    if not wanted or cannot_build(found.platforms):
+        return False
+    made = 0
+    for name, version, sure in wanted:
+        if len(built) >= MOST_BUILT:
+            job.stop(f"more than {MOST_BUILT} of the project's libraries would have to be built from their source, "
+                     "and Lantern builds no more than that for one run")
+        words = f"{_library_words(name)} {version}"
+        if sure:
+            job.log(BUILDING.format(words=words, host=job.store.host))
+        got = _build(job, repo, name, version, len(built) + 1, sure)
+        if got is None:
+            return None
+        if got is False:
+            continue
+        if got == "":
+            job.stop(f"{_library_words(name)} was not found in the store ({job.store.host}) as a ready-built package "
+                     f"for this Python, and the store has no source package of version {version} to build it from")
+        built[_norm(name)] = {**got, "name": name, "version": version}
+        made += 1
+        job.log(f"sandbox: built {words} from {got['from']} (sha256:{got['source_sha256'][:12]}…)"
+                + (", with " + ", ".join(got["with"][:8]) if got["with"] else ""))
+    return made > 0
+
+
+def _for_pip(lines: list[str], built: dict) -> list[str]:
+    """The lines pip is given once libraries were built: a fingerprint written beside a library that was built
+    names its source, which Lantern compared itself (`_build`); pip is handed the built package's in its place."""
+    out = []
+    for line in lines:
+        got = _requirement(line) if "--hash=" in line else None
+        made = built.get(_norm(got[0])) if got else None
+        out.append(f"{got[2]} --hash=sha256:{made['sha256']}" if made else line)
+    return out
+
+
+def _fetch_python(job: _Fetch, repo: Path, app: Path) -> Path:
+    found, store = job.plan, job.store
+    pip = importlib.util.find_spec("pip")
+    if getattr(pip, "origin", None) is None:
+        job.stop("the Python that runs Lantern has no pip to fetch them with")
+    libs = job.root / "libs"
+    libs.mkdir()
+    wanted, report, keep = job.dir / "wanted.txt", job.dir / "fetched.json", job.dir / "versions.txt"
+    readable = [os.path.dirname(pip.origin), os.path.dirname(os.__file__)]
+    built: dict[str, dict] = {}         # the libraries built from their source in this fetch, by name (`_build`)
+    while True:
+        wanted.write_text("\n".join(_for_pip(found.lines, built)) + "\n", encoding="utf-8")
+        more = []
+        if found.constraints:
+            keep.write_text("\n".join(_for_pip(found.constraints, built)) + "\n", encoding="utf-8")
+            more += ["-c", str(keep)]
+        if built:                       # the packages Lantern built, beside the store's
+            more += ["--find-links", str(job.dir / "built")]
+        for system in found.platforms:
+            more += ["--platform", system]
+        # `--no-warn-conflicts`: pip otherwise compares what it fetched with the libraries installed in the Python
+        # it runs in (those beside Lantern, which the tests never run on) and writes each one that wants another
+        # version as an "ERROR" of the project's fetch.
+        job.hand_over(libs)
+        job.way_out()
+        rc, output, timed_out = job.run(_pip(job, libs, wanted, report, *more), job.dir, [job.dir, libs], readable)
+        if rc is None and not timed_out:
+            return None
+        if timed_out:
+            job.stop(f"the fetch was not through after {FETCH_SECONDS // 60} minutes")
+        if rc == 0:
+            break
+        # a library pip found no ready-built file of may be one to build: then pip is asked again
+        again = _build_what_pip_left(job, repo, output, built)
+        if again is None:
+            return None
+        if not again:
+            why, then = _not_built_for_here(output, found)
+            job.stop(why or _pip_failure(output, store, job.refused()), then)
+    rows = _reported(report)
+    if rows is None:
+        job.stop("pip did not say what it fetched")
+    packages = []
+    for row in rows:
+        name, version, digest = row["name"], row["version"], row["digest"]
+        made = built.get(_norm(name))
+        if urlsplit(row["url"]).scheme == "file":
+            if not made or digest != made["sha256"]:      # only what Lantern built lies on this computer
+                job.stop("pip took a file from this computer that is not a package Lantern built")
+            packages.append({"name": name, "version": version, "fingerprint": "sha256:" + digest, "file": made["file"],
+                             "asked": row["asked"], "exact": True, "checked": made["checked"],
+                             "built": {"from": made["from"], "source_fingerprint": "sha256:" + made["source_sha256"],
+                                       "with": made["with"]}})
+            continue
         named = found.locked.get(_norm(name), {}).get(version)
         if named and digest not in named:
             job.stop(f"the file the store handed out for {_library_words(name)} {version} is not one the project's "
                      "lock file names (its fingerprint differs)")
         packages.append({"name": name, "version": version, "fingerprint": "sha256:" + digest,
-                         "file": _plain(urlsplit(manifest.text(info.get("url"))).path.rsplit("/", 1)[-1], 200),
-                         "asked": bool(item.get("requested")), "exact": _norm(name) in found.pinned,
+                         "file": _plain(urlsplit(row["url"]).path.rsplit("/", 1)[-1], 200),
+                         "asked": row["asked"], "exact": _norm(name) in found.pinned,
                          # the fingerprint is one the project names: in its lock file, or beside its requirements
                          # (pip then takes no file whose fingerprint is not written there)
                          "checked": bool(named) or found.hashed})
     packages.sort(key=lambda p: _norm(p["name"]))
     found.record.update(state="fetched", store=store.host, packages=packages, added=found.added)
+    made = [p for p in packages if "built" in p]
+    found.record.pop("built", None)
+    if made:
+        found.record["built"] = len(made)
+    for p in made:
+        found.notes.append(f"{_library_words(p['name'])} {p['version']} is not in the store ready-built for this "
+                           f"system and was built from its source ({p['built']['from']}) in the sandbox, with the "
+                           "network off" + (f", with {', '.join(p['built']['with'][:8])}" if p["built"]["with"] else ""))
     return libs
 
 
@@ -1214,6 +1836,8 @@ def fetch(found: Plan, repo: Path, app: Path, root: Path, cwd_rel: str, log, can
         try:
             where = _fetch_python(job, repo, app)
         except sandbox.NoLibraries as e:
+            if getattr(e, "final", False):
+                raise                       # something of that fetch is still going: nothing is started beside it
             why = getattr(e, "why", "") or "the fetch did not go through"
             log(f"sandbox: with the optional libraries the fetch did not go through ({why}); fetching again without them")
             found.lines, found.asked, found.pinned = lines, asked, pinned
