@@ -8,7 +8,7 @@ nothing in it that it can look at itself: the fingerprint of the source, and the
 
 * `source`, the one step with a way out (through the doorkeeper, to the store): ask the store's page of the
   library for the source package of exactly the version the project fixes (`pick`) and save that file. Nothing in
-  the file is read.
+  the file is read. It also names the ready-built files the page has of that version (`ready`).
 * `unpack`, behind the walls of the tests' run like the two after it: unpack that file (`unpack`: plain files and
   folders beneath the one folder at its top, or nothing at all) and read in its `pyproject.toml` how it is built
   (`how`). No line of the library runs.
@@ -31,6 +31,7 @@ MOST_FILES = 20_000                 # the entries one source package may hold
 MOST_UNPACKED = 1 << 30             # the bytes it may hold once unpacked
 MOST_PAGE = 64 << 20                # the bytes of a store's page that are read
 MOST_TOOLS = 50                     # the tools a build may name
+MOST_READY = 500                    # the ready-built files of one version that are named back (`ready`)
 MOST_TOML = 4_000_000
 LEGACY = "setuptools.build_meta:__legacy__"         # the build of a source that names none (PEP 517)
 LEGACY_TOOLS = ["setuptools>=40.8.0"]
@@ -58,6 +59,28 @@ def _norm(name: str) -> str:
 _LINK = re.compile(r"""<a\s[^<>]{0,4000}?(?<![\w\-])href\s*=\s*(?:"([^"<>]{1,4000})"|'([^'<>]{1,4000})')""", re.I)
 
 
+def _links(page: str):
+    """(the address as the page writes it without what follows a `#`, what follows it, the file's name) of each
+    link of a store's page."""
+    for m in _LINK.finditer(page[:MOST_PAGE]):
+        place, _, mark = html.unescape(m.group(1) or m.group(2)).strip().partition("#")
+        yield place, mark, place.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+
+
+def ready(page: str, name: str, version: str) -> list[str]:
+    """The names of the ready-built files of exactly `version` of `name` on a store's page (`<name>-<version>-…
+    .whl`), the first `MOST_READY`: what the store has of that version without a build."""
+    want, found = _norm(name), []
+    for _, _, file in _links(page):
+        parts = file.split("-")
+        if file.lower().endswith(".whl") and len(parts) >= 5 and len(file) <= 300 and _norm(parts[0]) == want \
+                and parts[1].lower() == version.lower() and file not in found:
+            found.append(file)
+            if len(found) >= MOST_READY:
+                break
+    return found
+
+
 def pick(page: str, name: str, version: str) -> tuple[str, str] | None:
     """The source package of exactly `version` of `name` on a store's page of that library (PyPI's simple index):
     (its address as the page writes it, without what follows a `#`; the SHA-256 the page names for it, or "").
@@ -65,9 +88,7 @@ def pick(page: str, name: str, version: str) -> tuple[str, str] | None:
     way a store may write it (`Stage2_Mac`, `stage2-mac`). None when the page names no such file: not a
     ready-built file, not another version, not a library whose name begins the same, not a `.zip`."""
     want, tail = _norm(name), "-" + version.lower()
-    for m in _LINK.finditer(page[:MOST_PAGE]):
-        place, _, mark = html.unescape(m.group(1) or m.group(2)).strip().partition("#")
-        file = place.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+    for place, mark, file in _links(page):
         if not file.lower().endswith(".tar.gz"):
             continue
         stem = file[:-len(".tar.gz")]
@@ -274,9 +295,11 @@ def _source(given: dict) -> dict:
         status, page = _get(page_at, given["proxy"], given.get("cert", ""), MOST_PAGE)
         if status != 200:
             return {"state": "no-library" if status == 404 else "refused" if status == 403 else "unreachable"}
-        found = pick(page.decode("utf-8", "replace"), given["name"], given["version"])
+        text = page.decode("utf-8", "replace")
+        there = ready(text, given["name"], given["version"])
+        found = pick(text, given["name"], given["version"])
         if found is None:
-            return {"state": "no-source"}
+            return {"state": "no-source", "ready": there}
         digest = hashlib.sha256()
         with os.fdopen(os.open(given["into"], os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o644), "wb") as out:
             def sink(chunk: bytes) -> None:
@@ -286,7 +309,7 @@ def _source(given: dict) -> dict:
         if status != 200:
             return {"state": "too-large" if status == "large" else "refused" if status == 403 else "unreachable"}
         return {"state": "fetched", "file": found[0].split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1][:300],
-                "sha256": digest.hexdigest(), "bytes": size, "page_sha256": found[1]}
+                "sha256": digest.hexdigest(), "bytes": size, "page_sha256": found[1], "ready": there}
     except (OSError, ValueError) as e:      # no way to the store, or an answer that is none (`http.client`'s are OSError)
         refused = "403" in str(e) and "Tunnel" in str(e)
         return {"state": "refused" if refused else "unreachable"}

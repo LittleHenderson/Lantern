@@ -890,9 +890,9 @@ class _Fetch:
             raise sandbox.NoLibraries("the folder the project's libraries are fetched into could not be made "
                                       f"({e.strerror or type(e).__name__})") from e
         self.port, self.proxy = DOOR_PORT, f"http://127.0.0.1:{DOOR_PORT}"
-        self.open()
+        self.way_out()
 
-    def open(self) -> None:
+    def way_out(self) -> None:
         """The way out for the next fetching program: `proxy`. In a network of the fetch's own the launcher makes
         the doorkeeper there, for each program anew. Where the system gives a run none, the doorkeeper listens on
         this computer, and each `run` closes its own when its program ends: a fetch that builds a library fetches
@@ -983,8 +983,11 @@ class _Fetch:
                f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])",
                json.dumps(policy), "--", *cmd]
 
-        def said(line: str) -> None:        # every line is the build's own, whatever it begins with
-            if line.strip():
+        def said(line: str) -> None:
+            # Every line is taken as the build's own, whatever it begins with. The launcher's lines about its
+            # walls begin with "sandbox:" and are left out: Lantern said once which walls a build runs behind,
+            # and a build that writes such a line itself gains nothing by it.
+            if line.strip() and not line.startswith("sandbox:"):
                 self.log("sandbox: build: " + line[:300])
         left: list[str] = []
         output = ""
@@ -1104,7 +1107,7 @@ def _pip_failure(output: str, store: Store, refused: int) -> str:
 
 def _pip(job: _Fetch, target: Path, wanted: Path, report: Path, *more: str) -> list[str]:
     """pip's command line for one fetch into `target`: ready-built packages only, from the person's store, through
-    this fetch's doorkeeper (`job.open()` comes first)."""
+    this fetch's doorkeeper (`job.way_out()` comes first)."""
     cmd = programs.python("pip", "install", "--isolated", "--no-input", "--disable-pip-version-check", "--no-cache-dir",
                           "--only-binary=:all:", "--no-compile", "--no-warn-script-location", "--no-warn-conflicts",
                           "--progress-bar", "off",
@@ -1174,6 +1177,8 @@ _STEP_WHY = {
     "follow": "says how it is built in a form Lantern cannot follow",
     "outside-code": "names code for its build that lies outside its source",
 }
+BUILDING = ("sandbox: {words} is not in the store ({host}) ready-built for this system: building it from its source, "
+            "behind the walls the tests run behind and with the network off")
 _PACKAGE = re.compile(r"([A-Za-z0-9_.]+)-([A-Za-z0-9_.!+]+)(?:-\d[A-Za-z0-9_.]*)?-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+\.whl")
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
 
@@ -1266,19 +1271,29 @@ def _named_prints(found: Plan, name: str, version: str) -> set[str]:
     return named
 
 
-def _to_build(output: str, found: Plan) -> list[tuple[str, str]]:
-    """(name, version) of each library pip could not take that may be built from its source: one pip found no
-    ready-built file of, at the one version the project fixes; and, where pip's word is "conflicting
-    dependencies", one whose lock file lists that version as source and ready-built for other systems only."""
-    here = "Linux" if found.platforms or sys.platform.startswith("linux") else \
-        "macOS" if sys.platform == "darwin" else "Windows" if os.name == "nt" else ""
-    wanted: list[tuple[str, str]] = []
+def _here() -> str:
+    """The system the tests run on, as `_built_for` names systems."""
+    return "Linux" if sys.platform.startswith("linux") else "macOS" if sys.platform == "darwin" else \
+        "Windows" if os.name == "nt" else ""
 
-    def add(name: str, version: str) -> None:
-        if version and re.fullmatch(_NAME, name) and len(name) <= 60 and not any(_norm(n) == _norm(name) for n, _ in wanted):
-            wanted.append((name, version))
+
+def _to_build(output: str, found: Plan) -> list[tuple[str, str, bool]]:
+    """(name, version, sure) of each library pip could not take that may be built from its source. Sure: pip
+    found no ready-built file of it, at the one version the project fixes; or pip's word is "conflicting
+    dependencies" (what the project asks for against the version its lock file fixes, which names no cause) and
+    the lock file lists that version as source, and ready-built for other systems only. Not sure: that word,
+    about a library whose one version the project fixes in a lock file that lists no files (Pipenv's). Then the
+    store's own page says whether the version is there ready-built for this system, and it is built only when
+    not (`_build`)."""
+    here = "Linux" if found.platforms else _here()
+    wanted: list[tuple[str, str, bool]] = []
+
+    def add(name: str, version: str, sure: bool) -> None:
+        if version and re.fullmatch(_NAME, name) and len(name) <= 60 \
+                and not any(_norm(w[0]) == _norm(name) for w in wanted):
+            wanted.append((name, version, sure))
     for name in re.findall(r"No matching distribution found for ([^\s(<>=!~;\[]+)", output):
-        add(name, _fixed(found, name))
+        add(name, _fixed(found, name), True)
     m = re.search(r"Cannot install (.{1,2000}?) because these package versions have conflicting dependencies", output)
     for part in re.split(r",\s*|\s+and\s+", m.group(1)) if m else []:
         name = re.split(r"[\s(<>=!~;\[]", part.strip(), maxsplit=1)[0]
@@ -1287,7 +1302,9 @@ def _to_build(output: str, found: Plan) -> list[tuple[str, str]]:
             version, files = next(iter(versions.items()))
             systems, source = _built_for(files)
             if source and "any" not in systems and here not in systems and _fixed(found, name) == version:
-                add(name, version)
+                add(name, version, True)
+        elif not versions and len(found.locked.get(_norm(name), {})) == 1:
+            add(name, _fixed(found, name), False)
     return wanted
 
 
@@ -1328,7 +1345,7 @@ def _fetch_tools(job: _Fetch, here: Path, tools: Path, lines: list[str], words: 
         keep = here / "run" / f"held-{number}.txt"
         keep.write_text("\n".join(held) + "\n", encoding="utf-8")
         more = ["-c", str(keep)]
-    job.open()
+    job.way_out()
     cmd = _pip(job, tools, wanted, report, *more)
     pip = importlib.util.find_spec("pip")
     rc, output, timed_out = job.run(cmd, job.dir, [job.dir], [os.path.dirname(pip.origin), os.path.dirname(os.__file__)])
@@ -1349,13 +1366,15 @@ def _fetch_tools(job: _Fetch, here: Path, tools: Path, lines: list[str], words: 
     return names, hold
 
 
-def _build(job: _Fetch, repo: Path, name: str, version: str, number: int):
+def _build(job: _Fetch, repo: Path, name: str, version: str, number: int, sure: bool = True):
     """Build `name` at `version` from its source, in a folder of its own under the fetch's (the steps are named
     above `_STEP_WHY`). Returns what was built: `file` (the package, copied into the fetch's `built` folder),
     `sha256` (its fingerprint), `from` and `source_sha256` (the source package and its fingerprint), `with` (the
     tools), `checked` (the source's fingerprint is one the project names); "" when the store has no source
-    package of that version; None when the run was stopped because it was asked to. Anything else stops the
-    fetch, with the reason in Lantern's words (`job.stop`)."""
+    package of that version; None when the run was stopped because it was asked to; False where it is not `sure`
+    that the library has to be built (`_to_build`) and the store's page does not show it: the page names a
+    ready-built file of that version for this system, or no source of it. Anything else stops the fetch, with the
+    reason in Lantern's words (`job.stop`)."""
     found, store, sandbox = job.plan, job.store, job.sandbox
     words = f"{_library_words(name)} {version}"
     here = job.dir / "build" / str(number)
@@ -1375,7 +1394,7 @@ def _build(job: _Fetch, repo: Path, name: str, version: str, number: int):
     archive = here / "in" / "source.tar.gz"
 
     # -- the source package, from the store
-    job.open()
+    job.way_out()
     given = {"index": store.url, "name": name, "version": version, "into": str(archive), "most": MOST_SOURCE,
              "result": str(here / "res" / "source.json"), "proxy": job.proxy, "cert": str(job.cert) if job.cert else ""}
     rc, output, timed_out = job.run([sys.executable, "-I", "-S", str(script), "source", json.dumps(given)], here,
@@ -1386,6 +1405,13 @@ def _build(job: _Fetch, repo: Path, name: str, version: str, number: int):
         job.stop(f"the source package of {words} was not fetched after {FETCH_SECONDS // 60} minutes")
     said = _step_said(here / "res" / "source.json")
     state = said.get("state")
+    if not sure and state in ("fetched", "no-library", "no-source"):
+        there = said.get("ready")
+        systems = _built_for([f for f in there[:_builder.MOST_READY] if isinstance(f, str)])[0] \
+            if isinstance(there, list) else {"any"}
+        if state != "fetched" or "any" in systems or _here() in systems:
+            sandbox._rm(here)           # pip's word was about something else: nothing is built
+            return False
     if state in ("no-library", "no-source"):
         return ""
     if state == "too-large":
@@ -1434,6 +1460,8 @@ def _build(job: _Fetch, repo: Path, name: str, version: str, number: int):
         return _step_said(result)
 
     given = {"archive": str(archive), "into": str(here / "src")}
+    if not sure:
+        job.log(BUILDING.format(words=words, host=store.host))
     job.log(f"sandbox: build: unpacking {file}")
     said = step("unpack", [sys.executable, "-I", "-S"], ["src", "tmp", "res"], [str(script), stdlib])
     if said is None:
@@ -1527,28 +1555,37 @@ def _build_what_pip_left(job: _Fetch, repo: Path, output: str, built: dict):
     wanted = _to_build(output, found)
     again = [w for w in wanted if _norm(w[0]) in built]
     if again:
-        name, version = again[0]
-        job.stop(f"the package built for {_library_words(name)} {version} was not taken as that by pip (it says "
-                 "another name or version inside, or is not for this Python)")
+        name, version = again[0][:2]
+        words = f"{_library_words(name)} {version}"
+        missing = re.findall(r"No matching distribution found for ([^\s(<>=!~;\[]+)", output)
+        if any(_norm(m) == _norm(name) for m in missing) or "inconsistent" in output or "has an invalid wheel" in output:
+            job.stop(f"the package built for {words} was not taken as that by pip (it says another name or version "
+                     "inside, or is not for this Python)")
+        job.stop(_pip_failure(output, job.store, job.refused()) + f" ({words} was built from its source for this "
+                 "run, and pip could still not take it beside the rest)")
     if not wanted or cannot_build(found.platforms):
         return False
-    for name, version in wanted:
+    made = 0
+    for name, version, sure in wanted:
         if len(built) >= MOST_BUILT:
             job.stop(f"more than {MOST_BUILT} of the project's libraries would have to be built from their source, "
                      "and Lantern builds no more than that for one run")
         words = f"{_library_words(name)} {version}"
-        job.log(f"sandbox: {words} is not in the store ({job.store.host}) ready-built for this system: building it "
-                "from its source, behind the walls the tests run behind and with the network off")
-        got = _build(job, repo, name, version, len(built) + 1)
+        if sure:
+            job.log(BUILDING.format(words=words, host=job.store.host))
+        got = _build(job, repo, name, version, len(built) + 1, sure)
         if got is None:
             return None
+        if got is False:
+            continue
         if got == "":
             job.stop(f"{_library_words(name)} was not found in the store ({job.store.host}) as a ready-built package "
                      f"for this Python, and the store has no source package of version {version} to build it from")
         built[_norm(name)] = {**got, "name": name, "version": version}
+        made += 1
         job.log(f"sandbox: built {words} from {got['from']} (sha256:{got['source_sha256'][:12]}…)"
                 + (", with " + ", ".join(got["with"][:8]) if got["with"] else ""))
-    return True
+    return made > 0
 
 
 def _for_pip(lines: list[str], built: dict) -> list[str]:
@@ -1586,7 +1623,7 @@ def _fetch_python(job: _Fetch, repo: Path, app: Path) -> Path:
         # it runs in (those beside Lantern, which the tests never run on) and writes each one that wants another
         # version as an "ERROR" of the project's fetch.
         job.hand_over(libs)
-        job.open()
+        job.way_out()
         rc, output, timed_out = job.run(_pip(job, libs, wanted, report, *more), job.dir, [job.dir, libs], readable)
         if rc is None and not timed_out:
             return None
