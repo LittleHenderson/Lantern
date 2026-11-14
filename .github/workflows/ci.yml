@@ -74,6 +74,31 @@ jobs:
           sudo env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" "LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE" PYTHONDONTWRITEBYTECODE=1 \
             python -m pytest -q -rs -p no:cacheprovider tests/test_netguard.py | tee "$RUNNER_TEMP/second-pass.log"
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/second-pass.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
+      - name: The tests of a run's own network, a second time where an ordinary user may make one (in the pass above only Docker's container had one)
+        # A project's tests get a network of their own in the sandbox (lantern/_jail.py, 2026-11-13). Root makes it
+        # directly, an ordinary user through a user namespace, and GitHub's Linux machines refuse an ordinary user
+        # that (the first pass of commit 9e6696f said so: "this system does not let the tests have a network of
+        # their own (error 13)"). So in the pass above the restricted process fell back to refusing every address,
+        # which is what it must do there and what that pass tested, and a test's own server answered only in
+        # Docker's container: the launcher's own network was made nowhere in CI. This step takes the machine's rule
+        # against user namespaces for ordinary users away and runs the file again, as the ordinary user and with
+        # the computer's ordinary network (the guard in tests/conftest.py refuses and records every attempt, as it
+        # does everywhere). No test may be skipped: the test that needs the launcher's network is skipped where it
+        # cannot be made, which fails this step and names the reason. The rule is put back for the steps after.
+        env:
+          LANTERN_TESTS_COMPLETE: no-skips
+        run: |
+          set -o pipefail   # piped into tee, as above
+          rule=kernel.apparmor_restrict_unprivileged_userns
+          was=$(sysctl -n "$rule" 2>/dev/null || true)
+          echo "the machine's rule $rule: ${was:-not there}"
+          if [ -n "$was" ]; then sudo sysctl -w "$rule=0"; fi
+          python -c "from lantern import sandbox; print('a network of its own for an ordinary user here:', sandbox.own_network() or 'yes')"
+          status=0
+          python -m pytest -q -rs -p no:cacheprovider tests/test_sandbox_own_network.py | tee "$RUNNER_TEMP/own-network.log" || status=$?
+          if [ -n "$was" ]; then sudo sysctl -w "$rule=$was"; fi
+          [ "$status" -eq 0 ] || exit "$status"
+          grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=no-skips' "$RUNNER_TEMP/own-network.log" || { echo "::error::The rule this step sets did not reach the tests: the last lines of the run do not name it"; exit 1; }
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
         run: python tools/netguard/lantern_netguard.py --allow pypi.org,registry.npmjs.org,api.osv.dev -- lantern analyze . --out /tmp/self --fail-on medium

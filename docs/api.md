@@ -72,8 +72,8 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 | `GET /api/projects/<id>/explanation?node=<id>` | | `{"record": explanation record or null, "metaphor": {"world", "roles"}}` |
 | `POST /api/projects/<id>/accept` | `{"finding": id, "reason": "≥10 letters, two words", "by": name}` or `{"finding", "remove": true}` | job (202): writes `lantern-accepted.json` in the repo and re-analyzes. A weak reason → 400 |
 | `POST /api/projects/<id>/cmd` | `{"argv": ["analyze", "--offline"]}` | The terminal drawer. job (202) whose log the drawer prints. `argv` is a list of strings (never a shell line; at most 64 items). Allowed: `analyze [--offline] [--no-scan] [--privacy]`, `trace [--] TEST COMMAND` (through the test sandbox; typing it counts as the confirmation), `explain [--node ID…] [--depth N] [--max-nodes N]`, `report [--privacy]`, `verify [--report FILE]`, `accept ID --reason "…" [--by]` / `accept ID --remove` (same reason check as the UI), `packs`, `export [--sarif FILE]` (default `.lantern/findings.sarif`), `learn [--check]`; a leading `lantern` is dropped. `--out` is always the project's `.lantern/`; path arguments must resolve inside the project. Anything else → 400 `{"error", "allowed": [...], "help"}`. Token and Host checks as on every write |
-| `GET /api/projects/<id>/testcmd` | | The command the "Watch my tests run" sheet shows first: `{"command", "how", "language": "python\|node\|go\|rust\|java", "supported", "traced", "note", "cwd"?, "sandbox": {"name": "docker\|subprocess", "label", "image", "details": [lines]}, "leaves", "confirmed"}`. `details` lists the walls this computer's sandbox has (fewer on macOS and on a Linux kernel without Landlock); its last line says that the tests are not run when any of them cannot be set up. `traced` is true for Python only ("Tests run; your map upgrades for Python only for now") |
-| `POST /api/projects/<id>/trace` | `{"command": "python -m pytest -q", "confirm": true}` | job (202). Only test runners (`sandbox.check_command`; anything else → 400). The first run of a command for a project needs `confirm: true` (409 otherwise); later runs of the same command do not. Runs in `lantern/sandbox.py` and re-analyzes; the job result is `{"returncode", "observed", "recall", "backend", "language", "traced", "timed_out", "blocked": [{"kind": "write\|network", "what"}], "ran", "unavailable", "cancelled", "not_ended", "note", "score_before", "score_after", "summary"}`. `ran` false + `unavailable` (a sentence, always Lantern's own words): the sandbox could not be set up on this computer, so the tests were **not run**; the job still ends `done`, because everything that only reads the code was checked: `returncode` is null and `observed` 0, the score's "Tests pass" check is `skip` (not `fail`), and the Evidence Report names no test command. `cancelled`: the person stopped the tests (below); the job ended there, **no result file was written** (the project shows what its last finished check found, `score_after` equals `score_before`, `summary` is null). `returncode` null with `timed_out`: stopped at the 10-minute wall clock (the check goes on and "Tests pass" is `fail`). Whatever way a test run ends, every process it started is ended too; `not_ended` lists, in Lantern's own words, anything that could not be (normally `[]`; the page then says so and never says beside it that everything was ended) |
+| `GET /api/projects/<id>/testcmd` | | The command the "Watch my tests run" sheet shows first: `{"command", "how", "language": "python\|node\|go\|rust\|java", "supported", "traced", "note", "cwd"?, "sandbox": {"name": "docker\|subprocess", "label", "image", "details": [lines]}, "minutes", "minutes_range": [1, 240], "memory_mb", "memory_range": [128, 1048576], "leaves", "confirmed"}`. `details` lists the walls this computer's sandbox has (fewer on macOS and on a Linux kernel without Landlock; since 2026-11-13 they say whether the tests get a network of their own, in which they may start a server and call it, and how long and how much memory they get); its last line says that the tests are not run when any of them cannot be set up. `minutes` and `memory_mb` (since 2026-11-13) are what a run started now would get: what the person last set in the sheet, else what the installation says (`LANTERN_TEST_MINUTES`, `LANTERN_TEST_MEMORY_MB`), else 10 minutes and 2048 MB; the two ranges are what the sheet's fields (`#testmin`, `#testmem`) may hold. `traced` is true for Python only ("Tests run; your map upgrades for Python only for now") |
+| `POST /api/projects/<id>/trace` | `{"command": "python -m pytest -q", "confirm": true, "minutes"?: 1…240, "memory_mb"?: 128…1048576}` | job (202). `minutes` and `memory_mb` (since 2026-11-13) are how long the tests may take and how much memory they and everything they start may have in use; a value that is no whole number in its range → 400 (never quietly another number); one that is given is remembered for the next run (settings `test_minutes`, `test_memory_mb`), one left out means the last one set, else the installation's, else 10 minutes and 2048 MB. Only test runners (`sandbox.check_command`; anything else → 400). The first run of a command for a project needs `confirm: true` (409 otherwise); later runs of the same command do not. Runs in `lantern/sandbox.py` and re-analyzes; the job result is `{"returncode", "observed", "recall", "backend", "language", "traced", "timed_out", "time_limit", "over_memory", "memory_limit", "blocked": [{"kind": "write\|network\|read", "what"}], "ran", "unavailable", "not_run_for", "libraries", "off_network", "cancelled", "not_ended", "note", "score_before", "score_after", "summary"}`. `blocked[].kind` (since 2026-11-13 also `read`: the tests reached for one of the person's own folders, which the sandbox closes to a Python or JavaScript run on Linux). `libraries` (since 2026-11-13): what the tests ran on, `{"state": "fetched\|installed\|none", "store", "count", "exact"}` (fetched for this run from the store named, with how many libraries and whether every version was the project's own choice; the ones installed on this computer, when the check was offline; or none, when the project names none), null when there is no such record; the libraries themselves are in `run.json`. `off_network` (since 2026-11-14): true when this run's own walls kept the tests from the network, false when they did not (tests that are not Python on macOS and Windows, where Lantern's guard is inside Python only; the run's log says why), null for a run that does not say (one before that date, or one that did not run); the page says "with the network off" only for true, and for false that the tests were not kept from the network by this run. `ran` false + `unavailable` (a sentence, always Lantern's own words): the sandbox could not be set up on this computer, or (`not_run_for: "libraries"`, since 2026-11-13) the libraries the project names could not be had for the tests, so the tests were **not run**; the job still ends `done`, because everything that only reads the code was checked: `returncode` is null and `observed` 0, the score's "Tests pass" check is `skip` (not `fail`), and the Evidence Report names no test command. `cancelled`: the person stopped the tests (below); the job ended there, **no result file was written** (the project shows what its last finished check found, `score_after` equals `score_before`, `summary` is null). `returncode` null with `timed_out`: stopped at the time limit (`time_limit`, the seconds the tests had); `returncode` null with `over_memory`: stopped because the tests, with what they started, had more memory in use than `memory_limit` megabytes. Either way the tests did not finish, which is no pass and no failure: the check goes on, "Tests pass" is `skip` with `required: true` (its points stay in the sum and earn none; until 2026-11-13 a run stopped by the clock read `fail` there) and the release decision is Incomplete, with the way to give the tests more time or memory. Whatever way a test run ends, every process it started is ended too; `not_ended` lists, in Lantern's own words, anything that could not be (normally `[]`; the page then says so and never says beside it that everything was ended) |
 | `POST /api/jobs/<id>/stop` | `{}` | Ends a running test run: the tests and every process they started. Returns the job (`stopping: true`); the job then ends `done` with `result.cancelled` true and no result file changed (`pipeline.Stopped`). 404 for an unknown job, 400 for a job that cannot be stopped part-way (`can_stop` false), 403 without the app's token. Asking again, or after the job has ended, changes nothing |
 | `POST /api/projects/<id>/starter` | `{"name": "Dockerfile"}` | `{"ok", "wrote"}`; never overwrites |
 | `GET /api/projects/<id>/learn` | | Starter progress: `{"steps": [{"title", "done", …}]}` |
@@ -91,7 +91,7 @@ code is sent). The `anthropic` row (the default, `providers.DEFAULT_PROVIDER`; H
 
 | Route | Body / returns |
 |---|---|
-| `POST /api/settings` | `{"provider", "model", "base_url", "privacy": "full"\|"structure", "view_mode"?: "simple"\|"advanced", "backdrop"?: "off"\|"subtle"\|"bold", "share_usage"?: bool, "key"?, "remember"?: bool, "forget_key"?: true}` (fields left out keep their saved values; an unknown `view_mode` is saved as `simple`) → `{"settings", "providers"}` |
+| `POST /api/settings` | `{"provider", "model", "base_url", "privacy": "full"\|"structure", "view_mode"?: "simple"\|"advanced", "backdrop"?: "off"\|"subtle"\|"bold", "share_usage"?: bool, "key"?, "remember"?: bool, "forget_key"?: true}` (fields left out keep their saved values; an unknown `view_mode` is saved as `simple`; the saved settings also hold `test_minutes` and `test_memory_mb`, written by `POST …/trace` and kept only as whole numbers in their ranges) → `{"settings", "providers"}` |
 | `GET /api/allowance` | `{"available": bool, "used_requests", "limit_requests", "remaining_requests", "remaining_today", "used_tokens", "limit_tokens"}` |
 | `GET /api/usage` | `{"enabled": bool, "gateway": bool, "where", "why", "pending": [the pings that would be sent now], "features": [the whole vocabulary], "text"}`. `gateway`: the counts can be sent now. `where`: the address they are posted to, or null. `why`: null, or one fixed sentence saying why none is sent (the gateway address is not https, holds a name or a password, …, or real providers are switched off); it never repeats the address. `text`: what `lantern usage --show` prints, with how the last try ended |
 | `GET /api/packs?project=<id>` or `?all=1` | `{"packs": [{"name", "version", "source": "builtin"\|"project"\|"user", "rules": n, "entry_patterns": n, "path", "enabled": bool, "active": bool\|null, "about"}]}`. Built-in and user packs always; the project's own `lantern-packs/*.json` when `project` is given, or every listed project's with `all=1` (what Settings → Analysis packs shows; a name is listed once). `active`: its `requires` match that project (null without a project). Python web and TypeScript web are the engine, not packs, and are not listed |
@@ -176,7 +176,11 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   still on the map. The calls written in such a piece are not on the map. The run's log has a line
   `deep    <n> pieces of code nested deeper than Lantern follows were not read to the end (<files>)`, the Evidence
   Report's Limits name the files and the readers; `lantern/deep.py`. Until then such a piece ended the run with
-  `maximum recursion depth exceeded` and no result file).
+  `maximum recursion depth exceeded` and no result file. `too_deep.slow`, only when there is one =
+  `{count: n, files: [path, …], readers: [reader, …], seconds: 20}`: the files a parser was not through with in the
+  seconds it gets for one file (`deep.PARSE_SECONDS`; the first 40 by name). Such a file is on the map as a file and
+  nothing written in it is; the log's `deep` line and the Limits say so. Only the Dart reader's parser has such a
+  limit so far).
 * JavaScript `via` values added in stage 3 (2026-11-09): `require-call` (`require('./x')(...)`), `route-handler` and
   `middleware` (a function handed to an Express router by name: resolved when it is named straight from a module,
   inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),
@@ -456,7 +460,9 @@ path that was not found lowers no rank),
 `test_file_in_use` (true on a finding in a file named like a test that a page, route or command outside the test
 files runs through links Lantern worked out: it is then the app's code, `in_tests` is false and it is ranked like
 any other), `test_file_guessed` (true where only a guess by method name leads from the app into the test file: it
-stays test code and the reason says so), `ui_path` (node ids from a
+stays test code and the reason says so), `test_file_stood_in` (true where only the recording of the project's own
+test run leads from the app into the test file, a call to a stand-in, a callback or a double that a test handed
+the app: it stays test code, as it is with no test run, and the reason says so), `ui_path` (node ids from a
 page, or null), `input` (null, `false`, or `{"via": "parameter `name`"}`; when a flow was followed to the line,
 `{"via": <the words of the flow's first step>, "flow": true}`), `flow` (optional, `flowscan.py`: request data followed
 to this line across functions and files, on a `lantern-flow` finding or attached to another tool's finding for the same
@@ -513,8 +519,9 @@ shown, also show `title` as "<tool> says: …"), `scenario` (`{"kind", "who", "s
 `version` (2 since 2026-11-11), `score`, `grade`, `checklist`, `release`, `shape`, `stack` (`{frameworks, …}`),
 `categories` (`[{key, title, weight, score, percent, checks: [{id, title, points, earned, status:
 pass|fail|partial|skip, evidence, fix, how, required?}]}]`; a skipped check leaves the sum, except one with
-`required: true`: the release needs it and the work was not done (the tests were not run, listed libraries were not
-looked up), so its points stay in the sum and it earns none), `next_steps` (the
+`required: true`: the release needs it and the work was not done (the tests were not run, or, since 2026-11-13, were
+stopped at their time or memory limit: `tests-pass` then says "not finished: …" where it said `fail` for the clock
+before; listed libraries were not looked up), so its points stay in the sum and it earns none), `next_steps` (the
 highest-gain failed checks, with `gain` and `category`), `protections` (`[{id, title, status: add|check|in place, why,
 evidence, found, how}]`; for `rate-limit` (`lantern/ratelimit.py`) `in place` means every route in question shows a
 limit that covers it (on the route, or put on the app before the route in the same file), `check` that a limit exists
@@ -571,8 +578,9 @@ looked up, or the project lists libraries of a kind Lantern has no check for yet
 Swift, C and C++, or software copied into a `vendor` folder was not looked up (`copied-audit`: offline, or files with
 no name and version); `not-applicable` and not required where the project lists none and holds no such copy), `tests` (passed only when the
 project's tests ran in this check and ended with 0; failed when they ended with anything else; missing when the
-project has none, they were not run, the sandbox could not be set up or stopped them, or it refused something they
-tried), `behaviour` (not required where the project has no `lantern-behaviour.json`; else passed only when
+project has none, they were not run, the sandbox could not be set up or stopped them, it refused something they
+tried, or they ended with an error in a run where the libraries the project names as optional could not be had and
+were left out, `trace.libraries.optional.fetched: false`), `behaviour` (not required where the project has no `lantern-behaviour.json`; else passed only when
 `behaviour.json` carries this computer's seal, is of this plan and this code, and every case held; failed when a
 case came out broken). `blocking` and `missing` name the required criteria in those states. `bound_to` is what the
 decision is about: `code.sha256` is one SHA-256 over every file of the project by path and content (the folders no
@@ -614,7 +622,12 @@ and otherwise ends in `blocked` or `incomplete`), `architecture`,
 `security` (`open`, `accepted`, `fixed`, `changed`, `in_tests`, `protections`, `incomplete`: `[{tool, state, status,
 why, role, version}]`, the scanners that did not finish or did not cover everything; while it is not empty the memo, a
 notice under the tiles and the badge say `scan incomplete`, and the badge is never green), `understanding`,
-`provenance` (`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs), `limits`
+`provenance` (`tools` with each scanner's `state` and `status`, `models`, `rules`, including analysis packs, and
+since 2026-11-13 `libraries`: the libraries the project's tests ran on, taken from `run.json` by shape,
+`{state: "fetched"|"installed", store, exact, checked, left_out, above, packages: [{name, version, exact, checked,
+fingerprint}], optional_left?}`, or null when no test run is in the results or the tests ran on no library; the page lists them
+under "Libraries the tests ran on"; `optional_left` is there only when optional libraries were left out of the fetch,
+`{groups: [<name>, …], more}` with names of the form a tool writes only, and the Limits then carry a line for it), `limits`
 (strings: what the report does not prove; one line per incomplete scanner; one line per kind of project for the
 dependency entries that were not checked because they have no exact version, whatever state that audit ended in; one
 line when the baseline in the results folder could not be used, in which case `scorecard.before`, `baseline_date` and
@@ -677,8 +690,40 @@ of the work this run took from `LANTERN_HOME/cache` and how much it worked out a
 `kept    bandit: 1 from kept work, 0 anew; python-file: 2788 from kept work, 0 anew`; it is about the run, like its
 timings, and in no other result file, and a run with `LANTERN_CACHE=off`, a `lantern verify` and a cloud run have
 none; `trace`, when a test command was asked for = `{command, returncode, observed_edges, recall, stderr_tail,
-backend, language, traced, timed_out, blocked, not_ended, ran}`, or `{command, ran: false, unavailable: "<why>",
-returncode: null, observed_edges: 0, …}` when the sandbox could not be set up and the tests were not run;
+backend, language, traced, timed_out, blocked, not_ended, ran}` and, since 2026-11-13, `time_limit` (the seconds the
+tests had: in the sandbox what was set, else 600; on the command line without `--sandbox` what `--test-minutes`
+says, else 900), `over_memory` (true when the sandbox stopped the tests for their memory), `memory_limit` (the
+megabytes they had in the sandbox) and `own_network` (true when the tests ran in a network of their own, which
+holds this computer's own address and nothing else: there a test may start its app's server and call it), and,
+since stage 2 of "a firm pass or fail" (the same day), `own_sockets` (true when every connection of the tests'
+programs was made for them by the sandbox's doorman, so that a program that is not Python reached no socket file
+outside the run's own folders), since 2026-11-14 `off_network` (true when the run's own walls kept the tests from
+the network: a container, a network of the run's own, Python's tests through the guard, or any other program
+where something below Python holds it, `sandbox.held_below_python`; false for tests that are not Python where
+nothing does, which is macOS and Windows, and a run inside another sandbox whose doorman makes the connections;
+a run before that date has no such entry, which says nothing either way) and `libraries`, what the tests ran on: `{state: "none"}` when the project names no
+library, `{state: "installed"}` when the check was offline and every library named is on this computer, else
+`{state: "fetched", language, store, packages: [{name, version, fingerprint, file, asked, exact, checked}], added,
+notes, exact, checked, reached, refused, walls, locked?, above?, optional?}`: `store` is the host the libraries were fetched
+from, each package has the fingerprint of the file that was fetched (`sha256:<hex>` for Python, npm's
+`sha512-<base64>` for JavaScript), `asked` says the project names it itself, `exact` that its version was the
+project's own choice (an `==` pin or a lock file, named in `locked`) and `checked` that the fingerprint is one the
+project names; at the top `exact` is true when every version was, `checked` counts the fingerprints the project
+names, `added` is what Lantern asked for itself (the test runner), `notes` are Lantern's own sentences about what it
+passed over or did not do (an option of pip's it does not take, the libraries the project names as optional and
+whether they were fetched too or left out, install scripts that were not run, a `package.json` with no lock file), `reached` and `refused` are the places the
+fetch reached and how many it was refused, `walls` says what held the fetch to its doorkeeper (`own-network`, `port-rule` or `told`: `lantern/libraries.py`;
+`told` also inside a sandbox whose doorman makes every connection for what runs in it, where no rule of the run's own decides),
+`optional` (Python, since 2026-11-14, only where the project names libraries under an extra or a group that is not one for tests)
+is `{groups: [<name>, …], more: <how many names are not of the form a tool writes>, fetched: true|false, why?}`: `true` when they
+were fetched beside the rest, `false` when they were left out and the tests ran on what the project always needs: the fetch with
+them did not go through, or they were not asked for (the project writes fingerprints beside its libraries, or one of them names
+another store, a link or a folder); `why` is Lantern's sentence for it,
+and `above` counts the `node_modules` folders above the run's own folder, which Node looks in too; or `{command,
+ran: false, unavailable: "<why>", returncode: null, observed_edges: 0, …}` when the sandbox could not be set up
+and the tests were not run, with `not_run_for: "libraries"` when the sandbox was there and the libraries the
+project names could not be had (`<why>` then says which library or file; nothing is fetched from a store, a link
+or a folder that the project names itself);
 `lantern.trace.counted` says whether anything of the run is in the results; tests the person stopped leave no record,
 because a stopped run writes no file), `baseline.json` (first-run findings for "fixed since"),
 `cache/` (explanation cache).

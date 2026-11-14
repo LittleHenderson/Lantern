@@ -99,6 +99,19 @@ def test_a_high_finding_no_path_was_found_to_blocks_too(tmp_path):
     assert rel["decision"] == "Blocked" and "1 high" in rel["words"], rel["words"]
 
 
+def test_a_finding_with_no_line_is_named_by_its_file_alone():
+    """A known problem in a library is found in a lock file, at no line. Until 2026-11-13 the decision's words
+    said "at uv.lock:None" for it (seen on the first public project a link was run from)."""
+    def words(**where):
+        return release._findings({"findings": [{"id": "x", "rule": "PYSEC-0000-1", "rank": "high", **where}]})["why"]
+
+    assert "PYSEC-0000-1 in uv.lock" in words(file="uv.lock", line=None)
+    assert "PYSEC-0000-1 in uv.lock" in words(file="uv.lock")
+    assert "None" not in words(file="uv.lock", line=None) + words(file="uv.lock") + words(file=None, line=None)
+    assert words(file=None, line=None).endswith("PYSEC-0000-1")
+    assert "PYSEC-0000-1 at app.py:7" in words(file="app.py", line=7)          # the twin with a line, as before
+
+
 def test_a_finding_the_project_accepted_with_a_reason_does_not_block_and_is_named(tmp_path):
     g = build_graph(_write(tmp_path, BROKEN))
     fid = next(f["id"] for f in scan(g, offline=True)["findings"] if f["rule"] == "B602")
