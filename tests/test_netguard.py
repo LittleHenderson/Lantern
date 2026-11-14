@@ -1067,13 +1067,13 @@ def test_a_marked_test_names_its_try_where_the_runner_reads_it(tmp_path, monkeyp
                   ("anything", "192.0.2.1", 80, "x"), ("connect", "192.0.2.1", "80", "x")):
         with pytest.raises(ValueError):
             conftest.name_a_try(*wrong, path=str(path))
-    # which tests are marked: the sandbox's JavaScript twin, and no other
+    # which tests are marked: the sandbox's JavaScript twin and the hostile build's two calls, and no other
     marked = {}
     for f in sorted((ROOT / "tests").glob("test_*.py")):
         text = f.read_text(encoding="utf-8")
         if f.name != "test_netguard.py" and "pytest.mark.tries_outside(" in text:
             marked[f.name] = text.count("pytest.mark.tries_outside(")
-    assert marked == {"test_sandbox_own_network.py": 1}, marked
+    assert marked == {"test_library_build.py": 2, "test_sandbox_own_network.py": 1}, marked
 
 
 def _being_recorded() -> bool:
