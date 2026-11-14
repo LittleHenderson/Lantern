@@ -533,8 +533,11 @@ def test_on_windows_the_program_that_ends_a_tree_is_found_the_same_way(tmp_path,
 STARTERS = {"run", "Popen", "call", "check_call", "check_output", "run_bounded", "run_tool", "_tool_version", "_stream",
             "system", "popen", "startfile", "execv", "execve", "execvp", "execvpe", "spawnv", "spawnvp"}
 # A Python program started with the current folder first, on purpose: the project's own tests, in the project's
-# folder, inside the sandbox ("Watch my tests run") or at the person's own command (`lantern trace`).
-ON_PURPOSE = {("lantern/sandbox.py", "lantern.tracehook"), ("lantern/trace.py", "lantern.tracehook")}
+# folder, at the person's own command (`lantern trace`). The sandbox ("Watch my tests run") no longer does
+# (2026-11-13): it starts the recorder with -P, and the recorder then puts the current folder on the path itself,
+# so a project file named like the recorder, or a project folder named `lantern`, is not run in its place
+# (`tests/test_libraries_run.py`).
+ON_PURPOSE = {("lantern/trace.py", "lantern.tracehook")}
 
 
 def _bare(e) -> bool:

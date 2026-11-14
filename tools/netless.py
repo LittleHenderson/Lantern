@@ -15,11 +15,20 @@ Linux machines) ignores it.
 `strace` program must be installed). FILE gets one JSON object: the addresses outside this computer, each with the
 program that tried it. With --watch the result is 4 when the command succeeded and something tried the outside.
 
+A try made on purpose. A test of Lantern's sandbox starts a program that is not Python and has it call an address
+outside, to see the kernel refuse the call; nothing can refuse that before the operating system records it. Such a
+test names the try before it makes it: --watch gives the command a file's place in LANTERN_NETLESS_ON_PURPOSE, and a
+line `{"kind": "connect", "address": "192.0.2.1", "port": 80, "why": "..."}` there (tests/conftest.py writes it for
+`@pytest.mark.tries_outside(...)`) keeps that try apart, under `on_purpose` in FILE and in what is printed. It is
+kept apart only when the very try was named (kind, address and port), the address is one kept for examples (RFC 5737,
+RFC 3849: no computer has one) and the kernel refused it; anything else that was tried still gives 4.
+
 Result: the command's own; 2 when this was called wrongly; 3 when this system cannot do it.
 """
 from __future__ import annotations
 
 import collections
+import ipaddress
 import json
 import os
 import re
@@ -39,6 +48,12 @@ USAGE = "usage: python tools/netless.py [--watch FILE] -- COMMAND [ARGUMENT...]\
 CLONE_NEWUSER, CLONE_NEWNET = 0x10000000, 0x40000000
 SIOCGIFFLAGS, SIOCSIFFLAGS, IFF_UP = 0x8913, 0x8914, 0x1
 WITH_SUDO = 'sudo env "PATH=$PATH" "HOME=$HOME" python tools/netless.py -- COMMAND'
+
+
+ON_PURPOSE = "LANTERN_NETLESS_ON_PURPOSE"       # for the command: the file its tests name their on-purpose tries in
+KINDS = ("connect", "send", "lookup")          # what a test may name (a forwarding proxy is never tried on purpose)
+REFUSED = ("EACCES", "EPERM", "ENETUNREACH", "EHOSTUNREACH")   # the kernel said no, there and then
+EXAMPLES = tuple(ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32"))
 
 
 class Cannot(Exception):
@@ -191,30 +206,83 @@ def summarize(trace_path: str, forwarder_ports=()) -> dict:
             "services_on_this_computer_with_their_own_way_out": dict(services)}
 
 
+def for_examples(address: str) -> bool:
+    """An address kept for examples (RFC 5737, RFC 3849): no computer has one."""
+    try:
+        a = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(a.version == n.version and a in n for n in EXAMPLES)
+
+
+def named(path: str) -> list:
+    """The tries the run's tests named as made on purpose: one JSON object a line, `kind` (one of KINDS), `address`,
+    `port` and `why`. A line that is anything else names no try."""
+    out = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(d, dict) and d.get("kind") in KINDS and isinstance(d.get("address"), str)
+                and type(d.get("port")) is int and isinstance(d.get("why"), str) and d["why"].strip()):
+            out.append({"kind": d["kind"], "address": d["address"], "port": d["port"], "why": d["why"].strip()})
+    return out
+
+
+def sort_out(outside: list, names: list) -> tuple:
+    """(what was tried and nobody named, what a test tried on purpose). A try is one made on purpose only when a
+    test named that very try (kind, address and port), the address is one kept for examples, and the kernel refused
+    it: a try that got through, or whose end the record does not show, counts like any other."""
+    why = {(n["kind"], n["address"], n["port"]): n["why"] for n in names}
+    left, meant = [], []
+    for e in outside:
+        key = (e["kind"], e["address"], e["port"])
+        if key in why and for_examples(e["address"]) and e["result"] in REFUSED:
+            meant.append({**e, "why": why[key]})
+        else:
+            left.append(e)
+    return left, meant
+
+
 def watched(command: list, out_path: str, forwarder_ports) -> int:
     strace = shutil.which("strace")
     if not strace:
         raise Cannot("--watch needs the strace program (Debian/Ubuntu: apt-get install strace)")
     folder = tempfile.mkdtemp(prefix="netless-")       # the raw record holds the first bytes of what programs sent each
     raw = os.path.join(folder, "trace")                # other on this computer: private, and removed below
+    names = os.path.join(folder, "on-purpose")         # where the command's tests name the tries they make on purpose
     try:
+        with open(names, "w", encoding="utf-8"):
+            pass
         child = subprocess.Popen([strace, "-f", "-qq", "--seccomp-bpf", "-s", "64", "-o", raw, "-e", f"trace={TRACED}",
-                                  "--", *command])
+                                  "--", *command], env={**os.environ, ON_PURPOSE: names})
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda number, _frame: child.send_signal(number))
         code = child.wait()
         summary = summarize(raw, forwarder_ports)
+        summary["outside"], summary["on_purpose"] = sort_out(summary["outside"], named(names))
     finally:
         shutil.rmtree(folder, ignore_errors=True)
     summary["command"], summary["result"] = command[:8], code
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=1)
-    outside = summary["outside"]
+    outside, meant = summary["outside"], summary["on_purpose"]
     sys.stderr.write(f"netless: {summary['connections_on_this_computer']} connections stayed on this computer, "
                      f"{sum(e['count'] for e in outside)} attempts to reach outside it (none can succeed here), "
-                     f"{summary['checks_that_there_is_no_route']} checks that there is no route\n")
+                     f"{summary['checks_that_there_is_no_route']} checks that there is no route"
+                     + (f"; {sum(e['count'] for e in meant)} more that a test made on purpose, for an address no "
+                        "computer has, and the kernel refused" if meant else "") + "\n")
     for e in outside:
         sys.stderr.write(f"  {e['count']}x {e['kind']} {e['address']}:{e['port']} ({e['result'] or '?'})   by: {e['program']}\n")
+    for e in meant:
+        sys.stderr.write(f"  on purpose: {e['count']}x {e['kind']} {e['address']}:{e['port']} ({e['result']})   "
+                         f"by: {e['program']}   why: {e['why']}\n")
     return code if code or not outside else 4
 
 
