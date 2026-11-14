@@ -5,6 +5,7 @@ Read the files in this order:
 
 | File | What it gives you |
 |---|---|
+| [`CURRENT_STATE.md`](CURRENT_STATE.md) | **Start here.** The commit to audit, what is released and live, what changed since the last outside audit, measured results with every miss, known open problems, where to look hardest |
 | [`README.md`](README.md) (this file) | Setup, the one-command check, scope, how to report, and a ready-to-paste prompt for an auditing LLM |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | How the pieces fit: pipeline, modules, data files and their fields, invariants the code must keep |
 | [`CLAIMS.md`](CLAIMS.md) | Every product claim, the evidence for it, and how to try to falsify it |
@@ -17,12 +18,15 @@ The product spec is [`../Lantern_Product_Spec_v0.4.pdf`](../Lantern_Product_Spec
 
 ## What Lantern is, in one paragraph
 
-Lantern reads a full-stack app (Python backend, TypeScript/JavaScript frontend), builds a call graph with a
-confidence level on every edge, links frontend HTTP calls to the backend routes that serve them, runs security
-scanners and ranks each finding by whether a user can reach it, grades deployment readiness 0–100, and writes a
-commit-pinned Evidence Report with a results digest anyone can re-check. A model of the user's choice (their own key,
-or a local model) only writes plain-language explanations, and every phrase must anchor to real code or it is
-rejected. It runs locally: `lantern serve` opens a browser app; every feature also has a command.
+Lantern reads a full-stack app (13 languages, phone apps included), builds a call graph with a confidence level on
+every edge, links frontend HTTP calls to the backend routes that serve them, runs security scanners and its own rules,
+follows request data across functions (Python and TypeScript/JavaScript), ranks each finding by who can reach it,
+grades deployment readiness 0–100, makes a release decision (Blocked / Incomplete / Passed) that the score cannot
+speak over, can run the project's tests and its app in a sandbox, and writes a commit-pinned Evidence Report with a
+results digest anyone can re-check. A model of the user's choice only writes plain-language explanations, and every
+phrase must anchor to real code or it is rejected. It runs locally (`lantern serve` opens a browser app; every
+feature also has a command), and as a hosted website (`cloud/`) that reads code and never runs it, with a gateway
+(`gateway/`) for sign-in and a free model allowance.
 
 ## Setup (about 2 minutes)
 
@@ -35,7 +39,7 @@ pip install -e ".[scan,dev]"
 Optional, for browser tests: Node 18+ and `npm i -g playwright && npx playwright install chromium`.
 No API key is needed: `tools/fake_model.py` is an offline OpenAI-compatible model for end-to-end runs.
 
-To audit a specific commit, check it out (`git checkout <commit>`) and read this folder there: these six files are
+To audit a specific commit, check it out (`git checkout <commit>`) and read this folder there: these seven files are
 the whole audit package, and the source is the repository itself. No separate packet or source bundle is produced.
 
 ## The one-command check
@@ -59,8 +63,10 @@ In scope: everything under `lantern/`, `tools/`, `tests/`, the CI workflow, and 
    server, key handling. See `THREAT_MODEL.md`.
 4. **Usability**: can a non-expert install it, analyze their app, and understand the result?
 
-In scope since 2026-11-03: the cloud service (`cloud/`, THREAT_MODEL T7, CLAIMS C1–C7). Out of scope: device pairing
-(not built), and accuracy for languages other than Python and TypeScript/JavaScript.
+In scope: the cloud service (`cloud/`, THREAT_MODEL T7, CLAIMS C1–C13), the gateway (`gateway/`, T8, G1) and the
+test sandbox with its library fetch (`lantern/sandbox.py`, `_jail.py`, `libraries.py`, `_stores.py`, CLAIMS A4b–A4j).
+Test the services on your own computer, never the live ones. Out of scope: device pairing (not built). Accuracy for the
+languages other than Python and TypeScript/JavaScript is in scope as findings, but has no benchmark yet to compare with.
 
 ## How to report a finding
 
@@ -74,7 +80,8 @@ Lantern itself go through the private process in `SECURITY.md`.
 Paste this together with the repository (or give the model repository access):
 
 > You are auditing Lantern, a local tool that maps, explains, audits, and grades full-stack apps. Start with
-> `docs/audit/README.md`, then `ARCHITECTURE.md`, `CLAIMS.md`, `THREAT_MODEL.md`, and `TEST_PLAN.md`.
+> `docs/audit/CURRENT_STATE.md` (the commit, what changed since the last outside audit, every recorded miss, where
+> to look hardest), then `README.md`, `ARCHITECTURE.md`, `CLAIMS.md`, `THREAT_MODEL.md`, and `TEST_PLAN.md`.
 > 1. Run `bash tools/audit.sh` and report its output. If you cannot run code, say so and do a static review only.
 > 2. For each claim in `CLAIMS.md`, try to falsify it. Write the smallest repository that breaks it and show the
 >    command and output. Mark each claim as held, broken, or not testable by you.

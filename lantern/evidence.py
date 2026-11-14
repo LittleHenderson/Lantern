@@ -272,6 +272,7 @@ LIBRARY_STORE = re.compile(r"[A-Za-z0-9.\-\[\]:]{1,100}")
 LIBRARY_NAME = re.compile(r"(?:@[A-Za-z0-9._\-]{1,100}/)?[A-Za-z0-9._\-]{1,110}")
 LIBRARY_VERSION = re.compile(r"[A-Za-z0-9.+!_\-]{1,100}")
 LIBRARY_PRINT = re.compile(r"sha256:[0-9a-f]{64}|sha(?:1|256|384|512)-[A-Za-z0-9+/]{20,100}={0,2}|")
+LIBRARY_SOURCE = re.compile(r"sha256:[0-9a-f]{64}")      # the source package a library was built from (`built_from`)
 MOST_LIBRARIES = 5000
 MOST_ABOVE = 100        # folders above a run's folder: a path is not that deep
 LIBRARY_GROUP = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,39}")       # a group of libraries, as a tool would write it
@@ -303,8 +304,16 @@ def libraries_clean(lib) -> dict | None:
                 and LIBRARY_VERSION.fullmatch(version) and isinstance(mark, str) and LIBRARY_PRINT.fullmatch(mark)):
             left_out += 1
             continue
-        packages.append({"name": name, "version": version, "exact": p.get("exact") is True,
-                         "checked": p.get("checked") is True, "fingerprint": mark})
+        row = {"name": name, "version": version, "exact": p.get("exact") is True,
+               "checked": p.get("checked") is True, "fingerprint": mark}
+        # A library that was built for the run (`libraries._build`): the fingerprint of the source package it was
+        # built from, taken by its shape from the run's record (`built`) or from a report read back (`built_from`).
+        # The file's name and the tools are text of a file that may have come with the project, and stay there.
+        made = p.get("built")
+        source = made.get("source_fingerprint") if isinstance(made, dict) else p.get("built_from") if made is None else None
+        if isinstance(source, str) and LIBRARY_SOURCE.fullmatch(source):
+            row["built_from"] = source
+        packages.append(row)
     left_out += max(0, len(lib["packages"]) - MOST_LIBRARIES)
     store, above = lib.get("store"), lib.get("above")
     return {"state": lib["state"], "store": store if isinstance(store, str) and LIBRARY_STORE.fullmatch(store) else "",
@@ -313,7 +322,9 @@ def libraries_clean(lib) -> dict | None:
             # folders of packages above the run's own folder, which Node looks in too (JavaScript): a count
             "above": above if type(above) is int and 0 < above <= MOST_ABOVE else 0,
             # groups of optional libraries that were left out of the fetch (Python); the entry is there only then
-            **({"optional_left": left} if (left := _optional_left(lib)) else {})}
+            **({"optional_left": left} if (left := _optional_left(lib)) else {}),
+            # how many of the libraries were built from their source for the run; the entry is there only then
+            **({"built": n} if (n := sum(1 for p in packages if "built_from" in p)) else {})}
 
 
 def libraries_shown(tr) -> dict | None:
@@ -353,6 +364,18 @@ def libraries_limits(lib: dict | None) -> list[str]:
                    "ran: they could not be fetched beside the libraries the project always needs, or were not asked "
                    "for (the run's log says which, and why). A test of a part that needs one of them fails for that "
                    "alone, and what that part does was not tested.")
+    made = [f"{p['name']} {p['version']}" for p in lib["packages"] if "built_from" in p]
+    if made:
+        shown, one = made[:6], len(made) == 1
+        words = (", ".join(shown[:-1]) + (" and " if len(shown) > 1 else "") + shown[-1]) if len(made) == len(shown) \
+            else ", ".join(shown) + f" and {len(made) - len(shown)} more"
+        out.append(f"Libraries built from their source. {words} {'was' if one else 'were'} not in the store ready-built "
+                   f"for the system the tests ran on and {'was' if one else 'were'} built for this run, in the sandbox "
+                   f"with the network off, by code the librar{'y brings' if one else 'ies bring'}. The fingerprint "
+                   f"shown for {'its' if one else 'each'} source is of the file the store handed out. The package the "
+                   "build made was on this computer only for that run, and the tools it was built with were the newest "
+                   "that fit, so the same check on another day or another computer may run the tests on a package "
+                   "that differs.")
     return out
 
 
@@ -1008,12 +1031,19 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
         rows = "".join(f"<tr><td>{E(p['name'])}</td><td>{E(p['version'])}"
                        f"{'' if p['exact'] else ' <span class=muted>(not fixed by the project)</span>'}</td>"
                        f"<td class='muted'><code>{E(p['fingerprint'])}</code>"
-                       f"{' · named by the project' if p['checked'] else ''}</td></tr>" for p in libs["packages"])
+                       f"{' · named by the project' if p['checked'] and 'built_from' not in p else ''}"
+                       + (f" · built for this run from its source, <code>{E(p['built_from'])}</code>"
+                          f"{' (the fingerprint the project names)' if p['checked'] else ''}" if "built_from" in p else "")
+                       + "</td></tr>" for p in libs["packages"])
         libs_html = (f"<h4>Libraries the tests ran on</h4><p class='muted'>Fetched for this run"
                      f"{' from ' + E(libs['store']) if libs['store'] else ''} into a folder that was deleted after, "
                      f"and no others: {count} librar{'y' if count == 1 else 'ies'}, {exact} at a version the project "
                      f"fixes, {libs['checked']} with a fingerprint the project names itself. Each fingerprint is of "
                      "the file that was fetched."
+                     + (f" {libs['built']} of them {'was' if libs['built'] == 1 else 'were'} built from "
+                        f"{'its' if libs['built'] == 1 else 'their'} source for this run: the first fingerprint there "
+                        "is of the package the build made, the second of the source the store handed out."
+                        if libs.get("built") else "")
                      + (f" {libs['left_out']} more could not be shown." if libs["left_out"] else "")
                      + f"</p><table>{rows}</table>")
     elif libs and libs["state"] == "installed":
