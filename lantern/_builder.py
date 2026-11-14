@@ -33,6 +33,7 @@ MOST_PAGE = 64 << 20                # the bytes of a store's page that are read
 MOST_TOOLS = 50                     # the tools a build may name
 MOST_READY = 500                    # the ready-built files of one version that are named back (`ready`)
 MOST_TOML = 4_000_000
+MOST_VERSION = 200                  # the letters a version, or a file's name on a store's page, may have
 LEGACY = "setuptools.build_meta:__legacy__"         # the build of a source that names none (PEP 517)
 LEGACY_TOOLS = ["setuptools>=40.8.0"]
 _PART = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -51,6 +52,50 @@ class Refused(Exception):
 
 def _norm(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
+
+
+# ---------------------------------------------------------------------------- one version, however it is written
+# A project may write the version it fixes another way than a store names its files and a build its package:
+# `2024.01.0` for `2024.1.0`, `1.0.0-rc1` for `1.0.0rc1`, `3.0` for `3.0.0`. pip reads each pair as one version (PEP
+# 440), so Lantern does too: comparing the letters found no source for such a version, and would have refused the
+# package built from it as "another version" (2026-11-14, found by an outside audit).
+_VERSION = re.compile(r"""v?(?:(?P<epoch>\d+)!)?(?P<release>\d+(?:\.\d+)*)
+    (?:[-_.]?(?P<pre>alpha|a|beta|b|preview|pre|c|rc)[-_.]?(?P<pre_n>\d+)?)?
+    (?P<post>-(?P<post_a>\d+)|[-_.]?(?:post|rev|r)[-_.]?(?P<post_b>\d+)?)?
+    (?P<dev>[-_.]?dev[-_.]?(?P<dev_n>\d+)?)?
+    (?:\+(?P<local>[a-z0-9]+(?:[-_.][a-z0-9]+)*))?""", re.X)
+_PRE = {"alpha": "a", "beta": "b", "c": "rc", "pre": "rc", "preview": "rc"}
+
+
+def version(text):
+    """What version `text` names, as PEP 440 reads it, in a form every spelling of that version shares: its epoch,
+    its numbers without the noughts at their end, its pre-release, post-release and development parts, and what
+    follows a `+`. None for text that is no version of that form, or too long to be one."""
+    if not isinstance(text, str) or len(text) > MOST_VERSION:
+        return None
+    m = _VERSION.fullmatch(text.strip().lower())
+    if m is None:
+        return None
+    release = [int(n) for n in m["release"].split(".")]
+    while len(release) > 1 and not release[-1]:
+        release.pop()
+    local = tuple(int(part) if part.isdigit() else part for part in re.split(r"[-_.]", m["local"])) if m["local"] else ()
+    return (int(m["epoch"] or 0), tuple(release),
+            (_PRE.get(m["pre"], m["pre"]), int(m["pre_n"] or 0)) if m["pre"] else None,
+            int(m["post_a"] or m["post_b"] or 0) if m["post"] else None,
+            int(m["dev_n"] or 0) if m["dev"] else None, local)
+
+
+def same_version(a, b) -> bool:
+    """Do `a` and `b` name one version? As pip reads them (`version`). Text that is no version of that form is the
+    same only letter for letter, a dash and an underscore counting as one (the way a built package's name writes
+    it), as before; never the same as one that is."""
+    if not isinstance(a, str) or not isinstance(b, str) or not a or len(a) > MOST_VERSION or len(b) > MOST_VERSION:
+        return False
+    first, second = version(a), version(b)
+    if first is None or second is None:
+        return first is None and second is None and a.lower().replace("-", "_") == b.lower().replace("-", "_")
+    return first == second
 
 
 # ---------------------------------------------------------------------------- which file of a store's page
@@ -74,7 +119,7 @@ def ready(page: str, name: str, version: str) -> list[str]:
     for _, _, file in _links(page):
         parts = file.split("-")
         if file.lower().endswith(".whl") and len(parts) >= 5 and len(file) <= 300 and _norm(parts[0]) == want \
-                and parts[1].lower() == version.lower() and file not in found:
+                and same_version(parts[1], version) and file not in found:
             found.append(file)
             if len(found) >= MOST_READY:
                 break
@@ -85,15 +130,17 @@ def pick(page: str, name: str, version: str) -> tuple[str, str] | None:
     """The source package of exactly `version` of `name` on a store's page of that library (PyPI's simple index):
     (its address as the page writes it, without what follows a `#`; the SHA-256 the page names for it, or "").
     The file is told by the name a store gives it, `<name>-<version>.tar.gz`, with the library's name written any
-    way a store may write it (`Stage2_Mac`, `stage2-mac`). None when the page names no such file: not a
-    ready-built file, not another version, not a library whose name begins the same, not a `.zip`."""
-    want, tail = _norm(name), "-" + version.lower()
+    way a store may write it (`Stage2_Mac`, `stage2-mac`) and the version any way that names the same version
+    (`same_version`; an older store may write a dash inside it, so every dash of the name is tried as the one
+    between the two). None when the page names no such file: not a ready-built file, not another version, not a
+    library whose name begins the same, not a `.zip`."""
+    want = _norm(name)
     for place, mark, file in _links(page):
-        if not file.lower().endswith(".tar.gz"):
+        if not file.lower().endswith(".tar.gz") or len(file) > MOST_VERSION:
             continue
         stem = file[:-len(".tar.gz")]
-        head = stem[:-len(tail)]
-        if not stem.lower().endswith(tail) or not head or _norm(head) != want:
+        if not any(c == "-" and i and _norm(stem[:i]) == want and same_version(stem[i + 1:], version)
+                   for i, c in enumerate(stem)):
             continue
         said = re.fullmatch(r"sha256=([0-9a-f]{64})", mark.strip().lower())
         return place, said.group(1) if said else ""
@@ -289,6 +336,7 @@ def _get(url: str, proxy: str, cert: str, most: int, sink=None):
 def _source(given: dict) -> dict:
     """Save the source package of `name` `version` from the store at `index` into the file `into` (made anew)."""
     import hashlib
+    import http.client
     from urllib.parse import urljoin
     page_at = given["index"].rstrip("/") + "/" + _norm(given["name"]) + "/"
     try:
@@ -310,7 +358,10 @@ def _source(given: dict) -> dict:
             return {"state": "too-large" if status == "large" else "refused" if status == 403 else "unreachable"}
         return {"state": "fetched", "file": found[0].split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1][:300],
                 "sha256": digest.hexdigest(), "bytes": size, "page_sha256": found[1], "ready": there}
-    except (OSError, ValueError) as e:      # no way to the store, or an answer that is none (`http.client`'s are OSError)
+    except (OSError, ValueError, http.client.HTTPException) as e:
+        # No way to the store, or an answer that is none. What `http.client` says about such an answer (a first line
+        # that is no HTTP, too many headers, a header without end, a piece cut off) is its own kind of error, not an
+        # OSError: until 2026-11-14 it ended this step with an error where "cannot be reached" is true.
         refused = "403" in str(e) and "Tunnel" in str(e)
         return {"state": "refused" if refused else "unreachable"}
 
