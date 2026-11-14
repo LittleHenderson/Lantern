@@ -17,6 +17,47 @@ const chromium = require('playwright')[BROWSER];
 const a11y = require('./a11y.js');
 const outside = require('./outside.js');   // no page under test reaches the internet
 
+// A sheet has to be usable in the window it opens in: its Close button and its two action buttons in view as it
+// opens, with nothing to scroll first, and every field between them reachable by scrolling the sheet (and then not
+// under the buttons). 2026-11-13: two new fields made the test sheet 984 px tall; in a window 900 px high "Confirm
+// and run" sat below the window and nothing scrolled to it. The released sheet (642 px) fitted a window 720 px high
+// and had the same fault in one 600 px high and on a phone (1,003 px in a window of 844).
+async function sheetFits(p, name, errs, step, sizes, back) {
+  for (const [w, h] of sizes) {
+    await p.setViewportSize({ width: w, height: h });
+    const seen = sel => p.evaluate(sel => {
+      const el = document.querySelector(sel);
+      if (!el) return 'not there';
+      const r = el.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > innerHeight) return `at ${Math.round(r.top)} to ${Math.round(r.bottom)} px`;
+      // its middle and both its ends: on a phone Ask Lantern's pill, which floats over the page's lower right corner,
+      // lay on the right end of "Run the tests"
+      for (const x of [r.left + 5, r.left + r.width / 2, r.right - 5]) {
+        const at = document.elementFromPoint(x, r.top + r.height / 2);
+        if (!at || !(at === el || el.contains(at))) return `under something else at ${Math.round(x)} px across: ${at ? at.tagName.toLowerCase() + (at.id ? '#' + at.id : '') : 'nothing'}`;
+      }
+      return '';
+    }, sel);
+    // what scrolls is the sheet, or the part of it above its row of buttons
+    const tall = await p.evaluate(() => { const s = document.querySelector('.sheet .shbody') || document.querySelector('.sheet'), a = document.querySelector('.sheet.split .acts');
+      s.scrollTop = 0; return Math.round(s.scrollHeight + (a ? a.offsetHeight : 0)); });
+    const wrong = [];
+    for (const [what, sel] of [['Close', '#shx'], ['Skip', '#shskip'], ['the Run button', '#shrun']]) {
+      const why = await seen(sel);
+      if (why) wrong.push(`${what} is not in view as the sheet opens (${why})`);
+    }
+    for (const [what, sel] of [['the command', '#testcmd'], ['the minutes', '#testmin'], ['the memory', '#testmem'], ['the last line', '.sheet .rewards > div:last-child']]) {
+      await p.$eval(sel, el => el.scrollIntoView({ block: 'nearest' }));
+      const why = await seen(sel);
+      if (why) wrong.push(`${what} cannot be scrolled into view (${why})`);
+    }
+    step(name, `sheet in a ${w}×${h} window: ${tall} px of content, ${wrong.length ? wrong.join('; ') : 'every button in view as it opens, every field reachable'}`);
+    for (const x of wrong) errs.push(`${name}: the test sheet in a ${w}×${h} window: ${x}`);
+    await p.evaluate(() => { (document.querySelector('.sheet .shbody') || document.querySelector('.sheet')).scrollTop = 0; });
+  }
+  await p.setViewportSize(back);
+}
+
 // page.waitForFunction polls through eval in older Playwright, which the app's script-src policy (rightly) refuses;
 // poll with page.evaluate instead, which the policy allows.
 async function until(p, fn, timeout) {
@@ -84,6 +125,13 @@ async function appSmoke(url, out, image, expectText, slowTests) {
         const rs = fr ? await fr.evaluate(() => S.simple).catch(() => null) : null;
         if (rs !== true) errs.push(`phone: the Atlas frame is not Simple (${rs})`);
         step(name, `view mode ${mode}, Atlas simple ${rs}`);
+        // the test sheet on a phone: opened, measured, closed with Skip (the desktop pass runs the tests)
+        await p.click('#watchtests'); await p.waitForSelector('#shrun');
+        await a11y.axe(p, `${name} test sheet`, errs);
+        await sheetFits(p, name, errs, step, [[vp.width, vp.height], [360, 640]], vp);
+        await p.screenshot({ path: `${out}-${name}-sheet.png` });
+        await p.click('#shskip');
+        if (await p.$('#sheet')) errs.push('phone: Skip did not close the test sheet');
       }
       if (name === 'desk') {
         // 1. the sheet: confirm the test command, run it in the sandbox, wait for the toast
@@ -91,6 +139,8 @@ async function appSmoke(url, out, image, expectText, slowTests) {
         const sbx = await p.$eval('.sheet', el => el.innerText);
         if (!/sandbox|Docker|restricted/i.test(sbx)) errs.push('desk: the sheet does not say which sandbox runs the tests');
         await p.screenshot({ path: `${out}-${name}-sheet.png` });
+        await a11y.axe(p, `${name} test sheet`, errs);
+        await sheetFits(p, name, errs, step, [[vp.width, vp.height], [1280, 600]], vp);
         await p.click('#shrun');
         await p.waitForSelector('.toastin.ok, .toastin.bad', { timeout: 300000 });
         const toast = (await p.$eval('#toast', el => el.innerText)).replace(/\s+/g, ' ').trim();

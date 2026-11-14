@@ -54,12 +54,41 @@ def _split_cmd(argv: list[str]) -> tuple[list[str], list[str]]:
     return argv, []
 
 
+def _minutes(text: str) -> int:
+    """`--test-minutes N`: a whole number from 1 to 240, or the parser says so."""
+    from . import sandbox
+    try:
+        return sandbox.time_limit(text) // 60
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
+def _megabytes(text: str) -> int:
+    """`--test-memory N`: the megabytes of memory the tests may have in use in the sandbox (`sandbox.memory_limit`)."""
+    from . import sandbox
+    try:
+        return sandbox.memory_limit(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
 def cmd_analyze(a, trace_cmd: list[str]) -> int:
     from .pipeline import analyze
     repo = Path(a.path).resolve()
+    test_cwd = ""
+    if a.sandbox:   # the sandbox runs test commands only (as in the app); said before anything is read or written
+        from . import sandbox
+        try:
+            language = sandbox.check_command(trace_cmd)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        found = sandbox.detect(repo)             # started in the folder the app would start them in
+        test_cwd = found.get("cwd", "") if found.get("language") == language else ""
     out = _out(repo, a.out)
     try:
-        res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan, offline=a.offline or None)
+        res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan, offline=a.offline or None, sandbox=a.sandbox,
+                      test_cwd=test_cwd, test_minutes=a.test_minutes, test_memory=a.test_memory)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -223,8 +252,16 @@ def cmd_trace(a, trace_cmd: list[str]) -> int:
     if not trace_cmd:
         print("give the command after --, e.g. lantern trace . -- python -m pytest -q", file=sys.stderr)
         return 2
+    from . import sandbox
     g = Graph.load(out / "graph.json", repo)
-    m = merge_trace(g, run_trace(repo, trace_cmd))
+    data = run_trace(repo, trace_cmd, timeout=sandbox.time_limit(a.test_minutes) if sandbox.time_asked(a.test_minutes) else None)
+    if data.get("timed_out"):   # until 2026-11-13 this ended with a Python error and left what the command had started
+        had = sandbox.minutes_words(data.get("time_limit"))
+        print("the command was stopped at the time limit" + (f" ({had})" if had else "") + ", with the programs it "
+              "had started. Nothing was recorded and no result was changed. It can be given more time: "
+              "--test-minutes N, from 1 to 240.", file=sys.stderr)
+        return 1
+    m = merge_trace(g, data)
     print(json.dumps(m, indent=1))
     g.save(out / "graph.json")
     run = _load(out, "run.json") or {}
@@ -517,6 +554,19 @@ def _main(argv: list[str]) -> int:
     sp = sub.add_parser("analyze", help="build graph, scan, write report")
     common(sp)
     sp.add_argument("--trace", action="store_true", help="also run the command after -- and record real calls")
+    sp.add_argument("--sandbox", action="store_true",
+                    help="with --trace: run the tests in Lantern's sandbox, the way the app does (on a copy of the "
+                         "project that is thrown away afterwards, with no way out to the internet and nothing "
+                         "they start left running). Only a test command runs there. Without it the command runs "
+                         "in the project's folder, as you")
+    sp.add_argument("--test-minutes", type=_minutes, metavar="N",
+                    help="with --trace: how long the tests may take, from 1 to 240 minutes (default: 10 in the "
+                         "sandbox, 15 without it; LANTERN_TEST_MINUTES sets it for every run). Tests stopped at the "
+                         "limit are neither passed nor failed")
+    sp.add_argument("--test-memory", type=_megabytes, metavar="MB",
+                    help="with --trace --sandbox: how much memory the tests and everything they start may have in "
+                         "use, in megabytes from 128 to 1048576 (default: 2048; LANTERN_TEST_MEMORY_MB sets it for "
+                         "every run). Tests stopped for their memory are neither passed nor failed")
     sp.add_argument("--no-scan", action="store_true")
     sp.add_argument("--offline", action="store_true",
                     help="skip dependency audits (pip-audit, npm audit), the only steps that use the network")
@@ -529,6 +579,8 @@ def _main(argv: list[str]) -> int:
 
     sp = sub.add_parser("trace", help="run a command and mark calls that actually happen")
     common(sp)
+    sp.add_argument("--test-minutes", type=_minutes, metavar="N",
+                    help="how long the command may take, from 1 to 240 minutes (default 15)")
 
     sp = sub.add_parser("behave", help="start the app in the test sandbox and run the project's lantern-behaviour.json")
     common(sp)
@@ -614,6 +666,15 @@ def _main(argv: list[str]) -> int:
                     help="start, print the link, load the app once, then stop (exit 0 if it answered)")
 
     a = p.parse_args(argv)
+    if a.cmd == "analyze" and not (a.trace and trace_cmd):
+        if a.sandbox:
+            p.error("--sandbox is where the tests run: give it with --trace and the test command after --, "
+                    "e.g. lantern analyze . --trace --sandbox -- python -m pytest -q")
+        if a.test_minutes is not None:
+            p.error("--test-minutes is the time the tests get: give it with --trace and the test command after --")
+    if a.cmd == "analyze" and a.test_memory is not None and not (a.sandbox and a.trace and trace_cmd):
+        p.error("--test-memory is the memory the tests get in the sandbox: give it with --trace --sandbox and the "
+                "test command after --")
     # A repository link instead of a folder: clone it (shallow) under ~/.lantern/repos and go on from there.
     from . import remote
     try:
