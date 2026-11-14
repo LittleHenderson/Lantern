@@ -20,16 +20,19 @@ container, a sandbox inside a sandbox) the reason says so, and those cases run o
 
 No test here reaches the internet: the store is a stand-in on this computer (`tests/stores.py`), the address
 "outside" is one that is nobody's (192.0.2.1), the name one that never exists (`example.invalid`)."""
+import contextlib
 import hashlib
 import io
 import json
 import os
 import re
 import shutil
+import socket
 import sys
 import sysconfig
 import tarfile
 import tempfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -990,7 +993,8 @@ PAGE = '''<!DOCTYPE html><html><body>
     ("stage2-mac", "3.0.0.post1", ("/files/stage2_mac-3.0.0.post1.tar.gz", "d" * 64)),
     ("stage2-mac", "4.0.0", ("/files/stage2_mac-4.0.0.tar.gz", "")),       # the page names no fingerprint for it
     ("stage2-mac-extra", "3.0.0", ("/files/stage2_mac_extra-3.0.0.tar.gz", "e" * 64)),
-    ("stage2-mac", "3.0", None), ("stage2-mac", "3.0.0.post2", None), ("stage2-mac", "5.0.0", None),
+    ("stage2-mac", "3.0", ("../../files/Stage2_Mac-3.0.0.tar.gz", "c" * 64)),     # one version, written another way
+    ("stage2-mac", "3.0.1", None), ("stage2-mac", "3.0.0.post2", None), ("stage2-mac", "5.0.0", None),
     ("stage2", "3.0.0", None), ("stage2-mac-extra", "4.0.0", None), ("mac", "3.0.0", None),
 ])
 def test_which_file_of_a_stores_page_is_the_source_of_a_version(name, version, found):
@@ -1003,6 +1007,150 @@ def test_which_file_of_a_stores_page_is_the_source_of_a_version(name, version, f
 def test_a_page_that_is_no_page_names_no_source():
     for page in ("", "<a href=", "\x00\xff" * 50, "<a href='/files/stage2mac-3.0.0.tar.gz'>" * 3 + "<" * 100_000):
         assert _builder.pick(page, "stage2mac", "3.0.0") in (None, ("/files/stage2mac-3.0.0.tar.gz", ""))
+
+
+# ---------------------------------------------------------------------------- a version written another way
+# Found by an outside audit of this step (2026-11-14). A project may write the one version it fixes in a way a store
+# does not: `2024.01.0`, `1.0.0-rc1`, `3.0`. pip reads both as one version (PEP 440), a store names its files by the
+# one canonical spelling, and so does every build. Lantern compared the letters: no source was found for such a
+# version, and a built package of it would have been refused as "another version". Each spelling stands beside a
+# twin that is another version and must stay one.
+SAME = [("3.0", "3.0.0"), ("3.00.0", "3.0.0"), ("v3.0.0", "3.0.0"), ("2024.01.0", "2024.1.0"), ("1.0.0-rc1", "1.0.0rc1"),
+        ("1.0.0.RC.1", "1.0.0rc1"), ("1.0-alpha2", "1.0a2"), ("1.0.0-1", "1.0.0.post1"), ("1.0.0.dev", "1.0.0.dev0"),
+        ("1!2.0", "1!2.0.0"), ("1.0+Ubuntu-1", "1.0+ubuntu.1"), ("3.0.0", "3.0.0")]
+OTHER = [("3.0", "3.0.1"), ("3.0.0", "3.0.0.post1"), ("3.0.0", "3.0.0rc1"), ("3.0.0", "3.0.0.dev0"), ("3.0.0", "1!3.0.0"),
+         ("3.0.0", "3.0.0+local"), ("3.0.0", "30.0"), ("3.0.0", "3.0.0.0.1"), ("3.0.0rc1", "3.0.0rc2"),
+         ("not a version", "3.0.0"), ("3.0.0;x", "3.0.0"), ("3.0.0", "3.0.0;x"), ("", "3.0.0"), ("3.*", "3.0.0")]
+
+
+def _page(version: str) -> str:
+    return (f'<a href="/files/stage2mac-{version}.tar.gz#sha256={"a" * 64}">s</a>'
+            f'<a href="/files/stage2mac-{version}-py3-none-any.whl">r</a>')
+
+
+@pytest.mark.parametrize("written, stored", SAME)
+def test_a_version_written_another_way_is_the_same_version(written, stored):
+    assert _builder.same_version(written, stored) and _builder.same_version(stored, written)
+    assert _builder.pick(_page(stored), "stage2mac", written) == (f"/files/stage2mac-{stored}.tar.gz", "a" * 64)
+    assert _builder.ready(_page(stored), "stage2mac", written) == [f"stage2mac-{stored}-py3-none-any.whl"]
+
+
+@pytest.mark.parametrize("written, stored", OTHER)
+def test_the_twin_that_is_another_version_stays_another_version(written, stored):
+    assert not _builder.same_version(written, stored) and not _builder.same_version(stored, written)
+    assert _builder.pick(_page(stored), "stage2mac", written) is None
+    assert _builder.ready(_page(stored), "stage2mac", written) == []
+
+
+def test_a_source_file_an_older_store_names_with_a_dash_in_its_version_is_found():
+    page = '<a href="/files/stage2-mac-1.0.0-rc1.tar.gz">s</a><a href="/files/stage2-mac-extra-1.0.0rc1.tar.gz">x</a>'
+    assert _builder.pick(page, "stage2_mac", "1.0.0rc1") == ("/files/stage2-mac-1.0.0-rc1.tar.gz", "")
+    assert _builder.pick(page, "stage2-mac-extra", "1.0.0-rc1") == ("/files/stage2-mac-extra-1.0.0rc1.tar.gz", "")
+    assert _builder.pick(page, "stage2", "1.0.0rc1") is None and _builder.pick(page, "mac", "1.0.0rc1") is None
+
+
+def test_a_version_that_is_very_long_or_no_text_is_no_version():
+    assert not _builder.same_version("1." * 5000 + "0", "1.0") and not _builder.same_version(None, "1.0")
+    assert _builder.same_version("Odd_Version", "odd-version")      # what is no PEP 440 version: by its letters, as before
+
+
+@builds
+@pytest.mark.parametrize("written, stored", [("3.0", "3.0.0"), ("2024.01.0", "2024.1.0"), ("3.0.0-rc1", "3.0.0rc1")])
+@pytest.mark.parametrize("kind", ["pins", "hashed"])
+def test_a_version_the_project_writes_another_way_is_built_and_the_tests_run(tmp_path, monkeypatch, pystore, written,
+                                                                             stored, kind):
+    """The whole way: the project fixes `stage2mac==<written>`, the store has `<stored>` as source only. It is found,
+    built, taken by pip as the version asked for, and the tests run on it."""
+    _online(monkeypatch, python=pystore)
+    digest = pystore.put("stage2mac", *source("stage2mac", stored, {"stage2mac.py": "N = 3\n"}))
+    lines: list[str] = []
+    res = _run(_project(tmp_path / "proj", pystore, kind, digest, version=written), lines.append)
+    assert res["returncode"] == 0, (res["output_tail"], lines)
+    built = _named(res)["stage2mac"]
+    assert built["version"] == stored and built["built"]["from"] == f"stage2mac-{stored}.tar.gz", built
+    assert built["built"]["source_fingerprint"] == "sha256:" + digest and built["checked"] is (kind == "hashed")
+    assert _sources_asked(pystore) == [f"/files/stage2mac-{stored}.tar.gz"]
+
+
+@builds
+def test_the_twin_build_that_hands_back_another_version_is_still_refused(tmp_path, monkeypatch, pystore):
+    """`3.0` is asked for and `3.0.0` is on the store; the build hands back `3.0.1`."""
+    _online(monkeypatch, python=pystore)
+    body = "    return wheel(wheel_directory, sources(), version='3.0.1')"
+    digest = pystore.put("stage2mac", *source("stage2mac", "3.0.0", {"stage2mac.py": "N = 3\n"}, body=body))
+    said, _ = _refused(_project(tmp_path / "proj", pystore, "pins", digest, version="3.0"))
+    assert "stage2mac 3.0" in said and "another name or version" in said, said
+
+
+# ---------------------------------------------------------------------------- a store that answers with no answer
+# Found by the same audit. The source is asked of the store with Python's `http.client`, and what that says about an
+# answer that is none (a first line that is no HTTP, too many headers, a header without end, a piece cut off) is not
+# an OSError, as the code believed: the step ended with an error and the person read "could not be fetched (the last
+# lines are in the log)" over a Python traceback, where "the store could not be reached" is true.
+ODD_ANSWERS = {
+    "a first line that is no answer": b"SPAM AND EGGS\r\n\r\n",
+    "more than a hundred headers": b"HTTP/1.1 200 OK\r\n" + b"".join(b"X-%d: y\r\n" % n for n in range(120)) + b"\r\n",
+    "a header that does not end": b"HTTP/1.1 200 OK\r\nX-Long: " + b"y" * 70000 + b"\r\n\r\n",
+    "a piece that is cut off": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nff\r\n<a href=",
+    "a piece whose length is no number": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n<a href=\r\n",
+    "nothing at all": b"",
+}
+
+
+@contextlib.contextmanager
+def _answering(raw: bytes):
+    """A stand-in for the doorkeeper, on this computer: whatever is asked, it sends `raw` and hangs up."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(8)
+        server.settimeout(0.2)
+        over = threading.Event()
+
+        def serve():
+            while not over.is_set():
+                try:
+                    conn, _ = server.accept()
+                except OSError:
+                    continue
+                with conn:
+                    conn.settimeout(5)
+                    try:
+                        asked = b""
+                        while b"\r\n\r\n" not in asked:
+                            more = conn.recv(65536)
+                            if not more:
+                                break
+                            asked += more
+                        conn.sendall(raw)
+                    except OSError:
+                        pass
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            yield "http://127.0.0.1:%d" % server.getsockname()[1]
+        finally:
+            over.set()
+            thread.join(5)
+
+
+def _ask_for_source(tmp_path, door: str) -> dict:
+    return _builder._source({"index": "http://store.example.invalid/simple", "name": "stage2mac", "version": "3.0.0",
+                             "into": str(tmp_path / "source.tar.gz"), "most": 1 << 20, "proxy": door})
+
+
+@pytest.mark.parametrize("odd", sorted(ODD_ANSWERS))
+def test_a_store_whose_answer_is_no_answer_could_not_be_reached(tmp_path, odd):
+    with _answering(ODD_ANSWERS[odd]) as door:
+        assert _ask_for_source(tmp_path, door) == {"state": "unreachable"}
+
+
+def test_the_twin_store_that_answers_as_a_store_does_is_read(tmp_path):
+    page = b'<a href="/files/stage2mac-2.0.0.tar.gz">another version</a>'
+    answer = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % len(page) + page
+    with _answering(answer) as door:
+        assert _ask_for_source(tmp_path, door) == {"state": "no-source", "ready": []}
+    with _answering(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") as door:
+        assert _ask_for_source(tmp_path, door) == {"state": "no-library"}
 
 
 # ---------------------------------------------------------------------------- the record of a whole check

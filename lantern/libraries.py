@@ -1565,7 +1565,7 @@ def _build(job: _Fetch, repo: Path, name: str, version: str, number: int, sure: 
         job.stop(f"the build of {words} did not leave exactly one package (one plain file) where a build leaves it")
     package = left[0][0]
     m = _PACKAGE.fullmatch(package) if len(package) <= 200 else None
-    if not m or _norm(m.group(1)) != _norm(name) or m.group(2).lower() != version.lower().replace("-", "_"):
+    if not m or _norm(m.group(1)) != _norm(name) or not _builder.same_version(m.group(2), version):
         job.stop(f"the build of {words} left a package of another name or version than the one asked for")
     if os.path.lexists(kept / package):
         job.stop(f"the build of {words} left a package of another name or version than the one asked for")
