@@ -22,7 +22,7 @@ same.
 * Point it at code you have no right to read, or upload someone else's private code.
 * Use it to find weaknesses in software you do not own and are not authorised to test.
 * Run many accounts to multiply the free allowance, or use the service as free computing for anything other than
-  Lantern's checks. The per-account limits (50 checks a day, one at a time) and the daily sign-up cap exist for this.
+  Lantern's checks. The per-account limits (300 checks a day, one at a time) and the daily sign-up cap exist for this.
 * Try to break the service, read other people's results, or send it code made to attack it. (If you find a weakness,
   tell us: `SECURITY.md` says how, and we will say thank you in the release notes.)
 

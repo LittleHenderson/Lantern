@@ -25,6 +25,11 @@ dependencies = [
   "tree-sitter-ruby>=0.23",
   "tree-sitter-c>=0.23",
   "tree-sitter-cpp>=0.23",
+  # A project's libraries are fetched with pip, started in the Python that runs Lantern (lantern/libraries.py; 23 is
+  # the first pip that says what it fetched the way Lantern reads it). Named here because a Python does not always
+  # have one: an environment made by uv has none, and neither has the one a run of Lantern's own tests in the
+  # sandbox makes from the libraries named here.
+  "pip>=23",
 ]
 
 [project.urls]

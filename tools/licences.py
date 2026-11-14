@@ -26,7 +26,9 @@ def declared() -> list[str]:
 
 
 def check_licences() -> int:
-    out = subprocess.run([sys.executable, "-m", "piplicenses", "--format=json", "--from=mixed", "--with-urls"],
+    # --with-system: pip is one of the libraries Lantern names, and the tool leaves pip out unless told to list it
+    out = subprocess.run([sys.executable, "-m", "piplicenses", "--format=json", "--from=mixed", "--with-urls",
+                          "--with-system"],
                          capture_output=True, text=True, encoding="utf-8", check=False)
     if out.returncode:
         print(out.stderr or out.stdout)
