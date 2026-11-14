@@ -435,7 +435,8 @@ HOSTILE = '''    import socket
     attempt("another server on this computer", lambda: tcp("127.0.0.1", OTHER))
     attempt("an address outside", lambda: tcp("192.0.2.1", 80))
     attempt("a datagram to an address outside", lambda: udp("192.0.2.1", 9))
-    attempt("a name", lambda: socket.getaddrinfo("example.invalid", 80))
+    if LOOKUP:
+        attempt("a name", lambda: socket.getaddrinfo("example.invalid", 80))
     attempt("a file where anybody may write", lambda: open(os.path.join(DROP, "built.txt"), "w").write("x"))
     attempt("a file in the project", lambda: open(os.path.join(REPO, "built.txt"), "w").write("x"))
     attempt("twin: a file in its own source", lambda: open("made-here.txt", "w").write("x"))
@@ -450,11 +451,20 @@ PLANTED_NAMES = ("ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "
 
 
 @builds
+@pytest.mark.tries_outside("connect", "192.0.2.1", 80, "a hostile build calls a computer outside to see the kernel refuse it")
+@pytest.mark.tries_outside("send", "192.0.2.1", 9, "a hostile build sends a datagram outside to see the kernel refuse it")
 def test_what_a_hostile_build_gets(tmp_path, monkeypatch, pystore, other, person, walls):
     """A build that does what a planted one would. It finds no key in its environment, reads nothing of the
     person's own, not the project and not the copy the tests run on, changes neither the tests nor their
     libraries, reaches no address, writes nowhere but in its own folders, and what it left running is ended. What
-    an honest build needs works beside all of it, and the tests then run on what was built."""
+    an honest build needs works beside all of it, and the tests then run on what was built.
+
+    A build is a program below Python's guard, so in a network of the run's own its calls for outside get as far
+    as the kernel, which refuses them, and the operating system's record of a run holds them: the marks name the
+    two for the no-network runner (`tools/netless.py`; found before the first push: the runner's result was 4
+    with every test passed). A name is looked up only where the run has no network of its own and no datagram
+    socket is made for it: in a network of its own the lookup asks the name servers this computer is set up
+    with, which no test can name, and the kernel refuses that like the two calls above."""
     for name in PLANTED_NAMES:
         monkeypatch.setenv(name, person.secret)
     _online(monkeypatch, python=pystore)
@@ -462,7 +472,7 @@ def test_what_a_hostile_build_gets(tmp_path, monkeypatch, pystore, other, person
     repo = tmp_path / "proj"
     body = HOSTILE
     for word, value in (("KEY", str(person.key)), ("REPO", str(repo)), ("DROP", str(person.drop)), ("MARK", mark),
-                        ("STORE", pystore.port), ("OTHER", other.port)):
+                        ("STORE", pystore.port), ("OTHER", other.port), ("LOOKUP", walls == "doorkeeper")):
         body = re.sub(rf"\b{word}\b(?!\")", lambda m, value=value: repr(value), body)
     digest = pystore.put("stage2hostile", *source("stage2hostile", "1.0.0", {}, body=body))
     _project(repo, pystore, "pins", digest, name="stage2hostile", version="1.0.0",
