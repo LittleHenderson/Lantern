@@ -1,6 +1,13 @@
 # Lantern cloud service. Build from the REPOSITORY ROOT (it installs the engine and this service together):
 #   docker build -f cloud/Dockerfile -t lantern-cloud .
 #   fly deploy . --config cloud/fly.toml --dockerfile cloud/Dockerfile      (also from the repository root)
+# gitleaks, the secrets scanner, at one version, built from its source (Go checks what it downloads against its
+# public record). Lantern starts it with settings of its own and never with a project's (lantern/security.py).
+FROM golang:1.26 AS gitleaks
+RUN GOBIN=/out GOTOOLCHAIN=auto CGO_ENABLED=0 go install -ldflags "-X github.com/zricethezav/gitleaks/v8/version.Version=8.30.1" \
+      github.com/zricethezav/gitleaks/v8@v8.30.1 \
+ && test "$(/out/gitleaks version)" = "8.30.1"
+
 FROM python:3.12-slim
 # git clones the repositories people link; npm reads package-lock.json for the dependency audit (lock files only,
 # never `npm install`). Nothing from an analysed repository is ever built or run. Tesseract reads the text in
@@ -8,6 +15,7 @@ FROM python:3.12-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git nodejs npm tesseract-ocr \
  && rm -rf /var/lib/apt/lists/*
+COPY --from=gitleaks /out/gitleaks /usr/local/bin/gitleaks
 RUN useradd --create-home app
 WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./

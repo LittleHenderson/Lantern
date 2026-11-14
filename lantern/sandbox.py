@@ -1310,10 +1310,19 @@ def _judge(ev, args):
                 _block("network " + ev.split(".")[1] + " to the socket file " + name[:200])
     elif ev in ("socket.getaddrinfo", "socket.gethostbyname", "socket.gethostbyaddr"):
         # This computer under its own names is no question to the network, and neither is where an address written
-        # as a number is. Who a number belongs to (gethostbyaddr) is one.
+        # as a number is. Who a number belongs to (gethostbyaddr) is one, and so is who this computer's own name
+        # belongs to, except in a network of the run's own, which nothing leaves (elsewhere `_whose` answers it).
         host = args[0] if args else None
-        if host not in (None, "", "localhost", "127.0.0.1", "::1", b"localhost") and host not in _SELF \
+        if host not in (None, "", "localhost", "127.0.0.1", "::1", b"localhost") \
+                and not (host in _SELF and (ev != "socket.gethostbyaddr" or _OWN)) \
                 and not (ev != "socket.gethostbyaddr" and _number(host)):
+            _block("network lookup " + repr(host)[:80])
+    elif ev == "socket.getnameinfo":
+        # Python's event does not say whether the number or its owner is asked for; `_who` has read the call and
+        # refused the second. A name in the address is no address to ask about, whoever asks.
+        to = args[0] if args else None
+        host = to[0] if isinstance(to, tuple) and to else None
+        if isinstance(host, (str, bytes, bytearray)) and not _here(to) and not _number(host):
             _block("network lookup " + repr(host)[:80])
 # A guard the project brings itself (an audit hook of its own) has its say first. Python calls hooks in the order
 # they were added and this guard is the first, so a hook added later never saw what is refused here: a project's
@@ -1343,6 +1352,74 @@ def _add(hook):
     _THEIRS.append(hook)
 _add.__name__ = _add.__qualname__ = "addaudithook"
 _add.__module__, _add.__doc__ = "sys", _sys.addaudithook.__doc__
+# A name in an address. A socket hands an address to the system in five calls, and where the address holds a host
+# name Python has it looked up on the way down and tells its hooks of the call afterwards. So the five calls ask
+# here first: for a name that is not this computer's and not a number, Python's own event for a lookup is raised,
+# which is refused above like any lookup once the project's own hooks have seen it, and the system is not asked.
+# A number, this computer's names and the two words that are no names go down as they did. This holds for
+# `socket.socket` and every class made from it (a TLS socket, a test's own). A program that takes the type beneath
+# it, loads the socket module anew or calls the system's library itself is held by the kernel's walls only.
+import _socket as _below
+_family, _kind, _proto = (getattr(_below.socket, n).__get__ for n in ("family", "type", "proto"))
+def _name_first(sock, address):
+    if type(address) is not tuple or not address:
+        return
+    host = address[0]
+    if not isinstance(host, (str, bytes, bytearray)) or _number(host) or _here(address) \
+            or host in ("<broadcast>", b"<broadcast>"):
+        return
+    try:
+        family, kind, proto = _family(sock), _kind(sock), _proto(sock)
+    except (TypeError, AttributeError):
+        return                     # no socket at all: what is wrong with the call is the system's to say
+    if family in _NET:
+        _sys.audit("socket.getaddrinfo", host, address[1] if len(address) > 1 else None, family, kind, proto)
+        _block("network lookup " + repr(host)[:80])
+def _asks_first(name, where):
+    down = getattr(_socket.socket, name, None)
+    if down is None:               # sendmsg: not on every system
+        return
+    def call(self, *args, **more):
+        _name_first(self, where(args))
+        return down(self, *args, **more)
+    call.__name__, call.__qualname__, call.__doc__ = name, "socket." + name, down.__doc__
+    setattr(_socket.socket, name, call)
+for _n in ("connect", "connect_ex", "bind"):
+    _asks_first(_n, lambda a: a[0] if a else None)
+_asks_first("sendto", lambda a: a[-1] if len(a) > 1 else None)
+_asks_first("sendmsg", lambda a: a[3] if len(a) > 3 else None)
+# Who an address is. `getnameinfo` asks that, as `gethostbyaddr` does, unless it is told to answer with the number
+# itself, and Python's event for it does not say which. So the call is read here. An address that is only written
+# out (a number, or this computer's own, with NI_NUMERICHOST) goes down: nothing is asked of anybody. Who an address
+# belongs to goes down only for this computer's own address in a network of the run's own, which nothing leaves.
+# Everything else, a name in the address and a number whose owner is asked for, is refused as the lookup it is.
+_NUMERIC = getattr(_socket, "NI_NUMERICHOST", 1)
+def _who(down):
+    def getnameinfo(sockaddr, flags, /):
+        host = sockaddr[0] if type(sockaddr) is tuple and sockaddr else None
+        if isinstance(host, (str, bytes, bytearray)):
+            here = _here(sockaddr)
+            written = isinstance(flags, int) and flags & _NUMERIC and (here or _number(host))
+            if not written and not (_OWN and here):
+                _sys.audit("socket.gethostbyaddr", host)
+                _block("network lookup " + repr(host)[:80])
+        return down(sockaddr, flags)
+    return getnameinfo
+# Who this computer is under its own name (`socket.getfqdn` asks: a mail library for a message's id, an HTTP
+# server when it starts). In a network of the run's own nothing leaves, and the system is asked. Anywhere else
+# the system may ask the network around it, so the guard answers itself, with the name at this computer's own
+# address, and the system is not asked at all. Nothing is refused, so no honest test is held up.
+def _whose(down):
+    def gethostbyaddr(host, /):
+        if not _OWN and type(host) is str and host in _SELF:
+            return (host, [], ["127.0.0.1"])
+        return down(host)
+    return gethostbyaddr
+for _n, _f in (("getnameinfo", _who), ("gethostbyaddr", _whose)):
+    _f = _f(getattr(_below, _n))
+    _f.__qualname__, _f.__doc__ = _n, getattr(_below, _n).__doc__
+    setattr(_socket, _n, _f)
+    setattr(_below, _n, _f)
 _sys.addaudithook(_hook)
 _sys.addaudithook = _add
 _sys.lantern_sandbox_guard = "on"   # lantern.tracehook looks for this before it runs a test (LANTERN_SANDBOX_GUARD)

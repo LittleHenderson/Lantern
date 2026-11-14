@@ -756,3 +756,209 @@ def test_the_guard_costs_no_more_than_a_little_for_what_it_lets_through(tmp_path
         print("ok" if a < 30 and b < 60 else "slow", round(a, 2), round(b, 2))
     ''')
     assert r.stdout.split()[:1] == ["ok"], r.stdout + r.stderr[-1500:]
+
+
+# ----------------------------------------------------------------------------- a name in an address
+# (2026-11-14) A socket hands an address to the system in five calls: connect, connect_ex, bind, sendto and sendmsg.
+# Where the address holds a host name, Python has the name looked up on the way down and tells its hooks of the call
+# afterwards. The guard asks about such a name itself, first, with Python's own event for a lookup: a name is
+# refused the way `getaddrinfo` refuses it, after the project's own hooks have seen it, and the system is not asked.
+# A number, this computer's own names and the two words that are no names ("" and "<broadcast>") go down as they
+# did and are judged where they always were. Each call stands beside those twins.
+NAME = "lantern-guard.invalid"
+NAMED = '''
+    import socket, sys
+    NAME, SIX = sys.argv[1], sys.argv[2] == "True"
+    seen = []
+    sys.addaudithook(lambda event, args: seen.append(event)
+                     if event.startswith("socket.") and event != "socket.__new__" else None)
+    def tried(what, do):
+        del seen[:]
+        try:
+            got = do()
+        except PermissionError as e:
+            print("refused:", what, "|", str(e).split(": ", 1)[-1], "|", " ".join(seen))
+        except TypeError:
+            print("no address:", what, "|", " ".join(seen))
+        except OSError as e:
+            print("the system's answer:", what, "|", type(e).__name__, "|", " ".join(seen))
+        else:
+            print("answered:", what, "|", got if isinstance(got, (str, tuple)) else "", "|", " ".join(seen))
+    class Mine(socket.socket):
+        pass
+    def tcp(cls=socket.socket, family=socket.AF_INET):
+        s = cls(family, socket.SOCK_STREAM)
+        s.settimeout(0.01)
+        return s
+    def udp(family=socket.AF_INET):
+        return socket.socket(family, socket.SOCK_DGRAM)
+    WAYS = [("connect", tcp, lambda s, to: s.connect(to)), ("connect_ex", tcp, lambda s, to: s.connect_ex(to)),
+            ("bind", tcp, lambda s, to: s.bind(to)), ("sendto", udp, lambda s, to: s.sendto(b"x", to)),
+            ("sendto with flags", udp, lambda s, to: s.sendto(b"x", 0, to))]
+    if hasattr(socket.socket, "sendmsg"):
+        WAYS.append(("sendmsg", udp, lambda s, to: s.sendmsg([b"x"], [], 0, to)))
+    def each(to, note=""):
+        for what, make, call in WAYS:
+            with make() as s:
+                tried(what + note, lambda: call(s, to))
+'''
+A_NAME = NAMED + '''
+    each((NAME, 9))
+    each((NAME.encode(), 9), " as bytes")
+    with tcp(Mine) as s:
+        tried("connect on a class made from socket", lambda: s.connect((NAME, 9)))
+    with tcp() as s:
+        tried("connect called on the class", lambda: socket.socket.connect(s, (NAME, 9)))
+    import ssl
+    with ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).wrap_socket(tcp(), server_hostname=NAME) as s:
+        tried("connect on a TLS socket", lambda: s.connect((NAME, 443)))
+    if SIX:
+        with tcp(family=socket.AF_INET6) as s:
+            tried("connect, IPv6", lambda: s.connect((NAME, 9, 0, 0)))
+    for almost in ("localhost." + NAME, "127.0.0.1." + NAME, "0x7f.0.0.1", "192.0.2.256", "localhost."):
+        with tcp() as s:
+            tried("connect to " + ascii(almost), lambda: s.connect((almost, 9)))
+'''
+THE_TWINS = NAMED + '''
+    each(("192.0.2.1", 9))
+    each(("localhost", 9), " to localhost")
+    with udp() as s:
+        tried("sendto everybody", lambda: s.sendto(b"x", ("<broadcast>", 9)))
+    with tcp() as s:
+        tried("bind anywhere", lambda: s.bind(("", 0)))
+    with tcp() as s:
+        tried("a name that is no address", lambda: s.connect(NAME))
+    with tcp() as s:
+        tried("a number where the name goes", lambda: s.connect((9, NAME)))
+    if hasattr(socket, "AF_UNIX") and sys.platform != "win32":
+        with socket.socket(socket.AF_UNIX) as s:
+            tried("a socket file of its own", lambda: s.bind("mine.sock"))
+'''
+WAYS = ["connect", "connect_ex", "bind", "sendto", "sendto with flags"] + (["sendmsg"] if hasattr(socket.socket, "sendmsg") else [])
+EVENT = {"connect": "connect", "connect_ex": "connect", "bind": "bind", "sendto": "sendto", "sendto with flags": "sendto",
+         "sendmsg": "sendmsg"}
+
+
+def _marked(r) -> list[str]:
+    return [line for line in r.stderr.splitlines() if line.startswith(sandbox.MARK)]
+
+
+def test_a_name_in_an_address_is_refused_before_the_system_is_asked_for_it(tmp_path):
+    """With the guard and nothing else around it. Each of the five calls, a name as text and as bytes, a class made
+    from `socket.socket`, the call made on the class, a TLS socket, IPv6, and names that only look like this
+    computer or like a number: every one is refused as a lookup, the only event anybody hears of is the lookup, and
+    one line is written for each."""
+    six = _six()
+    r = _guard_alone(tmp_path, A_NAME, NAME, str(six))
+    lookup = lambda what, name: f"refused: {what} | network lookup {name!r} | socket.getaddrinfo"      # noqa: E731
+    want = ([lookup(way, NAME) for way in WAYS] + [lookup(way + " as bytes", NAME.encode()) for way in WAYS]
+            + [lookup("connect on a class made from socket", NAME), lookup("connect called on the class", NAME),
+               lookup("connect on a TLS socket", NAME)] + ([lookup("connect, IPv6", NAME)] if six else [])
+            + [lookup("connect to " + ascii(n), n)
+               for n in ("localhost." + NAME, "127.0.0.1." + NAME, "0x7f.0.0.1", "192.0.2.256", "localhost.")])
+    assert r.stdout.splitlines() == want, r.stdout + r.stderr[-3000:]
+    written = _marked(r)
+    assert len(written) == len(want) and all(" network lookup " in line for line in written), r.stderr[-3000:]
+
+
+def test_the_twins_a_number_this_computer_and_what_is_no_name_go_down_as_before(tmp_path):
+    """The same calls with an address written as a number and with `localhost`: no lookup is heard of, the call
+    itself is what the guard refuses (there is no network of the run's own here), and its line names the call as it
+    always did. What is no address is the system's to refuse, and a socket file of the run's own is made."""
+    r = _guard_alone(tmp_path, THE_TWINS, NAME, str(_six()))
+    call = lambda what, to: (f"refused: {what} | network {EVENT[what.split(' to ')[0]]} {to!r} | "      # noqa: E731
+                             f"socket.{EVENT[what.split(' to ')[0]]}")
+    want = ([call(way, ("192.0.2.1", 9)) for way in WAYS] + [call(way + " to localhost", ("localhost", 9)) for way in WAYS]
+            + ["refused: sendto everybody | network sendto ('<broadcast>', 9) | socket.sendto",
+               "refused: bind anywhere | network bind ('', 0) | socket.bind",
+               "no address: a name that is no address | ", "no address: a number where the name goes | "]
+            + (["answered: a socket file of its own |  | socket.bind"]
+               if hasattr(socket, "AF_UNIX") and sys.platform != "win32" else []))
+    assert r.stdout.splitlines() == want, r.stdout + r.stderr[-3000:]
+    assert "lookup" not in r.stderr, r.stderr[-3000:]
+
+
+# ----------------------------------------------------------------------------- who an address is
+# `getnameinfo` asks who an address is, as `gethostbyaddr` does, unless it is told to answer with the number
+# (NI_NUMERICHOST); Python's event for it does not say which. The guard reads the call itself. A number that is
+# only written out is answered. Who an address belongs to is a lookup: a name in the address, a number, and here,
+# where the run has no network of its own, this computer's own address too (the system may ask the network around
+# it; in a network of the run's own that one is answered, tests/test_sandbox_own_network.py).
+WHO = NAMED + '''
+    import asyncio
+    LOOP = sys.argv[3] == "True"
+    NUMBERS = socket.NI_NUMERICHOST | socket.NI_NUMERICSERV
+    who = socket.getnameinfo
+    async def through_a_loop(flags):
+        return await asyncio.get_running_loop().getnameinfo(("192.0.2.1", 80), flags)
+    tried("a name", lambda: who((NAME, 80), 0))
+    tried("a name, numbers asked for", lambda: who((NAME, 80), NUMBERS))
+    tried("who 192.0.2.1 is", lambda: who(("192.0.2.1", 80), 0))
+    tried("who 192.0.2.1 is, the port as a number", lambda: who(("192.0.2.1", 80), socket.NI_NUMERICSERV))
+    tried("who this computer's own address is", lambda: who(("127.0.0.1", 80), socket.NI_NUMERICSERV))
+    tried("192.0.2.1 written out", lambda: who(("192.0.2.1", 80), NUMBERS))
+    tried("this computer's own address written out", lambda: who(("127.0.0.1", 80), NUMBERS))
+    if LOOP:
+        tried("who 192.0.2.1 is, asked through an event loop", lambda: asyncio.run(through_a_loop(0)))
+        tried("192.0.2.1 written out, through an event loop", lambda: asyncio.run(through_a_loop(NUMBERS)))
+    if SIX:
+        tried("who 2001:db8::1 is", lambda: who(("2001:db8::1", 80, 0, 0), 0))
+        tried("2001:db8::1 written out", lambda: who(("2001:db8::1", 80, 0, 0), NUMBERS))
+'''
+
+
+def test_who_an_address_is_is_a_lookup_and_writing_it_out_is_none(tmp_path):
+    """With the guard and nothing else around it. On Windows no event loop starts under the guard (CLAUDE.md, the
+    sandbox's row), so the two questions put through one are asked where a loop starts."""
+    six, loop = _six(), sys.platform != "win32"
+    r = _guard_alone(tmp_path, WHO, NAME, str(six), str(loop))
+    want = ([f"refused: a name | network lookup {NAME!r}", f"refused: a name, numbers asked for | network lookup {NAME!r}",
+             "refused: who 192.0.2.1 is | network lookup '192.0.2.1'",
+             "refused: who 192.0.2.1 is, the port as a number | network lookup '192.0.2.1'",
+             "refused: who this computer's own address is | network lookup '127.0.0.1'",
+             "answered: 192.0.2.1 written out | ('192.0.2.1', '80')",
+             "answered: this computer's own address written out | ('127.0.0.1', '80')"]
+            + (["refused: who 192.0.2.1 is, asked through an event loop | network lookup '192.0.2.1'",
+                "answered: 192.0.2.1 written out, through an event loop | ('192.0.2.1', '80')"] if loop else [])
+            + (["refused: who 2001:db8::1 is | network lookup '2001:db8::1'",
+                "answered: 2001:db8::1 written out | ('2001:db8::1', '80')"] if six else []))
+    assert [line.rsplit(" | ", 1)[0] for line in r.stdout.splitlines()] == want, r.stdout + r.stderr[-3000:]
+    written = _marked(r)                                        # one line for each refusal and for nothing else
+    assert len(written) == sum(line.startswith("refused: ") for line in want), r.stderr[-3000:]
+    assert all(" network lookup " in line for line in written), written
+
+
+# ----------------------------------------------------------------------------- this computer under its own name
+# `socket.getfqdn()` asks who this computer is under its own name (a mail library does when it writes a message's
+# id, an HTTP server when it starts). Where the run has no network of its own, the system may ask the network
+# around it. The guard answers itself, with the name at this computer's own address: the system is not asked, no
+# event is heard of, nothing is refused, so an honest test is not held up and no line is written. The question put
+# to the system for this computer's own name is refused there like any other; whose a number is stays refused.
+OWN_NAME = NAMED + '''
+    mine = socket.gethostname()
+    tried("getfqdn", lambda: "its name" if socket.getfqdn() == mine else socket.getfqdn())
+    tried("who this computer is", lambda: "its name, at its own address"
+          if socket.gethostbyaddr(mine) == (mine, [], ["127.0.0.1"]) else repr(socket.gethostbyaddr(mine)))
+    tried("asked twice, the answers are two", lambda: str(socket.gethostbyaddr(mine)[1] is not socket.gethostbyaddr(mine)[1]))
+    import _socket
+    tried("asked of the module beneath", lambda: "the same" if _socket.gethostbyaddr(mine) == socket.gethostbyaddr(mine) else "another")
+    tried("the question itself, put to the system", lambda: sys.audit("socket.gethostbyaddr", mine))
+    tried("who 192.0.2.1 is", lambda: socket.gethostbyaddr("192.0.2.1"))
+    tried("who a name is", lambda: socket.gethostbyaddr(NAME))
+'''
+
+
+def test_who_this_computer_is_is_answered_by_the_guard_and_the_system_is_not_asked(tmp_path):
+    r = _guard_alone(tmp_path, OWN_NAME, NAME, "False")
+    mine = socket.gethostname()
+    plain = mine in ("localhost", "127.0.0.1", "::1")    # a computer named so: that question was never one to the network
+    assert r.stdout.splitlines() == [
+        "answered: getfqdn | its name | socket.gethostname",
+        "answered: who this computer is | its name, at its own address | ",
+        "answered: asked twice, the answers are two | True | ",
+        "answered: asked of the module beneath | the same | ",
+        ("answered: the question itself, put to the system |  | socket.gethostbyaddr" if plain else
+         f"refused: the question itself, put to the system | network lookup {mine!r} | socket.gethostbyaddr"),
+        "refused: who 192.0.2.1 is | network lookup '192.0.2.1' | socket.gethostbyaddr",
+        f"refused: who a name is | network lookup {NAME!r} | socket.gethostbyaddr"], r.stdout + r.stderr[-3000:]
+    assert len(_marked(r)) == 3 - plain, r.stderr[-3000:]

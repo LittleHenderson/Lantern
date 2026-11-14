@@ -368,58 +368,229 @@ def run_secrets(repo: Path) -> tuple[list[dict], list[dict]]:
     return found, records
 
 
-def _run_gitleaks(repo: Path, gitleaks: str) -> tuple[list[dict], dict]:
-    """`gitleaks detect --no-git` writing its JSON report to a temp file (never stdout, where a warning could break
-    the JSON). `--exit-code 0` makes leaks exit 0, so a non-zero code means gitleaks itself failed; a report file that
-    is present and parses is the proof it finished."""
-    import os
-    import tempfile
-    from . import scanresult
-    fd, path = tempfile.mkstemp(prefix="lantern-gitleaks-", suffix=".json")
-    os.close(fd)
-    report = Path(path)
-    base: dict = {"role": "secrets in files"}
+# gitleaks takes what it is to look for, and what it is to leave out, from more places than its command line: a
+# settings file and a list of findings to leave out in the folder it reads, a comment on a line, variables of the
+# shell. Each of those comes with a project or with the place Lantern was started in, so Lantern starts it its own
+# way (2026-11-14):
+#   * with a settings file of Lantern's own that says "gitleaks' own rules and nothing else" (`--config`), an empty
+#     list of findings to leave out, comments that switch a line off passed over, and no GITLEAKS_ variable;
+#   * in an empty folder of Lantern's own;
+#   * with the project handed over under a name of Lantern's own, new with every run, as a folder (the separator at
+#     its end: gitleaks does not walk a link it is handed without one). gitleaks tells one finding from another by the
+#     path it was handed and the file's place beneath it, so nothing written down before the run names a finding of it.
+# Before the project it is handed, the same way, a folder of Lantern's own: one file with a key made for this run,
+# beside everything that would keep such a key from being found. A program that does not find it (one too old to
+# know an option, rules that find nothing, a link it does not walk) is not asked about the project: its record says
+# `failed` with the reason, and the built-in patterns run. Where no name of Lantern's own can be made, or the program
+# names files by where a link leads, the project is handed over by its own path after the same first question,
+# which is as good where the project brings no list of its own at its top; where it brings one, gitleaks is not
+# started on it.
+GITLEAKS_SETTINGS = "[extend]\nuseDefault = true\n"
+GITLEAKS_FIRST = 60                              # seconds for the question before the project
+GITLEAKS_LIST = ".gitleaksignore"                # gitleaks' name for a list of findings to leave out
+GITLEAKS_FIRST_FILE = "settings.py"
+GITLEAKS_STARTED_WITH = ("Lantern starts gitleaks with --config, --gitleaks-ignore-path and --ignore-gitleaks-allow, and "
+                         "an older gitleaks does not know all three")
+
+
+class _GitleaksOwn:
+    """Lantern's own side of one gitleaks run, all of it in one new folder: the settings file, the empty list, the
+    empty folder the program is started in, the reports, and the names the folders are handed over under.
+    OSError when it cannot be made."""
+
+    def __init__(self, top: Path):
+        self.top = top
+        self.settings = top / "gitleaks.toml"
+        self.settings.write_text(GITLEAKS_SETTINGS, encoding="utf-8")
+        self.leave_out = top / "leave-out"
+        self.leave_out.write_text("", encoding="utf-8")
+        self.start = top / "start"
+        self.start.mkdir()
+        self.names: list[str] = []
+        self.asked = 0
+        self.env = {k: v for k, v in programs.env().items() if not k.upper().startswith("GITLEAKS_")}
+
+    def name_for(self, folder) -> str:
+        """A name of Lantern's own for `folder`, which nobody knew before this run. OSError when none can be made."""
+        import secrets
+        name = str(self.top / secrets.token_hex(16))
+        _gitleaks_link(os.path.abspath(folder), name)
+        self.names.append(name)
+        return name
+
+    def first(self, with_list: bool) -> Path:
+        """The folder for the question before the project: a key of this run on a line that says to pass it over,
+        beside a settings file with no rule in it and, `with_list`, a list that names the finding every way a
+        folder can know itself by."""
+        import secrets
+        import string
+        self.asked += 1
+        folder = self.top / f"first-{self.asked}"
+        folder.mkdir()
+        key = "ghp_" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(36))
+        here = folder / GITLEAKS_FIRST_FILE
+        here.write_text(f'TOKEN = "{key}"  # gitleaks:allow\n', encoding="utf-8")
+        (folder / ".gitleaks.toml").write_text('title = "no rules"\n', encoding="utf-8")
+        if with_list:
+            ways = (GITLEAKS_FIRST_FILE, "./" + GITLEAKS_FIRST_FILE, str(here))
+            (folder / GITLEAKS_LIST).write_text(
+                "".join(f"{way}:{rule}:1\n" for rule in ("github-pat", "generic-api-key") for way in ways), encoding="utf-8")
+        return folder
+
+    def tidy(self) -> None:
+        """Take the names away again, each as itself and never what it stands for, before the folder is cleared."""
+        for name in self.names:
+            for remove in (os.unlink, os.rmdir):
+                try:
+                    remove(name)
+                    break
+                except OSError:
+                    continue
+
+
+def _gitleaks_link(target: str, name: str) -> None:
+    """`name` as another name for the folder `target`: a link, or on Windows, where this user may make none, a
+    junction. OSError when neither can be made."""
     try:
-        cmd = [gitleaks, "detect", "--no-git", "-s", str(repo), "-f", "json", "-r", str(report), "--exit-code", "0"]
-        run = scanresult.run_tool(cmd, timeout=GITLEAKS_TIMEOUT)
-        base |= {"version": _tool_version([gitleaks, "version"]), "exit_code": run.returncode,
-                 "duration_ms": run.duration_ms}
-        if run.timed_out:
-            return [], scanresult.record("gitleaks", "timeout", f"after {GITLEAKS_TIMEOUT} s", **base)
-        if run.error:
-            return [], scanresult.record("gitleaks", "failed", run.error, **base)
-        err = scanresult.tail(run.stderr)
-        if run.returncode not in (0, 1):
-            return [], scanresult.record("gitleaks", "failed", f"exit code {run.returncode}: {err or 'no message'}", **base)
+        os.symlink(target, name, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        if not programs.WINDOWS:
+            raise
+        import _winapi
+        _winapi.CreateJunction(target, name)
+
+
+def _gitleaks_beneath(handed: str, name) -> str | None:
+    """The file a row of gitleaks' report names, as its place beneath the folder gitleaks was handed (`/` between
+    the parts), or None when by its name it does not lie there. By the names alone: nothing is looked up."""
+    if not isinstance(name, str) or not name:
+        return None
+    top, full = os.path.normpath(handed), os.path.normpath(name)
+    if not os.path.normcase(full).startswith(os.path.normcase(top) + os.sep):
+        return None
+    return full[len(top) + 1:].replace(os.sep, "/") or None
+
+
+def _gitleaks_ask(gitleaks: str, own: _GitleaksOwn, source: str, timeout: int) -> tuple[list | None, str, str, dict]:
+    """One run of gitleaks on the folder `source`: (the rows of its report, "ok", "", exit code and time), or
+    (None, "timeout" or "failed", why, exit code and time). The JSON report goes to a file in Lantern's folder (never
+    stdout, where a warning could break the JSON). `--exit-code 0` makes leaks exit 0, so a non-zero code means
+    gitleaks itself failed; a report file that is present and parses is the proof it finished."""
+    from . import scanresult
+    own.asked += 1
+    report = own.top / f"report-{own.asked}.json"
+    cmd = [gitleaks, "detect", "--no-git", "-s", source, "-f", "json", "-r", str(report), "--exit-code", "0",
+           "--config", str(own.settings), "--gitleaks-ignore-path", str(own.leave_out), "--ignore-gitleaks-allow"]
+    run = scanresult.run_tool(cmd, timeout=timeout, cwd=str(own.start), env=own.env)
+    ran = {"exit_code": run.returncode, "duration_ms": run.duration_ms}
+    if run.timed_out:
+        return None, "timeout", f"after {timeout} s", ran
+    if run.error:
+        return None, "failed", run.error, ran
+    err = scanresult.tail(run.stderr)
+    if run.returncode not in (0, 1):
+        return None, "failed", f"exit code {run.returncode}: {err or 'no message'}", ran
+    try:
+        text = report.read_text(encoding="utf-8", errors="replace") if report.exists() else ""
+    except OSError as exc:
+        return None, "failed", f"report file could not be read ({exc.strerror or exc})", ran
+    if not text.strip():
+        if run.returncode == 0:
+            return [], "ok", "", ran
+        return None, "failed", f"exit code 1 and no report written: {err or 'no message'}", ran
+    rows, why = scanresult.parse_json(text, list)
+    if rows is None:
+        return None, "failed", f"report file: {why}", ran
+    return [r for r in rows if isinstance(r, dict) and r.get("RuleID") and r.get("File") and isinstance(r["File"], str)], "ok", "", ran
+
+
+def _gitleaks_first(gitleaks: str, own: _GitleaksOwn, linked: bool) -> tuple[bool | None, str, dict]:
+    """The question before the project, asked the way the project will be handed over: (True, "", exit code and
+    time) when the key of this run was found where it is; (False, why, ...) when the program finished and did not
+    name it there, or when no name of Lantern's own could be made for the folder; (None, why, ...) when the program
+    could not be asked at all, which no other way of handing a folder over changes."""
+    try:
+        folder = own.first(with_list=linked)
+    except OSError as exc:
+        return None, ("a file of Lantern's own for gitleaks to be asked about first could not be written "
+                      f"({exc.strerror or exc}), so it was not started on the project"), {}
+    handed = str(folder)
+    if linked:
         try:
-            text = report.read_text(encoding="utf-8", errors="replace") if report.exists() else ""
+            handed = own.name_for(folder)
         except OSError as exc:
-            return [], scanresult.record("gitleaks", "failed", f"report file could not be read ({exc.strerror or exc})", **base)
-        if not text.strip():
-            if run.returncode == 0:
-                return [], scanresult.record("gitleaks", "ok", findings=0, **base)
-            return [], scanresult.record("gitleaks", "failed", f"exit code 1 and no report written: {err or 'no message'}", **base)
-        rows, why = scanresult.parse_json(text, list)
-        if rows is None:
-            return [], scanresult.record("gitleaks", "failed", f"report file: {why}", **base)
-        out = []
-        for r in rows:
-            if not isinstance(r, dict) or not r.get("RuleID") or not r.get("File"):
-                continue
-            rel = _rel(repo, r["File"])
-            out.append({
-                "id": _fid("gitleaks", r["RuleID"], rel, r.get("StartLine")),
-                "tool": "gitleaks", "rule": str(r["RuleID"]), "title": f"Possible secret: {r.get('Description') or r['RuleID']}",
-                "tool_severity": "HIGH", "tool_confidence": "MEDIUM",
-                "file": rel, "line": r.get("StartLine"),
-                "snippet": "[redacted]", "category": "secret",
-            })
-        return out, scanresult.record("gitleaks", "ok", findings=len(out), **base)
-    finally:
+            return False, f"no name of Lantern's own could be made for a folder ({exc.strerror or exc})", {}
+    rows, state, why, ran = _gitleaks_ask(gitleaks, own, handed + os.sep if linked else handed, GITLEAKS_FIRST)
+    if rows is None:
+        said = f"it did not answer in {GITLEAKS_FIRST} s" if state == "timeout" else why
+        return None, (f"gitleaks could not be asked about a file of Lantern's own first ({said}), so it was not "
+                      f"started on the project. {GITLEAKS_STARTED_WITH}"), ran
+    where = (lambda name: _gitleaks_beneath(handed, name)) if linked else (lambda name: _rel(folder, name))
+    if any(where(r["File"]) == GITLEAKS_FIRST_FILE for r in rows):
+        return True, "", ran
+    if linked:
+        return False, "handed a folder under such a name, gitleaks did not find the key Lantern made for this run in it", ran
+    return False, ("started with Lantern's settings, gitleaks did not find the key Lantern made for this run in a file "
+                   "of Lantern's own, so it was not asked about the project"), ran
+
+
+def _run_gitleaks(repo: Path, gitleaks: str) -> tuple[list[dict], dict]:
+    """gitleaks over the project's files (`detect --no-git`), started with settings of Lantern's own in a folder of
+    Lantern's own and asked about a file of Lantern's own first (see above). Its findings, each for a file of the
+    project (`inside_repo`) under that file's own path, and the record of the run."""
+    import contextlib
+    from . import scanresult
+    base: dict = {"role": "secrets in files"}
+    with contextlib.ExitStack() as stack:
         try:
-            report.unlink()
-        except OSError:
-            pass
+            own = _GitleaksOwn(Path(os.path.realpath(stack.enter_context(programs.folder()))))
+        except OSError as exc:
+            return [], scanresult.record("gitleaks", "failed", "a folder of Lantern's own for the scanner, with its settings "
+                                         f"file in it, could not be made ({exc.strerror or exc})", version=None, **base)
+        stack.callback(own.tidy)
+        base["version"] = _tool_version([gitleaks, "version"], cwd=str(own.start), env=own.env)
+        handed, way = None, "linked"
+        found, why, ran = _gitleaks_first(gitleaks, own, linked=True)
+        if found is None:
+            return [], scanresult.record("gitleaks", "failed", why, **base, **ran)
+        if found:
+            try:
+                handed = own.name_for(repo)
+            except OSError as exc:
+                why = f"no name of Lantern's own could be made for the project ({exc.strerror or exc})"
+        if handed is None:
+            way = "plain"
+            if os.path.lexists(repo / GITLEAKS_LIST):
+                return [], scanresult.record(
+                    "gitleaks", "failed", f"the project brings a list of findings for gitleaks to leave out ({GITLEAKS_LIST}), "
+                    "which gitleaks reads unless it is handed the project under a name of Lantern's own, and that was not "
+                    f"possible here ({why}); gitleaks was not started on the project", **base)
+            found, why, ran = _gitleaks_first(gitleaks, own, linked=False)
+            if not found:
+                return [], scanresult.record("gitleaks", "failed", why, **base, **ran)
+        base["way"] = way
+        rows, state, why, ran = _gitleaks_ask(gitleaks, own, handed + os.sep if handed else os.path.abspath(repo), GITLEAKS_TIMEOUT)
+        base |= ran
+        if rows is None:
+            return [], scanresult.record("gitleaks", state, why, **base)
+        out, outside = [], 0
+        for r in rows:
+            rel = _gitleaks_beneath(handed, r["File"]) if handed else _rel(repo, r["File"])
+            if rel is None:
+                outside += 1
+            elif inside_repo(repo / rel, repo):         # a finding is for a file of the project, and for nothing else
+                out.append({
+                    "id": _fid("gitleaks", r["RuleID"], rel, r.get("StartLine")),
+                    "tool": "gitleaks", "rule": str(r["RuleID"]), "title": f"Possible secret: {r.get('Description') or r['RuleID']}",
+                    "tool_severity": "HIGH", "tool_confidence": "MEDIUM",
+                    "file": rel, "line": r.get("StartLine"),
+                    "snippet": "[redacted]", "category": "secret",
+                })
+        if outside:
+            return [], scanresult.record(
+                "gitleaks", "failed", f"gitleaks named {outside} file{'s' if outside != 1 else ''} outside the folder it was "
+                "handed, so its list cannot be told to be whole", **base)
+        return out, scanresult.record("gitleaks", "ok", findings=len(out), **base)
 
 
 def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
@@ -460,10 +631,10 @@ def _builtin_secrets(repo: Path) -> tuple[list[dict], dict]:
     return out, scanresult.record("lantern-secrets", "ok", "built-in patterns; install gitleaks for full coverage", **base)
 
 
-def _tool_version(cmd: list[str]) -> str | None:
+def _tool_version(cmd: list[str], cwd: str | None = None, env: dict | None = None) -> str | None:
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-                             env=programs.env()).stdout
+                             cwd=cwd, env=programs.env() if env is None else env).stdout
         m = re.search(r"\d+\.\d+(\.\d+)?", out)
         return m.group(0) if m else None
     except Exception:

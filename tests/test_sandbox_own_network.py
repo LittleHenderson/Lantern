@@ -635,6 +635,96 @@ def test_in_a_network_of_its_own_the_guard_still_refuses_every_address_that_is_n
     assert sandbox.MARK + " network connect ('127.0.0.1', 9)" not in r.stderr, r.stderr[-1500:]
 
 
+NAMES_AT_HOME = '''
+    import socket, sys
+    assert sys.lantern_sandbox_guard == "on"
+    NAME = sys.argv[1]
+    def tried(what, do):
+        try:
+            got = do()
+        except PermissionError as e:
+            print("refused:", what, "|", str(e).split(": ", 1)[-1])
+        except OSError as e:
+            print("the system's answer:", what, "|", type(e).__name__)
+        else:
+            print("worked:", what, "|", got if isinstance(got, (str, int, tuple)) else "")
+    def tcp():
+        return socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    def udp():
+        return socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    with tcp() as srv, udp() as box, udp() as s:
+        srv.bind(("localhost", 0))
+        srv.listen(8)
+        port = srv.getsockname()[1]
+        box.bind(("localhost", 0))
+        box.settimeout(5)
+        to = ("localhost", box.getsockname()[1])
+        def call(way, host):
+            with tcp() as c:
+                c.settimeout(5)
+                got = getattr(c, way)((host, port))
+                srv.accept()[0].close()
+                return got
+        tried("connect to localhost", lambda: call("connect", "localhost"))
+        tried("connect_ex to localhost", lambda: call("connect_ex", "localhost"))
+        tried("connect to 127.0.0.1", lambda: call("connect", "127.0.0.1"))
+        tried("sendto localhost", lambda: s.sendto(b"a", to))
+        tried("sendto localhost, with flags", lambda: s.sendto(b"b", 0, to))
+        tried("sendmsg to localhost", lambda: s.sendmsg([b"c"], [], 0, to))
+        tried("what arrived", lambda: b"".join(sorted(box.recv(10) for _ in range(3))).decode())
+    for what, make, do in (("connect", tcp, lambda s: s.connect((NAME, 80))), ("connect_ex", tcp, lambda s: s.connect_ex((NAME, 80))),
+                           ("bind", tcp, lambda s: s.bind((NAME, 0))), ("sendto", udp, lambda s: s.sendto(b"x", (NAME, 53))),
+                           ("sendmsg", udp, lambda s: s.sendmsg([b"x"], [], 0, (NAME, 53)))):
+        with make() as s:
+            tried(what + " with a name", lambda: do(s))
+    tried("who a name is", lambda: socket.getnameinfo((NAME, 80), 0))
+    tried("who 192.0.2.1 is", lambda: socket.getnameinfo(("192.0.2.1", 80), 0))
+    tried("192.0.2.1 written out", lambda: socket.getnameinfo(("192.0.2.1", 80), socket.NI_NUMERICHOST | socket.NI_NUMERICSERV))
+    tried("who this computer's own address is", lambda: socket.getnameinfo(("127.0.0.1", 80), socket.NI_NUMERICSERV)[1])
+    tried("who this computer is, the question itself", lambda: sys.audit("socket.gethostbyaddr", socket.gethostname()))
+    tried("who localhost is", lambda: bool(socket.gethostbyaddr("localhost")) and "")
+'''
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="a network of its own is made on Linux only")
+def test_in_a_network_of_its_own_this_computers_name_in_an_address_works_and_any_other_name_is_still_a_lookup(tmp_path):
+    """The guard inside a network the launcher made. `localhost` written into an address reaches the run's own
+    listener through each call that takes an address, as its number does; a name that is not this computer's is
+    refused as a lookup before the system is asked for it, and so is the question who an address outside is. Who
+    this computer's own address belongs to, and who this computer is under its own name, are let through to the
+    system here, where nothing leaves (the second is put to the guard as Python's own event, not to a resolver:
+    on GitHub's newer Linux machines the name is not in the hosts file)."""
+    if sandbox.own_network():
+        pytest.skip("this system cannot give a program a network of its own: " + sandbox.own_network())
+    hook, room = tmp_path / "hook", tmp_path / "room"
+    hook.mkdir()
+    room.mkdir()
+    (hook / "sitecustomize.py").write_text(sandbox.SITECUSTOMIZE, encoding="utf-8")
+    for folder in (tmp_path, hook, room):
+        folder.chmod(0o755)
+    policy = {"writable": [str(room)], "nobody": False, "python": True, "net": True, "own_net": True, "must": True}
+    launcher = ("import sys; sys.path.insert(0, %r); from lantern._jail import main; main(sys.argv[1:])"
+                % str(Path(_jail.__file__).resolve().parent.parent))
+    name = "lantern-guard.invalid"
+    r = subprocess.run([sys.executable, "-I", "-c", launcher, json.dumps(policy), "--", sys.executable, "-c",
+                        textwrap.dedent(NAMES_AT_HOME), name], cwd=room, capture_output=True, text=True,
+                       encoding="utf-8", timeout=120,
+                       env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(hook), "LANTERN_SANDBOX_WRITABLE": str(room)})
+    lines = r.stdout.splitlines()
+    assert lines[:-1] == [
+        "worked: connect to localhost | ", "worked: connect_ex to localhost | 0", "worked: connect to 127.0.0.1 | ",
+        "worked: sendto localhost | 1", "worked: sendto localhost, with flags | 1", "worked: sendmsg to localhost | 1",
+        "worked: what arrived | abc",
+        *[f"refused: {way} with a name | network lookup {name!r}" for way in ("connect", "connect_ex", "bind", "sendto", "sendmsg")],
+        f"refused: who a name is | network lookup {name!r}", "refused: who 192.0.2.1 is | network lookup '192.0.2.1'",
+        "worked: 192.0.2.1 written out | ('192.0.2.1', '80')", "worked: who this computer's own address is | 80",
+        "worked: who this computer is, the question itself | "], r.stdout + r.stderr[-3000:]
+    # What the system then says about `localhost` is the system's; the guard said nothing against the question.
+    assert lines[-1].startswith(("worked: who localhost is", "the system's answer: who localhost is")), r.stdout
+    written = [line for line in r.stderr.splitlines() if line.startswith(sandbox.MARK)]
+    assert len(written) == 7 and all(" network lookup " in line for line in written), r.stderr[-3000:]
+
+
 def test_the_guard_refuses_a_socket_file_outside_the_temp_folder_and_a_socket_name(tmp_path, others):
     """On every system, with nothing else around it: another program's socket file, and (Linux) a socket name, which
     only a network of the run's own keeps apart from the other programs' names."""

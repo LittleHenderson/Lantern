@@ -31,6 +31,16 @@ jobs:
         run: |
           for i in $(seq 1 30); do docker info --format 'Docker {{.ServerVersion}} answers' 2>/dev/null && exit 0; sleep 2; done
           echo "::warning::Docker did not answer within 60 seconds: the four Docker sandbox tests will be skipped, and the test log names them"
+      - name: gitleaks 8.30.1 for the tests of how Lantern starts it, built from its source (Go checks what it downloads against its public record)
+        # tests/test_scanners.py runs against the real program where LANTERN_TESTS_GITLEAKS names one (where it
+        # names none, those tests are skipped and the log says so). It is not put on PATH: every other test, and
+        # Lantern's check of itself below, run as they do on a computer without it.
+        shell: bash
+        run: |
+          GOBIN="$RUNNER_TEMP/gitleaks" GOTOOLCHAIN=auto CGO_ENABLED=0 go install -ldflags "-X github.com/zricethezav/gitleaks/v8/version.Version=8.30.1" github.com/zricethezav/gitleaks/v8@v8.30.1
+          program="$RUNNER_TEMP/gitleaks/gitleaks$(go env GOEXE)"
+          test "$("$program" version)" = "8.30.1"
+          echo "LANTERN_TESTS_GITLEAKS=$program" >> "$GITHUB_ENV"
       - name: Tests, measuring how much of the code they run (coverage; the build fails under 85%)
         # The tests run without a network: tools/netless.py gives the run one that holds nothing but this computer's
         # own address, and has the operating system write down every address any program of the run tries. Anything
@@ -40,16 +50,18 @@ jobs:
         # sudo hands a command only what is written on its own line: the sudo of GitHub's machines ignores -E and
         # says so, and until 2026-11-10 neither rule reached the tests of this step wherever that sudo ran. So both
         # rules are written on that line, and the last line looks for them in the run's own words: a rule that did
-        # not arrive fails the step.
+        # not arrive fails the step. The gitleaks built above is named on that line too, and the run's own words
+        # must say that its tests started it, with its version and the way it was handed a project.
         env:
           LANTERN_TESTS_NETLESS: required
         run: |
           set -o pipefail   # the run is piped into tee: without this the step would pass whatever the tests did
-          sudo env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" "LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE" "LANTERN_TESTS_NETLESS=$LANTERN_TESTS_NETLESS" \
+          sudo env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" "LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE" "LANTERN_TESTS_NETLESS=$LANTERN_TESTS_NETLESS" "LANTERN_TESTS_GITLEAKS=$LANTERN_TESTS_GITLEAKS" \
             python tools/netless.py --watch "$RUNNER_TEMP/network.json" -- \
             python -m pytest -q -rs --cov=lantern --cov=gateway --cov=cloud --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=85 | tee pytest.log
           grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required' pytest.log || { echo "::error::The rules this step sets did not reach the tests: the last lines of the run do not name both"; exit 1; }
           grep '^programs these tests started' pytest.log || true   # which npm the tests met: what npm asks differs by version, and this line is far up in the log
+          grep -q '^programs these tests started: .*gitleaks 8\.30\.1 (linked)' pytest.log || { echo "::error::The tests of how Lantern starts gitleaks did not run against the gitleaks built for them"; exit 1; }
       - name: Coverage and the network record, for the summary
         if: always()
         run: |
@@ -162,6 +174,7 @@ jobs:
           test "$(docker exec lc id -u)" != "0"
           docker exec lc git --version
           docker exec lc npm --version
+          test "$(docker exec lc gitleaks version)" = "8.30.1"
           python3 - <<'PY'
           import json, re
           d = json.load(open("health.json"))
@@ -189,6 +202,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[scan,dev]"
+      - name: gitleaks 8.30.1 for the tests of how Lantern starts it, built from its source (Go checks what it downloads against its public record)
+        # tests/test_scanners.py runs against the real program where LANTERN_TESTS_GITLEAKS names one (where it
+        # names none, those tests are skipped and the log says so). It is not put on PATH: every other test, and
+        # Lantern's check of itself below, run as they do on a computer without it.
+        shell: bash
+        run: |
+          GOBIN="$RUNNER_TEMP/gitleaks" GOTOOLCHAIN=auto CGO_ENABLED=0 go install -ldflags "-X github.com/zricethezav/gitleaks/v8/version.Version=8.30.1" github.com/zricethezav/gitleaks/v8@v8.30.1
+          program="$RUNNER_TEMP/gitleaks/gitleaks$(go env GOEXE)"
+          test "$("$program" version)" = "8.30.1"
+          echo "LANTERN_TESTS_GITLEAKS=$program" >> "$GITHUB_ENV"
       - run: python -m pytest -q -rs
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
@@ -203,6 +226,33 @@ jobs:
           subprocess.run([*isolated, "lantern", "analyze", "tests/fixtures/nextapp", "--out", out], check=True)
           rules = {f["rule"] for f in json.load(open(os.path.join(out, "security.json"), encoding="utf-8"))["findings"]}
           assert "LW-AUTH-MISSING" in rules, rules
+
+  macos:
+    # macOS runs no other test of Lantern's. These are the ones whose answer the system itself gives: a name handed
+    # straight to a socket and the question who an address is, under the sandbox's guard and under the guard of
+    # Lantern's own tests, each beside its twins; and how gitleaks is started, with the real program.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # the run's own GitHub sign-in is not left in the checkout, where tests could read it
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[scan,dev]"
+      - name: gitleaks 8.30.1 for the tests of how Lantern starts it, built from its source (Go checks what it downloads against its public record)
+        # tests/test_scanners.py runs against the real program where LANTERN_TESTS_GITLEAKS names one (where it
+        # names none, those tests are skipped and the log says so). It is not put on PATH: every other test, and
+        # Lantern's check of itself below, run as they do on a computer without it.
+        shell: bash
+        run: |
+          GOBIN="$RUNNER_TEMP/gitleaks" GOTOOLCHAIN=auto CGO_ENABLED=0 go install -ldflags "-X github.com/zricethezav/gitleaks/v8/version.Version=8.30.1" github.com/zricethezav/gitleaks/v8@v8.30.1
+          program="$RUNNER_TEMP/gitleaks/gitleaks$(go env GOEXE)"
+          test "$("$program" version)" = "8.30.1"
+          echo "LANTERN_TESTS_GITLEAKS=$program" >> "$GITHUB_ENV"
+      - name: The guards' tests of a name in an address, and the tests of how gitleaks is started
+        run: |
+          python -m pytest -q -rs tests/test_sandbox_guards.py tests/test_sandbox.py tests/test_netguard.py tests/test_scanners.py -k "name_in_an_address or twins_a_number_this_computer or who_an_address_is or who_this_computer_is or asked_the_older_ways or handed_straight_to_a_socket or socket_class_of_the_tests_own or twins_this_computer_by_name or number_outside_is_still or gitleaks"
 
   browser:
     # The viewer in a real browser: no JS errors, and hostile text can't break or hijack the page.

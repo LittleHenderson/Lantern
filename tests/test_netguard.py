@@ -461,6 +461,135 @@ def test_every_way_to_name_an_outside_address_is_refused(network_attempts):
         six.close()
 
 
+# A name written into an address. Python's own events for `connect`, `connect_ex`, `bind`, `sendto` and `sendmsg`
+# come when the address is already a number, so the guard asks about the name itself first, as a lookup, exactly as
+# for `socket.getaddrinfo`; an address written as a number, and this computer under its names, go on as before.
+A_NAME = "lantern-probe.example"
+
+
+def _straight_ways(tcp, udp, name) -> list:
+    ways = [("connect", lambda: tcp.connect((name, 80))),
+            ("connect_ex", lambda: tcp.connect_ex((name, 80))),
+            ("bind", lambda: tcp.bind((name, 0))),
+            ("sendto", lambda: udp.sendto(b"x", (name, 53))),
+            ("sendto with flags", lambda: udp.sendto(b"x", 0, (name, 53)))]
+    if hasattr(socket.socket, "sendmsg"):                     # not on every system
+        ways.append(("sendmsg", lambda: udp.sendmsg([b"x"], [], 0, (name, 53))))
+    return ways
+
+
+@pytest.mark.network_refused("checks that a name in an address is refused as a lookup, before the system is asked")
+@pytest.mark.parametrize("name", [A_NAME, A_NAME.encode("ascii"), bytearray(A_NAME, "ascii")],
+                         ids=["text", "bytes", "bytearray"])
+def test_a_name_handed_straight_to_a_socket_is_refused_as_a_lookup(network_attempts, name):
+    tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    ways = _straight_ways(tcp, udp, name)
+    try:
+        for what, way in ways:
+            with pytest.raises(OSError, match=f"{ng.MARK}: lookup {A_NAME}") as refused:
+                way()
+            assert isinstance(refused.value, ng.Refused), what
+    finally:
+        tcp.close()
+        udp.close()
+    assert [(a["kind"], a["host"]) for a in network_attempts()] == [("lookup", A_NAME)] * len(ways)
+
+
+@pytest.mark.network_refused("checks that a socket class of a test's own is asked about a name in the same way")
+def test_a_socket_class_of_the_tests_own_is_asked_too(network_attempts):
+    class Mine(socket.socket):
+        def connect(self, address):
+            return super().connect(address)
+
+    mine = Mine(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(ng.Refused, match=f"lookup {A_NAME}"):
+            mine.connect((A_NAME, 443))
+    finally:
+        mine.close()
+    assert [(a["kind"], a["host"], a["port"]) for a in network_attempts()] == [("lookup", A_NAME, 443)]
+
+
+def test_the_twins_this_computer_by_name_and_by_number_goes_on_as_before():
+    """The same calls with `localhost` and with this computer's number, for which nothing is asked of anybody."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    box = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    callers = []
+    try:
+        server.bind(("localhost", 0))
+        server.listen(8)
+        server.settimeout(5)
+        port = server.getsockname()[1]
+        for way in ("connect", "connect_ex"):
+            for host in ("localhost", b"localhost", "127.0.0.1"):
+                c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                callers.append(c)
+                assert getattr(c, way)((host, port)) in (None, 0)
+                taken, _ = server.accept()
+                taken.close()
+        box.bind(("localhost", 0))
+        box.settimeout(5)
+        to = ("localhost", box.getsockname()[1])
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        callers.append(udp)
+        sent = [udp.sendto(b"a", to), udp.sendto(b"b", 0, to)]
+        if hasattr(udp, "sendmsg"):
+            sent.append(udp.sendmsg([b"c"], [], 0, to))
+        assert sent == [1] * len(sent) and sorted(box.recv(10) for _ in sent) == [b"a", b"b", b"c"][:len(sent)]
+    finally:
+        for s in (server, box, *callers):
+            s.close()
+
+
+@pytest.mark.network_refused("checks that an outside address written as a number is still refused as what it is")
+def test_a_number_outside_is_still_a_connection_or_a_datagram_and_no_lookup(network_attempts):
+    tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        with pytest.raises(OSError, match=f"{ng.MARK}: connect 192.0.2.1:80"):
+            tcp.connect(("192.0.2.1", 80))
+        with pytest.raises(OSError, match=f"{ng.MARK}: send 192.0.2.1:53"):
+            udp.sendto(b"x", ("192.0.2.1", 53))
+    finally:
+        tcp.close()
+        udp.close()
+    assert [(a["kind"], a["host"]) for a in network_attempts()] == [("connect", "192.0.2.1"), ("send", "192.0.2.1")]
+
+
+def test_what_is_no_name_in_an_address_is_left_to_the_system_to_refuse(tmp_path):
+    """What the guard has nothing to say about goes down as it came, and the system's own error comes back: an
+    address that is no pair, a host that is no text, a closed socket."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        for odd in (None, 5, (), "localhost", [A_NAME, 80], (None, 80), (5, 80)):
+            with pytest.raises((TypeError, OSError)) as said:
+                s.connect(odd)
+            assert ng.MARK not in str(said.value), odd
+    finally:
+        s.close()
+    with pytest.raises(OSError) as said:                       # a closed socket: the system's "bad file descriptor"
+        s.connect(("127.0.0.1", 9))
+    assert ng.MARK not in str(said.value)
+
+
+def test_a_declared_name_handed_straight_to_a_socket_is_learned_and_let_on(monkeypatch):
+    """A benchmark's declared host: the name is let through to the system's own lookup, and its addresses are
+    learned first, as for `socket.getaddrinfo`. (Asked of the guard's own step, so that nothing is looked up here.)"""
+    learned = []
+    monkeypatch.setattr(ng._S, "allow", frozenset({"declared.example"}))
+    monkeypatch.setattr(ng, "_learn", learned.append)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        assert ng._name_first(s, ("api.declared.example", 443)) is None
+        assert ng._name_first(s, ("127.0.0.1", 443)) is None and ng._name_first(s, ("192.0.2.1", 443)) is None
+        assert ng._name_first(s, ("localhost", 443)) is None and ng._name_first(s, ("", 0)) is None
+        assert ng._name_first(s, ("<broadcast>", 9)) is None
+    finally:
+        s.close()
+    assert learned == ["api.declared.example"]
+
+
 def _closed_copy_of_the_guard(tmp_path) -> Path:
     """The guard's two files in a folder that only its owner can enter, as a checkout under a private home folder is
     (CI's is). pytest's own folders are their owner's alone already; the mode says so here."""

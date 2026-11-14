@@ -42,6 +42,8 @@ import threading
 import time
 import urllib.parse
 
+import _socket
+
 LOG_ENV = "LANTERN_NETGUARD_LOG"       # every refused attempt, one JSON object per line, from every process
 ALLOW_ENV = "LANTERN_NETGUARD_ALLOW"   # host names a benchmark has declared (comma-separated); tests leave it empty
 DENY_ENV = "LANTERN_NETGUARD_DENY"     # ports on this computer where a forwarding proxy listens (comma-separated)
@@ -242,6 +244,55 @@ def _hook(event: str, args: tuple) -> None:
     raise Refused(errno.ENETUNREACH, f"{MARK}: {kind} {where} (tests and benchmarks may not reach the network)")
 
 
+# ------------------------------------------------------------------------------------------------ a name in an address
+# Python raises its events for `connect`, `connect_ex`, `bind`, `sendto` and `sendmsg` once the address is a number: a
+# name written into the address has been looked up by then. So each of these calls first asks about the name as the
+# lookup it is, with Python's own event for one (`socket.getaddrinfo`), and the hook judges it like any other lookup:
+# a declared host is learned and goes on, anything else is written down and refused. The five methods are replaced in
+# place on Python's socket class, so the class stays the one every program knows and a class made from it is asked
+# too. Not asked: code that takes the C type underneath (`_socket.socket`) or loads the `socket` module anew, and
+# whatever reaches the system without Python's `socket` module; tools/netless.py holds those where it runs.
+_FAMILY, _KIND, _PROTO = (getattr(_socket.socket, n).__get__ for n in ("family", "type", "proto"))
+
+
+def _name_first(sock, address) -> None:
+    """Ask about the name in `address` before the call that carries it goes down to the system."""
+    if type(address) is not tuple or not address:
+        return
+    host = address[0]
+    if not isinstance(host, (str, bytes, bytearray)):
+        return
+    h = _text(host)
+    if h == "<broadcast>" or _is_address(h) or is_local(host):
+        return
+    try:
+        family, kind, proto = _FAMILY(sock), _KIND(sock), _PROTO(sock)
+    except (TypeError, AttributeError):
+        return                               # no socket at all: what is wrong with the call is the system's to say
+    if family in _IP_FAMILIES:
+        sys.audit("socket.getaddrinfo", host, address[1] if len(address) > 1 else None, family, kind, proto)
+
+
+def _asks_first(name: str, where) -> None:
+    down = getattr(socket.socket, name, None)
+    if down is None:                         # sendmsg: not on every system
+        return
+
+    def call(self, *args, **more):
+        _name_first(self, where(args))
+        return down(self, *args, **more)
+
+    call.__name__, call.__qualname__, call.__doc__ = name, "socket." + name, down.__doc__
+    setattr(socket.socket, name, call)
+
+
+def _ask_before_names() -> None:
+    for name in ("connect", "connect_ex", "bind"):
+        _asks_first(name, lambda a: a[0] if a else None)
+    _asks_first("sendto", lambda a: a[-1] if len(a) > 1 else None)
+    _asks_first("sendmsg", lambda a: a[3] if len(a) > 3 else None)
+
+
 def install(log: str | None = None, allow=None, deny_ports=None) -> None:
     """Start refusing in this process. Safe to call again: the log, the declared hosts and the forwarding proxies'
     ports are updated, the hook is added once."""
@@ -260,6 +311,7 @@ def install(log: str | None = None, allow=None, deny_ports=None) -> None:
         except OSError:
             _S.hostname = ""
         sys.addaudithook(_hook)
+        _ask_before_names()
         _S.installed = True
 
 

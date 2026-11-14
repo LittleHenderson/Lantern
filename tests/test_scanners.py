@@ -9,9 +9,15 @@ line, the app's project summary, the stored results and the readiness score.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
+import os
+import re
+import secrets
 import socket
+import string
+import sys
 from pathlib import Path
 
 import pytest
@@ -185,15 +191,15 @@ def test_bandit_really_runs_and_fills_the_record(tmp_path):
 # ---------------------------------------------------------------- secrets: gitleaks and the built-in patterns
 
 
-def _gitleaks_present(monkeypatch):
-    monkeypatch.setattr(programs, "find", lambda name: "/usr/bin/gitleaks" if name == "gitleaks" else None)
+# gitleaks is asked about a file of Lantern's own before the project (the section after this one), so the stand-in
+# of these tests answers that first question as the real program does and `project` stands for the run that follows.
 
 
 def test_gitleaks_crash_falls_back_to_patterns_but_is_recorded_as_a_failure(tmp_path, monkeypatch):
     _write(tmp_path, {"config.py": 'KEY = "AKIA' + "ABCDEFGHIJKLMNOP" + '"\n'})
-    _gitleaks_present(monkeypatch)
-    _fake_tool(monkeypatch, _run(2, "", "panic: something broke\n"))
+    calls = _stand_in(monkeypatch, tmp_path, project=lambda cmd: _run(2, "", "panic: something broke\n"))
     f, infos = security.run_secrets(tmp_path)
+    assert [c["project"] for c in calls] == [False, True]
     by = {i["tool"]: i for i in infos}
     assert by["gitleaks"]["state"] == "failed" and "something broke" in by["gitleaks"]["why"]
     assert by["lantern-secrets"]["state"] == "ok" and by["lantern-secrets"]["fallback_for"] == "gitleaks"
@@ -202,15 +208,14 @@ def test_gitleaks_crash_falls_back_to_patterns_but_is_recorded_as_a_failure(tmp_
 
 def test_gitleaks_report_file_is_read_and_exit_code_one_means_findings(tmp_path, monkeypatch):
     _write(tmp_path, {"config.py": "x = 1\n"})
-    _gitleaks_present(monkeypatch)
 
-    def run_tool(cmd, *, timeout, cwd=None, env=None):
+    def project(cmd):
         report = Path(cmd[cmd.index("-r") + 1])
         assert report.suffix == ".json" and not str(report).startswith("/dev")
-        report.write_text(json.dumps([{"RuleID": "aws-access-token", "Description": "AWS key", "File": str(tmp_path / "config.py"),
-                                       "StartLine": 1}]), encoding="utf-8")
+        report.write_text(json.dumps([{"RuleID": "aws-access-token", "Description": "AWS key", "StartLine": 1,
+                                       "File": os.path.join(_after(cmd, "-s"), "config.py")}]), encoding="utf-8")
         return _run(1, "", "")
-    monkeypatch.setattr(scanresult, "run_tool", run_tool)
+    _stand_in(monkeypatch, tmp_path, project=project)
     f, infos = security.run_secrets(tmp_path)
     assert len(f) == 1 and f[0]["tool"] == "gitleaks" and f[0]["snippet"] == "[redacted]"
     assert infos == [infos[0]] and infos[0]["state"] == "ok" and infos[0]["exit_code"] == 1
@@ -218,23 +223,21 @@ def test_gitleaks_report_file_is_read_and_exit_code_one_means_findings(tmp_path,
 
 def test_gitleaks_clean_run_leaves_an_empty_report(tmp_path, monkeypatch):
     _write(tmp_path, {"config.py": "x = 1\n"})
-    _gitleaks_present(monkeypatch)
-    _fake_tool(monkeypatch, _run(0, "", ""))     # exit 0, report file never written
+    _stand_in(monkeypatch, tmp_path, project=lambda cmd: _run(0, "", ""))     # exit 0, report file never written
     f, infos = security.run_secrets(tmp_path)
     assert f == [] and infos[0]["tool"] == "gitleaks" and infos[0]["state"] == "ok" and infos[0]["findings"] == 0
 
 
 def test_gitleaks_timeout_and_broken_report_are_failures(tmp_path, monkeypatch):
     _write(tmp_path, {"config.py": "x = 1\n"})
-    _gitleaks_present(monkeypatch)
-    _fake_tool(monkeypatch, _run(None, "", "", timed_out=True))
+    _stand_in(monkeypatch, tmp_path, project=lambda cmd: _run(None, "", "", timed_out=True))
     _, infos = security.run_secrets(tmp_path)
     assert infos[0]["tool"] == "gitleaks" and infos[0]["state"] == "timeout" and infos[1]["tool"] == "lantern-secrets"
 
-    def run_tool(cmd, *, timeout, cwd=None, env=None):
+    def project(cmd):
         Path(cmd[cmd.index("-r") + 1]).write_text("<html>", encoding="utf-8")
         return _run(1, "", "")
-    monkeypatch.setattr(scanresult, "run_tool", run_tool)
+    _stand_in(monkeypatch, tmp_path, project=project)
     _, infos = security.run_secrets(tmp_path)
     assert infos[0]["state"] == "failed" and "broken JSON" in infos[0]["why"]
 
@@ -261,6 +264,361 @@ def test_built_in_secret_scan_counts_files_it_could_not_read(tmp_path, monkeypat
     f, infos = security.run_secrets(tmp_path)
     s = next(i for i in infos if i["tool"] == "lantern-secrets")
     assert s["state"] == "partial" and s["errors"] == ["b.py: Permission denied"] and s["scope"]["files"] == 2
+
+
+# ---------------------------------------------------------------- gitleaks: settings of Lantern's own, a folder of its own
+#
+# gitleaks takes what it is to look for, and what it is to leave out, from more places than its command line. So
+# Lantern starts it with a settings file of its own (gitleaks' own rules and nothing else), in an empty folder of
+# its own, with an empty list of findings to leave out, told to pass over a comment that switches a line off, with
+# no GITLEAKS_ variable of the shell, and hands it the project under a name of Lantern's own. Before the project it
+# is handed one file of Lantern's own that holds a key made for this run: a scanner that does not find that key is
+# not believed about the project, and the built-in patterns run. The stand-in tests run everywhere; the tests with
+# the real program run where LANTERN_TESTS_GITLEAKS names one (CI: one pinned version, built from its source).
+
+OWN_SETTINGS = "[extend]\nuseDefault = true\n"
+GITLEAKS = os.environ.get("LANTERN_TESTS_GITLEAKS", "").strip() and os.path.normpath(os.environ["LANTERN_TESTS_GITLEAKS"].strip())
+
+
+def _a_key() -> str:
+    """Text of the shape of a GitHub token, made for this run: never a real one and never in the repository."""
+    return "ghp_" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(36))
+
+
+def _after(cmd, flag):
+    return cmd[cmd.index(flag) + 1] if flag in cmd else None
+
+
+def _text_of(cmd, flag):
+    name = _after(cmd, flag)
+    return Path(name).read_text(encoding="utf-8") if name and os.path.isfile(name) else None
+
+
+def _in_project(name, repo) -> bool:
+    return Path(os.path.abspath(name)).is_relative_to(os.path.abspath(repo))
+
+
+def _finds_keys(cmd, where=None, also=()):
+    """What an honest gitleaks does with the folder it is handed: every line that holds a key of that shape, each
+    file named by the path the folder was handed under (`where`: a program that names the files another way)."""
+    source, rows = _after(cmd, "-s"), []
+    for folder, _, names in os.walk(source):
+        for name in sorted(names):
+            full = os.path.join(folder, name)
+            try:
+                lines = Path(full).read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            for n, line in enumerate(lines, 1):
+                if re.search(r"ghp_[0-9A-Za-z]{36}", line):
+                    rows.append({"RuleID": "github-pat", "Description": "GitHub token", "StartLine": n,
+                                 "File": full if where is None else where(full)})
+    rows += [{"RuleID": "github-pat", "Description": "GitHub token", "StartLine": 1, "File": os.path.join(source, x)}
+             for x in also]
+    Path(_after(cmd, "-r")).write_text(json.dumps(rows), encoding="utf-8")
+    return _run(0, "", "")
+
+
+def _stand_in(monkeypatch, repo, project=_finds_keys, first=_finds_keys):
+    """A gitleaks for these tests: `first` answers what Lantern asks it before the project, `project` the run on
+    the project. Gives the list of its calls: what each was started with, and what was there at that moment."""
+    calls, home = [], os.path.realpath(repo)
+
+    def run_tool(cmd, *, timeout, cwd=None, env=None):
+        source = _after(cmd, "-s")
+        on_project = os.path.realpath(source) == home
+        calls.append({"cmd": list(cmd), "cwd": cwd, "env": env, "source": source, "project": on_project,
+                      "settings": _text_of(cmd, "--config"), "leave_out": _text_of(cmd, "--gitleaks-ignore-path"),
+                      "in_cwd": sorted(os.listdir(cwd)) if cwd else None})
+        return (project if on_project else first)(cmd)
+    monkeypatch.setattr(scanresult, "run_tool", run_tool)
+    monkeypatch.setattr(programs, "find", lambda name, path=None: "/usr/bin/gitleaks" if name == "gitleaks" else None)
+    return calls
+
+
+def _kept(repo) -> dict:
+    """Every file of a folder with its text: what a run must leave exactly as it was."""
+    return {p.relative_to(repo).as_posix(): p.read_text(encoding="utf-8")
+            for p in sorted(Path(repo).rglob("*")) if p.is_file() and not p.is_symlink()}
+
+
+def _its_own(repo, key):
+    """A project that brings what gitleaks would take from a project: settings, a list of findings to leave out,
+    a comment on the line."""
+    here = repo / "config.py"
+    lines = [f"{name}:{rule}:1" for rule in ("github-pat", "generic-api-key")
+             for name in ("config.py", "./config.py", str(here), os.path.realpath(here))]
+    return _write(repo, {"config.py": f'TOKEN = "{key}"  # gitleaks:allow\n', ".gitleaks.toml": 'title = "the project\'s own"\n',
+                         ".gitleaksignore": "\n".join(lines) + "\n"})
+
+
+def test_gitleaks_is_started_with_settings_of_lanterns_own_in_a_folder_of_its_own(tmp_path, monkeypatch):
+    """Whatever the project and the person's shell bring, the program is started the same way, twice: on a file of
+    Lantern's own first, then on the project. Afterwards nothing of Lantern's is left and nothing of the project
+    is touched."""
+    repo = _its_own(tmp_path / "p", _a_key())
+    before = _kept(repo)
+    for name in ("GITLEAKS_CONFIG", "GITLEAKS_CONFIG_TOML", "GITLEAKS_ANYTHING"):
+        monkeypatch.setenv(name, str(repo / ".gitleaks.toml"))
+    calls = _stand_in(monkeypatch, repo)
+    found, records = security.run_secrets(repo)
+    assert [(f["tool"], f["file"], f["line"]) for f in found] == [("gitleaks", "config.py", 1)], (found, records)
+    assert records == [records[0]] and records[0]["state"] == "ok" and records[0]["way"] == "linked", records
+    assert [c["project"] for c in calls] == [False, True]
+    for c in calls:
+        cmd = c["cmd"]
+        assert c["settings"] == OWN_SETTINGS and c["leave_out"] == "" and "--ignore-gitleaks-allow" in cmd, cmd
+        assert not any(_in_project(_after(cmd, flag), repo) for flag in ("--config", "--gitleaks-ignore-path", "-r", "-s")), cmd
+        assert c["cwd"] and not _in_project(c["cwd"], repo) and c["in_cwd"] == [], c
+        assert not [k for k in c["env"] if k.upper().startswith("GITLEAKS_")] and c["env"].get("PATH"), sorted(c["env"])
+    way = calls[1]["source"]                       # the project, under a name of Lantern's own, as a folder
+    assert way.endswith(os.sep) and len(Path(way).name) >= 32 and Path(way).name != Path(calls[0]["source"]).name
+    for c in calls:                                # nothing of Lantern's is left, nothing of the project is touched
+        assert not os.path.lexists(c["source"].rstrip(os.sep)) and not os.path.exists(_after(c["cmd"], "--config"))
+        assert not os.path.exists(c["cwd"])
+    assert _kept(repo) == before
+    again = _stand_in(monkeypatch, repo)
+    security.run_secrets(repo)
+    assert Path(again[1]["source"]).name != Path(way).name          # a new name every run
+
+
+def test_what_gitleaks_found_keeps_the_projects_own_paths_and_its_id(tmp_path, monkeypatch):
+    """The twin of every refusal below: an honest run. A finding is named by the file's path in the project and
+    keeps the id it always had, so what a person accepted or fixed is still the same finding."""
+    key = _a_key()
+    repo = _write(tmp_path / "p", {"config.py": f'x = 1\nTOKEN = "{key}"\n', "pkg/deep/settings.py": f'TOKEN = "{key}"\n',
+                                   "clean.py": "y = 2\n"})
+    _stand_in(monkeypatch, repo)
+    found, records = security.run_secrets(repo)
+    assert sorted((f["file"], f["line"]) for f in found) == [("config.py", 2), ("pkg/deep/settings.py", 1)], found
+    assert {f["id"] for f in found} == {security._fid("gitleaks", "github-pat", "config.py", 2),
+                                        security._fid("gitleaks", "github-pat", "pkg/deep/settings.py", 1)}
+    assert all(f["snippet"] == "[redacted]" and key not in json.dumps(f) for f in found)
+    assert records == [records[0]] and records[0]["state"] == "ok" and records[0]["findings"] == 2, records
+
+
+def _finds_nothing(cmd):
+    Path(_after(cmd, "-r")).write_text("[]", encoding="utf-8")
+    return _run(0, "", "")
+
+
+@pytest.mark.parametrize("first, words", [
+    (_finds_nothing, "did not find"),
+    (lambda cmd: _run(0, "", ""), "did not find"),
+    (lambda cmd: _run(126, "", "Error: unknown flag: --ignore-gitleaks-allow\n"), "unknown flag"),
+    (lambda cmd: _run(1, "", "FTL could not load the settings\n"), "could not load the settings"),
+    (lambda cmd: _run(None, "", "", timed_out=True), "did not answer"),
+    (lambda cmd: _run(None, error="OSError: [Errno 8] Exec format error"), "Exec format error"),
+], ids=["it finds nothing", "it writes no report", "it does not know an option", "it ends with an error",
+        "it does not answer", "it cannot be started"])
+def test_a_gitleaks_that_does_not_find_lanterns_own_key_is_not_believed_about_the_project(tmp_path, monkeypatch, first, words):
+    """Old enough not to know an option, started with rules that find nothing, or not started at all: what such a
+    program would say about the project is not asked for. The record says why, and the built-in patterns run."""
+    repo = _write(tmp_path / "p", {"config.py": 'KEY = "AKIA' + "ABCDEFGHIJKLMNOP" + '"\n'})
+    calls = _stand_in(monkeypatch, repo, first=first)
+    found, records = security.run_secrets(repo)
+    by = {r["tool"]: r for r in records}
+    assert by["gitleaks"]["state"] == "failed" and words in by["gitleaks"]["why"], by["gitleaks"]
+    assert "Lantern" in by["gitleaks"]["why"] and calls and not any(c["project"] for c in calls), by["gitleaks"]
+    assert by["lantern-secrets"]["state"] == "ok" and by["lantern-secrets"]["fallback_for"] == "gitleaks"
+    assert [(f["tool"], f["file"]) for f in found] == [("lantern-secrets", "config.py")]
+
+
+def test_a_file_gitleaks_names_outside_what_it_was_handed_fails_the_run(tmp_path, monkeypatch):
+    """The program found Lantern's own key under the name it was handed, and then names the project's files
+    another way: its list cannot be told to be whole. Failed, in the record's words, and the patterns run."""
+    repo = _write(tmp_path / "p", {"config.py": f'TOKEN = "{_a_key()}"\n', "aws.py": 'KEY = "AKIA' + "ABCDEFGHIJKLMNOP" + '"\n'})
+    calls = _stand_in(monkeypatch, repo, project=lambda cmd: _finds_keys(cmd, where=os.path.realpath))
+    found, records = security.run_secrets(repo)
+    by = {r["tool"]: r for r in records}
+    assert [c["project"] for c in calls] == [False, True] and by["gitleaks"]["state"] == "failed", records
+    assert "outside" in by["gitleaks"]["why"] and by["lantern-secrets"]["fallback_for"] == "gitleaks", by["gitleaks"]
+    assert {f["tool"] for f in found} == {"lantern-secrets"}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a link made by the test: POSIX")
+def test_a_file_gitleaks_names_through_a_link_out_of_the_project_or_that_is_not_there_is_no_finding(tmp_path, monkeypatch):
+    """A scanner's row is a finding only for a file of the project. The twin, a plain file two folders down, is in
+    the test above."""
+    outside = _write(tmp_path / "elsewhere", {"secret.py": f'TOKEN = "{_a_key()}"\n'})
+    repo = _write(tmp_path / "p", {"config.py": f'TOKEN = "{_a_key()}"\n'})
+    (repo / "out").symlink_to(outside, target_is_directory=True)
+    _stand_in(monkeypatch, repo, project=lambda cmd: _finds_keys(cmd, also=("out/secret.py", "gone.py")))
+    found, records = security.run_secrets(repo)
+    assert [f["file"] for f in found] == ["config.py"] and records[0]["state"] == "ok" and records[0]["findings"] == 1, (found, records)
+
+
+def test_without_a_folder_of_lanterns_own_gitleaks_is_not_started(tmp_path, monkeypatch):
+    repo = _write(tmp_path / "p", {"config.py": 'KEY = "AKIA' + "ABCDEFGHIJKLMNOP" + '"\n'})
+    calls = _stand_in(monkeypatch, repo)
+
+    @contextlib.contextmanager
+    def no_folder():
+        raise OSError(28, "No space left on device")
+        yield
+    monkeypatch.setattr(programs, "folder", no_folder)
+    found, records = security.run_secrets(repo)
+    by = {r["tool"]: r for r in records}
+    assert calls == [] and by["gitleaks"]["state"] == "failed" and "No space left on device" in by["gitleaks"]["why"], records
+    assert "folder" in by["gitleaks"]["why"] and by["lantern-secrets"]["fallback_for"] == "gitleaks"
+    assert [f["tool"] for f in found] == ["lantern-secrets"]
+
+
+def _no_link(monkeypatch):
+    def refuse(target, link):
+        raise OSError(1, "Operation not permitted")
+    monkeypatch.setattr(security, "_gitleaks_link", refuse)
+
+
+def test_where_no_name_of_lanterns_own_can_be_made_gitleaks_gets_the_project_by_its_path(tmp_path, monkeypatch):
+    """A system that lets Lantern make no link: the project is handed over as it always was, with the settings,
+    the folder and the first question as everywhere. That is as good where the project brings no list of findings
+    to leave out."""
+    repo = _write(tmp_path / "p", {"config.py": f'TOKEN = "{_a_key()}"  # gitleaks:allow\n', ".gitleaks.toml": 'title = "own"\n'})
+    _no_link(monkeypatch)
+    calls = _stand_in(monkeypatch, repo)
+    found, records = security.run_secrets(repo)
+    assert [f["file"] for f in found] == ["config.py"] and records == [records[0]], (found, records)
+    assert records[0]["state"] == "ok" and records[0]["way"] == "plain", records
+    assert [c["project"] for c in calls] == [False, True] and calls[1]["source"] == str(repo)
+    for c in calls:
+        assert c["settings"] == OWN_SETTINGS and c["leave_out"] == "" and "--ignore-gitleaks-allow" in c["cmd"]
+        assert not _in_project(c["cwd"], repo) and c["in_cwd"] == []
+
+
+@pytest.mark.parametrize("as_a", ["file", "link"])
+def test_where_no_name_of_lanterns_own_can_be_made_a_project_with_its_own_list_is_not_scanned_by_gitleaks(tmp_path, monkeypatch, as_a):
+    """The same system, and the project brings a list of findings for gitleaks to leave out: handed over by its
+    own path the program would read it. It is not started on the project; the record says why; the patterns run."""
+    if as_a == "link" and sys.platform == "win32":
+        pytest.skip("a link made by the test: POSIX")
+    repo = _write(tmp_path / "p", {"config.py": 'KEY = "AKIA' + "ABCDEFGHIJKLMNOP" + '"\n'})
+    if as_a == "file":
+        (repo / ".gitleaksignore").write_text("config.py:aws-access-token:1\n", encoding="utf-8")
+    else:
+        (repo / ".gitleaksignore").symlink_to(tmp_path / "nowhere")
+    _no_link(monkeypatch)
+    calls = _stand_in(monkeypatch, repo)
+    found, records = security.run_secrets(repo)
+    by = {r["tool"]: r for r in records}
+    assert by["gitleaks"]["state"] == "failed" and ".gitleaksignore" in by["gitleaks"]["why"], by["gitleaks"]
+    assert not any(c["project"] for c in calls) and by["lantern-secrets"]["fallback_for"] == "gitleaks"
+    assert [(f["tool"], f["file"]) for f in found] == [("lantern-secrets", "config.py")]
+
+
+def test_a_gitleaks_that_names_files_by_where_a_link_leads_gets_the_project_by_its_path(tmp_path, monkeypatch):
+    """A program that looks through the name it was handed and names files by where it leads: the name of
+    Lantern's own protects nothing there, so the first question fails that way and is asked the plain way."""
+    key = _a_key()
+    repo = _write(tmp_path / "p", {"config.py": f'TOKEN = "{key}"\n'})
+    through = lambda cmd: _finds_keys(cmd, where=os.path.realpath)      # noqa: E731
+    calls = _stand_in(monkeypatch, repo, project=through, first=through)
+    found, records = security.run_secrets(repo)
+    assert [f["file"] for f in found] == ["config.py"] and records[0]["state"] == "ok" and records[0]["way"] == "plain", records
+    assert [c["project"] for c in calls] == [False, False, True] and calls[2]["source"] == str(repo)
+    (repo / ".gitleaksignore").write_text("config.py:github-pat:1\n", encoding="utf-8")
+    calls = _stand_in(monkeypatch, repo, project=through, first=through)
+    found, records = security.run_secrets(repo)
+    assert records[0]["state"] == "failed" and not any(c["project"] for c in calls), records
+
+
+SH_GITLEAKS = """#!/bin/sh
+# a stand-in for the gitleaks program: it writes down how it was started, and names every file with a key in it
+here=$(dirname "$0")
+echo "$1 cwd=$(pwd) variables=$(env | grep -c '^GITLEAKS_')" >> "$here/asked.log"
+if [ "$1" = "version" ]; then echo 8.30.1; exit 0; fi
+while [ $# -gt 0 ]; do
+  case "$1" in -s) src="$2" ;; -r) out="$2" ;; esac
+  shift
+done
+rows=""
+for f in $(grep -rl 'ghp_' "$src" 2>/dev/null); do
+  n=$(grep -n 'ghp_' "$f" | head -1 | cut -d: -f1)
+  rows="$rows${rows:+,}{\\"RuleID\\": \\"github-pat\\", \\"File\\": \\"$f\\", \\"StartLine\\": $n}"
+done
+printf '[%s]' "$rows" > "$out"
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a shell script stands in for the program: POSIX")
+def test_every_start_of_gitleaks_is_in_a_folder_of_lanterns_own_without_its_variables(tmp_path, monkeypatch):
+    """A real process this time, started inside the project with the shell's variables set: also the question
+    which version it is goes to a program that stands in a folder of Lantern's own and sees none of them."""
+    repo = _its_own(tmp_path / "p", _a_key())
+    program = tmp_path / "bin" / "gitleaks"
+    _write(tmp_path, {"bin/gitleaks": SH_GITLEAKS})
+    program.chmod(0o755)
+    monkeypatch.setenv("PATH", str(program.parent) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setenv("GITLEAKS_CONFIG", str(repo / ".gitleaks.toml"))
+    monkeypatch.setenv("GITLEAKS_CONFIG_TOML", 'title = "the shell\'s"')
+    monkeypatch.chdir(repo)
+    found, records = security.run_secrets(repo)
+    assert [(f["tool"], f["file"], f["line"]) for f in found] == [("gitleaks", "config.py", 1)], (found, records)
+    assert records[0]["state"] == "ok" and records[0]["version"] == "8.30.1", records
+    asked = (program.parent / "asked.log").read_text(encoding="utf-8").splitlines()
+    assert sorted(line.split()[0] for line in asked) == ["detect", "detect", "version"], asked
+    for line in asked:
+        cwd = line.split(" cwd=", 1)[1].rsplit(" variables=", 1)[0]
+        assert line.endswith(" variables=0") and not _in_project(cwd, repo) and not os.path.exists(cwd), line
+
+
+# The real program. Each dangerous project beside its twin: the same key alone, and a project with no key.
+
+needs_gitleaks = pytest.mark.skipif(not GITLEAKS, reason="no gitleaks named for these tests (LANTERN_TESTS_GITLEAKS)")
+
+
+@pytest.fixture
+def the_real_one(monkeypatch, request):
+    """The gitleaks this run was told of, as the program Lantern finds. A run told of one that is not there fails."""
+    assert os.path.isabs(GITLEAKS) and os.path.isfile(GITLEAKS), f"LANTERN_TESTS_GITLEAKS names no program: {GITLEAKS!r}"
+    real = programs.find
+    monkeypatch.setattr(programs, "find", lambda name, path=None: GITLEAKS if name == "gitleaks" else real(name, path))
+    for name in [k for k in os.environ if k.upper().startswith("GITLEAKS_")]:
+        monkeypatch.delenv(name)
+
+    def said(records):
+        ran = getattr(request.config, "_lantern_ran_against", None)
+        if ran is None:
+            ran = request.config._lantern_ran_against = {}
+        ran["gitleaks"] = f"{records[0].get('version') or 'of a version it did not tell'} ({records[0].get('way')})"
+    return said
+
+
+@needs_gitleaks
+def test_the_real_gitleaks_finds_a_key_and_finds_none_where_there_is_none(tmp_path, the_real_one):
+    key = _a_key()
+    repo = _write(tmp_path / "p", {"config.py": f'TOKEN = "{key}"\n', "app.py": "def go():\n    return 1\n"})
+    found, records = security.run_secrets(repo)
+    the_real_one(records)
+    assert [(f["tool"], f["rule"], f["file"], f["line"]) for f in found] == [("gitleaks", "github-pat", "config.py", 1)], (found, records)
+    assert records == [records[0]] and records[0]["state"] == "ok" and records[0]["findings"] == 1, records
+    assert key not in json.dumps(found) + json.dumps(records)
+    clean = _write(tmp_path / "q", {"config.py": 'TOKEN = os.environ["TOKEN"]\n', "app.py": "def go():\n    return 1\n"})
+    found, records = security.run_secrets(clean)
+    assert found == [] and records == [records[0]] and records[0]["state"] == "ok" and records[0]["findings"] == 0, records
+
+
+@needs_gitleaks
+def test_the_real_gitleaks_finds_the_same_key_beside_everything_a_project_and_a_shell_can_bring(tmp_path, monkeypatch, the_real_one):
+    """The same key and the same finding, with the project's own settings file, its list of findings to leave
+    out, a comment on the line, and the shell's variables for settings."""
+    key = _a_key()
+    alone = _write(tmp_path / "alone" / "p", {"config.py": f'TOKEN = "{key}"\n'})
+    want, _ = security.run_secrets(alone)
+    repo = _its_own(tmp_path / "beside" / "p", key)
+    _write(repo, {"pkg/.gitleaksignore": "x:github-pat:1\n", "pkg/.gitleaks.toml": 'title = "deeper"\n',
+                  "pkg/inner.py": f'TOKEN = "{key}"  # gitleaks:allow\n'})
+    before = _kept(repo)
+    nothing = _write(tmp_path / "shell", {"none.toml": 'title = "the shell\'s"\n'}) / "none.toml"
+    monkeypatch.setenv("GITLEAKS_CONFIG", str(nothing))
+    monkeypatch.setenv("GITLEAKS_CONFIG_TOML", 'title = "the shell\'s"\n')
+    monkeypatch.chdir(repo)
+    found, records = security.run_secrets(repo)
+    the_real_one(records)
+    assert sorted((f["rule"], f["file"], f["line"]) for f in found) == [("github-pat", "config.py", 1), ("github-pat", "pkg/inner.py", 1)], (found, records)
+    assert records == [records[0]] and records[0]["state"] == "ok", records
+    assert [f["id"] for f in found if f["file"] == "config.py"] == [f["id"] for f in want] and len(want) == 1
+    assert _kept(repo) == before and key not in json.dumps(found) + json.dumps(records)
 
 
 # ---------------------------------------------------------------- pip-audit

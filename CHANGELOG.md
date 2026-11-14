@@ -9,6 +9,83 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- **The guard asks about a name before the system looks it up, and gitleaks is started on Lantern's terms**
+  (2026-11-14; stage 0 of the roadmap of 2026-11-14: two places where a guard that was there did not cover all it
+  stands for. Each was checked against Python itself and against the real program before it was touched, each
+  fixed after tests that failed, each dangerous case beside twins that must keep working).
+  - **The Python guard of the test sandbox, and the guard of Lantern's own tests.** *What was wrong* (measured on
+    Python 3.13.18). The guard refuses a question about a name (`getaddrinfo`, `gethostbyname` and its like) through
+    Python's audit events. For an address handed straight to a socket (`connect`, `connect_ex`, `bind`, `sendto`,
+    `sendmsg`) Python raises its event only once the address is a number: a host name written there had been asked
+    of the system by the time the guard was told, and the guard then refused the connection. `socket.getnameinfo`,
+    which asks who an address is, was not read by the guard, and who this computer is under its own name
+    (`socket.getfqdn`) was asked of the system. On Linux, in a network of the run's own or behind the run's
+    doorman, such a question could not leave the computer; on macOS and Windows, and in Lantern's own tests run
+    without the no-network runner, the Python guard was all that stood there.
+    *Now.* The five methods are replaced in place on `socket.socket` (`sandbox.SITECUSTOMIZE`: `_name_first`,
+    `_asks_first`). A name in an address raises Python's own event for a lookup first, so a project's own hooks
+    hear of it as of any lookup, and is refused and reported as `network lookup '<name>'`; a number, this
+    computer's own names and `<broadcast>` go down as before. `getnameinfo` is read (`_who`): an address that is
+    only written out (`NI_NUMERICHOST`) goes down, who an address belongs to goes down only for this computer's own
+    address in a network of the run's own, anything else is a lookup. Who this computer is under its own name is
+    answered by the guard itself where the run has no network of its own (`_whose`): honest code that asks (a mail
+    library for a message's id, an HTTP server when it starts) gets its answer, and the system asks nobody. The
+    guard of Lantern's own tests does the same (`tools/netguard/lantern_netguard.py`, `_ask_before_names`): a
+    declared host is learned and let on, any other name is written down and refused before the system is asked.
+    Tests: `tests/test_sandbox_guards.py` (28; 4 new), `tests/test_netguard.py` (142; 8 new),
+    `tests/test_sandbox_own_network.py` (19; 1 new), one line of `tests/test_sandbox.py`. On the code before, 9 of
+    the 13 new tests fail and the 4 twins pass (the four files: 9 failed, 187 passed, 16 skipped); now 196 pass and
+    16 are skipped. CI has a `macos` job that runs the new tests there; until now no test of the guard ran on macOS.
+    Not covered: the asking is on `socket.socket` and on classes made from it. Code that takes the socket type
+    beneath Python's module, loads the module anew, or is not Python is held by the kernel's walls only, which
+    macOS and Windows do not have. `gethostbyaddr("127.0.0.1")` is still answered by the system where the run has
+    no network of its own, while `getnameinfo` for the same address is refused there.
+  - **gitleaks, the secrets scanner.** *What was wrong* (the code before, 137ec6f; gitleaks 8.30.1 built from its
+    source, 34 ways of starting it tried by hand). gitleaks was started as it comes: on the project's folder, with
+    the shell's variables. It takes settings from a file in the folder it scans and from two variables, a list of
+    findings to leave out from that folder, and comments in the code that switch a line off. With any of them a
+    scan could find nothing where there is a key, and Lantern's record of it said `ok`: what a `.bandit` file did
+    for Bandit and a `.npmrc` for npm until 2026-11-10, whose notes said that gitleaks had not been measured.
+    *Now* (`security._run_gitleaks`, `_GitleaksOwn`). gitleaks is started in a folder Lantern made for the run
+    (`programs.folder()`), with a settings file Lantern wrote (`--config`: gitleaks' own whole rule set), an empty
+    list of findings to leave out (`--gitleaks-ignore-path`), `--ignore-gitleaks-allow`, and without any
+    `GITLEAKS_…` variable. Measured: that is not enough by itself, because gitleaks 8.30.1 reads a leave-out list at
+    the top of the folder it is handed whatever it is told. So the project is handed over under a name of Lantern's
+    own: a link in Lantern's folder with a new random name each run (`_gitleaks_link`; on Windows a junction where
+    no symlink can be made). The files gitleaks reports are mapped back by name (`_gitleaks_beneath`), and a
+    finding's id is what it was. The link is written with a separator at its end: without one gitleaks 8.30.1
+    walks nothing, finds nothing and ends with 0.
+    **A first question before the project** (`_gitleaks_first`; every run, about 0.05 s). gitleaks is asked the same
+    way about a folder of Lantern's own: a key made for this run on a line with an allow comment, beside a settings
+    file with no rules and a leave-out list that names the finding. A gitleaks that does not find that key (one too
+    old to know an option, one that names files by where a link leads) is not believed about the project. Then: the
+    linked way (`way: "linked"` in the record); where that cannot be had, the project by its own path if it has no
+    leave-out list at its top, after a first question asked that way (`way: "plain"`); otherwise gitleaks is not
+    started on the project, the record says `failed` with the reason and the built-in patterns run in its place
+    (`fallback_for`), so the release decision's scanners criterion reads missing, never passed. A file gitleaks
+    names is a finding only inside the project (`inside_repo`); one it names outside what it was handed fails the
+    run.
+    Changed for the person: a `.gitleaks.toml`, a `.gitleaksignore` and `gitleaks:allow` comments of their own no
+    longer change what Lantern's scan reports (to set a finding aside, `lantern accept` keeps it listed with its
+    reason), and a gitleaks that does not pass the first question is said to have failed, with the options Lantern
+    starts it with.
+    Tests: `tests/test_scanners.py` (66; 18 new cases, 4 changed; 16 of the new with a stand-in program on every
+    system, 2 with the real program), `tests/test_programs.py`, `tests/test_project_files.py`. On the code before,
+    18 of the 278 tests of the three files fail (257 pass, 3 skipped); now 275 pass and 3 are skipped. The real
+    program is named to the tests by `LANTERN_TESTS_GITLEAKS=<full path>`. CI builds gitleaks 8.30.1 from its
+    source with Go, which checks what it downloads against its public record, in the Linux, Windows and macOS
+    jobs, and keeps it off PATH, so that Lantern's check of itself runs as on a computer without it; the Linux job
+    fails unless its log says the tests started "gitleaks 8.30.1 (linked)". `cloud/Dockerfile` builds the same
+    version into the website's image: from the next deploy the website's checks use gitleaks' rules where they
+    used the built-in patterns.
+    Measured: on the 15 sample apps the built-in patterns find 0 secrets and gitleaks, started this way, 1 (a key
+    in a notebook of the AI sample); under the website step's memory limit a large project (Django, 41.58 MB read)
+    took 8.9 s at 2 GB and 8.06 s at 1 GB; the starter apps' planted problems are still found and their fixes still
+    clear with gitleaks on PATH (`tests/test_learn.py`: 11 passed).
+    Not covered: measured against gitleaks 8.30.1 only, by hand on Linux only; no older gitleaks was tried (one that
+    does not pass the first question is not used); an allow comment is not read as an accepted risk the way
+    `# nosec` is; a project far larger than the one measured could take gitleaks past the website step's memory
+    limit (the record then says `failed`).
 - **A library's version is one version however it is written, and a store's answer that is no answer reads "could
   not be reached"** (2026-11-14; two small faults an outside audit found in the build step of 2026-11-14, each
   checked against the code before it was touched; neither let anything through, both kept a project's tests from

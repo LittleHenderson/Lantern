@@ -271,6 +271,20 @@ def _via_setup(tmp_path):
     assert str(tmp_path / "own" / "lantern") in text and '"./lantern"' not in text and " ./lantern " not in text, text
 
 
+# Lantern asks gitleaks about a file of its own before the project, so the person's own one names every file under
+# the folder it is handed (-s) that holds a key of the shape Lantern makes for that question, in its report (-r).
+GITLEAKS_ANSWERS = """if [ "$1" = "version" ]; then echo 8.18.0; exit 0; fi
+while [ $# -gt 0 ]; do
+  case "$1" in -s) src="$2" ;; -r) out="$2" ;; esac
+  shift
+done
+rows=""
+for f in $(grep -rl 'ghp_' "$src" 2>/dev/null); do
+  rows="$rows${rows:+,}{\\"RuleID\\": \\"github-pat\\", \\"File\\": \\"$f\\", \\"StartLine\\": 1}"
+done
+printf '[%s]' "$rows" > "$out"
+"""
+
 WAYS = {
     # the program, what the person's own one answers, how Lantern is asked to start it
     "git": ("git", None, _via_git),
@@ -278,8 +292,7 @@ WAYS = {
     "git, for Lantern's own commit": ("git", None, _via_engine),
     "npm": ("npm", 'if [ "$1" = "--version" ]; then echo 10.0.0; else echo \'{"vulnerabilities": {}}\'; fi', _via_npm),
     "pip-audit": ("pip-audit", 'echo \'{"dependencies": [], "fixes": []}\'', _via_pip_audit),
-    "gitleaks": ("gitleaks", 'if [ "$1" = "version" ]; then echo 8.18.0; exit 0; fi\n'
-                             'while [ $# -gt 0 ]; do if [ "$1" = "-r" ]; then printf "[]" > "$2"; fi; shift; done', _via_gitleaks),
+    "gitleaks": ("gitleaks", GITLEAKS_ANSWERS, _via_gitleaks),
     "tesseract": ("tesseract", "echo READ 4821", _via_tesseract),
     "docker": ("docker", "echo 27.0.0", _via_docker),
     "lantern, in the words for an assistant's settings": ("lantern", "echo lantern", _via_setup),
