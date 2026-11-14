@@ -139,6 +139,15 @@ class PyStore(_Store):
         self.sha256[fname] = digest
         return digest
 
+    def put(self, name: str, fname: str, data: bytes, says: str | None = None) -> str:
+        """Put a file made elsewhere under a library's name (a source package of any shape); returns its SHA-256.
+        `says` is the SHA-256 the store's page names for it, where a test wants the page to name another."""
+        digest = hashlib.sha256(data).hexdigest()
+        self.pages[f"/files/{fname}"] = ("application/octet-stream", data)
+        self.files.setdefault(_norm(name), []).append((fname, says or digest))
+        self.sha256[fname] = digest
+        return digest
+
     def answer(self, path: str):
         m = re.fullmatch(r"/simple/([^/]+)/?", path)
         if m and _norm(m.group(1)) in self.files:

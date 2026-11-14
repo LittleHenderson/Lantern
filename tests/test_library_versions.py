@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from stores import NpmStore, PyStore
+from stores import NpmStore, PyStore, sdist
 from test_libraries import UNITTEST, _check, _js_project, _named, _online, _py_project, needs_npm
 
 from lantern import sandbox
@@ -251,16 +251,19 @@ FILES_NAMED = ["uv.lock", "poetry.lock", "pdm.lock"]        # these list each fi
 
 
 def _for_another_system(folder: Path, store: PyStore, kind: str, older: bool = True, built: bool = True,
-                        names: str = "stage2mac") -> Path:
+                        names: str = "stage2mac", source: bytes | None = None) -> Path:
     """A project that names `stage2sample` and `stage2mac`, with a lock file that fixes `stage2mac` 3.0.0. The
-    store has that version ready-built for another system than this one (`built`) and as source, and (`older`) a
-    2.0.0 for every system, which the lock file does not name."""
+    store has that version ready-built for another system than this one (`built`) and as source (`source`: the
+    package, or one that says so if anything of it is run), and (`older`) a 2.0.0 for every system, which the
+    lock file does not name."""
     files = []
     if built:
         tag = "py3-none-" + ELSEWHERE[0]
         files.append((f"stage2mac-3.0.0-{tag}.whl", store.add("stage2mac", "3.0.0", {"stage2mac.py": "N = 3\n"}, tag=tag)))
-    files.append(("stage2mac-3.0.0.tar.gz", store.add("stage2mac", "3.0.0", source=True, files={
-        "setup.py": "raise SystemExit('PLANTED-BUILT: the source of a library was run')\n", "stage2mac.py": "N = 3\n"})))
+    if source is None:
+        source = sdist("stage2mac", "3.0.0", {
+            "setup.py": "raise SystemExit('PLANTED-BUILT: the source of a library was run')\n", "stage2mac.py": "N = 3\n"})[1]
+    files.append(("stage2mac-3.0.0.tar.gz", store.put("stage2mac", "stage2mac-3.0.0.tar.gz", source)))
     if older:
         store.add("stage2mac", "2.0.0", {"stage2mac.py": "N = 2\n"})
     repo = _locked_project(folder, kind, [("stage2sample", "1.0.0", store.sha256[WHEEL]), ("stage2mac", "3.0.0", files)])
@@ -276,14 +279,23 @@ def _for_another_system(folder: Path, store: PyStore, kind: str, older: bool = T
     return repo
 
 
+@pytest.fixture()
+def builds_nothing(monkeypatch):
+    """A computer on which Lantern builds no library: one where nothing holds a program that is not Python to the
+    walls of the tests' run (macOS, Windows, a sandbox inside a sandbox). Where those walls stand, a library that
+    is there as source is built behind them (`tests/test_library_build.py`)."""
+    monkeypatch.setattr(sandbox, "held_below_python", lambda: False)
+
+
 @pytest.mark.parametrize("older", [True, False], ids=["an older one fits", "no version fits"])
 @pytest.mark.parametrize("kind", FILES_NAMED)
-def test_a_version_that_is_ready_built_for_another_system_only_is_said_as_that(tmp_path, monkeypatch, pystore, kind, older):
+def test_a_version_that_is_ready_built_for_another_system_only_is_said_as_that(tmp_path, monkeypatch, pystore, kind, older,
+                                                                              builds_nothing):
     """The lock file fixes a version that the store has ready-built for another system only, and as source. Found
     on a public project (2026-11-13): pip's word for it is "conflicting dependencies", and Lantern said "the
     versions the project names cannot be had together", which sends the reader after a conflict that is not there.
-    The source is not asked for and nothing of it runs, no test is run, and the reason names the library, its
-    version and the system the lock file lists it for."""
+    Where no library is built, the source is not asked for and nothing of it runs, no test is run, and the reason
+    names the library, its version and the system the lock file lists it for."""
     _online(monkeypatch, python=pystore)
     repo = _for_another_system(tmp_path / "proj", pystore, kind, older=older)
     (repo / "test_it.py").write_text("raise SystemExit('PLANTED-RAN: a test file was run')\n", encoding="utf-8")
@@ -292,13 +304,14 @@ def test_a_version_that_is_ready_built_for_another_system_only_is_said_as_that(t
         sandbox.run(repo, UNITTEST, log=lines.append)
     said = str(e.value)
     assert "stage2mac 3.0.0" in said and "lock file" in said and "no ready-built package for" in said, said
-    assert f"for {ELSEWHERE[1]} only" in said and "does not build" in said and "tests were not run" in said, said
+    assert f"for {ELSEWHERE[1]} only" in said and "does not build a library here" in said, said
+    assert "tests were not run" in said, said
     assert "cannot be had together" not in said and "PLANTED" not in " ".join(lines), (said, lines)
     assert not any(path.endswith(".tar.gz") for path in pystore.seen), pystore.seen
 
 
 @pytest.mark.parametrize("kind", FILES_NAMED)
-def test_a_version_that_is_there_as_source_only_is_said_as_that(tmp_path, monkeypatch, pystore, kind):
+def test_a_version_that_is_there_as_source_only_is_said_as_that(tmp_path, monkeypatch, pystore, kind, builds_nothing):
     """The same with no ready-built file of that version at all: the lock file lists the source and nothing else."""
     _online(monkeypatch, python=pystore)
     repo = _for_another_system(tmp_path / "proj", pystore, kind, built=False)
@@ -307,12 +320,12 @@ def test_a_version_that_is_there_as_source_only_is_said_as_that(tmp_path, monkey
     with pytest.raises(sandbox.NoLibraries) as e:
         sandbox.run(repo, UNITTEST, log=lines.append)
     said = str(e.value)
-    assert "stage2mac 3.0.0" in said and "as source only" in said and "does not build" in said, said
+    assert "stage2mac 3.0.0" in said and "as source only" in said and "does not build a library here" in said, said
     assert "cannot be had together" not in said and ELSEWHERE[1] not in said and "PLANTED" not in " ".join(lines), said
     assert not any(path.endswith(".tar.gz") for path in pystore.seen), pystore.seen
 
 
-def test_a_lock_file_that_names_no_files_gets_no_reason_it_cannot_know(tmp_path, monkeypatch, pystore):
+def test_a_lock_file_that_names_no_files_gets_no_reason_it_cannot_know(tmp_path, monkeypatch, pystore, builds_nothing):
     """Pipenv's lock file names fingerprints and no file: which systems a version is built for is not in it. The
     reason then says what pip said and names the library, and claims nothing about systems."""
     _online(monkeypatch, python=pystore)

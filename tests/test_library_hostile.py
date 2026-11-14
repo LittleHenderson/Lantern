@@ -34,7 +34,7 @@ import pytest
 from stores import NpmStore, PyStore
 from test_libraries import UNITTEST, WALLS, _files, _online, needs_npm
 
-from lantern import _jail, sandbox
+from lantern import _jail, libraries, sandbox
 
 LINUX = sys.platform.startswith("linux")
 KERNEL = LINUX and sandbox.landlock_abi() >= 1
@@ -443,9 +443,12 @@ def test_code_a_library_brings_to_run_at_every_start_is_not_run(tmp_path, monkey
 
 
 # ---------------------------------------------------------------------------- while the libraries are fetched
-def test_a_library_that_has_to_be_built_is_not_built(tmp_path, monkeypatch, pystore, person):
-    """Building a library runs code it brings, while the store can be reached. Only ready-built files are taken:
-    the source package is never asked of the store, nothing of it runs, and the tests are not started."""
+def test_a_library_that_has_to_be_built_runs_nothing_while_the_store_can_be_reached(tmp_path, monkeypatch, pystore, person):
+    """Building a library runs code it brings. While the libraries are fetched, with the store in reach, only
+    ready-built files are taken. A library that is there as source only is built afterwards, behind the walls of
+    the tests' run and with the network off, where those walls hold any program (`tests/test_library_build.py`:
+    what a hostile build gets there); anywhere else its source is never asked of the store. Here the build would
+    need a tool the store does not have: either way nothing of the package runs and no test is started."""
     mark = person.drop / "built.txt"
     pystore.add("stage2built", "1.0.0", source=True, files={
         "setup.py": f"open({str(mark)!r}, 'w').write('x')\nfrom setuptools import setup\nsetup(name='stage2built', version='1.0.0')\n",
@@ -456,7 +459,10 @@ def test_a_library_that_has_to_be_built_is_not_built(tmp_path, monkeypatch, pyst
     with pytest.raises(sandbox.Unavailable) as e:
         sandbox.run(repo, UNITTEST, log=QUIET, backend="subprocess")
     assert "ready-built" in str(e.value) and "stage2built" in str(e.value)
-    assert not any(path.endswith(".tar.gz") for path in pystore.seen), pystore.seen
+    if libraries.cannot_build():
+        assert not any(path.endswith(".tar.gz") for path in pystore.seen), pystore.seen
+    else:       # the build was begun, and stopped at the tool it names (setuptools, by the rule for a `setup.py`)
+        assert "setuptools" in str(e.value), str(e.value)
     assert _files(person.drop) == {"kept.txt"}
 
 
