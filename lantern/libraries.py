@@ -77,8 +77,8 @@ BUILD_SECONDS = 600                     # the time each step of a build gets (`_
 MOST_BUILT = 5                          # the libraries one run builds from their source
 MOST_SOURCE = 200 << 20                 # the bytes of a source package that are taken
 MOST_PACKAGE = 1 << 30                  # the bytes of the package a build may hand back
-BUILD_LINES = 40                        # the lines of a build step's own output the log takes from its start,
-BUILD_TAIL = 40                         # and from its end (where an error is said); the rest is counted
+BUILD_LINES = 10                        # the lines of a build step's own output the log takes from its start,
+BUILD_TAIL = 30                         # and from its end (where an error is said); the rest is counted
 
 _NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._\-]{0,98}[A-Za-z0-9])?"
 _VERSION = r"[A-Za-z0-9][A-Za-z0-9.*+!_\-]{0,99}"
