@@ -181,6 +181,18 @@ file. New entries go under `## Unreleased`, on top.
     each test that failed and the lines that say why (`named`, 60 lines at most), then its last 20 lines as before;
     a step that passed shows neither (`tests/test_isolation.py::test_a_failed_check_of_the_audit_names_what_failed`
     runs the script's own four helper lines on such a log: it failed before the change).
+  - **A test of kept work no longer goes by where an entry happens to be kept.** An entry of kept work lies in a
+    folder named by the first two digits of a SHA-256 over, among other things, the content of every Python file of
+    Lantern and the Python that runs it. `tests/test_kept.py::test_clearing_removes_entries_and_nothing_else` made
+    a link at the folder `ab`, taking it that none of its five entries lies there. For the code of this change's
+    sixth push and the Python of the machine it was written on, the first of the five does: the test failed there
+    on code that was right (`FileExistsError`), in Lantern's own run of its tests in the sandbox and outside it.
+    For any one version of the code and any one Python the chance is 1 − (255/256)^5, a little under 2 in 100;
+    GitHub's Pythons give other digests, and its checks on that push were green (whether the test that failed
+    without a name on the fourth push was this one is not known either). The link now stands at two digits none of
+    the test's entries has, and `test_clearing_does_not_go_by_where_an_entry_is_kept` goes through the same steps
+    five times with a stamp made up so that each of the five entries in turn lies in `ab`: all five failed before
+    the change. The fault was in the test, which came with point 10, not in Lantern.
   - Found and not fixed: on a Linux system that refuses an ordinary user a user namespace (GitHub's machines do),
     a Lantern started by an ordinary user with no Docker has no network of the run's own: tests that start their
     app's server are refused there as before, the log and the sheet say why, and such a run reads Incomplete; a

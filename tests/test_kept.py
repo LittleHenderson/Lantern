@@ -749,25 +749,39 @@ def test_a_write_that_is_cut_off_leaves_a_file_the_tidy_up_knows(monkeypatch):
     assert kept.tidy(now=now, force=True) == 1 and not left[0].exists()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="needs the right to make a link")
-def test_clearing_removes_entries_and_nothing_else(tmp_path):
-    keys = [SHELF.key("entry", str(i)) for i in range(5)]
+def _made_up(part: str, which: int) -> kept.Shelf:
+    """A shelf of code that is not this code (its stamp is made up here), picked so that entry `which` of five is
+    kept in the folder `part`. Where an entry is kept is read from the content of Lantern's own code and from the
+    Python that runs it (`Shelf.stamp`), so for the code as it is nobody chooses it."""
+    shelf = kept.Shelf(SHELF.kind, classes=(Inner, Outer, Bare))
+    for n in range(100_000):
+        shelf._stamp = n.to_bytes(32, "big")
+        if shelf.key("entry", str(which))[:2] == part:
+            return shelf
+    raise AssertionError(f"no made-up stamp keeps entry {which} in {part}")
+
+
+def _clearing(tmp_path, shelf):
+    keys = [shelf.key("entry", str(i)) for i in range(5)]
     for k in keys:
-        assert SHELF.put(k, [1])
+        assert shelf.put(k, [1])
     precious = tmp_path / "precious.json"
     precious.write_text("{}", encoding="utf-8")
     folder = _entry(keys[0]).parent
     os.symlink(precious, folder / ("cd" * 31 + ".json"))                 # named like an entry, and a link out
-    # a folder somewhere else that is laid out like kept work, with a file named like an entry in it
-    theirs = tmp_path / "theirs" / "ab" / ("ef" * 31 + ".json")
+    # a folder somewhere else that is laid out like kept work, with a file named like an entry in it; the link to
+    # it stands where no entry is kept ("ab" unless one is, then the next two digits that are free)
+    taken = {k[:2] for k in keys}
+    part = next(p for p in (f"{(0xab + i) % 256:02x}" for i in range(256)) if p not in taken)
+    theirs = tmp_path / "theirs" / part / ("ef" * 31 + ".json")
     theirs.parent.mkdir(parents=True)
     theirs.write_text("{}", encoding="utf-8")
     os.symlink(tmp_path / "theirs", kept.home() / "test-linked")         # a kind's folder that is a link to it
-    os.symlink(tmp_path / "theirs" / "ab", kept.home() / "test-values" / "ab")   # and a part's folder that is one
+    os.symlink(tmp_path / "theirs" / part, kept.home() / shelf.kind / part)      # and a part's folder that is one
     # files named like entries where no entry is ever written: beside the kinds, in a folder that is no kind's,
     # and in a kind's folder that is no part's
     strays = [kept.home() / ("ef" * 31 + ".json"), kept.home() / "Not_A_Kind" / "ab" / ("ef" * 31 + ".json"),
-              kept.home() / "test-values" / "abc" / ("ef" * 31 + ".json")]
+              kept.home() / shelf.kind / "abc" / ("ef" * 31 + ".json")]
     for stray in strays:
         stray.parent.mkdir(parents=True, exist_ok=True)
         stray.write_text("{}", encoding="utf-8")
@@ -776,7 +790,7 @@ def test_clearing_removes_entries_and_nothing_else(tmp_path):
     assert kept.tidy(now=4_000_000_000.0, force=True) == 5               # decades on, every entry is an old entry
     assert kept.size() == (0, 0)
     for k in keys:
-        assert SHELF.put(k, [1])
+        assert shelf.put(k, [1])
     assert kept.size()[0] == 5
     assert kept.clear() == (5, 0)
     assert kept.size() == (0, 0)
@@ -784,6 +798,22 @@ def test_clearing_removes_entries_and_nothing_else(tmp_path):
     assert (folder / ("cd" * 31 + ".json")).is_symlink()
     assert theirs.read_text(encoding="utf-8") == "{}"                    # nothing was removed through a link
     assert all(stray.read_text(encoding="utf-8") == "{}" for stray in strays)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs the right to make a link")
+def test_clearing_removes_entries_and_nothing_else(tmp_path):
+    _clearing(tmp_path, SHELF)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs the right to make a link")
+@pytest.mark.parametrize("which", range(5))
+def test_clearing_does_not_go_by_where_an_entry_is_kept(tmp_path, which):
+    """The same, with an entry kept in the folder this test once took for its link. On 2026-11-13 the first of the five
+    entries was kept there, by the content of the code as it then was and the Python of one computer, and the test
+    above failed on code that was right: it made its link where a folder already was."""
+    shelf = _made_up("ab", which)
+    assert shelf.key("entry", str(which))[:2] == "ab"
+    _clearing(tmp_path, shelf)
 
 
 def test_clearing_says_how_many_entries_would_not_go(monkeypatch):
