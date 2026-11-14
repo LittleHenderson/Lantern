@@ -480,6 +480,21 @@ def test_python_gives_a_tool_no_current_folder(tmp_path, monkeypatch):
     assert now.returncode != 0 and "loaded" not in now.stdout and "No module named" in now.stderr
 
 
+def test_a_file_of_lanterns_own_is_put_in_lanterns_own_folder_and_nowhere_else(tmp_path):
+    """`put` writes what a tool is told to read in place of a project's file: under a bare name, inside the folder
+    it is handed, the same bytes on every system. A name that would leave that folder writes nothing."""
+    programs = _programs()
+    with programs.folder() as own:
+        path = programs.put(own, "gitleaks.toml", "[extend]\nuseDefault = true\n")
+        assert path == own / "gitleaks.toml" and path.read_bytes() == b"[extend]\nuseDefault = true\n"
+        assert programs.put(own, "empty", "").read_bytes() == b""
+        for name in ("", ".", "..", "../out", "sub/file", str(tmp_path / "out"), "a\\b", "x\0y", None):
+            with pytest.raises(ValueError):
+                programs.put(own, name, "text")
+        assert sorted(p.name for p in own.iterdir()) == ["empty", "gitleaks.toml"]
+    assert not (tmp_path / "out").exists() and not own.exists()
+
+
 def test_env_keeps_the_folders_named_in_full_and_changes_nothing_else(tmp_path, monkeypatch):
     programs = _programs()
     a, b = str(tmp_path / "a"), str(tmp_path / "b")

@@ -400,10 +400,8 @@ class _GitleaksOwn:
 
     def __init__(self, top: Path):
         self.top = top
-        self.settings = top / "gitleaks.toml"
-        self.settings.write_text(GITLEAKS_SETTINGS, encoding="utf-8")
-        self.leave_out = top / "leave-out"
-        self.leave_out.write_text("", encoding="utf-8")
+        self.settings = programs.put(top, "gitleaks.toml", GITLEAKS_SETTINGS)
+        self.leave_out = programs.put(top, "leave-out", "")
         self.start = top / "start"
         self.start.mkdir()
         self.names: list[str] = []
@@ -428,13 +426,12 @@ class _GitleaksOwn:
         folder = self.top / f"first-{self.asked}"
         folder.mkdir()
         key = "ghp_" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(36))
-        here = folder / GITLEAKS_FIRST_FILE
-        here.write_text(f'TOKEN = "{key}"  # gitleaks:allow\n', encoding="utf-8")
-        (folder / ".gitleaks.toml").write_text('title = "no rules"\n', encoding="utf-8")
+        here = programs.put(folder, GITLEAKS_FIRST_FILE, f'TOKEN = "{key}"  # gitleaks:allow\n')
+        programs.put(folder, ".gitleaks.toml", 'title = "no rules"\n')
         if with_list:
             ways = (GITLEAKS_FIRST_FILE, "./" + GITLEAKS_FIRST_FILE, str(here))
-            (folder / GITLEAKS_LIST).write_text(
-                "".join(f"{way}:{rule}:1\n" for rule in ("github-pat", "generic-api-key") for way in ways), encoding="utf-8")
+            programs.put(folder, GITLEAKS_LIST,
+                         "".join(f"{way}:{rule}:1\n" for rule in ("github-pat", "generic-api-key") for way in ways))
         return folder
 
     def tidy(self) -> None:

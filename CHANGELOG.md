@@ -69,10 +69,13 @@ file. New entries go under `## Unreleased`, on top.
     longer change what Lantern's scan reports (to set a finding aside, `lantern accept` keeps it listed with its
     reason), and a gitleaks that does not pass the first question is said to have failed, with the options Lantern
     starts it with.
+    The few files of Lantern's own that gitleaks is handed are written by `programs.put`, the same bytes on every
+    system, so the scanner's module still writes no file in the plain way (the rule of 2026-11-10 for the modules
+    that write result files; this change's first run on GitHub failed that rule's test, on Linux and on Windows).
     Tests: `tests/test_scanners.py` (66; 18 new cases, 4 changed; 16 of the new with a stand-in program on every
-    system, 2 with the real program), `tests/test_programs.py`, `tests/test_project_files.py`. On the code before,
-    18 of the 278 tests of the three files fail (257 pass, 3 skipped); now 275 pass and 3 are skipped. The real
-    program is named to the tests by `LANTERN_TESTS_GITLEAKS=<full path>`. CI builds gitleaks 8.30.1 from its
+    system, 2 with the real program), `tests/test_programs.py` (1 new), `tests/test_project_files.py`. On the code
+    before, 19 of the 279 tests of the three files fail (257 pass, 3 skipped); now 276 pass and 3 are skipped. The
+    real program is named to the tests by `LANTERN_TESTS_GITLEAKS=<full path>`. CI builds gitleaks 8.30.1 from its
     source with Go, which checks what it downloads against its public record, in the Linux, Windows and macOS
     jobs, and keeps it off PATH, so that Lantern's check of itself runs as on a computer without it; the Linux job
     fails unless its log says the tests started "gitleaks 8.30.1 (linked)". `cloud/Dockerfile` builds the same
