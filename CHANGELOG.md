@@ -9,6 +9,81 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- **A library that has to be built is built in the sandbox, with the network off** (2026-11-14; the last step of
+  the second stage of "a firm pass or fail"). Until now a library the store has only as source, or ready-built for
+  other systems only, meant that a project's tests were not run: pip is told to build nothing
+  (`--only-binary=:all:`), because a build is a stranger's code and the fetch is the one step that can reach a
+  network. One such library kept the Python tests of the third public project of this stage from running from its
+  link (its lock file fixes a version the store has ready-built for macOS only). pip still builds nothing. Where
+  pip could not take a library of which the project fixes one exact version, Lantern now builds that one library
+  from its source, behind the walls of a tests' run and with no way out, and asks pip again with the built package
+  beside the store's. The measure was written first: `tests/test_library_build.py` (103 tests; stand-in stores on
+  127.0.0.1 that hold a library as source only; every refusal beside a twin that is built and whose project's test
+  then passes; no test reaches the internet). On the code before, that file cannot be loaded and 10 of the 78
+  tests of the two older test files that changed with it fail. On this code, every sandbox and library test of
+  the repository (26 test files) on a fixed copy of it, Linux with no Docker daemon: as root 1,064 passed, 0
+  failed, 30 skipped (18 need Docker, 12 Windows) in 908.93 s; as an ordinary user on a stand-in for GitHub's
+  Linux machines, where a run can be given no network and no memory folder of its own, 1,042 passed, 0 failed,
+  52 skipped (18 Docker, 12 Windows, 5 root, 17 that need such a network or memory folder, 6 of them the build
+  tests' variants with a network of the run's own, whose variants without one ran) in 886.92 s.
+  - **Which libraries** (`lantern/libraries.py`, `_to_build`, `_fixed`). Only Python's, and only one of which the
+    project fixes one exact version: the only version its lock file names, or `==` in a requirement. Built when
+    pip says it found no package of that version, or says "conflicting dependencies" about a version the lock file
+    lists as source and ready-built for other systems only. Where the lock file lists no files (Pipenv's), the
+    store's own page decides, and nothing is built when the store has that version ready-built for this system or
+    for every system. No more than five libraries a run (`MOST_BUILT`).
+  - **Where** (`cannot_build`). Only where the kernel holds every program of the run to the run's walls: Linux
+    with Landlock, and not inside another sandbox that makes the connections. Not for a tests' container, not on
+    macOS or Windows. There the source is never asked for, the tests are not run as before, and the reason names
+    the library and says why nothing is built.
+  - **How** (`_build`, `lantern/_builder.py`, which uses Python's own library only). Each library in a folder of
+    its own under the fetch's, one step at a time. `source`, the one step with a way out, through the fetch's
+    doorkeeper and by Lantern's own code, never pip: the store's page is asked for `<name>-<version>.tar.gz` and
+    the file saved. Lantern takes the file's fingerprint itself, and it has to be one the project names (its lock
+    file's, or a `--hash` beside the requirement) or, where the project names none, the one the store's page
+    gives. Every step after that runs behind the walls of a tests' run with no doorkeeper and no port
+    (`_Fetch.behind_walls`: a network of its own or, where the system gives a run none, no TCP by the kernel's
+    rule and the doorman for the rest; the read wall; the run's memory; ten minutes a step; everything it started
+    ended with it). `unpack`: plain files and folders beneath the one folder at the package's top, or nothing (a
+    link of any kind, a name that leaves, a device, too many or too large refuse the whole package). The tools
+    the build names are fetched by name from the store, ready-built only, through the doorkeeper like the
+    project's libraries; a link, another store, a folder or an option among them stops the build. `needs` and
+    `build` call the build the way every tool does (PEP 517), directly, never through pip or `setup.py`.
+  - **What is believed of a build.** As much as Lantern can look at: exactly one plain file in the build's `out`
+    folder, named as a package of that library at that version, copied out by Lantern with its fingerprint taken
+    on the way. pip then takes it or does not, inside the fetch's walls, and a file pip took from this computer
+    that is not that package stops the fetch. Something a build step started that could not be ended stops the
+    run for good: no second fetch without the optional libraries, no test. A reason is Lantern's sentence, never
+    text of a build.
+  - **On the record.** The package says `built` = `{from, source_fingerprint, with}` (`run.json`
+    `trace.libraries`; its `checked` then says that the source's fingerprint is one the project names), the record
+    counts them (`built`) and has a note for each; the Evidence Report has `built_from`, `built`, the page's rows
+    and a Limits line that says the package was made on this computer for this run. In the log a build's own
+    output stands behind `sandbox: build: `, the first 10 and the last 30 lines of a step with the rest counted,
+    and a line says when the store is asked for a build's tools.
+  - **A public project, from its link** (a trial on this change before it was merged; the real store, a computer
+    with none of its libraries). The library that stopped it before was built from its source in the sandbox (a
+    part written in C, by the computer's own compiler; the source's fingerprint the one the project's lock file
+    names; its three tools fetched ready-built), 67 libraries in all, and the project's Python tests ran: 541
+    passed, 3 failed, 5 skipped; decision Blocked for findings in its code. Two of the three failures need a
+    library the project names as optional, whose source cannot be built under Python 3.13 (it loads a module
+    Python no longer has); the optional groups were left out, the run says so, and the `tests` criterion reads
+    `missing`. A run six minutes earlier had a fourth failure, a test of the project's own that compares a clock
+    time and fails when its thousandths of a second are 000. That first run showed two things of Lantern's, each
+    fixed after a failing test: one library's build wrote 333 lines into the check's log, and the log did not say
+    when the store is asked for a build's tools.
+  - **What is not built, and what a build does not check** (Known gaps in `CLAUDE.md`; claim A4j in
+    `docs/audit/CLAIMS.md`). Nothing is built for a tests' container, on macOS or Windows, or inside another
+    sandbox (a run of Lantern's own tests by Lantern builds nothing), and there such a library still means no
+    test run. A version the store has ready-built for this system but for another Python counts as there. A
+    source package that holds a link is refused whole. A build's tools are the newest the store has that fit,
+    and their fingerprints are compared with nothing; a tool that would itself have to be built stops the build.
+    A build finds the compiler and the headers of the computer and no others. A library the project always needs
+    is built a second time when the fetch starts again without the optional libraries (seen on the public
+    project: built twice in a check that took 47 seconds with its tests). A built package is this computer's work
+    on this day: the same check elsewhere may run the tests on a package that differs, and its own fingerprint is
+    one nobody names.
+
 - **A project's tests run on the libraries the project names** (2026-11-13; the second stage of "a firm pass or
   fail"). Until now the sandbox ran a project's tests on whatever the Python that runs Lantern had installed, and
   for JavaScript on a `node_modules` folder the project happened to bring. A project whose libraries are not on the
