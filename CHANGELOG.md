@@ -44,6 +44,51 @@ file. New entries go under `## Unreleased`, on top.
   problems"), read from the pipeline's own log lines; the raw log is one tap away. Advanced keeps its add bar and
   its log as before (directive: user first, step 2).
 
+- **Tests ended for their memory in a container say so even when Docker does not name the kill** (2026-11-14; a
+  step of the second stage of "a firm pass or fail", found on GitHub in the checks of a change that touched
+  documents only). Tests that go over their memory limit read "Incomplete", never "failed". Under Docker the kernel
+  ends a program of the container, and Lantern learned why from Docker alone, asked for up to five seconds after
+  the command's end (2026-11-13). In one job of 2026-11-14, on main's code, Docker said "false" all that time:
+  `returncode` 137, `over_memory` false, and the check read "failed", a release decision Blocked where Incomplete
+  is true. The cause, reasoned from that job's log and the code and not reproduced (no computer this was written
+  on runs Docker): the tracer runs pytest in its own process, so the tests were the container's first process;
+  the kernel ended it, the container was gone at once, and Docker hears of such a kill in a message of its own,
+  which it can lose when the container ends with the kill. No wait mends a message that never comes.
+  - **What changes** (`lantern/sandbox.py`: `_first_process`, `_FIRST`, `_run_docker`). A container now starts with
+    a small program of Lantern's own, a shell's (every pinned image has one). It starts the tests' command, waits
+    for it and, when the command ended with an error, reads the kernel's own count of the programs of this
+    container that the kernel ended for the container's memory: `oom_kill` in `memory.events` (cgroup v2) or in
+    `memory.oom_control` (v1), under the place `/proc/self/cgroup` names where the container sees the whole
+    computer's folders, and at the top where it sees its own. With a count above nought it says the launcher's
+    line and ends with the launcher's number (118), which `_over_memory` already reads for the restricted
+    process; otherwise it ends as the command did. The program is small, so the kernel ends the tests' program and
+    not this one, and what it reads is a count the kernel keeps, not a message. Docker's answer stays as the second
+    source, asked as before when the first process did not say it; when both are silent after a kill, the log
+    says so and the run reads as failed tests.
+  - **Measured.** Tests first: 32 new tests in `tests/test_sandbox_memory.py` (82 in all, 2 of them with the real
+    Docker). On the code before, of the 80 that run where no Docker answers, 26 failed and 54 passed. On this
+    code, 80 passed. Every sandbox and library test of the repository (26 test files) on a fixed copy of this
+    code, Linux with no Docker daemon: as root 1,095 passed, 0 failed, 31 skipped (19 need Docker, 12 Windows)
+    in 913.23 s; as an ordinary user on a stand-in for GitHub's Linux machines 1,073 passed, 0 failed, 53
+    skipped (19 Docker, 12 Windows, 5 root, 17 that need a network or memory folder of the run's own) in
+    863.06 s. The first process was also tried against a real kill by the kernel for a memory limit, outside
+    Docker (as root, a memory folder of the kernel's with a limit of 64 MB, cgroup v1): a program that uses more
+    and more was ended by the kernel, the first process read `oom_kill 1`, said its line and ended with 118;
+    before that, in the same folder, a kill that was not for the memory ended with 137, failed tests with 1 and
+    passed tests with 0, each without the line. In Docker itself it runs on GitHub's Linux machines only:
+    `test_in_a_real_container_the_kernels_own_count_says_it_and_docker_is_not_asked` puts a Docker that always
+    says "false" in the place of Docker's answer, so it passes only where the first process read the count in a
+    real container.
+  - **What this does not show.** The misreading was seen twice (2026-11-13, when Docker was asked once, and
+    2026-11-14 with the five seconds of asking in place), so a green run does not show that it is gone. What is
+    shown is that such a kill is now read from the kernel's count by a program that is still there. Where the
+    kernel ends that first program too, or its count cannot be read in the container (a layout this program does
+    not know), Docker is asked as before, and a kill that neither names still reads as failed tests. As with
+    Docker's own answer, the count is for the container's whole run: tests that fail after the kernel ended any
+    program of theirs for the memory read Incomplete. A test that prints the launcher's line and ends with 118
+    reads Incomplete where it would have read Blocked, now under Docker as in the restricted process; never
+    passed.
+
 - **A library that has to be built is built in the sandbox, with the network off** (2026-11-14; the last step of
   the second stage of "a firm pass or fail"). Until now a library the store has only as source, or ready-built for
   other systems only, meant that a project's tests were not run: pip is told to build nothing

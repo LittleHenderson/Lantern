@@ -21,7 +21,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from test_sandbox import BACKENDS, _tiny
+from test_sandbox import BACKENDS, DOCKER_SKIP, _tiny
 
 from lantern import _jail, cli, pipeline, release, sandbox
 
@@ -339,12 +339,15 @@ def test_on_the_command_line_the_limit_is_given_in_megabytes(tmp_path, monkeypat
 
 # ------------------------------------------------------------------------------------------------------- Docker
 FAKE_DOCKER = '''#!/bin/sh
-# a stand-in for the docker program: "run" writes down what it was asked and ends as run.mode says; "inspect"
+# a stand-in for the docker program: "run" writes down what it was asked, says what run.says holds (when that file
+# is there: the words of the container's first process) and ends as run.mode says; "inspect"
 # answers the line of inspect.mode that belongs to this ask (the first ask the first line, and so on; the last
 # line for every ask after it) and ends as inspect.rc says, when that file is there; "rm" removes
 here=$(dirname "$0")
 case "$1" in
-  run) echo "$@" > "$here/run.log"; exit "$(cat "$here/run.mode")" ;;
+  run) echo "$@" > "$here/run.log"
+    if [ -f "$here/run.says" ]; then cat "$here/run.says" >&2; fi
+    exit "$(cat "$here/run.mode")" ;;
   inspect) echo "$@" >> "$here/inspect.log"
     n=$(wc -l < "$here/inspect.log")
     said=$(sed -n "${n}p" "$here/inspect.mode")
@@ -496,6 +499,176 @@ def test_docker_is_asked_no_more_often_than_it_takes(code, answers, rc, asks, tm
     assert _asked(where) == asks, (_asked(where), r["returncode"])
     assert clock.waits == []                                     # and nothing is waited for
     assert r["over_memory"] is (code == "137" and answers == "true" and not rc)
+
+
+# ------------------------------------------------------------------------- the container's first process
+# On GitHub, 2026-11-14, tests the kernel had ended for their container's memory read as tests that failed: the
+# command ended with 137 and Docker, asked for five seconds, said "false" every time. The program the kernel ended
+# was the container's first (the tracer runs pytest in its own process), so the container was gone at once, and
+# Docker hears of such a kill in a message of its own that it can lose when the container ends with it. No wait
+# mends a message that never comes. So a container starts with a small program of Lantern's own, a shell's, which
+# starts the tests' command, outlives it, and reads the kernel's own count of the programs of this container it
+# ended for the container's memory. Docker's answer stays as the second source.
+#
+# What the kernel's files say in a container, as that first process finds them. A folder of the test's own stands in
+# for /sys/fs/cgroup and a file for /proc/self/cgroup: the program is the one a container gets, word for word.
+EVENTS = "low 0\nhigh 0\nmax 41\noom 1\noom_kill {n}\noom_group_kill 0\n"          # memory.events (cgroup v2)
+CONTROL = "oom_kill_disable 0\nunder_oom 0\noom_kill {n}\n"                        # memory.oom_control (v1)
+OWN_TOP = "0::/\n"                                              # the container sees its own folder as the top
+OWN_NAMED = "0::/system.slice/docker-0a1b.scope\n"              # ... or the whole computer's, and its own by name
+OWN_OLDER = "12:pids:/docker/0a1b\n11:memory:/docker/0a1b\n10:cpu,cpuacct:/docker/0a1b\n0::/\n"
+NAMED, OTHER = "system.slice/docker-0a1b.scope/memory.events", "system.slice/docker-ffff.scope/memory.events"
+KILLED, FAILED, PASSED = "kill -9 $$", "exit 1", "exit 0"
+
+
+def _first_run(tmp_path, child: str, files: dict, own: str = OWN_TOP, memory: int = 256) -> tuple[int, str]:
+    """What a container of Lantern's starts with, started here; the tests' command is `sh -c <child>`."""
+    counts = tmp_path / "cgroup"
+    counts.mkdir()
+    for name, text in files.items():
+        (counts / name).parent.mkdir(parents=True, exist_ok=True)
+        (counts / name).write_text(text, encoding="utf-8")
+    (tmp_path / "own").write_text(own, encoding="utf-8")
+    words = sandbox._first_process(["sh", "-c", child], memory, counts=str(counts), own=str(tmp_path / "own"))
+    r = subprocess.run(words, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    return r.returncode, r.stdout + r.stderr
+
+
+@DOCKER_ONLY
+@pytest.mark.parametrize("child, files, own, code, over", [
+    # the kernel ended the tests' program, and counts a program of this container ended for its memory
+    (KILLED, {"memory.events": EVENTS.format(n=1)}, OWN_TOP, 118, True),
+    # ... and counts none: a kill that was not for the memory is the tests' own end
+    (KILLED, {"memory.events": EVENTS.format(n=0)}, OWN_TOP, 137, False),
+    # a test runner that lost a child to the limit reports a failure of its own
+    (FAILED, {"memory.events": EVENTS.format(n=3)}, OWN_TOP, 118, True),
+    (FAILED, {"memory.events": EVENTS.format(n=0)}, OWN_TOP, 1, False),
+    # tests that passed have passed
+    (PASSED, {"memory.events": EVENTS.format(n=1)}, OWN_TOP, 0, False),
+    # a container that sees the whole computer's folders reads its own among them, and no other container's
+    (KILLED, {NAMED: EVENTS.format(n=1), OTHER: EVENTS.format(n=0)}, OWN_NAMED, 118, True),
+    (KILLED, {NAMED: EVENTS.format(n=0), OTHER: EVENTS.format(n=5)}, OWN_NAMED, 137, False),
+    (KILLED, {OTHER: EVENTS.format(n=5)}, OWN_NAMED, 137, False),
+    # the older layout: the container's count is at the top of the memory folder ...
+    (KILLED, {"memory/memory.oom_control": CONTROL.format(n=1)}, OWN_OLDER, 118, True),
+    (KILLED, {"memory/memory.oom_control": CONTROL.format(n=0)}, OWN_OLDER, 137, False),
+    # ... or under its own name, where it sees the whole computer's: its own is the one that is read
+    (KILLED, {"memory/docker/0a1b/memory.oom_control": CONTROL.format(n=1),
+              "memory/memory.oom_control": CONTROL.format(n=0)}, OWN_OLDER, 118, True),
+    (KILLED, {"memory/docker/0a1b/memory.oom_control": CONTROL.format(n=0),
+              "memory/memory.oom_control": CONTROL.format(n=7)}, OWN_OLDER, 137, False),
+    # nothing said about its own place: the top is read
+    (KILLED, {"memory.events": EVENTS.format(n=1)}, "", 118, True),
+    # no count to read (a kernel that keeps none, no file, words that are no number): the tests' own end
+    (KILLED, {"memory/memory.oom_control": "oom_kill_disable 0\nunder_oom 0\n"}, OWN_OLDER, 137, False),
+    (KILLED, {}, OWN_TOP, 137, False),
+    (KILLED, {"memory.events": "oom_kill many\n"}, OWN_TOP, 137, False),
+    (KILLED, {"memory.events": "oom_kill 1 2\n"}, OWN_TOP, 137, False),
+    (KILLED, {"memory.events": "oom_kill -1\n"}, OWN_TOP, 137, False),
+    (KILLED, {"memory.events": "oom_kill\n"}, OWN_TOP, 137, False),
+    (KILLED, {"memory.events": "oom_kill 99999999999999999999999999\n"}, OWN_TOP, 137, False),
+    # the number Lantern's own programs end with, from the tests: without the kernel's count it stays theirs
+    ("exit 118", {"memory.events": EVENTS.format(n=0)}, OWN_TOP, 118, False),
+])
+def test_what_a_containers_first_process_says_about_the_memory(child, files, own, code, over, tmp_path):
+    rc, said = _first_run(tmp_path, child, files, own)
+    assert rc == code, said
+    assert sandbox._over_memory(rc, said) is over, said
+    assert (_jail.LIMIT_MARK in said) is over, said
+
+
+@DOCKER_ONLY
+def test_the_first_process_says_it_on_a_line_of_its_own(tmp_path):
+    """Lantern reads a whole line: tests whose last words had no line end do not hide it."""
+    rc, said = _first_run(tmp_path, "printf 'no line end'; printf 'nor here' >&2; kill -9 $$",
+                          {"memory.events": EVENTS.format(n=1)}, memory=300)
+    assert rc == _jail.OVER_MEMORY and sandbox._over_memory(rc, said), said
+    assert f"{_jail.LIMIT_MARK} memory 300 300" in said.splitlines(), said
+
+
+@DOCKER_ONLY
+def test_the_first_process_hands_the_tests_command_on_as_it_was_written(tmp_path):
+    """Every word reaches the tests' program as the one word it was, whatever is in it; what the program prints
+    comes out where it printed it, and its result is the result."""
+    odd = ["a b", "c'd", 'e"f', "$HOME", "`id`", "g\nh", "", "*", "-n", "\\", "$(id)", ";", "&&", "#"]
+    (tmp_path / "own").write_text(OWN_TOP, encoding="utf-8")
+    show = "import json, sys; print(json.dumps(sys.argv[1:])); print('err', file=sys.stderr); sys.exit(3)"
+    words = sandbox._first_process([sys.executable, "-c", show, *odd], 256, counts=str(tmp_path),
+                                   own=str(tmp_path / "own"))
+    r = subprocess.run(words, capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert r.returncode == 3 and json.loads(r.stdout) == odd and r.stderr == "err\n", (r.returncode, r.stdout, r.stderr)
+
+
+def test_the_first_process_reads_the_kernels_own_folders_in_a_container():
+    words = sandbox._first_process(["python", "-m", "pytest"], 512)
+    assert words[:2] == ["sh", "-c"] and words[-3:] == ["python", "-m", "pytest"], words
+    assert "/sys/fs/cgroup" in words and "/proc/self/cgroup" in words and "512" in words, words[3:]
+    assert str(_jail.OVER_MEMORY) in words and _jail.LIMIT_MARK in words     # its words are the launcher's, not copies
+    program = words[2]
+    assert "python" not in program and "512" not in program     # the program is one text: nothing is written into it
+
+
+SAID = f"{_jail.LIMIT_MARK} memory 512 512\n"
+
+
+@DOCKER_ONLY
+@pytest.mark.parametrize("code, says, docker, over, asks", [
+    ("118", SAID, "false", True, 0),       # the first process read the kernel's count: Docker is not asked
+    ("118", "", "false", False, None),     # the number alone is the tests' own: Docker is asked, and says no
+    ("118", "", "true", True, 1),          # ... or yes
+    ("1", SAID, "false", False, None),     # the line alone is the tests' own too
+    ("137", SAID, "false", False, None),
+    ("0", SAID, "true", False, 0),         # tests that passed are not asked about
+])
+def test_the_first_process_is_believed_and_docker_is_asked_only_without_it(code, says, docker, over, asks, tmp_path,
+                                                                            monkeypatch):
+    where, _ = _fake_docker(tmp_path, monkeypatch, code, docker)
+    (where / "run.says").write_text(says, encoding="utf-8")
+    repo = _tiny(tmp_path / "tiny", "def test_ok():\n    assert True\n")
+    lines = []
+    r = sandbox.run(repo, PYTEST, log=lines.append, backend="docker", memory=512)
+    assert r["over_memory"] is over and r["returncode"] == (None if over else int(code)), (r["returncode"], lines)
+    assert _asked(where) == asks if asks is not None else _asked(where) >= 2, _asked(where)
+    if over:
+        assert r["cancelled"] is False and any("more memory than their limit (512 MB)" in x for x in lines), lines
+    assert (where / "rm.log").read_text(encoding="utf-8").startswith("rm -f lantern-sbx-")
+
+
+@DOCKER_ONLY
+def test_a_container_starts_with_lanterns_own_first_process(tmp_path, monkeypatch):
+    where, _ = _fake_docker(tmp_path, monkeypatch, "0", "false")
+    repo = _tiny(tmp_path / "tiny", "def test_ok():\n    assert True\n")
+    assert sandbox.run(repo, PYTEST, log=QUIET, backend="docker", memory=512)["returncode"] == 0
+    asked = (where / "run.log").read_text(encoding="utf-8")
+    image, own = sandbox.image_for("python"), sandbox._first_process([], 512)[3:]
+    assert image and asked.count(image) == 1, asked[:300]
+    words = asked.split(image, 1)[1].split()
+    assert words[:2] == ["sh", "-c"], words[:8]                  # the image's first program is the shell's ...
+    at = [i for i in range(len(words)) if words[i:i + len(own)] == own]
+    assert len(at) == 1 and "512" in own, words                  # ... with Lantern's words: the counts, the limit
+    assert words[at[0] + len(own):][:4] == ["python", "-P", "-m", "lantern.tracehook"], words    # then the tests'
+
+
+@pytest.mark.skipif(DOCKER_SKIP is not None, reason=DOCKER_SKIP or "")
+def test_in_a_real_container_the_kernels_own_count_says_it_and_docker_is_not_asked(tmp_path, monkeypatch):
+    """With the real Docker: tests over their container's memory are stopped by the kernel, the container's first
+    process reads the kernel's count and says so, and what Docker would have answered is never needed. The twin in
+    the same container: tests that fail under their limit are failed tests, and Docker is asked as before."""
+    asked = []
+
+    def no(docker, name, wait=0.0):
+        asked.append(wait)
+        return False, 1
+    monkeypatch.setattr(sandbox, "_docker_oom", no)
+    repo = _tiny(tmp_path / "tiny", USES.replace("TIMES", "40").replace("HOLD", "20"))
+    lines = []
+    r = sandbox.run(repo, PYTEST, log=lines.append, backend="docker", memory=256)
+    assert r["over_memory"] is True and r["returncode"] is None and r["memory_limit"] == 256, (r["output_tail"], lines)
+    assert asked == [], lines
+    repo = _tiny(tmp_path / "fails", "def test_no():\n    assert 1 == 2\n")
+    r = sandbox.run(repo, PYTEST, log=lines.append, backend="docker", memory=256)
+    assert r["returncode"] == 1 and r["over_memory"] is False, (r["output_tail"], lines)
+    assert asked == [sandbox.OOM_WAIT], asked
 
 
 @pytest.mark.parametrize("backend", BACKENDS)

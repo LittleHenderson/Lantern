@@ -75,10 +75,15 @@ memory in use, by the tests and everything they started together: Docker counts 
 program can run out of while it uses little (a file mapped, threads, an allocator's arenas): Lantern's own tests
 were refused memory after 302 of them, and the refusal read as "the tests failed". Tests stopped for their
 memory did not finish (`over_memory`): the release decision is "Incomplete", never passed or failed. The words
-come from the launcher's own line and result (`_over_memory`) or from Docker's answer about the container
-(`_docker_oom`: Docker may hear of the kill after the container's end, so a "false" is asked again for
-`OOM_WAIT_KILLED` seconds after a kill and `OOM_WAIT` after any other error; a kill Docker never names reads as
-failed tests); a test that prints the line and ends with that result says of itself that it was stopped, and
+come from the launcher's own line and result (`_over_memory`). In a container they are said by the container's
+first process, which is Lantern's own and not the tests' (`_first_process`, 2026-11-14): it starts the tests'
+command, outlives it, and reads the kernel's own count of the programs of this container that the kernel ended
+for the container's memory. Until then Docker alone was asked (`_docker_oom`), and Docker can lose the message
+that tells it of such a kill when the program that was ended is the container's first and the container ends
+with it: tests the kernel had stopped read as failed tests however long Docker was asked. Docker's answer stays
+as the second source, for a container whose first process did not say it (a "false" is asked again for
+`OOM_WAIT_KILLED` seconds after a kill and `OOM_WAIT` after any other error; a kill that neither names reads
+as failed tests). A test that prints the line and ends with that result says of itself that it was stopped, and
 gains "Incomplete" where it would have had "Blocked", never a pass. On macOS the limit is put on the address
 space as before, and on Windows it is the job's limit for each process: there tests that go over fail in their
 own way, and are reported as failed.
@@ -1962,6 +1967,61 @@ def _docker_oom(docker: str, name: str, wait: float = 0.0) -> tuple[bool, int]:
         _oom_wait(min(OOM_ASK_AGAIN, left))
 
 
+# What a container starts with: a small program of Lantern's own, a shell's (every pinned image has one). It starts
+# the tests' command and waits for it. When the command ended with an error, it reads the kernel's own count of
+# the programs of this container that the kernel ended for the container's memory: `oom_kill` in the container's
+# memory.events (cgroup v2) or memory.oom_control (v1), under the place /proc/self/cgroup names where the container
+# sees the whole computer's folders, and at the top where it sees only its own. With a count above nought it says
+# the launcher's line and ends with the launcher's number, which `_over_memory` reads; with a count of nought, or
+# none it can read, it ends as the command did, and Docker is asked as before.
+#
+# Why (GitHub, 2026-11-14, on main's code): the tracer runs pytest in its own process, so tests over their
+# container's memory were the container's first process. The kernel ended it, the container was gone at once, and
+# Docker, which hears of such a kill in a message of its own, said "false" for the five seconds it was asked: the
+# check read "failed" where "Incomplete" is true. This program is small, so the kernel ends the tests' program and
+# not this one; it is still there afterwards, and what it reads is the kernel's count and not a message.
+#
+# Its own words stand before the command's: the folder of the kernel's counts, the file that names the container's
+# own place, the limit in megabytes, the line's first word and the number to end with. Nothing is written into the
+# program, and it holds no backslash. Tests that passed have passed, whatever the kernel ended on the way.
+_FIRST = """counts=$1 own=$2 limit=$3 mark=$4 code=$5
+shift 5
+"$@"
+rc=$?
+[ "$rc" -ne 0 ] || exit 0
+whole= memory=
+if [ -r "$own" ]; then
+  while IFS=: read -r number kinds place || [ -n "$number" ]; do
+    case "$number:$kinds" in 0:) whole=$place ;; esac
+    case ",$kinds," in *,memory,*) memory=$place ;; esac
+  done < "$own"
+fi
+killed=
+for file in "$counts$whole/memory.events" "$counts/memory.events" \
+"$counts/memory$memory/memory.oom_control" "$counts/memory/memory.oom_control"; do
+  if [ -f "$file" ] && [ -r "$file" ]; then
+    while read -r word count || [ -n "$word" ]; do
+      if [ "$word" = oom_kill ]; then killed=$count; fi
+    done < "$file"
+    break
+  fi
+done
+case "$killed" in ''|*[!0-9]*) exit "$rc" ;; esac
+[ "$killed" -gt 0 ] 2>/dev/null || exit "$rc"
+echo >&2
+echo "$mark memory $limit $limit" >&2
+exit "$code"
+"""
+
+
+def _first_process(words, memory: int, counts: str = "/sys/fs/cgroup", own: str = "/proc/self/cgroup") -> list[str]:
+    """The words a container is started with: Lantern's own first process (`_FIRST`), then the tests' command.
+    `counts` and `own` are the kernel's own places in a container; a test gives a folder and a file of its own."""
+    from . import _jail
+    return ["sh", "-c", _FIRST, "lantern", counts, own, str(int(memory)), _jail.LIMIT_MARK, str(_jail.OVER_MEMORY),
+            *words]
+
+
 def _over_words(mb: int) -> str:
     had = memory_words(mb)
     return "because the tests used more memory than their limit" + (f" ({had})" if had else "")
@@ -2557,17 +2617,22 @@ def _run_docker(repo, words, language, root, log, timeout, cwd_rel, cancel=None,
             return f"its Docker container {name} may still be running: docker rm ended with {r.returncode}"
         return None
     left: list[str] = []
-    rc, output, timed_out = _stream(args + [img, *cmd], root, programs.env(), timeout, log,
+    rc, output, timed_out = _stream(args + [img, *_first_process(cmd, memory)], root, programs.env(), timeout, log,
                                     cancel=cancel, also=remove, left=left)
     why = _unavailable(rc, output)
     if why:
         raise Unavailable(why)
-    over = False
-    if rc not in (None, 0, 125):
+    # The container's first process, which is Lantern's, read the kernel's count and said so: Docker is not asked.
+    over = _over_memory(rc, output)
+    if over:
+        log("sandbox: the kernel ended a program of the tests for the container's memory (the kernel's own count, "
+            "read in the container by its first process, which is Lantern's)")
+    elif rc not in (None, 0, 125):
         over, asked = _docker_oom(docker, name, OOM_WAIT_KILLED if rc == 137 else OOM_WAIT)
         if rc == 137 and not over:
-            log(f"sandbox: the tests' program was ended by a kill (137). Docker, asked {asked} times, did not say "
-                "that the container was over its memory, so this reads as a failure of the tests")
+            log("sandbox: the tests' program was ended by a kill (137). The container's first process did not say "
+                f"that the kernel ended a program for the container's memory, and neither did Docker, asked {asked} "
+                "times, so this reads as a failure of the tests")
     if rc is not None:      # ended by itself: the container is still there (a stopped run's was removed by `_stream`)
         problem = remove()
         if problem:
