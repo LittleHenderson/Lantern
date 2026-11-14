@@ -319,10 +319,15 @@ def test_the_tools_a_build_asks_for_are_fetched_ready_built_and_are_not_the_test
     digest = pystore.put("stage2mac", *sdist("stage2mac", "3.0.0", {"pyproject.toml": TOOL, "stage2mac.py": "N = 3\n"}))
     check = ("with self.assertRaises(ImportError):\n            import stage2backend  # noqa: F401\n"
              "        self.assertEqual(stage2mac.N, 3)")
-    res = _run(_project(tmp_path / "proj", pystore, "pins", digest, check=check))
+    lines: list[str] = []
+    res = _run(_project(tmp_path / "proj", pystore, "pins", digest, check=check), lines.append)
     assert res["returncode"] == 0, res["output_tail"]
     assert _named(res)["stage2mac"]["built"]["with"] == ["stage2backend 1.2.0"]
     assert set(_named(res)) == {"stage2mac", "stage2sample"}
+    # the log says when the store is asked again, and for what (found on a real project, 2026-11-14: the lines
+    # about the doorkeeper came a second time with no word on why)
+    asked = [line for line in lines if "fetching the tools" in line]
+    assert len(asked) == 1 and "stage2backend>=1" in asked[0] and "ready-built" in asked[0], lines
 
 
 @builds
@@ -544,6 +549,25 @@ def test_a_build_that_takes_more_memory_than_the_run_has_is_ended(tmp_path, monk
     digest = pystore.put("stage2mac", *source("stage2mac", "3.0.0", {"stage2mac.py": "N = 3\n"}, body=body))
     said, _ = _refused(_project(tmp_path / "proj", pystore, "pins", digest), memory=300)
     assert "stage2mac 3.0.0" in said and "more memory than" in said and "300 MB" in said, said
+
+
+@builds
+def test_a_build_that_prints_a_great_deal_does_not_fill_the_log(tmp_path, monkeypatch, pystore):
+    """A build's own output is in the log for whoever wants to see how it went: the first lines of each step, its
+    last lines (where an error is said), and how many were left out between them. Found on a real project
+    (2026-11-14): one library's build wrote 333 lines into the log of the check."""
+    _online(monkeypatch, python=pystore)
+    body = "    for n in range(5000):\n        print('PLANTED-LINE', n, flush=n % 500 == 0)\n" + HONEST
+    digest = pystore.put("stage2mac", *source("stage2mac", "3.0.0", {"stage2mac.py": "N = 3\n"}, body=body))
+    lines: list[str] = []
+    res = _run(_project(tmp_path / "proj", pystore, "pins", digest), lines.append)
+    assert res["returncode"] == 0, res["output_tail"]
+    planted = [line for line in lines if "PLANTED-LINE" in line]
+    assert len(planted) == libraries.BUILD_LINES + libraries.BUILD_TAIL, len(planted)
+    assert planted[0].endswith("PLANTED-LINE 0") and planted[-1].endswith("PLANTED-LINE 4999"), (planted[0], planted[-1])
+    assert all(line.startswith("sandbox: build: ") for line in planted)
+    left_out = 5000 - len(planted)
+    assert sum(f"{left_out} more lines" in line for line in lines) == 1, [line for line in lines if "more lines" in line]
 
 
 @builds

@@ -43,6 +43,7 @@ the project names is there (`state: "installed"`), and are otherwise not run, wi
 Nothing is kept between runs: the folder the libraries are fetched into is the run's temp folder."""
 from __future__ import annotations
 
+import collections
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -52,6 +53,7 @@ import re
 import shutil
 import stat
 import sys
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -75,6 +77,8 @@ BUILD_SECONDS = 600                     # the time each step of a build gets (`_
 MOST_BUILT = 5                          # the libraries one run builds from their source
 MOST_SOURCE = 200 << 20                 # the bytes of a source package that are taken
 MOST_PACKAGE = 1 << 30                  # the bytes of the package a build may hand back
+BUILD_LINES = 40                        # the lines of a build step's own output the log takes from its start,
+BUILD_TAIL = 40                         # and from its end (where an error is said); the rest is counted
 
 _NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._\-]{0,98}[A-Za-z0-9])?"
 _VERSION = r"[A-Za-z0-9][A-Za-z0-9.*+!_\-]{0,99}"
@@ -983,12 +987,24 @@ class _Fetch:
                f"import sys; sys.path.insert(0, {pkg_root!r}); from lantern._jail import main; main(sys.argv[1:])",
                json.dumps(policy), "--", *cmd]
 
+        lock, last, counts = threading.Lock(), collections.deque(maxlen=BUILD_TAIL), [0, 0, False]
+
         def said(line: str) -> None:
             # Every line is taken as the build's own, whatever it begins with. The launcher's lines about its
             # walls begin with "sandbox:" and are left out: Lantern said once which walls a build runs behind,
-            # and a build that writes such a line itself gains nothing by it.
-            if line.strip() and not line.startswith("sandbox:"):
-                self.log("sandbox: build: " + line[:300])
+            # and a build that writes such a line itself gains nothing by it. The log takes the first lines of a
+            # step and its last ones; a build may write thousands.
+            if not line.strip() or line.startswith("sandbox:"):
+                return
+            with lock:
+                if counts[2]:
+                    return
+                if counts[0] < BUILD_LINES:
+                    counts[0] += 1
+                    self.log("sandbox: build: " + line[:300])
+                else:
+                    counts[1] += 1
+                    last.append(line[:300])
         left: list[str] = []
         output = ""
         try:
@@ -996,6 +1012,12 @@ class _Fetch:
                                                     ask=_jail.ASK if linux else 0.0, left=left)
         finally:
             self.plan.left = left + sandbox._left_by_launcher(output)
+            with lock:
+                counts[2] = True            # whatever still holds the step's output open writes nothing more here
+                if counts[1] > len(last):
+                    self.log(f"sandbox: build: ({counts[1] - len(last)} more lines of this step are left out here)")
+                for line in last:
+                    self.log("sandbox: build: " + line)
         why = sandbox._unavailable(rc, output)
         if why:
             raise sandbox.Unavailable(why)
@@ -1341,6 +1363,9 @@ def _fetch_tools(job: _Fetch, here: Path, tools: Path, lines: list[str], words: 
     to. They are asked of the store the way the project's libraries are, and a tool is never built."""
     wanted, report = here / "run" / f"tools-{number}.txt", here / "run" / f"tools-{number}.json"
     wanted.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    job.log(f"sandbox: build: fetching the tools the build of {words} names from the store ({job.store.host}), "
+            f"ready-built only: {', '.join(_plain(line, 80) for line in lines[:8])}"
+            + (f" and {len(lines) - 8} more" if len(lines) > 8 else ""))
     more = []
     if held:
         keep = here / "run" / f"held-{number}.txt"
