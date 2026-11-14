@@ -242,10 +242,20 @@ jobs:
       - run: pip install -e ".[scan,dev]"
       - name: gitleaks 8.30.1 for the tests of how Lantern starts it, built from its source (Go checks what it downloads against its public record)
         # tests/test_scanners.py runs against the real program where LANTERN_TESTS_GITLEAKS names one (where it
-        # names none, those tests are skipped and the log says so). It is not put on PATH: every other test, and
-        # Lantern's check of itself below, run as they do on a computer without it.
+        # names none, those tests are skipped and the log says so). It is not put on PATH.
+        # GitHub's macOS machines keep Go in their tool cache and put none on PATH (the Linux and Windows ones have
+        # one there): the newest one kept is used, and Homebrew's where none is kept. Whichever Go it is builds
+        # the same gitleaks: the version is written in the line that builds it, GOTOOLCHAIN=auto has an older Go
+        # fetch the one the source asks for, and Go checks what it downloads against its public record.
         shell: bash
         run: |
+          if ! command -v go >/dev/null 2>&1; then
+            for bin in "$RUNNER_TOOL_CACHE"/go/*/*/bin; do
+              if [ -x "$bin/go" ]; then kept="$bin"; fi
+            done
+            if [ -n "${kept:-}" ]; then export PATH="$kept:$PATH"; else brew install go; fi
+          fi
+          go version
           GOBIN="$RUNNER_TEMP/gitleaks" GOTOOLCHAIN=auto CGO_ENABLED=0 go install -ldflags "-X github.com/zricethezav/gitleaks/v8/version.Version=8.30.1" github.com/zricethezav/gitleaks/v8@v8.30.1
           program="$RUNNER_TEMP/gitleaks/gitleaks$(go env GOEXE)"
           test "$("$program" version)" = "8.30.1"
