@@ -719,12 +719,30 @@ def test_pythons_own_ways_between_processes_work_behind_the_doorman(tmp_path):
 # ---------------------------------------------------------------------------- the launcher by itself
 HERE = Path(_jail.__file__).resolve().parent.parent
 LAUNCH = "import sys; from lantern import _jail; _jail.KILLABLE = {killable!r}; _jail.main(sys.argv[1:])"
+# The same launcher with a doorman that takes its time over every request (a stand-in for a slow or a busy
+# computer, where the doorman's answer comes later than a program's next signal).
+SLOW = ("import sys, time; from lantern import _jail; _jail.KILLABLE = {killable!r}; was = _jail._Doorman._decide; "
+        "_jail._Doorman._decide = lambda *a: (time.sleep({pause!r}), was(*a))[1]; _jail.main(sys.argv[1:])")
 BELOW = [sys.executable, "-S"]          # a Python with no guard: what it asks for it asks of the kernel
 
 
-def _launch(policy: dict, cmd: list[str], killable: bool = True):
-    return subprocess.run([sys.executable, "-c", LAUNCH.format(killable=killable), json.dumps(policy), "--", *cmd],
+def _launch(policy: dict, cmd: list[str], killable: bool = True, pause: float = 0):
+    text = SLOW.format(killable=killable, pause=pause) if pause else LAUNCH.format(killable=killable)
+    return subprocess.run([sys.executable, "-c", text, json.dumps(policy), "--", *cmd],
                           capture_output=True, text=True, encoding="utf-8", timeout=180, cwd=HERE)
+
+
+def _holds_signals_back() -> bool:
+    """Does this kernel know the way (Linux 5.19) to hold a signal back while a doorman decides? Asked of the kernel
+    itself, with no filter at all: it says "bad address" where it knows the flag and "invalid argument" where not."""
+    table = _jail._CALLS.get(os.uname().machine)
+    if not LINUX or table is None:
+        return False
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.syscall.restype = ctypes.c_long
+    libc.syscall(ctypes.c_long(table["seccomp"]), ctypes.c_ulong(1),
+                 ctypes.c_ulong(_jail._NEW_LISTENER | _jail._WAIT_KILLABLE), ctypes.c_void_p(None))
+    return ctypes.get_errno() == errno.EFAULT
 
 
 @pytest.fixture()
@@ -750,7 +768,10 @@ def _file(folder: Path, name: str, text: str) -> str:
 
 
 # A server and its callers in one program below the guard: 8 threads of 50 calls each, or calls one after the other
-# while a timer interrupts the program a thousand times a second, until 1,000 calls and 500 interruptions are counted.
+# while a timer interrupts the program, until the calls and the interruptions asked for are counted. "storm": a
+# thousand signals a second, whatever the program is doing. "paced": the next signal is asked for when the one
+# before has been counted (0.2, 0.5 or 1 thousandth of a second later, in turn, so that it meets a call at
+# another moment each time), which interrupts a request once and never the same one again and again.
 MANY = r'''
 import signal
 import socket
@@ -788,14 +809,23 @@ def call(n, out):
 
 threading.Thread(target=serve, daemon=True).start()
 done, fired, calls = [], [], 400
-if how == "storm":
-    signal.signal(signal.SIGALRM, lambda *_: fired.append(1))
+if how in ("storm", "paced"):
+    most, least = int(sys.argv[3]), int(sys.argv[4])
+    over = []
+
+    def counted(*_):
+        fired.append(1)
+        if how == "paced" and not over:
+            signal.setitimer(signal.ITIMER_REAL, (0.0002, 0.0005, 0.001)[len(fired) % 3])
+
+    signal.signal(signal.SIGALRM, counted)
     signal.siginterrupt(signal.SIGALRM, False)   # a request a signal interrupted is made again, as most programs have it
-    signal.setitimer(signal.ITIMER_REAL, 0.001, 0.001)
+    signal.setitimer(signal.ITIMER_REAL, 0.001, 0 if how == "paced" else 0.001)
     calls = 0
-    while (calls < 1000 or len(fired) < 500) and calls < 200000:
+    while (calls < most or len(fired) < least) and calls < 200000:
         call(1, done)
         calls += 1
+    over.append(1)
     signal.setitimer(signal.ITIMER_REAL, 0)
 else:
     threads = [threading.Thread(target=call, args=(50, done)) for _ in range(8)]
@@ -812,20 +842,139 @@ print("got %d answers to %d calls, %d signals" % (len(done), calls, len(fired)))
 @pytest.mark.parametrize("how", ["at once", "storm"])
 def test_many_connections_at_once_and_under_a_storm_of_signals(place, how, killable):
     """The safe twin under load: 400 connections from 8 threads at once, and 1,000 or more while a timer
-    interrupts the program a thousand times a second (until 500 interruptions are counted, so no clock decides
-    what was tested). Every one is made and answered, both the way newer kernels hold a signal back until the
-    doorman answered and the way older ones hand the request back to be made again (where the doorman may have
-    made the connection already: the second answer is then the first one's; until the doorman kept every
-    connection it made in mind, 4 of 5,000 such calls were told "is connected already")."""
+    interrupts the program (until 500 interruptions are counted, so no clock decides what was tested). Every one
+    is made and answered, both the way newer kernels hold a signal back until the doorman answered and the way
+    older ones hand the request back to be made again (where the doorman may have made the connection already:
+    the second answer is then the first one's; until the doorman kept every connection it made in mind, 4 of
+    5,000 such calls were told "is connected already").
+
+    Where the kernel holds signals back the timer fires a thousand times a second, whatever the program is doing.
+    The older way the program asks for its next signal when the one before was counted (measured here: the
+    doorman's answer found 73 of 1,000 requests handed back, to be made again; 97 under the timer). Until
+    2026-11-14 the timer was used both ways, and the older way that is a test of the computer: a request is
+    handed back at every signal, so once the doorman takes longer to answer than the next signal takes to come,
+    no request is answered (the test after this one). On this computer the doorman answers in less than the
+    thousandth of a second, and the 1,000 calls took 0.85 seconds; on one of GitHub's machines, with every
+    program of the run being watched, the program had not ended after 180."""
     if not _can():
         pytest.skip("this system gives a run no doorman of its own (" + sandbox.own_sockets() + ")")
-    done = _launch(_policy(place), [*BELOW, _file(place, "many.py", MANY), str(place / "own.sock"), how], killable)
+    stormy = how == "storm"
+    if stormy and not (killable and _holds_signals_back()):
+        how = "paced"
+    done = _launch(_policy(place), [*BELOW, _file(place, "many.py", MANY), str(place / "own.sock"), how, "1000", "500"],
+                   killable)
     assert done.returncode == 0, done.stderr
     answers, calls, signals = (int(n) for n in re.findall(r"\d+", done.stdout))
-    assert answers == calls and calls >= (1000 if how == "storm" else 400), done.stdout
-    assert signals >= 500 if how == "storm" else signals == 0, done.stdout
+    assert answers == calls and calls >= (1000 if stormy else 400), done.stdout
+    assert signals >= 500 if stormy else signals == 0, done.stdout
     assert "a doorman makes every connection" in done.stderr
     assert _jail.BLOCKED_MARK not in done.stderr, done.stderr
+
+
+def _started_with(text: str) -> list[str]:
+    """The programs of this computer that were started with `text` among their words."""
+    found = []
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                words = (entry / "cmdline").read_bytes()
+            except OSError:
+                continue                                     # gone in the meantime, or not ours to look at
+            if text.encode() in words:
+                found.append(entry.name)
+    return found
+
+
+@only_linux
+def test_signals_faster_than_the_doorman_answers_hold_a_program_up_on_older_kernels_only(place):
+    """A limit, kept as a test so that what is written about it stays true (Known gaps). The doorman is a program
+    and takes time over a request. A kernel before 5.19 hands a request back at every signal, to be made again:
+    a program whose signals come faster than its doorman answers gets no connection, and goes on asking until
+    the run's time limit ends it. A kernel from 5.19 holds the signal back until the doorman answered. Here the
+    doorman is slow on purpose (a twentieth of a second for a request: a stand-in for a slow or a busy computer)
+    and the program wants ten connections. With signals it asks for one by one (as the test above does the older
+    way) it gets all ten, so that test does not depend on how fast the computer is. Interrupted a thousand times
+    a second, the older way, it is still asking after three times as long; once a thousand of one thread's
+    requests in a row were handed back with no answer taken (`_jail.MOST_HANDED_BACK`) the doorman says why in
+    the run's output, where it is read as the sandbox's doing (tests that fail for it are not counted as the
+    code's failure), and the launcher, told to stop, ends the program with everything it started. The newer way
+    it gets all ten, and nothing is said."""
+    if not _can():
+        pytest.skip("this system gives a run no doorman of its own (" + sandbox.own_sockets() + ")")
+    program = _file(place, "many.py", MANY)
+
+    def run(how: str, killable: bool):
+        began = time.monotonic()
+        done = _launch(_policy(place), [*BELOW, program, str(place / "own.sock"), how, "10", "5"], killable, 0.05)
+        assert done.returncode == 0, done.stderr
+        answers, calls, signals = (int(n) for n in re.findall(r"\d+", done.stdout))
+        assert answers == calls >= 10 and signals >= 5, done.stdout
+        assert _jail.BLOCKED_MARK not in done.stderr, done.stderr
+        (place / "own.sock").unlink()
+        return time.monotonic() - began
+
+    took = run("paced", False)
+    if _holds_signals_back():
+        took = max(took, run("storm", True))
+    cmd = [*BELOW, program, str(place / "own.sock"), "storm", "10", "5"]
+    said = place / "held.err"
+    with open(said, "wb") as sink:
+        held = subprocess.Popen([sys.executable, "-c", SLOW.format(killable=False, pause=0.05),
+                                 json.dumps(_policy(place)), "--", *cmd], stdout=subprocess.PIPE, stderr=sink,
+                                text=True, encoding="utf-8", cwd=HERE)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            held.wait(timeout=max(3.0, 3 * took))
+        # How soon the doorman has counted `MOST_HANDED_BACK` requests handed back depends on the computer, so
+        # the line is waited for and not looked for at a moment: the program asks for as long as it is let.
+        until = time.monotonic() + 150
+        while _jail.BLOCKED_MARK not in said.read_text(encoding="utf-8") and time.monotonic() < until:
+            time.sleep(0.1)
+        assert held.poll() is None and len(_started_with(program)) >= 1     # still there, still asking
+        held.terminate()
+        out, _ = held.communicate(timeout=120)
+    finally:
+        if held.poll() is None:
+            held.kill()
+            held.communicate()
+    err = said.read_text(encoding="utf-8")
+    assert "answers" not in out, out
+    assert _started_with(program) == [], err
+    assert err.count(_jail.BLOCKED_MARK) == 1 and f"{_jail.BLOCKED_MARK} {_jail.SAID['signals']}" in err, err
+    (told,) = sandbox.blocked_reasons(err)
+    assert told["kind"] == "network" and "signals" in told["what"] and "5.19" in told["what"], told
+
+
+def test_a_row_of_requests_handed_back_is_said_once_and_any_answer_taken_ends_it(capfd):
+    """What the doorman counts before it says that a program is held up by its own signals: one thread's requests
+    for a connection that were handed back in a row. One short of `MOST_HANDED_BACK` nothing is said (a program
+    that is interrupted often and still gets through: the longest row measured for one that was done in 1.36
+    seconds was 98); an answer that was taken ends the row, each thread has a row of its own, and the line is
+    written once however many threads get there and however long a row goes on. Every answer `_connect` gives
+    goes through the one place that counts, so a refusal that was taken ends a row as a connection does."""
+    import inspect
+    import threading
+    door = _jail._Doorman.__new__(_jail._Doorman)            # the counting alone: no kernel is asked for anything
+    door.lock, door.told, door.back = threading.Lock(), set(), {}
+    for _ in range(_jail.MOST_HANDED_BACK - 1):
+        door._heard(7, False)
+    door._heard(7, True)
+    for _ in range(_jail.MOST_HANDED_BACK - 1):
+        door._heard(7, False)
+        door._heard(8, False)
+    assert _jail.BLOCKED_MARK not in capfd.readouterr().err
+    door._heard(7, False)
+    assert capfd.readouterr().err == f"{_jail.BLOCKED_MARK} {_jail.SAID['signals']}\n"
+    for _ in range(3 * _jail.MOST_HANDED_BACK):
+        door._heard(7, False)
+        door._heard(8, False)
+    assert capfd.readouterr().err == ""
+    assert door.back == {7: 4 * _jail.MOST_HANDED_BACK, 8: 4 * _jail.MOST_HANDED_BACK - 1}
+    door._heard(8, True)
+    assert door.back == {7: 4 * _jail.MOST_HANDED_BACK}
+    written = inspect.getsource(_jail._Doorman._connect)
+    assert written.count("self._send(") == 1 and "self._heard(tid, self._send(ident, number))" in written
+    assert _jail.MOST_HANDED_BACK >= 1000                    # ten times the longest row of a program that gets through
 
 
 @only_linux

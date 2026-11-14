@@ -18,7 +18,7 @@ file. New entries go under `## Unreleased`, on top.
   which before they run). The first measure was a small project whose libraries are not on the
   computer (15 tests written first, with stand-in stores on 127.0.0.1: 14 failed on the code before). The second
   was three public projects, each run from its link against the real stores on a computer with none of their
-  libraries (below). 288 tests in nine new files, each thing refused beside a twin that must work; no test reaches
+  libraries (below). 290 tests in nine new files, each thing refused beside a twin that must work; no test reaches
   the internet. The first version of this change failed the checks it has to pass before it is merged (below:
   "What the change's own two checks showed"); the numbers here are of the fixed code. Every sandbox and library
   test of the repository (the nine new files and 16 older ones), on a fixed copy of it, Linux with no Docker
@@ -26,7 +26,11 @@ file. New entries go under `## Unreleased`, on top.
   failed were the repository's own rules about its code, both right (a name given twice at the top of
   `lantern/_jail.py`, and a new place that opens a folder handle and was not on the list of such places); with
   both corrected that test file passed whole (140 tests), and as an ordinary user 954 passed, 0 failed, 35
-  skipped (18 Docker, 12 Windows, 5 root) in 692.03 s. Of the 113 tests of `tests/test_libraries.py` and
+  skipped (18 Docker, 12 Windows, 5 root) in 692.03 s. On the third version (2026-11-14: three tests corrected,
+  two added, one line more that the doorman says): as root 961 passed, 0 failed, 30 skipped in 686.51 s; as an
+  ordinary user on a stand-in for GitHub's Linux machines, where a run can be given no network and no memory
+  folder of its own, 945 passed, 0 failed, 46 skipped (18 Docker, 12 Windows, 5 root, 11 that need such a
+  network or memory folder) in 662.85 s. Of the 113 tests of `tests/test_libraries.py` and
   `tests/test_sandbox_second_look.py`, 47 fail on the code as first pushed.
   - **What a project asks for is read, never run** (`lantern/libraries.py`, `plan`). Python: `requirements*.txt`
     at the top of the project (`-r` and `-c` files of the project are followed) and `pyproject.toml`
@@ -215,6 +219,55 @@ file. New entries go under `## Unreleased`, on top.
       run are not where they lie; one asked of a fetch that is only told to use its doorkeeper that no other place
       be reached round it, which nothing promises there; four asked of a run inside a run, and one of Windows, for
       a closed network below Python. Each now says what it means.
+    The second version, with those causes fixed, was pushed, and its checks were not green either. On GitHub's
+    Linux machines one test job had 1 failed test of 5,042 and a slower machine 2 of 5,042; both Windows jobs
+    had 1 of 4,938; the browser job had the first of these in its own run of the tests, and every other check of
+    it passed (the pages in three browsers, the website, Lantern's check of itself). Three tests, each asking the
+    wrong thing of the machine it ran on, each reproduced here with a stand-in for that machine before it was
+    corrected:
+    - *A test of the first stage asked for the guard's line where the doorman now refuses first.* Where a run has
+      no network of its own and stands behind a doorman (GitHub's Linux machines, where an ordinary user may
+      make no network), no UDP socket is made at all. A Python test then never gets to send its datagram, and the
+      line in the run's record is the doorman's ("a UDP socket was not made"), not the guard's ("network
+      sendto"). The refusal is right and is written down; the test asked for the older line everywhere
+      (`tests/test_sandbox_own_network.py`, `_datagram_line`). On the first version another failure in the same
+      test hid this one.
+    - *A test of the doorman was a test of the computer's speed.* It interrupted a program a thousand times a
+      second by a timer, also the way kernels before 5.19 work, which hand a request back at every signal to be
+      made again. That way, once the doorman takes longer over a request than the next signal takes to come, no
+      request is answered: on the slower of GitHub's machines, with every program of the run being watched, the
+      program had not ended after 180 seconds. Measured here, 1,000 connections the older way: 0.73 to 0.93
+      seconds with a signal every thousandth of a second, 1.10 to 1.36 with one every half of that, 21.79 to
+      113.25 in four runs with one every fifth; with
+      a doorman made to take two thousandths over a request, 3 of the 1,000 in 20 seconds. The way kernels from
+      5.19 work (the signal is held back until the doorman answered): 0.66 seconds with a signal every fifth of a
+      thousandth, 0.72 with one every twentieth. The test
+      (`test_many_connections_at_once_and_under_a_storm_of_signals`) now paces its signals the older way, the
+      next one asked for when the one before was counted (the doorman's answer still found 73 of its 1,000
+      requests handed back, to be made again; 97 under the timer), and keeps the timer where the kernel holds
+      signals back. The limit has a
+      test of its own, with a doorman made slow on purpose
+      (`test_signals_faster_than_the_doorman_answers_hold_a_program_up_on_older_kernels_only`): the older way the
+      program is still asking after three times as long as the same connections take otherwise, and the launcher
+      ends it with everything it started when told to; the newer way it gets every one. On a kernel before 5.19
+      (the 5.15 of Ubuntu 22.04 is one) this is a limit of the doorman, written under Known gaps. So that it is
+      not read as the code's failure, the doorman now says when it happens (the one change to Lantern's own
+      code in this round, written after the limit's test asked for the line and failed): it counts each
+      thread's requests for a connection that were handed back in a row with no answer taken between them, and
+      at 1,000 (`_jail.MOST_HANDED_BACK`, `_Doorman._heard`) writes one line into the run's output, "network
+      connect by a program whose own signals keep taking its request back before the answer is there (a Linux
+      before 5.19 hands a request back at every signal): its connections come late or never". Like every
+      refusal of the sandbox it is in the run's record, and tests that fail in such a run read `missing`, not
+      `failed`; tests that never end run into the run's time limit and read `missing` as before. The number is
+      set on what was measured: a program that still gets through quickly had rows of 3 to 7 (a signal every
+      thousandth of a second) and 86 to 98 (every half of that) and is not told; one that crawls (a signal
+      every fifth of a thousandth) had rows of 2,008 to 2,789 and is told. The counting has a test of its own
+      that asks the kernel for nothing and runs on every system
+      (`test_a_row_of_requests_handed_back_is_said_once_and_any_answer_taken_ends_it`). No wall changed.
+    - *A test asked Windows for Linux's words.* A sandbox that makes the connections of what runs inside it is
+      Linux's. On Windows the fetch is only told to use its doorkeeper as well, and the reason it gives is the
+      system's own; `test_inside_a_sandbox_that_makes_the_connections_the_kernels_rule_is_not_claimed` asked for
+      the sentence about a sandbox around this one there too.
     On the fixed code, before it was pushed again: the 15 test files with failures in the sandbox, run there by
     Lantern, 504 passed, 5 failed (the five of "the network was closed where nothing closes it"), 38 skipped; with
     that corrected, the six files that held them, 235 passed, 0 failed, 16 skipped (no Docker daemon, not root,

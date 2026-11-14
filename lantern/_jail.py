@@ -96,7 +96,17 @@ POLICY_JSON: {"writable": [dirs], "nobody": bool, "python": bool, "net": bool, "
   "under way" to a program whose handlers do not have the request made again, which Python's own do not
   (measured here, 5,000 connections under about a thousand signals a second: 50 failed afterwards with "not
   connected"; the way kernels before 5.19 work, which hand a request back at any signal, 1,037; with handlers
-  that restart, as Node, Go and most C programs have them, 0 either way);
+  that restart, as Node, Go and most C programs have them, 0 either way); and on a kernel before 5.19 a program
+  whose signals come faster than the doorman answers gets its connections late or not at all, because every
+  request is handed back before its answer is there (measured here, 1,000 connections with handlers that
+  restart: 0.73 to 0.93 seconds with a signal every thousandth of a second, 1.10 to 1.36 with one every half of
+  that, 21.79 to 113.25 in four runs with one every fifth, and with a doorman made to take two thousandths over
+  a request, a signal every thousandth: 3 of the 1,000 in 20 seconds; the way kernels from 5.19 work: 0.66
+  seconds with a signal every fifth of a thousandth). The doorman counts each thread's requests for a
+  connection that were handed back in a row with no answer taken between them, and at `MOST_HANDED_BACK` it
+  says so in the run's output, once (`SAID["signals"]`, `_Doorman._heard`; the longest rows measured at those
+  three rates: 3 to 7, 86 to 98, 2,008 to 2,789), so tests that fail while held up that way are read as the
+  sandbox's doing; tests that never end run into the run's time limit;
 * `nobody`: drop to uid/gid 65534 when started as root (root ignores file modes);
 * no_new_privs, so nothing it runs can gain privileges.
 
@@ -677,6 +687,7 @@ KILLABLE = True       # the kernel (5.19+) is asked to hold a signal that is not
 MOST_TOLD = 20        # the refusals a doorman writes into a run's output, each place once
 MOST_AT_ONCE = 128    # the requests a doorman works on at the same time
 MOST_REMEMBERED = 4096   # the sockets whose last connection a doorman keeps in mind
+MOST_HANDED_BACK = 1000  # requests of one thread in a row that a signal took back unanswered, before the run is told
 _AF_UNIX, _AF_INET, _AF_INET6, _AF_NETLINK = 1, 2, 10, 16
 _RET_ASK, _RET_ALLOW, _RET_ERRNO = 0x7FC00000, 0x7FFF0000, 0x00050000
 _NOTIF_RECV, _NOTIF_SEND, _NOTIF_VALID, _NOTIF_VALID_OLD = 0xC0502100, 0xC0182101, 0x40082102, 0x80082102
@@ -717,6 +728,8 @@ SAID = {
                "program): the sandbox cannot read what it asks for, so it was ended",
     "closed": "network connect by a program the sandbox cannot look into (it closed itself to the other programs "
               "of its user)",
+    "signals": "network connect by a program whose own signals keep taking its request back before the answer is "
+               "there (a Linux before 5.19 hands a request back at every signal): its connections come late or never",
     "more": "network and other requests: the sandbox refused more than is listed here",
 }
 # The C library's own cache of names, which it tries before it looks a user or a host up by itself and does
@@ -933,6 +946,7 @@ class _Doorman:
         self.told: set[str] = set()
         self.made: dict = {}                         # the connections the doorman made, by socket (`_connect`)
         self.gates: dict = {}                        # one socket, one connection at a time: [a lock, who waits]
+        self.back: dict = {}                         # by thread: its requests in a row that were handed back
         self.room = threading.BoundedSemaphore(MOST_AT_ONCE)
 
     def serve(self) -> None:
@@ -1082,6 +1096,26 @@ class _Doorman:
         finally:
             os.close(held)
 
+    def _heard(self, tid: int, answered: bool) -> None:
+        """Count the requests for a connection of one thread that were taken back before their answer was there.
+        A kernel that does not hold signals back (`KILLABLE`, Linux 5.19) hands a request back at every signal,
+        to be made again; a program whose signals come faster than the doorman answers then gets its connections
+        late, or not at all. After `MOST_HANDED_BACK` in a row with no answer taken between them the run is told
+        (once), so that tests which fail for it, or never end, are read as held up by the sandbox and not as the
+        code's failure. A refusal that was taken is an answer too. A program that is gone leaves one such request;
+        one that a signal interrupts now and then has answers between them. Measured here the older way, 1,000
+        connections under a timer: a signal every thousandth of a second, the longest row 7 (done in 0.88
+        seconds); every 0.5 thousandths, 98 (1.32 seconds); every 0.2 thousandths, 2,008 (32.12 seconds)."""
+        with self.lock:
+            if answered:
+                self.back.pop(tid, None)
+                return
+            if len(self.back) >= MOST_REMEMBERED:
+                self.back.clear()
+            count = self.back[tid] = self.back.get(tid, 0) + 1
+        if count == MOST_HANDED_BACK:
+            self._tell(SAID["signals"])
+
     def _tell(self, text: str) -> None:
         """One refusal into the run's output, where `lantern.sandbox` reads it: each once, and not without end."""
         with self.lock:
@@ -1098,8 +1132,12 @@ class _Doorman:
     def _connect(self, ident: int, tid: int, fd: int, pointer: int, size: int) -> None:
         """Make, refuse or pass on to the kernel's own judgement one connection, and answer the one that asked."""
         import threading
+
+        def answer(number: int) -> None:             # the one way out, so that a row of requests handed back
+            self._heard(tid, self._send(ident, number))    # unanswered ends at any answer that was taken
+
         if size > 128:                               # longer than any address: what the kernel says to that
-            self._send(ident, errno.EINVAL)
+            answer(errno.EINVAL)
             return
         keep: list[int] = []
         try:
@@ -1112,18 +1150,19 @@ class _Doorman:
             except OSError as e:
                 if e.errno in (errno.EPERM, errno.EACCES):
                     self._tell(SAID["closed"])
-                    self._send(ident, errno.EACCES)
+                    answer(errno.EACCES)
                 elif e.errno != errno.ESRCH:
-                    self._send(ident, e.errno or errno.EPERM)
+                    answer(e.errno or errno.EPERM)
                 return
             if not self._valid(ident):
+                self._heard(tid, False)
                 return                               # whoever asked is gone, or was interrupted: nothing is done
             with self.lock:
                 first = self.knock is not None and asked == self.knock
                 if first:
                     self.knock = None
             if first:
-                self._send(ident, _KNOCK_SAYS)       # the command's side, before the command (`_knock`)
+                answer(_KNOCK_SAYS)       # the command's side, before the command (`_knock`)
                 return
             family = self._family(mine)
             kind = int.from_bytes(asked[:2], sys.byteorder) if len(asked) >= 2 else -1
@@ -1135,16 +1174,16 @@ class _Doorman:
                     # of a program outside. With neither, nothing tells whose name it is.
                     if not (self.own_net or self.scoped):
                         self._tell(SAID["name"].format(where=_plain(repr(asked[3:].decode("utf-8", "replace")))))
-                        self._send(ident, errno.EACCES)
+                        answer(errno.EACCES)
                         return
                 else:
                     address = self._file(tid, asked[2:].split(b"\0", 1)[0], keep)
                     if address is None:
-                        self._send(ident, errno.EACCES)
+                        answer(errno.EACCES)
                         return
             elif family in (_AF_INET, _AF_INET6) and kind in (_AF_INET, _AF_INET6) and not self.own_net:
                 self._tell(SAID["address"].format(where=_numbers(asked)))
-                self._send(ident, errno.EACCES)
+                answer(errno.EACCES)
                 return
             # A request that a signal interrupted is made again by the program, or by the kernel for it, and the
             # connection the doorman made the first time is then there already. The doorman cannot tell whether
@@ -1177,14 +1216,14 @@ class _Doorman:
                             self.made[which] = (asked, number)
                         elif before is not None:
                             del self.made[which]
-                    self._send(ident, number)
+                    answer(number)
             finally:
                 with self.lock:
                     gate[1] -= 1
                     if not gate[1]:
                         self.gates.pop(which, None)
         except OSError as e:
-            self._send(ident, e.errno or errno.EPERM)
+            answer(e.errno or errno.EPERM)
         finally:
             for one in keep:
                 try:

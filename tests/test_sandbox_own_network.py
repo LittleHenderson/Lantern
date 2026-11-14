@@ -36,6 +36,34 @@ def _own(backend: str = "subprocess") -> bool:
     return backend == "docker" or sandbox.own_network() == ""
 
 
+def _udp_made_here() -> bool:
+    """Does whatever stands around this test let a program make a UDP socket at all?"""
+    try:
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM).close()
+    except OSError:
+        return False
+    return True
+
+
+def _datagram_line(backend: str) -> str | None:
+    """What a datagram for another computer leaves in the record of the run that refused it. The guard refuses the
+    send and writes it down. Where the run has no network of its own and stands behind a doorman of its own, the
+    UDP socket itself is not made (there a UDP message would go wherever it is sent), so the test never gets to
+    send and the line is the doorman's: GitHub's Linux machines, where an ordinary user may make no network. Inside
+    another sandbox that makes no UDP socket the refusal is that sandbox's, written in its record and not in this
+    run's (None). Until 2026-11-14 the test asked for the guard's line everywhere, which the doorman of stage 2
+    made untrue on such a machine; on the change's first version another failure in the same test hid it."""
+    send = "network sendto ('192.0.2.1', 53)"
+    if backend == "docker":
+        return send
+    no_doorman = sandbox.own_sockets()
+    if not no_doorman:                                   # a doorman of the run's own
+        return send if _own(backend) else _jail.SAID["udp"]
+    if no_doorman == sandbox.DOORMAN_ABOVE and not _udp_made_here():
+        return None
+    return send
+
+
 def _failed(out: str) -> set[str]:
     """The names of the tests pytest's summary says failed."""
     return {line.split("::", 1)[1].split(" ", 1)[0] for line in out.splitlines()
@@ -193,11 +221,11 @@ def test_the_twin_that_reaches_outside_is_still_refused_and_written_down(backend
     assert _failed(out) == OUTSIDE | (set() if _own(backend) else {"test_it_talks_to_itself"}), out
     assert {b["kind"] for b in r["blocked"]} == {"network"}, r["blocked"]
     what = [b["what"] for b in r["blocked"]]
-    for tried in ("network connect ('192.0.2.1', 80)", "network sendto ('192.0.2.1', 53)",
-                  "network lookup 'example.invalid'"):
-        assert tried in what, what
+    datagram = _datagram_line(backend)
+    for tried in ("network connect ('192.0.2.1', 80)", datagram, "network lookup 'example.invalid'"):
+        assert tried is None or tried in what, what
     if _own(backend):                # and nothing else was refused: the test that talks to itself left no line
-        assert len(what) == 3, what
+        assert len(what) == (2 if datagram is None else 3), what
 
 
 # ------------------------------------------------------------------------------- the other programs of this computer

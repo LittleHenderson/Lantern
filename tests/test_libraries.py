@@ -285,7 +285,9 @@ def test_inside_a_sandbox_that_makes_the_connections_the_kernels_rule_is_not_cla
     """A run inside a run (Lantern's own tests, run by Lantern): the sandbox around it makes every connection for
     what runs inside it, so the kernel's rule for the fetching program's own connections decides nothing there.
     The fetch then says `told`. (On the code before it said `port-rule`, and inside such a sandbox a program that
-    went round the doorkeeper arrived: `straight/store: HTTP/1.0 200 OK`.)"""
+    went round the doorkeeper arrived: `straight/store: HTTP/1.0 200 OK`.) A sandbox that makes the connections
+    is Linux's: on another system the fetch is only told as well, and the reason it gives is that system's own
+    (until 2026-11-14 this test asked Windows for Linux's reason, and failed there)."""
     from lantern import libraries
     monkeypatch.setattr(sandbox, "_OWN_NETWORK", ["this test takes the network of its own away"])
     monkeypatch.setattr(sandbox, "landlock_abi", lambda: 7)
@@ -293,7 +295,9 @@ def test_inside_a_sandbox_that_makes_the_connections_the_kernels_rule_is_not_cla
     assert libraries.walls() == "told"
     job = libraries._Fetch(libraries.Plan("python"), Path(tempfile.mkdtemp(prefix="lantern-sandbox-")), QUIET, None, 512)
     try:
-        assert job.own is False and "sandbox around this one" in job.held_by()
+        assert job.own is False
+        assert job.held_by() == (libraries.TOLD_INSIDE if LINUX else libraries.WALL_WORDS["told"])
+        assert ("sandbox around this one" in job.held_by()) is LINUX
     finally:
         job.close()
         assert sandbox._rm(job.root)
