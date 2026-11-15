@@ -791,6 +791,56 @@ def test_this_computer_and_a_declared_host_are_read_with_nothing_taken_off():
     assert seen == {"here": [], "declared": []}
 
 
+# Which hosts are numbers is the guard's own reading, the same on every system (2026-11-14). A system may read
+# more as an IPv6 number than the others do: Windows takes a zero in front of a part of the IPv4 number at its
+# end, a form Linux and macOS take for a name. The guard went by this system's reading alone, so on Windows such
+# a host went down unasked. Below this system's reading is replaced by one that takes anything: a number is then
+# only what is written the one way all of them read it.
+SIX_ALMOST = ["::ffff:127.0.0.09", "::ffff:127.0.0.010", "::127.0.0.01", "::ffff:127.0.1", "::ffff:127.0.0.256",
+              "::ffff:127.0.0.1.", "1:2:3:4:5:6:7:8:9", "1::2::3", "12345::1", "1:2:3:4:5:6:7", "1.2.3.4::", ":::1", "::1:"]
+SIX_AS_WRITTEN = ["::1", "::", "::ffff:127.0.0.1", "::ffff:192.0.2.1", "2001:db8::1", "1:2:3:4:5:6:7:8", "2001:DB8:0:0:0:0:0:1",
+                  "fe80::1", "1:2:3:4:5:6:7::", "::2:3:4:5:6:7:8", "1:2:3:4:5:6:192.0.2.1", "::192.0.2.1"]
+SIX_NOT_AS_IT_LOOKS = AS_THE_SYSTEM_READS + """
+    socket.inet_pton = lambda family, text: bytes(16)     # from here on this system reads anything as a number
+    for host in json.loads(sys.argv[1]):
+        with tcp() as s:
+            tried("connect", lambda: s.connect((host, 80)))
+        with udp() as s:
+            tried("sendto", lambda: s.sendto(b"x", (host, 53)))
+        tried("getaddrinfo", lambda: socket.getaddrinfo(host, 80))
+        tried("gethostbyname", lambda: socket.gethostbyname(host))
+    print(json.dumps({"tried": out, "here": [h for h in json.loads(sys.argv[1]) if ng.is_local(h)]}))
+"""
+
+
+def test_what_only_one_system_reads_as_an_ipv6_number_is_asked_about_first(monkeypatch):
+    """A program of its own with this guard and no other, in which this system reads anything as a number. A zero
+    in front of a part of the IPv4 number at the end, a part too few or too large, a dot after it, a group too
+    many or too long, two gaps: each is refused as the lookup of a name and written down as it was written, and
+    none is this computer. The guard's own reading says the same when it is asked here."""
+    seen = _json(_program(SIX_NOT_AS_IT_LOOKS, json.dumps(SIX_ALMOST)))
+    assert seen["tried"] == [[way, "refused", [["lookup", host]]] for host in SIX_ALMOST
+                             for way in ("connect", "sendto", "getaddrinfo", "gethostbyname")]
+    assert seen["here"] == []
+    monkeypatch.setattr(socket, "inet_pton", lambda family, text: bytes(16))
+    assert [h for h in SIX_ALMOST if ng._number(h) or ng.is_local(h)] == []
+
+
+def test_the_twins_an_ipv6_number_as_every_system_reads_it_is_a_number(monkeypatch):
+    """The guard's own reading of the numbers written the one way: with a system that takes anything they are
+    numbers, and three of them this computer; and where this system does not read one of them as a number, it
+    is none here either."""
+    monkeypatch.setattr(socket, "inet_pton", lambda family, text: bytes(16))
+    assert [h for h in SIX_AS_WRITTEN if not ng._number(h)] == []
+    assert [h for h in SIX_AS_WRITTEN if ng.is_local(h)] == ["::1", "::", "::ffff:127.0.0.1"]
+
+    def reads_none(family, text):
+        raise OSError("not an address")
+    monkeypatch.setattr(socket, "inet_pton", reads_none)
+    assert [h for h in SIX_AS_WRITTEN if ng._number(h)] == []
+    assert [h for h in ("127.0.0.1", "192.0.2.1") if not ng._number(h)] == []
+
+
 # A way out on this computer is known by its port, and an address by the host in it: neither is taken at its word
 # (2026-11-14). Through the socket class a port goes down as the plain number it holds, or says once. Where the
 # class was gone round, the guard still hears of the connection before it is made, and one whose host or port it

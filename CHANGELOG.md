@@ -98,9 +98,21 @@ file. New entries go under `## Unreleased`, on top.
     refused; through `socket.socket` it works as plain text does.
     Tests: 11 new and 5 new cases of an older one (`tests/test_sandbox_guards.py` 4, `tests/test_netguard.py` 5 and
     the cases, `tests/test_sandbox_own_network.py` 2). On this change's code before them 7 of the tests and the 5
-    cases fail and the 4 twins pass; now all pass. The four files as they are now (228 tests), in a copy that is no
-    checkout: on the code before the stage 21 failed, 191 passed and 16 were skipped; now 212 pass and the same 16
-    are skipped (15 need Docker, 1 a checkout).
+    cases fail and the 4 twins pass; now all pass. The four files as they were then (228 tests), in a copy that is
+    no checkout: on the code before the stage 21 failed, 191 passed and 16 were skipped; with it 212 passed and the
+    same 16 were skipped (15 need Docker, 1 a checkout).
+    **A number is read the same on every system** (the same evening). The version above asked the system it runs
+    on what an IPv6 number is, and systems differ: Windows reads an IPv6 address whose IPv4 number at the end has
+    a zero in front of a part as a number, Linux and macOS take the same host for a name. One of the new tests asks
+    about such a host: it passed on Linux and macOS and failed in both of CI's Windows jobs (1 test of 4,628 run),
+    where the guard let the host go down unasked. Both guards now read an IPv6 number by a rule of their own
+    (`_six`: eight groups of one to four hex digits, one `::` for groups of zeros left out, at most a strictly
+    read IPv4 number in the last place) and count it as a number only where this system reads it as one too.
+    Tests: 4 new (2 in each of `tests/test_sandbox_guards.py` and `tests/test_netguard.py`), in which the system's
+    reading is replaced by one that takes anything, so they ask the same of every system: on the code before, 2
+    fail and the 2 twins pass; now all pass. The rule and this computer's own reading agreed on each of 400,000
+    hosts made at random. The four files as they are now (232 tests), in a copy that is no checkout: on the code
+    before the stage 24 failed, 192 passed and 16 were skipped; now 216 pass and the same 16 are skipped.
     Not covered, as before: a name handed to the socket type beneath Python's module is looked up by the system
     before the guard hears of the call. This computer's own names (`localhost`, the computer's name) are handed to
     the system, which answers them from its own file on an ordinary computer.

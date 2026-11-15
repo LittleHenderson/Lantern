@@ -118,21 +118,44 @@ def _exact(host):
 
 
 def _number(host) -> bool:
-    """An address written out as a number, read strictly: four plain decimal parts up to 255 with no zero in front,
-    or what this system reads as an IPv6 address, and nothing around it. Anything else may be a name."""
+    """An address written out as a number, read strictly: four plain decimal parts up to 255 with no zero in front
+    (`_four`), or an IPv6 address written the one way every system reads one (`_six`) that this system reads as one
+    too, and nothing around it. Anything else may be a name."""
     h = _exact(host)
     if h is None or not h.isascii():
         return False
-    parts = h.split(".")
-    if len(parts) == 4 and all(x.isdigit() and len(x) < 4 and int(x) < 256 and (x == "0" or x[0] != "0") for x in parts):
+    if _four(h):
         return True
-    if ":" in h and all(c in "0123456789abcdefABCDEF:." for c in h):
+    if _six(h):
         try:
             socket.inet_pton(socket.AF_INET6, h)
             return True
         except (OSError, ValueError, AttributeError):
             return False
     return False
+
+
+def _four(h: str) -> bool:
+    parts = h.split(".")
+    return len(parts) == 4 and all(x.isdigit() and len(x) < 4 and int(x) < 256 and (x == "0" or x[0] != "0") for x in parts)
+
+
+def _six(h: str) -> bool:
+    """An IPv6 address as every system reads one: eight groups of one to four hex digits with a colon between them,
+    where one "::" may stand for the groups of zeros left out and the last two groups may be written as an IPv4
+    number, read as strictly as any other. What this system reads as one is not enough: one system reads more as a
+    number than another (Windows takes a zero in front of a part of that IPv4 number, which Linux and macOS take
+    for a name), and what any of them may take for a name is a name here."""
+    head, gap, tail = h.partition("::")
+    groups = (head.split(":") if head else []) + (tail.split(":") if tail else [])
+    n = len(groups)
+    if groups and "." in groups[-1]:
+        if (gap and not tail) or not _four(groups[-1]):
+            return False
+        groups, n = groups[:-1], n + 1
+    if not all(0 < len(g) < 5 and all(c in "0123456789abcdefABCDEF" for c in g) for g in groups):
+        return False
+    return n < 8 if gap else n == 8
 
 
 def _shown(host) -> str:

@@ -1048,7 +1048,8 @@ def _here(addr):
 def _number(host):
     # An address written out as a number: asking where it is asks nothing of any name server, the answer is the
     # number itself. Read strictly, so that what is not surely a number is still a name: four plain decimal parts
-    # up to 255 with no zero in front, or what this system reads as an IPv6 address, and nothing around it.
+    # up to 255 with no zero in front (`_four`), or an IPv6 address written the one way every system reads one
+    # (`_six`) that this system reads as one too, and nothing around it.
     host = _held(host)
     if type(host) in (bytes, bytearray):
         try:
@@ -1057,16 +1058,34 @@ def _number(host):
             return False
     if type(host) is not str or not host.isascii():
         return False
-    p = host.split(".")
-    if len(p) == 4 and all(x.isdigit() and len(x) < 4 and int(x) < 256 and (x == "0" or x[0] != "0") for x in p):
+    if _four(host):
         return True
-    if ":" in host and all(c in "0123456789abcdefABCDEF:." for c in host):
+    if _six(host):
         try:
             _socket.inet_pton(_socket.AF_INET6, host)
             return True
         except (OSError, ValueError, AttributeError):
             return False
     return False
+def _four(h):
+    p = h.split(".")
+    return len(p) == 4 and all(x.isdigit() and len(x) < 4 and int(x) < 256 and (x == "0" or x[0] != "0") for x in p)
+def _six(h):
+    # An IPv6 address as every system reads one: eight groups of one to four hex digits with a colon between
+    # them, where one "::" may stand for the groups of zeros left out and the last two groups may be written as
+    # an IPv4 number, read as strictly as any other. What this system reads as one is not enough: one system reads
+    # more as a number than another (Windows takes a zero in front of a part of that IPv4 number, which Linux and
+    # macOS take for a name), and what any of them may take for a name is a name here.
+    head, gap, tail = h.partition("::")
+    groups = (head.split(":") if head else []) + (tail.split(":") if tail else [])
+    n = len(groups)
+    if groups and "." in groups[-1]:
+        if (gap and not tail) or not _four(groups[-1]):
+            return False
+        groups, n = groups[:-1], n + 1
+    if not all(0 < len(g) < 5 and all(c in "0123456789abcdefABCDEF" for c in g) for g in groups):
+        return False
+    return n < 8 if gap else n == 8
 _WFLAGS = _os.O_WRONLY | _os.O_RDWR | _os.O_CREAT | _os.O_APPEND | getattr(_os, "O_TRUNC", 0)
 for _p in _os.environ.get("LANTERN_SANDBOX_SITE", "").split(_os.pathsep):
     # Folders of libraries, behind Python's own library as installed libraries are at home: the fetched ones and

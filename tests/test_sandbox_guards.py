@@ -1158,3 +1158,59 @@ def test_the_twins_this_computers_number_as_it_is_written_is_no_lookup(tmp_path)
                 for host in ("::1", "::ffff:127.0.0.1")] if six else []))
     assert r.stdout.splitlines() == want, r.stdout + r.stderr[-3000:]
     assert "lookup" not in r.stderr, r.stderr[-3000:]
+
+
+# ----------------------------------------------------------------------------- a number on every system alike
+# Which hosts are numbers must not depend on the system the guard runs on. A system may read more as an IPv6
+# number than the others do: Windows takes a zero in front of a part of the IPv4 number at its end, a form Linux
+# and macOS take for a name. The guard went by this system's reading alone, so on Windows it let such a host go
+# down unasked (CI's Windows job, 2026-11-14: `::ffff:127.0.0.09` in the test above). In these programs this
+# system's reading is replaced by one that takes anything, so the answer is the guard's own on every system: an
+# IPv6 number is one only where it is written the one way all of them read it.
+TAKES_ANYTHING = CLASSES + """
+    import json
+    socket.inet_pton = lambda family, text: bytes(16)     # from here on this system reads anything as a number
+"""
+SIX_ALMOST = ["::ffff:127.0.0.09", "::ffff:127.0.0.010", "::127.0.0.01", "::ffff:127.0.1", "::ffff:127.0.0.256",
+              "::ffff:127.0.0.1.", "1:2:3:4:5:6:7:8:9", "1::2::3", "12345::1", "1:2:3:4:5:6:7", "1.2.3.4::", ":::1", "::1:"]
+SIX_ALMOST_HERE = TAKES_ANYTHING + """
+    for host in json.loads(sys.argv[3]):
+        with tcp() as s:
+            tried("connect to " + ascii(host), lambda: s.connect((host, 9)))
+        with udp() as s:
+            tried("sendto " + ascii(host), lambda: s.sendto(b"x", (host, 9)))
+        tried("getaddrinfo of " + ascii(host), lambda: socket.getaddrinfo(host, 9) and "")
+"""
+SIX_AS_WRITTEN = ["::1", "::", "::ffff:127.0.0.1", "::ffff:192.0.2.1", "2001:db8::1", "1:2:3:4:5:6:7:8"]
+SIX_WRITTEN_RARELY = ["2001:DB8:0:0:0:0:0:1", "fe80::1", "1:2:3:4:5:6:7::", "::2:3:4:5:6:7:8", "1:2:3:4:5:6:192.0.2.1", "::192.0.2.1"]
+SIX_WRITTEN_HERE = TAKES_ANYTHING + """
+    for host in json.loads(sys.argv[3]):
+        tried("getaddrinfo of " + host, lambda: socket.getaddrinfo(host, 9, 0, 0, 0, socket.AI_NUMERICHOST) and "")
+"""
+
+
+def test_what_only_one_system_reads_as_an_ipv6_number_is_asked_about_first(tmp_path):
+    """A zero in front of a part of the IPv4 number at the end, a part too few or too large, a dot after it, a
+    group too many or too long, two gaps: each is a name to some system, so each is asked about before any system
+    sees it, through a socket and through a lookup, also where this system would read it as a number."""
+    r = _guard_alone(tmp_path, SIX_ALMOST_HERE, NAME, "False", json.dumps(SIX_ALMOST))
+    want = [f"refused: {call} {ascii(host)} | network lookup {ascii(host)} | socket.getaddrinfo"
+            for host in SIX_ALMOST for call in ("connect to", "sendto", "getaddrinfo of")]
+    assert r.stdout.splitlines() == want, r.stdout + r.stderr[-3000:]
+    written = _marked(r)
+    assert len(written) == len(want) and all(" network lookup " in line for line in written), r.stderr[-3000:]
+
+
+def test_the_twins_an_ipv6_number_as_every_system_reads_it_is_no_lookup(tmp_path):
+    """The same program with numbers written the one way: none is refused and no lookup is written down. The ones
+    every system is sure to read are answered; of the rarer ways of writing one the test asks only that the guard
+    let them down, and what the system then says is the system's."""
+    r = _guard_alone(tmp_path, SIX_WRITTEN_HERE, NAME, "False", json.dumps(SIX_AS_WRITTEN + SIX_WRITTEN_RARELY))
+    got = r.stdout.splitlines()
+    assert got[:len(SIX_AS_WRITTEN)] == [f"answered: getaddrinfo of {host} |  | socket.getaddrinfo" for host in SIX_AS_WRITTEN], \
+        r.stdout + r.stderr[-3000:]
+    rarely = [line.split(" | ") for line in got[len(SIX_AS_WRITTEN):]]
+    assert [(line[0].split(": ", 1)[1], line[-1]) for line in rarely] == [
+        ("getaddrinfo of " + host, "socket.getaddrinfo") for host in SIX_WRITTEN_RARELY], r.stdout
+    assert not any(line[0].startswith("refused") for line in rarely), r.stdout
+    assert "lookup" not in r.stderr and _marked(r) == [], r.stderr[-3000:]
