@@ -9,16 +9,18 @@ from lantern.engine import build_graph
 
 NEXT = json.dumps({"dependencies": {"next": "14.2.0", "react": "18.3.0"}})
 PLAIN = json.dumps({"dependencies": {"express": "4.19.0"}})
+SPA = json.dumps({"dependencies": {"react": "18.3.0", "react-dom": "18.3.0"}, "devDependencies": {"vite": "5.4.0"}})
+OTHER = json.dumps({"dependencies": {"react": "19.0.0", "react-server-dom-webpack": "19.0.0"}})
 
 ACTIONS = '''"use server";
-import { db } from "../lib/db";
+import { insert, remove } from "../lib/db";
 
 export async function createTodo(formData: FormData) {
-  await db.insert({ title: formData.get("title") });
+  await insert({ title: formData.get("title") });
 }
 
 export const removeTodo = async (id: string) => {
-  await db.remove(id);
+  await remove(id);
 };
 
 async function log(what: string) {   // not exported: the server's own helper
@@ -28,10 +30,8 @@ async function log(what: string) {   // not exported: the server's own helper
 export const LIMIT = 20;              // no function
 export type Todo = { id: string };
 '''
-DB = '''export const db = {
-  async insert(row: unknown) { return row; },
-  async remove(id: string) { return id; },
-};
+DB = '''export async function insert(row: unknown) { return row; }
+export async function remove(id: string) { return id; }
 '''
 FORM_PAGE = '''import { createTodo } from "./actions";
 
@@ -51,16 +51,16 @@ export function Row({ id }: { id: string }) {
   return <button onClick={() => removeTodo(id)}>Remove</button>;
 }
 '''
-INLINE_PAGE = '''import { db } from "../../lib/db";
+INLINE_PAGE = '''import { insert } from "../../lib/db";
 
 export default function Page() {
   async function save(formData: FormData) {
     "use server";
-    await db.insert({ title: formData.get("title") });
+    await insert({ title: formData.get("title") });
   }
   const rename = async (formData: FormData) => {
     "use server";
-    await db.insert({ title: formData.get("name") });
+    await insert({ title: formData.get("name") });
   };
   async function plain(formData: FormData) {
     const said = "use server";      // a text further down is a text
@@ -115,16 +115,36 @@ def test_a_function_whose_body_begins_with_use_server_is_a_route(tmp_path):
     assert g.nodes["js:app/new/page::Page"].entry == {"kind": "page", "detail": "/new"}
 
 
+def test_an_action_written_inside_a_page_leaves_the_page_where_it_was(tmp_path):
+    """The action is the server's; the page around it, and the page's other functions, keep their place in the
+    picture (a route written in a file makes the whole file the server's, which a page is not)."""
+    g = _build(tmp_path, {"app/new/page.tsx": INLINE_PAGE, "lib/db.ts": DB})
+    assert g.nodes["js:app/new/page::Page.save"].lane == "server"
+    assert g.nodes["js:app/new/page::Page.rename"].lane == "server"
+    assert g.nodes["js:app/new/page::Page"].lane == "browser"
+    assert g.nodes["js:app/new/page::Page.plain"].lane == "frontend"
+    without = _build(tmp_path / "twin", {"app/new/page.tsx": INLINE_PAGE.replace('    "use server";\n', ""),
+                                         "lib/db.ts": DB})
+    assert without.nodes["js:app/new/page::Page"].lane == "browser"
+    assert without.nodes["js:app/new/page::Page.save"].lane == "frontend"
+
+
 def test_the_twins_a_file_that_is_no_use_server_file(tmp_path):
-    """The same functions with no directive, in a client file, with the words further down, and in a project that
-    has neither React nor Next.js: no route is made of them."""
+    """The same functions with no directive, in a client file, with the words further down, and in a project with
+    no framework that runs Server Actions (there the words do nothing): no route is made of them."""
     body = ACTIONS.split("\n", 1)[1]
     for name, text, pkg in (("none", body, NEXT), ("client", '"use client";\n' + body, NEXT),
                             ("later", 'import x from "./x";\n"use server";\n' + body, NEXT),
                             ("comment", '// "use server";\n' + body, NEXT),
-                            ("no-react", ACTIONS, PLAIN)):
+                            ("no-react", ACTIONS, PLAIN), ("spa", ACTIONS, SPA)):
         g = _build(tmp_path / name, {"app/actions.ts": text, "lib/db.ts": DB, "app/x.ts": "export default 1;\n"}, pkg)
         assert _routes(g) == {}, name
+
+
+def test_another_framework_that_runs_server_actions_counts_too(tmp_path):
+    g = _build(tmp_path, {"src/actions.ts": ACTIONS, "lib/db.ts": DB}, OTHER)
+    assert _routes(g) == {"js:src/actions::createTodo": "ACTION createTodo",
+                          "js:src/actions::removeTodo": "ACTION removeTodo"}
 
 
 def test_a_form_and_a_client_component_are_linked_to_the_action_they_run(tmp_path):
@@ -139,7 +159,7 @@ def test_a_form_and_a_client_component_are_linked_to_the_action_they_run(tmp_pat
     e = _edge(g, "js:app/new/page::Page", "js:app/new/page::Page.save")
     assert e is not None and e.detail == "action"
     # what the action itself calls is on the map as before
-    assert _edge(g, "js:app/actions::createTodo", "js:lib/db::db.insert") is not None
+    assert _edge(g, "js:app/actions::createTodo", "js:lib/db::insert") is not None
 
 
 def test_the_visitors_side_stops_at_an_action(tmp_path):
@@ -149,6 +169,19 @@ def test_the_visitors_side_stops_at_an_action(tmp_path):
                           "app/new/page.tsx": INLINE_PAGE})
     side = clientside.where(g)
     assert "js:components/Row::Row" in side
-    for nid in ("js:app/actions::removeTodo", "js:app/actions::createTodo", "js:lib/db::db.remove",
+    for nid in ("js:app/actions::removeTodo", "js:app/actions::createTodo", "js:lib/db::remove",
                 "js:app/new/page::Page.save", "js:app/new/page::Page.rename"):
         assert nid not in side, nid
+
+
+def test_the_twin_where_nothing_runs_server_actions_the_file_is_browser_code(tmp_path):
+    """In a web app that runs in the browser and has no framework for Server Actions, `"use server"` does nothing:
+    the file is bundled like any other, so what it holds is on the visitor's side."""
+    g = _build(tmp_path, {"src/actions.ts": ACTIONS, "src/db.ts": DB,
+                          "src/Row.tsx": ROW.replace("../app/actions", "./actions"),
+                          "src/main.tsx": 'import { createRoot } from "react-dom/client";\n'
+                                          'import { Row } from "./Row";\n'
+                                          'createRoot(document.getElementById("root")!).render(<Row id="1" />);\n'}, SPA)
+    side = clientside.where(g)
+    for nid in ("js:src/Row::Row", "js:src/actions::removeTodo", "js:src/db::remove"):
+        assert nid in side, nid

@@ -66,16 +66,29 @@ def _module_id(n: Node) -> str:
 
 
 def _server_modules(g: Graph) -> set[str]:
+    """The JS files that are the server's (by module id), and beside them the id of each Server Action written
+    inside another function of a file that is not: there the action alone is the server's, not the page around it."""
     out: set[str] = set()
+    said = g.meta.get("js_directives") or {}
     for n in g.nodes.values():
         if not n.id.startswith("js:"):
             continue
         if n.file and SERVER_PATH_RE.search(n.file):
             out.add(_module_id(n))
         e = n.entry or {}
-        if e.get("kind") == "route" or (e.get("kind") == "main" and str(e.get("detail", "")).startswith("server start")):
+        if e.get("kind") == "route" and str(e.get("detail", "")).startswith("ACTION ") \
+                and "use server" not in (said.get(n.file) or ()):
+            out.add(n.id)
+        elif e.get("kind") == "route" or (e.get("kind") == "main" and str(e.get("detail", "")).startswith("server start")):
             out.add(_module_id(n))
     return out
+
+
+def _in_action(nid: str, server_modules: set[str]) -> bool:
+    """Is this function a Server Action written inside another function, or written inside one?"""
+    mod, sep, local = nid.partition("::")
+    parts = local.split(".") if sep else []
+    return any(f"{mod}::{'.'.join(parts[:i])}" in server_modules for i in range(len(parts), 0, -1))
 
 
 def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> str | None:
@@ -95,7 +108,7 @@ def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> s
         return "browser" if screen else "frontend"
     if not n.id.startswith("js:"):
         return "server"
-    if _module_id(n) in server_modules:
+    if _module_id(n) in server_modules or _in_action(n.id, server_modules):
         return "server"
     e = n.entry or {}
     if e.get("kind") == "page" or (e.get("kind") == "main" and str(e.get("detail", "")).startswith("app start")):

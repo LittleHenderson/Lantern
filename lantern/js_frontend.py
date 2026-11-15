@@ -92,6 +92,9 @@ DB_OPS = ("select", "insert", "update", "upsert", "delete")
 # What a file says of itself in its first statements, before any code. `"use client"`: the file and what it loads
 # run in the browser. `"use server"`: what it exports runs on the server, also when a client file calls it.
 DIRECTIVES = ("use client", "use server")
+# The frameworks that run Server Actions: with one of them among the nearest package.json's libraries, a function
+# marked "use server" gets an address of its own on the server. With none, the words do nothing.
+SERVER_ACTIONS = {"next", "waku", "react-server-dom-webpack", "react-server-dom-turbopack", "react-server-dom-parcel"}
 SUPABASE_CLIENT = re.compile(r"^@supabase/[\w.-]+\.(create\w*Client\(\)|useSupabaseClient\(\)|SupabaseClient)$")
 SUPABASE_NAME = re.compile(r"^_?supabase(_?(client|admin))?$", re.I)   # by its name alone: a possible link, no more
 TABLE_NAME = re.compile(r"^[A-Za-z_][\w$]{0,62}$")
@@ -320,6 +323,7 @@ class JSDef:
     entry: dict | None = None
     member: bool = False       # stored as a property (`X.y = function`, `this.x = …`, `X.prototype.y = …`): no name in scope
     lexical: str | None = None  # where the function is written, when that differs from parent_local (names it can see)
+    server: bool = False       # its own body begins with "use server": a Server Action written inside another function
 
 
 @dataclass
@@ -529,7 +533,9 @@ class Walker:
         self.m.defs[local] = JSDef(
             local=local, name=name, kind=kind, start=o.start_point[0] + 1, end=o.end_point[0] + 1,
             parent_local=scope, in_class=in_class, params=_text(params)[:200],
-            fingerprint=_fingerprint(node), jsx=kind != "class" and body is not None and _contains_jsx(body))
+            fingerprint=_fingerprint(node), jsx=kind != "class" and body is not None and _contains_jsx(body),
+            server=(kind != "class" and body is not None and body.type == "statement_block"
+                    and "use server" in _directives(body)))
         return local
 
     def walk(self, n: TSNode, scope: str, cls: str | None = None, ui: str | None = None):
@@ -1356,7 +1362,7 @@ class Walker:
             aname = _text(kids[0])
             val = kids[1] if len(kids) > 1 else None
             attrs[aname] = val
-            sub_ui = aname if re.match(r"^on[A-Z]", aname) or aname == "action" else ui
+            sub_ui = aname if re.match(r"^on[A-Z]", aname) or aname in ("action", "formAction") else ui
             if val is not None and val.type == "jsx_expression" and val.named_child_count:
                 inner = val.named_children[0]
                 if inner.type in ("identifier", "member_expression"):
@@ -2872,6 +2878,19 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             elif re.search(r"(^|/)(src/)?pages/", rel_pkg) and m.default in m.defs \
                     and not re.match(r"_(app|document|error)\.", fn):
                 g.nodes[nid(m.name, m.default)].entry = {"kind": "page", "detail": _route_path_from_file(rel_pkg, "page")}
+        if pkg["deps"] & SERVER_ACTIONS:
+            # Server Actions: the framework gives each one an address of its own, which any visitor can send a request
+            # to, whatever page shows the form. So each is a route, named by the function (it has no path to show).
+            acts = {local: d.name for local, d in m.defs.items() if d.server}
+            if "use server" in m.directives:
+                for local in [*m.exports.values(), m.default]:
+                    d = m.defs.get(local) if isinstance(local, str) else None
+                    if d is not None and d.kind == "function" and not d.in_class:
+                        acts.setdefault(local, d.name)
+            for local, name in acts.items():
+                node = g.nodes.get(nid(m.name, local))
+                if node is not None and not node.entry:
+                    node.entry = {"kind": "route", "detail": f"ACTION {name}"}
         for reg in m.page_regs:
             res = r.resolve_parts(m, "", reg["component"])
             tid = target_id(res)

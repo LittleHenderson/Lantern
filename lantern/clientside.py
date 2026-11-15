@@ -12,7 +12,9 @@ the reason as words a finding can repeat:
 * the file is a page of Next.js's `pages/` folder, whose pages run in the browser too, without the functions
   Next.js runs on the server only (`SERVER_ONLY`);
 * a function such code calls runs where its caller runs, unless it is the server's own: a route, a file in a server
-  folder, a file that begins with `"use server"` (a client file reaches that one over the network).
+  folder, a Server Action, a file that begins with `"use server"` where a framework runs Server Actions
+  (`js_frontend.SERVER_ACTIONS`; a client file reaches those over the network. Without such a framework the words
+  do nothing and the file is read like any other).
 
 A function with none of these is not said to run there. In a project that renders on a server, a file with no
 directive that nothing on the visitor's side calls is left out: it may be a server component."""
@@ -23,7 +25,7 @@ from pathlib import Path
 
 from . import lanes
 from .graph import Graph
-from .js_frontend import _nearest_package
+from .js_frontend import SERVER_ACTIONS, _nearest_package
 
 SERVER_RENDERED = {"next", "nuxt", "astro", "gatsby", "@sveltejs/kit", "@remix-run/react", "@remix-run/node",
                    "@remix-run/serve", "@remix-run/dev", "@react-router/dev", "@react-router/node",
@@ -51,11 +53,16 @@ def where(g: Graph) -> dict[str, dict]:
     phone = lanes.phone_roots(g.meta)
     packages: dict = {}
     out: dict[str, dict] = {}
+
+    def servers_own(file: str) -> bool:   # "use server" says so only where a framework runs Server Actions
+        return "use server" in (said.get(file) or ()) and \
+            bool(_nearest_package(repo / file, repo, packages)["deps"] & SERVER_ACTIONS)
+
     for n in g.nodes.values():
         if not n.id.startswith("js:") or not n.file or n.lane == "server":
             continue
         told = said.get(n.file) or ()
-        if "use server" in told:
+        if servers_own(n.file):
             continue
         if "use client" in told:
             out[n.id] = {"on": BROWSER, "why": f'{n.file} begins with "use client"'}
@@ -78,7 +85,7 @@ def where(g: Graph) -> dict[str, dict]:
         for dst in calls.get(src, ()):
             n = g.nodes.get(dst)
             if dst in out or n is None or not dst.startswith("js:") or not n.file or n.lane == "server" or \
-                    "use server" in (said.get(n.file) or ()) or \
+                    servers_own(n.file) or \
                     (PAGES_FOLDER.search(n.file) and _own_name(dst).split(".")[0] in SERVER_ONLY):
                 continue
             out[dst] = {"on": out[src]["on"], "why": f"`{_short(src)}` calls it, and {out[src]['why']}"}
