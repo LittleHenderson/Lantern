@@ -400,3 +400,290 @@ def test_a_helper_handed_the_event_says_who_is_signed_in(tmp_path):
     owner = [f for f in scan(g)["findings"] if f["rule"] == "LT-AUTHZ-OWNER"]
     assert [(f["file"], f["line"], f["routes"]) for f in owner] == [
         ("src/routes/notes/[id]/+server.ts", 18, ["DELETE /notes/[id]"])]
+
+
+# ------------------------------------------------------------------ what only looks like one
+LOOKS = '''<script>
+  import Card from "$lib/Card.svelte";
+  export let data;
+  function wipe() {}
+  function pick() {}
+</script>
+<p>To empty the list write onclick={wipe} on a button.</p>
+<!-- <form method="POST" action="?/gone"><button onclick={wipe}>x</button></form> -->
+<style>
+  p { color: red; }
+</style>
+<p>{data.total +}</p>
+<Form method="POST" action="?/save"></Form>
+{#each data.notes as note}
+  <Card {note} on:pick={pick} />
+{/each}
+<button onclick={wipe}>empty</button>
+'''
+
+
+def test_markup_that_only_looks_like_an_event_a_form_or_a_tag(tmp_path):
+    """Read as written, and no further: `onclick={wipe}` in a sentence is text (only inside a tag is it a button's
+    event), a form inside a comment is not there, a `<Form>` with a capital is somebody's component and not the
+    page's form, the braces of a `<style>` are no code, and a value that does not stand as code is passed over
+    without a word. The real ones beside them are read: the event a component sends, and the button."""
+    g = _build(tmp_path, {"svelte.config.js": CONFIG, "src/lib/Card.svelte": CARD, "src/routes/+page.svelte": LOOKS})
+    page = "js:src/routes/+page.svelte::+page"
+    assert _edge(g, page, page + ".wipe").lines == [17]
+    assert _edge(g, page, page + ".pick").lines == [15]
+    assert _edge(g, page, "js:src/lib/Card.svelte::Card").lines == [15]
+    assert g.meta["sveltekit"] == {"routes": 0, "pages": 1, "forms": 0, "linked": 0}
+
+
+RUNES = '''<script lang="ts">
+  import { page } from "$app/stores";
+  let { data } = $props();
+  let count = $state(0);
+  let twice = $derived(count * 2);
+  $effect(() => { document.title = String(twice); });
+  const q = $page.url.searchParams.get("q");
+</script>
+<p>{count}</p>
+'''
+COUNTER = 'export function counter() {\n  let n = $state(0);\n  return { up: () => { n += 1; } };\n}\n'
+NO_RUNE = 'export function make() {\n  return $state(0);\n}\n'
+
+
+def test_sveltes_own_words_are_no_calls_nobody_could_follow(tmp_path):
+    """`$state(0)`, `$props()`, `$derived(…)`, `$effect(…)` are the language's own in a `.svelte` file and in a
+    `.svelte.ts` file: the inventory says built-in. `$page` is what the store `page` holds right now: a call on
+    it is on a value Lantern does not know. The twin: in a plain `.ts` file `$state` is a name nobody defined."""
+    g = _build(tmp_path, {"svelte.config.js": CONFIG, "src/routes/+page.svelte": RUNES,
+                          "src/lib/counter.svelte.ts": COUNTER, "src/lib/plain.ts": NO_RUNE})
+    said = {(s["file"], s["callee"]): (s["outcome"], s["via"] or s["reason"]) for s in g.sites}
+    for rune in ("$props", "$state", "$derived", "$effect"):
+        assert said[("src/routes/+page.svelte", rune)] == ("builtin", "svelte-rune"), rune
+    assert said[("src/lib/counter.svelte.ts", "$state")] == ("builtin", "svelte-rune")
+    assert said[("src/routes/+page.svelte", "$page.url.searchParams.get")] == ("unresolved", "local-unknown")
+    assert said[("src/lib/plain.ts", "$state")] == ("unresolved", "not-defined")
+    assert g.unresolved.get("$state") == 1 and "$props" not in g.unresolved
+
+
+# ------------------------------------------------------------------ data a page loads in the browser too
+FEED_LOAD = '''import type { PageLoad } from "./$types";
+export const load: PageLoad = async ({ fetch }) => {
+  const res = await fetch("/api/notes");
+  return { notes: await res.json() };
+};
+'''
+FEED_PAGE = '<script>\n  export let data;\n</script>\n<p>{data.notes.length}</p>\n'
+FEED = {**APP, "src/routes/feed/+page.ts": FEED_LOAD, "src/routes/feed/+page.svelte": FEED_PAGE,
+        "src/routes/+layout.ts": 'export const load = async () => ({ theme: "dark" });\n',
+        "src/routes/+layout.svelte": "<nav>notes</nav>\n<slot />\n"}
+
+
+def test_a_load_that_also_runs_in_the_browser_is_called_by_its_page(tmp_path):
+    """`+page.ts` and `+layout.ts` hold a `load` that runs on the server for the first view and in the browser
+    after it: no route (nobody can ask for it from outside), a function the page calls. So what it fetches is
+    reached from the page. A page is drawn inside the `+layout.svelte` above it. The twin: without SvelteKit these
+    are files like any other."""
+    g = _build(tmp_path, FEED)
+    page, load = "js:src/routes/feed/+page.svelte::+page", "js:src/routes/feed/+page::load"
+    for dst in (load, "js:src/routes/+layout::load"):
+        e = _edge(g, page, dst)
+        assert e is not None and (e.confidence, e.via) == ("resolved", "sveltekit-load"), dst
+        assert g.nodes[dst].entry is None and g.nodes[dst].lane == "frontend"
+    e = _edge(g, load, "js:src/routes/api/notes/+server::GET")
+    assert e is not None and (e.confidence, e.via) == ("resolved", "http-exact")
+    e = _edge(g, page, "js:src/routes/+layout.svelte::+layout")
+    assert e is not None and (e.confidence, e.via) == ("resolved", "sveltekit-layout")
+    plain = _build(tmp_path / "plain", FEED, NO_KIT)
+    assert _edge(plain, page, load) is None and _edge(plain, page, "js:src/routes/+layout.svelte::+layout") is None
+
+
+# ------------------------------------------------------------------ a hook made of several
+HOOKS_SEQ = '''import { sequence } from "@sveltejs/kit/hooks";
+import type { Handle } from "@sveltejs/kit";
+import { readUser } from "$lib/server/session";
+
+const populate: Handle = async ({ event, resolve }) => {
+  event.locals.user = await readUser(event.cookies.get("sid"));
+  return resolve(event);
+};
+const authGuard: Handle = async ({ event, resolve }) => {
+  if (event.url.pathname.startsWith("/admin") && !event.locals.user) return new Response(null, { status: 401 });
+  return resolve(event);
+};
+export const handle = sequence(populate, authGuard);
+'''
+HOOKS_LOG = '''export const handle = async ({ event, resolve }) => {
+  console.log(event.url.pathname);
+  return resolve(event);
+};
+'''
+
+
+def test_a_hook_made_of_several_parts(tmp_path):
+    """`export const handle = sequence(populate, authGuard)`: each part runs before every route, in that order, so
+    each is the app's front door (`ANY /*`) and stands in every route's list. Its name is no login check for the
+    routes behind it, whatever it is called: a hook looks at every address and usually turns away only some, so
+    the two open routes stay findings and the readiness page says "check". The twin: a hook that only writes a log
+    line is no sign of a login anywhere ("add")."""
+    from lantern import websec
+    from lantern.readiness import assess
+    from lantern.security import scan
+    g = _build(tmp_path, {**APP, "src/hooks.server.ts": HOOKS_SEQ})
+    parts = ["js:src/hooks.server::populate", "js:src/hooks.server::authGuard"]
+    for nid in parts:
+        assert g.nodes[nid].entry == {"kind": "route", "detail": "ANY /*", "sveltekit": "handle", "serves": "sveltekit"}
+    assert g.nodes[NOTES + "actions.default"].entry["middleware"] == parts
+    assert g.meta["sveltekit"]["routes"] == 10
+    assert sorted(f["title"] for f in websec.missing_auth(g)) == [
+        "DELETE /api/notes/[id] changes data, is called by the app, and no login check was found",
+        "POST /notes changes data, is called by the app, and no login check was found"]
+    prot = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}
+    assert prot["route-auth"]["status"] == "check"
+    g = _build(tmp_path / "log", {**APP, "src/hooks.server.ts": HOOKS_LOG})
+    prot = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}
+    assert prot["route-auth"]["status"] == "add"
+
+
+# ------------------------------------------------------------------ a route written another way
+GUARD = '''import { error } from "@sveltejs/kit";
+export function withAuth(fn) {
+  return async (event) => {
+    if (!event.locals.user) throw error(401, "sign in");
+    return fn(event);
+  };
+}
+export function logged(fn) {
+  return async (event) => { console.log(event.url.pathname); return fn(event); };
+}
+'''
+WRAPPED_API = '''import { json } from "@sveltejs/kit";
+import { db } from "$lib/server/db";
+import { withAuth, logged } from "$lib/server/guard";
+export const POST = withAuth(async (event) => {
+  return json(await db.note.create({ data: { text: "a" } }));
+});
+export const DELETE = logged(async (event) => {
+  await db.note.deleteMany();
+  return json({});
+});
+'''
+WRAPPED_ACTIONS = '''import type { Actions } from "./$types";
+import { db } from "$lib/server/db";
+import { withAuth, logged } from "$lib/server/guard";
+export const actions = {
+  save: withAuth(async (event) => { await db.note.create({ data: {} }); }),
+  wipe: logged(async (event) => { await db.note.deleteMany(); }),
+  async clear({ locals }) { await db.note.deleteMany(); },
+} satisfies Actions;
+'''
+WRAPPED_PAGE = '''<script>
+  async function add() { await fetch("/api/n", { method: "POST" }); }
+  async function del() { await fetch("/api/n", { method: "DELETE" }); }
+</script>
+<button onclick={add}>a</button><button onclick={del}>d</button>
+<form method="POST" action="?/save"></form>
+<form method="POST" action="?/wipe"></form>
+<form method="POST" action="?/clear"></form>
+'''
+
+
+def test_a_route_inside_a_helper_and_an_action_written_as_a_method(tmp_path):
+    """`save: withAuth(async (event) => …)` and `export const POST = withAuth(…)`: the function inside is the
+    route, and the helper around it runs first, so its name is read as a middleware's is. `async clear({ locals })`
+    written as a method is an action like the others, and `{…} satisfies Actions` is the same object. The twins: a
+    helper that only writes a log line is no login check, and neither is being written as a method."""
+    from lantern import websec
+    g = _build(tmp_path, {"svelte.config.js": CONFIG, "src/lib/server/db.ts": DB, "src/lib/server/guard.ts": GUARD,
+                          "src/routes/api/n/+server.ts": WRAPPED_API, "src/routes/+page.server.ts": WRAPPED_ACTIONS,
+                          "src/routes/+page.svelte": WRAPPED_PAGE})
+    acts = "js:src/routes/+page.server::actions."
+    assert {k: v for k, v in _entries(g, "route").items() if k.startswith(acts)} == {
+        acts + "save": "POST /?/save", acts + "wipe": "POST /?/wipe", acts + "clear": "POST /?/clear"}
+    assert g.nodes[acts + "save"].entry["middleware"] == ["js:src/lib/server/guard::withAuth"]
+    assert g.nodes[acts + "wipe"].entry["middleware"] == ["js:src/lib/server/guard::logged"]
+    assert sorted(f["title"] for f in websec.missing_auth(g)) == [
+        "DELETE /api/n changes data, is called by the app, and no login check was found",
+        "POST /?/clear changes data, is called by the app, and no login check was found",
+        "POST /?/wipe changes data, is called by the app, and no login check was found"]
+
+
+# ------------------------------------------------------------------ where a form posts
+INBOX_SERVER = '''import { db } from "$lib/server/db";
+export const actions = {
+  default: async ({ request }) => { await db.note.create({ data: {} }); },
+  archive: async ({ request }) => { await db.note.updateMany({ data: { archived: true } }); },
+};
+'''
+ONE_ACTION = 'export const actions = { archive: async () => ({}) };\n'
+INBOX_PAGE = '''<form method="POST">
+  <button>save</button>
+  <button formaction="?/archive">archive</button>
+</form>
+<form method="POST" action="/inbox/new?/archive"></form>
+<form method="POST" action="/api/notes"></form>
+<form method="POST" action={target}></form>
+<form action="/search"></form>
+'''
+ROW = '<script>\n  export let note;\n</script>\n<form method="POST" action="/inbox/{note.id}?/archive"><button>x</button></form>\n'
+INBOX = {**APP, "src/routes/inbox/+page.server.ts": INBOX_SERVER, "src/routes/inbox/+page.svelte": INBOX_PAGE,
+         "src/routes/inbox/new/+page.server.ts": ONE_ACTION, "src/routes/inbox/[id]/+page.server.ts": ONE_ACTION,
+         "src/lib/Row.svelte": ROW}
+
+
+def test_where_a_form_posts(tmp_path):
+    """A button's `formaction` posts to the action it names. A form that writes another page's address posts to
+    that page's action, and an address written out in full is the page with that very address, not the one with a
+    part that changes beside it. An address with a part worked out as the page runs (`/inbox/{note.id}`) may be
+    either: possible, to both. A form that posts to an address with no page action is a request like any other,
+    matched to the `+server.ts` there. The twins: a form whose address is worked out as the page runs is counted
+    and linked to nothing, and a form that only searches is not counted."""
+    g = _build(tmp_path, INBOX)
+    page, inbox = "js:src/routes/inbox/+page.svelte::+page", "js:src/routes/inbox/+page.server::actions."
+    new, by_id = "js:src/routes/inbox/new/+page.server::actions.archive", "js:src/routes/inbox/[id]/+page.server::actions.archive"
+    got = {e.dst: (e.confidence, e.lines, e.detail) for e in g.call_edges() if e.src == page and e.via == "http-sveltekit"}
+    assert got == {inbox + "default": ("resolved", [1], "POST /inbox"),
+                   inbox + "archive": ("resolved", [3], "POST /inbox?/archive"),
+                   new: ("resolved", [5], "POST /inbox/new?/archive")}
+    row = "js:src/lib/Row.svelte::Row"
+    assert {e.dst: e.confidence for e in g.call_edges() if e.src == row and e.via == "http-sveltekit"} == {
+        new: "possible", by_id: "possible"}
+    e = _edge(g, page, "js:src/routes/api/notes/+server::POST")
+    assert e is not None and (e.confidence, e.via, e.lines) == ("resolved", "http-exact", [6])
+    assert g.meta["sveltekit"]["forms"] - _build(tmp_path / "base", APP).meta["sveltekit"]["forms"] == 6
+    assert g.meta["sveltekit"]["linked"] - _build(tmp_path / "base2", APP).meta["sveltekit"]["linked"] == 4
+
+
+# ------------------------------------------------------------------ the session the server keeps
+SESSION_API = '''import { error, json } from "@sveltejs/kit";
+import { db } from "$lib/server/db";
+export async function POST(event) {
+  if (!event.locals.session) throw error(401, "sign in");
+  return json(await db.note.create({ data: { text: "a" } }));
+}
+export async function PUT(event) {
+  if (!event.locals.requestId) throw error(400, "no id");
+  return json(await db.note.updateMany({ data: { text: "b" } }));
+}
+export async function DELETE(event) {
+  const { session } = await event.request.json();
+  if (!session) throw error(401, "sign in");
+  return json(await db.note.deleteMany());
+}
+'''
+
+
+def test_the_session_the_server_keeps_says_who_is_asking(tmp_path):
+    """`locals.session` is the session the server's own hook found for this request, as `req.session` is elsewhere:
+    a route that turns away a request without one checks who is asking. The twins: another thing kept in `locals`
+    (`locals.requestId`) says nothing of the caller, and a `session` the request itself sends is what the caller
+    claims."""
+    from lantern import websec
+    g = _build(tmp_path, {"svelte.config.js": CONFIG, "src/lib/server/db.ts": DB,
+                          "src/routes/api/s/+server.ts": SESSION_API})
+    adj = websec.call_adjacency(g)
+    strong = {}
+    for verb in ("POST", "PUT", "DELETE"):
+        n = g.nodes["js:src/routes/api/s/+server::" + verb]
+        got = websec.login_check(g, n, adj, (tmp_path / n.file).read_text(encoding="utf-8"))
+        strong[verb] = bool(got and got[0] == "strong")
+    assert strong == {"POST": True, "PUT": False, "DELETE": False}
