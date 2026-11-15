@@ -940,3 +940,81 @@ def test_the_report_says_who_opens_a_page_and_which_page_calls(tmp_path):
                     "It runs when App calls it.", "It runs when Card calls it.",
                     "It runs when +page.wipe, +layout and Card call it."]
     assert "${andList(names(callers).slice(0, 3))} call${callers.length === 1 ? 's' : ''} it." not in html
+
+
+# ------------------------------------------------------------------ a hook that names the addresses it guards
+AREA_HOOK = '''import { error, redirect } from "@sveltejs/kit";
+import { readUser } from "$lib/server/session";
+
+export const handle = async ({ event, resolve }) => {
+  event.locals.user = await readUser(event.cookies.get("session"));
+  CHECK
+  return resolve(event);
+};
+'''
+READ_USER = 'export async function readUser(token) {\n  return token ? { id: 1 } : null;\n}\n'
+AREA_ACTION = '''import { db } from "$lib/server/db";
+export const actions = { default: async () => { await db.note.deleteMany(); } };
+'''
+AREA_PAGE = '''<script>
+  async function wipe() { await fetch("/api/notes/7", { method: "DELETE" }); }
+</script>
+<form method="POST"><button>Empty</button></form>
+<button on:click={wipe}>x</button>
+'''
+AREA_API = '''import { json } from "@sveltejs/kit";
+import { db } from "$lib/server/db";
+export async function DELETE({ params }) {
+  await db.note.delete({ where: { id: params.id } });
+  return json({});
+}
+'''
+AREA = {"svelte.config.js": CONFIG, "src/lib/server/db.ts": DB, "src/lib/server/session.ts": READ_USER,
+        "src/routes/app/notes/+page.server.ts": AREA_ACTION, "src/routes/app/notes/+page.svelte": AREA_PAGE,
+        "src/routes/api/notes/[id]/+server.ts": AREA_API}
+BOTH, APP_ONLY = ["DELETE /api/notes/[id]", "POST /app/notes"], ["POST /app/notes"]
+AREA_CASES = {
+    # every address but the sign-in page: a login for every route
+    "all but one page": ('if (event.url.pathname !== "/login" && !event.locals.user) redirect(303, "/login");', BOTH),
+    "all but a list of pages": ('const open = ["/login", "/signup"];\n  if (!open.includes(event.url.pathname) && '
+                                '!event.locals.user) redirect(303, "/login");', BOTH),
+    # the addresses under /app: a login for the routes there, and for no other
+    "one area, in the condition": ('if (event.url.pathname.startsWith("/app") && !event.locals.user) '
+                                   'redirect(303, "/login");', APP_ONLY),
+    "one area, in a branch of its own": ('if (event.url.pathname.startsWith("/app")) {\n    if (!event.locals.user) '
+                                         'redirect(303, "/login");\n  }', APP_ONLY),
+    "one area, the others sent on first": ('if (!event.url.pathname.startsWith("/app")) return resolve(event);\n'
+                                           '  if (!event.locals.user) error(401, "sign in");', APP_ONLY),
+    "two areas": ('if ((event.url.pathname.startsWith("/app") || event.url.pathname.startsWith("/api")) && '
+                  '!event.locals.user) error(401, "sign in");', BOTH),
+    "one page by its whole address": ('if (event.url.pathname === "/app/notes" && !event.locals.user) '
+                                      'error(401, "sign in");', APP_ONLY),
+    # the twins: nobody is turned away, another area, and a word that is not the address
+    "an area where nobody is turned away": ('if (event.url.pathname.startsWith("/app") && event.locals.user) '
+                                            'console.log("hello");', []),
+    "another area": ('if (event.url.pathname.startsWith("/admin") && !event.locals.user) redirect(303, "/login");',
+                     []),
+    "a header that names an area": ('if (event.request.headers.get("x-area") === "/app" && !event.locals.user) '
+                                    'error(401, "sign in");', []),
+    "an area asked, and the check made of some": ('if (event.url.pathname.startsWith("/app")) {\n    if (event.request.'
+                                                  'method === "POST" || Math.random() > 0.5) return resolve(event);\n'
+                                                  '    if (!event.locals.user) error(401, "sign in");\n  }', []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(AREA_CASES))
+def test_a_hook_that_names_the_addresses_it_guards(tmp_path, case):
+    """The usual SvelteKit guard stands in the hook and names addresses. One that turns away whoever is not signed
+    in on every address but a few named ones (the sign-in page) is a login for every route, as the same check is in
+    Express or Flask. One that guards the addresses under `/app` is a login for the routes whose own address is
+    there, and for no other: read with the route's address, in the condition itself, in a branch of its own, or
+    after the other addresses were sent on. Each route with no login shown, and only it, is reported as open."""
+    from lantern.security import scan
+    check, shown = AREA_CASES[case]
+    g = _build(tmp_path, {**AREA, "src/hooks.server.ts": AREA_HOOK.replace("CHECK", check)})
+    sec = scan(g, offline=True)
+    routes = {n.id: n.entry["detail"] for n in g.nodes.values() if n.entry and n.entry.get("sveltekit") in (
+        "action", "endpoint")}
+    assert sorted(routes[i] for i in sec["logins_shown"] if i in routes) == shown
+    open_ones = sorted(f["title"].split(" changes data")[0] for f in sec["findings"] if f["rule"] == "LW-AUTH-MISSING")
+    assert open_ones == sorted(set(routes.values()) - set(shown))
