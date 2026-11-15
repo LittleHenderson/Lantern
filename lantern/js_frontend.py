@@ -89,6 +89,9 @@ JS_BUILTINS = JS_GLOBALS | {
 # Supabase (roadmap stage 1): `<client>.from("<table>").<one of these>(…)` is a call into that table. A value is a
 # client by where it came from: what one of the libraries' own makers handed back, or a value of the written type
 DB_OPS = ("select", "insert", "update", "upsert", "delete")
+# What a file says of itself in its first statements, before any code. `"use client"`: the file and what it loads
+# run in the browser. `"use server"`: what it exports runs on the server, also when a client file calls it.
+DIRECTIVES = ("use client", "use server")
 SUPABASE_CLIENT = re.compile(r"^@supabase/[\w.-]+\.(create\w*Client\(\)|useSupabaseClient\(\)|SupabaseClient)$")
 SUPABASE_NAME = re.compile(r"^_?supabase(_?(client|admin))?$", re.I)   # by its name alone: a possible link, no more
 TABLE_NAME = re.compile(r"^[A-Za-z_][\w$]{0,62}$")
@@ -254,6 +257,22 @@ def _site_pos(n: TSNode) -> tuple[int, int]:
     return n.start_point[0] + 1, n.start_point[1] + 1
 
 
+def _directives(root: TSNode) -> set[str]:
+    """The directives a file begins with (`DIRECTIVES`): statements that are one text and nothing else, before the
+    first statement that is anything else. A text further down is a text."""
+    out: set[str] = set()
+    for c in root.named_children:
+        if c.type == "comment":
+            continue
+        inner = c.named_children[0] if c.type == "expression_statement" and c.named_child_count == 1 else None
+        if inner is None or inner.type != "string":
+            break
+        said = _text(inner)[1:-1]
+        if said in DIRECTIVES:
+            out.add(said)
+    return out
+
+
 def _unparen(n: TSNode | None) -> TSNode | None:
     while n is not None and n.type == "parenthesized_expression" and n.named_child_count:
         n = n.named_children[0]
@@ -388,6 +407,7 @@ class JSModule:
     #                                                         handed to the calls the variable was set from
     mounts_app: bool = False
     listens: bool = False
+    directives: set[str] = field(default_factory=set)   # of DIRECTIVES, the ones the file begins with
 
 
 # --------------------------------------------------------------------------------------------
@@ -2185,7 +2205,8 @@ class JSResolver:
         table = db["table"] if db["table"] is not None else self._const(m, scope, db["const"])
         if table is None:
             return None
-        tid = "db:" + (f"{db['schema']}.{table}" if db["schema"] else table)
+        schema = None if db["schema"] == "public" else db["schema"]   # `public` is where a table is unless said
+        tid = "db:" + (f"{schema}.{table}" if schema else table)
         recv = db["recv"]
         known = self.client(m, scope, recv)
         if known:
@@ -2380,6 +2401,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                      html=html)
         w = Walker(m, lambda s, _p=p: spec.resolve(s, _p))
         w.each(tree.root_node.children, "")
+        if not html:
+            m.directives = _directives(tree.root_node)
         covered = {ref.at for ref in m.refs if ref.at}
         for cn in _call_nodes(tree.root_node):
             pos = _site_pos(cn)
@@ -2463,7 +2486,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             if hit is not None:   # a call into a table: the link itself is made by the bridge, from meta["db_calls"]
                 tid, table, conf, via = hit
                 site(m, ref, src_id, [(tid, conf, via)])
-                db_calls.append({"src": src_id, "table": table, "schema": ref.db["schema"], "op": ref.db["op"],
+                db_calls.append({"src": src_id, "table": table,
+                                 "schema": None if ref.db["schema"] == "public" else ref.db["schema"], "op": ref.db["op"],
                                  "id": tid, "confidence": conf, "via": via, "file": m.rel, "line": ref.line,
                                  "ui": ref.ui})
                 continue
@@ -2917,6 +2941,9 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     g.meta.setdefault("http_calls", []).extend(http_calls)
     if db_calls:
         g.meta.setdefault("db_calls", []).extend(db_calls)
+    said = {m.rel: sorted(m.directives) for m in mods.values() if m.directives}
+    if said:
+        g.meta.setdefault("js_directives", {}).update(said)
     return {"files": len(mods), "lines": total, "unresolved": unresolved,
             "components": sum(1 for m in mods.values() for d in m.defs.values() if d.jsx),
             "http_calls": len(http_calls)}

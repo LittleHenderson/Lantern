@@ -622,7 +622,7 @@ def _cors_finding(rel, line, creds):
                     more="Fine for a truly public API; otherwise list your own frontend's address instead of '*'.")
 
 
-def database_rules(repo: Path) -> list[dict]:
+def database_rules(repo: Path, g: Graph | None = None) -> list[dict]:
     out = []
     for p in _files(repo, names=("firestore.rules", "storage.rules", "database.rules.json")):
         text = _read(p, repo)
@@ -637,29 +637,137 @@ def database_rules(repo: Path) -> list[dict]:
         for m in re.finditer(r"['\"]\.(read|write)['\"]\s*:\s*true", text):
             out.append(_finding("LW-DB-OPEN", "Realtime Database rules let anyone read or write", "HIGH", rel,
                                 _line_of(text, m.start()), category="config", cwe=284, fixed_rank="critical"))
-    sql_files = list(_files(repo, {".sql"}))
     uses_supabase = (repo / "supabase").is_dir() or any(
         "@supabase" in _read(pj, repo) for pj in _files(repo, names=("package.json",)))
-    if sql_files and uses_supabase:
-        rls, created = set(), []
-        for p in sql_files:
-            text = _read(p, repo)
-            for m in re.finditer(r"alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:\"?public\"?\.)?\"?(\w+)\"?\s+"
-                                 r"enable\s+row\s+level\s+security", text, re.I):
-                rls.add(m.group(1).lower())
-            for m in re.finditer(r"create\s+table\s+(?:if\s+not\s+exists\s+)?(?:\"?public\"?\.)?\"?(\w+)\"?", text, re.I):
-                created.append((m.group(1).lower(), p.relative_to(repo).as_posix(), _line_of(text, m.start())))
-            for m in re.finditer(r"create\s+policy[^;]*using\s*\(\s*true\s*\)", text, re.I | re.S):
-                out.append(_finding("LW-NO-RLS", "Row-level security policy allows everyone (using (true))",
-                                    "MEDIUM", p.relative_to(repo).as_posix(), _line_of(text, m.start()),
-                                    category="config", cwe=284, fixed_rank="medium"))
-        for name, rel, line in created:
-            if name not in rls:
-                out.append(_finding(
-                    "LW-NO-RLS", f"Table '{name}' has no row-level security: anyone with the public key can read it",
-                    "HIGH", rel, line, category="config", cwe=284, fixed_rank="high",
-                    more=f"alter table {name} enable row level security; then add policies for who may read and write."))
+    if uses_supabase:
+        out += row_rules(repo, g)
     return out
+
+
+ROW_WAYS = {"insert": "add rows", "update": "change any row", "delete": "remove any row"}
+ROW_WHO = {"everyone": "anyone", "signed-in": "any signed-in user"}
+ROW_ORDER = ("select", "insert", "update", "upsert", "delete")
+ROW_RANKS = ("medium", "high", "critical")
+
+
+def _and(words) -> str:
+    words = list(words)
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def row_rules(repo: Path, g: Graph | None = None) -> list[dict]:
+    """`LW-NO-RLS`: where a Supabase project's SQL files leave a table open (`lantern/rowrules.py`, which replays
+    them in the order they are applied), read with the code that reaches the table when the map is given.
+
+    * the files create the table and never switch row-level security on: high, and critical where code that runs in
+      the browser or on the phone reaches the table (`lantern/clientside.py`, through the map's `db:<table>` links);
+      where code that runs in the database names row-level security, whether it is on is not known: medium, a guess;
+    * row-level security is on and a policy lets every one of its roles change or remove any row: for everyone
+      high, critical where the visitor's side reaches the table; for any signed-in user high;
+    * such a policy that only lets rows be added, or lets every row be read: medium.
+
+    A policy for the server's own roles, one that asks who is calling, and one a restrictive policy narrows are
+    none. A table the files do not create is not judged. The id is the one the older rule gave the same line."""
+    from . import clientside, rowrules
+    st = rowrules.read(repo)
+    reached: dict[str, list[dict]] = {}
+    if g is not None:
+        side = clientside.where(g)
+        rows: dict[tuple[str, str], dict] = {}
+        for c in g.meta.get("db_calls") or ():
+            if c["src"] not in side:
+                continue
+            row = rows.setdefault((c["id"], c["src"]), {"node": c["src"], "does": [], "file": c["file"],
+                                                        "line": c["line"], **side[c["src"]]})
+            row["line"] = min(row["line"], c["line"])
+            if c["op"] not in row["does"]:
+                row["does"].append(c["op"])
+        for (tid, _), row in sorted(rows.items()):
+            row["does"].sort(key=lambda o: ROW_ORDER.index(o) if o in ROW_ORDER else len(ROW_ORDER))
+            reached.setdefault(tid, []).append(row)
+    best: dict[str, dict] = {}
+
+    def add(t, state, rank, title, file, line, why, more, conf="HIGH", **facts):
+        name = t.name if t.schema == "public" else t.key
+        tid = f"db:{name}"
+        f = _finding("LW-NO-RLS", title, "MEDIUM" if rank == "medium" else "HIGH", file, line, category="config",
+                     conf=conf, cwe=284, fixed_rank=rank, more=more)
+        f["fixed_why"] = why
+        f["row_rules"] = {"table": t.key, "state": state, **facts, "client": reached.get(tid, [])}
+        if g is not None and tid in g.nodes:
+            f["pin"] = tid
+        had = best.get(f["id"])
+        if had is None or ROW_RANKS.index(rank) > ROW_RANKS.index(had["fixed_rank"]):
+            best[f["id"]] = f
+
+    def visitor(t) -> str:
+        """The code on the visitor's side that reaches the table, in words, or nothing."""
+        client = reached.get("db:" + (t.name if t.schema == "public" else t.key))
+        if not client:
+            return ""
+        c = client[0]
+        more = f" and {len(client) - 1} more" if len(client) > 1 else ""
+        return (f"code that runs in {c['on']} reaches this table (`{_func_name(g, c['node'])}` in "
+                f"{c['file']}:{c['line']}{more}; {c['why']})")
+
+    for t in st.tables.values():
+        name = t.name if t.schema == "public" else t.key
+        seen = visitor(t)
+        if t.file is not None and t.rls is False:
+            fix = f"alter table {name} enable row level security; then add policies for who may read and write."
+            if t.policies:
+                fix += " The table's policies are not in force while row-level security is off."
+            if st.in_database:
+                at = "; ".join(f"{f}:{ln}" for f, ln in st.in_database[:3])
+                add(t, "off-in-the-files", "medium",
+                    f"Table '{name}' has no row-level security in the files that create it (code in the database "
+                    "may switch it on)", t.file, t.line,
+                    "Medium, and a guess: the files that create the table never switch row-level security on, but "
+                    f"code that runs in the database names row-level security ({at}), and Lantern does not run "
+                    "that code.", f"If {at} does not switch it on for this table: {fix}", conf="LOW")
+                continue
+            why = (f"Critical: {seen}, so the key that opens the table and the table's name are in every visitor's "
+                   "hands, and nothing in the database asks who is reading or writing." if seen else
+                   "High: with row-level security off the table answers anyone who has the project's public key. "
+                   "Lantern found no code on the visitor's side that reaches it, which is not proof that none does.")
+            add(t, "off", "critical" if seen else "high",
+                f"Table '{name}' has no row-level security: anyone with the public key can read and change every row",
+                t.file, t.line, why, fix)
+            continue
+        wrote = set()
+        for pol, ways, who in t.open_writes():
+            wrote.add((pol.file, pol.line))
+            lets = _and(ROW_WAYS[w] for w in ways)
+            title = f"Policy '{pol.name[:60]}' on '{name}' lets {ROW_WHO[who]} {lets}"
+            fix = ("Write the policy so that it compares the row's owner with who is asking, for example "
+                   "`using (auth.uid() = user_id) with check (auth.uid() = user_id)`.")
+            if "update" in ways and pol.check is not None and not pol.check_always:
+                fix += (" A changed row still has to pass this policy's `with check`, which keeps nobody from "
+                        "taking another person's row over.")
+            if not {"update", "delete"} & set(ways):
+                rank, why = "medium", (f"Medium: the policy lets {ROW_WHO[who]} add rows and nothing else. That is "
+                                       "often meant (a sign-up, a feedback form), and it still lets rows be added "
+                                       "without end or in another person's name.")
+            elif who == "signed-in":
+                rank, why = "high", ("High: the policy asks only that somebody is signed in, so any account can "
+                                     f"{lets} that is not its own.")
+            else:
+                rank = "critical" if seen else "high"
+                why = (f"Critical: the policy lets anyone {lets}, and {seen}." if seen else
+                       f"High: the policy lets anyone who has the project's public key {lets}. Lantern found no "
+                       "code on the visitor's side that reaches the table, which is not proof that none does.")
+            add(t, "open-write", rank, title, pol.file, pol.line, why, fix, policy=pol.name, lets=list(ways),
+                **{"for": who})
+        for pol, who in t.open_reads():
+            if (pol.file, pol.line) in wrote:
+                continue
+            add(t, "open-read", "medium", f"Policy '{pol.name[:60]}' on '{name}' lets {ROW_WHO[who]} read every row",
+                pol.file, pol.line,
+                f"Medium: the policy lets {ROW_WHO[who]} read every row of the table. That is right for what is "
+                "meant for all and wrong for anything personal.",
+                "If the rows are personal, let a row be read only by its owner: `using (auth.uid() = user_id)`.",
+                policy=pol.name, lets=["select"], **{"for": who})
+    return sorted(best.values(), key=lambda f: (f["file"], f["line"]))
 
 
 _NOT_IN_A_NAME = re.compile(r"[^A-Za-z0-9]+")
@@ -1662,7 +1770,7 @@ def template_rules(repo: Path) -> list[dict]:
 
 def scan_web(g: Graph) -> tuple[list[dict], list[dict]]:
     repo = Path(g.repo_root)
-    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + template_rules(repo) + inline_secrets(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo) + missing_auth(g)
+    findings = js_rules(repo) + go_rules(repo) + rust_rules(repo) + java_rules(repo) + php_rules(repo) + ruby_rules(repo) + cpp_rules(repo) + template_rules(repo) + inline_secrets(repo) + exposed_secrets(repo) + cors(repo) + database_rules(repo, g) + missing_auth(g)
     has_js = "typescript/javascript" in g.meta.get("languages", {})
     tools = [{"tool": "lantern-web", "status": "ok" + ("" if has_js else " (no JS/TS files; Python-side checks only)"),
               "version": "0.1"}]
