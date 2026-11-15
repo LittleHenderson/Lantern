@@ -1,0 +1,21 @@
+# Lantern's own report on its own pull requests, through its own GitHub Action (action.yml at the top, docs/github.md).
+# It comments on each pull request and never saves a report or fails a check here: ci.yml holds Lantern's own gates.
+name: lantern-report
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./
+        with:
+          save-report: "off"
+          require: none

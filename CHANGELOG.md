@@ -9,6 +9,16 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Lantern leaves its report on the GitHub repository it checked (`docs/github.md`), in three ways: one comment with
+  the result (Passed, Blocked or Incomplete) on every pull request, edited on each push; one pull request on the main
+  branch that saves the report in `.lantern/report/` (README in words, the commit-pinned Evidence Report, the digest
+  `lantern verify` checks); and the badge on the front page, linked to the saved report. `lantern github setup` puts
+  the workflow, the first badge, the README line and the `.gitignore` lines on a repository in one command; the
+  GitHub Action is `action.yml` at the top of this repository (`uses: LittleHenderson/Lantern@<commit or tag>`).
+  `lantern github summary` and `lantern github save` write the words and the folder from a finished check
+  (`lantern/onrepo.py`); every value from the results is written as text (no link, image, HTML or mention can be
+  made through a finding's title). Lantern's own pull requests get the comment (`.github/workflows/lantern-report.yml`).
+
 - **Modern stack, first part: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and
   SvelteKit's files as routes** (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14, steps 1 to 3 and the
   SvelteKit half of step 4. Tests first for each rule, each dangerous example beside twins that must stay clean. The
