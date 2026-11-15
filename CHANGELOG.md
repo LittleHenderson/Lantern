@@ -9,6 +9,14 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Team workspaces on Lantern Cloud: a few people who can open each other's reports. The owner names a workspace
+  and invites people with one-time links (they work once, for 7 days; Lantern keeps only a hash and never asks for
+  an email). A report joins only when its own owner puts it there (Share, then Your team, or Add one of my reports
+  on the Team page), and teammates can open it but never change, share, explain or delete it. Owners take people
+  out or close the workspace; leaving, removing someone or closing gives every report back to its owner, and
+  nothing is deleted. The Team page sits in Advanced and appears in Simple only once someone is in a workspace.
+  New `/v1/workspaces`, `/v1/invites` and `PUT /v1/runs/{id}/workspace` (docs/api.md) (directive: user first,
+  step 3).
 - Getting started is one button: Simple's home on Lantern Cloud and in `lantern serve` opens with **Show us your
   project**, then asks one plain question per screen (is it on this computer, on GitHub, or not sure?). The word
   repository never shows; "Where do I find the link?" and "Is my code safe?" sit behind small Why? buttons, and
