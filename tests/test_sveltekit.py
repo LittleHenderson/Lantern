@@ -189,7 +189,7 @@ def test_each_door_of_a_sveltekit_app_is_a_route(tmp_path):
     assert handle.entry["sveltekit"] == "handle" and handle.entry["serves"] == "sveltekit"
     # ... and it is named on every route as what runs before it
     assert remove.entry["middleware"] == ["js:src/hooks.server::handle"]
-    assert g.meta["sveltekit"] == {"routes": 10, "pages": 3, "forms": 5, "linked": 4}
+    assert g.meta["sveltekit"] == {"routes": 10, "pages": 3, "forms": 5, "linked": 4, "handed": 0}
 
 
 def test_the_twins_that_are_no_routes(tmp_path):
@@ -440,7 +440,7 @@ def test_markup_that_only_looks_like_an_event_a_form_or_a_tag(tmp_path):
     assert _edge(g, page, page + ".wipe").lines == [17]
     assert _edge(g, page, page + ".pick").lines == [15]
     assert _edge(g, page, "js:src/lib/Card.svelte::Card").lines == [15]
-    assert g.meta["sveltekit"] == {"routes": 0, "pages": 1, "forms": 0, "linked": 0}
+    assert g.meta["sveltekit"] == {"routes": 0, "pages": 1, "forms": 0, "linked": 0, "handed": 0}
 
 
 RUNES = '''<script lang="ts">
@@ -1301,3 +1301,77 @@ def test_the_function_kept_on_locals_for_asking_who_is_signed_in_taken_apart(tmp
     sec = scan(g, offline=True)
     routes = {n.id: n.entry["detail"] for n in g.nodes.values() if n.entry and n.entry["kind"] == "route"}
     assert sorted(routes[i] for i in sec["logins_shown"] if i in routes) == shown
+
+
+# ------------------------------------------------------------------ a form in a part the page draws
+PANEL = '''<script lang="ts">
+  let { title, sendTo = "", children } = $props();
+</script>
+<h2>{title}</h2>
+<form method="POST" action={sendTo}>
+  {@render children?.()}
+  <button>Save</button>
+</form>
+'''
+PANEL_OLD = ('<script>\n  export let sendTo;\n  export let label;\n</script>\n'
+             '<form method="POST" action={sendTo}><button>{label}</button></form>\n')
+PANEL_LINK = '<script>\n  export let sendTo;\n  export let href;\n</script>\n<a {href}>{sendTo}</a>\n'
+PANEL_FIND = '<script>\n  export let sendTo;\n</script>\n<form action={sendTo}><input name="q" /></form>\n'
+PANEL_SHORT = '<script>\n  export let action;\n</script>\n<form method="POST" {action}><button>Leave</button></form>\n'
+ACCOUNT_SERVER = '''import { db } from "$lib/server/db";
+export const actions = {
+  rename: async ({ request }) => { await db.user.update({ data: {} }); },
+  leave: async ({ request }) => { await db.user.delete({}); },
+};
+'''
+ACCOUNT_PAGE = '''<script>
+  import Old from "$lib/PanelOld.svelte";
+</script>
+<Old label="Leave" sendTo="?/leave" />
+'''
+NAME_PAGE = '''<script>
+  import Panel from "$lib/Panel.svelte";
+  import Link from "$lib/PanelLink.svelte";
+  import Find from "$lib/PanelFind.svelte";
+  import Short from "$lib/PanelShort.svelte";
+  let where = "/account?/leave";
+</script>
+<Panel title="Your name" sendTo="/account?/rename">
+  <input name="name" />
+</Panel>
+<Short action="/account?/leave" />
+<Link sendTo="/account?/leave" href="/account" />
+<Find sendTo="/account?/leave" />
+<Panel title="Worked out as the page runs" sendTo={where} />
+<Panel title="No such page" sendTo="/nowhere?/rename" />
+'''
+PANELS = {**APP, "src/lib/Panel.svelte": PANEL, "src/lib/PanelOld.svelte": PANEL_OLD,
+          "src/lib/PanelLink.svelte": PANEL_LINK, "src/lib/PanelFind.svelte": PANEL_FIND,
+          "src/lib/PanelShort.svelte": PANEL_SHORT,
+          "src/routes/account/+page.server.ts": ACCOUNT_SERVER, "src/routes/account/+page.svelte": ACCOUNT_PAGE,
+          "src/routes/account/name/+page.svelte": NAME_PAGE}
+
+
+def test_a_form_in_a_part_the_page_draws_posts_where_the_page_says(tmp_path):
+    """A shared part holds the form (`<form method="POST" action={sendTo}>`) and each page that draws it writes
+    the address (`<Panel sendTo="/account?/rename">`). The page posts to that action through the part: a likely
+    link from the page, on the line the address is written, with a name of its own (`http-sveltekit-prop`).
+    `{action}` is the short way to write `action={action}`.
+    Until 2026-11-15 such a form was counted and linked to nothing (6 of 8 forms of one sample project).
+    The twins: the same attribute on a part that only shows it, on a part whose form does not post, an address
+    worked out as the page runs, and an address no page has."""
+    g = _build(tmp_path, PANELS)
+    acts = "js:src/routes/account/+page.server::actions."
+    by = {}
+    for e in g.call_edges():
+        if e.via == "http-sveltekit-prop":
+            by.setdefault(e.src, {})[e.dst] = (e.confidence, e.lines, e.detail)
+    assert by == {
+        "js:src/routes/account/name/+page.svelte::+page": {acts + "rename": ("inferred", [8], "POST /account?/rename"),
+                                                           acts + "leave": ("inferred", [11], "POST /account?/leave")},
+        "js:src/routes/account/+page.svelte::+page": {acts + "leave": ("inferred", [4], "POST /account?/leave")}}
+    # the part's own form stays counted, and linked to nothing by itself
+    assert not [e for e in g.call_edges() if e.src.startswith("js:src/lib/Panel") and (e.via or "").startswith("http-")]
+    base = _build(tmp_path / "base", APP).meta["sveltekit"]
+    assert g.meta["sveltekit"]["forms"] - base["forms"] == 3 and g.meta["sveltekit"]["linked"] == base["linked"]
+    assert g.meta["sveltekit"]["handed"] == 3 and base["handed"] == 0

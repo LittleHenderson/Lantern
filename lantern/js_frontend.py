@@ -147,6 +147,9 @@ RUNE_FILE = re.compile(r"\.svelte\.[jt]s$")
 # that ships modules. Only where no file of the written name is there.
 TS_FOR = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
 _FORMACTION = re.compile(rb"(?<![\w:.$-])formaction\s*=\s*(?:\"([^\"{}]*)\"|'([^'{}]*)')", re.I)
+# `action={sendTo}`: a form's address is one name; `sendTo="/account?/rename"`: an attribute whose text is written out
+_ACTION_NAME = re.compile(rb"(?<![\w:.$-])action\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}|(?<![\w$.{])\{\s*(action)\s*\}")
+_TEXT_ATTR = re.compile(rb"(?<![\w:.$-])([A-Za-z_$][\w$-]*)\s*=\s*(?:\"([^\"{}]*)\"|'([^'{}]*)')")
 _JS_NAME = re.compile(rb"[A-Za-z_$][\w$]*")
 # `onclick={…}` (Svelte 5) is an event only under a name the browser has; `on:click={…}` (Svelte 4) under any
 DOM_EVENTS = frozenset("""click dblclick submit change input keydown keyup keypress focus blur mouseenter mouseleave
@@ -487,7 +490,9 @@ class JSModule:
     runes: bool = False        # ... or a `.svelte.ts` file: Svelte's own words (`$state`) are the language's here
     kit_handles: list[tuple] = field(default_factory=list)   # `handle = sequence(a, b)` of hooks.server: (name, at)
     component: str | None = None   # ... and the function that stands for the component: named after the file
-    forms: list[dict] = field(default_factory=list)   # the forms of its markup that post: {line, action}
+    forms: list[dict] = field(default_factory=list)   # the forms of its markup that post: {line, action[, prop]}
+    # an address written out on a part it draws (`<Panel sendTo="/account?/rename">`): {line, tag, name, value}
+    part_attrs: list[dict] = field(default_factory=list)
     # `actions` of a SvelteKit `+page.server` file: {key, line, local | handler + at, wrap} (Walker._kit_actions)
     kit_actions: list[dict] = field(default_factory=list)
     defs: dict[str, JSDef] = field(default_factory=dict)
@@ -2406,7 +2411,11 @@ def svelte_markup(markup: bytes) -> dict:
     "onClick") or None for any other attribute.
     `tags`: (line, column, name) of each component drawn (`<Card …>`).
     `forms`: each place a form posts from, {line, action}: the text of its `action` ("" when none is written, None
-    when it is worked out as the page runs), and a button's `formaction`.
+    when it is worked out as the page runs), and a button's `formaction`. `prop` where the address is one name
+    (`action={sendTo}`, or `{action}` for short): a page that draws this file as a part may hand it the address
+    under that name.
+    `part_attrs`: each attribute of a part drawn here whose text is written out and begins like an address
+    (`<Panel sendTo="/account?/rename">`), {line, tag, name, value}.
     `names`: what the blocks name (`as note`, `then value`, a snippet and its parameters): no names of the script."""
     ex = bytearray(re.sub(rb"[^\n]", b" ", markup))
     starts = [0] + [m.end() for m in re.finditer(rb"\n", markup)]
@@ -2469,13 +2478,26 @@ def svelte_markup(markup: bytes) -> dict:
         if (_attr(tag, b"method")[1] or "").upper() != "POST":
             continue
         written, action = _attr(tag, b"action")
-        forms.append({"line": where(m.start())[0], "action": action if written else ""})
+        form = {"line": where(m.start())[0], "action": action if written else ""}
+        one = _ACTION_NAME.search(tag) if action is None else None     # `action={sendTo}`, and `{action}` for short
+        if one is not None:
+            form["action"], form["prop"] = None, (one.group(1) or one.group(2)).decode("utf-8", "replace")
+        forms.append(form)
     for m in _FORMACTION.finditer(markup):
         if not inside[m.start()]:
             forms.append({"line": where(m.start())[0],
                           "action": (m.group(1) if m.group(1) is not None else m.group(2)).decode("utf-8", "replace")})
     forms.sort(key=lambda f: f["line"])
-    return {"exprs": bytes(ex), "attrs": attrs, "tags": tags, "forms": forms, "names": names}
+    part_attrs = []
+    for m in _SVELTE_TAG.finditer(markup):
+        end = _tag_end(markup, m.end()) if not inside[m.start()] else -1
+        for a in (_TEXT_ATTR.finditer(markup, m.end(), end) if end > 0 else ()):
+            value = (a.group(2) if a.group(2) is not None else a.group(3)).decode("utf-8", "replace")
+            if not inside[a.start()] and value.startswith(("/", "?/")):
+                part_attrs.append({"line": where(a.start())[0], "tag": m.group(1).decode("utf-8", "replace"),
+                                   "name": a.group(1).decode("utf-8", "replace"), "value": value})
+    return {"exprs": bytes(ex), "attrs": attrs, "tags": tags, "forms": forms, "names": names,
+            "part_attrs": part_attrs}
 
 
 def read_svelte(w: "Walker", tree, script: bytes, markup: bytes, own: list[tuple[int, int]], parser) -> list:
@@ -2499,6 +2521,7 @@ def read_svelte(w: "Walker", tree, script: bytes, markup: bytes, own: list[tuple
     m.default = comp
     got = svelte_markup(markup)
     m.forms = got["forms"]
+    m.part_attrs = got["part_attrs"]
     if got["names"]:
         m.anon_params.setdefault(comp, set()).update(got["names"])
     for line, col, name in got["tags"]:
@@ -4320,33 +4343,54 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                     kit_link(src, kit["layouts"][(base, above)], 1)
                 kit_calls(src, kit["shared"].get((base, above, "layout")), "sveltekit-load")
                 kit_calls(src, kit["frames"].get((base, above)), "sveltekit-layout")
-        posted = linked = 0
+        def posts_to(written: str, base, km) -> tuple[list, str, bool]:
+            """The actions a form with this address posts to: of the page it stands on (`?/name`, or `default` when
+            none is named), or of the page whose address it writes (`/login?/register`). With them: the address
+            without its question, and whether an action is named."""
+            at, named, key = written.partition("?/")
+            at, key = at.split("?")[0].strip(), key.split("&")[0].strip() if named else "default"
+            hits = []
+            if not at and km is not None and km.group("kind") == "page":
+                hits = [a for a in kit["actions"] if (a["base"], a["folder"], a["key"]) == (base, km.group("dir"), key)]
+            elif at.startswith("/"):
+                hits = [a for a in kit["actions"] if a["base"] == base and a["key"] == key and kit_same(a["path"], at)]
+                # the page with that very address, before one with a part that changes (`/inbox/new`, `[id]`)
+                hits = [a for a in hits if a["path"].rstrip("/") == at.rstrip("/")] or hits
+            return hits, at, bool(named)
+
+        posted = linked = through = 0
+        # a part's form whose address is one name (`<form method="POST" action={sendTo}>`): file -> those names
+        takes = {m.name: {f["prop"] for f in m.forms if f.get("prop")} for m, _, _ in kit["files"]}
         for m, base, km in kit["files"]:
-            # a form with method="POST" posts to an action: of the page it stands on (`?/name`, or `default` when
-            # none is named), or of the page whose address it writes (`/login?/register`)
+            # a form with method="POST" posts to an action
             src = nid(m.name, m.component)
             for form in m.forms:
                 posted += 1
                 if form["action"] is None:
                     continue
-                at, named, key = form["action"].partition("?/")
-                at, key = at.split("?")[0].strip(), key.split("&")[0].strip() if named else "default"
-                hits = []
-                if not at and km is not None and km.group("kind") == "page":
-                    hits = [a for a in kit["actions"] if (a["base"], a["folder"], a["key"]) == (base, km.group("dir"), key)]
-                elif at.startswith("/"):
-                    hits = [a for a in kit["actions"] if a["base"] == base and a["key"] == key and kit_same(a["path"], at)]
-                    # the page with that very address, before one with a part that changes (`/inbox/new`, `[id]`)
-                    hits = [a for a in hits if a["path"].rstrip("/") == at.rstrip("/")] or hits
-                    if not hits and not named:   # no page's action: a `+server.ts`, matched like any request
-                        call = _normalize_http(at, "POST", m.component, form["line"], "onSubmit")
-                        if call is not None:
-                            m.http.append(call)
+                hits, at, named = posts_to(form["action"], base, km)
+                if not hits and at.startswith("/") and not named:   # no page's action: a `+server.ts`, matched like any request
+                    call = _normalize_http(at, "POST", m.component, form["line"], "onSubmit")
+                    if call is not None:
+                        m.http.append(call)
                 for a in hits:
                     kit_link(src, a["tid"], form["line"], RESOLVED if len(hits) == 1 else POSSIBLE)
                 linked += bool(hits)
+            # ... and a form that stands in a part this file draws gets its address from here: the part takes it
+            # under a name (`takes`) and this file writes it out (`<Panel sendTo="/account?/rename">`). Likely:
+            # the name is all that ties the two
+            for h in m.part_attrs:
+                res = r.resolve_parts(m, m.component, h["tag"].split("."))
+                part = mods.get(res[1]) if res and res[0] == "def" else None
+                if part is None or res[2] != part.component or h["name"] not in takes.get(part.name, ()):
+                    continue
+                hits = posts_to(h["value"], base, km)[0]
+                for a in hits:
+                    g.add_edge(src, a["tid"], kind=CALLS, confidence=INFERRED if len(hits) == 1 else POSSIBLE,
+                               line=h["line"], via="http-sveltekit-prop", detail=g.nodes[a["tid"]].entry["detail"])
+                through += bool(hits)
         g.meta["sveltekit"] = {"routes": sum(1 for n, _ in kit["routes"] if n.entry.get("sveltekit") != "handle"),
-                               "pages": len(kit["pages"]), "forms": posted, "linked": linked}
+                               "pages": len(kit["pages"]), "forms": posted, "linked": linked, "handed": through}
 
     http_calls = []
     for m in mods.values():
