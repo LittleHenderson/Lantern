@@ -1059,6 +1059,26 @@ export const handle = async ({ event, resolve }) => {
   return resolve(event);
 };
 '''
+GUIDE_ASKED_LATE = '''import { redirect } from "@sveltejs/kit";
+import { readUser } from "$lib/server/session";
+
+export const handle = async ({ event, resolve }) => {
+  event.locals.user = await readUser(event.cookies.get("session"));
+  const response = await resolve(event);
+  if (!event.locals.user) redirect(303, "/login");
+  return response;
+};
+'''
+GUIDE_KEPT_WHOLE = '''import { error } from "@sveltejs/kit";
+import { readUser } from "$lib/server/session";
+
+export const handle = async (input) => {
+  input.event.locals.user = await readUser(input.event.cookies.get("session"));
+  if (!input.event.url.pathname.startsWith("/app")) return input.resolve(input.event);
+  if (!input.event.locals.user) error(401, "sign in");
+  return input.resolve(input.event);
+};
+'''
 API_ONLY = ["DELETE /api/notes/[id]"]
 NOT_SIGNED_IN = '!event.locals.user) redirect(303, "/login");'
 GUIDE_CASES = {
@@ -1136,6 +1156,9 @@ GUIDE_CASES = {
     # whole hooks: the guard as one part of `sequence(...)`; an area handed on with its answer kept under a name
     "the guard as a part of sequence()": (None, GUIDE_SEQUENCE, APP_ONLY),
     "an area handed on with its answer kept": (None, GUIDE_ANSWER_KEPT, APP_ONLY),
+    # the route has run by the time the check is made; and the hook's one parameter not taken apart
+    "a check after the request was handed on": (None, GUIDE_ASKED_LATE, []),
+    "the hook's one parameter kept whole": (None, GUIDE_KEPT_WHOLE, APP_ONLY),
 }
 
 
@@ -1146,9 +1169,10 @@ def test_a_hook_as_the_sign_in_guides_write_it(tmp_path, case):
     cookie that is merely there says nothing. The addresses it guards are read where the code names the request's
     whole address: `event.url.pathname` or `event.route.id`, also kept under a name as it is, against fixed text
     (`startsWith`, `===`, a list's `includes`). A request that is handed on (`return resolve(event)`, also with the
-    answer kept under a name first) was not asked what comes after. A route takes the login only when its own
-    address is certainly among those asked: a part that changes (`[id]`) counts for neither side. The path changed
-    before it is asked, a pattern, a list of areas: not read, so those routes are reported as open."""
+    answer kept under a name first) was not asked what comes after, and a check that stands after
+    `await resolve(event)` is made when the route has run: it counts for nothing. A route takes the login only
+    when its own address is certainly among those asked: a part that changes (`[id]`) counts for neither side. The
+    path changed before it is asked, a pattern, a list of areas: not read, so those routes are reported as open."""
     from lantern.security import scan
     top, check, shown = GUIDE_CASES[case]
     hook = check if top is None else GUIDE_HOOK.replace("TOP", top).replace("CHECK", check)
