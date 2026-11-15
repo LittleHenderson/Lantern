@@ -268,10 +268,9 @@ def refuses(stmts) -> bool:
 
 class KitWay(str):
     """The way on in a SvelteKit hook: `resolve(event)`, also with options, waited for, or kept and handed back
-    later (`const response = await resolve(event); ...; return response`)."""
-
-
-KIT_WAY = KitWay("resolve")
+    later (`const response = await resolve(event); ...; return response`). `of`: the name of the hook's one
+    parameter where it is kept whole (`input.resolve(input.event)`), else nothing."""
+    of = ""
 
 
 def goes_on(stmts, ends: bool, way: str = "next") -> bool:
@@ -312,11 +311,14 @@ def all_nodes(x, depth: int = 0):
 def hands(e, way) -> bool:
     """Whether this expression hands the request to what comes next: `next()`, `next('route')`. `next(err)` does
     not: that ends the request with an error. In a SvelteKit hook: `resolve(event)`."""
-    if not (isinstance(e, N) and e.k == "call" and e.a is not None and e.a.k == "name" and e.a.name == way):
+    if not (isinstance(e, N) and e.k == "call" and e.a is not None):
         return False
     if isinstance(way, KitWay):
-        return bool(e.items)
-    return not e.items or (e.items[0].k == "const" and e.items[0].a in ("route", "router"))
+        whole = e.a.k == "attr" and e.a.name == way and bool(way.of) and e.a.a is not None and \
+            e.a.a.k == "name" and e.a.a.name == way.of
+        return bool(e.items) and (whole or (e.a.k == "name" and e.a.name == way))
+    return e.a.k == "name" and e.a.name == way and \
+        (not e.items or (e.items[0].k == "const" and e.items[0].a in ("route", "router")))
 
 
 def ways(x, way) -> int:
@@ -1594,15 +1596,19 @@ class Engine:
         and the answer, the fourth of an error handler's four) and does hand one on somewhere; ("hook", None) for
         one that runs before every request and lets it on by answering nothing (Flask's `before_request`);
         ("helper", None) for any other: what it answers goes to the code that called it. A SvelteKit hook is a
-        gate whose way on is `resolve(event)` (`KIT_WAY`)."""
+        gate whose way on is `resolve(event)` (`KitWay`)."""
         got = self._passage.get(id(fn))
         if got is None:
             got = ("helper", None)
-            if (self.entry(fn) or {}).get("serves") == "sveltekit" and hands_on(fn.body, KIT_WAY):
+            kit = None
+            if (self.entry(fn) or {}).get("serves") == "sveltekit":
+                kit = KitWay("resolve")
+                kit.of = fn.params[0].name if len(fn.params) == 1 else ""
+            if kit is not None and hands_on(fn.body, kit):
                 # SvelteKit's `handle`, or a part of its `sequence(...)`: every request passes through it on its way
                 # to a route, and goes on where it calls `resolve(event)`. Until 2026-11-15 it was read as a route,
                 # and a guard after `if (!path.startsWith("/app")) return resolve(event)` as one for every request
-                got = ("gate", KIT_WAY)
+                got = ("gate", kit)
             elif self.is_route(fn):
                 got = ("route", None)
             elif fn.lang == "js":
@@ -1879,6 +1885,8 @@ class Engine:
     # ---- statements
     def block(self, stmts, env: Env, ctx: Ctx) -> bool:
         stmts = stmts or ()
+        late = 0
+        kit = self.role(ctx)[1] if stmts and env.fn.lang == "js" and self.g.meta.get("sveltekit") else None
         for i, s in enumerate(stmts):
             if s.k == "assign" and env.fn.lang == "py" and not s.name and s.a is not None and s.a.k == "call" and \
                     len(s.items or ()) == 1 and s.items[0].k == "name" and \
@@ -1896,7 +1904,13 @@ class Engine:
             elif s.k == "try":
                 self.after_try[id(s)] = (stmts[i + 1:], stmts is env.fn.body)
             if self.stmt(s, env, ctx):
+                ctx.narrow -= late
                 return True
+            if isinstance(kit, KitWay) and s.k in ("expr", "assign") and hands_on([s], kit):
+                # SvelteKit: `const response = await resolve(event)` and then a check. The route has run by then:
+                # what is asked from here on, on this way through the hook, is asked of nobody on the way to it
+                ctx.narrow += 1
+                late += 1
         return False
 
     @staticmethod
@@ -2222,7 +2236,8 @@ class Engine:
             return "event" if v is not None and v.kind == "req" and v.data == "kit" else None
         if e.k == "attr" and e.a is not None:
             return {("event", "url"): "url", ("event", "route"): "route", ("url", "pathname"): "path",
-                    ("route", "id"): "id"}.get((self.page_read(e.a, env, depth + 1), e.name))
+                    ("route", "id"): "id", ("event", "event"): "event"}.get(
+                        (self.page_read(e.a, env, depth + 1), e.name))
         return None
 
     def page_kept(self, t: N | None, src: N, env: Env, depth: int = 0) -> None:
