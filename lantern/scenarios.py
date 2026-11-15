@@ -587,6 +587,21 @@ def _action(route: str | None, rkind: str | None) -> str | None:
     return str(route)[len("ACTION "):] if route and rkind == "route" and str(route).startswith("ACTION ") else None
 
 
+PAID_LIMITED = ("Each call goes to the paid service, which bills you. A limit on how often slows a script down, but "
+                "nothing asks who is calling, so anyone on the internet can keep spending up to that limit.")
+
+
+def _paid(f: dict) -> tuple[bool, bool]:
+    """What a paid-call finding itself says is there: (a login, a limit on how often). From the record the rule
+    keeps beside its sentence (`paid`), else from the fixed ending of the title (results written before the record
+    existed). A finding that says neither is read as neither, which is the older story."""
+    p = f.get("paid")
+    if isinstance(p, dict):
+        return bool(p.get("login")), bool(p.get("limit"))
+    title = str(f.get("title") or "")
+    return title.endswith(" with no rate limit"), title.endswith(" without a login check")
+
+
 def _from_another_app(route: str | None, rkind: str | None) -> bool:
     """An Android component other apps can start (`INTENT …`) or an iOS link handler (`LINK …`)."""
     return bool(route) and rkind == "route" and str(route).startswith(("INTENT ", "LINK "))
@@ -692,13 +707,23 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                          "prove nobody can get here: something Lantern does not see may run it. Here is what happens "
                          f"when something does: {who} reaches it that way.")
             basis.append("Lantern found no path to this code, which is not proof that nothing runs it")
-        if kind in ("auth", "wallet") and _action(route, rkind):
-            steps.append(f"They are not signed in, and they run the Server Action {_action(route, rkind)} again and "
-                         "again." if kind == "wallet" else
-                         f"They are not signed in when they run the Server Action {_action(route, rkind)}.")
-        elif kind in ("auth", "wallet") and route:
-            steps.append(f"They are not signed in, and they send {route} again and again."
-                         if kind == "wallet" else f"They are not signed in when they send {route}.")
+        if kind == "wallet":
+            login, limit = _paid(f)
+            does = (f"run the Server Action {_action(route, rkind)}" if _action(route, rkind)
+                    else f"send {route}" if route else None)
+            if does and login:
+                steps.append(f"They sign in with an account of their own, and they {does} again and again.")
+            elif does:
+                steps.append(f"They are not signed in, and they {does} "
+                             + ("as often as the limit lets them." if limit else "again and again."))
+            if login and not limit:
+                after = "The route has a limit on how often one person can call it."
+            elif limit and not login:
+                harm, after = PAID_LIMITED, "The route needs a signed-in user."
+        elif kind == "auth" and _action(route, rkind):
+            steps.append(f"They are not signed in when they run the Server Action {_action(route, rkind)}.")
+        elif kind == "auth" and route:
+            steps.append(f"They are not signed in when they send {route}.")
         if kind in ("owner", "owner-late"):
             steps.append("They are signed in with their own account. In the request they change the record's id to "
                          "another one, which is not theirs.")
@@ -835,10 +860,11 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
         return f"{route} works without checking who is signed in" if route else "A route works without checking who is signed in"
     if kind == "wallet":
         route, rkind = _route_word(g, f)
+        who = "Anyone with an account" if _paid(f)[0] else "Anyone"      # a login is there: not just anyone
         if _action(route, rkind):
-            return f"Anyone can make the Server Action {_action(route, rkind)} spend your money on paid calls"
-        return (f"Anyone can make {route} spend your money on paid calls" if route
-                else "Anyone can make your app spend money on paid calls")
+            return f"{who} can make the Server Action {_action(route, rkind)} spend your money on paid calls"
+        return (f"{who} can make {route} spend your money on paid calls" if route
+                else f"{who} can make your app spend money on paid calls")
     if kind == "secret" and (f.get("category") == "exposure" or str(f.get("rule")) == "LW-PUBLIC-SECRET"):
         return "A secret setting is sent to every visitor's browser"
     if kind == "open-db" and row_words(f):

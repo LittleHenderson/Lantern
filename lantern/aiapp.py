@@ -227,14 +227,17 @@ def wallet_drain(g: Graph, calls: list[dict], cache: dict[str, list[str]]) -> li
         else:
             sev, title = "MEDIUM", f"{detail} spends money ({what}) with no rate limit"
             why = "Callers must log in, but nothing limits how often one account can call it." + unused
-        out.append(_finding(
+        f = _finding(
             "LA-WALLET-DRAIN", title, sev, r.file, r.start_line, category="code", conf="LOW", cwe=770,
             fixed_rank="high" if sev == "HIGH" else "medium",
             more=why + " Fix: require a signed-in user, add a per-user and per-IP rate limit (slowapi, express-rate-limit, "
                  "@upstash/ratelimit), set `max_tokens`, and put a spend limit on the provider's dashboard. Heuristic: "
                  "Lantern reads names, not meaning, for both checks. Paid calls reached: " +
                  "; ".join(f"{h['provider']} ({h['file']}:{h['line']})" for h in hit[:4]),
-            snippet=shown))
+            snippet=shown)
+        # what the two checks found, as data: the story and the heading are written from it, not from the title
+        f["paid"] = {"login": logged_in, "limit": limited}
+        out.append(f)
     return out
 
 

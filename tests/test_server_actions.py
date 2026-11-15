@@ -661,3 +661,40 @@ def test_the_reports_list_says_which_side_a_javascript_entry_runs_on(tmp_path):
     assert json.loads(r.stdout) == ["backend", "frontend", "frontend", "backend", "external"]
     assert "isJS(n.id) ? ' · frontend'" not in html
     assert "isJS(n.id) ? ' · ' + layer(n.id)" in html
+
+
+PAID_ACTIONS = '''"use server";
+import OpenAI from "openai";
+import { auth } from "../lib/session";
+
+const openai = new OpenAI();
+
+export async function summarize(text: string) {
+  const session = await auth();
+  if (!session) throw new Error("sign in");
+  const r = await openai.chat.completions.create({ model: "m", messages: [{ role: "user", content: text }] });
+  return r.choices[0].message.content;
+}
+
+export async function translate(text: string) {
+  const r = await openai.chat.completions.create({ model: "m", messages: [{ role: "user", content: text }] });
+  return r.choices[0].message.content;
+}
+'''
+
+
+def test_the_story_of_a_paid_action_says_a_login_is_there_where_the_finding_says_so(tmp_path):
+    """Two actions that ask a model, one behind a login: its story has the tester sign in, its heading says "Anyone
+    with an account"; the open one beside it keeps "not signed in" and "Anyone"."""
+    g = _build(tmp_path, {"app/actions.ts": PAID_ACTIONS, "lib/session.ts": WORDS_SESSION}, WORDS_PKG)
+    found = {f["title"].split(" spends ")[0]: f for f in scan(g)["findings"] if f["rule"] == "LA-WALLET-DRAIN"}
+    behind = found["The Server Action summarize"]
+    assert behind["paid"] == {"login": True, "limit": False} and behind["title"].endswith("with no rate limit")
+    assert behind["scenario"]["steps"][-1] == ("They sign in with an account of their own, and they run the Server "
+                                               "Action summarize again and again.")
+    assert behind["headline"] == "Anyone with an account can make the Server Action summarize spend your money on paid calls"
+    assert not any("not signed in" in s for s in behind["scenario"]["steps"])
+    open_ = found["The Server Action translate"]
+    assert open_["paid"] == {"login": False, "limit": False}
+    assert open_["scenario"]["steps"][-1] == "They are not signed in, and they run the Server Action translate again and again."
+    assert open_["headline"] == "Anyone can make the Server Action translate spend your money on paid calls"
