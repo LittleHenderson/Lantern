@@ -142,6 +142,7 @@ REMIX_CONFIGS = ("remix.config.js", "remix.config.mjs", "remix.config.cjs")
 ROUTER_ROUTES = ("routes.ts", "routes.js", "routes.mts", "routes.mjs", "routes.tsx", "routes.jsx")
 REMIX_SENDS = {"post", "put", "patch", "delete"}     # the verbs of a form that go to a route's `action`
 REMIX_OLD = "Remix 1 route folders"
+ROUTER_LISTED = "React Router routes listed in app/routes.ts"   # by hand, or a folder of its own: not read, and said
 _SVELTE_TS = re.compile(rb"\blang\s*=\s*[\"']?(?:ts|typescript)\b", re.I)
 _SVELTE_MODULE = re.compile(rb"\bmodule\b", re.I)     # <script module>, <script context="module">: the file's own
 _STYLE_RE = re.compile(rb"<style\b[^>]*>.*?</style\s*>", re.I | re.S)
@@ -2673,9 +2674,10 @@ def remix_same(route: str, written: str) -> bool:
 
 def remix_way(pkg: dict, repo: Path, mods: dict, cache: dict) -> str | None:
     """How the routes of the app this package.json is of are found: `files` (by the names of the files in
-    `app/routes`), `old` (Remix 1 kept them in folders, where the same names mean other addresses: not read), or
-    None (no such app, or one whose `app/routes.ts` lists its routes another way). Read from the package.json and
-    from the text of the settings; nothing of the app is run."""
+    `app/routes`), `old` (Remix 1 kept them in folders, where the same names mean other addresses: not read),
+    `listed` (React Router's `app/routes.ts` lists them by hand or names a folder of its own for them: not read,
+    and the files of `app/routes` are then not taken for the routes), or None (no such app). Read from the
+    package.json and from the text of the settings; nothing of the app is run."""
     base = pkg["dir"]
     if base in cache:
         return cache[base]
@@ -2701,6 +2703,7 @@ def remix_way(pkg: dict, repo: Path, mods: dict, cache: dict) -> str | None:
             listed = base / "app" / name
             if listed in mods:
                 text = _no_comments(mods[listed])
+                way = "listed"
                 if re.search(r"(?<![\w$.])flatRoutes\s*\(", text) and "rootDirectory" not in text:
                     way = "files"
                 break
@@ -4294,7 +4297,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
 
     # Remix: the route files of each app by the name that is their address, then what each of them is. Set before
     # the other entries, so that a route file's own functions are what the framework makes of them
-    remix: dict = {"apps": {}, "old": set(), "routes": [], "recs": [], "by_mod": {}}
+    remix: dict = {"apps": {}, "old": set(), "listed": set(), "routes": [], "recs": [], "by_mod": {}}
     remix_ways: dict = {}
     remix_texts: dict = {}
 
@@ -4354,8 +4357,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         if rm is None:
             continue
         way = remix_way(pkg, repo, remix_texts, remix_ways)
-        if way == "old":
-            remix["old"].add(pkg["dir"])
+        if way in ("old", "listed"):
+            remix[way].add(pkg["dir"])
         elif way == "files":
             # a folder's `route` file is its route; its `index` file only where no route of that name is there
             names = remix["apps"].setdefault(pkg["dir"], {})
@@ -4653,7 +4656,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         g.meta["sveltekit"] = {"routes": sum(1 for n, _ in kit["routes"] if n.entry.get("sveltekit") != "handle"),
                                "pages": len(kit["pages"]), "forms": posted, "linked": linked, "handed": through}
 
-    if remix["apps"] or remix["old"]:
+    if remix["apps"] or remix["old"] or remix["listed"]:
         def remix_link(src: str, tid: str, line: int, conf: str = RESOLVED) -> None:
             g.add_edge(src, tid, kind=CALLS, confidence=conf, line=line, via="http-remix",
                        detail=g.nodes[tid].entry["detail"])
@@ -4713,8 +4716,9 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 linked += bool(hits)
         g.meta["remix"] = {"routes": len(remix["routes"]), "pages": sum(1 for x in remix["recs"] if x["page"]),
                            "forms": posted, "linked": linked}
-        if remix["old"]:
-            g.meta["remix"]["not_read"] = REMIX_OLD
+        unread = [word for kind, word in (("old", REMIX_OLD), ("listed", ROUTER_LISTED)) if remix[kind]]
+        if unread:
+            g.meta["remix"]["not_read"] = "; ".join(unread)
 
     http_calls = []
     for m in mods.values():

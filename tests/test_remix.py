@@ -656,6 +656,46 @@ def test_remix_1_and_its_folders_are_not_guessed_at(tmp_path):
                                     R + "notes/index::loader": "GET /notes", R + "notes/index::action": "POST /notes"}
 
 
+BY_HAND = ('import { type RouteConfig, index, route } from "@react-router/dev/routes";\n\n'
+           'export default [\n  index("pages/home.tsx"),\n  route("notes/:noteId", "pages/note.tsx"),\n'
+           '] satisfies RouteConfig;\n')
+OWN_FOLDER = BY_NAME.replace("flatRoutes()", 'flatRoutes({ rootDirectory: "pages" })')
+
+
+def test_a_route_list_written_by_hand_is_said_and_not_guessed_at(tmp_path):
+    """React Router's framework mode lets `app/routes.ts` list the routes by hand, each with a file of any name, or
+    name a folder of its own for them. Neither is read: the files of `app/routes` are then not the app's routes, so
+    none is put on the map from its name, and the result and the Evidence page's Limits say so (until 2026-11-15
+    nothing was said, and such an app looked like one with no pages). The twins: the same app where `app/routes.ts`
+    says "the files of app/routes" is read and says nothing of the kind, and a Remix 1 app keeps its own words."""
+    from lantern import evidence, js_frontend
+    app = {k: v.replace("@remix-run/node", "react-router").replace("@remix-run/react", "react-router")
+           for k, v in APP.items()}
+    said = "React Router routes listed in app/routes.ts"
+    assert js_frontend.ROUTER_LISTED == said and set(evidence.ROUTES_NOT_READ) == {js_frontend.REMIX_OLD, said}
+    for name, routes in (("hand", BY_HAND), ("folder", OWN_FOLDER)):
+        g = _build(tmp_path / name, {**app, "app/routes.ts": routes}, RR_PKG)
+        assert _entries(g, "route") == {} and _entries(g, "page") == {}, name
+        assert g.meta["remix"] == {"routes": 0, "pages": 0, "forms": 0, "linked": 0, "not_read": said}, name
+        lines = evidence.limits(g, {"tools": [], "findings": []}, None, {}, "full", None)
+        assert [x for x in lines if "app/routes.ts" in x] == [evidence.ROUTES_NOT_READ[said]], lines
+    twin = _build(tmp_path / "named", {**app, "app/routes.ts": BY_NAME}, RR_PKG)
+    assert _entries(twin, "route") == ROUTES and "not_read" not in twin.meta["remix"]
+    lines = evidence.limits(twin, {"tools": [], "findings": []}, None, {}, "full", None)
+    assert not [x for x in lines if x in evidence.ROUTES_NOT_READ.values()], lines
+    old = _build(tmp_path / "old", {"app/root.tsx": ROOT, "app/routes/notes/index.tsx": NOTE_LIST},
+                 PKG.replace("2.9.2", "^1.19.3"))
+    lines = evidence.limits(old, {"tools": [], "findings": []}, None, {}, "full", None)
+    assert [x for x in lines if x in evidence.ROUTES_NOT_READ.values()] == [evidence.ROUTES_NOT_READ[js_frontend.REMIX_OLD]]
+    # what a results file says here is taken by its shape: other words name no sentence
+    old.meta["remix"]["not_read"] = "<b>anything</b>; Remix 1 route folders"
+    lines = evidence.limits(old, {"tools": [], "findings": []}, None, {}, "full", None)
+    assert [x for x in lines if "<b>" in x] == [] and evidence.ROUTES_NOT_READ[js_frontend.REMIX_OLD] in lines
+    old.meta["remix"] = "not a table"
+    assert not [x for x in evidence.limits(old, {"tools": [], "findings": []}, None, {}, "full", None)
+                if x in evidence.ROUTES_NOT_READ.values()]
+
+
 # ------------------------------------------------------------------ doors that are not written in the route file
 TAGS = '''import { db } from "~/db.server";
 

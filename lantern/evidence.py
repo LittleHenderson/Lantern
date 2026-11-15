@@ -159,6 +159,26 @@ def _names(x, most: int = 3) -> list[str]:
     return [str(v)[:120] for v in (x if isinstance(x, list) else []) if isinstance(v, str)][:most]
 
 
+ROUTES_NOT_READ = {      # `graph.json` `meta.remix.not_read` (the JS/TS reader's words) -> the sentence for the Limits
+    "Remix 1 route folders": (
+        "This is a Remix 1 app, which keeps its routes in folders. Lantern does not read that layout, so the app's "
+        "pages and routes are not on the map, and no finding says who can reach its code."),
+    "React Router routes listed in app/routes.ts": (
+        "This React Router app lists its routes in app/routes.ts by hand, or names a folder of its own for them. "
+        "Lantern does not read that list, so the app's pages and routes are not on the map, and no finding says "
+        "who can reach its code."),
+}
+
+
+def routes_not_read(meta: dict) -> list[str]:
+    """The Limits lines for an app whose routes the JS/TS reader did not read. The map's own words only pick the
+    sentence: a results file is taken by its shape, and nothing of its text is repeated."""
+    remix = meta.get("remix") if isinstance(meta, dict) else None
+    words = remix.get("not_read") if isinstance(remix, dict) else None
+    named = words.split("; ") if isinstance(words, str) else []
+    return [sentence for word, sentence in ROUTES_NOT_READ.items() if word in named]
+
+
 def not_read_lines(sec: dict | None) -> list[str]:
     """The Limits lines for what the project holds that Lantern takes for code or software and no reader opened
     (`security.json` `not_read`, `lantern/unread.py`): code kept under another name, software copied into a vendor
@@ -398,6 +418,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "type was unknown. They are marked likely or possible, never confirmed, and can point at the "
                    "wrong function.")
     out += deep.words(g.meta)    # code nested deeper than a reader follows: left where the reading stopped, and named
+    out += routes_not_read(g.meta)
     tr = run_meta.get("trace")
     if counted(tr):
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "
