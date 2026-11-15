@@ -6,6 +6,7 @@ import json
 
 from lantern import clientside
 from lantern.engine import build_graph
+from lantern.security import scan
 
 NEXT = json.dumps({"dependencies": {"next": "14.2.0", "react": "18.3.0"}})
 PLAIN = json.dumps({"dependencies": {"express": "4.19.0"}})
@@ -185,3 +186,65 @@ def test_the_twin_where_nothing_runs_server_actions_the_file_is_browser_code(tmp
     side = clientside.where(g)
     for nid in ("js:src/Row::Row", "js:src/actions::removeTodo", "js:src/db::remove"):
         assert nid in side, nid
+
+
+# ------------------------------------------------------------------ what a finding inside an action is told as
+SHELL = '''"use server";
+import { exec } from "child_process";
+
+export async function makeBackup(formData: FormData) {
+  const name = formData.get("name");
+  exec("tar czf /backups/" + name + ".tgz /data");
+}
+'''
+SHELL_PAGE = '''import { makeBackup } from "./actions";
+
+export default function Page() {
+  return (
+    <form action={makeBackup}>
+      <input name="name" />
+      <button type="submit">Back up</button>
+    </form>
+  );
+}
+'''
+SHELL_ROUTE = '''import { exec } from "child_process";
+
+export async function POST(request: Request) {
+  const { name } = await request.json();
+  exec("tar czf /backups/" + name + ".tgz /data");
+  return Response.json({ ok: true });
+}
+'''
+
+
+def _shell(g):
+    return next(f for f in scan(g)["findings"] if f["rule"] == "LJ-EXEC")
+
+
+def test_the_story_of_a_finding_in_an_action_walks_the_page_and_its_form(tmp_path):
+    g = _build(tmp_path, {"app/actions.ts": SHELL, "app/page.tsx": SHELL_PAGE})
+    f = _shell(g)
+    assert f["reachable"]["entry"] == "js:app/actions::makeBackup" and f["reachable"]["kind"] == "route"
+    assert f["ui_path"] == ["js:app/page::Page", "js:app/actions::makeBackup"]
+    steps = f["scenario"]["steps"]
+    assert "opens the / page" in steps[0]
+    assert steps[1] == "They send the form on it."
+    assert "ACTION" not in json.dumps(f["scenario"])
+
+
+def test_the_story_of_an_action_no_page_uses_names_it_as_an_action(tmp_path):
+    """No page leads to it, and it can be run all the same: the story says how, in words, never `ACTION x`."""
+    g = _build(tmp_path, {"app/actions.ts": SHELL})
+    f = _shell(g)
+    assert f["ui_path"] is None and f["reachable"]["entry"] == "js:app/actions::makeBackup"
+    told = f["scenario"]
+    assert "straight to the Server Action makeBackup" in told["steps"][0]
+    assert "an address of its own" in told["steps"][0]
+    assert "ACTION" not in json.dumps(told)
+
+
+def test_the_twin_a_route_file_is_told_as_it_was(tmp_path):
+    g = _build(tmp_path, {"app/api/backup/route.ts": SHELL_ROUTE})
+    f = _shell(g)
+    assert "sends a request straight to POST /api/backup. Anyone who knows the address can." in f["scenario"]["steps"][0]

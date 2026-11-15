@@ -29,6 +29,7 @@ NAMES = ["Maria", "Sam", "Priya", "Leo", "Aisha", "Tom"]
 # What people do on a page, by the event the map recorded on the hop (Edge.detail on a `ui-event` edge).
 EVENT_VERBS = {"onClick": "click", "onSubmit": "submit", "onChange": "change", "mutationFn": "submit",
                "queryFn": "load", "action": "submit", "onPress": "tap"}
+FORM_SENDS = ("action", "formAction")   # <form action={fn}>, <button formAction={fn}>: sending the form runs `fn`
 
 # kind -> (what they type, or None; what goes wrong; what the fix changes)
 STORIES: dict[str, tuple[str | None, str, str]] = {
@@ -444,7 +445,14 @@ def _clicks(g: Graph | None, path: list[str]) -> list[str]:
         return out
     for a, b in zip(path, path[1:]):
         for e in g.callees(a):
-            if e.dst == b and (e.via or "") == "ui-event" and e.detail in EVENT_VERBS:
+            if e.dst == b and (e.via or "") == "callback" and e.detail in FORM_SENDS:
+                src = g.nodes.get(a)
+                thing = _words(src.qualname) if src else ""
+                if not thing or (src is not None and (src.entry or {}).get("kind") == "page"):
+                    out.append("send the form on it")
+                else:
+                    out.append(f"send the {thing}" if "form" in thing else f"send the {thing} form")
+            elif e.dst == b and (e.via or "") == "ui-event" and e.detail in EVENT_VERBS:
                 verb, src = EVENT_VERBS[e.detail], g.nodes.get(a)
                 thing = _words(src.qualname) if src else "something"
                 if verb in ("click", "tap") and "button" not in thing:
@@ -562,6 +570,11 @@ def _route_word(g: Graph | None, f: dict) -> tuple[str | None, str | None]:
     return detail or None, r.get("kind")
 
 
+def _action(route: str | None, rkind: str | None) -> str | None:
+    """The name of a Server Action (`ACTION createTodo`): a route with a name and no address to show."""
+    return str(route)[len("ACTION "):] if route and rkind == "route" and str(route).startswith("ACTION ") else None
+
+
 def _from_another_app(route: str | None, rkind: str | None) -> bool:
     """An Android component other apps can start (`INTENT …`) or an iOS link handler (`LINK …`)."""
     return bool(route) and rkind == "route" and str(route).startswith(("INTENT ", "LINK "))
@@ -649,6 +662,11 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
             steps.append(f"{who}, who is testing your app, opens the {page} page.")
             steps += [f"They {c}." for c in _clicks(g, ui)]
             basis.append("the page and clicks come from the map of your app")
+        elif _action(route, rkind):
+            steps.append(f"{who} skips your pages and sends a request straight to the Server Action "
+                         f"{_action(route, rkind)}. An action has an address of its own on your server, the pages "
+                         "that use it carry it, and anyone who has it can send to it.")
+            basis.append("the Server Action comes from the map of your app")
         elif route and rkind == "route":
             steps.append(f"{who} skips your pages and sends a request straight to {route}. Anyone who knows the "
                          "address can.")
@@ -662,7 +680,11 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                          "prove nobody can get here: something Lantern does not see may run it. Here is what happens "
                          f"when something does: {who} reaches it that way.")
             basis.append("Lantern found no path to this code, which is not proof that nothing runs it")
-        if kind in ("auth", "wallet") and route:
+        if kind in ("auth", "wallet") and _action(route, rkind):
+            steps.append(f"They are not signed in, and they run the Server Action {_action(route, rkind)} again and "
+                         "again." if kind == "wallet" else
+                         f"They are not signed in when they run the Server Action {_action(route, rkind)}.")
+        elif kind in ("auth", "wallet") and route:
             steps.append(f"They are not signed in, and they send {route} again and again."
                          if kind == "wallet" else f"They are not signed in when they send {route}.")
         if kind in ("owner", "owner-late"):
@@ -795,10 +817,14 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
         pkg = f.get("package")
         return f"{pkg} has a published weakness at the version you use" if pkg else None
     if kind == "auth":
-        route, _ = _route_word(g, f)
+        route, rkind = _route_word(g, f)
+        if _action(route, rkind):
+            return f"The Server Action {_action(route, rkind)} works without checking who is signed in"
         return f"{route} works without checking who is signed in" if route else "A route works without checking who is signed in"
     if kind == "wallet":
-        route, _ = _route_word(g, f)
+        route, rkind = _route_word(g, f)
+        if _action(route, rkind):
+            return f"Anyone can make the Server Action {_action(route, rkind)} spend your money on paid calls"
         return (f"Anyone can make {route} spend your money on paid calls" if route
                 else "Anyone can make your app spend money on paid calls")
     if kind == "secret" and (f.get("category") == "exposure" or str(f.get("rule")) == "LW-PUBLIC-SECRET"):
@@ -827,7 +853,8 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
     if not who:
         if rkind in ("cli", "script", "main"):   # a command the owner runs by hand: no visitor reaches it
             return otherwise
-        who = f"A request to {route}" if route and rkind == "route" else "What a visitor types"
+        who = f"A request to the Server Action {_action(route, rkind)}" if _action(route, rkind) else \
+            f"A request to {route}" if route and rkind == "route" else "What a visitor types"
     return reached.format(who=who)
 
 
