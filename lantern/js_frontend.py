@@ -137,7 +137,15 @@ _SVELTE_EACH_AS, _SVELTE_AWAIT_THEN = re.compile(rb"\s+as\s"), re.compile(rb"\s+
 _SVELTE_ATTR = re.compile(rb"([\w:|.$-]+)\s*=\s*[\"']?$")
 _SVELTE_TAG = re.compile(rb"<([A-Z][\w$]*(?:\.[\w$]+)*)(?=[\s/>])")
 _SVELTE_NOT_PLAIN = re.compile(rb"\{|(?:async\s+)?function\b|class\b")
-_FORM_OPEN = re.compile(rb"<form(?=[\s>])", re.I)
+_SVELTE_OPEN = re.compile(rb"<[A-Za-z][\w:.-]*")     # where a tag opens: an attribute is one only inside a tag
+_FORM_OPEN = re.compile(rb"<form(?=[\s>])")          # `<Form …>` with a capital is a component, not the page's form
+# Svelte's own words, which its compiler turns into code (`let n = $state(0)`): in a `.svelte` file and in a
+# `.svelte.js` / `.svelte.ts` file, nowhere else
+SVELTE_RUNES = frozenset(("$state", "$derived", "$effect", "$props", "$bindable", "$inspect", "$host"))
+RUNE_FILE = re.compile(r"\.svelte\.[jt]s$")
+# `import { a } from "./util.js"` where the file is `util.ts`: how TypeScript itself reads an import in a project
+# that ships modules. Only where no file of the written name is there.
+TS_FOR = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
 _FORMACTION = re.compile(rb"(?<![\w:.$-])formaction\s*=\s*(?:\"([^\"{}]*)\"|'([^'{}]*)')", re.I)
 _JS_NAME = re.compile(rb"[A-Za-z_$][\w$]*")
 # `onclick={…}` (Svelte 5) is an event only under a name the browser has; `on:click={…}` (Svelte 4) under any
@@ -454,6 +462,8 @@ class JSModule:
     is_test: bool
     html: bool = False         # script taken from inside an HTML page (module name keeps the .html)
     svelte: bool = False       # a Svelte component file (module name keeps the .svelte)
+    runes: bool = False        # ... or a `.svelte.ts` file: Svelte's own words (`$state`) are the language's here
+    kit_handles: list[tuple] = field(default_factory=list)   # `handle = sequence(a, b)` of hooks.server: (name, at)
     component: str | None = None   # ... and the function that stands for the component: named after the file
     forms: list[dict] = field(default_factory=list)   # the forms of its markup that post: {line, action}
     # `actions` of a SvelteKit `+page.server` file: {key, line, local | handler + at, wrap} (Walker._kit_actions)
@@ -842,6 +852,8 @@ class Walker:
                 self._trpc_declared(name, value, scope, n)
             if self.kit == "page.server" and not scope and name == "actions":
                 self._kit_actions(_bare(value))
+            if self.kit == "hooks" and not scope and name == "handle":
+                self._kit_handle(_bare(value))
             if value.type == "call_expression" and OPTIONAL_LOGIN.search(_text(value)):
                 self.m.optional.add(name)   # const maybe = expressjwt({ ..., credentialsRequired: false })
             sv = self._url_of(value)
@@ -899,6 +911,21 @@ class Walker:
                 continue
             if item["key"]:
                 self.m.kit_actions.append(item)
+
+    def _kit_handle(self, call: TSNode | None) -> None:
+        """`export const handle = sequence(first, second)` in SvelteKit's `src/hooks.server`: each function named
+        there is a hook of its own, run in that order before every route. `sequence` is the kit's own."""
+        if call is None or call.type != "call_expression":
+            return
+        fn = _chain(call.child_by_field_name("function")) or []
+        imp = self.m.imports.get(fn[0]) if len(fn) == 1 else None
+        if imp is None or (imp[1], imp[2]) != ("sequence", "@sveltejs/kit/hooks"):
+            return
+        args = call.child_by_field_name("arguments")
+        for a in args.named_children if args is not None else ():
+            a = _bare(a)
+            if a is not None and a.type in ("identifier", "member_expression") and _chain(a):
+                self.m.kit_handles.append((_chain(a), _site_pos(a)))
 
     # -- CommonJS, values, wrappers (stage 3)
     def _require_binding(self, name_node: TSNode, value: TSNode, scope: str) -> bool:
@@ -1930,7 +1957,8 @@ class SpecResolver:
     def _try(self, base: Path) -> str | None:
         # an alias may name the root folder (`"@/*": ["/"]`), which has no name to put an ending on
         named = [base.with_name(base.name + e) for e in RESOLVE_EXTS] if base.name else []
-        cands = [base] + named + [base / ("index" + e) for e in RESOLVE_EXTS]
+        typed = [base.with_suffix(e) for e in TS_FOR.get(base.suffix, ())] if base.name else []
+        cands = [base] + typed + named + [base / ("index" + e) for e in RESOLVE_EXTS]
         for c in cands:
             # as the file is reached, then as its path is written: a file that is a link kept inside the project
             # is read under the name it has there (`inside_repo`), and an import of that name means that file
@@ -2146,9 +2174,15 @@ def svelte_markup(markup: bytes) -> dict:
 
     attrs: dict[int, str | None] = {}
     names: set[str] = set()
-    inside = bytearray(len(markup))
-    for i, j in _braces(markup):
+    inside, intag = bytearray(len(markup)), bytearray(len(markup))
+    spans = _braces(markup)
+    for i, j in spans:
         inside[i:j + 1] = b"\x01" * (j + 1 - i)
+    for m in _SVELTE_OPEN.finditer(markup):      # `<p>onclick={wipe}</p>` is text: no attribute outside a tag
+        end = _tag_end(markup, m.end()) if not inside[m.start()] else -1
+        if end > 0:
+            intag[m.start():end] = b"\x01" * (end - m.start())
+    for i, j in spans:
         a, b = i + 1, j
         blk = None
         if markup[a:b].lstrip()[:1] in (b"#", b":", b"/", b"@"):
@@ -2175,7 +2209,7 @@ def svelte_markup(markup: bytes) -> dict:
             continue
         ex[i:i + 1] = b";"
         ex[a:b] = markup[a:b]
-        at = _SVELTE_ATTR.search(markup, max(0, i - 80), i) if blk is None else None
+        at = _SVELTE_ATTR.search(markup, max(0, i - 80), i) if blk is None and intag[i] else None
         if at is not None:
             name = at.group(1).decode("utf-8", "replace").split("|")[0]
             event = name[3:] if name.startswith("on:") else name[2:] if name.startswith("on") and \
@@ -2943,6 +2977,8 @@ class JSResolver:
             doubt = self.global_doubt(m, parts)
             if doubt:
                 return doubt
+        if m.svelte and len(head) > 1 and head.startswith("$") and self.bind(m, scope, head) is None:
+            return "local-unknown"     # `$page.url…` in a Svelte file: what the store `page` holds right now
         if head == "this":
             d = m.defs.get(scope)
             if not (d and d.in_class):
@@ -3210,7 +3246,9 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     files = {}
     for p in paths:
         rel = p.relative_to(repo).as_posix()
-        files[rel] = rel if p.suffix.lower() in HTML_EXTS or p.suffix == SVELTE_EXT \
+        # a page, a Svelte component and a `.svelte.ts` file keep their whole name: `Toast.svelte` and
+        # `Toast.svelte.ts` may stand side by side
+        files[rel] = rel if p.suffix.lower() in HTML_EXTS or p.suffix == SVELTE_EXT or RUNE_FILE.search(rel) \
             else re.sub(r"\.[cm]?[jt]sx?$", "", rel)
     spec = SpecResolver(repo, files)
     parsers = {ext: Parser(lang) for ext, lang in LANGS.items()}
@@ -3238,12 +3276,14 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         total += src.count(b"\n") + 1
         tree = parsers[ext].parse(src)
         m = JSModule(name=files[rel], rel=rel, path=p, lines=src.count(b"\n") + 1, is_test=bool(TEST_RE.search(rel)),
-                     html=html, svelte=svelte)
+                     html=html, svelte=svelte, runes=svelte or bool(RUNE_FILE.search(rel)))
         pkg = _nearest_package(p, repo, pkg_cache)
-        km = KIT_FILE.match(p.relative_to(pkg["dir"]).as_posix()) \
+        in_kit = p.relative_to(pkg["dir"]).as_posix() \
             if KIT in pkg["deps"] and not m.is_test and pkg["dir"] in p.parents else None
+        km = KIT_FILE.match(in_kit) if in_kit else None
         w = Walker(m, lambda s, _p=p: spec.resolve(s, _p), trpc=not m.is_test and TRPC_SERVER in pkg["deps"],
-                   kit=km.group("kind") if km is not None and not svelte else None)
+                   kit=km.group("kind") if km is not None and not svelte else
+                   "hooks" if in_kit and KIT_HOOKS.match(in_kit) else None)
         shown = []
         if svelte:
             shown = read_svelte(w, tree, src, markup, own, parsers[ext])
@@ -3364,6 +3404,10 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                     site(m, ref, src_id, reason="computed")
                 continue
             inv = ref.kind in ("registration", "wrapper")
+            if m.runes and ref.parts[0].removesuffix("()") in SVELTE_RUNES and ref.kind != "jsx":
+                if ref.kind != "callback":     # `$state(0)`, `$derived.by(…)`: Svelte's compiler reads these
+                    site(m, ref, src_id, [("builtin:" + ".".join(ref.parts), RESOLVED, "svelte-rune")])
+                continue
             if ref.parts[0] in JS_GLOBALS and ref.kind != "jsx":
                 if ref.kind != "callback":   # (the map never counted these; only the inventory says what they are)
                     doubt = r.global_doubt(m, ref.parts)
@@ -3742,7 +3786,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
 
     # SvelteKit: what each file with a fixed name is, gathered while the entries are set and joined after them
     kit: dict = {"routes": [], "pages": [], "loads": {}, "layouts": {}, "frames": {}, "actions": [], "handle": {},
-                 "files": []}
+                 "files": [], "shared": {}}
 
     def kit_route(tid: str | None, detail: str, role: str, base: Path) -> str | None:
         node = g.nodes.get(tid) if tid else None
@@ -3763,6 +3807,11 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 kit["pages"].append((m, base, folder))
             elif kind == "layout" and node is not None:
                 kit["frames"][(base, folder)] = node.id
+        elif kind in ("page", "layout"):
+            # `+page.ts`, `+layout.ts`: a `load` that runs on the server for the first view and in the browser after
+            # it. Nobody can ask for it from outside, so it is no route: a function its page calls
+            if own("load") in g.nodes:
+                kit["shared"][(base, folder, kind)] = own("load")
         elif kind == "server":
             for verb in (*KIT_VERBS, "fallback"):     # `fallback` answers every verb that has no function of its own
                 kit_route(own(verb), f"{'ANY' if verb == 'fallback' else verb} {path}", "endpoint", base)
@@ -3829,13 +3878,16 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             km = KIT_FILE.match(rel_pkg)
             if km is not None:
                 kit_file(m, pkg["dir"], km)
-            elif KIT_HOOKS.match(rel_pkg) and m.exports.get("handle") in m.defs:
-                # the one function every request passes: marked, as tRPC's handler is, so that the rules which ask
-                # routes ask the routes behind it
-                tid = kit_route(nid(m.name, m.exports["handle"]), "ANY /*", "handle", pkg["dir"])
-                if tid:
-                    g.nodes[tid].entry["serves"] = "sveltekit"
-                    kit["handle"][pkg["dir"]] = tid
+            elif KIT_HOOKS.match(rel_pkg) and "handle" in m.exports:
+                # the function every request passes (or the functions, in the order `sequence(a, b)` names them):
+                # marked, as tRPC's handler is, so that the rules which ask routes ask the routes behind it
+                hooks = [nid(m.name, m.exports["handle"])] if m.exports["handle"] in m.defs else \
+                    [handed(m, "", chain, at, nid(m.name), "route-handler") for chain, at in m.kit_handles]
+                for tid in hooks:
+                    tid = kit_route(tid, "ANY /*", "handle", pkg["dir"])
+                    if tid:
+                        g.nodes[tid].entry["serves"] = "sveltekit"
+                        kit["handle"].setdefault(pkg["dir"], []).append(tid)
             if m.svelte:
                 kit["files"].append((m, pkg["dir"], km))
         for reg in m.page_regs:
@@ -3960,24 +4012,28 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             g.add_edge(src, tid, kind=CALLS, confidence=conf, line=line, via="http-sveltekit",
                        detail=g.nodes[tid].entry["detail"])
 
+        def kit_calls(src: str, tid: str | None, via: str) -> None:
+            if tid:
+                g.add_edge(src, tid, kind=CALLS, confidence=RESOLVED, line=1, via=via)
+
         for node, base in kit["routes"]:
-            hook = kit["handle"].get(base)
-            if hook and hook != node.id:     # `handle` of hooks.server runs before every route of the app
-                node.entry["middleware"] = [hook, *(node.entry.get("middleware") or ())]
+            hooks = kit["handle"].get(base)
+            if hooks and node.entry.get("sveltekit") != "handle":   # hooks.server runs before every route of the app
+                node.entry["middleware"] = [*hooks, *(node.entry.get("middleware") or ())]
         for m, base, folder in kit["pages"]:
             # the framework's own wiring: a page gets its data from the `load` beside it and from the layouts
             # above it, and is drawn inside those layouts
             src = nid(m.name, m.component)
             if (base, folder) in kit["loads"]:
                 kit_link(src, kit["loads"][(base, folder)], 1)
+            kit_calls(src, kit["shared"].get((base, folder, "page")), "sveltekit-load")
             parts = [x for x in folder.split("/") if x]
             for i in range(len(parts), -1, -1):
                 above = "".join(x + "/" for x in parts[:i])
                 if (base, above) in kit["layouts"]:
                     kit_link(src, kit["layouts"][(base, above)], 1)
-                if (base, above) in kit["frames"]:
-                    g.add_edge(src, kit["frames"][(base, above)], kind=CALLS, confidence=RESOLVED, line=1,
-                               via="sveltekit-layout")
+                kit_calls(src, kit["shared"].get((base, above, "layout")), "sveltekit-load")
+                kit_calls(src, kit["frames"].get((base, above)), "sveltekit-layout")
         posted = linked = 0
         for m, base, km in kit["files"]:
             # a form with method="POST" posts to an action: of the page it stands on (`?/name`, or `default` when
@@ -3994,6 +4050,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                     hits = [a for a in kit["actions"] if (a["base"], a["folder"], a["key"]) == (base, km.group("dir"), key)]
                 elif at.startswith("/"):
                     hits = [a for a in kit["actions"] if a["base"] == base and a["key"] == key and kit_same(a["path"], at)]
+                    # the page with that very address, before one with a part that changes (`/inbox/new`, `[id]`)
+                    hits = [a for a in hits if a["path"].rstrip("/") == at.rstrip("/")] or hits
                     if not hits and not named:   # no page's action: a `+server.ts`, matched like any request
                         call = _normalize_http(at, "POST", m.component, form["line"], "onSubmit")
                         if call is not None:

@@ -512,6 +512,13 @@ const authGuard: Handle = async ({ event, resolve }) => {
 };
 export const handle = sequence(populate, authGuard);
 '''
+SWEEP = '''import { json } from "@sveltejs/kit";
+import { db } from "$lib/server/db";
+export const POST = async () => {
+  await db.note.deleteMany();
+  return json({});
+};
+'''
 HOOKS_LOG = '''export const handle = async ({ event, resolve }) => {
   console.log(event.url.pathname);
   return resolve(event);
@@ -523,8 +530,9 @@ def test_a_hook_made_of_several_parts(tmp_path):
     """`export const handle = sequence(populate, authGuard)`: each part runs before every route, in that order, so
     each is the app's front door (`ANY /*`) and stands in every route's list. Its name is no login check for the
     routes behind it, whatever it is called: a hook looks at every address and usually turns away only some, so
-    the two open routes stay findings and the readiness page says "check". The twin: a hook that only writes a log
-    line is no sign of a login anywhere ("add")."""
+    the two open routes stay findings. For a route that changes data and that no page of the app calls, the
+    readiness page says "check" (an app-wide check is there, confirm it covers this route). The twin: a hook that
+    only writes a log line is no sign of a login anywhere ("add")."""
     from lantern import websec
     from lantern.readiness import assess
     from lantern.security import scan
@@ -537,11 +545,33 @@ def test_a_hook_made_of_several_parts(tmp_path):
     assert sorted(f["title"] for f in websec.missing_auth(g)) == [
         "DELETE /api/notes/[id] changes data, is called by the app, and no login check was found",
         "POST /notes changes data, is called by the app, and no login check was found"]
-    prot = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}
-    assert prot["route-auth"]["status"] == "check"
-    g = _build(tmp_path / "log", {**APP, "src/hooks.server.ts": HOOKS_LOG})
-    prot = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}
-    assert prot["route-auth"]["status"] == "add"
+    alone = {"svelte.config.js": CONFIG, "src/lib/server/db.ts": DB, "src/routes/api/sweep/+server.ts": SWEEP}
+    said = {}
+    for name, hook in (("several", HOOKS_SEQ), ("log", HOOKS_LOG)):
+        g = _build(tmp_path / name, {**alone, "src/hooks.server.ts": hook})
+        prot = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}
+        said[name] = (prot["route-auth"]["status"], [x.split(" (")[0] for x in prot["route-auth"]["evidence"]])
+    assert said == {"several": ("check", ["POST /api/sweep"]), "log": ("add", ["POST /api/sweep"])}
+
+
+def test_a_hook_that_turns_everyone_away_is_a_login_for_every_route(tmp_path):
+    """Read from the hook's code, not from its name: a part that answers 401 to every request with nobody in
+    `locals.user` stands before every route, so no route behind it is open, and what is left to say is that the
+    two routes which pick a record by an id never compare its owner. The twin: the same part turning away only the
+    addresses under `/admin` leaves the two open routes open."""
+    from lantern.security import scan
+    said = {}
+    everyone = HOOKS_SEQ.replace('if (event.url.pathname.startsWith("/admin") && !event.locals.user)',
+                                 "if (!event.locals.user)")
+    assert everyone != HOOKS_SEQ
+    for name, hook in (("everyone", everyone), ("some", HOOKS_SEQ)):
+        g = _build(tmp_path / name, {**APP, "src/hooks.server.ts": hook})
+        said[name] = sorted((f["rule"], f["title"].split(" ")[0] + " " + f["title"].split(" ")[1])
+                            for f in scan(g)["findings"] if f["rule"] in ("LW-AUTH-MISSING", "LT-AUTHZ-OWNER"))
+    assert said == {
+        "everyone": [("LT-AUTHZ-OWNER", "DELETE /api/notes/[id]"), ("LT-AUTHZ-OWNER", "POST /notes?/remove")],
+        "some": [("LT-AUTHZ-OWNER", "POST /notes?/remove"), ("LW-AUTH-MISSING", "DELETE /api/notes/[id]"),
+                 ("LW-AUTH-MISSING", "POST /notes")]}
 
 
 # ------------------------------------------------------------------ a route written another way

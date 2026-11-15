@@ -126,7 +126,8 @@ AUTH_WORDS = re.compile(
 JS_AUTH_WORDS = re.compile(r"\b(?:get server session|get session|use session)\b")
 IDENT = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
 # Read from a handler's body. Shapes that are a check wherever they appear: the framework's view of the caller.
-BODY_AUTH_SHAPED = re.compile(r"request\.user|req\.user|locals\.user|session\.user|session\[.{0,20}user|"
+BODY_AUTH_SHAPED = re.compile(r"request\.user|req\.user|locals\.user|locals\.session|session\.user|"
+                              r"session\[.{0,20}user|"
                               r"\bin\s+session\s*[:)]|request\.state\.user|ctx\.state\.user|req\.session|"
                               r"request\.session", re.I)
 # A parameter whose bare name means the caller (anything else named like an auth word is data: `permissions`)
@@ -1179,6 +1180,10 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, doub
         return sig
     for mid in (n.entry or {}).get("middleware") or ():   # Express: router.delete('/x', requireLogin, handler)
         if _in_doubt(mid, doubt):
+            continue
+        if ((g.nodes[mid].entry if mid in g.nodes else None) or {}).get("serves"):
+            # SvelteKit's hook stands before every route and usually turns away only some addresses: whatever it is
+            # called (`sequence(populate, authGuard)`), its name does not say this route is one of them
             continue
         # the function's own name: not the package or file it comes from, and never the folders on the way
         name = _func_name(g, mid).split("(")[0].rsplit(".", 1)[-1].rsplit("/", 1)[-1]

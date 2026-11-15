@@ -174,3 +174,19 @@ def test_what_lantern_cannot_follow_stays_unlinked_with_its_reason(tmp_path):
     assert _said(g, "db.note.count") == ("unresolved", [], "parameter")
     assert _said(g, "db.note.findMany")[0] == "unresolved"
     assert not [e for e in g.call_edges() if e.src.startswith("js:app/notes::") and "PrismaClient" in e.dst]
+
+
+def test_an_import_written_with_js_means_the_ts_file(tmp_path):
+    """TypeScript's own rule where a project ships modules: the import says `./util.js` and the file is `util.ts`
+    (`./view.jsx` for `view.tsx`, `./tool.mjs` for `tool.mts`). The twin: where no such file is there either, the
+    call is into a file Lantern cannot find, as before."""
+    g = _g(tmp_path, {"app/util.ts": "export function a() { return 1; }\n",
+                      "app/view.tsx": "export function b() { return 2; }\n",
+                      "app/tool.mts": "export function c() { return 3; }\n",
+                      "app/notes.ts": 'import { a } from "./util.js";\nimport { b } from "./view.jsx";\n'
+                                      'import { c } from "./tool.mjs";\nimport { d } from "./gone.js";\n'
+                                      "export function run() { a(); b(); c(); d(); }\n"})
+    assert _said(g, "a") == ("resolved", ["js:app/util::a"], "name")
+    assert _said(g, "b") == ("resolved", ["js:app/view::b"], "name")
+    assert _said(g, "c") == ("resolved", ["js:app/tool::c"], "name")
+    assert _said(g, "d") == ("unresolved", [], "missing-module")
