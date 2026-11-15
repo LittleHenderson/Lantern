@@ -815,7 +815,8 @@ const short = q => {
   const p = q.split('.'); return p.length > 2 ? p.slice(-2).join('.') : q;
 };
 const isJS = id => (id || '').startsWith('js:');
-const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv|kt|sw|dt|cs|php|rb|cc):/.test(id || '') ? 'backend' : 'external';
+// JS/TS on the Server lane (an Express handler, a Next.js route, a Server Action) is the server's code, not the browser's
+const layer = id => isJS(id) ? ((N[id] || {}).lane === 'server' ? 'backend' : 'frontend') : /^(py|go|rs|jv|kt|sw|dt|cs|php|rb|cc):/.test(id || '') ? 'backend' : 'external';
 // What is not the project's own code: a library or a server elsewhere (`ext:`), a database table the code reads or
 // changes (`db:`). A table is drawn where a library call is, and is called a table wherever it is named.
 const isTable = id => (id || '').startsWith('db:');
@@ -1442,7 +1443,7 @@ function situation(n) {
   let page = null, ui = null;
   if (ids) { page = N[ids[0]]; for (let i = 1; i < ids.length; i++) { const e = (OUT[ids[i - 1]] || []).find(x => x.dst === ids[i]); if (e && e.detail && UI_WORDS[e.detail]) { ui = UI_WORDS[e.detail]; break; } } }
   else { for (const nid of Object.keys(N)) { const v = ((window._uiReach || {})[nid]); if (v) break; } }
-  const where = onPhone(n) ? 'Runs on the person’s phone' : isJS(n.id) ? 'Runs in the visitor’s browser' : layer(n.id) === 'backend' ? 'Runs on your server' : isTable(n.id) ? 'A table in your database' : 'A library call';
+  const where = onPhone(n) ? 'Runs on the person’s phone' : layer(n.id) === 'backend' ? 'Runs on your server' : isJS(n.id) ? 'Runs in the visitor’s browser' : isTable(n.id) ? 'A table in your database' : 'A library call';
   if (page && page.entry) return `${where} when someone on <b>${esc(page.entry.detail || short(page.qualname))}</b> ${ui ? esc(ui).replace('on ', '') + 's' : 'uses the page'}.`;
   if (isAction(n.entry)) return `${where}: a Server Action · ${esc(actionName(n.entry))}.`;
   if (n.entry) return `${where}: ${esc({page: 'a page', route: 'a route', cli: 'a command', main: 'the program start', test: 'a test', script: 'a script'}[n.entry.kind] || n.entry.kind)}${n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}.`;
@@ -1530,9 +1531,9 @@ function mapRecord(n) {
     return {from_map: true, validated: true, lens1: {summary: s, inputs: [], outputs: '', side_effects: [], errors: [], role: who.length ? `Called from ${who.slice(0, 3).join(', ')}${who.length > 3 ? ` and ${who.length - 3} more` : ''}.` : ''},
       lens2: {text: s, example: '', analogy: ''}, lens3: {text: `A sealed boundary: the ${w} layer is not shared with you.`, pairs: []}};
   }
-  const where = onPhone(n) ? 'on the person’s phone, inside your app' : isJS(n.id) ? 'in the visitor’s browser' : layer(n.id) === 'backend' ? 'on your server' : 'in a library';
+  const where = onPhone(n) ? 'on the person’s phone, inside your app' : layer(n.id) === 'backend' ? 'on your server' : isJS(n.id) ? 'in the visitor’s browser' : 'in a library';
   const lines = n.start_line && n.end_line ? n.end_line - n.start_line + 1 : 0;
-  const kindWord = n.kind === 'module' ? 'file' : n.kind === 'external' ? 'library call' : isJS(n.id) ? 'component or function' : 'function';
+  const kindWord = n.kind === 'module' ? 'file' : n.kind === 'external' ? 'library call' : layer(n.id) === 'frontend' ? 'component or function' : 'function';
   const callers = (IN[n.id] || []).filter(e => N[e.src] && !isOut(e.src) && !(e.via || '').startsWith('http-')).map(e => e.src);
   const served = (IN[n.id] || []).filter(e => N[e.src] && (e.via || '').startsWith('http-'));
   const outs = OUT[n.id] || [];
@@ -2500,7 +2501,7 @@ function srcBlock(n) {
 function renderRight() {
   const el = document.getElementById('right');
   const n = N[S.sel];
-  const kindWord = n ? (isAction(n.entry) ? 'Server Action' : n.entry ? ({page: 'page', route: 'route', cli: 'command', main: 'program start', test: 'test', script: 'script'}[n.entry.kind] || n.entry.kind) : isTable(n.id) ? 'database table' : layer(n.id) === 'external' ? 'library' : (isJS(n.id) ? 'component' : 'function')) : '';
+  const kindWord = n ? (isAction(n.entry) ? 'Server Action' : n.entry ? ({page: 'page', route: 'route', cli: 'command', main: 'program start', test: 'test', script: 'script'}[n.entry.kind] || n.entry.kind) : isTable(n.id) ? 'database table' : layer(n.id) === 'external' ? 'library' : (layer(n.id) === 'frontend' ? 'component' : 'function')) : '';
   const railLabel = n ? `${onPhone(n) ? 'App' : layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : isTable(n.id) ? 'Data' : 'Library'} · ${isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord}` : 'Details';
   const chrome = railChrome(railLabel, 'r');
   // The Simple findings memo and the Readiness/About pages use the full width unless a function is open.
