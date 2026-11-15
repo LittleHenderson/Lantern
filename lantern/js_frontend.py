@@ -276,6 +276,19 @@ def _directives(root: TSNode) -> set[str]:
     return out
 
 
+def _or_new(value: TSNode | None) -> TSNode | None:
+    """`kept ?? new T()`, `kept || new T()` -> the `new T()`: how an app keeps one client across reloads. Whichever
+    side is taken, the code uses the value as the class it would make. `&&` and a `new` on the left are not this."""
+    v = _unparen(value)
+    if v is None or v.type != "binary_expression":
+        return None
+    op = v.child_by_field_name("operator")
+    right = _unparen(v.child_by_field_name("right"))
+    if op is None or _text(op) not in ("??", "||") or right is None or right.type != "new_expression":
+        return None
+    return right
+
+
 def _unparen(n: TSNode | None) -> TSNode | None:
     while n is not None and n.type == "parenthesized_expression" and n.named_child_count:
         n = n.named_children[0]
@@ -367,6 +380,7 @@ class JSModule:
     default: str | None = None
     consts: dict[str, str] = field(default_factory=dict)         # module-level string constants
     local_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    var_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)   # scope -> name -> written type
     class_bases: dict[str, list[str]] = field(default_factory=dict)
     refs: list[JSRef] = field(default_factory=list)
     http: list[HttpCall] = field(default_factory=list)
@@ -680,6 +694,9 @@ class Walker:
             return
         self.m.declared.setdefault(scope, set()).update(_pattern_names(name_node))
         name = _text(name_node)
+        written = _type_chain(n.child_by_field_name("type")) if name_node.type == "identifier" else None
+        if written:   # let prisma: PrismaClient
+            self.m.var_types.setdefault(scope, {})[name] = written
         fn = _unwrap_func(value)
         if fn is None and name_node.type == "identifier":
             fn = self._wrapped_func(value)
@@ -718,8 +735,9 @@ class Walker:
             sv = self._url_of(value)
             if sv is not None and not scope:
                 self.m.consts[name] = sv
-            if value.type == "new_expression":
-                ch = _chain(value.child_by_field_name("constructor"))
+            made = value if value.type == "new_expression" else _or_new(value)
+            if made is not None:   # new T(), and `kept ?? new T()`: the kept one or a new one
+                ch = _chain(made.child_by_field_name("constructor"))
                 if ch:
                     self.m.local_types.setdefault(scope, {})[name] = ch
             if value.type == "call_expression":
@@ -2031,21 +2049,67 @@ class JSResolver:
                 return self._param(m, s, name, depth, st)
             vals = m.values.get(s, {})
             if name in vals and name not in m.reassigned.get(s, ()) and name not in m.dynamic.get(s, ()):
+                was = st["value"]
                 st["value"] = True
                 st.setdefault("args", []).extend((m, s, c) for c in m.value_args.get(s, {}).get(name, ()))
                 v, inner = self._eval(m, s, vals[name], depth + 1, st)
-                return v, (inner if v is not None and v[0] == "builtin" else "library-value")
+                typed = self._written(m, s, name) if v is None else None
+                if typed is None:
+                    return v, (inner if v is not None and v[0] == "builtin" else "library-value")
+                st["value"] = was
+                return typed, "local-type"
             lt = m.local_types.get(s, {}).get(name)
             if lt and lt != ["<server>"]:
                 return self._type(m, s, lt), "local-type"
+            typed = self._written(m, s, name)
+            if typed is not None:
+                return typed, "local-type"
             if name in m.declared.get(s, ()) or name in m.dynamic.get(s, ()):
                 return None, None
             if not s:
                 break
             s = self._up(m, s)
+        imp = m.imports.get(name)
+        if imp is not None and imp[0] in self.mods and imp[1] not in ("cjs", "*"):
+            v = self._exported_value(imp[0], imp[1], depth + 1, st)
+            if v is not None:   # import { db } from "./db", where db is a value that file exports
+                st["value"] = True
+                return v, "import"
         if name in JS_BUILTINS:
             return ("builtin", name), "global"
         return None, None
+
+    def _written(self, m: JSModule, s: str, name: str):
+        """The value a variable's written TypeScript type names (`let prisma: PrismaClient`): a library's class or
+        a class of the repo. None for no type, one of several, or a type that is no class Lantern can look in."""
+        t = m.var_types.get(s, {}).get(name)
+        return self._type(m, s, t) if t else None
+
+    def _exported_value(self, mod: str, name: str, depth: int, st: dict):
+        """What a file of the project exports under `name`, when that is a value and not a function or a class:
+        `export const db = new PrismaClient()`, `export default pool`, `export { db } from "./db"`, `exports.db = …`.
+        The value as _eval gives it; None when the name is set again with no written type to hold it, or is built in
+        a way Lantern does not follow (a condition, an object written out, a call of a function of the project)."""
+        if depth > 6:
+            return None
+        tm = self.mods[mod]
+        local = tm.default if name == "default" else tm.exports.get(name)
+        if local is not None and local not in tm.defs:
+            if local in tm.reassigned.get("", ()) and local not in tm.var_types.get("", {}):
+                return None
+            v = self._eval(tm, "", [local], depth + 1, st)[0]
+            if v is not None:
+                return v
+        if name in tm.export_values:   # CommonJS: exports.db = mysql.createPool()
+            return self._eval(tm, "", tm.export_values[name], depth + 1, st)[0]
+        if name in tm.export_new:
+            return self._type(tm, "", tm.export_new[name])
+        for tmod, mp in tm.reexports:
+            if tmod in self.mods and (mp is None or name in mp):
+                hit = self._exported_value(tmod, name if mp is None else mp[name], depth + 1, st)
+                if hit is not None:
+                    return hit
+        return None
 
     def _param(self, m: JSModule, s: str, name: str, depth: int, st: dict):
         """A parameter: its written TypeScript type, its place in an Express handler, or what a built-in passes
@@ -2118,6 +2182,10 @@ class JSResolver:
             if name in mm.export_new:
                 st["value"] = True
                 return self._type(mm, "", mm.export_new[name])
+            v = self._exported_value(val[1], name, depth + 1, st)
+            if v is not None:   # import * as lib from "./lib"; lib.db: a value the file exports
+                st["value"] = True
+                return v
             whole = None   # module.exports = <a value>: its members
             if "default" in mm.export_values:
                 st["value"] = True
@@ -2132,8 +2200,9 @@ class JSResolver:
     def client(self, m: JSModule, scope: str, chain: list[str], depth: int = 0):
         """Is the value a chain names a Supabase client? -> the library call or type it came from
         (`@supabase/supabase-js.createClient()`), False when it is a known other thing, None when it is not known.
-        Followed here and nowhere else: a value another file of the project exports (`export const supabase =
-        createClient(…)`), and what a function of the project hands back when every `return` of it is a client."""
+        Followed here and nowhere else: what a function of the project hands back when every `return` of it is a
+        client. (A value another file of the project exports, `export const supabase = createClient(…)`, is followed
+        for every library since _exported_value.)"""
         if depth > 6 or not chain:
             return None
         val, _ = self._eval(m, scope, chain, depth, {"value": False})

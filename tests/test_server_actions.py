@@ -460,6 +460,23 @@ def test_a_call_into_a_library_that_keeps_none_of_the_apps_data_is_no_change(tmp
         "The Server Action addNote changes data, the app uses it, and no login check was found"]
 
 
+def test_a_library_handle_another_file_exports_is_asked_the_same_way(tmp_path):
+    """Most apps make their clients in one file (`lib/stripe.ts`, `lib/ai.ts`, `lib/db.ts`) and import them. The map
+    follows such a value to its library, so a payment or a model call through it is no change of data (before, the
+    call was not followed, and its name, `create`, read as a database change); the database twin still is one."""
+    libs = {"lib/stripe.ts": 'import Stripe from "stripe";\nexport const stripe = new Stripe("k");\n',
+            "lib/ai.ts": 'import OpenAI from "openai";\nconst openai = new OpenAI();\nexport default openai;\n'}
+    head = 'import { stripe } from "../lib/stripe";\nimport ai from "../lib/ai";\n'
+    assert _asked(tmp_path, "enrol", "  return stripe.customers.create({ email: id });\n", head, more=libs) == []
+    asks = '  return ai.chat.completions.create({ model: "m", messages: [{ role: "user", content: id }] });\n'
+    assert _asked(tmp_path / "ai", "summarize", asks, head, more=libs) == []
+    adds = "  return db.note.create({ data: { id } });\n"
+    assert _asked(tmp_path / "twin", "addNote", adds, head, more=libs) == [
+        "The Server Action addNote changes data, the app uses it, and no login check was found"]
+    g = _build(tmp_path / "map", {"app/actions.ts": _action_file("addNote", adds), "lib/db.ts": PRISMA_DB}, PRISMA)
+    assert _edge(g, "js:app/actions::addNote", "ext:@prisma/client.PrismaClient.note.create") is not None
+
+
 # ------------------------------------------------------------------ the map's word for an action stays on the map
 WORDS_PKG = json.dumps({"dependencies": {"next": "14.2.0", "react": "18.3.0", "@prisma/client": "5.14.0",
                                          "openai": "4.52.0"}})

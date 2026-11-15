@@ -232,7 +232,9 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),
   `wrapped-function` (`const f = wrap(async ...)`
   handed to a router; inferred), `library-value` (a variable or module export holding what a library call returned:
-  `const app = express()`), `library-result` (a call on a library call's result: `Joi.string().min()`),
+  `const app = express()`; since 2026-11-14 also a value an ES module exports and another file imports,
+  `export const db = new PrismaClient()` and `db.note.delete()` elsewhere; `local-type` now also stands for a
+  variable's written type, `let prisma: PrismaClient`, and for `kept ?? new T()`), `library-result` (a call on a library call's result: `Joi.string().min()`),
   `express-param` (`req`/`res`/`next` by position in a handler of a package that depends on express; inferred),
   `param-type` (a written TypeScript parameter type), `builtin-value` (DOM lists and elements, events, fetch
   responses), `module-value`, `member`. Python: `inherited-library` / `inherited-builtin` (a method or attribute the

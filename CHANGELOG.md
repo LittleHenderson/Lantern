@@ -64,12 +64,27 @@ file. New entries go under `## Unreleased`, on top.
     and the report's rows and chips "Server Action summarize". The report also said of every JavaScript function
     that it runs "in the visitor's browser"; one on the Server lane (an Express handler, a Next.js route, an
     action) is now "a function running on your server".
-    Tests: `tests/test_server_actions.py` (24; the 5 newest failed on the code before them).
+    Tests: `tests/test_server_actions.py` (25; the 6 newest failed on the code before them).
+  - **A value one file hands to another is followed.** `export const db = new PrismaClient()` in `lib/db.ts`
+    and `db.note.delete()` in a route: the call was "not followed" (`missing-export`), because an import was
+    followed only to a function or a class. Now it is a likely link to the library's function
+    (`library-value`), named as the same call on a value made in the file; a value of the project's own class
+    links to its method (`module-value`). Also through `export default`, `export { x } from`, `export *`,
+    `import * as lib` and a destructured `require`. Two readings a real `lib/db.ts` needs: a variable's
+    written type (`let prisma: PrismaClient`) and "the kept one or a new one" (`cached ?? new T()`). So a
+    Server Action that only asks the payment or the model provider through such a handle is no longer read
+    as "changes data" by the name `create`. *Measured* on the benchmark's seven projects (read, never run):
+    73 call sites newly followed (69 across files, each checked by hand against the exporting line: 69 name
+    the right library; 4 on what those calls returned), no link gone, no finding changed on nine projects; on
+    one of them the Data lane went from 1 node to 16 (its routes now reach the database and the payment
+    provider on the map). Left alone, with their reason: a name set again, a value built by a condition, an
+    object written out, what a function of the project hands back, `x && new T()`, and a name the project
+    puts a function of its own on. Tests: `tests/test_js_values.py` (6, all failed on the code before).
   *Not covered:* a client handed in as a parameter; a table reached through `rpc()` or a view; row-level
   security switched on in the dashboard (Lantern reads the files, and says so); an action exported through a
-  wrapper Lantern does not look through; a value another file exports (`export const db = new PrismaClient()`)
-  is not followed, so the login rule reads such a call by its name alone. `docs/audit/CLAIMS.md` A20, A21, S34
-  and S35 have the full lists.
+  wrapper Lantern does not look through; a value the map cannot place (an object written out, what a function
+  of the project hands back), where the login rule reads a call by its name alone. `docs/audit/CLAIMS.md` A20,
+  A21, A22, S34 and S35 have the full lists.
 
 - Fix this for me (optional): pick a coding agent you already use (Claude Code, Codex or Aider) in Advanced
   Settings, and a finding's Fix screen offers "Fix this for me with …". The agent works on a copy of your project;
