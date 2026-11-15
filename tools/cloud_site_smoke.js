@@ -69,13 +69,21 @@ async function until(p, fn, timeout) {
     await p.screenshot({ path: `${out}-${tag}-runs.png`, fullPage: true });
     await a11y.axe(p, `${tag} my runs`, errs);
     await clean(p, 'my runs');
+    // onboarding (directive: user first): one button, then one plain question per screen, and no jargon on it
+    await p.click('#showus'); await p.waitForSelector('.onb .pick');
+    if (await p.$$eval('.onb .pick', a => a.length) !== 3) errs.push(`${tag}: "Show us your project" should offer three places`);
+    if (/repositor/i.test(await p.$eval('main', m => m.innerText))) errs.push(`${tag}: the word repository shows in Simple onboarding`);
+    await a11y.axe(p, `${tag} onboarding`, errs);
+    await p.click('.onb .pick[data-to="github"]'); await p.waitForSelector('.onb details.why');
+    await p.screenshot({ path: `${out}-${tag}-onboarding-github.png` });
+    await p.click('[data-back="where"]'); await p.click('[data-back=""]'); await p.waitForSelector('#showus');
     if (name === 'desk') {
       await p.click('#viewmode [data-m="advanced"]'); await p.waitForSelector('.ptable');
       await p.screenshot({ path: `${out}-${tag}-runs-advanced.png` });
       await clean(p, 'advanced');
       await p.click('#viewmode [data-m="simple"]'); await p.waitForSelector('article.app');
     }
-    await p.goto(site + '#/run/going1-demo-0000'); await p.waitForSelector('.progress .running-steps'); await p.waitForSelector('.progress .indeterminate');
+    await p.goto(site + '#/run/going1-demo-0000'); await p.waitForSelector('.progress .running-steps'); await p.waitForSelector('.progress .runbar, .progress .indeterminate');
     await p.screenshot({ path: `${out}-${tag}-progress.png` });
     await a11y.axe(p, `${tag} progress`, errs);
     await clean(p, 'progress');
@@ -163,6 +171,46 @@ async function until(p, fn, timeout) {
     await p.click('#who'); await p.waitForSelector('#signout');
     await p.screenshot({ path: `${out}-${tag}-account.png` });
     await a11y.axe(p, `${tag} account`, errs);
+    if (tag === 'desk-light') {
+      // team workspaces (directive: user first, step 3): make one, invite with a one-time link, add a report;
+      // the second account joins with the link and can open the report, read-only
+      await p.click('.sheet [data-close]');
+      await p.click('#viewmode [data-m="advanced"]');
+      await p.goto(site + '#/team'); await p.waitForSelector('#teamname');
+      await p.fill('#teamname', 'Smoke team'); await p.click('#maketeam'); await p.waitForSelector('#invite');
+      await a11y.axe(p, `${tag} team`, errs);
+      await p.click('#invite'); await p.waitForSelector('#invurl');
+      const inv = await p.$eval('#invurl', i => i.value);
+      if (!/#\/join\/[A-Za-z0-9_-]{20,}$/.test(inv)) errs.push(`${tag}: the invite link looks wrong (${inv})`);
+      await p.screenshot({ path: `${out}-${tag}-invite.png` });
+      await p.click('#invdone');
+      await p.click('#addrun'); await p.click('.sheet [data-add="done1-demo-00000"]'); await p.waitForSelector('.apps [data-open="done1-demo-00000"]');
+      await p.screenshot({ path: `${out}-${tag}-team.png`, fullPage: true });
+      const ctxT = await b.newContext({ viewport, colorScheme: scheme });
+      await outside.watch(ctxT, errs, outside.FONTS);
+      await ctxT.addCookies([{ name: 'lt', value: token2, url: base }]);
+      const t = await ctxT.newPage(); watch(t);
+      await t.goto(site + '#/join/' + inv.split('#/join/')[1]); await t.waitForSelector('#dojoin');
+      if (/join\/[A-Za-z0-9_-]{20,}/.test(await t.evaluate(() => location.href))) errs.push(`${tag}: the invite's secret stayed in the address bar`);
+      await a11y.axe(t, `${tag} join`, errs);
+      await t.click('#dojoin'); await t.waitForSelector('.person + .person');
+      // per-layer permissions (step 4): the owner lets the teammate see only the Browser and Frontend layers
+      await p.reload(); await p.waitForSelector('[data-layers]');
+      await p.click('[data-layers]'); await p.waitForSelector('#savelayers');
+      await a11y.axe(p, `${tag} layers`, errs);
+      await p.uncheck('.layer input[value="server"]'); await p.uncheck('.layer input[value="data"]');
+      await p.screenshot({ path: `${out}-${tag}-layers.png` });
+      await p.click('#savelayers'); await until(p, () => /Browser and Frontend/.test(document.querySelector('[data-layers]')?.textContent || ''), 5000);
+      await t.reload(); await t.waitForSelector('[data-open="done1-demo-00000"]');
+      await t.click('[data-open="done1-demo-00000"]');
+      await until(t, () => { try { return !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('#tabs'); } catch (e) { return false; } }, 20000);
+      if (await t.$('#share') || await t.$('.sub [data-del]')) errs.push(`${tag}: a teammate can share or delete someone else's report`);
+      if (await t.$('.sub [data-t="evidence"]')) errs.push(`${tag}: a teammate who sees only some layers is offered the whole-app evidence report`);
+      if (!await t.evaluate(() => !!document.querySelector('#pbody iframe')?.contentDocument?.querySelector('.scopenote'))) errs.push(`${tag}: the scoped report does not say which layers it shows`);
+      await ctxT.close();
+      await p.click('#viewmode [data-m="simple"]');
+      await p.click('#who'); await p.waitForSelector('#signout');
+    }
     if (name === 'phone' && scheme === 'dark') {   // last pass: delete a run, then the whole account
       await p.click('.sheet [data-close]');
       await p.goto(site + '#/'); await p.waitForSelector('article.app');
