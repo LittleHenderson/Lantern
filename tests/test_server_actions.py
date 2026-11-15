@@ -955,3 +955,41 @@ def test_an_action_that_reads_the_token_and_lets_everybody_on_is_asked_again(tmp
         "The Server Action tidy changes data, the app uses it, and Lantern found nothing that turns away a request "
         "whose login token does not hold"]
     assert [g.nodes[i].entry["detail"] for i in sec["logins_shown"]] == ["ACTION wipe"]
+
+
+# ------------------------------------------------------------------ one of two functions handed to a call
+EITHER_PAGE = '''"use client";
+import { useActionState } from "react";
+import { createTodo, removeTodo, LIMIT } from "../actions";
+
+const wide = 40;
+
+export default function Either({ first }: { first: boolean }) {
+  const [state, run] = useActionState(first ? createTodo : removeTodo, null);
+  const size = Math.min(first ? LIMIT : wide, 10);
+  return <form action={run}>{size}</form>;
+}
+
+export function Other({ first }: { first: boolean }) {
+  const [state, run] = useActionState((first ? (createTodo) : undefined), null);
+  return <form action={run}></form>;
+}
+'''
+
+
+def test_one_of_two_functions_handed_to_a_call_is_linked_like_one(tmp_path):
+    """`useActionState(first ? createTodo : removeTodo, null)`: the page hands the hook one of two Server Actions.
+    A name handed to a call was linked ("likely": the call is taken to run it); a choice between two names was
+    not, and on a sample project the sign-in page had no link to its two actions (2026-11-15). Each of the two is
+    linked the way one name is. The twins: a choice between two values that are no functions, and a choice whose
+    other side is nothing."""
+    g = _build(tmp_path, {"app/actions.ts": ACTIONS, "lib/db.ts": DB, "app/either/page.tsx": EITHER_PAGE})
+    got = {(e.src.rpartition("::")[2], e.dst.rpartition("::")[2]): (e.confidence, e.via, e.lines)
+           for e in g.call_edges() if e.src.startswith("js:app/either/page") and e.dst.startswith("js:app/actions")}
+    assert got == {("Either", "createTodo"): ("inferred", "callback", [8]),
+                   ("Either", "removeTodo"): ("inferred", "callback", [8]),
+                   ("Other", "createTodo"): ("inferred", "callback", [14])}, got
+    handed = sorted((s["at"].rpartition("/")[2], s["callee"], s["outcome"]) for s in g.sites
+                    if s["group"] == "handed" and s["file"] == "app/either/page.tsx")
+    assert handed == [("page.tsx:14:49", "createTodo", "likely"), ("page.tsx:8:47", "createTodo", "likely"),
+                      ("page.tsx:8:60", "removeTodo", "likely")], handed

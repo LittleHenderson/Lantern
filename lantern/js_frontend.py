@@ -378,6 +378,16 @@ def _unparen(n: TSNode | None) -> TSNode | None:
     return n
 
 
+def _either(a):
+    """An argument, or the two sides of a choice written in its place (`first ? save : remove`, in brackets or
+    not). One level: a choice inside a choice is left alone."""
+    x = _unparen(a)
+    if x is not None and x.type == "ternary_expression":
+        sides = (_unparen(x.child_by_field_name("consequence")), _unparen(x.child_by_field_name("alternative")))
+        return [y for y in sides if y is not None]
+    return [a]
+
+
 def _bare(n: TSNode | None) -> TSNode | None:
     """The expression inside brackets, `as T`, `satisfies T` and `!`."""
     for _ in range(8):
@@ -1469,10 +1479,12 @@ class Walker:
                                                             fa.child_by_field_name("parameter"))):
                         key = (tuple(ch), ai, pi)
                         cbp[pname] = key if cbp.get(pname, key) == key else None
-        # functions passed as arguments are likely to be called: useEffect(load), map(render)
+        # functions passed as arguments are likely to be called: useEffect(load), map(render). One of two written
+        # in an argument's place too (`useActionState(first ? signIn : signUp, null)`): each is handed in some run
         for a in argv:
-            if a.type == "identifier":
-                self.m.refs.append(JSRef(scope, [_text(a)], line, "callback", ui, _site_pos(a), _text(a)))
+            for x in _either(a):
+                if x.type == "identifier":
+                    self.m.refs.append(JSRef(scope, [_text(x)], line, "callback", ui, _site_pos(x), _text(x)))
         if fn is not None:
             self.walk(fn, scope, cls, ui)
         for a in argv:
