@@ -44,6 +44,14 @@ file. New entries go under `## Unreleased`, on top.
   problems"), read from the pipeline's own log lines; the raw log is one tap away. Advanced keeps its add bar and
   its log as before (directive: user first, step 2).
 
+- Simple is simpler (directive: user first). A function's panel opens on the Everyday lens, uses Simple's lens names
+  (Where it sits, not Mapped), and keeps the code and the Called by / Calls lists behind one button; its signature and
+  line range are Advanced only. The map offers Lanes and Path (Flowchart and Graph are Advanced views), and the function
+  list leaves out tests. A finding card shows its severity, where a visitor can reach it, the plain words and Fix this;
+  the rule, file and line, the paths, the scenario and the other actions open with a small Why? button, in place. Each
+  readiness step keeps its evidence behind Why? too, and the Terminal button is Advanced only (the \` key still opens it).
+  Advanced is unchanged.
+
 - **A library's version is one version however it is written, and a store's answer that is no answer reads "could
   not be reached"** (2026-11-14; two small faults an outside audit found in the build step of 2026-11-14, each
   checked against the code before it was touched; neither let anything through, both kept a project's tests from
