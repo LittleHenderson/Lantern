@@ -394,6 +394,8 @@ code.cmd{font:11.5px var(--mono);color:var(--muted);background:var(--hover);padd
 .fixtwo{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0} .fixtwo .card{padding:14px 16px} .why{display:flex;flex-direction:column;gap:6px;font-size:13.5px;color:var(--ink-2)} .why b{display:inline-block;width:18px;color:var(--good-ink)}
 pre.oneline{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:var(--code-bg);color:var(--code-ink);font:12px var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 .paste{padding:14px 16px;margin-bottom:14px;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)} .paste p{margin:0;font-size:14px;line-height:1.6;color:var(--ink)}
+.agentres{margin-top:14px} .agentres .verdict{margin:6px 0 10px;font-size:14px;color:var(--ink)} .agentres .verdict.bad{color:var(--critical)}
+.agentres details{margin:6px 0} .agentres summary{cursor:pointer;font:13px var(--mono)} .agentres pre.diff{margin:6px 0 0;padding:8px 10px;border-radius:8px;background:var(--code-bg);color:var(--code-ink);font:12px var(--mono);white-space:pre;overflow:auto;max-height:340px}
 .fixbanner{margin:0 0 16px;padding:12px 16px;border-radius:12px;background:var(--critical-soft);color:var(--ink);font-size:14px} .fixbanner.ok{background:var(--good-soft)}
 @media (max-width:900px){.fixgrid,.fixtwo{grid-template-columns:1fr}}
 /* Ask Lantern pill + window (same look as the app) */
@@ -539,6 +541,16 @@ mark.p.on{background:var(--l3);color:var(--surface);border-radius:4px}
 .warn{display:flex;gap:8px;background:var(--warning-soft);color:var(--ink);font-size:12.5px;padding:10px 12px;border-radius:10px;margin:10px 0}
 .warn .ic{color:var(--warn-ink);margin-top:1px}
 .note{font-size:12.5px;color:var(--muted)}
+.notesbtn{margin:14px 0 0}
+.notes{margin:16px 0 0;padding:12px 14px;border:1px solid var(--line);border-radius:12px;display:grid;gap:10px}
+.notes h5{margin:0}
+.noteacts{display:flex;justify-content:space-between;gap:8px}
+.notecard .by{display:flex;gap:8px;align-items:baseline;font-size:12.5px;color:var(--muted)}
+.notecard .by b{color:var(--ink);font-weight:600}
+.notecard .by .linkbtn{margin-left:auto}
+.notecard p{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}
+.notes textarea{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface);color:var(--ink);resize:vertical}
+.scopenote{padding:6px 18px;border-top:1px solid var(--line);background:var(--surface-2,var(--surface))}
 .scanwarn{margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--warning-soft);color:var(--ink);font-size:13.5px;line-height:1.5} .scanwarn b{color:var(--warn-ink)} .scanwarn .note{display:block;margin-top:2px}
 .kv b.timeout,.kv b.failed,.kv b.partial,.kv b.unavailable{color:var(--warn-ink)}
 .byline{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:10px}
@@ -685,6 +697,7 @@ pre.file{background:var(--code-bg);color:var(--code-ink);font:12px/1.6 var(--mon
     </nav>
     <div class="chips" id="chips"></div>
   </div>
+  <div class="note scopenote" id="scopenote" role="note" hidden></div>
 </header>
 <main id="main">
   <aside class="left" id="left"></aside>
@@ -1037,7 +1050,7 @@ function renderChart() {
     svg += `<g data-id="${esc(id)}" style="cursor:pointer"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="10" fill="var(--surface)" stroke="${stroke}" stroke-width="${w || on ? 2 : 1}"/>
       ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="13" fill="none" stroke="var(--accent-soft)" stroke-width="4"/>` : ''}
       <rect x="${x + 10}" y="${y + 16}" width="8" height="8" rx="2.5" fill="${lc}"/>
-      <text x="${x + 26}" y="${y + 24}">${esc(t)}</text>${w ? `<circle cx="${x + W - 14}" cy="${y + 20}" r="4" fill="${w === 'critical' ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : w === 'medium' ? 'var(--warning)' : 'var(--good)'}"/>` : ''}<title>${esc(n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
+      <text x="${x + 26}" y="${y + 24}">${esc(t)}</text>${w ? `<circle cx="${x + W - 14}" cy="${y + 20}" r="4" fill="${w === 'critical' ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : w === 'medium' ? 'var(--warning)' : 'var(--good)'}"/>` : ''}${noteMark(id, x, y)}<title>${esc(n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use the tree view to go deeper.</div>` : '';
@@ -1115,7 +1128,7 @@ function renderLanes() {
     svg += `<g data-id="${esc(id)}" style="cursor:pointer"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="12" fill="var(--surface)" stroke="${stroke}" stroke-width="${w || on ? 2 : 1}"/>
       ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="15" fill="none" stroke="var(--accent-soft)" stroke-width="4"/><text class="sub" x="${x + W + 10}" y="${y + H / 2 + 4}" fill="var(--accent)" style="fill:var(--accent);font-weight:600">← you are here</text>` : ''}
       <text x="${x + 12}" y="${y + 21}">${esc(t)}</text>${lang ? `<text class="sub" x="${x + W - 12}" y="${y + 21}" text-anchor="end">${esc(lang)}</text>` : ''}
-      ${sub ? `<text class="sub" x="${x + 12}" y="${y + 40}">${esc(sub)}</text>` : ''}<title>${esc(ext ? id.slice(4) : n.qualname)}${w ? ` (${esc(w)} finding)` : ''} · ${esc(LANE_DEF[laneOf(id)])}</title></g>`;
+      ${sub ? `<text class="sub" x="${x + 12}" y="${y + 40}">${esc(sub)}</text>` : ''}${noteMark(id, x, y)}<title>${esc(ext ? id.slice(4) : n.qualname)}${w ? ` (${esc(w)} finding)` : ''} · ${esc(LANE_DEF[laneOf(id)])}</title></g>`;
   }
   svg += '</svg>';
   const more = order.length >= LIMIT ? `<div class="note" style="padding:8px">Showing the first ${LIMIT} functions on this path. Use Path to go deeper.</div>` : '';
@@ -1226,7 +1239,7 @@ function renderGraph() {
     svg += `<g data-id="${esc(id)}" data-http="${isHttp ? 1 : 0}"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="${isHttp ? 22 : 9}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>
       ${on ? `<rect x="${x - 4}" y="${y - 4}" width="${W + 8}" height="${H + 8}" rx="13" fill="none" stroke="var(--accent-soft)" stroke-width="4"/>` : ''}
       <text x="${x + 12}" y="${y + (sub ? 19 : 27)}" ${isHttp ? 'font-weight="600"' : ''}>${esc(label)}</text>${sub ? `<text class="sub" x="${x + 12}" y="${y + 34}" fill="${w && S.mode === 'risk' ? sevColor(w) : 'var(--muted)'}">${esc(sub)}</text>` : ''}
-      ${lang ? `<text class="lb" x="${x + W - 10}" y="${y + 15}" text-anchor="end">${lang}</text>` : ''}<title>${esc(isHttp ? httpNodes[id].label : n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
+      ${lang ? `<text class="lb" x="${x + W - 10}" y="${y + 15}" text-anchor="end">${lang}</text>` : ''}${noteMark(id, x, y)}<title>${esc(isHttp ? httpNodes[id].label : n.qualname)}${w ? ` (${esc(w)} finding)` : ''}</title></g>`;
   }
   svg += '</svg>';
   const lines = `<span><b class="ln"></b>A → B: A can call B (read from the code)</span>` +
@@ -1456,8 +1469,58 @@ const onPhone = n => !!n && ANDROID_APP && (n.lane === 'browser' || n.lane === '
 const entryPhrase = e => !e ? '' : isScreen(e) ? `someone opens the ${String(e.detail).split(' · ')[0]} on their phone` : isIntent(e) ? `another app on the phone, or a link, starts ${partName(e)}` : ({page: `the page ${e.detail || ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
   main: 'the program starts', test: 'the tests run', script: `the script${e.detail ? ' ' + e.detail : ''} is run`})[e.kind] || `${e.kind}${e.detail ? ' ' + e.detail : ''}`;
 const extWords = id => { const n = String(id || '').replace(/^ext:/, ''); if (n.startsWith('HTTP ')) return n; const lib = n.split(/[./]/)[0]; return `the ${lib} library`; };
+// ---------- notes on the map (directive: user first, step 5) ----------
+// On Lantern Cloud the page around this report (same origin) offers window.lanternNotes: people who can open the
+// report leave short notes on a function, and see each other's. Words only: every note is text, escaped where it is
+// drawn, and never part of the analysis. Opened as a file or in the local app, there are no notes and none of this
+// shows. A function's notes sit behind one button in its panel; a small mark on the map shows where notes are.
+const NOTES = {by: {}, open: false, busy: false, err: ''};
+function notesApi() { try { const a = window.self !== window.top && window.parent.lanternNotes; return a && typeof a.list === 'function' ? a : null; } catch (e) { return null; } }
+function loadNotes() {
+  const a = notesApi(); if (!a) return;
+  Promise.resolve(a.list()).then(list => {
+    NOTES.by = {};
+    for (const c of Array.isArray(list) ? list : []) if (c && typeof c.node === 'string' && N[c.node]) (NOTES.by[c.node] ||= []).push(c);
+    if (S.tab === 'map') renderMap(); renderRight();
+  }).catch(() => {});
+}
+function noteMark(id, x, y) {
+  const k = (NOTES.by[id] || []).length;
+  return k ? `<g class="notemark" aria-hidden="true"><circle cx="${x + 4}" cy="${y + 4}" r="8" fill="var(--accent)"/><text x="${x + 4}" y="${y + 7.5}" text-anchor="middle" style="fill:var(--accent-ink,#fff);font:700 9.5px var(--font)">${k > 9 ? '9+' : k}</text><title>${k} note${k === 1 ? '' : 's'} from your team</title></g>` : '';
+}
+function notesBlock(n) {
+  if (!notesApi() || n.sealed) return '';
+  const list = NOTES.by[n.id] || [];
+  if (!NOTES.open) return `<div class="notesbtn"><button class="btn quietlink" id="notesopen" aria-expanded="false">${list.length ? `Notes · ${list.length}` : 'Add a note'}</button></div>`;
+  return `<section class="notes" aria-label="Notes on this function"><h5>Notes · ${list.length}</h5>
+    ${list.map(c => `<div class="notecard"><div class="by"><b>${esc(c.by || 'Someone')}</b>${c.mine ? ' (you)' : ''}<span>${esc(String(c.created || '').slice(0, 10))}</span>${c.can_delete ? `<button class="linkbtn" data-delnote="${esc(c.id)}" aria-label="Delete this note">Delete</button>` : ''}</div><p>${esc(c.body)}</p></div>`).join('') || '<p class="note">No notes yet. A note is only words for the people you work with; it doesn’t change what Lantern found.</p>'}
+    <textarea id="notein" maxlength="1000" rows="3" placeholder="Leave a note for your team" aria-label="New note"></textarea>
+    ${NOTES.err ? `<p class="note" role="alert">${esc(NOTES.err)}</p>` : ''}
+    <div class="noteacts"><button class="btn quietlink" id="notesclose">Hide notes</button><button class="btn primary" id="noteadd"${NOTES.busy ? ' disabled' : ''}>Add note</button></div></section>`;
+}
+function wireNotes(el, n) {
+  const a = notesApi(); if (!a) return;
+  const o = el.querySelector('#notesopen'); if (o) o.onclick = () => { NOTES.open = true; renderRight(); const t = document.getElementById('notein'); if (t) t.focus(); };
+  const c = el.querySelector('#notesclose'); if (c) c.onclick = () => { NOTES.open = false; NOTES.err = ''; renderRight(); };
+  const add = el.querySelector('#noteadd');
+  if (add) add.onclick = () => {
+    const body = (document.getElementById('notein').value || '').trim();
+    if (!body || NOTES.busy) return;
+    NOTES.busy = true; NOTES.err = '';
+    Promise.resolve(a.add(n.id, body)).then(() => { NOTES.busy = false; loadNotes(); })
+      .catch(e => { NOTES.busy = false; NOTES.err = (e && e.message) || 'That note was not saved.'; renderRight(); });
+  };
+  el.querySelectorAll('[data-delnote]').forEach(b => b.onclick = () => Promise.resolve(a.remove(b.dataset.delnote)).then(loadNotes).catch(() => {}));
+}
 function mapRecord(n) {
   if (!n || n.kind === 'class') return null;
+  if (n.sealed) {
+    // a layer this person may not see (a team workspace's per-layer permissions, lantern/scope.py): only that it is there
+    const who = [...new Set((IN[n.id] || []).filter(e => N[e.src] && !N[e.src].sealed).map(e => short(N[e.src].qualname)))];
+    const w = LANE_WORD[n.lane] || 'another layer', s = `Your code here calls something in the ${w}. You don’t have access to the ${w} layer, so Lantern shows only that the call is there.`;
+    return {from_map: true, validated: true, lens1: {summary: s, inputs: [], outputs: '', side_effects: [], errors: [], role: who.length ? `Called from ${who.slice(0, 3).join(', ')}${who.length > 3 ? ` and ${who.length - 3} more` : ''}.` : ''},
+      lens2: {text: s, example: '', analogy: ''}, lens3: {text: `A sealed boundary: the ${w} layer is not shared with you.`, pairs: []}};
+  }
   const where = onPhone(n) ? 'on the person’s phone, inside your app' : isJS(n.id) ? 'in the visitor’s browser' : layer(n.id) === 'backend' ? 'on your server' : 'in a library';
   const lines = n.start_line && n.end_line ? n.end_line - n.start_line + 1 : 0;
   const kindWord = n.kind === 'module' ? 'file' : n.kind === 'external' ? 'library call' : isJS(n.id) ? 'component or function' : 'function';
@@ -1635,8 +1698,8 @@ function renderFix() {
       <div class="fixtwo"><div class="card"><div class="k2" style="margin-top:0">Why it’s ${esc(f.rank)}</div><div class="why">${why}</div></div>
         <div class="card"><div class="k2" style="margin-top:0">Where</div><div>${esc(f.file)}${f.line ? `, line ${esc(f.line)}` : ''}${n ? ` · in <code>${esc(short(n.qualname))}</code>` : ''}</div>${srcLine ? `<pre class="oneline">${esc(srcLine)}</pre>` : ''}</div></div>
       <div class="card paste"><div class="k2" style="margin-top:0">Paste this into your AI assistant</div><p>${esc(prompt)}</p></div>
-      <div class="acts"><button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button><button class="btn" id="copyprompt">Copy the prompt</button>${LIVE ? `<button class="btn primary" id="recheck">${icon('check')}I fixed it, check again</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">See the path</button>` : ''}<span class="spacer"></span>${LIVE ? `<span class="note">Not a problem? <button class="linkbtn" data-accept="${esc(f.id)}">Accept with a reason</button></span>` : ''}</div><div class="sendslot"></div><div id="recheckmsg" class="note"></div></div></div></div>`;
-  wireMode(el); wireFindings(el);
+      <div class="acts"><button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button><button class="btn" id="copyprompt">Copy the prompt</button>${LIVE && LIVE.agent ? `<button class="btn primary" id="agentfix">${icon('sparkle')}Fix this for me with ${esc(LIVE.agent.name)}</button>` : ''}${LIVE ? `<button class="btn ${LIVE.agent ? '' : 'primary'}" id="recheck">${icon('check')}I fixed it, check again</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">See the path</button>` : ''}<span class="spacer"></span>${LIVE ? `<span class="note">Not a problem? <button class="linkbtn" data-accept="${esc(f.id)}">Accept with a reason</button></span>` : ''}</div><div class="sendslot"></div><div id="recheckmsg" class="note"></div><div id="agentslot"></div></div></div></div>`;
+  wireMode(el); wireFindings(el); wireAgent(el, f);
   el.querySelector('#backfind').onclick = () => { S.tab = 'findings'; render(); };
   el.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { S.fsel = b.dataset.q; S.fixBanner = null; renderFix(); });
   el.querySelector('#copyprompt').onclick = e => { navigator.clipboard?.writeText(prompt); e.target.textContent = 'Copied'; };
@@ -1650,6 +1713,43 @@ function renderFix() {
       if (j.status === 'error') throw new Error(j.error);
       location.reload();
     } catch (e) { msg.textContent = e.message; rc.disabled = false; }
+  };
+}
+// "Fix this for me" (lantern/agents.py): the coding agent the person picked in Settings fixes this finding in a copy of
+// the project; Lantern analyzes the copy and says whether the finding is gone. Nothing changes in the project until
+// they press Apply. The changed files are behind a tap, for whoever wants to read them.
+const jobErr = e => String(e && e.message || e).replace(/^\w+Error: /, '');
+function agentResult(r) {
+  const bad = r.status === 'not_fixed' || r.status === 'fixed_with_new';
+  const files = (r.files || []).map(x => `<details><summary>${esc(x.path)} · ${esc(x.change)}</summary><pre class="diff">${esc(x.diff)}</pre></details>`).join('');
+  const added = (r.new || []).length ? `<div class="note">New: ${(r.new || []).map(x => `${esc(x.rank)} · ${esc(x.title)}`).join('; ')}</div>` : '';
+  return `<div class="card agentres"><div class="k2" style="margin-top:0">${esc(r.agent)} · checked by Lantern</div>
+    <p class="verdict ${bad ? 'bad' : ''}">${esc(r.verdict)}</p>${added}
+    ${files ? `<div class="note">${(r.files || []).length} file${(r.files || []).length === 1 ? '' : 's'} changed. Tap one to see the change.</div>${files}` : ''}
+    ${r.fix ? `<div class="acts"><button class="btn ${r.status === 'fixed' ? 'primary' : ''}" id="agentapply">Apply to my project</button><button class="btn" id="agentdiscard">Throw it away</button><span class="note">Nothing in your project has changed yet.</span></div>` : ''}
+    <div id="agentmsg" class="note"></div></div>`;
+}
+function wireAgent(el, f) {
+  const btn = el.querySelector('#agentfix'), slot = el.querySelector('#agentslot'); if (!btn || !slot) return;
+  btn.onclick = async () => {
+    btn.disabled = true; slot.innerHTML = `<div class="note">${esc(LIVE.agent.name)} is working on a copy of your project. Your files are not touched.</div>`;
+    try {
+      const job = await live('/agentfix', {finding: f.id});
+      const j = await waitJob(job.id, log => { const last = log[log.length - 1]; if (last) slot.firstElementChild.textContent = last; });
+      if (j.status === 'error') throw new Error(j.error);
+      slot.innerHTML = agentResult(j.result); btn.disabled = false;
+      const ap = slot.querySelector('#agentapply'), dc = slot.querySelector('#agentdiscard'), msg = slot.querySelector('#agentmsg');
+      if (ap) ap.onclick = async () => {
+        ap.disabled = dc.disabled = true; msg.textContent = 'Copying the change into your project, then checking it again…';
+        try {
+          sessionStorage.setItem('lantern.recheck', JSON.stringify({score: (DATA.readiness || {}).score, id: f.id, title: plainTitle(f)}));
+          const aj = await waitJob((await live('/agentapply', {fix: j.result.fix})).id, log => { msg.textContent = log[log.length - 1] || 'Working…'; });
+          if (aj.status === 'error') throw new Error(aj.error);
+          location.reload();
+        } catch (e) { sessionStorage.removeItem('lantern.recheck'); msg.textContent = jobErr(e); ap.disabled = dc.disabled = false; }
+      };
+      if (dc) dc.onclick = async () => { await live('/agentdiscard', {fix: j.result.fix}).catch(() => {}); slot.innerHTML = '<div class="note">Thrown away. Your project is as it was.</div>'; };
+    } catch (e) { slot.innerHTML = `<div class="note">${esc(jobErr(e))}</div>`; btn.disabled = false; }
   };
 }
 // After "I fixed it, check again" the page reloads with fresh results: say what changed, in one line.
@@ -2419,6 +2519,7 @@ function renderRight() {
     ${why(`${srcBlock(n)}
     <div class="links"><div><h5>Called by · ${callers.length}</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
       <div><h5>Calls · ${callees.length}</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div>`, 'Show the code and what it calls', S.lens === 3)}
+    ${notesBlock(n)}
     <div class="acts">${fs.length ? `<button class="btn primary" id="openfinding">Open finding</button>` : ''}${LIVE && LIVE.model && n.kind !== 'external' ? `<button class="btn" id="reexplain">${icon('sparkle')}${EXP[n.id] ? 'Re-explain' : `Explain with ${esc(LIVE.model)}`}</button>` : ''}</div></div>`;
   wire();
   const of = document.getElementById('openfinding'); if (of) of.onclick = () => { S.tab = 'findings'; S.fsev = 'all'; for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b.dataset.t === 'findings'); render(); const card = document.getElementById('f-' + fs[0].id); if (card) { card.scrollIntoView({behavior: 'smooth', block: 'center'}); card.classList.add('flash'); } };
@@ -2428,6 +2529,7 @@ function renderRight() {
   el.querySelectorAll('.links [data-id]').forEach(b => b.onclick = () => select(b.dataset.id));
   const xb = document.getElementById('explainbtn'); if (xb) xb.onclick = () => explainLive(S.sel);
   const c = document.getElementById('close'); if (c) c.onclick = () => el.classList.remove('open');
+  wireNotes(el, n);
 }
 
 const TAB_WORDS = {simple: {map: 'Paths', findings: 'What to fix', prot: 'What protects you', ready: 'Ready to ship?', xp: 'What does this do?', about: 'About'},
@@ -2500,7 +2602,15 @@ async function rAskSend(text) {
 
 window.setSimple = v => { setMode(PHONE.matches || v, false); if (LIVE) LIVE.view_mode = S.simple ? 'simple' : 'advanced'; render(); };   // the app's toggle, already saved
 PHONE.addEventListener('change', () => { if (PHONE.matches && !S.simple) { S.simple = true; render(); } });
+function renderScope() {   // per-layer permissions (lantern/scope.py): say once, on every tab, what this person sees
+  const el = document.getElementById('scopenote');
+  if (!el || !DATA.scope || !Array.isArray(DATA.scope.lanes)) return;
+  const ws = DATA.scope.lanes.map(l => LANE_WORD[l] || String(l)), and = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+  el.textContent = `You can see the ${and(ws)} ${ws.length === 1 ? 'layer' : 'layers'} of this app. Calls into the rest show as sealed boxes.`;
+  el.hidden = false;
+}
 function render() {
+  renderScope();
   // renderMap puts these back for Flowchart and Graph; left on, gfull's overflow:hidden stopped every other tab scrolling
   document.getElementById('center').classList.remove('dotted', 'gfull');
   if (S.tab !== 'map' && document.body.classList.contains('gmax')) setGraphMax(false);
@@ -2525,6 +2635,7 @@ if (worstReached) {
 }
 recheckBanner();
 render();
+loadNotes();
 </script>
 </body>
 </html>

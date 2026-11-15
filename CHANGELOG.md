@@ -16,6 +16,45 @@ file. New entries go under `## Unreleased`, on top.
   A name shown nowhere is still refused. `model-eval`'s `min_first_try` default is 0.7 (was 0.8), Wakil's choice,
   near the measured rate across seven repos (72.9%); the target in docs/explain-runs.md is unchanged.
 
+- Fix this for me (optional): pick a coding agent you already use (Claude Code, Codex or Aider) in Advanced
+  Settings, and a finding's Fix screen offers "Fix this for me with …". The agent works on a copy of your project;
+  Lantern then analyzes the copy and tells you, in one line, whether the problem is gone and whether anything new
+  and serious appeared. The changed files are one tap away, and nothing reaches your project until you press
+  Apply, which refuses if you changed those files meanwhile. Off by default (directive: user first, step 6).
+
+- Notes on the map (Lantern Cloud): people who can open a report leave short notes on a function for each other
+  ("Is this still used?"). They sit behind one "Add a note" or "Notes · 2" button in the function's panel, and a
+  small mark on the map shows where notes are. Notes are words only: they never change what Lantern found and are
+  never sent to a model. The author or the report's owner deletes a note; a member who sees only some layers sees
+  notes only there. New `/v1/runs/{id}/notes` and `DELETE /v1/notes/{id}` (docs/api.md) (directive: user first,
+  step 5).
+
+- Per-layer permissions in team workspaces: the owner chooses, per person, which layers of the app (Browser,
+  Frontend, Server, Data) they can see in the workspace's reports, from a "Sees everything" button on the Team
+  page. That person's report is built on the server without the other layers, so nothing about them reaches their
+  browser: where their part calls into a hidden layer the map shows one sealed box ("Something in the Server"),
+  and a line at the top says which layers they can see. The overall score, log, evidence report, raw files and Ask
+  Lantern describe the whole app, so they stay with people who see everything. The view link carries the layers
+  and can't be edited to open more. New `PUT /v1/workspaces/{id}/people/{person}` and `lantern/scope.py`
+  (directive: user first, step 4).
+
+- Team workspaces on Lantern Cloud: a few people who can open each other's reports. The owner names a workspace
+  and invites people with one-time links (they work once, for 7 days; Lantern keeps only a hash and never asks for
+  an email). A report joins only when its own owner puts it there (Share, then Your team, or Add one of my reports
+  on the Team page), and teammates can open it but never change, share, explain or delete it. Owners take people
+  out or close the workspace; leaving, removing someone or closing gives every report back to its owner, and
+  nothing is deleted. The Team page sits in Advanced and appears in Simple only once someone is in a workspace.
+  New `/v1/workspaces`, `/v1/invites` and `PUT /v1/runs/{id}/workspace` (docs/api.md) (directive: user first,
+  step 3).
+
+- Getting started is one button: Simple's home on Lantern Cloud and in `lantern serve` opens with **Show us your
+  project**, then asks one plain question per screen (is it on this computer, on GitHub, or not sure?). The word
+  repository never shows; "Where do I find the link?" and "Is my code safe?" sit behind small Why? buttons, and
+  "I'm not sure" walks through finding a project an AI builder made, with the practice app as a way out. While a
+  check runs, Simple shows a real progress bar with the step it is on in plain words ("Step 2 of 4: Looking for
+  problems"), read from the pipeline's own log lines; the raw log is one tap away. Advanced keeps its add bar and
+  its log as before (directive: user first, step 2).
+
 - Simple is simpler (directive: user first). A function's panel opens on the Everyday lens, uses Simple's lens names
   (Where it sits, not Mapped), and keeps the code and the Called by / Calls lists behind one button; its signature and
   line range are Advanced only. The map offers Lanes and Path (Flowchart and Graph are Advanced views), and the function
