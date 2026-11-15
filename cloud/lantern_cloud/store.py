@@ -47,6 +47,11 @@ create table if not exists members (
   lanes text,                        -- null: every layer; else the layers this member may see (lantern.scope.code)
   primary key (workspace, account));
 create index if not exists members_by_account on members (account);
+create table if not exists notes (      -- words people leave on a function in a run's map; never part of the analysis
+  id text primary key, run text not null, node text not null,
+  lane text,                         -- the layer the function is in, so a member who can't see it never gets the note
+  account text not null, body text not null, created text not null);
+create index if not exists notes_by_run on notes (run, created);
 create table if not exists invites (
   hash text primary key,             -- sha256 of the link's secret; the secret itself is never stored
   workspace text not null, created text not null, expires text not null);
@@ -160,6 +165,8 @@ class Store:
             for (wid,) in self.db.execute("select id from workspaces where owner = ?", (account,)).fetchall():
                 self._close_workspace(wid)
             self.db.execute("delete from members where account = ?", (account,))
+            self.db.execute("delete from notes where account = ? or run in (select id from runs where account = ?)",
+                            (account, account))
             for rid in ids:
                 self._owe("results", rid)
             self.db.execute("delete from runs where account = ?", (account,))
@@ -280,8 +287,34 @@ class Store:
         """Forget a run. In the same step its result files are written down as still to be removed, so a service
         that is cut off between the two, or whose disk refuses, finishes the delete later (`cleanup.Cleanup`)."""
         with self.lock:
+            self.db.execute("delete from notes where run = ?", (rid,))
             self.db.execute("delete from runs where id = ?", (rid,))
             self._owe("results", rid)
+            self.db.commit()
+
+    # ---- notes on the map ----
+    def notes(self, rid: str) -> list[dict]:
+        rows = self._all("select n.id, n.node, n.lane, n.account, coalesce(u.label, ''), n.body, n.created from notes n "
+                         "left join users u on u.account = n.account where n.run = ? order by n.created", (rid,))
+        return [dict(zip(("id", "node", "lane", "account", "label", "body", "created"), r)) for r in rows]
+
+    def add_note(self, rid: str, node: str, lane: str | None, account: str, body: str, *, most: int) -> str:
+        with self.lock:
+            if self.db.execute("select count(*) from notes where run = ?", (rid,)).fetchone()[0] >= most:
+                raise LimitReached(f"This report already has {most} notes, the most it can hold. Delete some first.")
+            nid = secrets.token_urlsafe(9)
+            self.db.execute("insert into notes (id, run, node, lane, account, body, created) values (?, ?, ?, ?, ?, ?, ?)",
+                            (nid, rid, node, lane, account, body, now()))
+            self.db.commit()
+        return nid
+
+    def note(self, nid: str) -> dict | None:
+        row = self._one("select id, run, node, lane, account from notes where id = ?", (nid,))
+        return dict(zip(("id", "run", "node", "lane", "account"), row)) if row else None
+
+    def delete_note(self, nid: str) -> None:
+        with self.lock:
+            self.db.execute("delete from notes where id = ?", (nid,))
             self.db.commit()
 
     # ---- what is still to be removed from the disk ----

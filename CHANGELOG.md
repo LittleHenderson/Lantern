@@ -9,6 +9,13 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- Notes on the map (Lantern Cloud): people who can open a report leave short notes on a function for each other
+  ("Is this still used?"). They sit behind one "Add a note" or "Notes · 2" button in the function's panel, and a
+  small mark on the map shows where notes are. Notes are words only: they never change what Lantern found and are
+  never sent to a model. The author or the report's owner deletes a note; a member who sees only some layers sees
+  notes only there. New `/v1/runs/{id}/notes` and `DELETE /v1/notes/{id}` (docs/api.md) (directive: user first,
+  step 5).
+
 - **A test of the website's service is on one day** (2026-11-14; found by a red check on the change below, which
   it is no part of). The service counts a person's runs by the day (UTC) and asks what day it is at every request.
   `tests/test_cloud_runs.py::test_limits_answer_429_with_a_sentence` makes three requests with two whole runs
