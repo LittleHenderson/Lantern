@@ -2652,6 +2652,10 @@ class Engine:
                 return Val(kind="req", data="trpc-ctx")      # made by the server: who is signed in, not request data
             if base.data == "trpc-ctx" and name in ("req", "request"):
                 return Val(kind="req", data="js")            # the request itself, where the server keeps it there
+            if base.data == "trpc-ctx" and name in R.KIT_ASKS and fn.lang == "js" and self.g.meta.get("sveltekit"):
+                # `({ locals: { safeGetSession } })`, `const { auth } = event.locals`: the function the app's hook
+                # keeps there for asking who is signed in, taken out before it is called (`lib`, rule 0)
+                return Val(kind="kit-ask", data=name)
             if base.data == "kit":
                 # SvelteKit's event: `locals` is what the server's own hook put there (who is signed in), `event`
                 # the whole again (`handle({ event, resolve })`); the rest is the request and its parts
@@ -3981,10 +3985,12 @@ class Engine:
         elif self.sender_checked(name, callee, e, env):
             self.sender_held(ctx, e)    # a webhook: nothing about the value changes, only who can get past here
         # 0. who is signed in, handed back by a call whose code Lantern does not read: taken by its name
-        if recv is not None and recv.kind == "req" and recv.data == "trpc-ctx" and member in R.KIT_ASKS and \
-                fn.lang == "js" and self.g.meta.get("sveltekit"):
-            # `await event.locals.auth()`, `locals.safeGetSession()`: what the app's own hook keeps there for it
-            return Val((Taint("ident", member, R.ALL, (), None, FIXED0),), kind="ext", data=f"locals.{member}()")
+        ask = member if recv is not None and recv.kind == "req" and recv.data == "trpc-ctx" and \
+            member in R.KIT_ASKS else callee.data if recv is None and callee.kind == "kit-ask" else None
+        if ask and fn.lang == "js" and self.g.meta.get("sveltekit"):
+            # `await event.locals.auth()`, `locals.safeGetSession()`: what the app's own hook keeps there for it;
+            # also taken out of `locals` first and called by its bare name (`member1`)
+            return Val((Taint("ident", ask, R.ALL, (), None, FIXED0),), kind="ext", data=f"locals.{ask}()")
         last = (name or text_of(e.a)).rsplit(".", 1)[-1]
         if (name and R.IDENT_CALLS.match(name)) or R.IDENT_FN.match(last):
             return Val((Taint("ident", last, R.ALL, (), None, FIXED0),), kind="ext", data=(name or last) + "()")

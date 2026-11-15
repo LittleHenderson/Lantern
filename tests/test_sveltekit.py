@@ -1189,3 +1189,115 @@ def test_a_hook_as_the_sign_in_guides_write_it(tmp_path, case):
     assert sorted(routes[i] for i in sec["logins_shown"] if i in routes) == shown
     open_ones = sorted(f["title"].split(" changes data")[0] for f in sec["findings"] if f["rule"] == "LW-AUTH-MISSING")
     assert open_ones == sorted(set(routes.values()) - set(shown))
+
+
+# ------------------------------------------------------------------ `locals` taken apart
+
+APART_HEAD = 'import { error, redirect } from "@sveltejs/kit";\nimport { db } from "$lib/server/db";\n'
+APART_OPEN = 'export async function safeGetSession() {\n  return { session: { id: 1 }, user: { id: 1 } };\n}\n'
+APART_WRITE = ('const data = await request.formData();\n'
+               '    await db.note.update({ where: { id: String(data.get("id")) }, data: { title: "x" } });')
+# name -> (the page's server file, the routes whose login the flow step shows)
+APART_CASES = {
+    "taken out in the parameter, a load and an action": (APART_HEAD + """
+export const load = async ({ locals: { safeGetSession } }) => {
+  const { session } = await safeGetSession();
+  if (!session) {
+    redirect(303, "/login");
+  }
+  return { notes: await db.note.findMany() };
+};
+
+export const actions = {
+  rename: async ({ request, locals: { safeGetSession } }) => {
+    const { session, user } = await safeGetSession();
+    if (!session || !user?.id) {
+      redirect(303, "/login");
+    }
+    WRITE
+  },
+};
+""", ["GET /account", "POST /account?/rename"]),
+    "taken out in the body": (APART_HEAD + """
+export const actions = {
+  rename: async ({ request, locals }) => {
+    const { safeGetSession } = locals;
+    const { session } = await safeGetSession();
+    if (!session) error(401, "sign in");
+    WRITE
+  },
+  retitle: async (event) => {
+    const { getSession } = event.locals;
+    const session = await getSession();
+    if (!session) error(401, "sign in");
+    const request = event.request;
+    WRITE
+  },
+};
+""", ["POST /account?/rename", "POST /account?/retitle"]),
+    "the other sign-in library's name": (APART_HEAD + """
+export const actions = {
+  rename: async ({ request, locals: { auth } }) => {
+    const session = await auth();
+    if (!session?.user) redirect(303, "/login");
+    WRITE
+  },
+};
+""", ["POST /account?/rename"]),
+    # the twins: nothing here shows a login
+    "asked and the answer never tested": (APART_HEAD + """
+export const actions = {
+  rename: async ({ request, locals: { safeGetSession } }) => {
+    const { session } = await safeGetSession();
+    console.log(session);
+    WRITE
+  },
+};
+""", []),
+    "a function kept on locals that asks nothing about who is signed in": (APART_HEAD + """
+export const actions = {
+  rename: async ({ request, locals: { tracer } }) => {
+    const span = await tracer();
+    if (!span) redirect(303, "/login");
+    WRITE
+  },
+};
+""", []),
+    "the same name from a file of the project, which lets everybody in": (
+        APART_HEAD + 'import { safeGetSession } from "$lib/server/open";\n' + """
+export const actions = {
+  rename: async ({ request }) => {
+    const { session } = await safeGetSession();
+    if (!session) redirect(303, "/login");
+    WRITE
+  },
+};
+""", []),
+    "the answer tested and the request goes on either way": (APART_HEAD + """
+export const actions = {
+  rename: async ({ request, locals: { safeGetSession } }) => {
+    const { session } = await safeGetSession();
+    if (!session) console.log("nobody");
+    WRITE
+  },
+};
+""", []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(APART_CASES))
+def test_the_function_kept_on_locals_for_asking_who_is_signed_in_taken_apart(tmp_path, case):
+    """`({ locals: { safeGetSession } })`, then `const { session } = await safeGetSession()` and a refusal: the way
+    one sign-in library's own guide writes a page's server file. The function is the one the app's hook keeps on
+    `locals`, whether it is called as `locals.safeGetSession()` or taken out first, in the parameter or in the
+    body. Until 2026-11-15 only the first was read, so the flow step showed no login for such a route. The twins:
+    an answer that is never tested, another function kept on `locals`, the same name from a file of the project
+    (read by its code, which lets everybody in), a test after which the request goes on either way."""
+    from lantern.security import scan
+    text, shown = APART_CASES[case]
+    g = _build(tmp_path, {"svelte.config.js": CONFIG, "src/lib/server/db.ts": DB, "src/lib/server/open.ts": APART_OPEN,
+                          "src/routes/account/+page.svelte": "<h1>Account</h1>\n",
+                          "src/routes/account/+page.server.ts": text.replace("WRITE", APART_WRITE)})
+    sec = scan(g, offline=True)
+    routes = {n.id: n.entry["detail"] for n in g.nodes.values() if n.entry and n.entry["kind"] == "route"}
+    assert sorted(routes[i] for i in sec["logins_shown"] if i in routes) == shown
