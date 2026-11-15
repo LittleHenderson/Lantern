@@ -366,13 +366,18 @@ def answers(stmts) -> bool:
 
 
 def thrown(stmts, lang: str) -> bool:
-    """Whether the request is turned away here by an error that code further out may catch: a `raise` or `throw`, and
-    in Python a call that refuses by raising (`abort(401)`). An answer that is returned cannot be caught."""
+    """Whether the request is turned away here by an error that code further out may catch: a `raise` or `throw`, in
+    Python a call that refuses by raising (`abort(401)`), and in JavaScript a call of a function that throws by
+    itself (SvelteKit's `error(401, ...)` and `redirect(303, ...)`, Next.js's `redirect("/login")`:
+    `flow_rules.JS_THROWS`). An answer that is returned cannot be caught."""
     for s in (stmts or ())[:8]:
         if s.k == "raise":
             return True
         if s.k in ("expr", "return") and s.a is not None and _says_no(s.a):
-            return lang == "py" and (s.k == "expr" or (s.a.k == "call" and text_of(s.a.a).rsplit(".", 1)[-1] == "abort"))
+            if lang != "py":
+                return s.k == "expr" and s.a.k == "call" and s.a.a is not None and s.a.a.k == "name" and \
+                    s.a.a.name in R.JS_THROWS
+            return s.k == "expr" or (s.a.k == "call" and text_of(s.a.a).rsplit(".", 1)[-1] == "abort")
     return False
 
 

@@ -910,6 +910,10 @@ REFUSAL = re.compile(r"forbidden|denied|not allowed|unauthori[sz]ed|not authori[
 REFUSAL_CALL = re.compile(r"^(abort|redirect|deny|reject|fail)$|forbidden|unauthori[sz]ed|"
                           r"permission_?denied|httpexception|notfound", re.I)
 REFUSAL_CODES = {401, 403, 404, "401", "403", "404"}
+# JavaScript functions that refuse by throwing, called as they are (no `throw` before them): SvelteKit 2's `error`
+# and `redirect`, Next.js's `redirect`, `permanentRedirect`, `notFound`, `unauthorized` and `forbidden`. Where such a
+# failure is caught and the request goes on, the check asked nothing (`flow.thrown`).
+JS_THROWS = {"error", "redirect", "permanentRedirect", "notFound", "unauthorized", "forbidden"}
 # Database text that reads, changes or removes rows that exist (an INSERT makes a new one: nobody else's record)
 RECORD_SQL = re.compile(r"^\W*(select|update|delete|with|replace)\b", re.I)
 SQL_WHERE = re.compile(r"\bwhere\b", re.I)
