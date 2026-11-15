@@ -240,10 +240,12 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
                 signed.append((n, d, sign[1]))
         where = [f"{d} ({n.file}:{n.start_line})" for n, d, _ in bare]
         weak_where = [f"{d} ({n.file}:{n.start_line}): {sign}" for n, d, sign in weak]
+        # a Server Action has no verb and path to show, and its finding's snippet is a line of its code
+        actions = {(n.file, n.start_line): f"the Server Action {d[7:]}" for n, d in routes if d.startswith("ACTION ")}
         for f in no_auth:   # routes the app calls that the list above does not already name
             loc = f"{f['file']}:{f['line']}"
             if not any(loc in w for w in where + weak_where):
-                where.append(f"{f.get('snippet') or 'route'} ({loc})")
+                where.append(f"{actions.get((f['file'], f['line'])) or f.get('snippet') or 'route'} ({loc})")
         app_wide = _global_auth_signs(repo)
         if not app_wide and managed:
             app_wide = [("an auth library is installed", 0, "")]

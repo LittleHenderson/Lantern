@@ -398,6 +398,23 @@ def test_the_case_of_a_finding_names_the_action_in_plain_words(tmp_path):
     assert any(x.startswith("It is an entry point itself: route POST /api/run") for x in said), said
 
 
+def test_the_protections_list_names_the_action_not_a_line_of_code(tmp_path):
+    """"Login check on routes that change data" lists what a finding calls open; an action is named there as
+    one, and a route file (the twin) by its verb and path as before."""
+    from lantern.readiness import assess
+    from lantern.security import scan
+    files = {"app/actions.ts": _action_file("removeNote", REMOVES), "lib/db.ts": PRISMA_DB, "app/page.tsx": NOTE_PAGE,
+             "components/Row.tsx": NOTE_ROW.replace("NAME", "removeNote")}
+    g = _build(tmp_path, files, PRISMA)
+    item = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}["route-auth"]
+    assert item["status"] == "add"
+    assert item["evidence"] == ["the Server Action removeNote (app/actions.ts:4)"]
+    twin = {"app/api/notes/route.ts": 'export async function DELETE(request: Request) {\n  return Response.json({});\n}\n'}
+    g = _build(tmp_path / "twin", twin)
+    item = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}["route-auth"]
+    assert item["evidence"] == ["DELETE /api/notes (app/api/notes/route.ts:1)"]
+
+
 def test_a_change_made_by_a_function_the_action_calls_counts_too(tmp_path):
     """The action hands the work to a function of the project; the twin's function only reads."""
     more = {"lib/notes.ts": NOTES}
