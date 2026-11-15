@@ -59,7 +59,7 @@ def _entry_text(g: Graph, r: dict | None) -> str:
 
 
 def build(f: dict, g: Graph) -> dict:
-    from .scenarios import TYPED, kind_of
+    from .scenarios import TYPED, kind_of, row_words
     from .security import rank_reason
     kind = kind_of(f)
     node = g.nodes.get(f.get("node") or "")
@@ -174,6 +174,23 @@ def build(f: dict, g: Graph) -> dict:
         conditions.append(_cond("The app uses the affected part of the library", None,
                                 "Lantern does not trace calls into libraries"))
         unknown.append("whether the affected code in the library is ever called")
+    elif row_words(f):
+        # an open Supabase table: what the project's SQL files show, and what no file can show
+        told = row_words(f)
+        c = told["client"]
+        evidence.append({"fact": told["fact"], "from": "SQL files"})
+        if c:
+            evidence.append({"fact": f"Code that runs in {c.get('on')} talks to this table "
+                                     f"({c.get('file')}:{c.get('line')}): {c.get('why')}", "from": "map"})
+        conditions.append(_cond(told["need"], told["known"], told["why"]))
+        conditions.append(_cond("The database is as the project's SQL files leave it", None,
+                                "Lantern reads the files; a change made in the dashboard, or by a file that is not in "
+                                "the project, is not in them"))
+        conditions.append(_cond("A visitor has the table's name and the public key", True if c else None,
+                                f"code that runs in {c.get('on')} talks to this table ({c.get('file')}:{c.get('line')})"
+                                if c else "Lantern found no code on the visitor's side that reaches this table, which "
+                                          "is not proof that none does"))
+        unknown += told["unknown"]
     elif f.get("category") in ("code", "exposure"):
         if node is not None or r:
             outside = bool((r and r.get("kind") in OUTSIDE_KINDS) or ui_kind in OUTSIDE_KINDS)

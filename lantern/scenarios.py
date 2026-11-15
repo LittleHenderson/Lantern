@@ -453,6 +453,105 @@ def _clicks(g: Graph | None, path: list[str]) -> list[str]:
     return out
 
 
+# An open Supabase table (`LW-NO-RLS` with `row_rules`, roadmap stage 1). One story was told for every open table
+# ("the database answers with every row, because the table has no rules"), which is not what happens where a rule
+# lets rows be added and nothing else, or lets any signed-in user change them. The words follow what the project's
+# SQL files leave open and for whom; a finding without `row_rules` (Firebase's rules, results an older Lantern wrote)
+# is told as before.
+ROW_VERBS = {"insert": "add", "update": "change", "delete": "remove"}
+ROW_STATES = ("off", "off-in-the-files", "open-write", "open-read")
+PUBLIC_KEY = " The key they used is the public one every visitor already has."
+
+
+def row_words(f: dict) -> dict | None:
+    """What an open table's finding says in plain words, read from its `row_rules`: `head` (the heading), `first`
+    and `ask` (the two steps, with `{who}` for the tester's name), `harm`, `after`, `basis`, and for the case
+    `need` (what has to be true), `fact` (what the files show), `known` (whether Lantern saw it), `why`,
+    `client` (the first function on the visitor's side that reaches the table, or None) and `unknown`."""
+    rr = f.get("row_rules")
+    if not isinstance(rr, dict) or rr.get("state") not in ROW_STATES:
+        return None
+    state = rr["state"]
+    signed = rr.get("for") == "signed-in"
+    lets = [w for w in (rr.get("lets") or ()) if w in ROW_VERBS]
+    changes = " and ".join(ROW_VERBS[w] for w in ("update", "delete") if w in lets)
+    table = str(rr.get("table") or "the table")[:130]
+    rows = [c for c in (rr.get("client") or ()) if isinstance(c, dict)]
+    client = rows[0] if rows else None
+    phone = bool(client) and client.get("on") == "the phone"
+    anyone, lower = ("Any signed-in user", "any signed-in user") if signed else ("Anyone", "anyone")
+    unknown = ["whether the database was changed outside these files (in the dashboard, or by a file that is not "
+               "in the project)"]
+    known, why = True, "its condition is true whatever the row and whoever asks"
+    if state in ("off", "off-in-the-files"):
+        head = "Anyone can read and change every row of this database table"
+        ask = ("From their own computer they ask the database for every row of this table, and then change or "
+               "remove rows as they like.")
+        harm = ("The database answers with every row and makes every change, because the table has no rules saying "
+                "who may read or change which rows." + PUBLIC_KEY)
+        after = "Row rules are turned on, so each person only gets their own rows."
+        need = "Row-level security is off for this table"
+        fact = f"create {table} and never switch row-level security on for it"
+        why = "the project's SQL files create the table and never switch it on"
+        if state == "off-in-the-files":
+            head = "This database table may have no row rules"
+            ask = "If row rules are off for this table, as the files that create it leave them: " + ask[0].lower() + ask[1:]
+            fact += "; code that runs in the database names row-level security, and Lantern does not run that code"
+            known, why = None, ("the files that create the table never switch it on, but code that runs in the "
+                                "database names row-level security, and Lantern does not run that code")
+    elif state == "open-read":
+        head = f"{anyone} can read every row of this database table"
+        ask = "From their own computer they ask the database for every row of this table."
+        harm = ("The database answers with every row, because a rule on the table lets any signed-in user read all "
+                "of it, not only their own rows." if signed else
+                "The database answers with every row, because a rule on the table lets everyone read all of it."
+                + PUBLIC_KEY)
+        after = "The rule lets a row be read only by its owner, so each person gets only their own rows."
+        need = f"A policy lets {lower} read every row"
+        fact = f"leave a policy on {table} that lets {lower} read every row"
+        unknown.append("whether these rows are meant for everybody")
+    elif changes:
+        head = f"{anyone} can {changes} any row of this database table"
+        ask = f"From their own computer they ask the database to {changes} rows of this table that are not theirs."
+        harm = ("The database does it, because a rule on the table only asks that somebody is signed in, not whose "
+                "row it is." if signed else
+                f"The database does it, because a rule on the table lets everyone {changes} rows without asking "
+                "whose they are." + PUBLIC_KEY)
+        after = "The rule compares each row's owner with who is asking, so each person reaches only their own rows."
+        need = f"A policy lets {lower} {changes} any row"
+        fact = f"leave a policy on {table} that lets {lower} {changes} any row"
+    else:
+        head = f"{anyone} can add rows to this database table"
+        ask = ("From their own computer they ask the database to add rows to this table, as many as they like and "
+               "under any name.")
+        harm = ("The database takes every row they send, because a rule on the table lets "
+                f"{'any signed-in user' if signed else 'everyone'} add rows and checks nothing about them."
+                + ("" if signed else PUBLIC_KEY))
+        after = "The rule checks that a new row belongs to who is adding it, so nobody adds rows in another person's name."
+        need = f"A policy lets {lower} add rows"
+        fact = f"leave a policy on {table} that lets {lower} add rows"
+        unknown.append("whether adding rows freely is meant here (a sign-up, a feedback form)")
+    if signed and phone:
+        first = ("{who} installs your app, signs up, as anyone can, and reads the public database address, the key "
+                 "and their own sign-in out of it.")
+    elif signed:
+        first = ("{who} signs up on your site, as anyone can, signs in, and copies the public database address, the "
+                 "key and their own sign-in from the page.")
+    elif phone:
+        first = ("{who} installs your app and reads the public database address and key out of it (they are meant "
+                 "to be public).")
+    else:
+        first = ("{who} opens your site and copies the public database address and key from the page (they are "
+                 "meant to be public).")
+    side = (client.get("on") if client else None) or "the visitor's side"
+    basis = ["what is open comes from the project's SQL files, replayed in the order they are applied",
+             f"the code that talks to this table from {side} comes from the map of your app" if client else
+             "Lantern found no code on the visitor's side that reaches this table, which is not proof that none does"]
+    return {"head": head, "first": first, "ask": ask, "harm": harm, "after": after, "basis": basis, "need": need,
+            "fact": "Replayed in the order they are applied, the project's SQL files " + fact, "known": known,
+            "why": why, "client": client, "unknown": unknown}
+
+
 def _route_word(g: Graph | None, f: dict) -> tuple[str | None, str | None]:
     """The route or command the request lands on (`POST /backup`), and the entry kind."""
     r = f.get("reachable") or {}
@@ -524,6 +623,11 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
         if f.get("line") and f.get("file"):
             steps.append(f"What lets them is in {f['file']}, line {f['line']}.")
         basis.append("the setting comes from your app's manifest, build file or code")
+    elif kind == "open-db" and row_words(f):
+        told = row_words(f)
+        steps += [told["first"].format(who=who), told["ask"]]
+        harm, after = told["harm"], told["after"]
+        basis += told["basis"]
     elif kind == "open-db":
         steps.append(f"{who} opens your site and copies the public database address and key from the page (they "
                      "are meant to be public).")
@@ -699,6 +803,8 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
                 else "Anyone can make your app spend money on paid calls")
     if kind == "secret" and (f.get("category") == "exposure" or str(f.get("rule")) == "LW-PUBLIC-SECRET"):
         return "A secret setting is sent to every visitor's browser"
+    if kind == "open-db" and row_words(f):
+        return row_words(f)["head"]
     if kind in FIXED_HEADLINES:
         return FIXED_HEADLINES[kind]
     if kind not in HEADLINES:

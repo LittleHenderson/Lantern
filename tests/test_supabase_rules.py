@@ -329,3 +329,119 @@ def test_without_a_map_the_files_alone_are_read(tmp_path):
     root = _write(tmp_path, {"package.json": NEXT, SQL: TABLE})
     (f,) = websec.database_rules(root)
     assert (f["rule"], f["file"], f["line"], f["fixed_rank"]) == ("LW-NO-RLS", SQL, 1, "high")
+
+
+def _told(root, files):
+    """The one `LW-NO-RLS` finding of the project as a person reads it: the heading, the story as one text (the
+    steps, what happens, what the fix changes), what the story rests on, and the case."""
+    _, s = _found(root, files)
+    (f,) = [f for f in s["findings"] if f["rule"] == "LW-NO-RLS"]
+    sc = f["scenario"]
+    return f["headline"], " ".join([*sc["steps"], sc["harm"], sc["after_fix"]]), sc["basis"], f["case"]
+
+
+TOLD = [
+    # (the SQL after the table is made, the heading, words the story holds, words it must not hold)
+    ("", "Anyone can read and change every row of this database table",
+     ["for every row of this table", "change or remove rows", "no rules saying who may read or change"],
+     ["signs up", "a rule on the table"]),
+    (ON + "create policy p on public.todos using (true);\n",
+     "Anyone can change and remove any row of this database table",
+     ["to change and remove rows of this table that are not theirs", "a rule on the table lets everyone"],
+     ["signs up", "no rules saying", "answers with every row"]),
+    (ON + "create policy p on public.todos for delete to anon using (true);\n",
+     "Anyone can remove any row of this database table",
+     ["to remove rows of this table that are not theirs"], ["change", "signs up"]),
+    (ON + "create policy p on public.todos for all to authenticated using (true);\n",
+     "Any signed-in user can change and remove any row of this database table",
+     ["signs up", "only asks that somebody is signed in"], ["no rules saying", "lets everyone"]),
+    (ON + "create policy p on public.todos for insert with check (true);\n",
+     "Anyone can add rows to this database table",
+     ["to add rows to this table", "as many as they like"],
+     ["answers with every row", "that are not theirs", "signs up"]),
+    (ON + "create policy p on public.todos for select using (true);\n",
+     "Anyone can read every row of this database table",
+     ["for every row of this table", "lets everyone read"],
+     ["change", "remove", "signs up", "no rules saying"]),
+    (ON + "create policy p on public.todos for select to authenticated using (true);\n",
+     "Any signed-in user can read every row of this database table",
+     ["signs up", "not only their own"], ["no rules saying", "change", "remove"]),
+]
+
+
+@pytest.mark.parametrize("sql,heading,holds,holds_not", TOLD, ids=[t[1][:60] for t in TOLD])
+def test_the_story_of_an_open_table_says_what_is_open_and_for_whom(tmp_path, sql, heading, holds, holds_not):
+    """One story was told for every open table: "the database answers with every row, because the table has no
+    rules". For a table whose rule lets rows be added and nothing else, or lets any signed-in user change them,
+    that story is not what happens. The heading and the story follow what the SQL files leave open."""
+    head, story, basis, _ = _told(tmp_path, {**BROWSER, SQL: TABLE + sql})
+    assert head == heading
+    for words in holds:
+        assert words in story, (words, story)
+    for words in holds_not:
+        assert words not in story, (words, story)
+    assert "the project's SQL files" in basis and "from the browser" in basis
+
+
+def test_the_story_says_where_the_key_is_taken_from_and_what_lantern_did_not_find(tmp_path):
+    """On a phone app the key is read out of the app, not copied from a page. Where Lantern found no code on the
+    visitor's side that reaches the table, the story says that this is no proof, and still tells what happens."""
+    _, story, basis, _ = _told(tmp_path / "phone", {
+        "package.json": EXPO, "app.json": '{"expo": {"name": "t"}}', "lib/supabase.ts": CLIENT,
+        "app/index.tsx": SCREEN, SQL: TABLE})
+    assert "installs your app" in story and "opens your site" not in story and "from the phone" in basis
+
+    head, story, basis, _ = _told(tmp_path / "server", {**SERVER, SQL: TABLE})
+    assert head == "Anyone can read and change every row of this database table"
+    assert "opens your site" in story
+    assert "found no code on the visitor's side that reaches this table, which is not proof that none does" in basis
+
+
+def test_the_case_of_an_open_table_says_what_the_files_show_and_what_is_not_known(tmp_path):
+    """What has to be true for harm, each with what Lantern saw: the files leave the table open (seen), the
+    database is as the files leave it (never known: Lantern reads files), a visitor has the table's name and the
+    key (seen where the visitor's side talks to the table, not known otherwise, never "no")."""
+    def needs(case):
+        return {c["need"]: c["met"] for c in case["conditions"]}
+
+    *_, case = _told(tmp_path / "off", {**BROWSER, SQL: TABLE})
+    assert needs(case) == {"Row-level security is off for this table": True,
+                           "The database is as the project's SQL files leave it": None,
+                           "A visitor has the table's name and the public key": True}
+    assert [e["fact"] for e in case["evidence"] if e["from"] == "SQL files"] == [
+        "Replayed in the order they are applied, the project's SQL files create public.todos and never switch "
+        "row-level security on for it"]
+    assert any("the dashboard" in u for u in case["unknown"])
+
+    *_, case = _told(tmp_path / "server", {**SERVER, SQL: TABLE})
+    assert needs(case)["A visitor has the table's name and the public key"] is None
+
+    *_, case = _told(tmp_path / "policy", {
+        **BROWSER, SQL: TABLE + ON + "create policy p on public.todos for all to authenticated using (true);\n"})
+    assert needs(case) == {"A policy lets any signed-in user change and remove any row": True,
+                           "The database is as the project's SQL files leave it": None,
+                           "A visitor has the table's name and the public key": True}
+
+    # the twin: code in the database names row-level security, so whether it is off is not known
+    *_, case = _told(tmp_path / "guess", {
+        **BROWSER, SQL: TABLE + "create function lock_down() returns void language plpgsql as $$\n"
+                                "begin execute 'alter table todos enable row level security'; end $$;\n"})
+    assert needs(case)["Row-level security is off for this table"] is None
+
+
+def test_the_twins_other_open_databases_keep_the_story_they_had(tmp_path):
+    """A finding that carries no row rules is told as before: Firebase's open rules, and an `LW-NO-RLS` finding an
+    older Lantern wrote."""
+    from lantern import scenarios
+    old = scenarios.for_finding({"id": "lw-1", "rule": "LW-NO-RLS", "tool": "lantern-web", "category": "config",
+                                 "title": "Table 'todos' has no row-level security"}, None)
+    assert old["steps"][1] == "From their own computer they ask the database for every row of this table."
+    assert old["harm"].startswith("The database answers with every row, because the table has no rules")
+    assert scenarios.headline({"id": "lw-1", "rule": "LW-NO-RLS"}, None) == "Anyone can read this database table"
+
+    root = _write(tmp_path, {"package.json": SPA, "firestore.rules":
+                             "service cloud.firestore {\n match /{document=**} {\n  allow read, write: if true;\n }\n}\n"})
+    s = scan(build_graph(root))
+    (f,) = [f for f in s["findings"] if f["rule"] == "LW-DB-OPEN"]
+    assert f["headline"] == "Anyone can read this database table"
+    assert f["scenario"]["steps"][1] == "From their own computer they ask the database for every row of this table."
