@@ -9,10 +9,11 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
-- **Modern stack, first part: Supabase tables read with their row rules, and Next.js Server Actions as routes**
-  (2026-11-14; stage 1 of the roadmap of 2026-11-14, steps 1 and 2. Tests first for each rule, each dangerous
-  example beside twins that must stay clean. The two new kinds of link and the new login rule are not yet
-  measured on public projects: until they are, they are provisional, and the documents say so).
+- **Modern stack, first part: Supabase tables read with their row rules; Next.js Server Actions and tRPC
+  procedures as routes** (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14, steps 1 to 3. Tests first
+  for each rule, each dangerous example beside twins that must stay clean. The new kinds of link and the new
+  login rule are not yet measured on public projects: until they are, they are provisional, and the documents
+  say so).
   - **A Supabase table is on the map.** A call written `<client>.from("<table>")` followed by `select`,
     `insert`, `update`, `upsert` or `delete` is a link from the function to the table (`db:<table>`, Data lane),
     with what the function does there. The link is "likely" (`supabase-from`) where the client's value was
@@ -64,7 +65,7 @@ file. New entries go under `## Unreleased`, on top.
     and the report's rows and chips "Server Action summarize". The report also said of every JavaScript function
     that it runs "in the visitor's browser"; one on the Server lane (an Express handler, a Next.js route, an
     action) is now "a function running on your server".
-    Tests: `tests/test_server_actions.py` (25; the 6 newest failed on the code before them).
+    Tests: `tests/test_server_actions.py` (26; the 7 newest failed on the code before them).
   - **A value one file hands to another is followed.** `export const db = new PrismaClient()` in `lib/db.ts`
     and `db.note.delete()` in a route: the call was "not followed" (`missing-export`), because an import was
     followed only to a function or a class. Now it is a likely link to the library's function
@@ -80,11 +81,38 @@ file. New entries go under `## Unreleased`, on top.
     provider on the map). Left alone, with their reason: a name set again, a value built by a condition, an
     object written out, what a function of the project hands back, `x && new T()`, and a name the project
     puts a function of its own on. Tests: `tests/test_js_values.py` (6, all failed on the code before).
+  - **A tRPC procedure is a route.** A tRPC app has no route files: one handler serves every procedure, and
+    that one door was all the map showed. Where the nearest `package.json` depends on `@trpc/server`, each
+    procedure of a router (`createTRPCRouter({ create: protectedProcedure.input(…).mutation(fn) })`, a router
+    inside a router, routers merged or spread, a router written out as an object) is an entry point named by
+    where it is served and its path: `POST /api/trpc/post.create` for a mutation, `GET` for a query or a
+    subscription. Where it is served comes from the adapter call (`endpoint`, `basePath`, `prefix`), the
+    Express path it is mounted under, or the Next.js route file; with none of them the path stands alone. A
+    page's call through the tRPC client (`api.post.create.useMutation()`, `client.post.hello.query()`,
+    `trpc.post.hello.queryOptions()`) is a link to the procedure, as a request (`http-trpc`): confirmed on a
+    client that tRPC's own function made, "likely" where the client comes out of a hook Lantern does not
+    follow. *The login check* reads what a route is built on: `protectedProcedure` is a check by its name; any
+    other name by what the function put before it does (it turns a caller away with a `TRPCError`
+    `UNAUTHORIZED` or `FORBIDDEN`), and the handler's own lines the same way. A comment, a text and another
+    error code (`TOO_MANY_REQUESTS`) are none. *What the caller sends* is the handler's `input` (also
+    `opts.input`), followed as request data; `ctx` is the server's own, and `ctx.session` is who is signed in.
+    The one handler is marked (`serves: "trpc"`) and is no longer counted as a route that changes data: its
+    procedures are asked instead. Reading every sentence of a whole analysis on a tiny app found three wrong
+    wordings, fixed with a test first: a finding on a procedure's first line said the request's data arrives
+    through `input(`, the step that says what the procedure accepts (the reader of a flagged line knew that
+    word as Python's built-in in every language; in JS/TS a method after a dot is not that); the login
+    finding did not say what it had read for a procedure; and the report's list said "frontend" beside every
+    JavaScript entry, also beside one that runs on the server (a route file, an action, a procedure).
+    *Measured* on the projects already on the benchmark machine, none of which uses tRPC, so nothing should
+    move: 0 of 31,168 call sites changed on seven, no finding changed on nine.
+    Tests: `tests/test_trpc.py` (15; the first 9 failed on the code before them).
   *Not covered:* a client handed in as a parameter; a table reached through `rpc()` or a view; row-level
   security switched on in the dashboard (Lantern reads the files, and says so); an action exported through a
   wrapper Lantern does not look through; a value the map cannot place (an object written out, what a function
-  of the project hands back), where the login rule reads a call by its name alone. `docs/audit/CLAIMS.md` A20,
-  A21, A22, S34 and S35 have the full lists.
+  of the project hands back), where the login rule reads a call by its name alone; a tRPC procedure kept under
+  a name of its own and put into a router later, a call from the server's own code (`createCaller`), a router
+  loaded lazily, and a request limit or a login check put on the one handler in place of the procedures.
+  `docs/audit/CLAIMS.md` A20 to A23 and S34 to S36 have the full lists.
 
 - Fix this for me (optional): pick a coding agent you already use (Claude Code, Codex or Aider) in Advanced
   Settings, and a finding's Fix screen offers "Fix this for me with …". The agent works on a copy of your project;

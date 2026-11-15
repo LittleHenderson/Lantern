@@ -227,6 +227,27 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   (`graph.route_words`), in a finding's title, story (through a page: "send the form on it"; with no page that
   uses it, a request sent straight to the action) and case, and in the lists of `readiness.json`; the report's
   rows and chips show `Server Action <name>`. A finding's `routes` list keeps the detail as the map writes it.
+* tRPC procedures (since 2026-11-15, roadmap stage 1). Where the nearest `package.json` depends on `@trpc/server`,
+  each procedure of a router is an entry point on its handler: `{"kind": "route", "detail": "POST
+  /api/trpc/post.create", "trpc": {"path": "post.create", "type": "mutation"|"query"|"subscription", "procedures":
+  ["protectedProcedure", …], "mount": "/api/trpc"|null}}`. A mutation is `POST`, a query or a subscription `GET`.
+  The path is the keys through the routers (a router inside a router, `mergeRouters(a, b)`, a router spread into
+  another, one written out as an object: `{ … } satisfies TRPCRouterRecord`). `mount` is where the adapter serves
+  them (`endpoint`, `basePath` or `prefix` of the adapter call, the path of the Express `use` it stands in, or the
+  Next.js route file that calls it) and `null` where the code does not say: the detail is then the path alone
+  (`POST /post.create`). `procedures` are the names the procedure is built on, nearest first (`adminProcedure`,
+  `publicProcedure`), and the functions put before it with `.use(fn)` are in the entry's `middleware` list (node
+  ids). A handler written in place is a node of its own, `js:<file>::<router>.<key>` (a `.use(fn)` written in
+  place: `js:<file>::<name>.use`); a handler handed by name keeps its node. The route whose function calls the
+  adapter keeps its entry and gets `"serves": "trpc"`: the login rule and the readiness page ask its procedures,
+  not it. A call through a tRPC client (`api.post.create.useMutation()`, `client.post.hello.query()`,
+  `trpc.post.hello.queryOptions()`) adds an edge from the calling function to the procedure with `via`
+  `http-trpc` and the route's detail, beside the call's own record in `calls.json`: `resolved` where the client is
+  what a function of an `@trpc/…` package returned, `inferred` where the client's value is not followed and the
+  path names one procedure, `possible` where it names several. `graph.json` `meta.trpc` counts them:
+  `{"procedures", "routers", "client_calls", "linked"}` (absent where the project has none). The data flow reads
+  `input` (and `rawInput`) of the handler's one argument as request data and `ctx` as the server's own
+  (`ctx.session`, `ctx.user`: who is signed in). The client links are provisional: not measured on public projects.
 * JavaScript `via` values added in stage 3 (2026-11-09): `require-call` (`require('./x')(...)`), `route-handler` and
   `middleware` (a function handed to an Express router by name: resolved when it is named straight from a module,
   inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),
@@ -368,7 +389,9 @@ absent from results written before 2026-11-11. The protection `route-auth` in `r
 as checked (found: "the code on the way to this route turns away whoever is not signed in"), and names a route an
 `LW-AUTH-MISSING` finding calls open among the open ones, whatever the names around it say. A Server Action that
 changes data (read as for the finding, below) counts among the "routes that change data" of `route-auth` and
-`rate-limit`, and their `evidence` and `found` name it `the Server Action <name> (<file>:<line>)`.
+`rate-limit`, and their `evidence` and `found` name it `the Server Action <name> (<file>:<line>)`. A tRPC
+procedure is counted under its own address (a mutation changes data); the one route that serves them all
+(`serves: "trpc"`) is not counted.
 
 `not_read` (`lantern/unread.py`, since 2026-11-12; `{}` when the project holds neither kind, absent from older
 results): what the project holds that Lantern takes for code or software and did not read. `renamed`: code kept under
@@ -477,7 +500,14 @@ own, `crypto`) or the map followed the call into a library that keeps none of th
 `setDoc`, `addDoc`, `updateDoc`, `deleteDoc`. The action's own lines are read first, then the project's JS/TS
 functions it calls, two calls deep. The rule is provisional: it has not been measured on public projects yet.
 `LA-WALLET-DRAIN` on an action is titled "The Server Action <name> spends money …", and its `snippet` is the
-action's first line (a route's is its verb and path).
+action's first line (a route's is its verb and path). A tRPC procedure is asked as a route (a mutation is a
+`POST`), with two signs of its own (since 2026-11-15): a name it is built on that holds a login word ("the
+procedure `protectedProcedure` it is built on"), and, under any name, what the functions put before it and its
+own lines do: `new TRPCError({ code: "UNAUTHORIZED" })` or `FORBIDDEN` written as code ("`adminProcedure` turns a
+caller away (TRPCError FORBIDDEN, server/api/trpc.ts:17)", "it turns a caller away itself (TRPCError
+UNAUTHORIZED, line 22)"). A comment, a text and another code (`TOO_MANY_REQUESTS`) are none. `more_info` of the
+finding names what the procedure is built on. On a finding in a procedure, `input.via` names the handler's
+`input` ("parameter `input`"), never the `.input(…)` step that says what the procedure accepts.
 
 Two rules of `lantern-web` rest on the same step. `LW-XSS-RAW` (79, `tool_confidence: LOW`): a place in a page
 template that prints a value without escaping it (EJS `<%- x %>`, Handlebars and Mustache `{{{x}}}` / `{{& x}}`, Pug
