@@ -190,6 +190,23 @@ KIT_SERVER_FILE = re.compile(r"\.server\.[cm]?[jt]s$|(^|/)server/|(^|/)\+server\
 # write it: `await locals.auth()` (Auth.js), `locals.safeGetSession()` / `locals.getSession()` (Supabase),
 # `locals.validate()` (Lucia). What such a call hands back is there when somebody is signed in.
 KIT_ASKS = {"auth", "getSession", "safeGetSession", "getUser", "validate", "validateUser", "getSessionAndUser"}
+# Remix and React Router: a session kept with the library's own storage. `getSession(request.headers.get("Cookie"))`
+# hands back the session of whoever sent the cookie, and what the server put into it under a name that says who is
+# signed in (`session.get("userId")`, `session.has("userId")`) is there when somebody is. `createCookieSessionStorage`
+# keeps all of it in the cookie itself, which only the server can have written where the cookie is made with secrets
+# to sign it (`flow.secrets_given`); the other storages keep it on the server, under a number the cookie carries.
+SESSION_LIB = r"(@remix-run/[\w-]+|react-router|@react-router/[\w-]+)"
+SESSION_STORE = re.compile(rf"^{SESSION_LIB}\.create(?P<kind>\w*)SessionStorage$")
+SESSION_COOKIE = re.compile(rf"^{SESSION_LIB}\.createCookie$")
+SESSION_COOKIE_SIGNED = re.compile(rf"^{SESSION_LIB}\.createCookie\(\)$")
+SESSION_ASKS = re.compile(rf"^{SESSION_LIB}\.create\w*SessionStorage\(\)\.getSession$")
+SESSION_HELD = re.compile(rf"^{SESSION_LIB}\.create\w*SessionStorage\(\)\.getSession\(\)$")
+SESSION_READS = {"get", "has"}
+# What such a storage, its cookie or a part taken out of it is called once made (`flow.Engine.lookup` follows these,
+# and nothing else, into the file of the project that made them); `UNSIGNED` is put where the call's `()` would
+# stand when the code does not show that the server alone can have written the session.
+SESSION_MADE = re.compile(rf"^{SESSION_LIB}\.create(\w*SessionStorage|Cookie)\([^()]*\)(\.\w+)?$")
+UNSIGNED = "(not signed)"
 REQUEST_TYPES = re.compile(r"\b(Request|HttpRequest|WSGIRequest|NextRequest|NextApiRequest|FastifyRequest|"
                            r"WebSocket|HTTPConnection|IncomingMessage)\b")
 REQUEST_GLOBALS = {"flask.request", "quart.request", "bottle.request", "flask.globals.request", "sanic.request"}

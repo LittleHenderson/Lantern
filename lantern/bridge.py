@@ -17,6 +17,9 @@ from __future__ import annotations
 from .graph import CALLS, INFERRED, POSSIBLE, RESOLVED, Graph
 
 
+REMIX_ACTION_VERBS = ("POST", "PUT", "PATCH", "DELETE")
+
+
 def _segs(path: str) -> list[str]:
     out = []
     for s in path.split("/"):
@@ -43,6 +46,8 @@ def _routes(g: Graph) -> list[dict]:
         verbs = {v.upper() for v in verb.split("/")} if verb else {"ANY"}
         if verbs & {"ROUTE", "API_ROUTE", "WEBSOCKET"}:
             verbs = {"ANY"}
+        if n.entry.get("remix") == "action":
+            verbs = set(REMIX_ACTION_VERBS)     # a Remix route's `action` answers every verb but GET
         out.append({"id": n.id, "verbs": verbs, "segs": _segs(path), "detail": detail})
     return out
 

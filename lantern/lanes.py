@@ -55,9 +55,12 @@ DATA_RE = re.compile(
 )
 
 # A JS/TS module in one of these places runs on the server, and so does one whose name says so (`+page.server.ts`,
-# `hooks.server.ts`, `db.server.ts`: SvelteKit and Remix keep such a file out of what the browser gets).
+# `hooks.server.ts`, `db.server.ts`: SvelteKit and Remix keep such a file out of what the browser gets). Not by
+# its place: the route file of a folder of `app/routes` (`app/routes/<name>/route.tsx`), which in a Remix app holds
+# a page beside its `loader`; where it is a server's route (Next.js, Express) the route on it says so.
 SERVER_PATH_RE = re.compile(
-    r"(^|/)(src/)?(app/.*(/|^)route\.[cm]?[jt]sx?$|pages/api/|api/|server/|backend/|functions/|netlify/|"
+    r"(^|/)(src/)?(app/(?!routes/[^/]+/route\.).*(/|^)route\.[cm]?[jt]sx?$|pages/api/|api/|server/|backend/|"
+    r"functions/|netlify/|"
     r"supabase/functions/|worker[s]?/|middleware\.[cm]?[jt]s$)|\.server\.[cm]?[jt]sx?$"
 )
 
@@ -71,6 +74,7 @@ def _server_modules(g: Graph) -> set[str]:
     inside another function of a file that is not: there the action alone is the server's, not the page around it."""
     out: set[str] = set()
     said = g.meta.get("js_directives") or {}
+    both: dict[str, tuple[set[str], str]] = {}
     for n in g.nodes.values():
         if not n.id.startswith("js:"):
             continue
@@ -80,9 +84,35 @@ def _server_modules(g: Graph) -> set[str]:
         if e.get("kind") == "route" and str(e.get("detail", "")).startswith("ACTION ") \
                 and "use server" not in (said.get(n.file) or ()):
             out.add(n.id)
+        elif e.get("kind") == "route" and e.get("remix") and e.get("component"):
+            # a Remix route file that shows something holds both sides: its `loader` and `action` are the server's
+            # and what it shows is the browser's (a route file that shows nothing is the server's as a whole)
+            both.setdefault(_module_id(n), (set(), e["component"]))[0].add(n.id)
         elif e.get("kind") == "route" or (e.get("kind") == "main" and str(e.get("detail", "")).startswith("server start")):
             out.add(_module_id(n))
+    for mod, (doors, shown) in both.items():
+        if mod not in out:
+            out |= doors | _servers_part(g, doors, shown)
     return out
+
+
+def _servers_part(g: Graph, doors: set[str], shown: str) -> set[str]:
+    """In a Remix route file that shows something: the functions of that file its `loader` and `action` call (and
+    what those call there) which the part that is shown does not call. Only the server runs them: the framework
+    leaves them out of what the browser gets."""
+    mod = shown.split("::", 1)[0]
+
+    def reach(start: set[str]) -> set[str]:
+        seen, todo = set(start), list(start)
+        while todo:
+            for e in g.callees(todo.pop()):
+                if e.dst not in seen and e.dst.startswith(mod + "::") and \
+                        not (e.via or "").startswith(("http-", "remix-")):
+                    seen.add(e.dst)
+                    todo.append(e.dst)
+        return seen
+
+    return reach(doors) - reach({shown})
 
 
 def _in_action(nid: str, server_modules: set[str]) -> bool:

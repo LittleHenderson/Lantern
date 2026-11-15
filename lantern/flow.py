@@ -585,6 +585,40 @@ def given(n: N | None) -> bool:
     return True
 
 
+def secrets_given(opts: N | None) -> bool:
+    """Whether a cookie's options are written with secrets to sign it with (`{ secrets: [process.env.SESSION_SECRET] }`):
+    at least one, and none that is fixed nothing or may be empty text. A cookie with none is the visitor's to write."""
+    if opts is None or opts.k != "map":
+        return False
+    for key, x in opts.items or ():
+        if key is not None and key.k == "const" and key.a == "secrets":
+            if x is not None and x.k == "seq":
+                return bool(x.items) and all(given(i) for i in x.items)
+            return given(x)
+    return False
+
+
+def signed_cookie(e: N, args: list) -> bool:
+    """`createCookieSessionStorage({ cookie })`: whether the cookie the session is kept in is one the server signs,
+    written in the call or made before it with `createCookie(name, { secrets })`."""
+    opts = e.items[0] if e.items else None
+    if opts is None or opts.k != "map":
+        return False
+    for key, x in opts.items or ():
+        if key is not None and key.k == "const" and key.a == "cookie":
+            if x is not None and x.k == "map":
+                return secrets_given(x)
+            held = args[0].data.get("cookie") if args and args[0] is not None and args[0].kind == "obj" else None
+            return held is not None and held.kind == "ext" and isinstance(held.data, str) and \
+                bool(R.SESSION_COOKIE_SIGNED.match(held.data))
+    return False
+
+
+def session_held(v: Val | None) -> bool:
+    """Whether `v` is the session a Remix or React Router storage handed back for the request's cookie."""
+    return v is not None and v.kind == "ext" and isinstance(v.data, str) and bool(R.SESSION_HELD.match(v.data))
+
+
 def own_file(x: N | None) -> bool:
     """`__file__`, also made absolute or into a path: the code's own file."""
     if x is None:
@@ -1780,6 +1814,10 @@ class Engine:
             # a SvelteKit `load`, action, endpoint or `handle` is handed the event, whole (`event`) or taken apart
             # (`{ request, params, url, cookies, locals }`): `member1`
             return Val(kind="req", data="kit")
+        if not py and i == 0 and (self.entry(fn) or {}).get("remix"):
+            # a Remix `loader` or `action` is handed one object, whole (`args`) or taken apart
+            # (`{ request, params, context }`): `member1`
+            return Val(kind="req", data="remix")
         if not py:
             # a helper of a SvelteKit project that is handed the event, or what the server's hook put on it
             kit = bool(self.g.meta.get("sveltekit")) and bool(R.KIT_SERVER_FILE.search(fn.file or ""))
@@ -1949,8 +1987,9 @@ class Engine:
     def bind_param(self, env: Env, fn: Fn, i: int, p: P, given: Val | None, ctx: Ctx, summary: bool) -> None:
         val = given if given is not None else self.param_val(fn, i, p, summary)
         if p.pattern is not None:
-            if val.kind == "req" and val.data in ("trpc", "kit"):
-                pass      # `({ ctx, input })` of a tRPC procedure, `({ request, locals })` of a SvelteKit route
+            if val.kind == "req" and val.data in ("trpc", "kit", "remix"):
+                pass      # `({ ctx, input })` of a tRPC procedure, `({ request, locals })` of a SvelteKit route,
+                #           `({ request, params })` of a Remix one
             elif given is None and not summary and fn.lang == "js" and is_next_file(fn.file):
                 val = Val(kind="req", data="js")      # `({ params, searchParams })` of a Next.js page or route
             elif given is None and is_next_file(fn.file) and p.pattern.k == "map":
@@ -2737,6 +2776,14 @@ class Engine:
                 f = self.imported(mod, d)
                 if f is not None:
                     self.escaped.add(f.key)
+            if mod.lang == "js" and d.startswith(".") and name in mod.picked:
+                # a session storage another file of the project made, or a part taken out of it there: that very
+                # value, so that what is known of its cookie comes with it (`flow_rules.SESSION_MADE`)
+                src = self.js_file(mod, d)
+                if src is not None and mod.picked[name] in src.consts:
+                    got = self.modval(src, mod.picked[name])
+                    if got.kind == "ext" and isinstance(got.data, str) and R.SESSION_MADE.match(got.data):
+                        return got
             return Val(kind="ext", data=d)
         if name in ("this", "self") and mod.lang == "js":
             return Val(kind="self", data=env.fn.cls)
@@ -2826,6 +2873,12 @@ class Engine:
                     return Val(kind="req", data="trpc-ctx")
                 if name == "event":
                     return base
+                base = Val(kind="req", data="js")
+            if base.data == "remix":
+                # what a Remix route is handed: `context` is what the server itself put there when it started the
+                # app; `request` and `params` are the request and the parts of its address
+                if name == "context":
+                    return Val(kind="req", data="trpc-ctx")
                 base = Val(kind="req", data="js")
             inputs = R.PY_INPUT if base.data == "py" else R.TRPC_INPUT if base.data == "trpc" else \
                 FIXED0 if base.data == "trpc-ctx" else R.JS_INPUT
@@ -4159,6 +4212,21 @@ class Engine:
             self.token_lines.add((fn.file, e.line))
         elif self.sender_checked(name, callee, e, env):
             self.sender_held(ctx, e)    # a webhook: nothing about the value changes, only who can get past here
+        # a session kept with Remix's or React Router's own storage. A cookie that is not signed, and a session
+        # kept whole in one, is the visitor's to write: it is named apart and shows nothing
+        if fn.lang == "js" and name:
+            made = R.SESSION_STORE.match(name)
+            if (made and made.group("kind") == "Cookie" and not signed_cookie(e, args)) or \
+                    (R.SESSION_COOKIE.match(name) and not secrets_given(e.items[1] if len(e.items or ()) > 1 else None)):
+                return Val(kind="ext", data=name + R.UNSIGNED)
+            if R.SESSION_ASKS.match(name) and not (callee.kind == "ext" and callee.data == name):
+                # named by the map, not by a value followed here (`import * as sessions`, a file re-exporting it):
+                # which storage it is, and so whether its cookie is signed, is not known
+                return Val(kind="ext", data=name + R.UNSIGNED)
+        if session_held(recv) and member in R.SESSION_READS and a0 is not None and a0.kind == "const" and \
+                isinstance(a0.data, str) and R.SIGNED_IN.search("." + a0.data):
+            # `session.get("userId")`: what the server itself put there when somebody signed in
+            return proven_val("what the server's own session holds", f"session.{member}()")
         # 0. who is signed in, handed back by a call whose code Lantern does not read: taken by its name
         ask = member if recv is not None and recv.kind == "req" and recv.data == "trpc-ctx" and \
             member in R.KIT_ASKS else callee.data if recv is None and callee.kind == "kit-ask" else None
@@ -5546,6 +5614,9 @@ class Engine:
         if k == "call" and c.a is not None and c.a.k == "attr" and plain_chain(c.a.a):
             if c.a.name in R.LOGIN_ASKED and not c.items and text_of(c.a.a) in R.REQUEST_NAMES:
                 return True, ()                                         # req.isAuthenticated()
+            if c.a.name in R.SESSION_READS and len(c.items or ()) == 1 and session_held(self.eval(c.a.a, env, ctx)):
+                # Remix: `session.has("userId")`, asked in the condition itself (`lib` says what it hands back)
+                return (is_proven(self.eval(c, env, ctx)) and not soft), ()
             if c.a.name == "get" and c.items and c.items[0] is not None and c.items[0].k == "const" and \
                     isinstance(c.items[0].a, str) and R.SIGNED_IN.search("." + c.items[0].a):
                 return shows(self.eval(c.a.a, env, ctx), soft)          # session.get("user_id")

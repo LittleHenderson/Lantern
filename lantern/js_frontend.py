@@ -127,6 +127,19 @@ KIT_VERBS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 KIT_FILE = re.compile(r"^src/routes/(?P<dir>(?:[^/]+/)*)\+(?P<kind>page\.server|layout\.server|server|page|layout)"
                       r"(?:@[^./]*)?\.(?P<ext>[jt]s|svelte)$")
 KIT_HOOKS = re.compile(r"^src/hooks\.server(?:/index)?\.[jt]s$")
+# Remix, and React Router's framework mode that took its place (the same stage). The doors of such an app are its
+# route files: `app/root` and what lies directly in `app/routes`, a file or a folder with a `route` file in it. A
+# file's name is its address (`remix_address`); its `loader` answers a GET there, its `action` every other verb,
+# and what it exports by default is the page. Read only where the nearest package.json says the app is one
+# (`remix_way`), and never by running the app's settings.
+REMIX_PACKAGES = re.compile(r"^@remix-run/(dev|node|react|serve|express|cloudflare|deno|architect|netlify|vercel|"
+                            r"server-runtime)$")
+ROUTER_FRAMEWORK = "@react-router/dev"
+REMIX_FILE = re.compile(r"^app/(?:root|routes/(?P<name>[^/]+?)(?:/route)?)\.[cm]?[jt]sx?$")
+REMIX_CONFIGS = ("remix.config.js", "remix.config.mjs", "remix.config.cjs")
+ROUTER_ROUTES = ("routes.ts", "routes.js", "routes.mts", "routes.mjs", "routes.tsx", "routes.jsx")
+REMIX_SENDS = {"post", "put", "patch", "delete"}     # the verbs of a form that go to a route's `action`
+REMIX_OLD = "Remix 1 route folders"
 _SVELTE_TS = re.compile(rb"\blang\s*=\s*[\"']?(?:ts|typescript)\b", re.I)
 _SVELTE_MODULE = re.compile(rb"\bmodule\b", re.I)     # <script module>, <script context="module">: the file's own
 _STYLE_RE = re.compile(rb"<style\b[^>]*>.*?</style\s*>", re.I | re.S)
@@ -671,7 +684,7 @@ def _spine_args(n: TSNode | None) -> list[list[str]]:
 
 class Walker:
     def __init__(self, m: JSModule, resolve_spec, trpc: bool = False, kit: str | None = None,
-                 actions: frozenset | None = None):
+                 actions: frozenset | None = None, remix: bool = False):
         self.m = m
         self.resolve_spec = resolve_spec
         self.trpc = trpc      # the nearest package.json depends on @trpc/server (and this is no test file)
@@ -680,6 +693,7 @@ class Walker:
         self.actions = actions
         self.exporting = False    # inside `export const …` / `export function …`
         self.kit = kit        # what a SvelteKit route file is by its name (`page.server`, `server`, …), or None
+        self.remix = remix    # the nearest package.json says Remix or React Router's framework mode: forms are kept
         self.top = ""         # the scope whose string constants are the file's own: "", or a Svelte component
         self.planned: dict[int, str] = {}   # where an inline function begins -> the name it is a function under
         self.routed: set[int] = set()       # router calls already read (one written inside another, or in a mount)
@@ -1853,6 +1867,13 @@ class Walker:
                 self.walk(inner, scope, cls, sub_ui)
             elif val is not None:
                 self.walk(val, scope, cls, sub_ui)
+        if self.remix and attrs.get("method") is not None and \
+                _text(n.child_by_field_name("name")).rpartition(".")[2] in ("Form", "form"):
+            # <Form method="post">, <fetcher.Form method="post" action="/x">, a plain <form method="post">: a form
+            # that posts goes to a route's `action`: of the route it stands in, or of the address it writes
+            if (self._attr_text(attrs["method"]) or "").lower() in REMIX_SENDS:
+                self.m.forms.append({"line": line, "scope": scope,
+                                     "action": self._attr_text(attrs["action"]) if "action" in attrs else ""})
         # <Route path="/x" element={<X/>} /> or component={X}
         if parts and parts[-1] == "Route" and "path" in attrs:
             p = _string_value(attrs["path"]) if attrs["path"] is not None else None
@@ -1867,6 +1888,13 @@ class Walker:
                     comp = _chain(inner)
             if p is not None and comp:
                 self.m.page_regs.append({"path": p, "component": comp, "line": line})
+
+    def _attr_text(self, val: TSNode | None) -> str | None:
+        """The text an attribute is given: `"post"`, `{"post"}`, `{`/notes/${id}`}` (-> `/notes/{}`); None when it
+        is not written out."""
+        if val is not None and val.type == "jsx_expression":
+            val = val.named_children[0] if val.named_child_count else None
+        return self._url_of(val)
 
     # -- HTTP
     def _url_of(self, n: TSNode | None) -> str | None:
@@ -2568,6 +2596,116 @@ def kit_same(route: str, written: str) -> bool:
     a = [s for s in route.split("/") if s]
     b = [s for s in written.split("?")[0].split("#")[0].split("/") if s]
     return len(a) == len(b) and all(x == y or x.startswith("[") or "{" in y for x, y in zip(a, b))
+
+
+def remix_parts(name: str) -> list[str]:
+    """A route file's name, part by part as written: cut at each dot that does not stand in square brackets."""
+    out, cur, kept = [], "", False
+    for ch in name:
+        if ch == "[" and not kept:
+            kept = True
+        elif ch == "]" and kept:
+            kept = False
+        elif ch == "." and not kept:
+            out.append(cur)
+            cur = ""
+            continue
+        cur += ch
+    return [*out, cur]
+
+
+def remix_shown(part: str) -> str | None:
+    """What one part of a route file's name adds to the address, or None for nothing: `$id` -> `:id`, a bare `$`
+    -> `*` (every part that is left), `(x)` -> `x?` (it may be missing), `x_` -> `x` (the address stays, the layout
+    is left), `_x` and a last `_index` -> nothing (a layout's name; its folder's own page). What stands in square
+    brackets is meant as written, so none of these signs counts there."""
+    chars, kept = [], False       # (the character, whether it stood in square brackets)
+    for ch in part:
+        if ch == "[" and not kept:
+            kept = True
+        elif ch == "]" and kept:
+            kept = False
+        else:
+            chars.append((ch, kept))
+    may_miss = len(chars) > 2 and chars[0] == ("(", False) and chars[-1] == (")", False)
+    if may_miss:
+        chars = chars[1:-1]
+    if not chars or chars[0] == ("_", False):
+        return None       # `_index` too: it begins with the same sign
+    if len(chars) > 1 and chars[-1] == ("_", False):
+        chars = chars[:-1]
+    text = "".join(c for c, _ in chars)
+    if chars[0] == ("$", False):
+        text = "*" if len(chars) == 1 else ":" + text[1:]
+    return text + "?" if may_miss else text
+
+
+def remix_address(name: str) -> str:
+    """`notes.$noteId` -> `/notes/:noteId`, `_auth.login` -> `/login`, `notes._index` -> `/notes`."""
+    parts = remix_parts(name) if name else []
+    shown = [s for s in map(remix_shown, parts) if s is not None]
+    return "/" + "/".join(shown)
+
+
+def remix_same(route: str, written: str) -> bool:
+    """Is the address a form writes (`/notes/{}`, `/notes/12`) one this route answers (`/notes/:noteId`)?"""
+    want = [s for s in written.split("?")[0].split("#")[0].split("/") if s]
+
+    def fits(parts: list[str], i: int) -> bool:
+        if not parts:
+            return i == len(want)
+        head, rest = parts[0], parts[1:]
+        if head == "*":
+            return True
+        if head.endswith("?") and fits(rest, i):
+            return True
+        if i >= len(want):
+            return False
+        text = head[:-1] if head.endswith("?") else head
+        return (text.startswith(":") or want[i] == text) and fits(rest, i + 1)
+
+    return fits([s for s in route.split("/") if s], 0)
+
+
+def remix_way(pkg: dict, repo: Path, mods: dict, cache: dict) -> str | None:
+    """How the routes of the app this package.json is of are found: `files` (by the names of the files in
+    `app/routes`), `old` (Remix 1 kept them in folders, where the same names mean other addresses: not read), or
+    None (no such app, or one whose `app/routes.ts` lists its routes another way). Read from the package.json and
+    from the text of the settings; nothing of the app is run."""
+    base = pkg["dir"]
+    if base in cache:
+        return cache[base]
+    way = None
+    mine = [d for d in pkg["deps"] if REMIX_PACKAGES.match(d)]
+    if mine:
+        firsts = {v.group() for v in (re.search(r"\d+", manifest.text(pkg["specs"].get(d))) for d in mine) if v}
+        way = "files"
+        if firsts == {"1"}:        # every version written is a 1.x: folders, unless the newer names are switched on
+            way = "old"
+            for name in REMIX_CONFIGS:
+                if inside_repo(base / name, repo):
+                    try:
+                        text = project_text(base / name, repo)
+                    except OSError:
+                        continue
+                    if re.search(r"\bv2_routeConvention\s*:\s*true\b", _no_comments(text)):
+                        way = "files"
+    elif ROUTER_FRAMEWORK in pkg["deps"]:
+        # React Router's framework mode: `app/routes.ts` says which files are routes. `flatRoutes()` says "the
+        # files of app/routes, by their names"; a folder of its own choosing is not followed
+        for name in ROUTER_ROUTES:
+            listed = base / "app" / name
+            if listed in mods:
+                text = _no_comments(mods[listed])
+                if re.search(r"(?<![\w$.])flatRoutes\s*\(", text) and "rootDirectory" not in text:
+                    way = "files"
+                break
+    cache[base] = way
+    return way
+
+
+def _no_comments(text: str) -> str:
+    return re.sub(r"/\*.*?\*/|(?<![:\w\"'])//[^\n]*", "", text, flags=re.S)
 
 
 def _nearest_package(path: Path, repo: Path, cache: dict) -> dict:
@@ -3590,7 +3728,9 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                    kit=km.group("kind") if km is not None and not svelte else
                    "hooks" if in_kit and KIT_HOOKS.match(in_kit) else None,
                    actions=_exported_later(tree.root_node) if "use server" in m.directives and not m.is_test
-                   and pkg["deps"] & SERVER_ACTIONS else None)
+                   and pkg["deps"] & SERVER_ACTIONS else None,
+                   remix=not m.is_test and not svelte and not html and
+                   (ROUTER_FRAMEWORK in pkg["deps"] or any(REMIX_PACKAGES.match(d) for d in pkg["deps"])))
         shown = []
         if svelte:
             shown = read_svelte(w, tree, src, markup, own, parsers[ext])
@@ -4146,6 +4286,87 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                         g.external(mid[4:])
                     g.nodes[tid].entry["middleware"] = [mid]
 
+    # Remix: the route files of each app by the name that is their address, then what each of them is. Set before
+    # the other entries, so that a route file's own functions are what the framework makes of them
+    remix: dict = {"apps": {}, "old": set(), "routes": [], "recs": [], "by_mod": {}}
+    remix_ways: dict = {}
+    remix_texts: dict = {}
+
+    def remix_own(m: JSModule, name: str) -> str | None:
+        return nid(m.name, m.exports[name]) if m.exports.get(name) in m.defs else None
+
+    def remix_door(tid: str | None, detail: str, role: str) -> str | None:
+        node = g.nodes.get(tid) if tid else None
+        if node is None or node.kind != CALLABLE or node.entry:
+            return None
+        node.entry = {"kind": "route", "detail": detail, "remix": role}
+        remix["routes"].append(node)
+        return node.id
+
+    for m in mods.values():
+        if m.path.parent.name == "app" and m.path.name in ROUTER_ROUTES and not m.is_test:
+            try:
+                remix_texts[m.path] = project_text(m.path, repo)
+            except OSError:
+                pass
+    for m in mods.values():
+        if m.is_test or m.html or m.svelte:
+            continue
+        pkg = _nearest_package(m.path, repo, pkg_cache)
+        rm = REMIX_FILE.match(m.path.relative_to(pkg["dir"]).as_posix()) if pkg["dir"] in m.path.parents else None
+        if rm is None:
+            continue
+        way = remix_way(pkg, repo, remix_texts, remix_ways)
+        if way == "old":
+            remix["old"].add(pkg["dir"])
+        elif way == "files":
+            remix["apps"].setdefault(pkg["dir"], {})[rm.group("name") or ""] = m
+    for base, names in remix["apps"].items():
+        recs = {}
+        for name, m in names.items():
+            parts = remix_parts(name) if name else []
+            # the layout a route is drawn in: the route file whose whole name this one's begins with (the longest
+            # such), and at last the root; `admin_.reports` begins with `admin_`, which is no file's name
+            above = next((".".join(parts[:i]) for i in range(len(parts) - 1, 0, -1) if ".".join(parts[:i]) in names),
+                         "" if name and "" in names else None)
+            recs[name] = {"m": m, "name": name, "base": base, "path": remix_address(name), "above": above,
+                          "index": bool(parts) and parts[-1] == "_index", "below": [],
+                          "own": bool(name) and remix_shown(parts[-1]) is not None,
+                          "loader": None, "action": None, "page": None, "frame": None}
+        for rec in recs.values():
+            if rec["above"] is not None:
+                recs[rec["above"]]["below"].append(rec)
+        for name, rec in recs.items():
+            m, path = rec["m"], rec["path"]
+            layout = not name or bool(rec["below"])
+            if layout:
+                # a layout's loader runs for every page drawn in it; one with no address of its own (`_auth`) is
+                # named by its file, as nothing else tells it from the layout it stands in
+                under = path.rstrip("/") + ("" if rec["own"] or not name else "/" + remix_parts(name)[-1])
+                rec["loader"] = remix_door(remix_own(m, "loader"), f"GET {under}/*", "layout loader")
+            else:
+                rec["loader"] = remix_door(remix_own(m, "loader"), f"GET {path}", "loader")
+            # a POST to an address goes to the route there that is no index; `?index` says the index is meant
+            rec["action"] = remix_door(remix_own(m, "action"), f"POST {path}" + ("?index" if rec["index"] else ""),
+                                       "action")
+            shows = nid(m.name, m.default) if m.default in m.defs else None
+            node = g.nodes.get(shows) if shows else None
+            if node is not None and node.kind == CALLABLE:
+                if layout:
+                    rec["frame"] = node.id
+                # the page of an address: what the route there shows, unless an index below it is that page
+                if name and (rec["own"] or rec["index"]) and not node.entry and \
+                        not any(x["index"] for x in rec["below"]):
+                    node.entry = {"kind": "page", "detail": path}
+                    rec["page"] = node.id
+                # a file that shows something holds both sides: its doors say what the browser's part is (`lanes`)
+                for door in (rec["loader"], rec["action"]):
+                    if door:
+                        g.nodes[door].entry["component"] = node.id
+            remix["recs"].append(rec)
+            remix["by_mod"][m.name] = rec
+        remix["apps"][base] = recs
+
     # entries
     for m in mods.values():
         pkg = _nearest_package(m.path, repo, pkg_cache)
@@ -4403,6 +4624,62 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 through += bool(hits)
         g.meta["sveltekit"] = {"routes": sum(1 for n, _ in kit["routes"] if n.entry.get("sveltekit") != "handle"),
                                "pages": len(kit["pages"]), "forms": posted, "linked": linked, "handed": through}
+
+    if remix["apps"] or remix["old"]:
+        def remix_link(src: str, tid: str, line: int, conf: str = RESOLVED) -> None:
+            g.add_edge(src, tid, kind=CALLS, confidence=conf, line=line, via="http-remix",
+                       detail=g.nodes[tid].entry["detail"])
+
+        for rec in remix["recs"]:
+            # the framework's own wiring: a page gets its data from its own loader and from the loaders of the
+            # layouts it is drawn in, the root's last
+            if not rec["page"]:
+                continue
+            if rec["loader"]:
+                remix_link(rec["page"], rec["loader"], 1)
+            up, recs = rec["above"], remix["apps"][rec["base"]]
+            while up is not None:
+                if recs[up]["loader"]:
+                    remix_link(rec["page"], recs[up]["loader"], 1)
+                if recs[up]["frame"]:
+                    g.add_edge(rec["page"], recs[up]["frame"], kind=CALLS, confidence=RESOLVED, line=1,
+                               via="remix-layout")
+                up = recs[up]["above"]
+
+        def remix_posts(written: str | None, rec: dict | None, base: Path) -> list[str]:
+            """The actions a form posts to: of the route it stands in when it writes no address, of the route
+            whose address it writes otherwise (the very address before one with a part that changes)."""
+            if written is None:
+                return []
+            if written in ("", "."):
+                return [rec["action"]] if rec and rec["action"] else []
+            if not written.startswith("/"):
+                return []      # an address read from where the form stands (`action="new"`): not followed
+            at, _, asks = written.partition("?")
+            index = "index" in re.split(r"[&=#]", asks)
+            hits = [x for x in remix["apps"][base].values()
+                    if x["action"] and x["index"] == index and remix_same(x["path"], at)]
+            hits = [x for x in hits if x["path"].rstrip("/") == at.split("#")[0].rstrip("/")] or hits
+            return [x["action"] for x in hits]
+
+        posted = linked = 0
+        for m in mods.values():
+            if m.svelte or not m.forms:
+                continue
+            base = _nearest_package(m.path, repo, pkg_cache)["dir"]
+            if base not in remix["apps"]:
+                continue
+            for form in m.forms:
+                posted += 1
+                hits = remix_posts(form["action"], remix["by_mod"].get(m.name), base)
+                src = nid(m.name, form["scope"]) if form.get("scope") in m.defs else nid(m.name)
+                for tid in hits:
+                    remix_link(src, tid, form["line"], RESOLVED if len(hits) == 1 else POSSIBLE)
+                linked += bool(hits)
+        g.meta["remix"] = {"routes": len(remix["routes"]), "pages": sum(1 for x in remix["recs"] if x["page"]),
+                           "forms": posted, "linked": linked}
+        if remix["old"]:
+            g.meta["remix"]["not_read"] = REMIX_OLD
 
     http_calls = []
     for m in mods.values():

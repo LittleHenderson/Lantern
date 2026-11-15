@@ -205,7 +205,13 @@ class _Reader:
                         if spec.startswith("."):
                             mod.picked[local] = key
                     continue
-                out.append(N("assign", self.line(d), items=[self.target(name_n)], a=self.expr(val)))
+                value = self.expr(val)
+                if name_n is not None and name_n.type == "object_pattern":
+                    # `const { getSession, commitSession } = createCookieSessionStorage(…)`: each name is that part
+                    # of the value, also for the functions of the file that read it
+                    for key, local in self.pattern_names(name_n):
+                        mod.consts.setdefault(local, []).append(N("attr", self.line(d), a=value, name=key))
+                out.append(N("assign", self.line(d), items=[self.target(name_n)], a=value))
             return out
         if t == "expression_statement":
             e = self.unwrap(s.named_children[0]) if s.named_child_count else None
