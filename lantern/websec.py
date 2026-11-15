@@ -34,7 +34,7 @@ from pathlib import Path
 
 from .flow_rules import READS_TOKEN, VERIFIES
 from .graph import Graph
-from .js_frontend import jwt_role
+from .js_frontend import TEST_RE as JS_TEST_RE, jwt_role
 from . import listing, strings
 from .python_frontend import inside_repo, project_text, skipped
 
@@ -1259,6 +1259,159 @@ def mutating_route(detail: str) -> bool:
     return bool({v.upper() for v in verb.split("/")} & MUTATING)
 
 
+# --------------------------------------------------------- a Server Action that changes data (LW-AUTH-MISSING)
+# A Server Action has no verb to read and no request written in the frontend, so what it does is read from the map and
+# from its lines: a link to a database table with a change among what is done there, an SQL text that changes rows, or
+# a call whose last name is what a database library calls a change. Names, so a heuristic: the finding says which line
+# it read. Until measured on real apps (`bench/`) the list is provisional.
+ACTION_SQL = re.compile(r"\b(?:insert\s+into|update\s+[\w.\"`\[\]]+\s+set|delete\s+from|replace\s+into|merge\s+into|"
+                        r"truncate\s+table)\b", re.I)
+ACTION_CHANGE = re.compile(
+    r"(?P<dot>\??\.)\s*(?P<name>create|createMany|createManyAndReturn|update|updateMany|upsert|delete|deleteMany|"
+    r"insert|insertOne|insertMany|insertInto|updateOne|updateTable|deleteOne|deleteFrom|replaceOne|findOneAndUpdate|"
+    r"findOneAndDelete|findOneAndReplace|findByIdAndUpdate|findByIdAndDelete|findByIdAndRemove|bulkCreate|destroy|"
+    r"save|remove|softDelete|softRemove|\$executeRaw|\$executeRawUnsafe)\s*(?=[(`~])")
+ACTION_CHANGE_BARE = re.compile(r"(?<![\w$.])(?P<name>setDoc|addDoc|updateDoc|deleteDoc)\s*\(")
+# what such a name is said on that is no database: the request's own parts, the browser's and the language's objects
+ACTION_NOT_DATA = frozenset(
+    "formData form data cookies cookieStore headers params searchParams url URL map set cache localStorage "
+    "sessionStorage document window console Object Array JSON Math Promise router res response req request event "
+    "ref state this crypto createHash createHmac hash hmac".split())
+ACTION_OWN = re.compile(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]*)?=\s*(?:await\s+)?(?:new\s+(?:Set|Map|"
+                        r"WeakSet|WeakMap|URLSearchParams|FormData|Headers|URL|AbortController)\b|"
+                        r"(?:cookies|headers|draftMode)\s*\()")
+DB_CHANGES = {"insert": "adds rows to", "update": "changes rows of", "upsert": "adds or changes rows of",
+              "delete": "deletes rows of"}
+
+
+def _chain_root(code: str, dot: int) -> str | None:
+    """The first name of the chain whose last dot is at `dot` (`db` in `db.note.delete`), read backwards over names,
+    dots and balanced brackets, 400 characters at most. None when the chain begins with something that is no name."""
+    i, limit, root = dot, max(0, dot - 400), None
+    while True:
+        j = i
+        while j > limit and code[j - 1].isspace():
+            j -= 1
+        while j > limit and code[j - 1] in ")]":
+            depth = 0
+            while j > limit:
+                c = code[j - 1]
+                depth += 1 if c in ")]" else -1 if c in "([" else 0
+                j -= 1
+                if depth == 0:
+                    break
+            if depth:
+                return None
+        k = j
+        while k > limit and (code[k - 1].isalnum() or code[k - 1] in "_$"):
+            k -= 1
+        if k == j:
+            return None
+        root, i = code[k:j], k
+        while i > limit and code[i - 1].isspace():
+            i -= 1
+        if i > limit and code[i - 1] == ".":
+            i -= 2 if i - 1 > limit and code[i - 2] == "?" else 1
+            continue
+        return root
+
+
+def _change_in(g: Graph, n, text: str | None) -> tuple[str, int] | None:
+    """What shows that this function changes data, in words, and the line it is on; None when nothing does."""
+    for c in g.meta.get("db_calls") or ():
+        if c.get("src") == n.id and c.get("op") in DB_CHANGES:
+            return f"it {DB_CHANGES[c['op']]} the table `{c.get('table')}`", c.get("line") or n.start_line or 0
+    if not text or not n.start_line:
+        return None
+    first = n.start_line
+    raw = "\n".join(text.splitlines()[first - 1:n.end_line or first])
+    quoted = strings.sub("'\"", _blank, strings.templates(_blank, raw))            # strings blanked, comments kept
+    code = re.sub(r"//[^\n]*", _blank_data, strings.block_comments(_blank_data, quoted))   # comments `^`, strings `~`
+    for m in ACTION_SQL.finditer(raw):
+        at = m.start()
+        if quoted[at] != raw[at] and code[at] == "~":       # inside a string, and that string not inside a comment
+            return f"it holds SQL that changes rows (`{' '.join(m.group(0).split())[:60]}`)", first + raw.count("\n", 0, at)
+    own = set(ACTION_OWN.findall(code))
+    for m in ACTION_CHANGE.finditer(code):
+        root = _chain_root(code, m.start("dot"))
+        if root is not None and (root in ACTION_NOT_DATA or root in own):
+            continue
+        said = " ".join(raw[max(m.start() - 40, 0):m.end()].split())
+        said = re.search(r"[\w$.?()\[\]]*$", said).group(0)[-60:] or m.group("name")
+        return f"it calls `{said.lstrip('.?)]')}`", first + raw.count("\n", 0, m.start())
+    m = ACTION_CHANGE_BARE.search(code)
+    if m:
+        return f"it calls `{m.group('name')}`", first + raw.count("\n", 0, m.start())
+    return None
+
+
+def action_change(g: Graph, n, adj: dict[str, list[str]], texts: dict[str, str], depth: int = 2) -> tuple[str, int] | None:
+    """What shows that a Server Action changes data: its own lines, then those of the project's JS/TS functions it
+    calls, `depth` calls deep. The words name the function when it is not the action itself; the line is the
+    action's own (where it calls on) or the one read."""
+    seen, frontier = {n.id}, [n]
+    for _ in range(depth + 1):
+        nxt = []
+        for fn in frontier:
+            if fn.file and fn.file not in texts:
+                try:
+                    texts[fn.file] = project_text(Path(g.repo_root) / fn.file, g.repo_root)
+                except OSError:
+                    texts[fn.file] = ""
+            found = _change_in(g, fn, texts.get(fn.file or ""))
+            if found:
+                if fn is n:
+                    return found
+                return f"{found[0]}, in `{fn.name}` ({fn.file}:{found[1]}), which the action calls", n.start_line or 0
+            for dst in adj.get(fn.id, ()):
+                callee = g.nodes.get(dst)
+                if callee is None or dst in seen or not dst.startswith("js:") or callee.kind in ("module", "class"):
+                    continue
+                seen.add(dst)
+                nxt.append(callee)
+        frontier = nxt
+    return None
+
+
+def _actions_unasked(g: Graph, adj: dict[str, list[str]], texts: dict[str, str], doubt=None) -> list[dict]:
+    """Server Actions that change data, that the project's own code uses, and in which no login check is found."""
+    used: set[str] = set()
+    for e in g.call_edges():
+        src = g.nodes.get(e.src)
+        if src is not None and e.src != e.dst and src.file and not JS_TEST_RE.search(src.file):
+            used.add(e.dst)
+    out = []
+    for n in g.nodes.values():
+        route = str((n.entry or {}).get("detail") or "")
+        if (n.entry or {}).get("kind") != "route" or not route.startswith("ACTION ") or n.id not in used:
+            continue
+        if is_public_route(route) or (n.file and JS_TEST_RE.search(n.file)):
+            continue
+        change = action_change(g, n, adj, texts)
+        if not change:
+            continue
+        sign = login_check(g, n, adj, texts.get(n.file or ""), doubt=doubt)
+        if sign and sign[0] == "strong":
+            continue
+        name = route.partition(" ")[2]
+        more = ("Heuristic: a Server Action has an address of its own on your server, and anyone who has that address "
+                f"can send to it, with or without your pages. Lantern read this one as changing data because {change[0]}"
+                f"{'' if ', in `' in change[0] else f' (line {change[1]})'}, looked three calls deep for anything named "
+                "like an auth check (current_user, auth, login_required, token, permission...) and read the action's "
+                "own lines for the same words. ")
+        if sign:
+            more += (f"The only sign in the action is that {sign[1]}: that finds a record, not the caller. "
+                     "Check the signed-in user as well. ")
+        more += passed_over_words(n, texts.get(n.file or ""))
+        rows = (texts.get(n.file or "") or "").splitlines()
+        shown = rows[change[1] - 1].strip() if 0 < change[1] <= len(rows) else ""
+        out.append(_finding(
+            "LW-AUTH-MISSING", f"The Server Action {name} changes data, the app uses it, and no login check was found",
+            "MEDIUM", n.file, n.start_line, category="code", conf="LOW", cwe=306, fixed_rank="medium",
+            more=more + "If this action is meant to be public, ignore it.", snippet=shown))
+    return out
+
+
 # Said on a finding the flow step asks for: the route calls a library that reads a login token, and that is not
 # taken as a login check there. What Lantern found, and the three ways it comes about; never "the token is not
 # checked", which Lantern has not shown.
@@ -1269,7 +1422,8 @@ TOKEN_LETS_ON = ("The code on the way to this route calls a library that reads a
 
 
 def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
-    """Routes the frontend calls that change data, where no login check is visible within 3 calls. With `only`
+    """Routes the frontend calls that change data, where no login check is visible within 3 calls, and Server
+    Actions the project uses that change data (`_actions_unasked`: an action has no verb and no request to read). With `only`
     (the map's nodes of routes, from the flow step: `flow.Result.caught`) those routes are asked instead, called by
     the frontend or not, and read with `doubt` (`login_check`): a token library on the way to them is no sign."""
     out = []
@@ -1310,6 +1464,8 @@ def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
         out.append(_finding(
             "LW-AUTH-MISSING", title, "MEDIUM", n.file, n.start_line, category="code", conf="LOW", cwe=306,
             fixed_rank="medium", more=more + "If this route is meant to be public, ignore it.", snippet=detail or ""))
+    if only is None:
+        out += _actions_unasked(g, adj, texts, doubt=doubt)
     return out
 
 

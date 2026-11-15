@@ -55,6 +55,8 @@ def _entry_text(g: Graph, r: dict | None) -> str:
     n = g.nodes.get(r.get("entry") or "")
     detail = ((n.entry or {}).get("detail") if n is not None else None) or \
              (n.qualname if n is not None else r.get("entry"))
+    if r.get("kind") == "route" and str(detail).startswith("ACTION "):
+        return f"the Server Action {str(detail)[7:]}"
     return f"{r.get('kind')} {detail}"
 
 

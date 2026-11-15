@@ -336,12 +336,13 @@ def _action_file(name, body, head=""):
             f"\nexport async function {name}(id: string) {{\n{body}}}\n")
 
 
-def _asked(root, name, body, head="", used=True):
+def _asked(root, name, body, head="", used=True, more=None):
     from lantern import websec
     files = {"app/actions.ts": _action_file(name, body, head), "lib/db.ts": PRISMA_DB, "lib/session.ts": LOGIN,
              "app/page.tsx": NOTE_PAGE if used else "export default function Page() { return <p>Hi</p>; }\n"}
     if used:
         files["components/Row.tsx"] = NOTE_ROW.replace("NAME", name)
+    files.update(more or {})
     g = _build(root, files, PRISMA)
     return [f["title"] for f in websec.missing_auth(g)]
 
@@ -367,3 +368,53 @@ def test_the_twins_an_action_the_login_rule_leaves_alone(tmp_path):
     assert _asked(tmp_path / "unused", "removeNote", REMOVES, used=False) == []
     hashes = '  return createHash("sha256").update(id).digest("hex");\n'
     assert _asked(tmp_path / "hash", "fingerprint", hashes, 'import { createHash } from "crypto";\n') == []
+
+
+NOTES = '''import { db } from "./db";
+export async function dropNote(id: string) {
+  await db.note.delete({ where: { id } });
+}
+export async function readNote(id: string) {
+  return db.note.findUnique({ where: { id } });
+}
+'''
+FROM_NOTES = 'import { dropNote, readNote } from "../lib/notes";\n'
+
+
+def test_the_case_of_a_finding_names_the_action_in_plain_words(tmp_path):
+    """The case says where the finding is reached from; for an action that is "the Server Action x", for a route
+    file (the twin) the verb and path as before."""
+    from lantern.security import scan
+    files = {"app/actions.ts": _action_file("removeNote", REMOVES), "lib/db.ts": PRISMA_DB, "app/page.tsx": NOTE_PAGE,
+             "components/Row.tsx": NOTE_ROW.replace("NAME", "removeNote")}
+    found = [f for f in scan(_build(tmp_path, files, PRISMA))["findings"] if f["rule"] == "LW-AUTH-MISSING"]
+    assert len(found) == 1
+    facts = [e["fact"] for e in found[0]["case"]["evidence"]] + [c["why"] for c in found[0]["case"]["conditions"]]
+    assert "It is an entry point itself: the Server Action removeNote" in facts
+    assert "reached from the Server Action removeNote" in facts
+    assert not any("ACTION " in x for x in facts)
+    twin = [f for f in scan(_build(tmp_path / "twin", {"app/api/run/route.ts": SHELL_ROUTE}))["findings"]]
+    said = [e["fact"] for f in twin for e in f["case"]["evidence"]]
+    assert any(x.startswith("It is an entry point itself: route POST /api/run") for x in said), said
+
+
+def test_a_change_made_by_a_function_the_action_calls_counts_too(tmp_path):
+    """The action hands the work to a function of the project; the twin's function only reads."""
+    more = {"lib/notes.ts": NOTES}
+    assert _asked(tmp_path, "removeNote", "  await dropNote(id);\n", FROM_NOTES, more=more) == [
+        "The Server Action removeNote changes data, the app uses it, and no login check was found"]
+    assert _asked(tmp_path / "reads", "showNote", "  return readNote(id);\n", FROM_NOTES, more=more) == []
+
+
+def test_the_twins_what_is_no_database_is_no_change(tmp_path):
+    """`delete` on a set of the function's own, on the request's cookies and on a form's data: a name a database
+    library uses, on things that are none. Beside them an SQL text that changes rows, handed to a library whose
+    call has an everyday name (found), and the same written in a comment (not found)."""
+    own = ('  const seen = new Set<string>();\n  seen.delete(id);\n  const jar = await cookies();\n'
+           '  jar.delete("draft");\n  const form = new FormData();\n  form.delete("id");\n  return seen.size;\n')
+    assert _asked(tmp_path, "tidy", own, 'import { cookies } from "next/headers";\n') == []
+    words = '  await pool.query("delete from notes where id = $1", [id]);\n'
+    assert _asked(tmp_path / "words", "clear", words, 'import { pool } from "../lib/pool";\n') == [
+        "The Server Action clear changes data, the app uses it, and no login check was found"]
+    said = '  // await db.$executeRawUnsafe("delete from notes")\n  return id;\n'
+    assert _asked(tmp_path / "said", "clear", said) == []
