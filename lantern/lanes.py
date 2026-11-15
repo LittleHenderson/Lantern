@@ -87,6 +87,8 @@ def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> s
         return "server" if target.startswith("/") else "data"
     if n.id.startswith("ext:"):
         return "data" if DATA_RE.match(n.id[4:]) else None
+    if n.id.startswith("db:"):   # a database table the code reads or writes
+        return "data"
     if android and _in_roots(n.file, android):
         e = n.entry or {}
         screen = e.get("kind") == "page" or (e.get("kind") == "route" and " screen " in str(e.get("detail", "")))

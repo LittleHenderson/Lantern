@@ -18,6 +18,14 @@ MODULE, CLASS, CALLABLE, EXTERNAL = "module", "class", "callable", "external"
 # Edge kinds
 CALLS, MAY_CALL, CONTAINS, IMPLEMENTS = "calls", "may_call", "contains", "implements"
 
+# Ids of things outside the project's code: a library or a server elsewhere (`ext:`), a database table (`db:`)
+OUTSIDE = ("ext:", "db:")
+
+
+def outside(node_id: str) -> bool:
+    return node_id.startswith(OUTSIDE)
+
+
 # Confidence levels, strongest first. Order matters: merges keep the strongest.
 OBSERVED, RESOLVED, INFERRED, POSSIBLE = "observed", "resolved", "inferred", "possible"
 CONFIDENCE_RANK = {OBSERVED: 0, RESOLVED: 1, INFERRED: 2, POSSIBLE: 3}
@@ -109,6 +117,12 @@ class Graph:
     def external(self, name: str) -> Node:
         nid = f"ext:{name}"
         return self.add_node(Node(id=nid, kind=EXTERNAL, name=name.split(".")[-1], qualname=name))
+
+    def table(self, name: str, schema: str | None = None) -> Node:
+        """A database table the code reads or writes (`db:<table>`, `db:<schema>.<table>`): outside the code, in
+        the Data lane."""
+        full = f"{schema}.{name}" if schema else name
+        return self.add_node(Node(id=f"db:{full}", kind=EXTERNAL, name=name, qualname=full))
 
     # ---- edges ----
     def add_edge(self, src: str, dst: str, kind: str = CALLS, confidence: str = RESOLVED,
@@ -215,7 +229,7 @@ class Graph:
                "known_external": 0, "builtin": self.builtin_calls}
         for e in self.call_edges():
             n = max(1, len(e.lines))
-            if e.dst.startswith("ext:"):
+            if outside(e.dst):
                 out["known_external"] += n
             elif e.via in ("unique-method-name", "method-name"):
                 out["name_only_guess"] += n
@@ -248,7 +262,7 @@ class Graph:
         for e in self.call_edges():
             conf[e.confidence] = conf.get(e.confidence, 0) + 1
             by_name += e.via in ("unique-method-name", "method-name")
-            if not e.dst.startswith("ext:"):
+            if not outside(e.dst):
                 internal_calls += 1
         return {
             "nodes": kinds,

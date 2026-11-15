@@ -27,7 +27,7 @@ import tree_sitter_typescript as tst
 from tree_sitter import Language, Node as TSNode, Parser
 
 from . import calls, deep, manifest
-from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, RESOLVED, Graph, Node
+from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, project_text, skipped_dir
 
 LANGS = {
@@ -86,6 +86,13 @@ JS_BUILTINS = JS_GLOBALS | {
     "FileReader", "Notification", "ReadableStream", "WritableStream", "TransformStream", "AbortSignal",
     "DOMException", "self", "global", "__dirname", "__filename",
 }
+# Supabase (roadmap stage 1): `<client>.from("<table>").<one of these>(…)` is a call into that table. A value is a
+# client by where it came from: what one of the libraries' own makers handed back, or a value of the written type
+DB_OPS = ("select", "insert", "update", "upsert", "delete")
+SUPABASE_CLIENT = re.compile(r"^@supabase/[\w.-]+\.(create\w*Client\(\)|useSupabaseClient\(\)|SupabaseClient)$")
+SUPABASE_NAME = re.compile(r"^_?supabase(_?(client|admin))?$", re.I)   # by its name alone: a possible link, no more
+TABLE_NAME = re.compile(r"^[A-Za-z_][\w$]{0,62}$")
+
 JS_LANG = "typescript/javascript"   # the name engine.build_graph gives the language in g.meta["languages"]
 # An import of one of these is a file (relative, absolute, a path alias or a package.json "imports" entry), never a
 # library: when it does not resolve, the file is missing, and a call through it is not a library call.
@@ -306,6 +313,7 @@ class JSRef:
     at: tuple[int, int] | None = None   # (line, column from 1) of the call's "(": the call site's identity
     text: str = ""             # the callee as written
     args: list[list[str]] | None = None   # names handed to the calls inside the callee: getRepository(User).find
+    db: dict | None = None     # `<recv>.from("<table>").<op>(…)`: {recv, schema, table | const, op} (Walker._db_shape)
 
 
 @dataclass
@@ -365,6 +373,8 @@ class JSModule:
     required: dict[str, set[str]] = field(default_factory=dict)  # scope -> names bound there by `x = require('…')`
     returns: dict[str, set[str]] = field(default_factory=dict)   # function -> what its own `return` statements give:
     #                                                              a variable's name, or "" for anything else
+    returned: dict[str, list] = field(default_factory=dict)      # function -> each own `return`'s value as a chain
+    #                                                              (a name, a member, a call, `await` of one), or None
     # functions the code puts on an object that is not this file's own function or class (JSResolver.own_names).
     # `put`: by assignment, (scope, owner chain, name, right-hand chain or None for a function written there):
     # `schema.statics.x = function`, `res.x = helper`. `given`: in an object or by name, (scope, name, chain or
@@ -482,6 +492,7 @@ class Walker:
         self.resolve_spec = resolve_spec
         self.anon = 0
         self.inline = 0       # how many inline functions deep the walk is inside the current named function
+        self.nested = 0       # and how many methods written in an object (`{ getAll() {…} }`)
 
     # -- defs
     def add_def(self, node: TSNode, name: str, scope: str, kind: str, in_class: str | None,
@@ -517,6 +528,12 @@ class Walker:
         elif t == "return_statement" and scope and not self.inline:   # the function's own return, not a callback's
             v = _unparen(n.named_children[0]) if n.named_child_count else None
             self.m.returns.setdefault(scope, set()).add(_text(v) if v is not None and v.type == "identifier" else "")
+            if not self.nested:
+                if v is not None and v.type == "await_expression" and v.named_child_count:
+                    v = _unparen(v.named_children[0])
+                self.m.returned.setdefault(scope, []).append(
+                    _chain(v) if v is not None and v.type in ("call_expression", "member_expression", "identifier")
+                    else None)
         if t in ("import_statement",):
             self._import(n)
             return
@@ -566,11 +583,13 @@ class Walker:
         if t in STATEMENT_LISTS:
             self.each(n.children, scope, cls, ui)
             return
-        inline = t in FUNC_TYPES
+        inline, nested = t in FUNC_TYPES, t == "method_definition"
         self.inline += inline
+        self.nested += nested
         for c in n.children:
             self.walk(c, scope, cls, ui)
         self.inline -= inline
+        self.nested -= nested
 
     def each(self, nodes, scope: str, cls: str | None = None, ui: str | None = None):
         """The statements of a block, one by one. One that is nested deeper than Python lets `walk` call itself is
@@ -578,11 +597,11 @@ class Walker:
         written in it is forgotten: the part that was not read may have declared any of them or given it a new value,
         so each counts as a name of this scope that was assigned again."""
         for c in nodes:
-            held = self.inline
+            held, held_nested = self.inline, self.nested
             try:
                 self.walk(c, scope, cls, ui)
             except RecursionError:
-                self.inline = held
+                self.inline, self.nested = held, held_nested
                 self.m.too_deep.append(c.start_point[0] + 1)
                 written = deep.names(c, ("identifier", "shorthand_property_identifier_pattern"))
                 self.m.declared.setdefault(scope, set()).update(written)
@@ -592,11 +611,12 @@ class Walker:
 
     def _walk_body(self, fn: TSNode, local: str, cls: str | None, ui: str | None):
         outer, self.inline = self.inline, 0     # a named function: its body is its own, however deep it is written
+        outer_nested, self.nested = self.nested, 0
         for fld in ("parameters", "parameter", "body"):
             c = fn.child_by_field_name(fld)
             if c is not None:
                 self.walk(c, local, cls, ui)
-        self.inline = outer
+        self.inline, self.nested = outer, outer_nested
 
     def _class(self, n: TSNode, name: str, scope: str, ui):
         local = self.add_def(n, name, scope, "class", None)
@@ -1142,7 +1162,8 @@ class Walker:
             http.recv = hch[:-1] if hch[0] != "<expr>" else None
             self.m.http.append(http)
         if ch:
-            self.m.refs.append(JSRef(scope, ch, line, "call", ui, at, text, _spine_args(fn) or None))
+            self.m.refs.append(JSRef(scope, ch, line, "call", ui, at, text, _spine_args(fn) or None,
+                                     self._db_shape(fn, ch)))
             # parameters of inline functions handed to this call: what the callee passes them can be known
             # (forEach on a DOM list passes elements, addEventListener an event, fetch().then a response)
             cbp = self.m.cb_params.setdefault(scope, {})
@@ -1161,6 +1182,51 @@ class Walker:
             self.walk(fn, scope, cls, ui)
         for a in argv:
             self.walk(a, scope, cls, ui)
+
+    @staticmethod
+    def _written(call: TSNode | None):
+        """The first argument of a call as a name the code wrote: ("text", it) for a plain string, ("const", name)
+        for a bare name (which may be a constant of the file; the resolver says), None for anything else."""
+        args = call.child_by_field_name("arguments") if call is not None and call.type == "call_expression" else None
+        argv = [a for a in (args.named_children if args is not None else []) if a.type != "comment"]
+        if not argv:
+            return None
+        if argv[0].type == "identifier":
+            return ("const", _text(argv[0]))
+        if argv[0].type == "template_string" and argv[0].named_child_count:
+            return None   # a name built at run time
+        text = _string_value(argv[0])
+        return ("text", text) if text is not None and TABLE_NAME.match(text) else None
+
+    def _db_shape(self, fn: TSNode | None, ch: list[str]) -> dict | None:
+        """`<recv>.from("<table>").<select|insert|update|upsert|delete>`, also behind `.schema("<name>")`: what was
+        written, for the resolver to say whether `<recv>` is a Supabase client. None for a storage bucket
+        (`<recv>.storage.from("avatars")`) and where the table or the schema is not written as a name."""
+        if len(ch) < 3 or ch[-1] not in DB_OPS or ch[-2] != "from()" or fn is None or fn.type != "member_expression":
+            return None
+
+        def under(n):   # the call a member is used on, through `!`, `as X` and brackets
+            n = _unparen(n)
+            while n is not None and n.type in ("non_null_expression", "as_expression", "satisfies_expression") \
+                    and n.named_child_count:
+                n = _unparen(n.named_children[0])
+            return n
+
+        frm = under(fn.child_by_field_name("object"))
+        table = self._written(frm)
+        recv, schema = ch[:-2], None
+        if table is None:
+            return None
+        if recv[-1] == "schema()":
+            inner = frm.child_by_field_name("function")
+            schema = self._written(under(inner.child_by_field_name("object")) if inner is not None else None)
+            if schema is None or schema[0] != "text":
+                return None
+            recv = recv[:-1]
+        if not recv or recv[-1] == "storage":
+            return None
+        return {"recv": recv, "schema": schema[1] if schema else None, "op": ch[-1],
+                "table": table[1] if table[0] == "text" else None, "const": table[1] if table[0] == "const" else None}
 
     def _route_call(self, fn: TSNode):
         """`router.route('/x').get(...).post(...)`: for a verb hung on a `.route('<path>')` call (straight on it or
@@ -2036,6 +2102,122 @@ class JSResolver:
             return self._member(whole, name, depth + 1, st) if whole is not None and depth < 6 else None
         return None
 
+    # ---- Supabase (roadmap stage 1): is a value a client, and which table does a call go into
+    def client(self, m: JSModule, scope: str, chain: list[str], depth: int = 0):
+        """Is the value a chain names a Supabase client? -> the library call or type it came from
+        (`@supabase/supabase-js.createClient()`), False when it is a known other thing, None when it is not known.
+        Followed here and nowhere else: a value another file of the project exports (`export const supabase =
+        createClient(…)`), and what a function of the project hands back when every `return` of it is a client."""
+        if depth > 6 or not chain:
+            return None
+        val, _ = self._eval(m, scope, chain, depth, {"value": False})
+        if val is not None:
+            name = ".".join([val[1]] + val[2]) if val[0] == "ext" else ""
+            return name if SUPABASE_CLIENT.match(name) else False
+        if len(chain) != 1:
+            return None
+        name = chain[0]
+        if name.endswith("()"):
+            b = self.bind(m, scope, name[:-2])
+            if b is None or b[0] != "def":
+                return None
+            tm = self.mods[b[1]]
+            found = [self.client(tm, b[2], c, depth + 1) if c else None for c in tm.returned.get(b[2], ())]
+            return sorted(found)[0] if found and all(isinstance(x, str) for x in found) else None
+        s, seen = scope, []
+        while True:
+            seen.append(s)
+            if name in m.params.get(s, ()) or name in m.anon_params.get(s, ()):
+                return None
+            if name in m.values.get(s, {}):
+                if name in m.dynamic.get(s, ()) or any(name in m.reassigned.get(x, ()) for x in seen):
+                    return None
+                return self.client(m, s, m.values[s][name], depth + 1)
+            if name in m.declared.get(s, ()) or name in m.dynamic.get(s, ()):
+                return None
+            if not s:
+                break
+            s = self._up(m, s)
+        imp = m.imports.get(name)
+        if imp is not None and imp[0] in self.mods and imp[1] not in ("cjs", "*"):
+            return self._exported_client(imp[0], imp[1], depth + 1)
+        return None
+
+    def _exported_client(self, mod: str, name: str, depth: int):
+        if depth > 6:
+            return None
+        tm = self.mods[mod]
+        local = tm.default if name == "default" else tm.exports.get(name)
+        if local is not None and local not in tm.defs:
+            if local in tm.values.get("", {}):
+                if local in tm.reassigned.get("", ()) or local in tm.dynamic.get("", ()):
+                    return None
+                return self.client(tm, "", tm.values[""][local], depth + 1)
+            imp = tm.imports.get(local)
+            if imp is not None and imp[0] in self.mods and imp[1] not in ("cjs", "*"):
+                return self._exported_client(imp[0], imp[1], depth + 1)
+        if name in tm.export_values:   # CommonJS: exports.supabase = createClient(…)
+            return self.client(tm, "", tm.export_values[name], depth + 1)
+        for tmod, mp in tm.reexports:
+            if tmod in self.mods and (mp is None or name in mp):
+                hit = self._exported_client(tmod, name if mp is None else mp[name], depth + 1)
+                if hit is not None:
+                    return hit
+        return None
+
+    def _const(self, m: JSModule, scope: str, name: str) -> str | None:
+        """The text of a constant of the file, when `name` in this scope is that constant and nothing nearer."""
+        s = scope
+        while s:
+            if name in m.params.get(s, ()) or name in m.anon_params.get(s, ()) or name in m.declared.get(s, ()):
+                return None
+            s = self._up(m, s)
+        if name in m.reassigned.get("", ()) or name in m.anon_params.get("", ()):
+            return None
+        text = m.consts.get(name)
+        return text if text is not None and TABLE_NAME.match(text) else None
+
+    def table_call(self, m: JSModule, scope: str, db: dict):
+        """A call written `<recv>.from("<table>").<op>(…)` -> (table id, confidence, via), or None when `<recv>` is
+        not a Supabase client as far as the code shows, or the table's name is not written. A client by where the
+        value came from is a likely link (`supabase-from`); a value Lantern cannot follow that is only named like
+        one (`supabase`, `this.supabase`) a possible one (`supabase-name`)."""
+        table = db["table"] if db["table"] is not None else self._const(m, scope, db["const"])
+        if table is None:
+            return None
+        tid = "db:" + (f"{db['schema']}.{table}" if db["schema"] else table)
+        recv = db["recv"]
+        known = self.client(m, scope, recv)
+        if known:
+            return tid, table, INFERRED, "supabase-from"
+        if known is None and SUPABASE_NAME.match(recv[-1]) and (recv[0] == "this" or len(recv) == 1):
+            if len(recv) == 1:   # a name that was given another value, or that is a function or an import, is none
+                s = scope
+                while True:
+                    if recv[0] in m.reassigned.get(s, ()) or recv[0] in m.dynamic.get(s, ()):
+                        return None
+                    if not s:
+                        break
+                    s = self._up(m, s)
+                if self.bind(m, scope, recv[0]) is not None:
+                    return None
+            return tid, table, POSSIBLE, "supabase-name"
+        return None
+
+    def on_client(self, m: JSModule, scope: str, parts: list[str], args=()) -> str | None:
+        """A call on a Supabase client that came from another file or from a function of the project
+        (`supabase.from`, `supabase.from().select().order`, `supabase.auth.getUser`) -> the library name it is a
+        call of, as resolve_more names the same call on a client made in this file."""
+        for k in (1, 2):
+            if len(parts) > k and not (k == 2 and parts[0] != "this"):
+                base = self.client(m, scope, parts[:k])
+                if base:
+                    if self.may_be_own(m, scope, parts, ("ext", base, parts[k:-1]), "library-value",
+                                       {"value": True}, args):
+                        return None
+                    return _ext_name([base] + parts[k:])
+        return None
+
     @staticmethod
     def _call_value(val):
         if val[0] == "ext":
@@ -2257,6 +2439,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                      lang=JS_LANG, group=group, test=m.is_test, targets=targets, reason=reason)
 
     unresolved = 0
+    db_calls: list[dict] = []
     for m in mods.values():
         for ref in m.refs:
             src_id = nid(m.name, ref.scope) if ref.scope and ref.scope in m.defs else nid(m.name)
@@ -2276,9 +2459,22 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                         site(m, ref, src_id, [("builtin:" + ".".join(ref.parts), RESOLVED,
                                                "require" if ref.parts == ["require"] else "global")])
                 continue
+            hit = r.table_call(m, ref.scope, ref.db) if ref.db is not None and ref.kind == "call" else None
+            if hit is not None:   # a call into a table: the link itself is made by the bridge, from meta["db_calls"]
+                tid, table, conf, via = hit
+                site(m, ref, src_id, [(tid, conf, via)])
+                db_calls.append({"src": src_id, "table": table, "schema": ref.db["schema"], "op": ref.db["op"],
+                                 "id": tid, "confidence": conf, "via": via, "file": m.rel, "line": ref.line,
+                                 "ui": ref.ui})
+                continue
             res = r.resolve_parts(m, ref.scope, ref.parts)
             more = r.resolve_more(m, ref.scope, ref.parts, args=ref.args or ()) \
                 if res is None and ref.kind != "callback" else None
+            if res is None and more is None and ref.kind == "call":
+                lib = r.on_client(m, ref.scope, ref.parts, ref.args or ())
+                if lib is not None:
+                    more = ("ext", lib, "library-result" if any(x.endswith("()") for x in ref.parts)
+                            else "library-value", INFERRED)
             if more is not None:
                 kind, target, via, conf = more
                 counted = not inv and ref.kind == "call" and not m.is_test
@@ -2719,6 +2915,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                                "prefix_unknown": h.prefix_unknown, "host": h.host, "line": h.line,
                                "ui": h.ui, "file": m.rel})
     g.meta.setdefault("http_calls", []).extend(http_calls)
+    if db_calls:
+        g.meta.setdefault("db_calls", []).extend(db_calls)
     return {"files": len(mods), "lines": total, "unresolved": unresolved,
             "components": sum(1 for m in mods.values() for d in m.defs.values() if d.jsx),
             "http_calls": len(http_calls)}

@@ -123,5 +123,33 @@ def link(g: Graph) -> dict:
         for r in hits:
             g.add_edge(c["src"], r["id"], kind=CALLS, confidence=conf, line=c["line"],
                        via=f"http-{how}", detail=label)
+    tables = link_tables(g)
+    if tables:
+        stats["db_calls"], stats["tables"] = tables["db_calls"], tables["tables"]
     g.meta["bridge"] = stats
     return stats
+
+
+DB_OPS = ("select", "insert", "update", "upsert", "delete")
+
+
+def link_tables(g: Graph) -> dict:
+    """The calls into database tables the readers wrote down (`meta["db_calls"]`: Supabase's
+    `<client>.from("<table>").<op>(…)`) become one link from each function to each table it touches, a node
+    `db:<table>` in the Data lane, whose detail names what the function does there (`select, update cards`)."""
+    calls = g.meta.get("db_calls", [])
+    if not calls:
+        return {}
+    by: dict[tuple[str, str], list[dict]] = {}
+    for c in calls:
+        by.setdefault((c["src"], c["id"]), []).append(c)
+    for (src, tid), cs in by.items():
+        if src not in g.nodes:
+            continue
+        g.table(cs[0]["table"], cs[0]["schema"])
+        ops = sorted({c["op"] for c in cs}, key=lambda o: DB_OPS.index(o) if o in DB_OPS else len(DB_OPS))
+        likely = [c for c in cs if c["confidence"] != POSSIBLE]
+        for c in cs:
+            g.add_edge(src, tid, kind=CALLS, confidence=INFERRED if likely else POSSIBLE, line=c["line"],
+                       via=(likely or cs)[0]["via"], detail=f"{', '.join(ops)} {cs[0]['table']}")
+    return {"db_calls": len(calls), "tables": len({c["id"] for c in calls})}

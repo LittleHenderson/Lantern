@@ -99,7 +99,7 @@ def classify(targets: list[tuple[str, str, str | None]]) -> tuple[str, list[str]
     Python's `ext:builtins.<name>`; other `ext:` ids are libraries; everything else is a node in the repo."""
     if not targets:
         return "unresolved", [], None, None
-    internal = [t for t in targets if not t[0].startswith(("ext:", "builtin:"))]
+    internal = [t for t in targets if not t[0].startswith(("ext:", "db:", "builtin:"))]
     builtin = [t for t in targets if t[0].startswith(("builtin:", "ext:builtins."))]
     if internal:
         pick = internal
@@ -151,7 +151,7 @@ def _part(items: list[dict]) -> dict:
             reasons[s["reason"]] = reasons.get(s["reason"], 0) + 1
         if s["via"]:
             by_via[s["via"]] = by_via.get(s["via"], 0) + 1
-        several += len([t for t in s["to"] if not t.startswith(("ext:", "builtin:"))]) > 1
+        several += len([t for t in s["to"] if not t.startswith(("ext:", "db:", "builtin:"))]) > 1
         k = (s["file"], s["line"])
         lines[k] = lines.get(k, 0) + 1
     return {"total": len(items), "outcomes": outcomes,
