@@ -821,7 +821,7 @@ const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv|kt|sw|dt|cs|php|rb|cc
 const isTable = id => (id || '').startsWith('db:');
 const isOut = id => isTable(id) || (id || '').startsWith('ext:');
 const outName = id => isTable(id) ? `${id.slice(3)} table` : (id || '').slice(4);
-const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
+const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit', formAction: 'on submit'};
 const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', cams: {}, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
 try { S.simple = localStorage.getItem('lantern.simple') !== '0'; } catch (e) {}
 // Opened from `lantern serve`: the saved setting (Settings → view_mode) wins over this browser's memory.
@@ -1127,7 +1127,7 @@ function renderLanes() {
     const stroke = on ? 'var(--accent)' : w === 'critical' || (ext && hot(S.sel)) ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : 'var(--line-2)';
     const label = ext ? outName(id) : n.entry && n.entry.kind === 'page' ? `${n.entry.detail} · ${short(n.qualname)}` : `${(n.file || '').split('/').pop()} :: ${short(n.qualname)}`;
     const t = label.length > 27 ? label.slice(0, 26) + '…' : label;
-    const sub0 = ext ? 'runs with what arrived' : (summaryOf(id) || (n.entry ? (n.entry.kind === 'page' ? 'a page the visitor opens' : n.entry.kind === 'route' ? `answers ${n.entry.detail}` : n.entry.detail) : (w ? `${w} finding here` : '')) || '');
+    const sub0 = ext ? 'runs with what arrived' : (summaryOf(id) || (n.entry ? (n.entry.kind === 'page' ? 'a page the visitor opens' : isAction(n.entry) ? `the Server Action ${actionName(n.entry)}` : n.entry.kind === 'route' ? `answers ${n.entry.detail}` : n.entry.detail) : (w ? `${w} finding here` : '')) || '');
     const sub = sub0.length > 32 ? sub0.slice(0, 31) + '…' : sub0;
     const lang = n && n.file ? n.file.split('.').pop() : '';
     svg += `<g data-id="${esc(id)}" style="cursor:pointer"><rect class="box" x="${x}" y="${y}" width="${W}" height="${H}" rx="12" fill="var(--surface)" stroke="${stroke}" stroke-width="${w || on ? 2 : 1}"/>
@@ -1444,6 +1444,7 @@ function situation(n) {
   else { for (const nid of Object.keys(N)) { const v = ((window._uiReach || {})[nid]); if (v) break; } }
   const where = onPhone(n) ? 'Runs on the person’s phone' : isJS(n.id) ? 'Runs in the visitor’s browser' : layer(n.id) === 'backend' ? 'Runs on your server' : isTable(n.id) ? 'A table in your database' : 'A library call';
   if (page && page.entry) return `${where} when someone on <b>${esc(page.entry.detail || short(page.qualname))}</b> ${ui ? esc(ui).replace('on ', '') + 's' : 'uses the page'}.`;
+  if (isAction(n.entry)) return `${where}: a Server Action · ${esc(actionName(n.entry))}.`;
   if (n.entry) return `${where}: ${esc({page: 'a page', route: 'a route', cli: 'a command', main: 'the program start', test: 'a test', script: 'a script'}[n.entry.kind] || n.entry.kind)}${n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}.`;
   const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
   return `${where}, ${isTable(n.id) ? 'used' : 'called'} by ${callers.length ? callers.slice(0, 2).map(x => `<b>${esc(short(N[x].qualname))}</b>`).join(' and ') + (callers.length > 2 ? ` and ${callers.length - 2} more` : '') : 'nothing in the repo'}.`;
@@ -1470,8 +1471,11 @@ const isScreen = e => !!e && e.kind === 'page' && / screen\b/.test(String(e.deta
 // iOS link handlers (ios.py): "LINK DeepLink handles links (…) · handle"
 const isIntent = e => !!e && e.kind === 'route' && /^(INTENT|LINK) /.test(String(e.detail || ''));
 const partName = e => String(e.detail || '').replace(/^(INTENT|LINK) /, '').split(' ')[0];
+// Server Actions (js_frontend.py): "ACTION createTodo", a route with a name and no address to show
+const isAction = e => !!e && e.kind === 'route' && /^ACTION /.test(String(e.detail || ''));
+const actionName = e => String(e.detail || '').replace(/^ACTION /, '');
 const onPhone = n => !!n && ANDROID_APP && (n.lane === 'browser' || n.lane === 'frontend');
-const entryPhrase = e => !e ? '' : isScreen(e) ? `someone opens the ${String(e.detail).split(' · ')[0]} on their phone` : isIntent(e) ? `another app on the phone, or a link, starts ${partName(e)}` : ({page: `the page ${e.detail || ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
+const entryPhrase = e => !e ? '' : isScreen(e) ? `someone opens the ${String(e.detail).split(' · ')[0]} on their phone` : isIntent(e) ? `another app on the phone, or a link, starts ${partName(e)}` : isAction(e) ? `someone sends a form, or presses a button, that runs the Server Action ${actionName(e)}` : ({page: `the page ${e.detail || ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
   main: 'the program starts', test: 'the tests run', script: `the script${e.detail ? ' ' + e.detail : ''} is run`})[e.kind] || `${e.kind}${e.detail ? ' ' + e.detail : ''}`;
 const extWords = id => { const n = String(id || '').replace(/^ext:/, ''); if (n.startsWith('HTTP ')) return n; const lib = n.split(/[./]/)[0]; return `the ${lib} library`; };
 // ---------- notes on the map (directive: user first, step 5) ----------
@@ -1570,7 +1574,7 @@ function mapRecord(n) {
   const keeps = tables.length ? ` In your database it reads or changes ${andList(uniq(tables.map(tableWords)).slice(0, 3))}${tables.length > 3 ? ` and ${tables.length - 3} more` : ''}.` : '';
   const found = fs.length ? ` Scanners found ${fs.length === 1 ? 'a problem' : fs.length + ' problems'} inside it: ${list(uniq(fs.map(f => String(f.title).replace(/[.\s]+$/, ''))), 2)}.` : '';
   const lens1 = {
-    summary: `${short(n.qualname)} is a ${kindWord} in ${n.file || 'an unknown file'}${lines ? `, lines ${n.start_line}–${n.end_line} (${lines} lines)` : ''}, running ${where}.${n.entry ? ` Entry point: ${n.entry.kind === 'test' ? 'a test' : n.entry.kind + (n.entry.detail ? ' ' + n.entry.detail : '')}.` : ''}${n.docstring ? ` Its own docstring: “${String(n.docstring).split('\n')[0].slice(0, 160)}”` : ''}`,
+    summary: `${short(n.qualname)} is a ${kindWord} in ${n.file || 'an unknown file'}${lines ? `, lines ${n.start_line}–${n.end_line} (${lines} lines)` : ''}, running ${where}.${n.entry ? ` Entry point: ${n.entry.kind === 'test' ? 'a test' : isAction(n.entry) ? 'the Server Action ' + actionName(n.entry) : n.entry.kind + (n.entry.detail ? ' ' + n.entry.detail : '')}.` : ''}${n.docstring ? ` Its own docstring: “${String(n.docstring).split('\n')[0].slice(0, 160)}”` : ''}`,
     inputs: params.length ? params.map(p => `${p}`) : [],
     outputs: '',
     side_effects: [...http.map(e => `HTTP ${e.detail || e.dst.replace(/^ext:HTTP /, '')}${N[e.dst] ? ` → ${short(N[e.dst].qualname)}` : ''}`), ...tables.slice(0, 6).map(e => `database: ${e.detail || N[e.dst].qualname}`), ...exts.slice(0, 6).map(x => `calls ${x.replace(/^ext:/, '')}`)],
@@ -1580,7 +1584,7 @@ function mapRecord(n) {
   const lens2 = {
     text: `This is “${plainWords(n.qualname)}”, a ${kindWord} running ${where}. ${runs} ${uses} ${talks}${keeps}${found}`.replace(/\s+/g, ' ').trim(),
     example: isScreen(n.entry) ? `Someone opens the ${String(n.entry.detail).split(' · ')[0]} on their phone, and ${PHONE_OS} runs this code.` : isIntent(n.entry) ? `Another app on the same phone (or a link) starts ${partName(n.entry)}, and this code runs with whatever data it passed in.`
-      : n.entry && n.entry.kind === 'page' ? `Someone opens ${n.entry.detail || 'this page'} and this is what builds it.` : n.entry && n.entry.kind === 'route' ? `A request to ${n.entry.detail || 'this route'} lands here, and this code decides what to answer.`
+      : n.entry && n.entry.kind === 'page' ? `Someone opens ${n.entry.detail || 'this page'} and this is what builds it.` : isAction(n.entry) ? `Someone sends a form (or presses a button) that runs the Server Action ${actionName(n.entry)}, and the server runs this code with what was sent. Anyone can also send that request by hand.` : n.entry && n.entry.kind === 'route' ? `A request to ${n.entry.detail || 'this route'} lands here, and this code decides what to answer.`
       : served.length ? `Someone in the browser uses ${short(N[served[0].src].qualname)}, which sends a request this code answers.` : callers.length ? `${short(N[callers[0]].qualname)} needs “${plainWords(n.qualname)}” done and hands the job to this code.` : 'No example from the map: nothing in your code was seen calling it.',
     analogy: '',
   };
@@ -1944,7 +1948,7 @@ function laneSentence(f) {
   const ls = LANES.filter(l => fLanes(f).has(l));
   const ids = f.ui_path || (f.reachable || {}).path || [];
   const first = N[ids[0]], last = (() => { const n = N[f.node]; const d = n && (OUT[n.id] || []).find(e => laneOf(e.dst) === 'data'); return d ? N[d.dst] : null; })();
-  const startWhy = first && first.entry && first.entry.kind === 'page' ? `someone opens <code>${esc(first.entry.detail)}</code>` : first && first.entry ? `the ${esc(first.entry.kind)} <code>${esc(first.entry.detail || short(first.qualname))}</code>` : '';
+  const startWhy = first && first.entry && first.entry.kind === 'page' ? `someone opens <code>${esc(first.entry.detail)}</code>` : first && isAction(first.entry) ? `the Server Action <code>${esc(actionName(first.entry))}</code>` : first && first.entry ? `the ${esc(first.entry.kind)} <code>${esc(first.entry.detail || short(first.qualname))}</code>` : '';
   const endWhy = last ? `<code>${esc(last.id.slice(4))}</code>` : '';
   let t = `This problem lives on the <b>${LANE_WORD[hl]}</b>.`;
   if (ls.length > 1) t += ` It starts in the <b>${LANE_WORD[ls[0]]}</b>${startWhy ? ` (${startWhy})` : ''} and ends in <b>${LANE_WORD[ls[ls.length - 1]]}</b>${endWhy && ls[ls.length - 1] === 'data' ? ` (${endWhy})` : ''}.`;
@@ -2496,7 +2500,7 @@ function srcBlock(n) {
 function renderRight() {
   const el = document.getElementById('right');
   const n = N[S.sel];
-  const kindWord = n ? (n.entry ? ({page: 'page', route: 'route', cli: 'command', main: 'program start', test: 'test', script: 'script'}[n.entry.kind] || n.entry.kind) : isTable(n.id) ? 'database table' : layer(n.id) === 'external' ? 'library' : (isJS(n.id) ? 'component' : 'function')) : '';
+  const kindWord = n ? (isAction(n.entry) ? 'Server Action' : n.entry ? ({page: 'page', route: 'route', cli: 'command', main: 'program start', test: 'test', script: 'script'}[n.entry.kind] || n.entry.kind) : isTable(n.id) ? 'database table' : layer(n.id) === 'external' ? 'library' : (isJS(n.id) ? 'component' : 'function')) : '';
   const railLabel = n ? `${onPhone(n) ? 'App' : layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : isTable(n.id) ? 'Data' : 'Library'} · ${isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord}` : 'Details';
   const chrome = railChrome(railLabel, 'r');
   // The Simple findings memo and the Readiness/About pages use the full width unless a function is open.
