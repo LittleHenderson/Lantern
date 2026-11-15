@@ -1539,6 +1539,10 @@ def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
         if sign:
             more += (f"The only sign in the handler is that {sign[1]}: that finds a record, not the caller. "
                      "Check the signed-in user as well. ")
+        if n.entry.get("trpc"):
+            built = ", ".join(f"`{x}`" for x in n.entry["trpc"].get("procedures") or ())
+            more += ("A tRPC procedure: the names it is built on" + (f" ({built})" if built else "") + " and the "
+                     "functions put before it were read as well, for one that turns a caller away. ")
         more += passed_over_words(n, texts.get(n.file or ""))
         title = f"{n.entry['detail']} changes data, is called by the app, and no login check was found"
         if only is not None:

@@ -639,3 +639,25 @@ def test_the_report_page_shows_an_action_by_its_name(tmp_path):
                 "n.entry.kind === 'route' ? n.entry.detail :", "N[reach.entry].entry.detail ? N[reach.entry].entry.detail :",
                 "` · ${esc(n.entry.detail)}`"):
         assert raw not in html, raw
+
+
+def test_the_reports_list_says_which_side_a_javascript_entry_runs_on(tmp_path):
+    """The list of pages and routes said "frontend" beside every JavaScript entry, also beside a route file, an
+    action or a tRPC procedure, which run on the server. It says what the map's lane says, as the panel does."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    html = (Path(report.__file__).parent / "viewer" / "report.html").read_text(encoding="utf-8")
+    parts = [re.search(pattern, html, re.M) for pattern in (r"^const isJS = [^\n]*\n", r"^const layer = [^\n]*\n")]
+    assert all(parts), "the page has no layer()"
+    nodes = {"js:app/actions::saveNote": {"lane": "server"}, "js:app/page::Page": {"lane": "browser"},
+             "js:components/Row::Row": {"lane": "frontend"}}
+    (tmp_path / "run.js").write_text(
+        f"const N = {json.dumps(nodes)};\n" + "".join(p.group(0) for p in parts)
+        + "console.log(JSON.stringify([...Object.keys(N), 'py:app.main.save', 'ext:openai.create'].map(layer)));\n",
+        encoding="utf-8")
+    r = subprocess.run([node, str(tmp_path / "run.js")], capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == ["backend", "frontend", "frontend", "backend", "external"]
+    assert "isJS(n.id) ? ' · frontend'" not in html
+    assert "isJS(n.id) ? ' · ' + layer(n.id)" in html

@@ -299,6 +299,77 @@ def test_the_login_check_reads_the_procedure_a_route_is_built_on(tmp_path):
     assert signs["hide"] == ("strong", "`adminProcedure` turns a caller away (TRPCError FORBIDDEN, server/api/trpc.ts:17)")
     assert signs["mine"] == ("strong", "it turns a caller away itself (TRPCError UNAUTHORIZED, line 22)")
     assert signs["remove"] is None and signs["rename"] is None
+    # the finding says what was read for a procedure: the names it is built on and the functions put before it
+    more = {f["title"].split(" ")[1]: f["more_info"] for f in websec.missing_auth(g)}
+    assert ("A tRPC procedure: the names it is built on (`publicProcedure`) and the functions put before it were read "
+            "as well, for one that turns a caller away.") in more["/api/trpc/post.remove"]
+    assert "built on (`timedProcedure`, `publicProcedure`)" in more["/api/trpc/post.rename"]
+
+
+LOOKS = '''import { initTRPC, TRPCError } from "@trpc/server";
+const t = initTRPC.create();
+export const createTRPCRouter = t.router;
+export const publicProcedure = t.procedure;
+// throw new TRPCError({ code: "UNAUTHORIZED" }) was here once
+export const notedProcedure = t.procedure.use(async ({ next }) => {
+  // throw new TRPCError({ code: "UNAUTHORIZED" });
+  console.log('new TRPCError({ code: "FORBIDDEN" })');
+  return next();
+});
+export const slowedProcedure = t.procedure.use(async ({ ctx, next }) => {
+  if (ctx.hits > 100) throw new TRPCError({ code: "TOO_MANY_REQUESTS" });
+  return next();
+});
+const gate = t.middleware(({ ctx, next }) => {
+  if (!ctx.visitor) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  return next();
+});
+export const memberProcedure = t.procedure.use(gate);
+'''
+LOOKS_ROOT = '''import { createTRPCRouter, memberProcedure, notedProcedure, publicProcedure, slowedProcedure } from "./trpc";
+
+export const appRouter = createTRPCRouter({
+  noted: notedProcedure.mutation(async ({ ctx }) => ctx.db.note.deleteMany({})),
+  slowed: slowedProcedure.mutation(async ({ ctx }) => ctx.db.note.deleteMany({})),
+  member: memberProcedure.mutation(async ({ ctx }) => ctx.db.note.deleteMany({})),
+  said: publicProcedure.mutation(async ({ ctx }) => {
+    const hint = 'throw new TRPCError({ code: "UNAUTHORIZED" })';
+    return ctx.db.note.create({ data: { hint } });
+  }),
+});
+'''
+
+
+def test_words_that_only_look_like_a_refusal_are_no_login_check(tmp_path):
+    """A comment or a text that holds `TRPCError … UNAUTHORIZED`, and a step that turns a caller away for another
+    reason (too many requests), are no login check. The twin: a step made with `t.middleware` under a plain name,
+    put on a procedure with a plain name, that does turn a caller away."""
+    from lantern import websec
+    g = _build(tmp_path, {"server/api/trpc.ts": LOOKS, "server/api/root.ts": LOOKS_ROOT})
+    assert len(_procedures(g)) == 4
+    adj = websec.call_adjacency(g)
+    signs = {}
+    for name in ("noted", "slowed", "member", "said"):
+        n = g.nodes["js:server/api/root::appRouter." + name]
+        got = websec.login_check(g, n, adj, (tmp_path / n.file).read_text(encoding="utf-8"))
+        signs[name] = got and got[1]
+    line = LOOKS.splitlines().index('    throw new TRPCError({ code: "UNAUTHORIZED" });') + 1
+    assert signs == {"noted": None, "slowed": None, "said": None,
+                     "member": f"`gate` turns a caller away (TRPCError UNAUTHORIZED, server/api/trpc.ts:{line})"}
+
+
+def test_the_door_every_procedure_stands_behind_is_no_route_of_its_own(tmp_path):
+    """The one handler that serves every procedure is marked, so that nothing counts it as a route that changes
+    data (the procedures are asked instead). The twin: a route file beside it is a route as before."""
+    from lantern import websec
+    notes = 'export async function POST(request: Request) {\n  return Response.json(await request.json());\n}\n'
+    g = _build(tmp_path, {**WITH_PAGE, "app/api/notes/route.ts": notes})
+    door = g.nodes["js:app/api/trpc/[trpc]/route::handler"]
+    assert door.entry["kind"] == "route" and door.entry["serves"] == "trpc"
+    assert "serves" not in g.nodes["js:app/api/notes/route::POST"].entry
+    assert not [f for f in websec.missing_auth(g) if "[trpc]" in f["title"]]
 
 
 def test_the_readiness_page_counts_procedures_that_change_data(tmp_path):
@@ -346,3 +417,83 @@ def test_what_the_caller_sends_is_followed_and_what_the_server_made_is_not(tmp_p
     plain = flow.analyze(_build(tmp_path / "plain", {"server/db.ts": DB, "server/api/trpc.ts": TRPC,
                                                       "server/api/root.ts": SENT}, NO_TRPC))
     assert plain.flows == []
+
+
+OWNED = '''import { z } from "zod";
+import { createTRPCRouter, protectedProcedure } from "./trpc";
+
+export const appRouter = createTRPCRouter({
+  rename: protectedProcedure.input(z.object({ id: z.string(), name: z.string() })).mutation(async ({ ctx, input }) => {
+    return ctx.db.post.update({ where: { id: input.id }, data: { name: input.name } });
+  }),
+  retitle: protectedProcedure.input(z.object({ id: z.string(), name: z.string() })).mutation(async ({ ctx, input }) => {
+    return ctx.db.post.update({ where: { id: input.id, ownerId: ctx.session.user.id }, data: { name: input.name } });
+  }),
+});
+'''
+
+
+def test_who_is_signed_in_comes_from_the_servers_own_context(tmp_path):
+    """A record reached by an id the caller sent, with nothing that compares its owner: found. The twin asks for
+    the id and the owner, and the owner is `ctx.session.user.id`, which the server made."""
+    from lantern.security import scan
+    g = _build(tmp_path, {"server/db.ts": DB, "server/api/trpc.ts": TRPC, "server/api/root.ts": OWNED})
+    owner = [f for f in scan(g)["findings"] if f["rule"] == "LT-AUTHZ-OWNER"]
+    assert [(f["line"], f["routes"]) for f in owner] == [(6, ["POST /rename"])]
+    assert owner[0]["title"].startswith("POST /rename reaches a record by an id from the request")
+
+
+def test_a_router_in_a_nextjs_app_folder_is_read_the_same(tmp_path):
+    """A file under `app/` is where Next.js reads a page's own arguments; a procedure written there still gets what
+    the caller sent as `input`, and nothing else."""
+    from lantern import flow
+    g = _build(tmp_path, {"app/db.ts": DB, "app/api/trpc.ts": TRPC, "app/api/root.ts": SENT})
+    res = flow.analyze(g)
+    assert not res.errors, res.errors
+    assert sorted((f["class"], f["line"]) for f in res.flows) == [("shell", 12), ("sql", 9)]
+
+
+WRITTEN_OUT = '''import type { TRPCRouterRecord } from "@trpc/server";
+import { protectedProcedure, publicProcedure } from "./trpc";
+import { listNotes } from "../notes";
+
+async function addNote({ ctx, input }) {
+  return ctx.db.note.create({ data: { text: input } });
+}
+
+export const noteRouter = {
+  all: publicProcedure.query(listNotes),
+  add: protectedProcedure.mutation(addNote),
+} satisfies TRPCRouterRecord;
+export const labels = { all: "All notes", add: "Add a note" } satisfies Record<string, string>;
+'''
+
+
+def test_a_router_written_out_as_an_object_and_handlers_handed_by_name(tmp_path):
+    """tRPC 11 takes a plain object as a router (`{ … } satisfies TRPCRouterRecord`), and a procedure may be handed
+    a function by its name, from this file or another: the route is that function. The twin beside it is an object
+    of texts."""
+    files = {"server/db.ts": DB, "server/api/trpc.ts": TRPC, "server/api/note.ts": WRITTEN_OUT,
+             "server/notes.ts": "export async function listNotes({ ctx }) {\n  return ctx.db.note.findMany();\n}\n",
+             "server/api/root.ts": ('import { createTRPCRouter } from "./trpc";\nimport { noteRouter } from "./note";\n'
+                                    'export const appRouter = createTRPCRouter({ note: noteRouter });\n'),
+             "app/api/trpc/[trpc]/route.ts": HANDLER}
+    g = _build(tmp_path, files)
+    assert _procedures(g) == {"js:server/api/note::addNote": "POST /api/trpc/note.add",
+                              "js:server/notes::listNotes": "GET /api/trpc/note.all"}
+    assert g.nodes["js:server/api/note::addNote"].entry["trpc"]["procedures"] == ["protectedProcedure"]
+
+
+def test_the_line_reader_does_not_take_a_procedures_input_step_for_pythons_input(tmp_path):
+    """`.input(z.object(…))` says what a procedure accepts. The reader of a flagged line knew `input(` as Python's
+    built-in that asks the person at the keyboard, in every language, and a finding on a procedure's first line said
+    "request data `input(`". In JavaScript a method after a dot is not that; what the request sent is the handler's
+    `input`. The twin: Python's own `input()`."""
+    from lantern import security
+    tool = 'import os\n\n\ndef main():\n    os.system("echo " + input("who"))\n'
+    g = _build(tmp_path, {**APP, "tool.py": tool})
+    n = g.nodes[POST_ID + "remove"]
+    assert security._input_on_line(g, {"file": n.file, "line": n.start_line, "node": n.id}, {}) == {
+        "via": "parameter `input`"}
+    assert security._input_on_line(g, {"file": "tool.py", "line": 5, "node": "py:tool.main"}, {}) == {
+        "via": "request data `input(`"}

@@ -954,7 +954,7 @@ function renderLeft() {
       const list = groups[k]; if (!list) continue;
       list.sort((a, b) => (a.entry.detail || '').localeCompare(b.entry.detail || ''));
       html += `<div class="group"><h4>${ENTRY_LABEL[k]} <span>${list.length}</span></h4>` + list.slice(0, 300).map(n =>
-        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t">${entryGlyph(n.id)}${epTitle(n, k)}</span><span class="d">${esc(short(n.qualname))}${isJS(n.id) ? ' · frontend' : LANGS['typescript/javascript'] ? ' · backend' : ''}${entryCounts(n.id) ? ' · ' + entryCounts(n.id) : ''}</span></button>`).join('') + '</div>';
+        `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t">${entryGlyph(n.id)}${epTitle(n, k)}</span><span class="d">${esc(short(n.qualname))}${isJS(n.id) ? ' · ' + layer(n.id) : LANGS['typescript/javascript'] ? ' · backend' : ''}${entryCounts(n.id) ? ' · ' + entryCounts(n.id) : ''}</span></button>`).join('') + '</div>';
     }
   }
   html += '</div>';
