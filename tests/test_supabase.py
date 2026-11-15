@@ -238,6 +238,48 @@ export class Store {
     assert site["outcome"] == "external" and site["confidence"] == "possible"
 
 
+def test_a_longer_name_that_begins_with_the_librarys_is_a_possible_link_too(tmp_path):
+    """`supabaseServiceRole`, `supabase_server`, `this.supabaseAdminClient`: a value Lantern cannot follow whose name
+    begins with the library's and goes on as a new word. Until 2026-11-15 only `supabase`, `supabaseClient` and
+    `supabaseAdmin` were taken by their name. The twins: the word inside or at the end of a name, a name that goes
+    on in small letters, and a handle named as the library's file store."""
+    g = _build(tmp_path, {"lib/rows.js": '''export async function addRow({ locals: { supabaseServiceRole } }, text) {
+  await supabaseServiceRole.from("requests").insert({ text });
+}
+
+export async function rows(supabase_server) {
+  return supabase_server.from("requests").select("*");
+}
+
+export class Desk {
+  constructor(client) {
+    this.supabaseAdminClient = client;
+  }
+
+  async clear() {
+    return this.supabaseAdminClient.from("requests").delete();
+  }
+}
+
+export async function inside(notSupabase, mysupabase, supabased) {
+  await notSupabase.from("other").delete();
+  await mysupabase.from("other").delete();
+  return supabased.from("other").select("*");
+}
+
+export async function store(supabaseStorage, supabaseBucket, file) {
+  await supabaseBucket.from("other").update("me.png", file);
+  return supabaseStorage.from("other").update("me.png", file);
+}
+'''})
+    assert _tables(g) == ["db:requests"]
+    assert _calls(g) == [("requests", "delete", "Desk.clear"), ("requests", "insert", "addRow"),
+                         ("requests", "select", "rows")]
+    for src in ("js:lib/rows::addRow", "js:lib/rows::rows", "js:lib/rows::Desk.clear"):
+        e = _edge(g, src, "db:requests")
+        assert e is not None and (e.via, e.confidence) == ("supabase-name", POSSIBLE), src
+
+
 def test_what_only_looks_like_a_call_into_a_table_is_not_linked(tmp_path):
     g = _build(tmp_path, {"lib/other.js": '''import knex from "knex";
 import { createClient } from "@supabase/supabase-js";

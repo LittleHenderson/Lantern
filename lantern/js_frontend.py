@@ -154,7 +154,11 @@ DOM_EVENTS = frozenset("""click dblclick submit change input keydown keyup keypr
     scroll wheel drag drop dragstart dragend dragover load error reset select contextmenu paste copy cut resize
     toggle close""".split())
 SUPABASE_CLIENT = re.compile(r"^@supabase/[\w.-]+\.(create\w*Client\(\)|useSupabaseClient\(\)|SupabaseClient)$")
-SUPABASE_NAME = re.compile(r"^_?supabase(_?(client|admin))?$", re.I)   # by its name alone: a possible link, no more
+# By its name alone: a possible link, no more. `supabase`, `supabaseClient`, `supabase_admin` in any case, and a
+# longer name that begins with the library's and goes on as a new word (`supabaseServiceRole`, `supabase_server`);
+# not the word inside or at the end of a name, and not a handle named as the library's file store.
+SUPABASE_NAME = re.compile(r"(?i:^_?supabase(_?(client|admin))?$)|"
+                           r"^_?[sS]upabase(?=[A-Z_0-9])(?!(?i:\w*(storage|bucket)))\w+$")
 TABLE_NAME = re.compile(r"^[A-Za-z_][\w$]{0,62}$")
 
 JS_LANG = "typescript/javascript"   # the name engine.build_graph gives the language in g.meta["languages"]
