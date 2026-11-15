@@ -248,3 +248,58 @@ def test_the_twin_a_route_file_is_told_as_it_was(tmp_path):
     g = _build(tmp_path, {"app/api/backup/route.ts": SHELL_ROUTE})
     f = _shell(g)
     assert "sends a request straight to POST /api/backup. Anyone who knows the address can." in f["scenario"]["steps"][0]
+
+
+# ------------------------------------------------------------------ what an action is handed is what was sent
+WITH_PG = json.dumps({"dependencies": {"next": "14.2.0", "react": "18.3.0", "pg": "8.11.5"}})
+SPA_PG = json.dumps({"dependencies": {"react": "18.3.0", "react-dom": "18.3.0", "pg": "8.11.5"}})
+HANDED = '''"use server";
+import { exec } from "child_process";
+import { Pool } from "pg";
+const pool = new Pool();
+
+export async function makeBackup(formData: FormData) {
+  const name = formData.get("name");
+  exec("tar czf /backups/" + name + ".tgz /data");
+}
+
+export async function removeNote(id: string) {
+  await pool.query("delete from notes where id = '" + id + "'");
+}
+
+export async function rename(prevState: unknown, data: FormData) {
+  await pool.query("update notes set title = '" + data.get("title") + "'");
+}
+
+export async function page(n: number) {
+  await pool.query("select * from notes limit " + n);
+}
+
+export async function fixed() {
+  await pool.query("select * from notes where kind = '" + "todo" + "'");
+}
+
+async function helper(id: string) {
+  await pool.query("select * from notes where id = '" + id + "'");
+}
+'''
+
+
+def _flows(root, files, pkg):
+    from lantern import flow
+    res = flow.analyze(_build(root, files, pkg))
+    assert not res.errors, res.errors
+    return sorted((f["class"], f["line"]) for f in res.flows)
+
+
+def test_what_an_action_is_handed_is_followed_like_any_request_value(tmp_path):
+    """Form data under any name, the arguments a client component calls it with, the state a form hands back: the
+    visitor's browser sends them all. A number carries no text, a fixed text is the code's own, and a function the
+    file keeps to itself is handed only what the server gives it."""
+    assert _flows(tmp_path, {"app/actions.ts": HANDED}, WITH_PG) == [("shell", 8), ("sql", 12), ("sql", 16)]
+
+
+def test_the_twin_where_nothing_runs_server_actions_an_argument_is_no_request_value(tmp_path):
+    """The same file where the words do nothing: these are plain functions, called by the app's own code, and
+    what they are handed is not said to come from a request."""
+    assert _flows(tmp_path, {"src/actions.ts": HANDED}, SPA_PG) == []

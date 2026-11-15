@@ -1672,6 +1672,13 @@ class Engine:
         if name in ("formData", "searchParams", "params") and (is_next_file(fn.file) or name == "formData"):
             words = f"`{name}` arrives with the request (handed to `{fn.name}`)"
             return Val((self.source(fn, fn.line, words),), kind="bag", data=name)
+        if str((self.entry(fn) or {}).get("detail") or "").startswith("ACTION "):
+            # A Server Action: the visitor's browser sends every argument (a form's data under any name, what a
+            # client component calls it with, the state a form hands back, values bound to it). A number is no text.
+            words = f"`{name}` arrives with the request (handed to the Server Action `{fn.name}`)"
+            if ann and re_search(r"\bFormData\b", ann):
+                return Val((self.source(fn, fn.line, words),), kind="bag", data="formData")
+            return join(base, Val((self.source(fn, fn.line, words, set(R.ALL) if number else ()),)))
         return base
 
     def dependency(self, fn: Fn, text: str) -> Val | None:
