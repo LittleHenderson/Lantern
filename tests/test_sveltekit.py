@@ -1018,3 +1018,144 @@ def test_a_hook_that_names_the_addresses_it_guards(tmp_path, case):
     assert sorted(routes[i] for i in sec["logins_shown"] if i in routes) == shown
     open_ones = sorted(f["title"].split(" changes data")[0] for f in sec["findings"] if f["rule"] == "LW-AUTH-MISSING")
     assert open_ones == sorted(set(routes.values()) - set(shown))
+
+
+# ------------------------------------------------------------------ the hook as the sign-in guides write it
+GUIDE_HOOK = '''import { error, redirect } from "@sveltejs/kit";
+import { readUser } from "$lib/server/session";
+
+TOP
+export const handle = async ({ event, resolve }) => {
+  event.locals.user = await readUser(event.cookies.get("session"));
+  CHECK
+  return resolve(event);
+};
+'''
+GUIDE_SEQUENCE = '''import { redirect } from "@sveltejs/kit";
+import { sequence } from "@sveltejs/kit/hooks";
+import { readUser } from "$lib/server/session";
+
+const auth = async ({ event, resolve }) => {
+  event.locals.user = await readUser(event.cookies.get("session"));
+  return resolve(event);
+};
+const guard = async ({ event, resolve }) => {
+  if (event.url.pathname.startsWith("/app") && !event.locals.user) redirect(303, "/login");
+  return resolve(event);
+};
+export const handle = sequence(auth, guard);
+'''
+GUIDE_ANSWER_KEPT = '''import { redirect } from "@sveltejs/kit";
+import { readUser } from "$lib/server/session";
+
+export const handle = async ({ event, resolve }) => {
+  event.locals.user = await readUser(event.cookies.get("session"));
+  if (event.url.pathname.startsWith("/api")) {
+    const response = await resolve(event);
+    response.headers.set("x-api", "1");
+    return response;
+  }
+  if (!event.locals.user) redirect(303, "/login");
+  return resolve(event);
+};
+'''
+API_ONLY = ["DELETE /api/notes/[id]"]
+NOT_SIGNED_IN = '!event.locals.user) redirect(303, "/login");'
+GUIDE_CASES = {
+    # who is signed in, as the hook itself learns it: the libraries' own functions kept on `locals`
+    "Auth.js: what locals.auth() hands back": (
+        "", 'const session = await event.locals.auth();\n  if (!session) redirect(303, "/login");', BOTH),
+    "Auth.js: the user in it": (
+        "", 'const session = await event.locals.auth();\n  if (!session?.user) redirect(303, "/login");', BOTH),
+    "Supabase: the session kept on locals": (
+        "", 'const { session, user } = await event.locals.safeGetSession();\n  event.locals.session = session;\n'
+            '  event.locals.user = user;\n  if (!event.locals.session) redirect(303, "/auth");', BOTH),
+    "a cookie that is only there": ("", 'if (!event.cookies.get("session")) redirect(303, "/login");', []),
+    # the two guides' own guards, each for one area
+    "Supabase's guide": (
+        "", 'const { session, user } = await event.locals.safeGetSession();\n  event.locals.session = session;\n'
+            '  event.locals.user = user;\n  if (!event.locals.session && event.url.pathname.startsWith("/app")) {\n'
+            '    redirect(303, "/auth");\n  }\n  if (event.locals.session && event.url.pathname === "/auth") {\n'
+            '    redirect(303, "/app");\n  }', APP_ONLY),
+    "Auth.js's guide": (
+        "", 'if (event.url.pathname.startsWith("/app")) {\n    const session = await event.locals.auth();\n'
+            '    if (!session) {\n      throw redirect(303, "/auth/signin");\n    }\n  }', APP_ONLY),
+    # the address under a name, the route's id, a list at the file's top, a helper, the verb
+    "the path kept under a name": (
+        "", 'const { pathname } = event.url;\n  if (pathname.startsWith("/app") && ' + NOT_SIGNED_IN, APP_ONLY),
+    "the path kept under another name": (
+        "", 'const path = event.url.pathname;\n  if (path !== "/login" && ' + NOT_SIGNED_IN, BOTH),
+    "the event taken apart": (
+        "", 'const { url, locals } = event;\n  if (url.pathname.startsWith("/api") && !locals.user) error(401, "no");',
+        API_ONLY),
+    "a list of open pages at the file's top": (
+        'const OPEN = ["/login", "/signup"];', 'if (!OPEN.includes(event.url.pathname) && ' + NOT_SIGNED_IN, BOTH),
+    "the route's id": ("", 'if (event.route.id?.startsWith("/app") && ' + NOT_SIGNED_IN, APP_ONLY),
+    "an open area first, the rest guarded": (
+        "", 'if (event.url.pathname.startsWith("/public")) {\n    return resolve(event);\n  } else if ('
+            '!event.locals.user) {\n    redirect(303, "/login");\n  }', BOTH),
+    "a helper asked for one area": (
+        'async function requireUser(event) {\n  if (!event.locals.user) redirect(303, "/login");\n}',
+        'if (event.url.pathname.startsWith("/app")) await requireUser(event);', APP_ONLY),
+    "an open corner inside the area": (
+        "", 'if (event.url.pathname.startsWith("/app/public")) return resolve(event);\n'
+            '  if (event.url.pathname.startsWith("/app") && ' + NOT_SIGNED_IN, APP_ONLY),
+    "an area written with its slash": ("", 'if (event.url.pathname.startsWith("/app/") && ' + NOT_SIGNED_IN, APP_ONLY),
+    "every address but one with a part that changes": (
+        "", 'if (event.url.pathname !== "/api/notes/7" && ' + NOT_SIGNED_IN, APP_ONLY),
+    "every verb but GET": ("", 'if (event.request.method !== "GET" && !event.locals.user) error(401, "no");', BOTH),
+    "an area, or nobody signed in": ("", 'if (event.url.pathname.startsWith("/app") || ' + NOT_SIGNED_IN, BOTH),
+    # the twins: the same words where the guard does not reach the route
+    "the open area is where a route is": (
+        "", 'if (event.url.pathname.startsWith("/app")) {\n    return resolve(event);\n  } else if ('
+            '!event.locals.user) {\n    redirect(303, "/login");\n  }', API_ONLY),
+    "the open corner is the route": (
+        "", 'if (event.url.pathname.startsWith("/app/notes")) return resolve(event);\n'
+            '  if (event.url.pathname.startsWith("/app") && ' + NOT_SIGNED_IN, []),
+    "another route's id": ("", 'if (event.route.id?.startsWith("/(app)") && ' + NOT_SIGNED_IN, []),
+    "an area longer than the route": ("", 'if (event.url.pathname.startsWith("/app/notes/") && ' + NOT_SIGNED_IN, []),
+    "an area that names a part that changes": (
+        "", 'if (event.url.pathname.startsWith("/api/notes/7") && ' + NOT_SIGNED_IN, []),
+    "only GET": ("", 'if (event.request.method === "GET" && !event.locals.user) error(401, "no");', []),
+    "the name set again": (
+        "", 'let path = event.url.pathname;\n  path = path.slice(4);\n  if (path.startsWith("/app") && ' + NOT_SIGNED_IN,
+        []),
+    "contains, not begins": ("", 'if (event.url.pathname.includes("/app") && ' + NOT_SIGNED_IN, []),
+    "ends with": ("", 'if (event.url.pathname.endsWith("/notes") && ' + NOT_SIGNED_IN, []),
+    "the address's question, not its path": ("", 'if (event.url.search.startsWith("/app") && ' + NOT_SIGNED_IN, []),
+    "another address's path": (
+        "", 'const other = new URL(event.request.headers.get("referer"));\n'
+            '  if (other.pathname.startsWith("/app") && ' + NOT_SIGNED_IN, []),
+    # not read, and so reported as open (the safe side): the path changed first, a pattern, a list of areas
+    "the path changed before it is asked": (
+        "", 'const path = event.url.pathname.toLowerCase();\n  if (path.startsWith("/app") && ' + NOT_SIGNED_IN, []),
+    "a pattern": ("", 'if (/^\\/app/.test(event.url.pathname) && ' + NOT_SIGNED_IN, []),
+    "a list of areas": (
+        'const AREAS = ["/app", "/api"];',
+        'if (AREAS.some((p) => event.url.pathname.startsWith(p)) && ' + NOT_SIGNED_IN, []),
+    # whole hooks: the guard as one part of `sequence(...)`; an area handed on with its answer kept under a name
+    "the guard as a part of sequence()": (None, GUIDE_SEQUENCE, APP_ONLY),
+    "an area handed on with its answer kept": (None, GUIDE_ANSWER_KEPT, APP_ONLY),
+}
+
+
+@pytest.mark.parametrize("case", sorted(GUIDE_CASES))
+def test_a_hook_as_the_sign_in_guides_write_it(tmp_path, case):
+    """The hook learns who is signed in from what the app keeps on `locals`: `locals.user`, `locals.session`, and
+    what `await locals.auth()` (Auth.js) or `locals.safeGetSession()` (Supabase) hands back, under any name; a
+    cookie that is merely there says nothing. The addresses it guards are read where the code names the request's
+    whole address: `event.url.pathname` or `event.route.id`, also kept under a name as it is, against fixed text
+    (`startsWith`, `===`, a list's `includes`). A request that is handed on (`return resolve(event)`, also with the
+    answer kept under a name first) was not asked what comes after. A route takes the login only when its own
+    address is certainly among those asked: a part that changes (`[id]`) counts for neither side. The path changed
+    before it is asked, a pattern, a list of areas: not read, so those routes are reported as open."""
+    from lantern.security import scan
+    top, check, shown = GUIDE_CASES[case]
+    hook = check if top is None else GUIDE_HOOK.replace("TOP", top).replace("CHECK", check)
+    g = _build(tmp_path, {**AREA, "src/hooks.server.ts": hook})
+    sec = scan(g, offline=True)
+    routes = {n.id: n.entry["detail"] for n in g.nodes.values() if n.entry and n.entry.get("sveltekit") in (
+        "action", "endpoint")}
+    assert sorted(routes[i] for i in sec["logins_shown"] if i in routes) == shown
+    open_ones = sorted(f["title"].split(" changes data")[0] for f in sec["findings"] if f["rule"] == "LW-AUTH-MISSING")
+    assert open_ones == sorted(set(routes.values()) - set(shown))

@@ -186,6 +186,10 @@ REQUEST_NAMES = {"request", "req"}
 KIT_EVENT_TYPES = re.compile(r"\b(RequestEvent|ServerLoadEvent|PageServerLoadEvent|LayoutServerLoadEvent)\b")
 KIT_LOCALS_TYPES = re.compile(r"\bApp\.Locals\b")
 KIT_SERVER_FILE = re.compile(r"\.server\.[cm]?[jt]s$|(^|/)server/|(^|/)\+server\.[jt]s$")
+# What a SvelteKit app's own hook keeps on `locals` for asking who is signed in, as the sign-in libraries' guides
+# write it: `await locals.auth()` (Auth.js), `locals.safeGetSession()` / `locals.getSession()` (Supabase),
+# `locals.validate()` (Lucia). What such a call hands back is there when somebody is signed in.
+KIT_ASKS = {"auth", "getSession", "safeGetSession", "getUser", "validate", "validateUser", "getSessionAndUser"}
 REQUEST_TYPES = re.compile(r"\b(Request|HttpRequest|WSGIRequest|NextRequest|NextApiRequest|FastifyRequest|"
                            r"WebSocket|HTTPConnection|IncomingMessage)\b")
 REQUEST_GLOBALS = {"flask.request", "quart.request", "bottle.request", "flask.globals.request", "sanic.request"}
@@ -797,8 +801,9 @@ SIGNED_IN = re.compile(r"(^|[._\[\]'\" ])((current_?)?(user|account|member|princ
 WHICH_PAGE = re.compile(r"^(request|req|ctx|c)\.(endpoint|path|url|originalUrl|baseUrl|url_rule|blueprint|full_path|"
                         r"routerPath|route)\b")
 # Which verb the request is (`req.method === 'OPTIONS'`, `request.method in ("GET", "HEAD")`): a check may let some
-# verbs through unasked, and is then a login for the routes of the other verbs only (`flow.which_verbs`)
-VERB_READ = re.compile(r"^(request|req|ctx|c)(\.(request|req))?\.method$")
+# verbs through unasked, and is then a login for the routes of the other verbs only (`flow.which_verbs`).
+# `event.request.method` is SvelteKit's.
+VERB_READ = re.compile(r"^(request|req|ctx|c|event)(\.(request|req))?\.method$")
 VERB_CASE = {"toUpperCase", "toLowerCase", "upper", "lower"}
 ALL_VERBS = frozenset(v.upper() for v in HTTP_VERBS)
 # Asked of the request itself (Passport): `req.isAuthenticated()`.
