@@ -941,6 +941,11 @@ DATA_LIBS = re.compile(r"^(sqlalchemy|flask_sqlalchemy|django\.db|peewee|tortois
                        r"objection|bookshelf|mikro-orm|@mikro-orm/[\w-]+|drizzle-orm|waterline|@supabase/[\w-]+|"
                        r"firebase-admin|firebase/firestore|@google-cloud/firestore|dynamoose|redis-om|"
                        r"flask_pymongo|" + SQL_LIBS[1:] + r"(?![\w-])")
+# A query builder whose conditions are functions of the library: `where(eq(notes.id, id))`,
+# `and(eq(…), eq(notes.ownerId, user.id))`, `inArray(notes.id, ids)`. What such a function hands back stands for the
+# values it was given, as the object in `{ where: { id } }` does. Not the `sql` tag: its text is read elsewhere.
+CONDITIONS = re.compile(r"^drizzle-orm\.(eq|ne|gt|gte|lt|lte|and|or|not|inArray|notInArray|like|ilike|notLike|"
+                        r"notIlike|between|notBetween|isNull|isNotNull|arrayContains|arrayContained|arrayOverlaps)$")
 # Calls that write what they are given onto a stored record, or make one of it.
 WRITE_MEMBERS = {"update", "create", "insert", "insertOne", "insert_one", "insertMany", "insert_many", "save",
                  "updateOne", "update_one", "updateMany", "update_many", "findByIdAndUpdate", "findOneAndUpdate",

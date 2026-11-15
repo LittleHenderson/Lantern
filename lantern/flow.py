@@ -4136,6 +4136,11 @@ class Engine:
             step = (fn.file, e.line, words)
             return Val(tuple(with_step(t._replace(safe=norm(t.safe | got, fn.lang)), step) if t.kind != "ident" else t
                              for t in src.taints), None, src.sql, src.html)
+        if name and fn.lang == "js" and R.CONDITIONS.match(name):
+            # `eq(notes.id, id)`, `and(a, b)`: a condition of the query that holds the values it compares with. The
+            # record the query picks is picked by them: by who is signed in, or by what the request sent
+            held = join_all(vals)
+            return Val(held.taints, kind="ext", data=name + "()", lost=held.lost)
         # 2. sensitive actions
         self.sinks(e, env, ctx, name, member, recv, recv_expr, args, kw, a0, what)
         got = self.reached(e, env, ctx, name, member, recv, recv_expr, args, kw, a0, what)

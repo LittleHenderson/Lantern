@@ -3403,3 +3403,129 @@ def test_the_names_check_reads_a_maker_of_random_text_as_no_auth_word(name, word
     from lantern import websec
     got = websec.auth_word(name)
     assert (got is None) == (word is None), got
+
+
+# ------------------------------------------------------------------ conditions that are functions of the library
+BUILDER_PACKAGE = ('{"dependencies": {"next": "15.0.0", "react": "19.0.0", "next-auth": "4.24.7", "jose": "5.2.0", '
+                   '"drizzle-orm": "0.36.0", "postgres": "3.4.0", "lodash": "4.17.21"}}')
+BUILDER_DB = ('import { drizzle } from "drizzle-orm/postgres-js";\nimport postgres from "postgres";\n'
+              'export const db = drizzle(postgres(process.env.POSTGRES_URL));\n')
+BUILDER_SCHEMA = ('import { integer, pgTable, serial, text } from "drizzle-orm/pg-core";\n'
+                  'export const users = pgTable("users", { id: serial("id").primaryKey(), name: text("name") });\n'
+                  'export const invoices = pgTable("invoices", { id: serial("id").primaryKey(), '
+                  'userId: integer("user_id"), note: text("note") });\n')
+BUILDER_PROJECT = {"package.json": BUILDER_PACKAGE, "lib/db.ts": BUILDER_DB, "lib/schema.ts": BUILDER_SCHEMA,
+                   "lib/auth.ts": "export const authOptions = {};\n",
+                   "lib/util.ts": "export function pick(column, value) {\n  return [column, value];\n}\n"}
+BUILDER_HEAD = ('import { getServerSession } from "next-auth";\n'
+                'import { and, eq, inArray } from "drizzle-orm";\nimport _ from "lodash";\n'
+                'import { db } from "../../../../lib/db";\nimport { invoices } from "../../../../lib/schema";\n'
+                'import { authOptions } from "../../../../lib/auth";\n\n')
+BUILDER_ASK = ('  const session = await getServerSession(authOptions);\n'
+               '  if (!session) return new Response("sign in", { status: 401 });\n')
+BUILDER_MINE = "and(eq(invoices.id, params.id), eq(invoices.userId, session.user.id))"
+BUILDER_CASES = {
+    "caught: rows read by the id alone":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  const rows = await db.select().from(invoices).where(eq(invoices.id, params.id));\n"
+         "  return Response.json(rows[0]);\n}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: rows read by the id and the signed-in person":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  const rows = await db.select().from(invoices).where(" + BUILDER_MINE + ");\n"
+         "  return Response.json(rows[0]);\n}\n", []),
+    "clean: the rows of the signed-in person":
+        ("export async function GET(req) {\n" + BUILDER_ASK +
+         "  return Response.json(await db.select().from(invoices).where(eq(invoices.userId, session.user.id)));\n"
+         "}\n", []),
+    "caught: one row found by the id alone":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  return Response.json(await db.query.invoices.findFirst({ where: eq(invoices.id, params.id) }));\n"
+         "}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: one row found by the id and the signed-in person":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  return Response.json(await db.query.invoices.findFirst({ where: " + BUILDER_MINE + " }));\n"
+         "}\n", []),
+    "caught: a row removed by the id alone":
+        ("export async function DELETE(req, { params }) {\n" + BUILDER_ASK +
+         "  await db.delete(invoices).where(eq(invoices.id, params.id));\n"
+         "  return new Response(null, { status: 204 });\n}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: a row removed by the id and the signed-in person":
+        ("export async function DELETE(req, { params }) {\n" + BUILDER_ASK +
+         "  await db.delete(invoices).where(" + BUILDER_MINE + ");\n"
+         "  return new Response(null, { status: 204 });\n}\n", []),
+    "caught: a row changed by the id alone, with a field the code names":
+        ("export async function PATCH(req, { params }) {\n" + BUILDER_ASK +
+         "  const body = await req.json();\n"
+         "  await db.update(invoices).set({ note: body.note }).where(eq(invoices.id, params.id));\n"
+         "  return new Response(null, { status: 204 });\n}\n", ["LT-AUTHZ-OWNER"]),
+    "caught: rows read by a list of ids that was sent":
+        ("export async function POST(req) {\n" + BUILDER_ASK +
+         "  const body = await req.json();\n"
+         "  return Response.json(await db.select().from(invoices).where(inArray(invoices.id, body.ids)));\n"
+         "}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: a function of that name from another library says nothing about the row":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  const rows = await db.select().from(invoices).where(_.eq(invoices.id, params.id));\n"
+         "  return Response.json(rows[0]);\n}\n", []),
+}
+
+
+@pytest.mark.parametrize("case", sorted(BUILDER_CASES))
+def test_next_with_a_query_builder_whose_conditions_are_functions(tmp_path, case):
+    """`where(eq(invoices.id, params.id))`: the library's own condition functions stand for the values they are
+    given, as `{ where: { id } }` does with another library. Until 2026-11-15 what they were given was dropped: a
+    row picked by the id alone was not reported, and a row picked by who is signed in was not known to be theirs.
+    A function of that name from another library is read as before."""
+    body, want = BUILDER_CASES[case]
+    fs = _scan(tmp_path, {"app/api/invoices/[id]/route.ts": BUILDER_HEAD + body}, project=BUILDER_PROJECT)
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+BUILDER_SESSION = ('import { jwtVerify } from "jose";\n'
+                   'const key = new TextEncoder().encode(process.env.AUTH_SECRET);\n'
+                   'export async function readSession(input) {\n'
+                   '  const { payload } = await jwtVerify(input, key, { algorithms: ["HS256"] });\n'
+                   '  return payload;\n}\n')
+BUILDER_WHO = ('import { cookies } from "next/headers";\nimport { eq } from "drizzle-orm";\n'
+               'import { db } from "./db";\nimport { users } from "./schema";\n'
+               'import { readSession } from "./session";\n\n'
+               'export async function whoIsIt() {\n'
+               '  const kept = (await cookies()).get("session");\n'
+               '  if (!kept || !kept.value) {\n    return null;\n  }\n'
+               '  const told = await readSession(kept.value);\n'
+               '  if (!told || !told.user || typeof told.user.id !== "number") {\n    return null;\n  }\n')
+BUILDER_LOOKUPS = {
+    "shown: the user's row, read with the id the token holds":
+        ("  const rows = await db.select().from(users).where(eq(users.id, told.user.id)).limit(1);\n"
+         "  if (rows.length === 0) {\n    return null;\n  }\n  return rows[0];\n}\n", True),
+    "shown: the user's row, found with the id the token holds":
+        ("  const row = await db.query.users.findFirst({ where: eq(users.id, told.user.id) });\n"
+         "  return row ?? null;\n}\n", True),
+    "not shown: the first row of the table, whoever is calling":
+        ("  const rows = await db.select().from(users).limit(1);\n  return rows[0];\n}\n", False),
+}
+BUILDER_ROUTE = ('import { whoIsIt } from "../../../lib/who";\nimport { db } from "../../../lib/db";\n'
+                 'import { invoices } from "../../../lib/schema";\n\n'
+                 'export async function DELETE() {\n  const who = await whoIsIt();\n'
+                 '  if (!who) {\n    return new Response(null, { status: 401 });\n  }\n'
+                 '  await db.delete(invoices);\n  return new Response(null, { status: 204 });\n}\n')
+
+
+@pytest.mark.parametrize("case", sorted(BUILDER_LOOKUPS))
+def test_a_login_that_looks_the_user_up_with_a_condition_function(tmp_path, case):
+    """A helper checks a signed cookie, reads the user's row with the id the token holds and hands the row back;
+    the route turns away a caller with no row. The row is that person's (asked in the query itself), so the route
+    shows a login. Until 2026-11-15 `eq(users.id, …)` dropped the id, the row said nothing about who is calling,
+    and no route of such an app showed a login. A row read without asking for anybody says nothing, as before."""
+    from lantern.security import scan
+    tail, want = BUILDER_LOOKUPS[case]
+    files = {**BUILDER_PROJECT, "lib/session.ts": BUILDER_SESSION, "lib/who.ts": BUILDER_WHO + tail,
+             "app/api/invoices/route.ts": BUILDER_ROUTE}
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    g = build_graph(tmp_path)
+    sec = scan(g, offline=True)
+    shown = [g.nodes[i].entry["detail"] for i in sec["logins_shown"]]
+    assert shown == (["DELETE /api/invoices"] if want else []), shown
