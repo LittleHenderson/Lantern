@@ -717,3 +717,122 @@ def test_the_session_the_server_keeps_says_who_is_asking(tmp_path):
         got = websec.login_check(g, n, adj, (tmp_path / n.file).read_text(encoding="utf-8"))
         strong[verb] = bool(got and got[0] == "strong")
     assert strong == {"POST": True, "PUT": False, "DELETE": False}
+
+
+# ------------------------------------------------------------------ the words a reader gets
+ASK_API = '''import OpenAI from "openai";
+import { json } from "@sveltejs/kit";
+const openai = new OpenAI();
+export const POST = async ({ request }) => {
+  const body = await request.json();
+  const out = await openai.chat.completions.create({ model: "m", messages: [{ role: "user", content: body.q }] });
+  return json({ text: out.choices[0].message.content });
+};
+'''
+ASK_PAGE = '''<script>
+  let answer = "";
+  async function ask() {
+    const r = await fetch("/api/ask", { method: "POST", body: JSON.stringify({ q: "hi" }) });
+    answer = (await r.json()).text;
+  }
+</script>
+<button on:click={ask}>Ask</button>
+<p>{@html answer}</p>
+'''
+ASK = {"svelte.config.js": CONFIG, "src/routes/api/ask/+server.ts": ASK_API, "src/routes/ask/+page.svelte": ASK_PAGE}
+
+
+def _scan(root, files, pkg=PKG):
+    from lantern.security import scan
+    return [f for f in scan(_build(root, files, pkg), offline=True)["findings"] if not f["in_tests"]]
+
+
+def test_a_story_on_a_svelte_page_names_no_file(tmp_path):
+    """A page file has no name of its own (`+page`), so the tester's story says "a button on it" after the page
+    they opened, and the heading says where the button is. Never a piece of the file's name ("the svelte::+page
+    button"). A line of the page's markup is on the page: the story of `{@html answer}` starts by opening it."""
+    found = {f["rule"]: f for f in _scan(tmp_path, ASK, PKG.replace('"@prisma/client": "5.14.0"', '"openai": "4.0.0"'))}
+    open_route = found["LW-AUTH-MISSING"]
+    assert open_route["scenario"]["steps"][:2] == [
+        open_route["scenario"]["steps"][0], "They click a button on it."]
+    assert "opens the /ask page" in open_route["scenario"]["steps"][0]
+    for f in found.values():
+        said = json.dumps([f.get("headline"), f.get("scenario"), f.get("title")])
+        assert "svelte" not in said and "+page" not in said, said
+    assert found["LA-WALLET-DRAIN"]["headline"].startswith("A button on the /ask page ")
+    raw = found["LJ-XSS-HTML"]
+    assert (raw["file"], raw["line"]) == ("src/routes/ask/+page.svelte", 9)
+    assert raw["reachable"]["entry"] == "js:src/routes/ask/+page.svelte::+page"
+    assert "opens the /ask page" in raw["scenario"]["steps"][0]
+
+
+ASKED = '''import { error, json } from "@sveltejs/kit";
+import { Pool } from "pg";
+const pool = new Pool();
+export async function GET({ url, locals }) {
+  if (!locals.user) throw error(401, "sign in");
+  const id = url.searchParams.get("id");
+  return json(await pool.query("select * from notes where id = '" + id + "'"));
+}
+export async function DELETE(event) {
+  if (!event.locals.user) throw error(401, "sign in");
+  const noteId = event.url.searchParams.get("noteId");
+  await pool.query("delete from notes where id = $1", [noteId]);
+  return json({});
+}
+export async function PUT({ request, locals }) {
+  if (!locals.user) throw error(401, "sign in");
+  const { searchParams } = new URL(request.url);
+  await pool.query("update notes set seen = true where id = $1", [searchParams.get("noteId")]);
+  return json({});
+}
+export async function POST({ url, locals }) {
+  if (!locals.user) throw error(401, "sign in");
+  return json(await pool.query("select * from notes where text = $1", [url.searchParams.get("q")]));
+}
+'''
+
+
+def test_a_word_of_the_addresss_question_is_called_by_its_name(tmp_path):
+    """`url.searchParams.get("id")` is `id`, as `req.query.id` is on Express: the story names the box a tester
+    fills, and a record picked by it is a record picked by an id from the request (three ways to write it). The
+    twin: a search word (`q`) picks no record."""
+    found = _scan(tmp_path, {"svelte.config.js": CONFIG, "src/routes/api/n/+server.ts": ASKED},
+                  PKG.replace('"@prisma/client": "5.14.0"', '"pg": "8.11.5"'))
+    sql = next(f for f in found if f["rule"] == "LT-SQL")
+    assert sql["input"]["via"] == "`id` in `url.searchParams` is what the request sent"
+    assert "In the box that fills in `id` they type" in sql["scenario"]["steps"][1]
+    assert sorted((f["line"], f["title"].split(" reaches")[0]) for f in found if f["rule"] == "LT-AUTHZ-OWNER") == [
+        (7, "GET /api/n"), (12, "DELETE /api/n"), (18, "PUT /api/n")]
+
+
+TEXT_FORM = '''export const actions = {
+  default: async ({ request }) => {
+    const data = await request.formData();
+    return { name: String(data.get("name")) };
+  },
+};
+'''
+FILE_FORM = '''import { writeFile } from "fs/promises";
+export const actions = {
+  default: async ({ request }) => {
+    const data = await request.formData();
+    const photo = data.get("photo") as File;
+    await writeFile("/data/photo", Buffer.from(await photo.arrayBuffer()));
+  },
+};
+'''
+
+
+def test_a_form_with_text_fields_is_no_file_upload(tmp_path):
+    """Every SvelteKit form action reads `request.formData()`: that is how a form's fields arrive, and says nothing
+    of files. The readiness page speaks of uploads only where the code takes a file out of the form (a `File`, its
+    `arrayBuffer()`). The twin: the same action taking a photo is an upload with no size or type check."""
+    from lantern.readiness import assess
+    from lantern.security import scan
+    said = {}
+    for name, action in (("text", TEXT_FORM), ("file", FILE_FORM)):
+        g = _build(tmp_path / name, {"svelte.config.js": CONFIG, "src/routes/+page.server.ts": action})
+        prot = {p["id"]: p for p in assess(g, scan(g, offline=True), {})["protections"]}
+        said[name] = (prot.get("upload-checks") or {}).get("status")
+    assert said == {"text": None, "file": "add"}

@@ -1401,3 +1401,37 @@ PATH_ONLY_CASES = {
 @pytest.mark.parametrize("case", sorted(PATH_ONLY_CASES))
 def test_an_address_with_no_host_in_it_and_the_hosts_the_request_names(tmp_path, case):
     _check(tmp_path, PATH_ONLY_CASES, case, head=PATH_ONLY_JS)
+
+
+# ------------------------------------------------------------- a word of the address's question, by its name
+
+ASKED = {
+    "lib/db.ts": "import { Pool } from 'pg'\n\nexport const db = new Pool()\n",
+    "app/api/notes/route.ts": (
+        "import { NextRequest, NextResponse } from 'next/server'\nimport { getServerSession } from 'next-auth'\n"   # 1, 2
+        "import { db } from '../../../lib/db'\n\n"                                                                # 3
+        "export async function GET (request: NextRequest) {\n"                                                    # 5
+        "  if (!(await getServerSession())) return new NextResponse(null, { status: 401 })\n"                     # 6
+        "  const id = request.nextUrl.searchParams.get('id')\n"                                                   # 7
+        "  return NextResponse.json(await db.query(`SELECT * FROM notes WHERE id = '${id}'`))\n}\n\n"             # 8
+        "export async function DELETE (request: Request) {\n"                                                     # 11
+        "  if (!(await getServerSession())) return new NextResponse(null, { status: 401 })\n"                     # 12
+        "  const { searchParams } = new URL(request.url)\n"                                                       # 13
+        "  await db.query('DELETE FROM notes WHERE id = $1', [searchParams.get('noteId')])\n"                     # 14
+        "  return NextResponse.json({})\n}\n\n"
+        "export async function POST (request: NextRequest) {\n"                                                   # 18
+        "  if (!(await getServerSession())) return new NextResponse(null, { status: 401 })\n"                     # 19
+        "  const q = request.nextUrl.searchParams.get('q')\n"                                                     # 20
+        "  return NextResponse.json(await db.query('SELECT * FROM notes WHERE text = $1', [q]))\n}\n"),           # 21
+}
+
+
+def test_a_word_of_the_addresss_question_is_called_by_its_name(tmp_path):
+    """`request.nextUrl.searchParams.get('id')` is `id`, as `req.query.id` is on Express, and so is the same word
+    read off `new URL(request.url)`: the finding says which box a tester fills, and a record picked by it is a
+    record picked by an id from the request. The twin: a search word (`q`) picks no record."""
+    found = _scan(tmp_path, {**ASKED, "package.json": PACKAGE.replace('"pg": "8.11.5"', '"pg": "8.11.5", "next-auth": "4.24.7"')})
+    sql = next(f for f in found if f["rule"] == "LT-SQL")
+    assert sql["input"]["via"] == "`id` in `request.nextUrl.searchParams` is what the request sent"
+    assert sorted((f["line"], f["title"].split(" reaches")[0]) for f in found if f["rule"] == "LT-AUTHZ-OWNER") == [
+        (8, "GET /api/notes"), (14, "DELETE /api/notes")]
