@@ -906,7 +906,7 @@ def _input_on_line(g: Graph, f: dict, cache: dict[str, list[str]]) -> dict | Fal
 def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
     if not file:
         return None
-    best, best_span = None, None
+    best, best_span, of_file = None, None, False
     for n in g.nodes_in(file):
         if n.file != file or n.start_line is None:
             continue
@@ -916,8 +916,9 @@ def _node_at(g: Graph, file: str | None, line: int | None) -> str | None:
             continue
         if n.start_line <= line <= (n.end_line or n.start_line):
             span = (n.end_line or n.start_line) - n.start_line
-            if best_span is None or span < best_span:
-                best, best_span = n.id, span
+            # a function as long as its file (a Svelte component is its whole file) before the file itself
+            if best_span is None or span < best_span or (span == best_span and of_file and n.kind != "module"):
+                best, best_span, of_file = n.id, span, n.kind == "module"
     return best
 
 

@@ -721,10 +721,12 @@ def test_the_session_the_server_keeps_says_who_is_asking(tmp_path):
 
 # ------------------------------------------------------------------ the words a reader gets
 ASK_API = '''import OpenAI from "openai";
+import { exec } from "child_process";
 import { json } from "@sveltejs/kit";
 const openai = new OpenAI();
 export const POST = async ({ request }) => {
   const body = await request.json();
+  exec("say " + body.q);
   const out = await openai.chat.completions.create({ model: "m", messages: [{ role: "user", content: body.q }] });
   return json({ text: out.choices[0].message.content });
 };
@@ -759,7 +761,7 @@ def test_a_story_on_a_svelte_page_names_no_file(tmp_path):
     for f in found.values():
         said = json.dumps([f.get("headline"), f.get("scenario"), f.get("title")])
         assert "svelte" not in said and "+page" not in said, said
-    assert found["LA-WALLET-DRAIN"]["headline"].startswith("A button on the /ask page ")
+    assert found["LJ-EXEC"]["headline"] == "A button on the /ask page can run shell commands on your server"
     raw = found["LJ-XSS-HTML"]
     assert (raw["file"], raw["line"]) == ("src/routes/ask/+page.svelte", 9)
     assert raw["reachable"]["entry"] == "js:src/routes/ask/+page.svelte::+page"
@@ -794,14 +796,14 @@ export async function POST({ url, locals }) {
 
 
 def test_a_word_of_the_addresss_question_is_called_by_its_name(tmp_path):
-    """`url.searchParams.get("id")` is `id`, as `req.query.id` is on Express: the story names the box a tester
-    fills, and a record picked by it is a record picked by an id from the request (three ways to write it). The
-    twin: a search word (`q`) picks no record."""
+    """`url.searchParams.get("id")` is `id`, as `req.query.id` is on Express: the finding says which word of the
+    link a tester writes, and a record picked by it is a record picked by an id from the request (three ways to
+    write it). The twin: a search word (`q`) picks no record."""
     found = _scan(tmp_path, {"svelte.config.js": CONFIG, "src/routes/api/n/+server.ts": ASKED},
                   PKG.replace('"@prisma/client": "5.14.0"', '"pg": "8.11.5"'))
     sql = next(f for f in found if f["rule"] == "LT-SQL")
     assert sql["input"]["via"] == "`id` in `url.searchParams` is what the request sent"
-    assert "In the box that fills in `id` they type" in sql["scenario"]["steps"][1]
+    assert sql["scenario"]["steps"][1].startswith("In the link they send they type: ")
     assert sorted((f["line"], f["title"].split(" reaches")[0]) for f in found if f["rule"] == "LT-AUTHZ-OWNER") == [
         (7, "GET /api/n"), (12, "DELETE /api/n"), (18, "PUT /api/n")]
 

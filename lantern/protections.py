@@ -37,6 +37,10 @@ SERVER_FETCH = re.compile(
 ALLOW_LIST = re.compile(r"allow_?list|allowed_?hosts|ALLOWED_HOSTS|allowedHosts|ALLOWED_DOMAINS|is_private|"
                         r"isPrivate|ssrf", re.I)
 UPLOAD = re.compile(r"\bUploadFile\b|request\.files|multer\(|formData\(\)|\.formData\(|FileField|busboy|formidable")
+# `request.formData()` is how the fields of every form arrive in a Next.js route, a SvelteKit or a Remix action. It is
+# an upload only where the code of that file takes a file out of the form.
+FORM_READ = re.compile(r"formData\(\)|\.formData\(")
+FILE_TAKEN = re.compile(r"\b(?:File|Blob)\b|\.arrayBuffer\(|\.stream\(\)")
 UPLOAD_LIMIT = re.compile(r"MAX_CONTENT_LENGTH|max_size|maxFileSize|fileSize|content_type|contentType|mimetype|"
                           r"fileFilter|DATA_UPLOAD_MAX|sizeLimit|bodyParser", re.I)
 # Framework settings written as a string key (`app.config["MAX_CONTENT_LENGTH"] = ...`), matched in the raw text
@@ -291,7 +295,15 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
                  how, [f"{route_words(d)}: {sign}" for _, d, sign in signed[:6]])
 
     # 6. File uploads
-    up = _code_grep(repo, UPLOAD, limit=10)
+    up, takes = [], {}
+    for f, ln, text in _code_grep(repo, UPLOAD, limit=60):
+        if FORM_READ.search(text) and not UPLOAD.search(FORM_READ.sub("", text)):
+            if f not in takes:
+                takes[f] = bool(FILE_TAKEN.search(code_only(repo.text(f), js=not f.endswith(".py"))))
+            if not takes[f]:
+                continue
+        up.append((f, ln, text))
+    up = up[:10]
     if up:
         lim = _code_grep(repo, UPLOAD_LIMIT, limit=1) or repo.grep(UPLOAD_LIMIT_KEY, limit=1)
         item("upload-checks", "Upload size and type checks", "in place" if lim else "add",

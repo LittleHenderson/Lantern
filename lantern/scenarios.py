@@ -425,10 +425,19 @@ def name_for(fid: str) -> str:
 
 
 def _words(qualname: str) -> str:
-    """`BackupButton.start` -> "backup button": the component a click lands in, in plain words."""
-    last = [p for p in re.split(r"[.:/]+", qualname or "") if p and p[0].isupper()]
-    base = last[-1] if last else (qualname or "").split(".")[-1]
+    """`BackupButton.start` -> "backup button": the component a click lands in, in plain words. "" for a page file
+    that has no name of its own (SvelteKit's `+page`); never a piece of a file's name (`index.html::load`)."""
+    parts = [p for p in re.split(r"[.:/]+", qualname or "") if p]
+    last = [p for p in parts if p[0].isupper()]
+    base = last[-1] if last else parts[-1] if parts else ""
+    if base.startswith("+"):
+        return ""
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", base).replace("_", " ").strip().lower()
+
+
+# what a tester does on a page whose own file has no name to call the thing by
+NAMELESS = {"click": "click a button on it", "tap": "tap a button on it", "submit": "send the form on it",
+            "change": "change a field on it", "load": "wait for it to load"}
 
 
 def _page(g: Graph | None, nid: str) -> str | None:
@@ -455,6 +464,9 @@ def _clicks(g: Graph | None, path: list[str]) -> list[str]:
             elif e.dst == b and (e.via or "") == "ui-event" and e.detail in EVENT_VERBS:
                 verb, src = EVENT_VERBS[e.detail], g.nodes.get(a)
                 thing = _words(src.qualname) if src else "something"
+                if not thing:
+                    out.append(NAMELESS[verb])
+                    continue
                 if verb in ("click", "tap") and "button" not in thing:
                     thing += " button"
                 out.append(f"{verb} the {thing}" if verb != "load" else f"waits for the {thing} to load")
@@ -845,7 +857,11 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
         return reached.format(who="Another app or a link").replace("your database", "your app's database")
     if ui:
         clicks = _clicks(g, ui)
-        if clicks:   # "click the backup button" -> "The backup button"
+        if clicks and clicks[-1].endswith(" on it"):   # "click a button on it" -> "A button on the /ask page"
+            what, pg = clicks[-1].split(" ", 1)[1][:-len(" on it")], _page(g, ui[0])
+            where = "the page" if not pg else f"the {pg.split(' · ')[0]}" if " screen" in pg else f"the {pg} page"
+            who = f"{what[0].upper()}{what[1:]} on {where}"
+        elif clicks:   # "click the backup button" -> "The backup button"
             who = "The " + clicks[-1].split(" the ", 1)[-1]
         elif _page(g, ui[0]):
             pg = _page(g, ui[0])

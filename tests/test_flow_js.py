@@ -1431,7 +1431,8 @@ def test_a_word_of_the_addresss_question_is_called_by_its_name(tmp_path):
     read off `new URL(request.url)`: the finding says which box a tester fills, and a record picked by it is a
     record picked by an id from the request. The twin: a search word (`q`) picks no record."""
     found = _scan(tmp_path, {**ASKED, "package.json": PACKAGE.replace('"pg": "8.11.5"', '"pg": "8.11.5", "next-auth": "4.24.7"')})
-    sql = next(f for f in found if f["rule"] == "LT-SQL")
-    assert sql["input"]["via"] == "`id` in `request.nextUrl.searchParams` is what the request sent"
+    sql = next(f for f in found if f["line"] == 8 and f["rule"] != "LT-AUTHZ-OWNER")
+    assert (sql["rule"], sql["input"]["via"]) == (
+        "LJ-SQL-CONCAT", "`id` in `request.nextUrl.searchParams` is what the request sent")
     assert sorted((f["line"], f["title"].split(" reaches")[0]) for f in found if f["rule"] == "LT-AUTHZ-OWNER") == [
         (8, "GET /api/notes"), (14, "DELETE /api/notes")]

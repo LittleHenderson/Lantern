@@ -2403,7 +2403,7 @@ class Engine:
                 return narrow(v, c, False, env.fn.lang)
         return v
 
-    def leaf(self, bag: Val, key, e: N, env: Env, attr: bool = False) -> Val:
+    def leaf(self, bag: Val, key, e: N, env: Env, attr: bool = False, fresh: bool = False) -> Val:
         """One value out of what the request sent: `request.args["q"]`. Of the address the request was made to, the
         origin and the host are still that address (`req.nextUrl.origin`); any other part is the caller's text."""
         if bag.data == "files" or bag.data == "FILES" or bag.data == "file":
@@ -2423,7 +2423,7 @@ class Engine:
         for t in bag.taints if keep else disowned(bag.taints):
             safe = t.safe | R.ALL if number else t.safe
             out.append(Taint("src", (env.fn.file, e.line, words), safe, ((env.fn.file, e.line, words),), t.origin,
-                             t.drop) if t.kind == "src" and len(t.steps) <= 1 else t._replace(safe=safe))
+                             t.drop) if t.kind == "src" and (fresh or len(t.steps) <= 1) else t._replace(safe=safe))
         if isinstance(key, str) and key and isinstance(bag.data, str):
             self.sent[(env.fn.file, e.line, words)] = (key, str(bag.data))
         if inner:
@@ -2437,6 +2437,9 @@ class Engine:
         if plain and base.taints and name not in R.OWN_ATTRS:
             base = disown(base)         # `url.searchParams`: a part of the address, no longer the address
         v = self.member1(base, name, e, env, ctx, text)
+        if name == "searchParams" and v.taints and env.fn.lang == "js" and v.kind != "req":
+            # the address's question, read word by word: `url.searchParams.get("id")` is `id`, as `req.query.id` is
+            v = Val(v.taints, kind="bag", data="query")
         if plain and name == "origin" and owned(v):
             v = v.but(prefix=R.OWN_EXACT)
         asked = roled(base, name) if base.kind not in ("req", "bag", "upload") else ()
@@ -3694,7 +3697,10 @@ class Engine:
                                             any(t.safe & R.OWN_MARKS for t in recv.taints)):
                 return Val(recv.taints)     # `req.nextUrl.clone()`, `request.url.replace("http://", "https://")`
             self.page_calls.add(id(e))
-            return self.leaf(recv, key, e, env)
+            # a word asked of the address's question by its name is that word from here on, however the address
+            # came (`new URL(request.url).searchParams.get("id")`)
+            return self.leaf(recv, key, e, env, fresh=fn.lang == "js" and recv.data == "query" and
+                             member in ("get", "getAll") and isinstance(key, str))
         if callee.kind in ("bag", "upload") and recv is not None and recv.kind == "req":
             if fn.lang == "js" and member in ("get", "header") and e.items and e.items[0].k == "const" and \
                     isinstance(e.items[0].a, str):      # Express: `req.get("X-Role")` reads a header by its name
