@@ -1,0 +1,225 @@
+name: Lantern report
+description: >-
+  Check this repository with Lantern and leave the report on it: a comment with Passed, Blocked or Incomplete on each
+  pull request, a pull request that saves the report in .lantern/report, and the badge for the front page.
+author: LittleHenderson
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  path:
+    description: The folder to check, inside the repository.
+    default: "."
+  comment:
+    description: Post the result on each pull request as one comment that is updated on every push (true or false).
+    default: "true"
+  save-report:
+    description: >-
+      On the default branch: open, or bring up to date, one pull request that saves the report in .lantern/report
+      (pull-request), or do not (off).
+    default: pull-request
+  require:
+    description: >-
+      When this check fails: not-blocked (when the result is Blocked), passed (whenever it is not Passed) or none
+      (never; the result is still posted).
+    default: not-blocked
+  offline:
+    description: Skip the look-up of the project's libraries in the advisory databases (true or false).
+    default: "false"
+  python-version:
+    description: The Python that runs Lantern.
+    default: "3.12"
+  token:
+    description: The token that posts the comment and the pull request. The workflow's own token is enough.
+    default: ${{ github.token }}
+
+outputs:
+  decision:
+    description: Passed, Blocked, Incomplete, or none for a report with no decision.
+    value: ${{ steps.check.outputs.decision }}
+  report-folder:
+    description: Where the results of this check are on the runner.
+    value: ${{ steps.check.outputs.results }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    # Every value from outside reaches the scripts below through an environment variable, never written into a
+    # script: a branch name or a title cannot become a command.
+    - name: Install Lantern
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        ACTION_REPO: ${{ github.action_repository }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        src="$RUNNER_TEMP/lantern-src"
+        rm -rf "$src"
+        cp -R "$ACTION_PATH" "$src"
+        # The exact Lantern commit goes into the report, so an engineer can install the same one to check it.
+        sha=""
+        if [[ "$ACTION_REF" =~ ^[0-9a-f]{40}$ ]]; then
+          sha="$ACTION_REF"
+        elif [ -n "$ACTION_REPO" ] && [ -n "$ACTION_REF" ]; then
+          refs="$(git ls-remote "https://github.com/$ACTION_REPO" "$ACTION_REF" "$ACTION_REF^{}" 2>/dev/null || true)"
+          sha="$(printf '%s\n' "$refs" | awk '$2 ~ /\^\{\}$/ {print $1; exit}')"
+          [ -n "$sha" ] || sha="$(printf '%s\n' "$refs" | awk 'NR==1 {print $1}')"
+        else
+          sha="$(git -C "$ACTION_PATH" rev-parse HEAD 2>/dev/null || true)"
+        fi
+        if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+          printf 'COMMIT = "%s"\n' "$sha" >> "$src/lantern/_build.py"
+        fi
+        python -m pip install --quiet --disable-pip-version-check "$src[scan]"
+        lantern --version
+
+    - name: Check the repository
+      id: check
+      shell: bash
+      env:
+        TARGET: ${{ inputs.path }}
+        OFFLINE: ${{ inputs.offline }}
+      run: |
+        set -uo pipefail
+        out="$RUNNER_TEMP/lantern-results"
+        rm -rf "$out"
+        flags=()
+        [ "$OFFLINE" = "true" ] && flags+=(--offline)
+        lantern analyze "$TARGET" --out "$out" "${flags[@]}"
+        code=$?
+        if [ ! -f "$out/evidence.json" ]; then
+          echo "::error title=Lantern::Lantern could not finish the check (exit $code). The log above says why."
+          exit 1
+        fi
+        decision="$(lantern github summary "$TARGET" --out "$out" --decision-only)"
+        echo "decision=$decision" >> "$GITHUB_OUTPUT"
+        echo "results=$out" >> "$GITHUB_OUTPUT"
+        echo "Lantern's decision: $decision"
+
+    - name: Keep the full report with this run
+      id: upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: lantern-report
+        path: ${{ steps.check.outputs.results }}
+        if-no-files-found: error
+
+    - name: Write the result on this run's page
+      shell: bash
+      env:
+        TARGET: ${{ inputs.path }}
+        RESULTS: ${{ steps.check.outputs.results }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
+      run: |
+        set -euo pipefail
+        lantern github summary "$TARGET" --out "$RESULTS" --run-url "$RUN_URL" --report-url "$REPORT_URL" \
+          > "$RUNNER_TEMP/lantern-summary.md"
+        lantern github summary "$TARGET" --out "$RESULTS" --short --run-url "$RUN_URL" --report-url "$REPORT_URL" \
+          > "$RUNNER_TEMP/lantern-comment.md"
+        cat "$RUNNER_TEMP/lantern-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Comment on the pull request
+      if: github.event_name == 'pull_request' && inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        set -uo pipefail
+        body="$RUNNER_TEMP/lantern-comment.md"
+        say() {
+          echo "::warning title=Lantern::$1"
+          printf '\n> **Lantern could not comment on the pull request.** %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+        }
+        if ! command -v gh >/dev/null; then say "GitHub's gh program is not on this runner."; exit 0; fi
+        # The one comment this workflow made before: a bot's comment that starts with Lantern's mark.
+        id="$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+               --jq '.[] | select(.user.type == "Bot" and (.body | startswith("<!-- lantern-report -->"))) | .id' \
+               2>/dev/null | tail -n 1)"
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$body" >/dev/null \
+            || say "Updating the earlier comment was refused. A pull request from a fork gets a read-only token."
+        else
+          gh api "repos/$REPO/issues/$PR/comments" -F "body=@$body" >/dev/null \
+            || say "Posting was refused. A pull request from a fork gets a read-only token; the result is on this run's page."
+        fi
+
+    - name: Save the report through a pull request
+      if: >-
+        inputs.save-report == 'pull-request' && github.event_name != 'pull_request'
+        && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        BASE: ${{ github.event.repository.default_branch }}
+        TARGET: ${{ inputs.path }}
+        RESULTS: ${{ steps.check.outputs.results }}
+        DECISION: ${{ steps.check.outputs.decision }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        REPORT_URL: ${{ steps.upload.outputs.artifact-url }}
+      run: |
+        set -uo pipefail
+        head="lantern/report"
+        say() {
+          echo "::warning title=Lantern::$1"
+          printf '\n> **Lantern could not save the report through a pull request.** %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+        }
+        if ! command -v gh >/dev/null; then say "GitHub's gh program is not on this runner."; exit 0; fi
+        if git log -1 --format=%s 2>/dev/null | grep -q '^Lantern report for '; then
+          echo "This commit is a report Lantern saved; nothing to save."; exit 0
+        fi
+        short="${GITHUB_SHA:0:7}"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git switch -q -C "$head" || { say "The branch $head could not be made."; exit 0; }
+        lantern github save "$TARGET" --out "$RESULTS" --run-url "$RUN_URL" --report-url "$REPORT_URL" \
+          || { say "The report folder could not be written."; exit 0; }
+        git add -f -- "$TARGET/.lantern/report"
+        if git diff --cached --quiet; then echo "The saved report is already this one."; exit 0; fi
+        git commit -q -m "Lantern report for $short: $DECISION"
+        auth=()
+        if ! git config --get-regexp '^http\..*\.extraheader$' >/dev/null 2>&1; then
+          basic="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$basic"
+          auth=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic")
+        fi
+        git "${auth[@]}" push -q -f origin "$head" || { say "Pushing the branch $head was refused. The workflow needs 'contents: write' under permissions."; exit 0; }
+        title="Lantern report: $DECISION (commit $short)"
+        body="$RUNNER_TEMP/lantern-summary.md"
+        pr="$(gh pr list --repo "$REPO" --head "$head" --base "$BASE" --state open --json number --jq '.[0].number' 2>/dev/null)"
+        if [ -n "$pr" ]; then
+          gh pr edit "$pr" --repo "$REPO" --title "$title" --body-file "$body" >/dev/null \
+            || say "The pull request #$pr could not be updated."
+        else
+          gh pr create --repo "$REPO" --base "$BASE" --head "$head" --title "$title" --body-file "$body" \
+            || say "GitHub refused to open the pull request. On GitHub open Settings, then Actions, then General, tick 'Allow GitHub Actions to create and approve pull requests' under Workflow permissions, and Save. The report is on the branch $head meanwhile."
+        fi
+
+    - name: Pass or fail this check
+      shell: bash
+      env:
+        REQUIRE: ${{ inputs.require }}
+        DECISION: ${{ steps.check.outputs.decision }}
+      run: |
+        case "$REQUIRE" in
+          none) echo "Lantern's decision is $DECISION; this check passes whatever it is (require: none).";;
+          passed)
+            if [ "$DECISION" != "Passed" ]; then
+              echo "::error title=Lantern::The decision is $DECISION, and this check asks for Passed."; exit 1
+            fi;;
+          not-blocked)
+            if [ "$DECISION" = "Blocked" ]; then
+              echo "::error title=Lantern::The decision is Blocked. The comment and this run's page say what blocks it."; exit 1
+            fi;;
+          *) echo "::error title=Lantern::require must be not-blocked, passed or none (it is '$REQUIRE')."; exit 1;;
+        esac
+        echo "Lantern's decision: $DECISION"
