@@ -1080,6 +1080,15 @@ JS_TOKENS = ("const bcrypt = require('bcryptjs')\nconst jwt = require('jsonwebto
              "function verifyToken (req) {\n  return jwt.verify(req.headers.authorization, process.env.JWT_SECRET)\n}\n")
 JS_CHECK = ("  if (!user || !(await bcrypt.compare(req.body.password, user.passwordHash))) "
             "return res.status(401).end()\n")
+# a session kept by the app itself: read by one function, started by another that reads it first
+JS_SESSIONS = ("const sessions = new Map()\n"
+               "function getSession (req) {\n  return sessions.get(req.headers.cookie) || {}\n}\n"
+               "function startSession (req, user) {\n  const session = getSession(req)\n"
+               "  session.userId = user.id\n  sessions.set(req.headers.cookie, session)\n}\n"
+               "function touch (req) {\n  return getSession(req)\n}\n")
+JS_JOIN = ("  const taken = await User.findOne({ email: req.body.email })\n"
+           "  if (taken) return res.status(409).end()\n"
+           "  const user = await User.create({ email: req.body.email })\n")
 JS_SIGN_IN = {
     "clean: signing in, the session is told who it is":
         (_js("  const user = await User.findOne({ email: req.body.email })\n" + JS_CHECK +
@@ -1100,13 +1109,23 @@ JS_SIGN_IN = {
         (_js("  const user = await User.findOne({ email: req.body.email })\n" + JS_CHECK +
              "  req.session.userId = user.id\n  res.json({ ok: true })\n", mw="", verb="post", path="/admin/login"),
          []),
+    # the only sign of a login is that a session is read on the way: by the function that starts one, nobody is
+    # signed in yet (a sign-up page under a word of its own); by the route itself or a helper of another kind, it is
+    "clean: signing up under another word, the session is read by the function that starts it":
+        (_js(JS_JOIN + "  startSession(req, user)\n  res.json({ ok: true })\n", mw="", verb="post", path="/join"),
+         []),
+    "caught: the route reads the session itself, then looks a person up by what was typed":
+        (_js("  getSession(req)\n" + JS_JOIN + "  res.json({ ok: true })\n", mw="", verb="post", path="/join"),
+         ["LT-AUTHZ-OWNER"]),
+    "caught: the session is read by a helper of another kind on the way to another person's order":
+        (_js("  touch(req)\n  res.json(await Order.findById(req.params.id))\n", mw=""), ["LT-AUTHZ-OWNER"]),
 }
 
 
 @pytest.mark.parametrize("case", sorted(JS_SIGN_IN))
 def test_express_a_sign_in_page(tmp_path, case):
     body, want = JS_SIGN_IN[case]
-    fs = _scan(tmp_path, {"server.js": JS + JS_TOKENS + body, "models.js": JS_MODELS},
+    fs = _scan(tmp_path, {"server.js": JS + JS_TOKENS + JS_SESSIONS + body, "models.js": JS_MODELS},
                project={"package.json": PACKAGE})
     assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
 

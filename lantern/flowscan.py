@@ -34,11 +34,14 @@ def _signed_in(g, n, adj: dict, why: str, src: list[str]) -> bool:
     """Whether a route's sign of a login says that somebody is signed in when it runs. A sign found only in the names
     of what the route calls is also what a sign-in route shows (it makes a token, it checks a password), and there
     nobody is signed in yet: such a name counts only beside a function named for checking, or the framework's own view
-    of the caller in the handler's lines."""
+    of the caller in the handler's lines. What a function that starts a session calls is part of signing in too
+    (`startSession` reads the session it is about to write: until 2026-11-15 a sign-up page under a word of its
+    own read as one with a login, and was asked whose record the e-mail address it looks up belongs to)."""
     from .websec import BODY_AUTH_SHAPED, auth_callees, code_only, segments
     if not why.startswith("calls `"):
         return True
-    if any(not R.SIGNS_IN.search(segments(name)) for name in auth_callees(g, n, adj)):
+    names = auth_callees(g, n, adj, stop=lambda name: bool(R.SESSION_MAKER.search(segments(name))))
+    if any(not R.SIGNS_IN.search(segments(name)) for name in names):
         return True
     first = n.start_line or 1
     raw = "\n".join(src[first - 1:(n.end_line or first)])

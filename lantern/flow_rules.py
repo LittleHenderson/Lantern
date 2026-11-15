@@ -763,6 +763,12 @@ SIGNS_IN = re.compile(r"^(make|create|generate|gen|issue|sign|new|build|encode|m
                       r"add|grant|give|refresh|rotate|revoke|delete|remove|clear|destroy)\b|"
                       r"\b(password|passwd|pwd|credentials?|otp|2 ?fa|mfa)\b|"
                       r"^(log ?in|log ?out|sign ?in|sign ?up|sign ?out|register)( user)?$")
+# What a called function is named when it starts or ends a session, or signs somebody in: what it calls on its way
+# (it reads the session it is about to write) is part of signing in, and says nothing of who is calling.
+SESSION_MAKER = re.compile(r"^(make|create|generate|gen|issue|sign|new|build|mint|set|save|store|write|start|begin|"
+                           r"open|commit|grant|give|refresh|rotate|revoke|delete|remove|clear|destroy|end|close)\b"
+                           r".*\b(session|token|jwt|cookie|credentials?|login)\b|"
+                           r"^(log ?in|log ?out|sign ?in|sign ?up|sign ?out|register)( user)?$")
 # What says who is signed in, besides `request.user` and its like (IDENT_ATTRS) and a dependency named for it.
 IDENT_GLOBALS = {"flask_login.current_user", "flask.session", "flask.g.user", "flask.g.current_user",
                  "flask_jwt_extended.current_user", "flask_security.current_user", "flask_security.core.current_user",

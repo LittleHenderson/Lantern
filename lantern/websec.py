@@ -1212,9 +1212,10 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, doub
     return None
 
 
-def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> list[str]:
+def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, stop=None) -> list[str]:
     """The name of every function within `depth` calls of a route that is named like an auth check: the walk of
-    `route_auth_sign`, which stops at the first one."""
+    `route_auth_sign`, which stops at the first one. `stop(name)`: a function whose own calls are not walked (its
+    name is still read)."""
     out, seen, frontier = [], {n.id}, [n.id]
     for _ in range(depth):
         nxt = []
@@ -1226,7 +1227,8 @@ def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> list
                 name = _func_name(g, v)
                 if auth_word(name, v.startswith(("js:", "go:", "jv:", "kt:", "sw:", "dt:", "cs:", "php:"))):
                     out.append(name)
-                nxt.append(v)
+                if stop is None or not stop(name):
+                    nxt.append(v)
         frontier = nxt
     return out
 
