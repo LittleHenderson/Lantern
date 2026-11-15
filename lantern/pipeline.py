@@ -57,8 +57,12 @@ class Stopped(Exception):
 
 def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] | None = None,
             no_scan: bool = False, log: Log = print, offline: bool | None = None, sandbox: bool = False,
-            test_cwd: str = "", cancel=None, test_minutes=None, test_memory=None) -> dict:
+            test_cwd: str = "", cancel=None, test_minutes=None, test_memory=None,
+            typecheck: bool | None = None) -> dict:
     """Graph -> (trace) -> scan -> readiness -> report -> evidence. Returns a short summary.
+    `typecheck`: ask the type checkers installed on this computer where the calls go that Lantern's own reading left
+    unresolved (`lantern/typecheck.py`: opt-in, read only; None leaves it to LANTERN_TYPECHECK). What they said is
+    in `run.json` (`typecheck`) and the run's options, so `lantern verify --typecheck` repeats it.
     `sandbox`: run `trace_cmd` (a test command) in `lantern.sandbox` instead of directly (the app always does).
     `test_minutes`: how long the tests may take, a whole number from 1 to 240 (`sandbox.time_limit`; ValueError
     for anything else, before anything is read). With no word the sandbox gives ten minutes, or what
@@ -101,7 +105,7 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
             if not no_scan and not in_its_folder:
                 early = Early(Path(repo).resolve(), offline).start()
             return _analyze(repo, out, privacy, trace_cmd, no_scan, log, offline, sandbox, test_cwd, cancel, early,
-                            limit, room)
+                            limit, room, typecheck)
         finally:
             if early is not None:
                 early.close()   # whatever is still going is ended: a run that stops or fails leaves nothing behind
@@ -109,7 +113,7 @@ def analyze(repo: Path, out: Path, privacy: str = "full", trace_cmd: list[str] |
 
 
 def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log: Log, offline: bool, sandbox: bool,
-             test_cwd: str, cancel, early, limit=None, room=None) -> dict:
+             test_cwd: str, cancel, early, limit=None, room=None, typecheck=None) -> dict:
     from . import listing, remote
     from . import sandbox as sbx
     from . import trace as older
@@ -120,7 +124,7 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
 
     timings = {}
     t = time.perf_counter()
-    g = build_graph(repo)
+    g = build_graph(repo, typecheck=typecheck)
     timings["graph"] = round(time.perf_counter() - t, 2)
     s = g.stats()
     log(f"graph   {g.meta['files']} files, {s['nodes'].get('callable', 0)} functions, "
@@ -132,6 +136,10 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
     if deep.line_words(g.meta):   # code nested deeper than a reader follows was left where the reading stopped
         log(f"deep    {deep.line_words(g.meta)}")
     run_meta: dict = {"timings": timings, "privacy": privacy, "offline": offline}
+    if g.meta.get("typecheck"):   # asked for: which checkers answered, and what came of it
+        from . import typecheck as types
+        run_meta["typecheck"] = g.meta["typecheck"]
+        log(f"types   {types.line_words(g.meta['typecheck'])}")
     left = remote.skipped(repo) if remote.is_clone(repo) else None
     if left:   # the clone left out files Lantern does not read, to stay under the size cap (remote._checkout)
         run_meta["skipped"] = {k: left.get(k) for k in ("files", "mb", "kept_mb", "cap_mb", "examples")}

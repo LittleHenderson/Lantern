@@ -3912,6 +3912,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 if not inv and ref.kind == "call" and ref.parts[0] not in ("this",) and not m.is_test:
                     unresolved += 1
                     g.unresolved[".".join(ref.parts)[:120]] = g.unresolved.get(".".join(ref.parts)[:120], 0) + 1
+                    spot = ref.at or (ref.line, 0)
+                    g.unresolved_at[f"{m.rel}:{spot[0]}:{spot[1]}"] = (".".join(ref.parts)[:120], False)
                 continue
             if res[0] == "ext":
                 if ref.kind == "callback":
@@ -4729,6 +4731,9 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     said = {m.rel: sorted(m.directives) for m in mods.values() if m.directives}
     if said:
         g.meta.setdefault("js_directives", {}).update(said)
+    # where each import that found a file of the project led, for the opt-in type-aware pass (typecheck.py)
+    g.js_imports = {m.rel: {spec: mods[tmod].rel for tmod, _name, spec in m.imports.values() if spec and tmod in mods}
+                    for m in mods.values() if not m.html}
     return {"files": len(mods), "lines": total, "unresolved": unresolved,
             "components": sum(1 for m in mods.values() for d in m.defs.values() if d.jsx),
             "http_calls": len(http_calls)}

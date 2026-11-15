@@ -124,6 +124,11 @@ class Graph:
         self.unresolved_tests: dict[str, int] = {}   # the part of `unresolved` that sits in test files (Python)
         self.builtin_calls = 0   # built-in calls (Python `len`, `print`, `x.append` on a list; JS DOM and `fetch` results): counted, not drawn
         self.sites: list[dict] = []   # the call-site inventory (calls.py): saved to calls.json, summarised in meta
+        # For the opt-in type-aware pass (typecheck.py), never saved: the place of each call counted in `unresolved`
+        # -> (its text there, whether `unresolved_tests` counts it too), and where each import the JS/TS reader
+        # followed led (file -> {specifier: file})
+        self.unresolved_at: dict[str, tuple[str, bool]] = {}
+        self.js_imports: dict[str, dict[str, str]] = {}
         self.meta: dict = {}
 
     # ---- nodes ----

@@ -16,7 +16,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult
+from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult, typecheck
 from .depaudit import AUDIT_TOOLS
 from .graph import Graph, route_words
 from .lanes import LANE_WORDS, LANES
@@ -82,8 +82,12 @@ def run_options(sec: dict | None, run_meta: dict | None) -> dict:
     """How the results were made, so `lantern verify` can make them the same way."""
     tr = (run_meta or {}).get("trace")
     # tests that were asked for and not run left nothing in the results: no trace to repeat
-    return {"scan": sec is not None, "trace": tr.get("command") if counted(tr) else None,
-            "offline": bool((run_meta or {}).get("offline"))}
+    out = {"scan": sec is not None, "trace": tr.get("command") if counted(tr) else None,
+           "offline": bool((run_meta or {}).get("offline"))}
+    types = (run_meta or {}).get("typecheck")
+    if isinstance(types, dict) and types.get("asked"):   # only when asked for: every other run's options stay as they were
+        out["typecheck"] = typecheck.versions(types)
+    return out
 
 
 def digest_payload(g: Graph, sec: dict | None, rd: dict | None, commit: str | None, dirty: bool = False,
@@ -411,6 +415,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "tests were not executed.")
     if "typescript/javascript" in (g.meta.get("languages") or {}):
         out.append("Frontend call edges are static only (no JavaScript runtime tracing yet).")
+    out += typecheck.limits(run_meta.get("typecheck"))     # only for a run that asked for the type-aware pass
     if sec is None:
         out.append("Security scanners were not run for this report (--no-scan): no findings does not mean no problems.")
     tools = [t for t in (sec or {}).get("tools", []) if isinstance(t, dict)]
@@ -558,7 +563,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         # older Lantern wrote
         "release": (rd or {}).get("release") if isinstance((rd or {}).get("release"), dict) else None,
         "understanding": narratives,
-        "provenance": {"tools": tool_versions(sec), "models": models,
+        "provenance": {"tools": tool_versions(sec) + typecheck.rows(run_meta.get("typecheck")), "models": models,
                        # the libraries the project's tests ran on, each with its fingerprint (None: no tests, or
                        # tests that ran on no library of anyone's)
                        "libraries": libraries_shown(run_meta.get("trace")),
@@ -592,8 +597,12 @@ def read_digest(report: Path) -> tuple[str | None, dict | None]:
 
 
 def verify(repo: Path, want: str, old: dict | None, trace_cmd: list[str] | None = None, no_scan: bool = False,
-           offline: bool = False, beside: Path | None = None) -> dict:
+           offline: bool = False, beside: Path | None = None, typecheck: bool = False) -> dict:
     """Re-run the analysis on `repo` the way the report was made and compare digests.
+
+    `typecheck`: the caller's word that this computer's type checkers may be asked again. A report made with the
+    type-aware pass is verified only with it (`refused` otherwise, like a trace: a report starts no program), and a
+    report made without it is never verified with it.
 
     Scanning on/off and offline are copied from the report's recorded options; a trace command never is, because a
     trace runs the project's code. The caller types it, and it must match what the report recorded, or the result
@@ -615,10 +624,18 @@ def verify(repo: Path, want: str, old: dict | None, trace_cmd: list[str] | None 
                 "Lantern won't run a command taken from a report; check it and pass it yourself.",
                 "trace_command": want_trace, "report": want}
     offline = bool(run.get("offline")) or offline
+    with_types = isinstance(run.get("typecheck"), dict)
+    if with_types and not typecheck:
+        return {"match": False, "typecheck": True, "report": want,
+                "refused": "This report was made with the type-aware pass (--typecheck), which asks the type checkers "
+                           "installed on this computer where calls go. Lantern does not start them because a report "
+                           "says so: add --typecheck to check it the same way."}
     from . import kept
     with kept.without():        # a verification does the work again: nothing kept from an earlier run is used
-        g = build_graph(repo)
+        g = build_graph(repo, typecheck=with_types)
         run_meta: dict = {"offline": offline}
+        if g.meta.get("typecheck"):
+            run_meta["typecheck"] = g.meta["typecheck"]
         if trace_cmd:
             tm = merge_trace(g, run_trace(repo, trace_cmd))
             run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}

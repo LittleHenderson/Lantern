@@ -484,6 +484,9 @@ def tool_verify(P: Projects, args: dict) -> dict:
     if not want:
         raise ValueError("that report carries no sha256 digest")
     r = evidence.verify(repo, want, old, trace_cmd=None, offline=bool(args.get("offline")), beside=beside)
+    if r.get("refused") and r.get("typecheck"):   # the connector starts no type checker: a person does, by a flag
+        return {"text": r["refused"] + " From a terminal: lantern verify " + str(repo) + " --report <report> --typecheck",
+                "data": r}
     if r.get("refused"):
         text = (r["refused"] + " From a terminal: lantern verify " + str(repo) + " --report <report> -- " +
                 " ".join(r["trace_command"]))
