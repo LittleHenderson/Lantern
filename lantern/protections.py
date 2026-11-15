@@ -125,8 +125,11 @@ def _rate_limit(view, trig: list, what: str) -> tuple[str, str, list[str], list[
 def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     web = shape in ("full-stack web app", "web API", "frontend web app")
     # Routes in test code (a test's own server, the sample apps under tests/fixtures) are not the app's routes
+    # ... and neither is the handler every tRPC procedure stands behind (`POST /api/trpc/[trpc]`): each procedure
+    # is a route of its own (`entry["serves"]`, set by the JS/TS reader where it read the procedures)
     routes = [(n, (n.entry or {}).get("detail") or "") for n in g.entry_points()
-              if (n.entry or {}).get("kind") == "route" and not (n.file and repo.is_test(n.file))]
+              if (n.entry or {}).get("kind") == "route" and not (n.file and repo.is_test(n.file))
+              and (n.entry or {}).get("serves") != "trpc"]
     deps = _deps_text(repo)
     # In code, or on an import line (a JS import names its package in a string); not a word in a pattern list
     managed = MANAGED_AUTH.search(deps) or _code_grep(repo, MANAGED_AUTH, limit=1) or [

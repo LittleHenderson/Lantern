@@ -146,7 +146,7 @@ def test_the_twins_that_are_no_procedures(tmp_path):
              "lib/web.ts": ('import express from "express";\n'
                             'export const web = express.Router({ mergeParams: true });\n'
                             'export const other = makeRouter({ find: helper.query(() => 2) });\n'),
-             "server/api/routers/post.test.ts": POST.replace("../trpc", "../trpc")}
+             "server/api/routers/post.test.ts": POST}
     g = _build(tmp_path / "other", {**APP, **other})
     assert len(_procedures(g)) == 9
     assert not [i for i in _procedures(g) if i.startswith(("js:lib/", "js:server/api/routers/post.test"))]
@@ -296,16 +296,16 @@ def test_the_login_check_reads_the_procedure_a_route_is_built_on(tmp_path):
         signs[name] = got and (got[0], got[1])
     assert signs["create"] == ("strong", "the procedure `protectedProcedure` it is built on")
     assert signs["admin.purge"] == ("strong", "the procedure `protectedProcedure` it is built on")
-    assert signs["hide"] == ("strong", "`adminProcedure` turns a caller away (TRPCError FORBIDDEN, server/api/trpc.ts:18)")
-    assert signs["mine"] == ("strong", "it turns a caller away itself (TRPCError UNAUTHORIZED, line 24)")
+    assert signs["hide"] == ("strong", "`adminProcedure` turns a caller away (TRPCError FORBIDDEN, server/api/trpc.ts:17)")
+    assert signs["mine"] == ("strong", "it turns a caller away itself (TRPCError UNAUTHORIZED, line 22)")
     assert signs["remove"] is None and signs["rename"] is None
 
 
 def test_the_readiness_page_counts_procedures_that_change_data(tmp_path):
-    from lantern.protections import advise
+    from lantern.readiness import assess
     from lantern.security import scan
     g = _build(tmp_path, WITH_PAGE)
-    prot = {p["id"]: p for p in advise(g, scan(g))}
+    prot = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}
     assert prot["route-auth"]["status"] == "add"
     assert sorted(x.split(" (")[0] for x in prot["route-auth"]["evidence"]) == [
         "POST /api/trpc/post.remove", "POST /api/trpc/post.rename"]

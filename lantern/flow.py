@@ -1584,6 +1584,9 @@ class Engine:
         py = fn.lang == "py"
         if py and i == 0 and fn.cls and name in ("self", "cls"):
             return Val(kind="self", data=fn.cls)
+        if not py and i == 0 and (self.entry(fn) or {}).get("trpc"):
+            # a tRPC procedure is handed one object, whole (`opts`) or taken apart (`{ ctx, input }`): `member1`
+            return Val(kind="req", data="trpc")
         # a body described by a class of the project is that, also under the name `req` or `request`
         body = py and bool(ann) and self.body_class(fn.mod, ann)
         if not body and (name in R.REQUEST_NAMES or (ann and R.REQUEST_TYPES.search(ann)) or
@@ -1711,7 +1714,9 @@ class Engine:
     def bind_param(self, env: Env, fn: Fn, i: int, p: P, given: Val | None, ctx: Ctx, summary: bool) -> None:
         val = given if given is not None else self.param_val(fn, i, p, summary)
         if p.pattern is not None:
-            if given is None and not summary and fn.lang == "js" and is_next_file(fn.file):
+            if val.kind == "req" and val.data == "trpc":
+                pass      # `({ ctx, input })` of a tRPC procedure, wherever its file is
+            elif given is None and not summary and fn.lang == "js" and is_next_file(fn.file):
                 val = Val(kind="req", data="js")      # `({ params, searchParams })` of a Next.js page or route
             elif given is None and is_next_file(fn.file) and p.pattern.k == "map":
                 val = Val(kind="req", data="js")
@@ -2430,7 +2435,12 @@ class Engine:
         k = base.kind
         fn = env.fn
         if k == "req":
-            inputs = R.PY_INPUT if base.data == "py" else R.JS_INPUT
+            if base.data == "trpc" and name == "ctx":
+                return Val(kind="req", data="trpc-ctx")      # made by the server: who is signed in, not request data
+            if base.data == "trpc-ctx" and name in ("req", "request"):
+                return Val(kind="req", data="js")            # the request itself, where the server keeps it there
+            inputs = R.PY_INPUT if base.data == "py" else R.TRPC_INPUT if base.data == "trpc" else \
+                FIXED0 if base.data == "trpc-ctx" else R.JS_INPUT
             if name in inputs:
                 shown = text_of(e)[:70] if text is not None else name
                 words = f"`{shown}` is what the request sent"

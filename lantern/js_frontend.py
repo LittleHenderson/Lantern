@@ -95,6 +95,24 @@ DIRECTIVES = ("use client", "use server")
 # The frameworks that run Server Actions: with one of them among the nearest package.json's libraries, a function
 # marked "use server" gets an address of its own on the server. With none, the words do nothing.
 SERVER_ACTIONS = {"next", "waku", "react-server-dom-webpack", "react-server-dom-turbopack", "react-server-dom-parcel"}
+# tRPC (roadmap of 2026-11-14, stage 1). A tRPC app has no route files: `createTRPCRouter({ create:
+# protectedProcedure.input(…).mutation(fn) })` makes `post.create` an address. Read only where the nearest
+# package.json depends on `@trpc/server`; a router is told by its shape here and by what made it in `_trpc_plan`.
+TRPC_SERVER = "@trpc/server"
+TRPC_ROUTER = re.compile(r"^\w*[Rr]outers?$")     # the last name of what is called: router, createTRPCRouter, mergeRouters
+TRPC_MERGE = re.compile(r"^\w*[Mm]erge\w*Routers?$")
+TRPC_KINDS = {"query": "GET", "mutation": "POST", "subscription": "GET"}    # how tRPC's client sends each kind
+TRPC_STEPS = {"use", "input", "output", "meta", "concat", "unstable_concat"}   # what a procedure is built up with
+TRPC_ADAPTERS = {"fetchRequestHandler", "createNextApiHandler", "createExpressMiddleware", "createHTTPServer",
+                 "createHTTPHandler", "awsLambdaRequestHandler", "createKoaMiddleware", "nodeHTTPRequestHandler"}
+TRPC_AT_ROOT = {"createHTTPServer", "createHTTPHandler"}    # served at the address itself when no path is written
+# What a call through tRPC's client ends in. The hooks and option makers are tRPC's own names: a call that ends in
+# one, on a path that is a procedure, is a link even where the client is not followed ("likely"). `query` and
+# `mutate` are everyday names: a link only on a client that tRPC's own function made.
+TRPC_HOOKS = {"useQuery", "useMutation", "useSuspenseQuery", "useInfiniteQuery", "useSuspenseInfiniteQuery",
+              "useSubscription", "usePrefetchQuery", "queryOptions", "mutationOptions", "infiniteQueryOptions",
+              "subscriptionOptions"}
+TRPC_CALLS = {"query", "mutate", "mutateAsync", "subscribe"}
 SUPABASE_CLIENT = re.compile(r"^@supabase/[\w.-]+\.(create\w*Client\(\)|useSupabaseClient\(\)|SupabaseClient)$")
 SUPABASE_NAME = re.compile(r"^_?supabase(_?(client|admin))?$", re.I)   # by its name alone: a possible link, no more
 TABLE_NAME = re.compile(r"^[A-Za-z_][\w$]{0,62}$")
@@ -295,6 +313,36 @@ def _unparen(n: TSNode | None) -> TSNode | None:
     return n
 
 
+def _bare(n: TSNode | None) -> TSNode | None:
+    """The expression inside brackets, `as T`, `satisfies T` and `!`."""
+    for _ in range(8):
+        n = _unparen(n)
+        if n is None or n.type not in ("as_expression", "satisfies_expression", "non_null_expression") or \
+                not n.named_child_count:
+            break
+        n = n.named_children[0]
+    return n
+
+
+def _trpc_spine(call: TSNode | None):
+    """`base.input(x).use(mw).mutation(fn)` -> (["base"], [("input", [x]), ("use", [mw]), ("mutation", [fn])]): what a
+    chain of calls is built on, and each call hung on it, in the order written."""
+    steps: list[tuple[str, list]] = []
+    cur = _bare(call)
+    for _ in range(24):
+        if cur is None or cur.type != "call_expression":
+            break
+        fnn = _bare(cur.child_by_field_name("function"))
+        if fnn is None or fnn.type != "member_expression":
+            break
+        args = cur.child_by_field_name("arguments")
+        steps.append((_text(fnn.child_by_field_name("property")),
+                      [a for a in (args.named_children if args is not None else []) if a.type != "comment"]))
+        cur = _bare(fnn.child_by_field_name("object"))
+    steps.reverse()
+    return (_chain(cur) if cur is not None else None), steps
+
+
 def _call_nodes(root: TSNode):
     """Every call written in a file: calls, `new`, and JSX elements that name a component (a render)."""
     stack = [root]
@@ -425,6 +473,14 @@ class JSModule:
     #                                                         handed to the calls the variable was set from
     mounts_app: bool = False
     listens: bool = False
+    # tRPC (roadmap of 2026-11-14, stage 1), read only where the package depends on @trpc/server (Walker._trpc_*):
+    # `trpc_routers`: {name, scope, line, callee (None for an object written out), items}, an item being
+    # {key, kind "procedure", type, base, uses, line, local | handler + at}, {key, kind "router", chain | inline}
+    # or {kind "spread", chain | inline}; `trpc_bases`: (scope, name) -> {base, uses} for `const x = base.use(fn)`;
+    # `trpc_mounts`: {scope, line, endpoint, router | inline, adapter}, where the whole is served
+    trpc_routers: list[dict] = field(default_factory=list)
+    trpc_bases: dict[tuple[str, str], dict] = field(default_factory=dict)
+    trpc_mounts: list[dict] = field(default_factory=list)
     directives: set[str] = field(default_factory=set)   # of DIRECTIVES, the ones the file begins with
 
 
@@ -525,9 +581,14 @@ def _spine_args(n: TSNode | None) -> list[list[str]]:
 
 
 class Walker:
-    def __init__(self, m: JSModule, resolve_spec):
+    def __init__(self, m: JSModule, resolve_spec, trpc: bool = False):
         self.m = m
         self.resolve_spec = resolve_spec
+        self.trpc = trpc      # the nearest package.json depends on @trpc/server (and this is no test file)
+        self.planned: dict[int, str] = {}   # where an inline function begins -> the name it is a function under
+        self.routed: set[int] = set()       # router calls already read (one written inside another, or in a mount)
+        self.owner: tuple[int, str] | None = None   # (where a router call begins, the name it is kept under)
+        self.under: dict[int, str] = {}     # where a call begins -> the path of the `x.use("/path", …)` around it
         self.anon = 0
         self.inline = 0       # how many inline functions deep the walk is inside the current named function
         self.nested = 0       # and how many methods written in an object (`{ getAll() {…} }`)
@@ -555,6 +616,10 @@ class Walker:
     def walk(self, n: TSNode, scope: str, cls: str | None = None, ui: str | None = None):
         t = n.type
         if t in FUNC_TYPES:   # an inline function, read as part of the function around it
+            plan = self.planned.pop(n.start_byte, None) if self.planned else None
+            if plan is not None:   # a tRPC procedure's handler or middleware: a function of its own, named there
+                self._walk_body(n, self.add_def(n, plan, scope, "function", None), None, None)
+                return
             ps = _params(n.child_by_field_name("parameters") or n.child_by_field_name("parameter"))
             if ps:
                 self.m.anon_params.setdefault(scope, set()).update(x for x, _ in ps)
@@ -699,7 +764,7 @@ class Walker:
             self.m.var_types.setdefault(scope, {})[name] = written
         fn = _unwrap_func(value)
         if fn is None and name_node.type == "identifier":
-            fn = self._wrapped_func(value)
+            fn = self._wrapped_func(value) or (self._trpc_middleware(value) if self.trpc else None)
             if fn is not None:   # const create = wrap(async (req, res) => ...): the function is a node of its own
                 local = self.add_def(fn, name, scope, "function", cls, outer=n)
                 self.m.wrapped.add(local)
@@ -730,6 +795,8 @@ class Walker:
             self._class(value, name, scope, ui)
             return
         if value is not None and name_node.type == "identifier":
+            if self.trpc:
+                self._trpc_declared(name, value, scope, n)
             if value.type == "call_expression" and OPTIONAL_LOGIN.search(_text(value)):
                 self.m.optional.add(name)   # const maybe = expressjwt({ ..., credentialsRequired: false })
             sv = self._url_of(value)
@@ -1086,6 +1153,8 @@ class Walker:
                 first = args.named_children[0] if args is not None and args.named_child_count else None
                 if first is not None and first.type == "identifier":   # export default connect(X)
                     self.m.default = _text(first)
+                if self.trpc:
+                    self.owner = (val.start_byte, "default")
             self.walk(val, scope, cls, ui)
 
     # -- calls
@@ -1100,6 +1169,8 @@ class Walker:
             inner = _unparen(fn)
             self.m.refs.append(JSRef(scope, ["<inline>"] if inner is not None and inner.type in FUNC_TYPES else [],
                                      line, "computed", ui, at, text))
+        elif self.trpc:
+            self._trpc_call(n, ch, argv, scope, line)
 
         # createFileRoute("/path")({ component: X })  (TanStack Router)
         if fn is not None and fn.type == "call_expression":
@@ -1226,6 +1297,206 @@ class Walker:
             self.walk(fn, scope, cls, ui)
         for a in argv:
             self.walk(a, scope, cls, ui)
+
+    # -- tRPC: routers, the procedures in them, what each is built on, where the whole is served. Shapes only: what
+    # made a router, and so whether it is one, is read where the files are known (`_trpc_plan`)
+    @staticmethod
+    def _trpc_middleware(value: TSNode | None) -> TSNode | None:
+        """`t.middleware(async ({ ctx, next }) => …)` -> the function tRPC runs before a procedure, to be named by
+        the variable it is kept in."""
+        if value is None or value.type != "call_expression":
+            return None
+        ch = _chain(value.child_by_field_name("function"))
+        if not ch or len(ch) < 2 or ch[-1] != "middleware" or any(x.endswith("()") for x in ch):
+            return None
+        args = value.child_by_field_name("arguments")
+        first = _unparen(args.named_children[0]) if args is not None and args.named_child_count else None
+        return first if first is not None and first.type in FUNC_TYPES else None
+
+    def _trpc_declared(self, name: str, value: TSNode, scope: str, decl: TSNode) -> None:
+        """`const postRouter = createTRPCRouter({…})`: the name the router is kept under, for when the walk reaches
+        the call. `const protectedProcedure = t.procedure.use(fn)`: what a procedure of that name is built on.
+        `const postRouter = { all: publicProcedure.query(…) } satisfies TRPCRouterRecord`: a router written out."""
+        v = _bare(value)
+        if v is None:
+            return
+        if v.type == "call_expression":
+            ch = _chain(v.child_by_field_name("function"))
+            if ch and TRPC_ROUTER.match(ch[-1]):
+                self.owner = (v.start_byte, name)
+                return
+            base, steps = _trpc_spine(v)
+            if base and steps and any(x == "use" for x, _ in steps) and all(x in TRPC_STEPS for x, _ in steps):
+                # a function written in `.use()` is made a function of its own only on a name that says procedure:
+                # `app.use(fn)`, `unified().use(plugin)` and the like are written the same way
+                self.m.trpc_bases[(scope, name)] = {
+                    "base": base, "uses": self._trpc_uses(steps, scope, name, "procedure" in base[-1].lower())}
+        elif v.type == "object":
+            said = _text(value)[v.end_byte - value.start_byte:] + _text(decl.child_by_field_name("type"))
+            items = self._trpc_items(v, scope, name, strict=True)
+            if any(i["kind"] == "procedure" or i.get("inline") is not None for i in items) or \
+                    (items and "Router" in said):
+                self.routed.add(v.start_byte)
+                self.m.trpc_routers.append({"name": name, "scope": scope, "line": v.start_point[0] + 1,
+                                            "callee": None, "items": items})
+
+    def _trpc_call(self, n: TSNode, ch: list[str], argv: list, scope: str, line: int) -> None:
+        last = ch[-1]
+        if TRPC_ROUTER.match(last) and n.start_byte not in self.routed:
+            owner, self.owner = self.owner, None
+            self._trpc_router(n, ch, argv, scope, owner[1] if owner and owner[0] == n.start_byte
+                              else f"router@{line}")
+        if last == "use" and len(argv) > 1:     # app.use("/trpc", createExpressMiddleware({ router }))
+            prefix = self._url_of(argv[0])
+            for a in argv[1:] if prefix is not None else ():
+                a = _bare(a)
+                if a is not None and a.type == "call_expression":
+                    self.under[a.start_byte] = prefix
+        if last in TRPC_ADAPTERS and argv:
+            self._trpc_mount(n, _bare(argv[0]), None, scope, line, last)
+        elif last == "register" and len(argv) > 1 and "trpc" in _text(argv[0]).lower():
+            # fastify.register(fastifyTRPCPlugin, { prefix: "/trpc", trpcOptions: { router } })
+            outer = _bare(argv[1])
+            if outer is not None and outer.type == "object":
+                self._trpc_mount(n, _bare(self._obj_prop(outer, ("trpcOptions",))), outer, scope, line, last)
+
+    def _trpc_mount(self, call: TSNode, opts: TSNode | None, around: TSNode | None, scope: str, line: int,
+                    adapter: str) -> None:
+        if opts is None or opts.type != "object":
+            return
+        rv = _bare(self._obj_prop(opts, ("router",)))
+        if rv is None:
+            return
+        rec = {"scope": scope, "line": line, "endpoint": None, "router": None, "inline": None, "adapter": adapter}
+        if rv.type == "call_expression":
+            rch = _chain(rv.child_by_field_name("function"))
+            if rch and TRPC_ROUTER.match(rch[-1]) and rv.start_byte not in self.routed:
+                rargs = rv.child_by_field_name("arguments")
+                rec["inline"] = self._trpc_router(
+                    rv, rch, [a for a in (rargs.named_children if rargs is not None else []) if a.type != "comment"],
+                    scope, f"router@{rv.start_point[0] + 1}")
+        elif rv.type in ("identifier", "member_expression", "shorthand_property_identifier"):
+            rec["router"] = _chain(rv)
+        if rec["router"] is None and rec["inline"] is None:
+            return
+        for obj in (opts, around):
+            for key in ("endpoint", "basePath", "prefix"):
+                v = self._obj_prop(obj, (key,)) if obj is not None else None
+                if v is not None and rec["endpoint"] is None:
+                    rec["endpoint"] = self._url_of(v)
+        if rec["endpoint"] is None:
+            rec["endpoint"] = self.under.get(call.start_byte)
+        self.m.trpc_mounts.append(rec)
+
+    def _trpc_router(self, call: TSNode, ch: list[str], argv: list, scope: str, owner: str) -> int | None:
+        """`createTRPCRouter({ … })` / `mergeRouters(a, b)` -> its place in `trpc_routers`, or None when what it is
+        handed holds nothing a router is made of (`express.Router({ mergeParams: true })`)."""
+        items: list[dict] = []
+        if TRPC_MERGE.match(ch[-1]):
+            for a in argv:
+                items += self._trpc_part(_bare(a), scope, f"{owner}.{len(items)}", None)
+        else:
+            obj = _bare(argv[0]) if argv else None
+            if obj is None or obj.type != "object":
+                return None
+            items = self._trpc_items(obj, scope, owner)
+        if not items:
+            return None
+        self.routed.add(call.start_byte)
+        self.m.trpc_routers.append({"name": owner, "scope": scope, "line": call.start_point[0] + 1, "callee": ch,
+                                    "items": items})
+        return len(self.m.trpc_routers) - 1
+
+    def _trpc_part(self, val: TSNode | None, scope: str, name: str, key: str | None, strict: bool = False) -> list:
+        """One value in a router: another router (by name, made in place, or an object written out), or with a key
+        a procedure. `key` None: a router spread or merged into this one."""
+        kind = "router" if key is not None else "spread"
+        head = {"key": key} if key is not None else {}
+        if val is None:
+            return []
+        if val.type in ("identifier", "member_expression", "shorthand_property_identifier"):
+            ch = _chain(val)
+            return [{**head, "kind": kind, "chain": ch}] if ch and not any(x.endswith("()") for x in ch) else []
+        if val.type == "object":
+            sub = self._trpc_items(val, scope, name, strict)
+            if not sub or (strict and not any(i["kind"] == "procedure" or i.get("inline") is not None for i in sub)):
+                return []
+            self.m.trpc_routers.append({"name": name, "scope": scope, "line": val.start_point[0] + 1,
+                                        "callee": None, "items": sub})
+            return [{**head, "kind": kind, "inline": len(self.m.trpc_routers) - 1}]
+        if val.type != "call_expression":
+            return []
+        vch = _chain(val.child_by_field_name("function"))
+        if vch and TRPC_ROUTER.match(vch[-1]):
+            vargs = val.child_by_field_name("arguments")
+            idx = self._trpc_router(val, vch, [a for a in (vargs.named_children if vargs is not None else [])
+                                               if a.type != "comment"], scope, name)
+            return [{**head, "kind": kind, "inline": idx}] if idx is not None else []
+        item = self._trpc_procedure(val, scope, name, strict) if key is not None else None
+        return [{**head, **item}] if item else []
+
+    def _trpc_items(self, obj: TSNode, scope: str, owner: str, strict: bool = False) -> list[dict]:
+        """What an object handed to a router holds. `strict`: the object stands by itself (no router call around
+        it), so only a procedure built on a name that says procedure counts."""
+        items: list[dict] = []
+        for c in obj.named_children:
+            if c.type == "pair":
+                key = _string_value(c.child_by_field_name("key")) if c.child_by_field_name("key") is not None and \
+                    c.child_by_field_name("key").type == "string" else _text(c.child_by_field_name("key"))
+                if key and re.fullmatch(r"[\w$-]+", key):
+                    items += self._trpc_part(_bare(c.child_by_field_name("value")), scope, f"{owner}.{key}", key,
+                                             strict)
+            elif c.type == "shorthand_property_identifier":
+                items.append({"key": _text(c), "kind": "router", "chain": [_text(c)]})
+            elif c.type == "spread_element" and c.named_child_count:
+                items += self._trpc_part(_bare(c.named_children[0]), scope, f"{owner}.{len(items)}", None, strict)
+        return items
+
+    def _trpc_procedure(self, call: TSNode, scope: str, name: str, strict: bool) -> dict | None:
+        """`protectedProcedure.input(schema).mutation(async ({ ctx, input }) => …)`: the kind, what it is built on,
+        the functions put before it with `.use()`, and its handler: written there (a function of its own from here
+        on, named `<router>.<key>`) or handed by name."""
+        base, steps = _trpc_spine(call)
+        if not base or not steps or steps[-1][0] not in TRPC_KINDS:
+            return None
+        if strict and "procedure" not in base[-1].lower():
+            return None
+        h = _unparen(steps[-1][1][0]) if steps[-1][1] else None
+        item = {"kind": "procedure", "type": steps[-1][0], "base": base, "line": call.start_point[0] + 1}
+        if h is not None and h.type in FUNC_TYPES:
+            self.planned[h.start_byte] = name
+            item["local"] = f"{scope}.{name}" if scope else name
+        elif h is not None and h.type in ("identifier", "member_expression") and _chain(h):
+            item["handler"], item["at"] = _chain(h), _site_pos(h)
+        else:
+            return None
+        item["uses"] = self._trpc_uses(steps[:-1], scope, name, True)
+        return item
+
+    def _trpc_uses(self, steps: list, scope: str, name: str, plan: bool) -> list[dict]:
+        """The functions `.use()` puts before a procedure, in the order written: one written there (`plan`: made a
+        function of its own, `<name>.use`), one by name, or the call that makes one (`.use(limit({ max: 5 }))`)."""
+        out: list[dict] = []
+        k = 0
+        for step, args in steps:
+            a = _bare(args[0]) if step == "use" and args else None
+            if a is None:
+                continue
+            if a.type in FUNC_TYPES:
+                if plan:
+                    k += 1
+                    local = f"{name}.use" + (str(k) if k > 1 else "")
+                    self.planned[a.start_byte] = local
+                    out.append({"local": f"{scope}.{local}" if scope else local})
+            elif a.type in ("identifier", "member_expression"):
+                ch = _chain(a)
+                if ch:
+                    out.append({"chain": ch, "at": _site_pos(a)})
+            elif a.type == "call_expression":
+                ch = _chain(a.child_by_field_name("function"))
+                if ch:
+                    out.append({"chain": ch, "called": True})
+        return out
 
     @staticmethod
     def _written(call: TSNode | None):
@@ -2443,6 +2714,187 @@ def _clean_page_path(p: str) -> str:
     return "/" + "/".join(segs)
 
 
+def _trpc_served(m: JSModule, mt: dict, repo: Path, pkg_cache: dict) -> str | None:
+    """The address a tRPC handler serves under: the `endpoint` it is given, the path of the `use("/path", …)` it is
+    written in, the Next.js route file it stands in (`app/api/trpc/[trpc]/route.ts` -> /api/trpc), "/" for a server
+    of its own; None where the code does not say."""
+    ep = mt["endpoint"]
+    if ep is None:
+        pkg = _nearest_package(m.path, repo, pkg_cache)
+        rel = m.path.relative_to(pkg["dir"]).as_posix() if pkg["dir"] in m.path.parents else m.rel
+        at = _route_path_from_file(rel, "route") if "next" in pkg["deps"] else None
+        if at and re.search(r"/\[[^/]+\]$", at):
+            ep = at.rsplit("/", 1)[0]
+        elif mt["adapter"] in TRPC_AT_ROOT:
+            ep = "/"
+    return None if ep is None else "/" + ep.strip("/")
+
+
+def _trpc_plan(mods: dict[str, JSModule], r: "JSResolver", repo: Path, pkg_cache: dict, target_id) -> dict | None:
+    """Which function answers which tRPC procedure, and at which address (roadmap of 2026-11-14, stage 1).
+
+    The Walker wrote down everything shaped like a router. One counts where what made it is tRPC's own
+    (`initTRPC.create().router`, followed through the files: `made_by_trpc`), where a procedure in it is built on
+    tRPC's `procedure` (or, where that is not followed, on a name that says procedure), where it is handed to one
+    of tRPC's handlers, or where such a router holds it. A router nobody holds is a root; a procedure's path is the
+    keys on the way to it, and its address the root's mount, where the code says one, and that path."""
+    keys = [(m.name, i) for m in mods.values() for i in range(len(m.trpc_routers))]
+    if not keys:
+        return None
+    by_name: dict[tuple, tuple] = {}
+    for k in keys:
+        rec = mods[k[0]].trpc_routers[k[1]]
+        by_name.setdefault((k[0], rec["scope"], rec["name"]), k)
+
+    def home(m: JSModule, scope: str, name: str, depth: int = 0):
+        """Where a name is declared: (module, scope, name), in this file or in the one it is imported from."""
+        if depth > 8:
+            return None
+        s = scope
+        while True:
+            if name in m.declared.get(s, ()) or (m.name, s, name) in by_name:
+                return m, s, name
+            if not s:
+                break
+            s = r._up(m, s)
+        imp = m.imports.get(name)
+        if imp is None or imp[0] not in mods or imp[1] in ("cjs", "*"):
+            return None
+        return exported(mods[imp[0]], imp[1], depth + 1)
+
+    def exported(tm: JSModule, name: str, depth: int = 0):
+        if depth > 8:
+            return None
+        if name == "default" and (tm.name, "", "default") in by_name:
+            return tm, "", "default"
+        local = tm.default if name == "default" else tm.exports.get(name)
+        if local is not None:
+            if local in tm.imports and local not in tm.declared.get("", ()):
+                return home(tm, "", local, depth + 1)
+            return tm, "", local
+        for tmod, mp in tm.reexports:
+            if tmod in mods and (mp is None or name in mp):
+                hit = exported(mods[tmod], name if mp is None else mp[name], depth + 1)
+                if hit is not None:
+                    return hit
+        return None
+
+    def router_at(m: JSModule, scope: str, chain: list[str] | None):
+        """The router a name written in `scope` stands for (also `routers.post` of `import * as routers`)."""
+        at = None
+        if chain and len(chain) == 1:
+            at = home(m, scope, chain[0])
+        elif chain and len(chain) == 2:
+            imp = m.imports.get(chain[0])
+            if imp is not None and imp[0] in mods and imp[1] == "*":
+                at = exported(mods[imp[0]], chain[1])
+        return by_name.get((at[0].name, at[1], at[2])) if at else None
+
+    def made_by_trpc(m: JSModule, scope: str, chain: list[str]) -> bool | None:
+        """True where the chain is followed to something of @trpc/server, False where to another library or to
+        the language's own, None where it is not followed."""
+        val = r._eval(m, scope, list(chain), 0, {"value": False})[0] if chain else None
+        if val is None or val[0] not in ("ext", "builtin"):
+            return None
+        return val[0] == "ext" and val[1].startswith(TRPC_SERVER)
+
+    def built_on(m: JSModule, scope: str, chain: list[str], depth: int = 0):
+        """What a procedure is built on, through the names it is given: -> (the names on the way, nearest first;
+        the `.use()` steps in the order they run, each as (module, scope, step); made by tRPC or not, as above)."""
+        if depth > 8 or not chain:
+            return [], [], None
+        if len(chain) == 1 and not chain[0].endswith("()"):
+            at = home(m, scope, chain[0])
+            if at is not None:
+                tm, ts, local = at
+                rec = tm.trpc_bases.get((ts, local))
+                if rec is not None:
+                    names, uses, ok = built_on(tm, ts, rec["base"], depth + 1)
+                    return [local, *names], [*uses, *((tm, ts, u) for u in rec["uses"])], ok
+                v = tm.values.get(ts, {}).get(local)
+                if v and local not in tm.reassigned.get(ts, ()):
+                    names, uses, ok = built_on(tm, ts, v, depth + 1)
+                    return [local, *names], uses, ok
+                return [local], [], None
+        return [], [], made_by_trpc(m, scope, chain)
+
+    info: dict[tuple, tuple] = {}
+    for k in keys:
+        m = mods[k[0]]
+        rec = m.trpc_routers[k[1]]
+        items = []
+        for it in rec["items"]:
+            if it["kind"] == "procedure":
+                items.append((it, *built_on(m, rec["scope"], it["base"])))
+            else:
+                items.append((it, (m.name, it["inline"]) if it.get("inline") is not None
+                              else router_at(m, rec["scope"], it.get("chain"))))
+        info[k] = (m, rec, items)
+    mounts: dict[tuple, str | None] = {}
+    loose: list[str | None] = []
+    for m in mods.values():
+        for mt in m.trpc_mounts:
+            k = (m.name, mt["inline"]) if mt["inline"] is not None else router_at(m, mt["scope"], mt["router"])
+            if k in info:
+                mounts.setdefault(k, _trpc_served(m, mt, repo, pkg_cache))
+            else:
+                loose.append(_trpc_served(m, mt, repo, pkg_cache))
+    good = set(mounts) | {
+        k for k, (m, rec, items) in info.items()
+        if (rec["callee"] and made_by_trpc(m, rec["scope"], rec["callee"]))
+        or any(x[0]["kind"] == "procedure" and (x[3] or (x[3] is None and "procedure" in x[0]["base"][-1].lower()))
+               for x in items)}
+    todo = list(good)
+    while todo:
+        for x in info[todo.pop()][2]:
+            if x[0]["kind"] != "procedure" and x[1] in info and x[1] not in good:
+                good.add(x[1])
+                todo.append(x[1])
+    held = {x[1] for k in good for x in info[k][2] if x[0]["kind"] != "procedure" and x[1] in good}
+    roots = [k for k in keys if k in good and k not in held]
+    bare = [k for k in roots if k not in mounts]
+    if len(loose) == 1 and len(bare) == 1:      # one handler whose router is not followed, one router nobody mounts
+        mounts[bare[0]] = loose[0]
+    procs: list[dict] = []
+    seen: set[str] = set()
+
+    def walk(k: tuple, prefix: list[str], mount: str | None, trail: tuple) -> None:
+        if k in trail or len(trail) > 12:
+            return
+        m, rec, items = info[k]
+        for x in items:
+            it = x[0]
+            if it["kind"] != "procedure":
+                if x[1] in good:
+                    walk(x[1], prefix + ([it["key"]] if it["kind"] == "router" else []), mount, (*trail, k))
+                continue
+            if x[3] is False:       # built on another library's value: `queue.query(fn)` in a router is no procedure
+                continue
+            if "local" in it:
+                tid = nid(m.name, it["local"])
+            else:
+                res = r.resolve_parts(m, rec["scope"], it["handler"])
+                if res is None:
+                    more = r.resolve_more(m, rec["scope"], it["handler"])
+                    res = ("def", *more[1]) if more is not None and more[0] == "def" else None
+                tid = target_id(res) if res is not None and res[0] == "def" else None
+            node = r.g.nodes.get(tid) if tid else None
+            if node is None or node.kind != CALLABLE or tid in seen:
+                continue
+            seen.add(tid)
+            path = ".".join([*prefix, it["key"]])
+            procs.append({"m": m, "scope": rec["scope"], "item": it, "tid": tid, "path": path, "mount": mount,
+                          "detail": f"{TRPC_KINDS[it['type']]} {(mount or '').rstrip('/')}/{path}",
+                          "names": x[1], "uses": x[2]})
+
+    for k in [*(k for k in keys if k in mounts), *roots]:
+        walk(k, [], mounts.get(k), ())
+    paths: dict[str, list[dict]] = {}
+    for proc in procs:
+        paths.setdefault(proc["path"], []).append(proc)
+    return {"procs": procs, "paths": paths, "routers": len(good), "calls": 0, "linked": 0}
+
+
 def add_js(g: Graph, repo: str | Path) -> dict:
     repo = Path(repo).resolve()
     paths = discover(repo)
@@ -2474,7 +2926,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         tree = parsers[".js" if html else p.suffix].parse(src)
         m = JSModule(name=files[rel], rel=rel, path=p, lines=src.count(b"\n") + 1, is_test=bool(TEST_RE.search(rel)),
                      html=html)
-        w = Walker(m, lambda s, _p=p: spec.resolve(s, _p))
+        w = Walker(m, lambda s, _p=p: spec.resolve(s, _p),
+                   trpc=not m.is_test and TRPC_SERVER in _nearest_package(p, repo, pkg_cache)["deps"])
         w.each(tree.root_node.children, "")
         if not html:
             m.directives = _directives(tree.root_node)
@@ -2536,11 +2989,54 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         calls.record(g.sites, file=m.rel, line=at[0], col=at[1], callee=ref.text or ".".join(ref.parts), caller=src_id,
                      lang=JS_LANG, group=group, test=m.is_test, targets=targets, reason=reason)
 
+    # tRPC: which function answers which procedure. Worked out here, before the calls are read, so that a call
+    # through tRPC's client can be linked to its procedure; the entries are set below, with the other routes
+    trpc = _trpc_plan(mods, r, repo, pkg_cache, target_id)
+    trpc_users = {m.name for m in mods.values() if trpc is not None and not m.is_test and any(
+        d.startswith("@trpc/") for d in _nearest_package(m.path, repo, pkg_cache)["deps"])}
+
+    def trpc_call(m: JSModule, ref: JSRef):
+        """`api.post.create.useMutation()`: a request to the procedure `post.create` -> (the procedures of that
+        path, confidence), or None for a call that is none. Confirmed on a client that one of tRPC's own functions
+        made (`createTRPCReact()`, `createTRPCClient()`); likely where the client is not followed (it comes out of a
+        hook, a parameter), the path is a procedure and the last name is one of tRPC's hooks or option makers. No
+        link on an object of the project's own, on another library's value, or for `mutate` and `query` on a name
+        Lantern cannot place."""
+        parts = ref.parts
+        if len(parts) < 3 or parts[-1] not in TRPC_HOOKS | TRPC_CALLS or parts[0] == "this" or \
+                any(x.endswith("()") for x in parts):
+            return None
+        val = r._eval(m, ref.scope, parts[:1], 0, {"value": False})[0]
+        hits = trpc["paths"].get(".".join(parts[1:-1])) or []
+        if val is not None:
+            client = val[0] == "ext" and val[1].startswith("@trpc/") and not val[1].startswith(TRPC_SERVER)
+            return (hits, RESOLVED) if client else None
+        if not hits or parts[-1] not in TRPC_HOOKS or r.bind(m, ref.scope, parts[0]) is not None:
+            return None
+        s = ref.scope
+        while True:
+            if parts[0] in m.plain.get(s, ()):      # const store = { post: { create: { useMutation () {} } } }
+                return None
+            if not s:
+                break
+            s = r._up(m, s)
+        return hits, INFERRED
+
     unresolved = 0
     db_calls: list[dict] = []
     for m in mods.values():
         for ref in m.refs:
             src_id = nid(m.name, ref.scope) if ref.scope and ref.scope in m.defs else nid(m.name)
+            if ref.kind == "call" and m.name in trpc_users:
+                # a request, as `fetch("/api/notes")` is one: the link is added beside whatever the call itself
+                # resolves to below (a call into tRPC's library), and the inventory keeps that reading
+                link = trpc_call(m, ref)
+                if link is not None:
+                    trpc["calls"] += 1
+                    trpc["linked"] += bool(link[0])
+                    for proc in link[0]:
+                        g.add_edge(src_id, proc["tid"], kind=CALLS, confidence=link[1] if len(link[0]) == 1
+                                   else POSSIBLE, line=ref.line, via="http-trpc", detail=proc["detail"])
             if ref.kind == "computed":   # inventory only, as are "registration" and "wrapper" below
                 if ref.parts == ["<inline>"]:   # (function () {...})(): its body is read as part of this function
                     site(m, ref, src_id, [(src_id, RESOLVED, "inline-function")])
@@ -3016,6 +3512,66 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             g.nodes[nid(m.name)].entry = {"kind": "main", "detail": f"app start ({m.rel})"}
         elif m.listens and m.route_regs:
             g.nodes[nid(m.name)].entry = {"kind": "main", "detail": f"server start ({m.rel})"}
+
+    if trpc is not None:
+        # tRPC procedures: each is a route of its own, named by where it is served and its path through the routers
+        used: dict = {}
+
+        def use_node(tm: JSModule, ts: str, u: dict) -> str | None:
+            """The function a `.use()` step runs before a procedure: its node, or a library's name."""
+            key = (tm.name, ts, u.get("local") or tuple(u["chain"]), u.get("at"))
+            if key in used:
+                return used[key]
+            if "local" in u:
+                mid = nid(tm.name, u["local"])
+            elif u.get("called"):     # .use(limit({ max: 5 })): the call is a call site of its own; the name only
+                hit = r.resolve_parts(tm, ts, u["chain"])
+                if hit is None:
+                    more = r.resolve_more(tm, ts, u["chain"], guard=False)
+                    hit = ("def", *more[1]) if more and more[0] == "def" else \
+                        ("ext", more[1]) if more and more[0] == "ext" else None
+                if hit and hit[0] == "ext":
+                    mid = None if r.unread(hit[1]) else f"ext:{_ext_js(hit[1]) if '()' not in hit[1] else hit[1]}"
+                    if mid:
+                        g.external(mid[4:])
+                else:
+                    mid = target_id(hit) if hit and hit[0] == "def" else None
+            else:
+                mid = handed(tm, ts, u["chain"], u.get("at"), nid(tm.name, ts) if ts and ts in tm.defs
+                             else nid(tm.name), "middleware")
+            used[key] = mid if mid and (mid in g.nodes or mid.startswith("ext:")) else None
+            return used[key]
+
+        made = 0
+        for proc in trpc["procs"]:
+            m, it, node = proc["m"], proc["item"], g.nodes[proc["tid"]]
+            if node.entry:      # a function that is already a route of another kind stays that
+                continue
+            if "handler" in it:
+                handed(m, proc["scope"], it["handler"], it.get("at"),
+                       nid(m.name, proc["scope"]) if proc["scope"] and proc["scope"] in m.defs else nid(m.name),
+                       "route-handler")
+            mw: list[str] = []
+            for tm, ts, u in [*proc["uses"], *((m, proc["scope"], u) for u in it["uses"])]:
+                mid = use_node(tm, ts, u)
+                if mid and mid not in mw:
+                    mw.append(mid)
+            node.entry = {"kind": "route", "detail": proc["detail"],
+                          "trpc": {"path": proc["path"], "type": it["type"], "procedures": proc["names"],
+                                   "mount": proc["mount"]}}
+            if mw:
+                node.entry["middleware"] = mw
+            made += 1
+        for m in mods.values():
+            for mt in m.trpc_mounts if made else ():
+                # the handler every procedure stands behind (`app/api/trpc/[trpc]/route.ts`) is their door, not a
+                # route that changes data by itself: the rules that ask routes ask the procedures (`serves`)
+                node = g.nodes.get(nid(m.name, mt["scope"])) if mt["scope"] in m.defs else None
+                if node is not None and (node.entry or {}).get("kind") == "route":
+                    node.entry["serves"] = "trpc"
+        if made or trpc["calls"]:
+            g.meta["trpc"] = {"procedures": made, "routers": trpc["routers"], "client_calls": trpc["calls"],
+                              "linked": trpc["linked"]}
 
     http_calls = []
     for m in mods.values():

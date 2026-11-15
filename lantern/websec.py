@@ -1169,6 +1169,11 @@ def route_auth_sign(g: Graph, n, adj: dict[str, list[str]], depth: int = 3, doub
             d_check = re.sub(r"[A-Za-z_$][\w$]*", lambda m: "x" if m.group(0) in doubted else m.group(0), d_check)
         if auth_ident(d_check, js):
             return f"decorator @{d.split('(')[0]}"
+    for name in ((n.entry or {}).get("trpc") or {}).get("procedures") or ():
+        # tRPC: `create: protectedProcedure.input(…).mutation(…)`. The route is built on a procedure, and the login
+        # step is that procedure's, not a line of the handler: its name says so, as a middleware's does
+        if name not in doubted and auth_word(name, True):
+            return f"the procedure `{name}` it is built on"
     sig = signature_sign(n.signature or "", doubted)
     if sig:
         return sig
@@ -1221,6 +1226,50 @@ def auth_callees(g: Graph, n, adj: dict[str, list[str]], depth: int = 3) -> list
     return out
 
 
+# tRPC: the step that turns a caller away is a function put before the procedure (`t.procedure.use(fn)`), under
+# whatever name (`adminProcedure`, `authed`, `isAuthed`): it throws `new TRPCError({ code: "UNAUTHORIZED" })`, or
+# FORBIDDEN. Read from the lines of the functions the route's entry names (`entry["middleware"]`) and of the handler
+# itself. A text or a comment that holds those words is none, and neither is another code (TOO_MANY_REQUESTS).
+TRPC_REFUSES = re.compile(r"\bTRPCError\s*\(\s*\{[^{}]{0,200}?\bcode\s*:\s*[\"'`](UNAUTHORIZED|FORBIDDEN)[\"'`]")
+
+
+def _refusal_in(text: str | None, first: int, last: int) -> tuple[str, int] | None:
+    """(code, line) of the first `new TRPCError({ code: "UNAUTHORIZED" })` (or FORBIDDEN) written as code in these
+    lines of a file."""
+    if not text or not first:
+        return None
+    raw = "\n".join(text.splitlines()[first - 1:last or first])
+    code = code_only(raw, js=True)
+    for m in TRPC_REFUSES.finditer(raw):
+        if code[m.start():m.start() + 9] == "TRPCError":
+            return m.group(1), first + raw.count("\n", 0, m.start(1))
+    return None
+
+
+def trpc_refusal(g: Graph, n, text: str | None, doubt=None) -> str | None:
+    """A tRPC route whose own way turns a caller away: one of the functions that run before it does (named after
+    the procedure it was put on), or the handler itself. In words, or None."""
+    e = n.entry or {}
+    if not e.get("trpc"):
+        return None
+    for mid in e.get("middleware") or ():
+        fn = g.nodes.get(mid)
+        if fn is None or not fn.file or _in_doubt(mid, doubt):
+            continue
+        body = text if fn.file == n.file else None
+        if body is None:
+            try:
+                body = project_text(Path(g.repo_root) / fn.file, g.repo_root)
+            except OSError:
+                continue
+        hit = _refusal_in(body, fn.start_line or 0, fn.end_line or 0)
+        if hit:
+            who = re.sub(r"\.use\d*$", "", fn.qualname.split("::")[-1])
+            return f"`{who}` turns a caller away (TRPCError {hit[0]}, {fn.file}:{hit[1]})"
+    hit = _refusal_in(text, n.start_line or 0, n.end_line or 0)
+    return f"it turns a caller away itself (TRPCError {hit[0]}, line {hit[1]})" if hit else None
+
+
 def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None, doubt=None) -> tuple[str, str] | None:
     """Everything Lantern can see about a route checking its caller: ("strong", why) from the decorator, signature,
     callees or body; ("weak", why) when the body only looks up a user by a request value and tests the result;
@@ -1230,7 +1279,7 @@ def login_check(g: Graph, n, adj: dict[str, list[str]], text: str | None, doubt=
     are no sign (`_in_doubt`), and neither are the handler's lines on which the token library is called. What
     `passed_over` names on the route (a login made optional, a token only carried in) is no sign either."""
     skip = frozenset(passed_over(n, text))
-    sign = route_auth_sign(g, n, adj, doubt=doubt, skip=skip)
+    sign = route_auth_sign(g, n, adj, doubt=doubt, skip=skip) or trpc_refusal(g, n, text, doubt)
     if sign:
         return "strong", sign
     if text is None or not n.file:
@@ -1474,6 +1523,8 @@ def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
             continue
         route = n.entry.get("detail") or ""
         if not mutating_route(route) or is_public_route(route):
+            continue
+        if n.entry.get("serves") == "trpc":     # the one door every tRPC procedure stands behind: they are asked
             continue
         if n.file and n.file not in texts:
             try:

@@ -171,6 +171,9 @@ PY_INPUT = {"args", "form", "values", "json", "data", "files", "cookies", "heade
 JS_INPUT = {"query", "params", "body", "headers", "cookies", "signedCookies", "files", "file", "url", "originalUrl",
             "path", "hostname", "host", "ip", "get", "header", "param", "nextUrl", "json", "formData", "text",
             "rawBody", "protocol", "subdomains", "baseUrl", "search", "searchParams", "payload"}
+# tRPC hands a procedure one object: `input` is what the caller sent (as the procedure's `.input()` schema let it
+# through, or as it came: `rawInput`); `ctx` is what the server made for this request (the session, the database).
+TRPC_INPUT = {"input", "rawInput"}
 # What a request object knows about who is signed in (never request data; used by the ownership check).
 IDENT_ATTRS = {"user", "session", "auth", "userId", "user_id", "currentUser", "current_user", "identity", "account",
                "principal", "token_payload", "jwt", "state", "locals", "decoded", "userid", "uid"}
