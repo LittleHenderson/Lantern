@@ -642,7 +642,8 @@ def test_react_routers_framework_mode_reads_the_same_files(tmp_path):
 def test_remix_1_and_its_folders_are_not_guessed_at(tmp_path):
     """Remix 1 kept its routes in folders (`routes/notes/index.tsx`), and the same file names mean other
     addresses there. Such an app's routes are not read (the result says so) rather than read wrongly; with the
-    switch that turns the newer names on (`v2_routeConvention`), they are."""
+    switch that turns the newer names on (`v2_routeConvention`), they are, by the newer rules: the folder's
+    `index.tsx` is then the route of the folder's name, and no index."""
     old = PKG.replace("2.9.2", "^1.19.3")
     files = {"app/root.tsx": ROOT, "app/session.server.ts": SESSION, "tsconfig.json": TSCONFIG,
              "app/routes/index.tsx": HOME, "app/routes/notes/index.tsx": NOTE_LIST, "app/routes/login.tsx": LOGIN}
@@ -651,4 +652,220 @@ def test_remix_1_and_its_folders_are_not_guessed_at(tmp_path):
     assert g.meta["remix"] == {"routes": 0, "pages": 0, "forms": 0, "linked": 0, "not_read": "Remix 1 route folders"}
     config = 'module.exports = {\n  future: { v2_routeConvention: true },\n};\n'
     g = _build(tmp_path / "switched", {**files, "remix.config.js": config}, old)
-    assert _entries(g, "route") == {"js:app/root::loader": "GET /*", R + "login::action": "POST /login"}
+    assert _entries(g, "route") == {"js:app/root::loader": "GET /*", R + "login::action": "POST /login",
+                                    R + "notes/index::loader": "GET /notes", R + "notes/index::action": "POST /notes"}
+
+
+# ------------------------------------------------------------------ doors that are not written in the route file
+TAGS = '''import { db } from "~/db.server";
+
+export async function loader({ params }) {
+  return { tag: await db.tag.findUnique({ where: { id: params.tagId } }) };
+}
+
+async function wipe({ params }) {
+  await db.tag.delete({ where: { id: params.tagId } });
+  return null;
+}
+
+export { wipe as action };
+'''
+TAG_PAGE = '''export { loader, action } from "~/tags.server";
+
+export default function Tag() {
+  return <p>tag</p>;
+}
+'''
+TAG_USES = '''import { loader as read } from "~/tags.server";
+
+export async function loader(args) {
+  return read(args);
+}
+
+export default function Tag() {
+  return <p>tag</p>;
+}
+'''
+S = "js:app/tags.server::"
+
+
+def test_a_door_handed_on_from_another_file_is_that_routes(tmp_path):
+    """`export { loader, action } from "~/tags.server"`: the route's doors are the functions of that file, under
+    the route's address (written the two ways the language has: handed on in one line, or taken in and exported).
+    The twins: the same file when no route hands it on, and a route that takes the function in and calls it from
+    a loader of its own, which is then the door."""
+    files = {**APP, "app/tags.server.ts": TAGS}
+    two = TAG_PAGE.replace('export { loader, action } from "~/tags.server";',
+                           'import { loader, action } from "~/tags.server";\n\nexport { loader, action };')
+    assert two != TAG_PAGE
+    for name, page in (("one-line", TAG_PAGE), ("two-lines", two)):
+        g = _build(tmp_path / name, {**files, "app/routes/tags.$tagId.tsx": page})
+        assert _entries(g, "route") == {**ROUTES, S + "loader": "GET /tags/:tagId", S + "wipe": "POST /tags/:tagId"}
+        assert g.nodes[S + "wipe"].entry["remix"] == "action" and g.nodes[S + "wipe"].lane == "server"
+        e = _edge(g, R + "tags.$tagId::Tag", S + "loader")
+        assert e is not None and (e.confidence, e.via, e.detail) == ("resolved", "http-remix", "GET /tags/:tagId")
+        # the file the doors stand in shows nothing: all of it is the server's
+        assert "component" not in g.nodes[S + "loader"].entry
+    alone = _build(tmp_path / "alone", files)
+    assert _entries(alone, "route") == ROUTES
+    used = _build(tmp_path / "used", {**files, "app/routes/tags.$tagId.tsx": TAG_USES})
+    assert _entries(used, "route") == {**ROUTES, R + "tags.$tagId::loader": "GET /tags/:tagId"}
+
+
+GUARD = '''import { needUser } from "~/session.server";
+
+export function guarded(inner) {
+  return async (args) => {
+    const userId = await needUser(args.request);
+    return inner({ ...args, userId });
+  };
+}
+
+export function timed(inner) {
+  return async (args) => {
+    const began = Date.now();
+    const out = await inner(args);
+    console.log(Date.now() - began);
+    return out;
+  };
+}
+'''
+TEAMS = '''import { redirect } from "@remix-run/node";
+import { Form } from "@remix-run/react";
+import { db } from "~/db.server";
+import { guarded, timed } from "~/guard.server";
+
+export const loader = timed(async ({ params }) => {
+  return { team: await db.team.findUnique({ where: { id: params.teamId } }) };
+});
+
+export const action = guarded(async ({ request }) => {
+  const form = await request.formData();
+  await db.team.create({ data: { name: String(form.get("name")) } });
+  return redirect("/teams");
+});
+
+export default function Teams() {
+  return <Form method="post"><input name="name" /><button>Add</button></Form>;
+}
+'''
+T = R + "teams::"
+OPEN = "POST {} changes data, is called by the app, and no login check was found"
+
+
+def test_the_login_of_a_helper_that_makes_a_door_is_seen(tmp_path):
+    """`export const action = guarded(async (args) => …)`: what the helper hands back runs first on every request
+    and calls the function written here, so the helper is kept as the route's middleware is, with a link to it,
+    and the login it asks for is the route's (the helper's name says nothing; its code is read). The twin: the
+    same action made by a helper that only measures time, which stays open."""
+    from lantern import flow
+    from lantern.security import scan
+    files = {**APP, "app/guard.server.ts": GUARD, "app/routes/teams.tsx": TEAMS}
+    g = _build(tmp_path / "guarded", files)
+    assert {i: d for i, d in _entries(g, "route").items() if i.startswith(T)} == {
+        T + "loader": "GET /teams", T + "action": "POST /teams"}
+    assert g.nodes[T + "action"].entry["middleware"] == ["js:app/guard.server::guarded"]
+    assert g.nodes[T + "loader"].entry["middleware"] == ["js:app/guard.server::timed"]
+    e = _edge(g, T + "action", "js:app/guard.server::guarded")
+    assert e is not None and (e.confidence, e.via) == ("inferred", "action-helper")
+    res = flow.analyze(g)
+    assert not res.errors
+    shown = sorted(g.nodes[i].entry["detail"] for i in res.logins)
+    assert "POST /teams" in shown and "GET /teams" not in shown
+    titles = [f["title"] for f in scan(g, offline=True)["findings"] if f["rule"] == "LW-AUTH-MISSING"]
+    assert titles == [OPEN.format("/notes/new")]
+    # the twin
+    bare = TEAMS.replace("export const action = guarded(", "export const action = timed(")
+    assert bare != TEAMS
+    g = _build(tmp_path / "timed", {**files, "app/routes/teams.tsx": bare})
+    assert g.nodes[T + "action"].entry["middleware"] == ["js:app/guard.server::timed"]
+    assert "POST /teams" not in sorted(g.nodes[i].entry["detail"] for i in flow.analyze(g).logins)
+    titles = [f["title"] for f in scan(g, offline=True)["findings"] if f["rule"] == "LW-AUTH-MISSING"]
+    assert sorted(titles) == [OPEN.format("/notes/new"), OPEN.format("/teams")]
+
+
+SETTINGS = '''import { Form } from "@remix-run/react";
+import { db } from "~/db.server";
+
+export async function loader() {
+  return { n: await db.setting.count() };
+}
+
+export async function action({ request }) {
+  const form = await request.formData();
+  await db.setting.create({ data: { name: String(form.get("name")) } });
+  return null;
+}
+
+export default function Settings() {
+  return <Form method="post"><input name="name" /></Form>;
+}
+'''
+
+
+def test_an_index_file_in_a_route_folder_is_the_route_when_no_route_file_is_there(tmp_path):
+    """`app/routes/settings/index.tsx`, the first name Remix gave a route folder's own file and still reads. The
+    twins: beside a `route.tsx` it is one more file of the folder; one folder deeper it is no route; and a file
+    named `index` among the route files themselves is the address `/index`, as it was."""
+    at = R + "settings/index::"
+    g = _build(tmp_path / "index", {**APP, "app/routes/settings/index.tsx": SETTINGS})
+    assert _entries(g, "route") == {**ROUTES, at + "loader": "GET /settings", at + "action": "POST /settings"}
+    assert _entries(g, "page") == {**PAGES, at + "Settings": "/settings"}
+    assert _edge(g, at + "Settings", at + "action").via == "http-remix"
+    both = _build(tmp_path / "both", {**APP, "app/routes/dashboard/index.tsx": SETTINGS})
+    assert _entries(both, "route") == ROUTES and _entries(both, "page") == PAGES
+    deep = _build(tmp_path / "deep", {**APP, "app/routes/settings/parts/index.tsx": SETTINGS})
+    assert _entries(deep, "route") == ROUTES and _entries(deep, "page") == PAGES
+    flat = _build(tmp_path / "flat", {**APP, "app/routes/index.tsx": SETTINGS})
+    assert _entries(flat, "route") == {**ROUTES, R + "index::loader": "GET /index", R + "index::action": "POST /index"}
+
+
+RELATIVE = '''import { Form } from "@remix-run/react";
+import { db } from "~/db.server";
+import { needUser } from "~/session.server";
+
+export async function action({ request }) {
+  const userId = await needUser(request);
+  await db.note.deleteMany({ where: { ownerId: userId } });
+  return null;
+}
+
+export default function NoteList() {
+  return (
+    <div>
+      <Form method="post" action="new"><input name="title" /></Form>
+      <Form method="post" action="./new"><input name="title" /></Form>
+      <Form method="post" action="."><button>Remove all</button></Form>
+      <Form method="post" action="?index"><button>Remove all</button></Form>
+      <Form method="post" action="../logout"><button>Sign out</button></Form>
+      <Form method="post" action="nowhere/at/all"><button>x</button></Form>
+    </div>
+  );
+}
+'''
+FRAME_FORM = NOTES_FRAME.replace("<Outlet />", '<Form method="post" action="new"><input name="title" /></Form><Outlet />')
+PART = '''import { Form } from "@remix-run/react";
+
+export function QuickNote() {
+  return <Form method="post" action="new"><input name="title" /></Form>;
+}
+'''
+
+
+def test_a_form_whose_address_is_read_from_where_it_stands(tmp_path):
+    """`action="new"` in the page of `/notes` posts to `/notes/new`; `.` is the route the form stands in and
+    `?index` its index. The twins: an address that climbs (`..`: which route is one step up is not worked out), one
+    no route has, and the same words in a part that is no route file, which stands wherever it is shown."""
+    assert FRAME_FORM != NOTES_FRAME
+    files = {**APP, "app/routes/notes._index.tsx": RELATIVE, "app/routes/notes.tsx": FRAME_FORM.replace(
+        'import { Outlet, useLoaderData }', 'import { Form, Outlet, useLoaderData }'),
+        "app/components/quick.tsx": PART}
+    g = _build(tmp_path, files)
+    page = R + "notes._index::NoteList"
+    sent = sorted((e.dst, tuple(e.lines), e.confidence) for e in g.call_edges()
+                  if e.via == "http-remix" and e.src == page and e.dst.endswith("::action"))
+    assert sent == [(R + "notes._index::action", (16, 17), "resolved"), (R + "notes.new::action", (14, 15), "resolved")]
+    assert _edge(g, R + "notes::NotesFrame", R + "notes.new::action").lines == [14]
+    assert not [e for e in g.call_edges() if e.src.startswith("js:app/components/quick") and e.via == "http-remix"]
+    # 8 forms in the app as it was: one of the page's replaced by six, one more in the frame, one in the part
+    assert (g.meta["remix"]["forms"], g.meta["remix"]["linked"]) == (15, 11)

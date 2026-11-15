@@ -128,14 +128,16 @@ KIT_FILE = re.compile(r"^src/routes/(?P<dir>(?:[^/]+/)*)\+(?P<kind>page\.server|
                       r"(?:@[^./]*)?\.(?P<ext>[jt]s|svelte)$")
 KIT_HOOKS = re.compile(r"^src/hooks\.server(?:/index)?\.[jt]s$")
 # Remix, and React Router's framework mode that took its place (the same stage). The doors of such an app are its
-# route files: `app/root` and what lies directly in `app/routes`, a file or a folder with a `route` file in it. A
-# file's name is its address (`remix_address`); its `loader` answers a GET there, its `action` every other verb,
-# and what it exports by default is the page. Read only where the nearest package.json says the app is one
-# (`remix_way`), and never by running the app's settings.
+# route files: `app/root` and what lies directly in `app/routes`, a file or a folder with a `route` file in it (or,
+# where there is none, an `index` file: the name Remix first gave a folder's own file, and still reads). A file's
+# name is its address (`remix_address`); its `loader` answers a GET there, its `action` every other verb, and what
+# it exports by default is the page. Read only where the nearest package.json says the app is one (`remix_way`),
+# and never by running the app's settings.
 REMIX_PACKAGES = re.compile(r"^@remix-run/(dev|node|react|serve|express|cloudflare|deno|architect|netlify|vercel|"
                             r"server-runtime)$")
 ROUTER_FRAMEWORK = "@react-router/dev"
-REMIX_FILE = re.compile(r"^app/(?:root|routes/(?P<name>[^/]+?)(?:/route)?)\.[cm]?[jt]sx?$")
+REMIX_FILE = re.compile(r"^app/(?:root|routes/(?P<name>[^/]+?)(?:/(?P<own>route|index))?)\.[cm]?[jt]sx?$")
+REMIX_DOORS = ("loader", "action")
 REMIX_CONFIGS = ("remix.config.js", "remix.config.mjs", "remix.config.cjs")
 ROUTER_ROUTES = ("routes.ts", "routes.js", "routes.mts", "routes.mjs", "routes.tsx", "routes.jsx")
 REMIX_SENDS = {"post", "put", "patch", "delete"}     # the verbs of a form that go to a route's `action`
@@ -879,11 +881,13 @@ class Walker:
         fn = _unwrap_func(value)
         if fn is None and name_node.type == "identifier":
             fn = self._wrapped_func(value) or (self._trpc_middleware(value) if self.trpc else None)
-            action = self.actions is not None and not scope and (self.exporting or name in self.actions)
+            action = not scope and (self.exporting or name in self.actions if self.actions is not None else
+                                    self.remix and self.exporting and name in REMIX_DOORS)
             first = fn is not None
             if fn is None and action:
                 # export const save = checked(schema, async (data) => …) in a "use server" file: every export of
                 # such a file is a function the browser can call, so the helper hands one back, around this one
+                # (and so does the helper that makes a Remix route's `loader` or `action`)
                 fn = self._made_action(value)
             if fn is not None:   # const create = wrap(async (req, res) => ...): the function is a node of its own
                 local = self.add_def(fn, name, scope, "function", cls, outer=n)
@@ -4292,14 +4296,45 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     remix_ways: dict = {}
     remix_texts: dict = {}
 
-    def remix_own(m: JSModule, name: str) -> str | None:
-        return nid(m.name, m.exports[name]) if m.exports.get(name) in m.defs else None
+    def made_by(m: JSModule, local: str, node) -> None:
+        """export const save = checked(schema, async (data) => …): what the helper hands back runs first, on every
+        request, and calls this function. The helper is kept as a route's middleware is (its name is read as one),
+        and the function is linked to it: what it calls is on the way."""
+        hit = r.resolve_parts(m, "", m.made[local]) if local in m.made else None
+        mid = target_id(hit) if hit and hit[0] == "def" else \
+            f"ext:{_ext_js(hit[1])}" if hit and hit[0] == "ext" and not r.unread(hit[1]) else None
+        if mid and mid.startswith("ext:"):
+            g.external(mid[4:])
+            node.entry["middleware"] = [mid]
+        elif mid and mid != node.id and mid in g.nodes and g.nodes[mid].kind == CALLABLE:
+            g.add_edge(node.id, mid, kind=CALLS, confidence=INFERRED, line=node.start_line, via="action-helper")
+            node.entry["middleware"] = [mid]
 
-    def remix_door(tid: str | None, detail: str, role: str) -> str | None:
-        node = g.nodes.get(tid) if tid else None
+    def remix_own(m: JSModule, name: str) -> tuple[str, str] | None:
+        """The function a route file exports under `name`: its own, or one it hands on from another file of the
+        project (`export { loader } from "~/x.server"`, or taken in and exported), which is then the door."""
+        local = m.exports.get(name)
+        if local in m.defs:
+            return m.name, local
+        hit = None
+        if local is not None and local in m.imports:
+            tmod, tname, _spec = m.imports[local]
+            hit = r.lookup_export(tmod, tname) if tmod and tname != "cjs" else None
+        elif local is None:
+            for tmod, mp in m.reexports:
+                if tmod is not None and (mp is None or name in mp):
+                    hit = r.lookup_export(tmod, name if mp is None else mp[name])
+                    if hit:
+                        break
+        return (hit[1], hit[2]) if hit and hit[0] == "def" else None
+
+    def remix_door(m: JSModule, name: str, detail: str, role: str) -> str | None:
+        own = remix_own(m, name)
+        node = g.nodes.get(nid(*own)) if own else None
         if node is None or node.kind != CALLABLE or node.entry:
             return None
         node.entry = {"kind": "route", "detail": detail, "remix": role}
+        made_by(mods[own[0]], own[1], node)
         remix["routes"].append(node)
         return node.id
 
@@ -4320,7 +4355,10 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         if way == "old":
             remix["old"].add(pkg["dir"])
         elif way == "files":
-            remix["apps"].setdefault(pkg["dir"], {})[rm.group("name") or ""] = m
+            # a folder's `route` file is its route; its `index` file only where no route of that name is there
+            names = remix["apps"].setdefault(pkg["dir"], {})
+            if rm.group("own") != "index" or (rm.group("name") or "") not in names:
+                names[rm.group("name") or ""] = m
     for base, names in remix["apps"].items():
         recs = {}
         for name, m in names.items():
@@ -4343,12 +4381,11 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 # a layout's loader runs for every page drawn in it; one with no address of its own (`_auth`) is
                 # named by its file, as nothing else tells it from the layout it stands in
                 under = path.rstrip("/") + ("" if rec["own"] or not name else "/" + remix_parts(name)[-1])
-                rec["loader"] = remix_door(remix_own(m, "loader"), f"GET {under}/*", "layout loader")
+                rec["loader"] = remix_door(m, "loader", f"GET {under}/*", "layout loader")
             else:
-                rec["loader"] = remix_door(remix_own(m, "loader"), f"GET {path}", "loader")
+                rec["loader"] = remix_door(m, "loader", f"GET {path}", "loader")
             # a POST to an address goes to the route there that is no index; `?index` says the index is meant
-            rec["action"] = remix_door(remix_own(m, "action"), f"POST {path}" + ("?index" if rec["index"] else ""),
-                                       "action")
+            rec["action"] = remix_door(m, "action", f"POST {path}" + ("?index" if rec["index"] else ""), "action")
             shows = nid(m.name, m.default) if m.default in m.defs else None
             node = g.nodes.get(shows) if shows else None
             if node is not None and node.kind == CALLABLE:
@@ -4359,9 +4396,10 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                         not any(x["index"] for x in rec["below"]):
                     node.entry = {"kind": "page", "detail": path}
                     rec["page"] = node.id
-                # a file that shows something holds both sides: its doors say what the browser's part is (`lanes`)
+                # a file that shows something holds both sides: its doors say what the browser's part is (`lanes`).
+                # A door handed on from another file stands in a file that shows nothing
                 for door in (rec["loader"], rec["action"]):
-                    if door:
+                    if door and door.startswith(nid(m.name) + "::"):
                         g.nodes[door].entry["component"] = node.id
             remix["recs"].append(rec)
             remix["by_mod"][m.name] = rec
@@ -4403,19 +4441,7 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 node = g.nodes.get(nid(m.name, local))
                 if node is not None and not node.entry:
                     node.entry = {"kind": "route", "detail": f"ACTION {name}"}
-                    # export const save = checked(schema, async (data) => …): what the helper hands back runs
-                    # first, on every request, and calls this function. The helper is kept as a route's middleware
-                    # is (its name is read as one), and the action is linked to it: what it calls is on the way
-                    hit = r.resolve_parts(m, "", m.made[local]) if local in m.made else None
-                    mid = target_id(hit) if hit and hit[0] == "def" else \
-                        f"ext:{_ext_js(hit[1])}" if hit and hit[0] == "ext" and not r.unread(hit[1]) else None
-                    if mid and mid.startswith("ext:"):
-                        g.external(mid[4:])
-                        node.entry["middleware"] = [mid]
-                    elif mid and mid != node.id and mid in g.nodes and g.nodes[mid].kind == CALLABLE:
-                        g.add_edge(node.id, mid, kind=CALLS, confidence=INFERRED, line=node.start_line,
-                                   via="action-helper")
-                        node.entry["middleware"] = [mid]
+                    made_by(m, local, node)
         if KIT in pkg["deps"]:
             km = KIT_FILE.match(rel_pkg)
             if km is not None:
@@ -4654,7 +4680,14 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             if written in ("", "."):
                 return [rec["action"]] if rec and rec["action"] else []
             if not written.startswith("/"):
-                return []      # an address read from where the form stands (`action="new"`): not followed
+                # read from where the form stands: below the address of the route it stands in (`new`, `./new`),
+                # or that route asked for its index (`?index`). One that climbs (`..`) is not followed (which
+                # route is one step up is the framework's to say), nor one in a part that is no route file
+                rest = written.removeprefix("./")
+                if rec is None or ".." in rest.partition("?")[0].split("/"):
+                    return []
+                own = rec["path"].rstrip("/")
+                written = (own or "/") + rest if rest.startswith("?") else f"{own}/{rest}"
             at, _, asks = written.partition("?")
             index = "index" in re.split(r"[&=#]", asks)
             hits = [x for x in remix["apps"][base].values()

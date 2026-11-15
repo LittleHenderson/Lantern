@@ -60,8 +60,7 @@ DATA_RE = re.compile(
 # a page beside its `loader`; where it is a server's route (Next.js, Express) the route on it says so.
 SERVER_PATH_RE = re.compile(
     r"(^|/)(src/)?(app/(?!routes/[^/]+/route\.).*(/|^)route\.[cm]?[jt]sx?$|pages/api/|api/|server/|backend/|"
-    r"functions/|netlify/|"
-    r"supabase/functions/|worker[s]?/|middleware\.[cm]?[jt]s$)|\.server\.[cm]?[jt]sx?$"
+    r"functions/|netlify/|supabase/functions/|worker[s]?/|middleware\.[cm]?[jt]s$)|\.server\.[cm]?[jt]sx?$"
 )
 
 
