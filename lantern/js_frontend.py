@@ -2276,10 +2276,12 @@ def read_svelte(w: "Walker", tree, script: bytes, markup: bytes, own: list[tuple
     return read
 
 
-def kit_path(folder: str) -> str:
+def kit_path(folder: str, groups: bool = False) -> str:
     """`(app)/items/[id=integer]/` under `src/routes` -> `/items/[id]`: a folder in round brackets is no part of
-    the address, and a part's matcher (`=integer`) is a rule for it, not a name."""
-    segs = [re.sub(r"=\w+(?=\])", "", s) for s in folder.split("/") if s and not (s.startswith("(") and s.endswith(")"))]
+    the address, and a part's matcher (`=integer`) is a rule for it, not a name. With `groups` the folder in round
+    brackets stays (`/(app)/items/[id]`), for what belongs to that group of pages and to no address."""
+    segs = [re.sub(r"=\w+(?=\])", "", s) for s in folder.split("/")
+            if s and (groups or not (s.startswith("(") and s.endswith(")")))]
     return "/" + "/".join(segs)
 
 
@@ -3816,7 +3818,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             for verb in (*KIT_VERBS, "fallback"):     # `fallback` answers every verb that has no function of its own
                 kit_route(own(verb), f"{'ANY' if verb == 'fallback' else verb} {path}", "endpoint", base)
         elif kind == "layout.server":
-            tid = kit_route(own("load"), f"GET {path.rstrip('/')}/*", "layout load", base)
+            # it runs for the pages below its folder: of a group `(app)` those inside the group, not every address
+            tid = kit_route(own("load"), f"GET {kit_path(folder, groups=True).rstrip('/')}/*", "layout load", base)
             if tid:
                 kit["layouts"][(base, folder)] = tid
         elif kind == "page.server":

@@ -1479,8 +1479,11 @@ const actionName = e => String(e.detail || '').replace(/^ACTION /, '');
 // what a row, a chip or a path shows for an entry: its detail, and for a Server Action its name ("ACTION x" is the map's word)
 const entryLabel = e => !e ? '' : isAction(e) ? 'Server Action ' + actionName(e) : String(e.detail || '');
 const onPhone = n => !!n && ANDROID_APP && (n.lane === 'browser' || n.lane === 'frontend');
-const entryPhrase = e => !e ? '' : isScreen(e) ? `someone opens the ${String(e.detail).split(' · ')[0]} on their phone` : isIntent(e) ? `another app on the phone, or a link, starts ${partName(e)}` : isAction(e) ? `someone sends a form, or presses a button, that runs the Server Action ${actionName(e)}` : ({page: `the page ${e.detail || ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
+const entryPhrase = e => !e ? '' : isScreen(e) ? `someone opens the ${String(e.detail).split(' · ')[0]} on their phone` : isIntent(e) ? `another app on the phone, or a link, starts ${partName(e)}` : isAction(e) ? `someone sends a form, or presses a button, that runs the Server Action ${actionName(e)}` : ({page: `someone opens the page${e.detail ? ' ' + e.detail : ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
   main: 'the program starts', test: 'the tests run', script: `the script${e.detail ? ' ' + e.detail : ''} is run`})[e.kind] || `${e.kind}${e.detail ? ' ' + e.detail : ''}`;
+// What a sentence calls a function: its own short name, and a page whose only name is its file's (SvelteKit's `+page`, the same for every page) by its address
+const sayName = x => { const n = N[x] || {}, s = short(n.qualname); return n.entry && n.entry.kind === 'page' && n.entry.detail && s.startsWith('+') ? `the page ${n.entry.detail}` : s; };
+const calledBy = ids => { const who = [...new Set(ids.map(sayName))].slice(0, 3); return `It runs when ${who.length <= 1 ? who.join('') : who.slice(0, -1).join(', ') + ' and ' + who[who.length - 1]} call${who.length === 1 ? 's' : ''} it.`; };
 const extWords = id => { const n = String(id || '').replace(/^ext:/, ''); if (n.startsWith('HTTP ')) return n; const lib = n.split(/[./]/)[0]; return `the ${lib} library`; };
 // ---------- notes on the map (directive: user first, step 5) ----------
 // On Lantern Cloud the page around this report (same origin) offers window.lanternNotes: people who can open the
@@ -1571,8 +1574,8 @@ function mapRecord(n) {
       lens3: {text: `${extWords(n.id)} is used by ${andList(who.slice(0, 5)) || 'nothing the map found'}.`, pairs: callers.slice(0, 5).map(x => ({plain: short(N[x].qualname), technical: N[x].qualname, anchor: {type: 'symbol', id: x}}))}};
   }
   const params = sigParams(n.signature);
-  const runs = n.entry ? `It runs when ${entryPhrase(n.entry)}.` : served.length ? `It answers requests from ${andList(names(served.map(e => e.src)).slice(0, 3))} in the browser.`
-    : callers.length ? `It runs when ${andList(names(callers).slice(0, 3))} call${callers.length === 1 ? 's' : ''} it.` : 'Nothing in your code calls it directly: a framework may call it, or it may be unused.';
+  const runs = n.entry ? `It runs when ${entryPhrase(n.entry)}.` : served.length ? `It answers requests from ${andList(uniq(served.map(e => sayName(e.src))).slice(0, 3))} in the browser.`
+    : callers.length ? calledBy(callers) : 'Nothing in your code calls it directly: a framework may call it, or it may be unused.';
   const uses = callees.length ? `Along the way it uses ${andList(names(callees).slice(0, 4))}${callees.length > 4 ? ` and ${callees.length - 4} more of your functions` : ''}.` : '';
   const talks = http.length ? `It calls your backend: ${list(uniq(http.map(e => e.detail || e.dst.replace(/^ext:/, ''))), 3)}.` : exts.length ? `It relies on ${andList(uniq(exts.map(extWords)).slice(0, 3))}.` : '';
   const keeps = tables.length ? ` In your database it reads or changes ${andList(uniq(tables.map(tableWords)).slice(0, 3))}${tables.length > 3 ? ` and ${tables.length - 3} more` : ''}.` : '';
@@ -1589,7 +1592,7 @@ function mapRecord(n) {
     text: `This is “${plainWords(n.qualname)}”, a ${kindWord} running ${where}. ${runs} ${uses} ${talks}${keeps}${found}`.replace(/\s+/g, ' ').trim(),
     example: isScreen(n.entry) ? `Someone opens the ${String(n.entry.detail).split(' · ')[0]} on their phone, and ${PHONE_OS} runs this code.` : isIntent(n.entry) ? `Another app on the same phone (or a link) starts ${partName(n.entry)}, and this code runs with whatever data it passed in.`
       : n.entry && n.entry.kind === 'page' ? `Someone opens ${n.entry.detail || 'this page'} and this is what builds it.` : isAction(n.entry) ? `Someone sends a form (or presses a button) that runs the Server Action ${actionName(n.entry)}, and the server runs this code with what was sent. Anyone can also send that request by hand.` : n.entry && n.entry.kind === 'route' ? `A request to ${n.entry.detail || 'this route'} lands here, and this code decides what to answer.`
-      : served.length ? `Someone in the browser uses ${short(N[served[0].src].qualname)}, which sends a request this code answers.` : callers.length ? `${short(N[callers[0]].qualname)} needs “${plainWords(n.qualname)}” done and hands the job to this code.` : 'No example from the map: nothing in your code was seen calling it.',
+      : served.length ? `Someone in the browser uses ${sayName(served[0].src)}, which sends a request this code answers.` : callers.length ? `${sayName(callers[0]).replace(/^the page /, 'The page ')} needs “${plainWords(n.qualname)}” done and hands the job to this code.` : 'No example from the map: nothing in your code was seen calling it.',
     analogy: '',
   };
   const pairs = [], seen = new Set();
