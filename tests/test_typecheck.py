@@ -417,6 +417,179 @@ def test_a_guess_by_method_name_that_a_checker_confirms_is_no_longer_called_a_gu
     assert [e.via for e in g.edges if e.dst == SHOUT and e.kind == "calls"] == ["unique-method-name"]
 
 
+# A value's type names a method. Whether that method is the code that runs is another matter: a method that only
+# declares ("a subclass writes this") never is, and one a subclass replaces need not be.
+TYPED_APP = {
+    "app/__init__.py": "",
+    "app/shapes.py": (
+        "from abc import ABC, abstractmethod\n"
+        "from typing import Protocol\n"
+        "\n\n"
+        "class Theme(ABC):\n"
+        "    @abstractmethod\n"
+        "    def paint(self, text: str) -> str:\n"
+        "        \"\"\"What a theme does with a text.\"\"\"\n"
+        "\n"
+        "    def name(self) -> str:\n"
+        "        return 'theme'\n"
+        "\n"
+        "    def width(self) -> int:\n"
+        "        return 80\n"
+        "\n\n"
+        "class Dark(Theme):\n"
+        "    def paint(self, text: str) -> str:\n"
+        "        return 'dark ' + text\n"
+        "\n\n"
+        "class Light(Theme):\n"
+        "    def paint(self, text: str) -> str:\n"
+        "        return 'light ' + text\n"
+        "\n"
+        "    def name(self) -> str:\n"
+        "        return 'light'\n"
+        "\n\n"
+        "class Later(Light):\n"
+        "    def paint(self, text: str) -> str: ...\n"
+        "\n\n"
+        "class Message:\n"
+        "    def body(self) -> bytes:\n"
+        "        \"\"\"The bytes of the message.\"\"\"\n"
+        "        raise NotImplementedError()\n"
+        "\n\n"
+        "class Shown(Protocol):\n"
+        "    def show(self) -> str: ...\n"
+        "\n\n"
+        "class Card:\n"
+        "    def show(self) -> str:\n"
+        "        return 'card'\n"
+        "\n\n"
+        "def todo(text: str) -> str:\n"
+        "    raise NotImplementedError\n"),
+    "app/use.py": (
+        "from app.shapes import Message, Shown, Theme\n"
+        "\n\n"
+        "def run(themes: list[Theme], messages: list[Message], shown: list[Shown], cb=None):\n"
+        "    themes[0].paint('a')\n"
+        "    themes[0].name()\n"
+        "    themes[0].width()\n"
+        "    messages[0].body()\n"
+        "    shown[0].show()\n"
+        "    cb('a')\n"),
+}
+T_PAINT, T_NAME, T_WIDTH = "py:app.shapes.Theme.paint", "py:app.shapes.Theme.name", "py:app.shapes.Theme.width"
+DARK_PAINT, LIGHT_PAINT, LATER_PAINT = "py:app.shapes.Dark.paint", "py:app.shapes.Light.paint", "py:app.shapes.Later.paint"
+LIGHT_NAME, BODY, SHOW, TODO = "py:app.shapes.Light.name", "py:app.shapes.Message.body", "py:app.shapes.Shown.show", "py:app.shapes.todo"
+TYPED_SAYS = {
+    # only declared in the class the type names: the methods that replace it, each one possible, and not the
+    # placeholder itself nor a subclass's that is a placeholder again
+    "themes[0].paint": ("possible", [DARK_PAINT, LIGHT_PAINT]),
+    # written in the class the type names and replaced by a subclass: either may run
+    "themes[0].name": ("possible", [T_NAME, LIGHT_NAME]),
+    # written there and replaced by nobody
+    "themes[0].width": ("likely", [T_WIDTH]),
+}
+TYPED_LEFT = ("messages[0].body", "shown[0].show")      # only declared, and no class of the project writes it beneath
+
+
+def _typed_edges(g):
+    return sorted((e.dst, e.confidence) for e in g.edges if e.via == "typecheck" and e.kind == "calls")
+
+
+def test_a_method_that_only_declares_is_never_the_likely_one_and_what_replaces_it_is_possible(tmp_path, monkeypatch):
+    """Measured on five public Python projects: of 60 links through a value's type read by hand, 12 led to a
+    method that only declares (abstract, a body of `...`, `raise NotImplementedError`) and 1 to one that the
+    project's default subclass replaces. The checker is right about the type; the code that runs is beneath it."""
+    repo = _write(tmp_path, TYPED_APP)
+    before = build_graph(repo)
+    for callee in (*TYPED_SAYS, *TYPED_LEFT, "cb"):
+        assert _site(before, callee)["outcome"] == "unresolved", callee
+    _stand_in(monkeypatch, py={"themes[0].paint": _py(before, T_PAINT), "themes[0].name": _py(before, T_NAME),
+                               "themes[0].width": _py(before, T_WIDTH), "messages[0].body": _py(before, BODY),
+                               "shown[0].show": _py(before, SHOW), "cb": _py(before, TODO, direct=True)})
+    g = build_graph(repo, typecheck=True)
+    # the name written at the call names the function itself: it is what runs, whatever its body says
+    assert _by_checker(g) == TYPED_SAYS | {"cb": ("resolved", [TODO])}
+    assert _typed_edges(g) == sorted([(DARK_PAINT, "possible"), (LIGHT_PAINT, "possible"), (T_NAME, INFERRED),
+                                      (LIGHT_NAME, "possible"), (T_WIDTH, INFERRED), (TODO, RESOLVED)])
+    for callee in TYPED_LEFT:
+        was, now = _site(before, callee), _site(g, callee)
+        assert (now["outcome"], now["reason"], now["to"], now["via"]) == ("unresolved", was["reason"], [], was["via"])
+    part = g.meta["typecheck"]["python"]
+    assert (part["linked"], part["likely"], part["possible"], part["declared"], part["left"]) == (1, 1, 2, 2, 0), part
+    # one call is still one call, whatever number of functions it may lead to
+    was, now = before.meta["calls"]["written"], g.meta["calls"]["written"]
+    assert now["total"] == was["total"] and sum(now["outcomes"].values()) == now["total"]
+    assert now["outcomes"]["unresolved"] == was["outcomes"]["unresolved"] - 4
+    # the older count had counted one of these calls (the call on a parameter) and gives it up
+    assert (dict(before.unresolved), dict(g.unresolved)) == ({"cb": 1}, {})
+    # and the run says how many calls were given several possible functions, apart from the likely ones
+    assert "4 linked into the project (1 confirmed, 1 likely, 2 to one of several that may run)" in \
+        typecheck.line_words(g.meta["typecheck"])
+    assert ("4 were linked into the project on its word (1 confirmed, 1 likely, 2 to each function that may run "
+            "where the type's own method only declares or a class beneath it writes it anew)") in \
+        typecheck.limits(g.meta["typecheck"])[0]
+
+
+DECLARES = {
+    "abstract": "    @abstractmethod\n    def m(self):\n        return 1\n",
+    "abstract-by-its-module": "    @abc.abstractmethod\n    def m(self):\n        \"\"\"Doc.\"\"\"\n",
+    "three-dots": "    def m(self): ...\n",
+    "three-dots-after-words": "    def m(self):\n        \"\"\"Doc.\"\"\"\n        ...\n",
+    "not-implemented": "    def m(self):\n        raise NotImplementedError\n",
+    "not-implemented-called": "    async def m(self):\n        \"\"\"Doc.\"\"\"\n        raise NotImplementedError('write me')\n",
+    "one-of-several-signatures": "    @overload\n    def m(self): ...\n",
+    # Python's own reader cannot read it, so what it does is not known: no link is made on a guess
+    "not-read": "    def m(self):\n        print 'old'\n",
+}
+WRITTEN = {
+    "words-only": "    def m(self):\n        \"\"\"A hook that does nothing unless a subclass writes it.\"\"\"\n",
+    "pass": "    def m(self):\n        pass\n",
+    "returns": "    def m(self):\n        return None\n",
+    "another-error": "    def m(self):\n        raise ValueError('no')\n",
+    "dots-then-code": "    def m(self):\n        ...\n        return 1\n",
+    "not-implemented-on-one-way": "    def m(self):\n        if self.x:\n            raise NotImplementedError\n        return 1\n",
+    "another-decorator": "    @property_like\n    def m(self):\n        return 1\n",
+    "text-that-says-so": "    def m(self):\n        return '@abstractmethod ... raise NotImplementedError'\n",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(DECLARES) + sorted(WRITTEN))
+def test_which_methods_only_declare_is_read_from_their_own_lines(tmp_path, monkeypatch, shape):
+    body = (DECLARES | WRITTEN)[shape]
+    repo = _write(tmp_path, {"app/__init__.py": "",
+                             "app/kinds.py": "import abc\nfrom abc import abstractmethod\nfrom typing import overload\n"
+                                             "\n\nclass Kind:\n    x = 1\n\n" + body,
+                             "app/use.py": "from app.kinds import Kind\n\n\ndef run(kinds: list[Kind]):\n    kinds[0].m()\n"})
+    before = build_graph(repo)
+    assert _site(before, "kinds[0].m")["outcome"] == "unresolved"
+    _stand_in(monkeypatch, py={"kinds[0].m": _py(before, "py:app.kinds.Kind.m")})
+    g = build_graph(repo, typecheck=True)
+    if shape in WRITTEN:
+        assert _by_checker(g) == {"kinds[0].m": ("likely", ["py:app.kinds.Kind.m"])}
+    else:
+        assert _by_checker(g) == {} and _shape(g) == _shape(before)
+        assert g.meta["typecheck"]["python"]["declared"] == 1
+
+
+def test_a_method_replaced_in_more_classes_than_are_drawn_leaves_the_call_as_it_was(tmp_path, monkeypatch):
+    many = typecheck.MOST_REPLACING + 1
+    kinds = "class Kind:\n    def m(self):\n        return 0\n" + "".join(
+        f"\n\nclass K{i}(Kind):\n    def m(self):\n        return {i}\n" for i in range(many))
+    use = "from app.kinds import Kind\n\n\ndef run(kinds: list[Kind]):\n    kinds[0].m()\n"
+    repo = _write(tmp_path / "many", {"app/__init__.py": "", "app/kinds.py": kinds, "app/use.py": use})
+    before = build_graph(repo)
+    _stand_in(monkeypatch, py={"kinds[0].m": _py(before, "py:app.kinds.Kind.m")})
+    g = build_graph(repo, typecheck=True)
+    assert _by_checker(g) == {} and g.meta["typecheck"]["python"]["declared"] == 1
+    # the twin: one class fewer, and every one of them is drawn
+    fewer = kinds[:kinds.rindex("\n\nclass ")]
+    repo = _write(tmp_path / "fewer", {"app/__init__.py": "", "app/kinds.py": fewer, "app/use.py": use})
+    before = build_graph(repo)
+    _stand_in(monkeypatch, py={"kinds[0].m": _py(before, "py:app.kinds.Kind.m")})
+    g = build_graph(repo, typecheck=True)
+    outcome, to = _by_checker(g)["kinds[0].m"]
+    assert outcome == "possible" and len(to) == many and to[0] == "py:app.kinds.Kind.m"
+
+
 def test_a_checker_that_cannot_be_asked_changes_nothing_and_the_run_says_why(tmp_path, monkeypatch):
     repo = _write(tmp_path, TS_APP | PY_APP)
     before = build_graph(repo)
@@ -433,7 +606,7 @@ def test_a_checker_that_cannot_be_asked_changes_nothing_and_the_run_says_why(tmp
     assert [x for x in _shape(g)["sites"] if ".ts:" in x[0]] == [x for x in _shape(before)["sites"] if ".ts:" in x[0]]
     words = typecheck.line_words(g.meta["typecheck"])
     assert "the TypeScript compiler not asked: the TypeScript compiler ended with an error (result 3)" in words
-    assert "pyright 8.8.8: " in words and "1 linked into the project (1 confirmed, 0 likely)" in words
+    assert "pyright 8.8.8: " in words and "1 linked into the project (1 confirmed, 0 likely, 0 to one of several that may run)" in words
     # a checker this computer does not have: said, with how many calls were not asked, and nothing started
     missing = json.loads(json.dumps(TOOLS))
     missing["pyright"], missing["notes"]["python"] = None, "pyright was not found on this computer (somewhere)"
@@ -1227,3 +1400,19 @@ def test_what_a_typed_librarys_hook_hands_back_is_followed_into_the_project_and_
     twin = build_graph(_write(tmp_path / "twin", {k: v for k, v in HOOK_LIB.items() if not k.startswith("node_modules/")}),
                        typecheck=True)
     assert _by_checker(twin) == {} and twin.meta["typecheck"]["typescript"]["left"] == 2
+
+
+@needs_checkers
+def test_pyright_names_the_declared_method_and_lantern_draws_what_may_run(tmp_path, real):
+    """The same project with the real pyright: it names `Theme.paint` for `themes[0].paint('a')`, which is right
+    about the type and is not the code that runs."""
+    real("python")
+    repo = _write(tmp_path / "p", TYPED_APP)
+    before = build_graph(repo)
+    g = build_graph(repo, typecheck=True)
+    assert _by_checker(g) == TYPED_SAYS
+    for callee in (*TYPED_LEFT, "cb"):
+        assert (_site(g, callee)["outcome"], _site(g, callee)["reason"]) == ("unresolved", _site(before, callee)["reason"])
+    part = g.meta["typecheck"]["python"]
+    assert (part["likely"], part["possible"], part["declared"]) == (1, 2, 3), part       # `cb` is a parameter: declared
+    _same_counts(before, g)

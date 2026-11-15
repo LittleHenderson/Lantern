@@ -7,7 +7,8 @@ answers becomes
 
 * a link into the project (`via: "typecheck"`): `resolved` where the name written at the call names the function
   itself, `inferred` ("likely") where the function is reached through a value's type, as for Lantern's own links
-  through a written type (a type names a class's function; a subclass may replace it);
+  through a written type; in Python, where that type's method only declares or a class beneath its own writes it
+  anew, each function that may run is `possible` and none is called likely (`_Beneath`);
 * a built-in or a library call (the function is declared by the language or a library), never where Lantern's own
   reading withheld that label because the function may be the project's (`library-or-repo`);
 * nothing: the call stays unresolved, with the reason it had.
@@ -38,6 +39,7 @@ the map, a name that is none is no answer. Nothing here creates, closes or re-ra
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -52,8 +54,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from . import calls
-from .graph import CALLABLE, CALLS, CLASS, INFERRED, MODULE, RESOLVED
-from .python_frontend import project_bytes
+from .graph import CALLABLE, CALLS, CLASS, IMPLEMENTS, INFERRED, MODULE, POSSIBLE, RESOLVED
+from .python_frontend import project_bytes, project_text
 
 ENV = "LANTERN_TYPECHECK"
 VIA = "typecheck"
@@ -76,7 +78,9 @@ DEF = re.compile(r"\s*(?:async\s+)?(def|class)\s+([^\W\d]\w*)")
 LAST_NAME = re.compile(r"([^\W\d]\w*)\Z")
 IMPLEMENTED = ("FunctionDeclaration", "FunctionExpression", "ArrowFunction", "MethodDeclaration", "GetAccessor",
                "SetAccessor")
-COUNTS = ("linked", "likely", "builtin", "library", "declared", "left")
+COUNTS = ("linked", "likely", "possible", "builtin", "library", "declared", "left")
+MOST_REPLACING = 24                     # classes beneath a method's own that write it anew: more are not drawn
+DECLARING = ("abstractmethod", "overload")      # decorators under which a method only declares
 ON = ("1", "true", "yes", "on")
 
 
@@ -658,10 +662,10 @@ def _less(counts: dict, key: str) -> None:
         counts.pop(key, None)
 
 
-def _settle(g, s: dict, target: str, confidence: str) -> None:
-    """The record of the call says where it goes now, and the older count gives the call up: one call, counted
-    once, before and after."""
-    outcome, to, _via, conf = calls.classify([(target, confidence, VIA)])
+def _settle(g, s: dict, *goes: tuple[str, str]) -> str:
+    """The record of the call says where it goes now (`goes`: each target with its confidence), and the older
+    count gives the call up: one call, counted once, before and after. -> the call's outcome."""
+    outcome, to, _via, conf = calls.classify([(target, confidence, VIA) for target, confidence in goes])
     s.update({"outcome": outcome, "to": to, "via": VIA, "confidence": conf, "reason": None, "why": None})
     was = g.unresolved_at.pop(s["at"], None)
     if was:
@@ -670,6 +674,87 @@ def _settle(g, s: dict, target: str, confidence: str) -> None:
             _less(g.unresolved_tests, was[0])
         if outcome == "builtin":
             g.builtin_calls += 1
+    return outcome
+
+
+def _words(st) -> bool:
+    return isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and isinstance(st.value.value, str)
+
+
+def _placeholder(st) -> bool:
+    """`...`, or `raise NotImplementedError` (called or not): a line that stands where code is to be written."""
+    if isinstance(st, ast.Expr):
+        return isinstance(st.value, ast.Constant) and st.value.value is Ellipsis
+    if isinstance(st, ast.Raise) and st.exc is not None:
+        what = st.exc.func if isinstance(st.exc, ast.Call) else st.exc
+        return isinstance(what, ast.Name) and what.id == "NotImplementedError"
+    return False
+
+
+class _Beneath:
+    """A type names a class's method. The code that runs is the method of the class the value has, which no type
+    says: a method that only declares (`DECLARING`, or a body that is a placeholder) is never that code, and one
+    that a class beneath its own writes anew need not be. Measured on five public Python projects (2026-11-15):
+    of 60 links through a value's type read by hand, 12 led to a method that only declares and 1 to one that the
+    project's default subclass replaces. So such a method is not linked as the likely one: the methods that
+    replace it are each `possible`, as for Lantern's own `self.method()` (`via: "override"`), and with it where it
+    has code of its own. Python only: the map keeps no class's base for JavaScript."""
+
+    def __init__(self, g, root: Path):
+        self.g, self.root, self.files, self.subs = g, root, {}, {}
+        for e in g.edges:
+            if e.kind == IMPLEMENTS:
+                self.subs.setdefault(e.dst, []).append(e.src)
+
+    def method(self, target: str) -> bool:
+        cls = self.g.nodes.get(target.rpartition(".")[0])
+        return cls is not None and cls.kind == CLASS
+
+    def _functions(self, rel: str) -> dict:
+        """{a line a function begins on (its `def`, each of its decorators): the function} for one file, read by
+        Python's own parser (nothing of the file is run); empty where the file cannot be read that way."""
+        if rel not in self.files:
+            found: dict = {}
+            try:
+                tree = ast.parse(project_text(self.root / rel, self.root, MOST_FILE))
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        found[node.lineno] = node
+                        for d in node.decorator_list:
+                            found.setdefault(d.lineno, node)
+            except (OSError, SyntaxError, ValueError, RecursionError, MemoryError):
+                found = {}
+            self.files[rel] = found
+        return self.files[rel]
+
+    def only_declares(self, target: str) -> bool:
+        """Also true where the method's lines cannot be read: what a method does is then not known, and no link
+        is made on a guess."""
+        n = self.g.nodes[target]
+        fn = self._functions(n.file).get(n.start_line) if n.file else None
+        if fn is None or fn.name != target.rpartition(".")[2]:
+            return True
+        for d in fn.decorator_list:
+            if (d.attr if isinstance(d, ast.Attribute) else getattr(d, "id", None)) in DECLARING:
+                return True
+        body = fn.body[1:] if _words(fn.body[0]) else fn.body
+        return bool(body) and all(_placeholder(st) for st in body)
+
+    def may_run(self, target: str) -> list[str]:
+        """The functions a call may run that a type says is `target`: the method itself where it has code, then
+        the ones that replace it in the classes beneath, by name. Empty where it only declares and nothing of the
+        project replaces it, and where more replace it than are drawn (`MOST_REPLACING`)."""
+        cls, _, name = target.rpartition(".")
+        seen, todo = set(), [cls]
+        while todo:
+            for sub in self.subs.get(todo.pop(), ()):
+                if sub not in seen:
+                    seen.add(sub)
+                    todo.append(sub)
+        over = sorted(m for m in (f"{c}.{name}" for c in seen) if m in self.g.nodes and self.g.nodes[m].kind == CALLABLE)
+        if len(over) > MOST_REPLACING:
+            return []
+        return [m for m in [target, *over] if not self.only_declares(m)]
 
 
 def _places(g, prefix: str) -> dict:
@@ -711,15 +796,16 @@ def _py_node(g, index: dict, a: dict) -> str | None:
     return made.id if made is not None and made.kind == CALLABLE else None
 
 
-def _apply(g, lang: str, sites: list[dict], answers: list) -> dict:
+def _apply(g, root: Path, lang: str, sites: list[dict], answers: list) -> dict:
     index = _places(g, "js:" if lang == "typescript" else "py:")
+    beneath = _Beneath(g, root) if lang == "python" else None
     count = dict.fromkeys(COUNTS, 0)
     for s, a in zip(sites, answers):
-        count[_use(g, lang, index, s, a)] += 1
+        count[_use(g, lang, index, s, a, beneath)] += 1
     return count
 
 
-def _use(g, lang: str, index: dict, s: dict, a) -> str:
+def _use(g, lang: str, index: dict, s: dict, a, beneath=None) -> str:
     if not isinstance(a, dict) or s["outcome"] != "unresolved" or s["caller"] not in g.nodes:
         return "left"
     where, name = a.get("where"), a.get("name")
@@ -730,21 +816,27 @@ def _use(g, lang: str, index: dict, s: dict, a) -> str:
         if target is None:
             return "declared"
         conf = RESOLVED if a.get("direct") is True else INFERRED
-        e = g.add_edge(s["caller"], target, kind=CALLS, confidence=conf, line=s["line"], via=VIA)
-        if e.via in calls.NAME_ONLY_VIA:      # the same link was a guess by method name: now a checker says so too
-            e.via = VIA
-        _settle(g, s, target, conf)
-        return "linked" if conf == RESOLVED else "likely"
+        goes = [(target, conf)]
+        if conf == INFERRED and beneath is not None and beneath.method(target):     # a type's word for a method
+            goes = [(t, INFERRED if t == target else POSSIBLE) for t in beneath.may_run(target)]
+            if not goes:
+                return "declared"
+        for t, c in goes:
+            e = g.add_edge(s["caller"], t, kind=CALLS, confidence=c, line=s["line"], via=VIA)
+            if e.via in calls.NAME_ONLY_VIA:      # the same link was a guess by method name: now a checker says so too
+                e.via = VIA
+        outcome = _settle(g, s, *goes)
+        return "linked" if outcome == "resolved" else "possible" if outcome == "possible" else "likely"
     if where not in ("builtin", "library") or not isinstance(name, str) or not NAME.match(name) or \
             s["reason"] == "library-or-repo":      # Lantern's own reading withheld a library label here: it stands
         return "left"
     if where == "builtin":
-        _settle(g, s, ("builtin:" if lang == "typescript" else "ext:builtins.") + name, INFERRED)
+        _settle(g, s, (("builtin:" if lang == "typescript" else "ext:builtins.") + name, INFERRED))
         return "builtin"
     g.external(name)
     if not (lang == "typescript" and name.startswith("react")):     # as the JS/TS reader: React's own hooks are not drawn
         g.add_edge(s["caller"], f"ext:{name}", kind=CALLS, confidence=INFERRED, line=s["line"], via=VIA)
-    _settle(g, s, f"ext:{name}", INFERRED)
+    _settle(g, s, (f"ext:{name}", INFERRED))
     return "library"
 
 
@@ -756,7 +848,7 @@ def _part(g, root: Path, tools: dict, lang: str, sites: list[dict], ask) -> dict
     began = time.perf_counter()
     try:
         got = ask(tools, root, g, sites[:MOST_SITES], seconds())
-        count = _apply(g, lang, sites[:MOST_SITES], got["answers"])
+        count = _apply(g, root, lang, sites[:MOST_SITES], got["answers"])
     except Failed as e:
         return {"ran": False, "why": str(e), "asked": 0, "unresolved": len(sites)}
     return {"ran": True, "version": got["version"], "asked": min(len(sites), MOST_SITES), **count,
@@ -821,11 +913,13 @@ def limits(meta) -> list[str]:
     for lang, _tool, words, part, version in _parts(meta):
         kind = "JavaScript and TypeScript" if lang == "typescript" else "Python"
         if part.get("ran") is True:
-            linked, likely = _whole(part.get("linked")), _whole(part.get("likely"))
+            linked, likely, several = (_whole(part.get(k)) for k in ("linked", "likely", "possible"))
             line = (f"Links from a type checker. {words[0].upper() + words[1:]} {version or 'of a version it did not tell'} "
                     f"on this computer was asked where {_whole(part.get('asked'))} {kind} calls go that Lantern's own "
-                    f"reading left unresolved (--typecheck): {linked + likely} were linked into the project on its word "
-                    f"({linked} confirmed, {likely} likely) and {_whole(part.get('builtin')) + _whole(part.get('library'))} "
+                    f"reading left unresolved (--typecheck): {linked + likely + several} were linked into the project on its word "
+                    f"({linked} confirmed, {likely} likely, {several} to each function that may run where the type's "
+                    "own method only declares or a class beneath it writes it anew) and "
+                    f"{_whole(part.get('builtin')) + _whole(part.get('library'))} "
                     "placed in the language or a library. Such a link is as right as the types written in the code, and "
                     "`lantern verify` repeats it only with --typecheck and the same checker.")
             if part.get("stopped"):
@@ -855,8 +949,9 @@ def line_words(meta) -> str | None:
         part = meta.get(lang) if isinstance(meta.get(lang), dict) else {}
         if part.get("ran"):
             said.append(f"{tool} {part.get('version')}: {part.get('asked')} unresolved calls asked, "
-                        f"{part.get('linked', 0) + part.get('likely', 0)} linked into the project "
-                        f"({part.get('linked', 0)} confirmed, {part.get('likely', 0)} likely), "
+                        f"{part.get('linked', 0) + part.get('likely', 0) + part.get('possible', 0)} linked into the "
+                        f"project ({part.get('linked', 0)} confirmed, {part.get('likely', 0)} likely, "
+                        f"{part.get('possible', 0)} to one of several that may run), "
                         f"{part.get('builtin', 0)} built-in, {part.get('library', 0)} library, "
                         f"{part.get('declared', 0) + part.get('left', 0)} still unresolved"
                         + (", stopped at its time limit" if part.get("stopped") else ""))
