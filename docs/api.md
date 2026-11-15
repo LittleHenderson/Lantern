@@ -168,8 +168,16 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   `lines`, `via` (how it was resolved; `http-*` for a frontend→backend hop), `detail` (`PUT /api/items/{id}` on an
   HTTP edge, `onClick` on a UI edge).
 * Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.name>`; external `ext:<pkg.member>`
-  or `ext:HTTP <METHOD> <path>`.
-* `meta`: `files`, `lines`, `languages`, `bridge` (link counts), `http_calls`, `packs` (`{added, ambiguous, unresolved, packs}`),
+  or `ext:HTTP <METHOD> <path>`. A database table is `db:<table>`, or `db:<schema>.<table>` for a schema other than
+  `public` (since 2026-11-14, roadmap stage 1): `kind` `external`, `lane` `data`, `name` the table's name. One edge
+  runs from each function to each table it touches: `kind` `calls`, `detail` what the function does there in a
+  fixed order (`select, update cards`), `lines` every line it does so on, and `via` `supabase-from` (`inferred`:
+  the client is one by where its value came from) or `supabase-name` (`possible`: it is only named like one); a
+  function with a call of each kind gets the likely link. A table is never an entry point, and its name is no
+  called function's name for a rule that reads those (the login check). `graph.outside(id)` is true for `ext:` and
+  `db:` alike.
+* `meta`: `files`, `lines`, `languages`, `bridge` (link counts; with table calls also `db_calls` and `tables`),
+  `http_calls`, `db_calls` and `js_directives` (both below), `packs` (`{added, ambiguous, unresolved, packs}`),
   `lanes` (`{browser, frontend, server, data}` node counts), `calls` (the summary of `calls.json`, below),
   `too_deep` (since 2026-11-13, only when a reader left something: `{pieces: n, files: [path, …],
   where: [{file, line, reader}, …], readers: [reader, …]}`. A reader goes through code by calling itself once per
@@ -185,6 +193,25 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   seconds it gets for one file (`deep.PARSE_SECONDS`; the first 40 by name). Such a file is on the map as a file and
   nothing written in it is; the log's `deep` line and the Limits say so. Only the Dart reader's parser has such a
   limit so far).
+* `meta.db_calls` (since 2026-11-14, roadmap stage 1; only when the project has one): the calls into database
+  tables the JS/TS reader wrote down, one row per call written `<client>.from("<table>").<op>(…)` with `<op>` one of
+  `select`, `insert`, `update`, `upsert`, `delete`: `{"src"` (the function the call is written in), `"table",
+  "schema"` (null for `public`, also when written `.schema("public")`), `"op", "id"` (`db:<table>`), `"confidence"`
+  (`inferred`|`possible`), `"via"` (`supabase-from`|`supabase-name`), `"file", "line", "ui"}`. The client is one by
+  where its value came from (`supabase-from`: what `createClient` and its like of an `@supabase/…` package gave
+  back, a `useSupabaseClient()` result or a value typed `SupabaseClient`, followed through the names of the file,
+  a value another file of the project exports and a function of the project whose every `return` is a client) or
+  by its name alone (`supabase-name`: a receiver called `supabase`, `supabaseClient` or `supabaseAdmin`, also as
+  `this.<name>`, whose value Lantern cannot follow; not a name that is given another value, is a function or is an
+  import of something else, and not a value Lantern knows to be another thing). The table's name is the text
+  written in the call or a constant of the file that holds one; any other name makes no row.
+  `bridge.link_tables` turns the rows into the `db:` nodes and their edges.
+* `meta.js_directives` (the same date; only when a file has one): `{file: ["use client"]}`, `["use server"]` or
+  both, the directives a JS/TS file begins with. `lantern/clientside.py` reads them where it says which functions
+  run on the visitor's side (`where(g)` → `{node id: {"on": "the browser"|"the phone", "why"}}`: the file begins
+  with `"use client"`, it is part of a phone app, the project has no framework that renders pages on a server, it
+  is a page of Next.js's `pages/` folder, or such code calls it; never a route, a file in a server folder or a
+  file that begins with `"use server"`). It is worked out when a rule asks and is in no result file.
 * JavaScript `via` values added in stage 3 (2026-11-09): `require-call` (`require('./x')(...)`), `route-handler` and
   `middleware` (a function handed to an Express router by name: resolved when it is named straight from a module,
   inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),
@@ -500,6 +527,21 @@ non-security hash or SQL splicing only fixed text → `low`, a hash of unknown p
 (`server-checks-it`|`server-reads-it`|`not-seen-on-server`|`no-server-code`), `server_checks`, `server_reads`, `routes`,
 `other_controls` `[{route, login_check, why}]`, `conditions` (settings the checking code branches on), `stranger_access`
 (always `not determined`), `unknown` [plain sentences]; never changes the rank),
+`row_rules` (`LW-NO-RLS` only, since 2026-11-14, `websec.row_rules`: what the project's SQL files, replayed in the
+order they are applied (`lantern/rowrules.py`), leave open on one table: `{"table"` (`<schema>.<name>`), `"state"`:
+`off` (the files create the table and never switch row-level security on), `off-in-the-files` (the same, and code
+that runs in the database names row-level security, which Lantern does not run: a guess, `tool_confidence: LOW`),
+`open-write` or `open-read` (row-level security is on and a policy lets every one of its roles through with a
+condition that is always true); for the last two `"policy"`, `"lets"` (`insert`, `update`, `delete`, or `select`)
+and `"for"` (`everyone`|`signed-in`); `"client"`: the functions on the visitor's side that reach the table through
+the map's `db:` links, `[{"node", "does": [ops], "file", "line", "on", "why"}]`, empty when Lantern found none,
+which is not proof that none does}`. The rank is the rule's own (`fixed_rank`, with `fixed_why`): a table with
+row-level security off is `high`, and `critical` where `client` is not empty; `off-in-the-files` `medium`; a
+policy that lets everyone change or remove any row `high`, `critical` where `client` is not empty; one that lets
+any signed-in user do so `high`; one that only lets rows be added, or lets every row be read, `medium`. A policy
+for the server's own roles (`service_role` and its like), one that asks who is calling, one a restrictive policy
+narrows, and a table the files do not create make no finding. `pin` is the table's `db:` node when the map has
+it; the finding's id is the one the older rule gave the same line),
 `case` (every finding outside test code, `case.py`, version 1: `where` `{file, line, function, revision, revision_note?}` (revision = the analyzed folder's git commit, `null` outside git; `revision_note` when the folder has uncommitted changes, or the header's `note` when git could not compare the files), `claim` (the tool's words, never stronger than the evidence), `evidence` `[{fact, from}]` (`from`: the tool, `map`, `input check`, `context (names)`/`context (code)`), `conditions` `[{need, met, why}]` (what has to be true for harm; `met` true = Lantern saw it, false = saw it is not, null = cannot check), `impact` (the scenario's harm), `severity` `{rank, tool_severity, why, before_context?, context_note?}`, `confidence` `{level: high|medium|low|unknown, why, about}` (the tool's own confidence, one step lower when the path has a `likely`/`possible` link; about the pattern being there and reached, never about exploitability), `unknown` [plain sentences], `status` `[{word, done, why}]` for `reported`, `reproduced` (the id was in this folder's previous `security.json` or `baseline.json`; null on a first run), `fixed` (false while listed), `tested` and `independently reviewed` (always null: Lantern keeps no such record; an accepted risk is a review by the builder, not an independent one)),
 `status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted; with `"how": "nosec"`, and `by`
 and `date` null, when the acceptance is a `# nosec` comment with a written reason on the line),
