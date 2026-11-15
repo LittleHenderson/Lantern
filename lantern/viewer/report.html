@@ -521,6 +521,8 @@ input.search::placeholder{color:var(--faint)}
 .lenses button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1), 0 0 0 1px var(--line)}
 .lens{border-radius:12px;padding:14px 16px;font-size:13.5px;line-height:1.6;color:var(--ink);border:1px solid}
 .lens.l1{background:var(--l1s);border-color:var(--l1)} .lens.l2{background:var(--l2s);border-color:var(--l2)} .lens.l3{background:var(--l3s);border-color:var(--l3)} .lens.l4{background:var(--l4s);border-color:var(--l4)}
+/* Why? (directive: user first): Simple keeps the detail one tap away instead of on the page. */
+.why{margin-top:10px} .why>summary{display:inline-flex;align-items:center;gap:6px;cursor:pointer;list-style:none;font-size:12.5px;font-weight:600;color:var(--muted);padding:3px 10px;border-radius:99px;border:1px solid var(--line)} .why>summary::-webkit-details-marker{display:none} .why>summary:hover{color:var(--ink)} .why[open]>summary{color:var(--ink);background:var(--hover)} .why>.whybody{margin-top:8px}
 .scen ol{margin:6px 0 0;padding-left:20px} .scen li{margin:3px 0} .scen .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:block;margin-top:10px} .scenbox{margin-top:10px} .scenbox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .scenbox .lens{margin-top:8px} .casebox summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ink-2)} .casebox ul,.casebox ol{margin:4px 0 6px;padding-left:20px} .casebox li{margin:2px 0} .casebox .note>div{margin-top:6px}
 .scen .basis{font-size:12px;color:var(--muted);margin-top:10px}
 .lens dl{margin:6px 0 0} .lens dt{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-top:10px} .lens dd{margin:2px 0 0;color:var(--ink-2)}
@@ -810,7 +812,12 @@ try { const lv = window.LANTERN_LIVE; if (lv && (lv.view_mode === 'simple' || lv
 const PHONE = matchMedia('(max-width:760px)');
 if (PHONE.matches) S.simple = true;
 try { S.view = ['lanes', 'tree', 'chart', 'graph'].includes(localStorage.getItem('lantern.view')) ? localStorage.getItem('lantern.view') : (S.simple ? 'lanes' : 'graph') /* design: Simple opens on Lanes (11b), Advanced on the graph (3c) */; S.lrail = localStorage.getItem('lantern.lrail') === '1'; S.rrail = localStorage.getItem('lantern.rrail') === '1'; } catch (e) {}
-try { S.lens = [1, 2, 3, 4].includes(+localStorage.getItem('lantern.lens')) ? +localStorage.getItem('lantern.lens') : 1; } catch (e) {}
+try { S.lens = [1, 2, 3, 4].includes(+localStorage.getItem('lantern.lens')) ? +localStorage.getItem('lantern.lens') : (S.simple ? 2 : 1); } catch (e) {}
+// Simple's own words for the lenses and its order (Everyday first), used by the function panel and Explanations.
+const lensWord = l => ({1: 'Technical', 2: 'Everyday', 3: S.simple ? 'Where it sits' : 'Mapped', 4: 'Scenario'})[l];
+const lensOrder = () => S.simple ? [2, 1, 3, 4] : [1, 2, 3, 4];
+// A small Why? button: in Simple the detail behind a sentence opens in place, on demand. In Advanced it is shown as is.
+const why = (inner, label = 'Why?', open = false) => !inner ? '' : S.simple ? `<details class="why"${open ? ' open' : ''}><summary>${esc(label)}</summary><div class="whybody">${inner}</div></details>` : inner;
 // Icons and the status tone of a 0-100 value: fixed markup and fixed words, never data.
 const ICONS = {
   search: '<circle cx="9" cy="9" r="5.5"/><path d="m13 13 3.5 3.5"/>', chev: '<path d="m7.5 4.5 5.5 5.5-5.5 5.5"/>',
@@ -920,10 +927,10 @@ function renderLeft() {
   if (q) {
     const hits = G.nodes.filter(n => n.kind === 'callable' && n.qualname.toLowerCase().includes(q)).slice(0, 60);
     html += `<div class="group"><h4>Matches <span>${hits.length}</span></h4>` + hits.map(n =>
-      `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t"><span class="layer ${layer(n.id)}"></span><span class="x">${esc(short(n.qualname))}</span></span><span class="d">${esc(n.file)}:${esc(n.start_line)}</span></button>`).join('') + '</div>';
+      `<button class="ep ${S.entry === n.id ? 'on' : ''}" data-id="${esc(n.id)}"><span class="t"><span class="layer ${layer(n.id)}"></span><span class="x">${esc(short(n.qualname))}</span></span><span class="d">${esc(n.file)}${S.simple ? '' : ':' + esc(n.start_line)}</span></button>`).join('') + '</div>';
   } else {
     if (!eps.length) html += '<div class="empty">No entry points detected. Use search to start from any function.</div>';
-    for (const k of ['page', 'route', 'main', 'cli', 'script', 'test']) {
+    for (const k of S.simple ? ['page', 'route', 'main', 'cli', 'script'] : ['page', 'route', 'main', 'cli', 'script', 'test']) {   // tests never count toward the grade: Advanced lists them
       const list = groups[k]; if (!list) continue;
       list.sort((a, b) => (a.entry.detail || '').localeCompare(b.entry.detail || ''));
       html += `<div class="group"><h4>${ENTRY_LABEL[k]} <span>${list.length}</span></h4>` + list.slice(0, 300).map(n =>
@@ -1543,7 +1550,7 @@ function renderExplanations() {
         <div class="note" style="margin-top:14px">Explanations are written by <b>${esc(LIVE && LIVE.model ? LIVE.model + (LIVE.local ? ' on this computer' : '') : (r ? r.model : 'the model you choose in Settings'))}</b>. ${LIVE && LIVE.local ? 'Nothing left your machine, and a' : 'A'} model only explains: it never creates, closes or accepts a finding.</div></div>`
     : `<div class="xside"><input class="search" id="xq" placeholder="Filter" value="${esc(S.xq)}" spellcheck="false" autocomplete="off">
         <div class="filters" style="margin:8px 0 10px">${[['all', `All ${fns.length}`], ['explained', `Explained ${explained.length}`], ['findings', `Findings ${withF.length}`]].map(([k, l]) => `<button class="fchip ${S.xf === k ? 'on' : ''}" data-xf="${k}">${l}</button>`).join('')}</div>${list.map(row).join('')}</div>`;
-  const lensTabs = (order) => `<div class="lenses">${order.map(l => `<button data-l="${l}" class="${S.lens === l ? 'on' : ''}"><i></i>${{1: 'Technical', 2: 'Everyday', 3: S.simple ? 'Where it sits' : 'Mapped', 4: 'Scenario'}[l]}</button>`).join('')}</div>`;
+  const lensTabs = (order) => `<div class="lenses">${order.map(l => `<button data-l="${l}" class="${S.lens === l ? 'on' : ''}"><i></i>${lensWord(l)}</button>`).join('')}</div>`;
   const chips = r ? anchorChips(r) : [];
   const path = (() => { const f = n && SEC.findings.find(x => x.node === n.id && (x.ui_path || x.reachable)); return f ? chainHtml('', f.ui_path || f.reachable.path) : ''; })();
   const fs = n ? FIND_BY_NODE[n.id] || [] : [];
@@ -1660,6 +1667,8 @@ function recheckBanner() {
 const ART = '<svg class="art" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="35" r="24" fill="#FFB547" opacity=".14"/><path d="M26 13h12M25 51h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M22 19h20l-2.5 27h-15z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M32 25.5c3.2 3.6 4.8 6.3 4.8 8.8a4.8 4.8 0 0 1-9.6 0c0-2.5 1.6-5.2 4.8-8.8z" fill="#FFB547"/></svg>';
 function renderMap() {
   const el = document.getElementById('center');
+  // Simple offers Lanes and Path; Flowchart and Graph are Advanced views (the saved choice is kept for Advanced).
+  if (S.simple && S.view !== 'lanes' && S.view !== 'tree') S.view = 'lanes';
   el.classList.toggle('dotted', S.view === 'graph' || S.view === 'chart');
   el.classList.toggle('gfull', (S.view === 'graph' || S.view === 'chart') && !!S.entry);
   if (S.view !== 'graph' && S.view !== 'chart' && document.body.classList.contains('gmax')) setGraphMax(false);
@@ -1674,7 +1683,7 @@ function renderMap() {
   else if (n.entry && n.entry.kind === 'script') title = esc(n.entry.detail);
   const lanesHead = (() => { if (S.view !== 'lanes') return ''; const ls = LANES.filter(l => entryLanes(n.id).has(l)); const eps = G.nodes.filter(x => x.entry && x.entry.kind !== 'test'); const k = eps.findIndex(x => x.id === n.id); return `<div class="lanehead"><span class="eyebrow">${k >= 0 ? `Path ${k + 1} of ${eps.length} · ` : ''}${ls.length > 1 ? `starts in the ${LANE_WORD[ls[0]]}, ends in ${LANE_WORD[ls[ls.length - 1]]}` : ls.length ? `stays on the ${LANE_WORD[ls[0]]}` : 'not placed in the stack'}</span>${(() => { const w = SEC.findings.filter(f => f.status !== 'accepted' && ((f.ui_path && f.ui_path[0] === n.id) || (f.reachable && f.reachable.entry === n.id))).sort((a, b) => RANK[a.rank] - RANK[b.rank])[0]; return w ? `<div class="lanegoal"><span class="badge ${cls(w.rank, RANKS)}"><i></i>${esc(w.rank)}</span> Where this path goes wrong: <b>${esc(w.headline || w.title)}</b></div>` : ''; })()}</div>`; })();
   el.innerHTML = `${crumbsHtml(n)}${lanesHead}<div class="toolbar"><h2>${title}</h2>
-    <div class="seg"><button data-v="lanes" class="${S.view === 'lanes' ? 'on' : ''}" title="One lane per stop of the stack">Lanes</button><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button><button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button><button data-v="graph" class="${S.view === 'graph' ? 'on' : ''}">Graph</button></div>
+    <div class="seg"><button data-v="lanes" class="${S.view === 'lanes' ? 'on' : ''}" title="One lane per stop of the stack">Lanes</button><button data-v="tree" class="${S.view === 'tree' ? 'on' : ''}">Path</button>${S.simple ? '' : `<button data-v="chart" class="${S.view === 'chart' ? 'on' : ''}">Flowchart</button><button data-v="graph" class="${S.view === 'graph' ? 'on' : ''}">Graph</button>`}</div>
     ${S.view === 'graph' ? `<div class="seg gmode" title="What the colours mean"><button data-m="risk" class="${S.mode === 'risk' ? 'on' : ''}">Risk</button><button data-m="confidence" class="${S.mode === 'confidence' ? 'on' : ''}">Confidence</button><button data-m="fanin" class="${S.mode === 'fanin' ? 'on' : ''}">Fan-in</button></div>` : `<button class="btn" id="expand">${icon('expand')}Expand all</button>`}${helpBtns()}</div>
     ${S.view === 'graph' || S.view === 'lanes' ? '' : `<div class="legend">${LANGS['typescript/javascript'] ? '<span><i class="layer frontend"></i>frontend</span><span><i class="layer backend"></i>backend</span>' : ''}<span><i class="ln observed"></i>seen running</span><span><i class="ln"></i>confirmed</span><span><i class="ln inferred"></i>likely</span><span><i class="ln possible"></i>possible</span></div>`}
     ${S.view === 'tree' ? renderTree() : S.view === 'chart' ? renderChart() : S.view === 'lanes' ? renderLanes() : renderGraph()}`;
@@ -1915,16 +1924,34 @@ function findingCard(f) {
   const where = `<code>${esc(f.file)}${f.line ? ':' + esc(f.line) : ''}</code>${f.node && N[f.node] ? ' in <code>' + esc(short(N[f.node].qualname)) + '</code>' : ''}`;
   const reach = f.ui_path ? ` Reached from the <b>${esc(entryOf(f))}</b> page in ${esc(WORDS[hops(f)] || hops(f))} hop${hops(f) === 1 ? '' : 's'}${seenHops(f) ? `; ${esc(WORDS[seenHops(f)] || seenHops(f))} of them seen running under the test suite` : ''}.` : f.reachable ? ` Reachable from ${esc(f.reachable.kind)} <b>${esc(entryOf(f))}</b>.` : '';
   const input = f.input ? ` Uses outside input: ${esc(f.input.via)}.` : f.input === false ? ' Reachable, but no parameter or request data reaches this line inside this function, so it is not ranked critical.' : '';
-  return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE\u2011' + esc(f.cwe) : ''}</span>${heur}${accepted}<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span></div>
+  const ruleLine = `<span class="rule">${esc(f.tool)} · ${esc(f.rule)}${f.cwe ? ' · CWE\u2011' + esc(f.cwe) : ''}</span>`;
+  const fid = `<span class="fid" title="Finding id, for lantern accept">${esc(f.id)}</span>`;
+  const plain = ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : '';
+  const scen = findingScenario(f, ex) ? `<details class="scenbox"><summary>See it happen: a scenario</summary>${findingScenario(f, ex)}</details>` : '';
+  const more = `${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">Open in ${S.simple ? 'Paths' : 'Atlas'}</button>` : ''}${f.node && SRC[f.node] ? `<button class="btn" data-lines="${esc(f.id)}">Show the lines</button>` : ''}${f.status !== 'accepted' ? `<button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn quietlink" data-accept="${esc(f.id)}">Accept risk with a reason…</button>` : ''}`;
+  const fixBtn = f.status !== 'accepted' ? `<button class="btn primary" data-fix="${esc(f.id)}">Fix this</button>` : '';
+  if (S.simple) {
+    // Simple (directive: user first): severity, where it can be reached, plain words and one next action. The tool's
+    // own words, the rule, the file and line, the paths and the other actions open with Why?, in place.
+    const reachLine = `${reach}${input}`.trim();
+    return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}${heur}${accepted}</div>
+    ${hotLane(f) ? `<div class="top" style="margin-top:8px;gap:10px">${laneGlyph(fLanes(f), hotLane(f), f.rank)}${onLane(f)}</div>` : ''}
+    ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">${acceptedWords(f.accepted)}</div>` : ''}
+    <h4>${esc(f.headline || f.title)}</h4>${reachLine ? `<p class="fdesc">${reachLine}</p>` : ''}
+    ${plain}
+    <div class="acts">${fixBtn}</div>
+    ${why(`${f.headline ? `<div class="toolsays">${esc(f.tool)} says: “${esc(f.title)}”</div>` : ''}<p class="fdesc">${ruleLine} · ${fid}<br>${where}.</p>${pathsHtml(f)}${scen}<div class="srcslot" id="src-${esc(f.id)}"></div><div class="acts">${more}</div><div class="sendslot"></div>`)}</div>`;
+  }
+  return `<div class="fcard ${cls(f.rank, RANKS)}${f.status === 'accepted' ? ' accepted' : ''}" id="f-${esc(f.id)}"><div class="top">${sevChip(f.rank)}${S.simple ? '' : ruleLine}${heur}${accepted}${S.simple ? '' : fid}</div>
     ${hotLane(f) ? `<div class="top" style="margin-top:8px;gap:10px">${laneGlyph(fLanes(f), hotLane(f), f.rank)}${onLane(f)}</div>` : ''}
     ${f.status === 'accepted' ? `<div class="note" style="margin-top:6px">${acceptedWords(f.accepted)}</div>` : ''}
     <h4>${esc(S.simple && f.headline ? f.headline : f.title)}</h4>${S.simple && f.headline ? `<div class="toolsays">${esc(f.tool)} says: “${esc(f.title)}”</div>` : ''}<p class="fdesc">${where}.${reach}${input}</p>
     ${ctxNote(f)}${trustBox(f)}${flowBox(f)}${caseBox(f)}
     ${pathsHtml(f)}
-    ${findingScenario(f, ex) ? `<details class="scenbox"><summary>See it happen: a scenario</summary>${findingScenario(f, ex)}</details>` : ''}
-    ${ex ? `<div class="plain"><b>In plain words:</b> ${esc(ex.lens2)}<br><b>Fix:</b> ${esc(ex.fix)}</div>` : f.more_info && !String(f.more_info).startsWith('http') ? `<div class="note" style="margin-top:8px">${esc(f.more_info)}</div>` : ''}
+    ${scen}
+    ${plain}
     <div class="srcslot" id="src-${esc(f.id)}"></div>
-    <div class="acts">${f.status !== 'accepted' ? `<button class="btn primary" data-fix="${esc(f.id)}">Fix this</button>` : ''}${f.node ? `<button class="btn" data-atlas="${esc(f.node)}">Open in Atlas</button>` : ''}${f.node && SRC[f.node] ? `<button class="btn" data-lines="${esc(f.id)}">Show the lines</button>` : ''}${f.status !== 'accepted' ? `<button class="btn" data-send="${esc(f.id)}" aria-expanded="false">Send to…</button>` : ''}${LIVE && f.status !== 'accepted' && !f.in_tests ? `<button class="btn quietlink" data-accept="${esc(f.id)}">Accept risk with a reason…</button>` : ''}</div><div class="sendslot"></div></div>`;
+    <div class="acts">${fixBtn}${more}</div><div class="sendslot"></div></div>`;
 }
 function wireFindings(el) {
   el.querySelectorAll('[data-sev]').forEach(b => b.onclick = () => { S.fsev = b.dataset.sev; renderFindings(); });
@@ -2192,7 +2219,7 @@ function renderReady() {
     el.innerHTML = `<div class="psplit readysimple"><div class="smain"><div class="toolbar" style="justify-content:flex-end">${modeSeg()}</div>
       <div class="rhero">${gauge(R.score, 108, ['A', 'B', 'C', 'D', 'F'].includes(R.grade) ? R.grade : null)}<div><div class="k">Ready to ship? · ${esc(R.score)} of 100</div><h1>${readyHeadline(R)}</h1><div class="note">${scoreNote(R)}</div></div></div>
         ${releaseBox(R, true)}<div class="k2">What moves the needle most</div>
-        <div class="moves">${top.map(k => `<div class="move"><span class="gain">+${esc(Math.round(k.gain))}</span><div><div class="t">${esc(moveTitle(k))}</div><div class="d">${stepMeta(k)}</div></div>${stepAct(k)}</div>`).join('')}
+        <div class="moves">${top.map(k => `<div class="move"><span class="gain">+${esc(Math.round(k.gain))}</span><div><div class="t">${esc(moveTitle(k))}</div>${why(`<div class="d">${stepMeta(k)}</div>`)}</div>${stepAct(k)}</div>`).join('')}
           ${rest.length ? `<div class="more">${rest.map(k => `<span class="mi"><span class="gain sm">+${esc(Math.round(k.gain))}</span><span>${esc(moveTitle(k))}</span></span>`).join('')}<button class="linkbtn" data-go="advanced">All ten areas</button></div>` : ''}</div>
         </div><aside class="rside">
         <div class="k2" style="margin-top:0">Already good · keep it that way</div>${passed.length ? passed.slice(0, 6).map(k => `<div class="good"><span class="pic good">${icon('check')}</span><span>${esc(k.title)}</span></div>`).join('') : '<div class="note">Nothing has passed yet.</div>'}${passed.length > 6 ? `<div class="note">and ${passed.length - 6} more</div>` : ''}
@@ -2380,18 +2407,18 @@ function renderRight() {
   const lw = onPhone(n) ? [phoneLang(n.file)[0], `${phoneLang(n.file)[1]} · runs on the person’s phone, inside your app`] : LANGW[(n.id.split(':')[0])];
   el.innerHTML = `<div class="detail">${chrome}<button class="closebtn" id="close" aria-label="Close">${icon('close')}</button>
     <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(onPhone(n) ? 'app' : layer(n.id) === 'external' ? 'library' : layer(n.id))} · ${esc(isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord)}${AI_BY_NODE[n.id] ? ' · ' + aiChips(n.id) : ''}</div>
-    <h3>${esc(n.qualname)}</h3>
-    <div class="meta">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ` · ${esc(n.entry.detail)}` : ''}</div>
+    <h3>${esc(S.simple ? short(n.qualname) : n.qualname)}</h3>
+    <div class="meta">${esc(n.file)}${S.simple ? '' : `:${esc(n.start_line)}–${esc(n.end_line)}`}${n.entry && n.entry.detail ? ` · ${esc(n.entry.detail)}` : ''}</div>
     ${status ? `<div class="statusrow">${status}</div>` : ''}
     ${laneOf(n.id) ? laneStrip(laneOf(n.id), (() => { const f = fs.find(x => x.ui_path || x.reachable); const lit = f ? fLanes(f) : laneSet([S.entry, n.id]); lit.add(laneOf(n.id)); for (const e of OUT[n.id] || []) if (laneOf(e.dst) === 'data') lit.add('data'); return lit; })()) : ''}
     ${lw ? `<div class="langline"><span class="lang">${lw[0]}</span>Written in ${lw[1]}</div>` : ''}
-    <div class="sig">${esc(n.signature || n.kind)}</div>
-    <div class="lenses"><button data-l="1" class="${S.lens === 1 ? 'on' : ''}"><i></i>Technical</button><button data-l="2" class="${S.lens === 2 ? 'on' : ''}"><i></i>Everyday</button><button data-l="3" class="${S.lens === 3 ? 'on' : ''}"><i></i>Mapped</button><button data-l="4" class="${S.lens === 4 ? 'on' : ''}"><i></i>Scenario</button></div>
+    ${S.simple ? '' : `<div class="sig">${esc(n.signature || n.kind)}</div>`}
+    <div class="lenses">${lensOrder().map(l => `<button data-l="${l}" class="${S.lens === l ? 'on' : ''}"><i></i>${lensWord(l)}</button>`).join('')}</div>
     ${lensBody(r, n)}
-    ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard ${cls(f.rank, RANKS)}" style="margin-top:12px"><div class="top">${sevChip(f.rank)}<span class="rule">${esc(f.rule)} · line ${esc(f.line ?? '–')}</span></div><h4>${esc(f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : S.lens === 4 && ex.scenario ? ex.scenario : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
-    ${srcBlock(n)}
+    ${fs.map(f => { const ex = (r?.findings || []).find(x => x.id === f.id); return `<div class="fcard ${cls(f.rank, RANKS)}" style="margin-top:12px"><div class="top">${sevChip(f.rank)}${S.simple ? '' : `<span class="rule">${esc(f.rule)} · line ${esc(f.line ?? '–')}</span>`}</div><h4>${esc(S.simple && f.headline ? f.headline : f.title)}</h4>${ex ? `<div class="note">${esc(S.lens === 1 ? ex.lens1 : S.lens === 4 && ex.scenario ? ex.scenario : ex.lens2)}</div><div style="margin-top:4px"><b>Fix:</b> ${esc(ex.fix)}</div>` : ''}</div>`; }).join('')}
+    ${why(`${srcBlock(n)}
     <div class="links"><div><h5>Called by · ${callers.length}</h5>${callers.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div>
-      <div><h5>Calls · ${callees.length}</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div>
+      <div><h5>Calls · ${callees.length}</h5>${callees.slice(0, 30).map(x => `<button data-id="${esc(x)}">${esc(short(N[x].qualname))}</button>`).join('') || '<span class="note">nothing in the repo</span>'}</div></div>`, 'Show the code and what it calls', S.lens === 3)}
     <div class="acts">${fs.length ? `<button class="btn primary" id="openfinding">Open finding</button>` : ''}${LIVE && LIVE.model && n.kind !== 'external' ? `<button class="btn" id="reexplain">${icon('sparkle')}${EXP[n.id] ? 'Re-explain' : `Explain with ${esc(LIVE.model)}`}</button>` : ''}</div></div>`;
   wire();
   const of = document.getElementById('openfinding'); if (of) of.onclick = () => { S.tab = 'findings'; S.fsev = 'all'; for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('on', b.dataset.t === 'findings'); render(); const card = document.getElementById('f-' + fs[0].id); if (card) { card.scrollIntoView({behavior: 'smooth', block: 'center'}); card.classList.add('flash'); } };
