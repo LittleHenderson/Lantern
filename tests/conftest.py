@@ -249,6 +249,19 @@ def _a_home_for_each_test(monkeypatch):
     shutil.rmtree(home, ignore_errors=True)
 
 
+@pytest.fixture(autouse=True)
+def _one_day(monkeypatch):
+    """The day a test starts on is the cloud service's day until the test ends. The service counts runs by the day
+    (UTC) and asks what day it is at every request; a test that makes several requests means them to be made on one
+    day, and one that ran either side of midnight UTC failed for a count that had started again (2026-11-14, on CI).
+    A test about the turn of the day sets the day itself (`monkeypatch.setattr(store, "today", ...)`). Like
+    `_keep_work`, only once a test file has loaded the service: this file never loads it itself."""
+    store = sys.modules.get("lantern_cloud.store")
+    if store is not None:
+        day = store.today()
+        monkeypatch.setattr(store, "today", lambda: day)
+
+
 @pytest.fixture
 def network_attempts(request):
     """A function returning what this test has tried to reach so far (refused attempts, oldest first)."""

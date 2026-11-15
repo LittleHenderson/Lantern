@@ -9,6 +9,19 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- **A test of the website's service is on one day** (2026-11-14; found by a red check on the change below, which
+  it is no part of). The service counts a person's runs by the day (UTC) and asks what day it is at every request.
+  `tests/test_cloud_runs.py::test_limits_answer_429_with_a_sentence` makes three requests with two whole runs
+  between them, and on CI it ran either side of midnight UTC: the count had started again, the request that had to
+  be refused was let in, and one job of the eight that run the test failed (1 failed, 5206 passed, 47 skipped)
+  about a limit that had held. Nothing of the service changes. The day a test starts on is now the service's day
+  until the test ends (`tests/conftest.py`, `_one_day`), and a test about the turn of the day sets the day itself.
+  Tests (2, written first): with the service's clock a day on between a test's runs and its last request, the
+  request is still refused (on the code before it was let in, the failure CI showed); with the service's day set
+  by hand, the runs of a day are used up and a run is taken again the next day. *Not covered:* the gateway and the
+  app's opt-in counts read the day in places of their own, and a test of theirs that counts by the day makes its
+  requests one after the other with no run between them; such a test can still meet midnight.
+
 - **The guard asks about a name before the system looks it up, and gitleaks is started on Lantern's terms**
   (2026-11-14; stage 0 of the roadmap of 2026-11-14: two places where a guard that was there did not cover all it
   stands for. Each was checked against Python itself and against the real program before it was touched, each
