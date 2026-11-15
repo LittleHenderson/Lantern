@@ -263,7 +263,7 @@ def test_lib_is_the_projects_own_folder(tmp_path):
     g = _build(tmp_path, APP)
     e = _edge(g, NOTES + "actions.rename", "js:src/lib/server/auth::requireUser")
     assert e is not None and e.confidence == "resolved"
-    assert _edge(g, NOTES + "actions.remove", "ext:@prisma/client.PrismaClient().note.delete") is not None
+    assert _edge(g, NOTES + "actions.remove", "ext:@prisma/client.PrismaClient.note.delete") is not None
     assert g.nodes["js:src/lib/server/auth::requireUser"].lane == "server"
     plain = {k: v for k, v in APP.items() if k != "svelte.config.js"}
     g = _build(tmp_path / "plain", plain, NO_KIT)
@@ -274,7 +274,9 @@ def test_lib_is_the_projects_own_folder(tmp_path):
 def test_the_login_check_reads_what_the_server_knows_of_the_caller(tmp_path):
     """Asked: the routes the pages send to that change data. `locals` is what the server's own hook put there:
     a route that turns away a request with no `locals.user` checks who is asking, by its own lines, by a helper of
-    the project, or by `locals.auth()`. The form's default action and the endpoint that removes a note ask nobody."""
+    the project, or by `locals.auth()`; one that only reads `locals.user` counts too, as `req.user` does on every
+    other framework (nobody signed in: nothing there to read). The form's default action and the endpoint that
+    removes a note ask nobody."""
     from lantern import websec
     g = _build(tmp_path, APP)
     assert sorted(f["title"] for f in websec.missing_auth(g)) == [
@@ -288,7 +290,7 @@ def test_the_login_check_reads_what_the_server_knows_of_the_caller(tmp_path):
         got = websec.login_check(g, n, adj, (tmp_path / n.file).read_text(encoding="utf-8"))
         strong[nid.split("::")[1]] = bool(got and got[0] == "strong")
     assert strong == {"actions.default": False, "actions.remove": True, "actions.rename": True, "POST": True,
-                      "save": False}
+                      "save": True}
 
 
 def test_the_readiness_page_counts_the_routes_and_not_the_hook(tmp_path):
@@ -340,10 +342,61 @@ def test_what_the_caller_sends_is_followed_and_what_the_server_made_is_not(tmp_p
 
 
 def test_who_is_signed_in_comes_from_locals(tmp_path):
-    """A record reached by an id the caller sent, with nothing that compares its owner: found (the action that
-    removes a note, and the endpoint). The twin asks for the id and the owner, who is `locals.user` handed back by
-    the project's own helper."""
+    """A record reached by an id the caller sent, with nothing that compares its owner: found on the action that
+    removes a note (it asks that somebody is signed in, not whose the note is). The twins: the action that asks for
+    the id and the owner, who is `locals.user` handed back by the project's own helper; the one that reaches the
+    signed-in person's own record; and the endpoint that asks nobody at all, which is the login rule's finding."""
     from lantern.security import scan
     g = _build(tmp_path, APP)
-    owner = sorted((f["file"], f["line"]) for f in scan(g)["findings"] if f["rule"] == "LT-AUTHZ-OWNER")
-    assert owner == [("src/routes/api/notes/[id]/+server.ts", 5), ("src/routes/notes/+page.server.ts", 18)]
+    found = scan(g)["findings"]
+    owner = [f for f in found if f["rule"] == "LT-AUTHZ-OWNER"]
+    assert [(f["file"], f["line"], f["routes"]) for f in owner] == [
+        ("src/routes/notes/+page.server.ts", 18, ["POST /notes?/remove"])]
+    assert owner[0]["title"].startswith("POST /notes?/remove reaches a record by an id from the request")
+    assert [f["file"] for f in found if f["rule"] == "LW-AUTH-MISSING" and "DELETE /api/notes/[id]" in f["title"]] == [
+        "src/routes/api/notes/[id]/+server.ts"]
+
+
+HELPERS = {
+    "src/lib/server/guard.ts": '''import { error, type RequestEvent } from "@sveltejs/kit";
+
+export function signedIn(event: RequestEvent) {
+  if (!event.locals.user) throw error(401, "sign in");
+  return event.locals.user;
+}
+
+export function fromEvent(event) {
+  return event.locals.user;
+}
+''',
+    "src/routes/notes/[id]/+server.ts": '''import { json } from "@sveltejs/kit";
+import { db } from "$lib/server/db";
+import { fromEvent, signedIn } from "$lib/server/guard";
+
+export async function PATCH(event) {
+  const user = signedIn(event);
+  const body = await event.request.json();
+  return json(await db.note.update({ where: { id: event.params.id, ownerId: user.id }, data: { text: body.text } }));
+}
+
+export async function PUT(event) {
+  const user = fromEvent(event);
+  return json(await db.note.update({ where: { id: event.params.id, ownerId: user.id }, data: { done: true } }));
+}
+
+export async function DELETE(event) {
+  signedIn(event);
+  return json(await db.note.delete({ where: { id: event.params.id } }));
+}
+'''}
+
+
+def test_a_helper_handed_the_event_says_who_is_signed_in(tmp_path):
+    """A helper of the project that is handed SvelteKit's event (by its written type, or under the name `event` in
+    a file that runs on the server) hands back who is signed in: a record picked by an id and that person is their
+    own. The twin: the route that calls the helper and then picks the record by the id alone."""
+    from lantern.security import scan
+    g = _build(tmp_path, {"svelte.config.js": CONFIG, "src/lib/server/db.ts": DB, **HELPERS})
+    owner = [f for f in scan(g)["findings"] if f["rule"] == "LT-AUTHZ-OWNER"]
+    assert [(f["file"], f["line"], f["routes"]) for f in owner] == [
+        ("src/routes/notes/[id]/+server.ts", 18, ["DELETE /notes/[id]"])]

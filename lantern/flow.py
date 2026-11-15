@@ -1587,6 +1587,17 @@ class Engine:
         if not py and i == 0 and (self.entry(fn) or {}).get("trpc"):
             # a tRPC procedure is handed one object, whole (`opts`) or taken apart (`{ ctx, input }`): `member1`
             return Val(kind="req", data="trpc")
+        if not py and i == 0 and (self.entry(fn) or {}).get("sveltekit"):
+            # a SvelteKit `load`, action, endpoint or `handle` is handed the event, whole (`event`) or taken apart
+            # (`{ request, params, url, cookies, locals }`): `member1`
+            return Val(kind="req", data="kit")
+        if not py:
+            # a helper of a SvelteKit project that is handed the event, or what the server's hook put on it
+            kit = bool(self.g.meta.get("sveltekit")) and bool(R.KIT_SERVER_FILE.search(fn.file or ""))
+            if R.KIT_LOCALS_TYPES.search(ann) or (kit and name == "locals"):
+                return Val(kind="req", data="trpc-ctx")
+            if R.KIT_EVENT_TYPES.search(ann) or (kit and name == "event"):
+                return Val(kind="req", data="kit")
         # a body described by a class of the project is that, also under the name `req` or `request`
         body = py and bool(ann) and self.body_class(fn.mod, ann)
         if not body and (name in R.REQUEST_NAMES or (ann and R.REQUEST_TYPES.search(ann)) or
@@ -1714,8 +1725,8 @@ class Engine:
     def bind_param(self, env: Env, fn: Fn, i: int, p: P, given: Val | None, ctx: Ctx, summary: bool) -> None:
         val = given if given is not None else self.param_val(fn, i, p, summary)
         if p.pattern is not None:
-            if val.kind == "req" and val.data == "trpc":
-                pass      # `({ ctx, input })` of a tRPC procedure, wherever its file is
+            if val.kind == "req" and val.data in ("trpc", "kit"):
+                pass      # `({ ctx, input })` of a tRPC procedure, `({ request, locals })` of a SvelteKit route
             elif given is None and not summary and fn.lang == "js" and is_next_file(fn.file):
                 val = Val(kind="req", data="js")      # `({ params, searchParams })` of a Next.js page or route
             elif given is None and is_next_file(fn.file) and p.pattern.k == "map":
@@ -2439,6 +2450,14 @@ class Engine:
                 return Val(kind="req", data="trpc-ctx")      # made by the server: who is signed in, not request data
             if base.data == "trpc-ctx" and name in ("req", "request"):
                 return Val(kind="req", data="js")            # the request itself, where the server keeps it there
+            if base.data == "kit":
+                # SvelteKit's event: `locals` is what the server's own hook put there (who is signed in), `event`
+                # the whole again (`handle({ event, resolve })`); the rest is the request and its parts
+                if name == "locals":
+                    return Val(kind="req", data="trpc-ctx")
+                if name == "event":
+                    return base
+                base = Val(kind="req", data="js")
             inputs = R.PY_INPUT if base.data == "py" else R.TRPC_INPUT if base.data == "trpc" else \
                 FIXED0 if base.data == "trpc-ctx" else R.JS_INPUT
             if name in inputs:

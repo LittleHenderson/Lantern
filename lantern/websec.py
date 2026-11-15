@@ -1524,8 +1524,8 @@ def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
         route = n.entry.get("detail") or ""
         if not mutating_route(route) or is_public_route(route):
             continue
-        if n.entry.get("serves") == "trpc":     # the one door every tRPC procedure stands behind: they are asked
-            continue
+        if n.entry.get("serves"):     # the one door every tRPC procedure stands behind, SvelteKit's `handle`,
+            continue                   # which runs before every route: the routes behind it are asked
         if n.file and n.file not in texts:
             try:
                 texts[n.file] = project_text(Path(g.repo_root) / n.file, g.repo_root)

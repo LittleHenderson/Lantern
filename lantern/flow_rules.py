@@ -180,6 +180,12 @@ IDENT_ATTRS = {"user", "session", "auth", "userId", "user_id", "currentUser", "c
 STRING_ONLY = {"args", "form", "values", "GET", "POST", "query_params", "path_params", "view_args", "headers",
                "cookies", "COOKIES", "META", "params", "url", "path", "originalUrl", "match_info", "query_string"}
 REQUEST_NAMES = {"request", "req"}
+# SvelteKit hands a route one event: the request and its parts, and `locals`, which the server's own hook filled for
+# this request (who is signed in). A helper of the project is handed the event or its `locals`: told by the written
+# type, or by the name in a file of a SvelteKit project that runs on the server (`flow.Engine.param_val`).
+KIT_EVENT_TYPES = re.compile(r"\b(RequestEvent|ServerLoadEvent|PageServerLoadEvent|LayoutServerLoadEvent)\b")
+KIT_LOCALS_TYPES = re.compile(r"\bApp\.Locals\b")
+KIT_SERVER_FILE = re.compile(r"\.server\.[cm]?[jt]s$|(^|/)server/|(^|/)\+server\.[jt]s$")
 REQUEST_TYPES = re.compile(r"\b(Request|HttpRequest|WSGIRequest|NextRequest|NextApiRequest|FastifyRequest|"
                            r"WebSocket|HTTPConnection|IncomingMessage)\b")
 REQUEST_GLOBALS = {"flask.request", "quart.request", "bottle.request", "flask.globals.request", "sanic.request"}

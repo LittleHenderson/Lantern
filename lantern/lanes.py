@@ -54,10 +54,11 @@ DATA_RE = re.compile(
     r"(\.|\(|$|/)"
 )
 
-# A JS/TS module in one of these places runs on the server.
+# A JS/TS module in one of these places runs on the server, and so does one whose name says so (`+page.server.ts`,
+# `hooks.server.ts`, `db.server.ts`: SvelteKit and Remix keep such a file out of what the browser gets).
 SERVER_PATH_RE = re.compile(
     r"(^|/)(src/)?(app/.*(/|^)route\.[cm]?[jt]sx?$|pages/api/|api/|server/|backend/|functions/|netlify/|"
-    r"supabase/functions/|worker[s]?/|middleware\.[cm]?[jt]s$)"
+    r"supabase/functions/|worker[s]?/|middleware\.[cm]?[jt]s$)|\.server\.[cm]?[jt]sx?$"
 )
 
 
@@ -163,6 +164,8 @@ def lane_for_file(file: str | None, android: dict | None = None) -> str | None:
         return "server"
     if re.search(r"\.[cm]?[jt]sx?$", file):
         return "server" if SERVER_PATH_RE.search(file) else "frontend"
+    if file.endswith(".svelte"):
+        return "frontend"
     if re.search(r"(^|/)\.env|\.ya?ml$|\.toml$|\.json$|Dockerfile|\.ini$|\.cfg$", file):
         return "server"
     return None

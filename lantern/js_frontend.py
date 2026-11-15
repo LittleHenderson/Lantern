@@ -15,6 +15,7 @@ calls that can't be traced are counted, not guessed.
 from __future__ import annotations
 
 import base64
+import bisect
 import hashlib
 import json
 import os
@@ -113,6 +114,37 @@ TRPC_HOOKS = {"useQuery", "useMutation", "useSuspenseQuery", "useInfiniteQuery",
               "useSubscription", "usePrefetchQuery", "queryOptions", "mutationOptions", "infiniteQueryOptions",
               "subscriptionOptions"}
 TRPC_CALLS = {"query", "mutate", "mutateAsync", "subscribe"}
+# SvelteKit (roadmap of 2026-11-14, stage 1). The doors of a SvelteKit app are files with fixed names under
+# `src/routes`: `+server.ts` (a function per verb), `+page.server.ts` (`load` hands the page its data, each of
+# `actions` is what a form posts to), `+layout.server.ts` (`load` for every page below it); `src/hooks.server.ts`
+# (`handle`) runs before all of them. Read only where the nearest package.json depends on `@sveltejs/kit`. A
+# `.svelte` file is read wherever it is: its `<script>` as code, its markup for the components it draws, the
+# functions it hands to events, the expressions it shows and the forms that post.
+SVELTE_EXT = ".svelte"
+KIT = "@sveltejs/kit"
+SVELTE_CONFIGS = ("svelte.config.js", "svelte.config.ts", "svelte.config.mjs")
+KIT_VERBS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+KIT_FILE = re.compile(r"^src/routes/(?P<dir>(?:[^/]+/)*)\+(?P<kind>page\.server|layout\.server|server|page|layout)"
+                      r"(?:@[^./]*)?\.(?P<ext>[jt]s|svelte)$")
+KIT_HOOKS = re.compile(r"^src/hooks\.server(?:/index)?\.[jt]s$")
+_SVELTE_TS = re.compile(rb"\blang\s*=\s*[\"']?(?:ts|typescript)\b", re.I)
+_SVELTE_MODULE = re.compile(rb"\bmodule\b", re.I)     # <script module>, <script context="module">: the file's own
+_STYLE_RE = re.compile(rb"<style\b[^>]*>.*?</style\s*>", re.I | re.S)
+_COMMENT_RE = re.compile(rb"<!--.*?-->", re.S)
+_SVELTE_BLOCK = re.compile(rb"\s*(#if|:else\s+if|#key|@html|@render|#await|#each)\s+")
+_SVELTE_NAMES = re.compile(rb"\s*(?::then|:catch|#snippet)\s+([^}]*)")
+_SVELTE_EACH_AS, _SVELTE_AWAIT_THEN = re.compile(rb"\s+as\s"), re.compile(rb"\s+(?:then|catch)\b")
+_SVELTE_ATTR = re.compile(rb"([\w:|.$-]+)\s*=\s*[\"']?$")
+_SVELTE_TAG = re.compile(rb"<([A-Z][\w$]*(?:\.[\w$]+)*)(?=[\s/>])")
+_SVELTE_NOT_PLAIN = re.compile(rb"\{|(?:async\s+)?function\b|class\b")
+_FORM_OPEN = re.compile(rb"<form(?=[\s>])", re.I)
+_FORMACTION = re.compile(rb"(?<![\w:.$-])formaction\s*=\s*(?:\"([^\"{}]*)\"|'([^'{}]*)')", re.I)
+_JS_NAME = re.compile(rb"[A-Za-z_$][\w$]*")
+# `onclick={…}` (Svelte 5) is an event only under a name the browser has; `on:click={…}` (Svelte 4) under any
+DOM_EVENTS = frozenset("""click dblclick submit change input keydown keyup keypress focus blur mouseenter mouseleave
+    mouseover mouseout mousedown mouseup mousemove pointerdown pointerup pointermove touchstart touchend touchmove
+    scroll wheel drag drop dragstart dragend dragover load error reset select contextmenu paste copy cut resize
+    toggle close""".split())
 SUPABASE_CLIENT = re.compile(r"^@supabase/[\w.-]+\.(create\w*Client\(\)|useSupabaseClient\(\)|SupabaseClient)$")
 SUPABASE_NAME = re.compile(r"^_?supabase(_?(client|admin))?$", re.I)   # by its name alone: a possible link, no more
 TABLE_NAME = re.compile(r"^[A-Za-z_][\w$]{0,62}$")
@@ -421,6 +453,11 @@ class JSModule:
     lines: int
     is_test: bool
     html: bool = False         # script taken from inside an HTML page (module name keeps the .html)
+    svelte: bool = False       # a Svelte component file (module name keeps the .svelte)
+    component: str | None = None   # ... and the function that stands for the component: named after the file
+    forms: list[dict] = field(default_factory=list)   # the forms of its markup that post: {line, action}
+    # `actions` of a SvelteKit `+page.server` file: {key, line, local | handler + at, wrap} (Walker._kit_actions)
+    kit_actions: list[dict] = field(default_factory=list)
     defs: dict[str, JSDef] = field(default_factory=dict)
     imports: dict[str, tuple[str | None, str, str]] = field(default_factory=dict)  # local -> (mod, name, spec)
     exports: dict[str, str] = field(default_factory=dict)       # exported -> local
@@ -581,10 +618,12 @@ def _spine_args(n: TSNode | None) -> list[list[str]]:
 
 
 class Walker:
-    def __init__(self, m: JSModule, resolve_spec, trpc: bool = False):
+    def __init__(self, m: JSModule, resolve_spec, trpc: bool = False, kit: str | None = None):
         self.m = m
         self.resolve_spec = resolve_spec
         self.trpc = trpc      # the nearest package.json depends on @trpc/server (and this is no test file)
+        self.kit = kit        # what a SvelteKit route file is by its name (`page.server`, `server`, …), or None
+        self.top = ""         # the scope whose string constants are the file's own: "", or a Svelte component
         self.planned: dict[int, str] = {}   # where an inline function begins -> the name it is a function under
         self.routed: set[int] = set()       # router calls already read (one written inside another, or in a mount)
         self.owner: tuple[int, str] | None = None   # (where a router call begins, the name it is kept under)
@@ -615,6 +654,10 @@ class Walker:
 
     def walk(self, n: TSNode, scope: str, cls: str | None = None, ui: str | None = None):
         t = n.type
+        if t == "method_definition" and self.planned and n.start_byte in self.planned:
+            # `actions = { async remove({ request }) {…} }` of a SvelteKit page: a function of its own, named there
+            self._walk_body(n, self.add_def(n, self.planned.pop(n.start_byte), scope, "function", None), None, None)
+            return
         if t in FUNC_TYPES:   # an inline function, read as part of the function around it
             plan = self.planned.pop(n.start_byte, None) if self.planned else None
             if plan is not None:   # a tRPC procedure's handler or middleware: a function of its own, named there
@@ -797,10 +840,12 @@ class Walker:
         if value is not None and name_node.type == "identifier":
             if self.trpc:
                 self._trpc_declared(name, value, scope, n)
+            if self.kit == "page.server" and not scope and name == "actions":
+                self._kit_actions(_bare(value))
             if value.type == "call_expression" and OPTIONAL_LOGIN.search(_text(value)):
                 self.m.optional.add(name)   # const maybe = expressjwt({ ..., credentialsRequired: false })
             sv = self._url_of(value)
-            if sv is not None and not scope:
+            if sv is not None and scope == self.top:
                 self.m.consts[name] = sv
             made = value if value.type == "new_expression" else _or_new(value)
             if made is not None:   # new T(), and `kept ?? new T()`: the kept one or a new one
@@ -821,6 +866,39 @@ class Walker:
                 self.m.plain.setdefault(scope, set()).add(name)
         if value is not None:
             self.walk(value, scope, cls, ui)
+
+    def _kit_actions(self, obj: TSNode | None) -> None:
+        """`export const actions = { default: async ({ request }) => …, remove, save: saveNote }` in a SvelteKit
+        `+page.server` file: each key is what a form of the page posts to. A function written there is a function
+        of its own from here on (`actions.<key>`), also inside a helper that hands back a function around it
+        (`save: guarded(async (event) => …)`, the helper kept as `wrap`); one handed by name keeps the node it has."""
+        if obj is None or obj.type != "object":
+            return
+        for c in obj.named_children:
+            item: dict = {"line": c.start_point[0] + 1}
+            if c.type == "pair":
+                item["key"] = _text(c.child_by_field_name("key")).strip("'\"`")
+                val = _bare(c.child_by_field_name("value"))
+                inner = self._wrapped_func(val)
+                if inner is not None:
+                    item["wrap"] = _chain(val.child_by_field_name("function"))
+                    val = inner
+                if val is not None and val.type in FUNC_TYPES:
+                    self.planned[val.start_byte] = item["local"] = f"actions.{item['key']}"
+                elif val is not None and val.type in ("identifier", "member_expression") and _chain(val):
+                    item["handler"], item["at"] = _chain(val), _site_pos(val)
+                else:
+                    continue
+            elif c.type == "method_definition":
+                item["key"] = _text(c.child_by_field_name("name")).strip("'\"`")
+                self.planned[c.start_byte] = item["local"] = f"actions.{item['key']}"
+            elif c.type == "shorthand_property_identifier":
+                item["key"] = _text(c)
+                item["handler"], item["at"] = [item["key"]], _site_pos(c)
+            else:
+                continue
+            if item["key"]:
+                self.m.kit_actions.append(item)
 
     # -- CommonJS, values, wrappers (stage 3)
     def _require_binding(self, name_node: TSNode, value: TSNode, scope: str) -> bool:
@@ -1807,6 +1885,13 @@ class SpecResolver:
         self.repo = repo
         self.files = files            # rel path -> module name
         self._alias_cache: dict[Path, list[tuple[str, list[Path]]]] = {}
+        self._pkgs: dict = {}
+
+    def _kit(self, d: Path) -> bool:
+        """Is this folder the root of a SvelteKit project: its config stands here, or its package.json names the kit."""
+        return any(inside_repo(d / n, self.repo) for n in SVELTE_CONFIGS) or \
+            (inside_repo(d / "package.json", self.repo)
+             and KIT in _nearest_package(d / "package.json", self.repo, self._pkgs)["deps"])
 
     def _aliases(self, d: Path) -> list[tuple[str, list[Path]]]:
         """Path aliases from the nearest tsconfig/jsconfig (and its tsconfig.*.json siblings). A written `baseUrl`
@@ -1835,6 +1920,9 @@ class SpecResolver:
                 if not found and (cur / "package.json").exists():
                     root = cur / "src" if (cur / "src").is_dir() else cur
                     found = [("@/*", [root.resolve() / "*"]), ("~/*", [root.resolve() / "*"])]
+                if self._kit(cur):   # SvelteKit's own alias, which no tsconfig of the project writes down
+                    lib = (cur / "src" / "lib").resolve()
+                    found = found + [("$lib", [lib]), ("$lib/*", [lib / "*"])]
                 self._alias_cache[cur] = found + bases
                 return self._alias_cache[cur]
             cur = cur.parent
@@ -1906,8 +1994,10 @@ def discover(repo: Path) -> list[Path]:
                 continue
             if p.suffix.lower() in HTML_EXTS and not fn.endswith(".min.html"):
                 out.append(p)
+            elif p.suffix == SVELTE_EXT:
+                out.append(p)
             elif p.suffix in LANGS and not fn.endswith((".d.ts", ".min.js", ".bundle.js")) \
-                    and not fn.startswith(("vite.config", "next.config", "tailwind.config", "postcss.config",
+                    and not fn.startswith(("vite.config", "next.config", "tailwind.config", "postcss.config", "svelte.config",
                                            "eslint.config", "jest.config", "vitest.config", "playwright.config",
                                            "webpack.config", "babel.config", "rollup.config")) \
                     and not built_bundle(p, repo):
@@ -1947,6 +2037,223 @@ def inline_script(src: bytes) -> bytes | None:
         out[m.start(2):m.end(2)] = body
         found = True
     return bytes(out) if found else None
+
+
+def svelte_parts(src: bytes) -> tuple[bytes, bytes, bool, list[tuple[int, int]]]:
+    """A `.svelte` file taken apart: its script (every `<script>` body at its own offset, as `inline_script` does
+    for a page), its markup (the rest, with scripts, styles and comments blanked), whether the script is TypeScript
+    (`<script lang="ts">`), and where the script of the file itself lies (`<script module>`: it runs once, not with
+    each component). Newlines stay where they are, so every line number is the file's own."""
+    script = bytearray(re.sub(rb"[^\n]", b" ", src))
+    markup = bytearray(src)
+    ts, own = False, []
+    for m in _SCRIPT_RE.finditer(src):
+        attrs = m.group(1)
+        markup[m.start():m.end()] = script[m.start():m.end()]
+        t = re.search(rb"\btype\s*=\s*[\"']?\s*([^\"'\s>]*)", attrs, re.I)
+        if re.search(rb"\bsrc\s*=", attrs, re.I) or (t.group(1).strip().lower() if t else b"") not in _JS_TYPES:
+            continue
+        script[m.start(2):m.end(2)] = m.group(2)
+        ts = ts or bool(_SVELTE_TS.search(attrs))
+        if _SVELTE_MODULE.search(attrs):
+            own.append((m.start(2), m.end(2)))
+    for rx in (_STYLE_RE, _COMMENT_RE):
+        for m in rx.finditer(bytes(markup)):
+            markup[m.start():m.end()] = re.sub(rb"[^\n]", b" ", m.group(0))
+    return bytes(script), bytes(markup), ts, own
+
+
+def _braces(mk: bytes) -> list[tuple[int, int]]:
+    """Where each `{…}` of a Svelte file's markup opens and closes, braces inside it and its strings passed over.
+    One that does not close within 4,000 bytes is not read."""
+    out, i = [], 0
+    while True:
+        i = mk.find(b"{", i)
+        if i < 0:
+            return out
+        depth, quote, j, end = 0, 0, i, min(len(mk), i + 4000)
+        while j < end:
+            c = mk[j]
+            if quote:
+                if c == 0x5C:
+                    j += 1
+                elif c == quote:
+                    quote = 0
+            elif c in (0x22, 0x27, 0x60):
+                quote = c
+            elif c == 0x7B:
+                depth += 1
+            elif c == 0x7D:
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if j >= end:
+            i += 1
+            continue
+        out.append((i, j))
+        i = j + 1
+
+
+def _tag_end(mk: bytes, i: int) -> int:
+    """Where the tag that is open at `i` closes (its `>`), with strings and `{…}` passed over; -1 when it does not
+    within 4,000 bytes."""
+    quote, depth, j, end = 0, 0, i, min(len(mk), i + 4000)
+    while j < end:
+        c = mk[j]
+        if quote:
+            if c == quote:
+                quote = 0
+        elif c in (0x22, 0x27) or (c == 0x60 and depth):
+            quote = c
+        elif c == 0x7B:
+            depth += 1
+        elif c == 0x7D:
+            depth = max(0, depth - 1)
+        elif c == 0x3E and not depth:
+            return j
+        j += 1
+    return -1
+
+
+def _attr(tag: bytes, name: bytes) -> tuple[bool, str | None]:
+    """An attribute of a tag: (is it written, its text when that is written out). `action={x}` is (True, None)."""
+    m = re.search(rb"(?<![\w:.$-])" + name + rb"\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s\"'>{}]+))?", tag, re.I)
+    if m is None:
+        return False, None
+    val = next((x for x in m.groups() if x is not None), None)
+    return True, val.decode("utf-8", "replace") if val is not None else None
+
+
+def svelte_markup(markup: bytes) -> dict:
+    """What a Svelte file's markup holds for the map.
+    `exprs`: the expressions written in `{…}`, each at its own offset as a statement of its own (`{` becomes `;`),
+    so the JS grammar reads them with the file's line numbers: a value shown, an attribute's value, and what
+    `{#if …}`, `{#each … as x}`, `{#await …}`, `{#key …}`, `{@html …}` and `{@render …}` ask for. An object or a
+    function written out there is left alone (it would not stand as a statement).
+    `attrs`: where an attribute's expression starts -> the event it is handed to (`onclick={…}`, `on:click={…}`:
+    "onClick") or None for any other attribute.
+    `tags`: (line, column, name) of each component drawn (`<Card …>`).
+    `forms`: each place a form posts from, {line, action}: the text of its `action` ("" when none is written, None
+    when it is worked out as the page runs), and a button's `formaction`.
+    `names`: what the blocks name (`as note`, `then value`, a snippet and its parameters): no names of the script."""
+    ex = bytearray(re.sub(rb"[^\n]", b" ", markup))
+    starts = [0] + [m.end() for m in re.finditer(rb"\n", markup)]
+
+    def where(pos: int) -> tuple[int, int]:
+        row = bisect.bisect_right(starts, pos) - 1
+        return row + 1, pos - starts[row] + 1
+
+    attrs: dict[int, str | None] = {}
+    names: set[str] = set()
+    inside = bytearray(len(markup))
+    for i, j in _braces(markup):
+        inside[i:j + 1] = b"\x01" * (j + 1 - i)
+        a, b = i + 1, j
+        blk = None
+        if markup[a:b].lstrip()[:1] in (b"#", b":", b"/", b"@"):
+            blk = _SVELTE_BLOCK.match(markup, a, b)
+            if blk is None:
+                named = _SVELTE_NAMES.match(markup, a, b)
+                if named is not None:
+                    names.update(x.decode("utf-8", "replace") for x in _JS_NAME.findall(named.group(1)))
+                continue
+            a = blk.end()
+            tail = _SVELTE_EACH_AS if blk.group(1) == b"#each" else _SVELTE_AWAIT_THEN if blk.group(1) == b"#await" \
+                else None
+            cut = tail.search(markup, a, b) if tail is not None else None
+            if cut is not None:
+                names.update(x.decode("utf-8", "replace") for x in _JS_NAME.findall(markup[cut.end():b].split(b"(")[0]))
+                b = cut.start()
+        while a < b and markup[a:a + 1].isspace():
+            a += 1
+        if markup.startswith(b"...", a):
+            a += 3
+        while b > a and markup[b - 1:b].isspace():
+            b -= 1
+        if a >= b or _SVELTE_NOT_PLAIN.match(markup, a, b):
+            continue
+        ex[i:i + 1] = b";"
+        ex[a:b] = markup[a:b]
+        at = _SVELTE_ATTR.search(markup, max(0, i - 80), i) if blk is None else None
+        if at is not None:
+            name = at.group(1).decode("utf-8", "replace").split("|")[0]
+            event = name[3:] if name.startswith("on:") else name[2:] if name.startswith("on") and \
+                name[2:] in DOM_EVENTS else ""
+            attrs[a] = "on" + event[:1].upper() + event[1:] if event else None
+    tags = [(*where(m.start(1)), m.group(1).decode("utf-8", "replace")) for m in _SVELTE_TAG.finditer(markup)
+            if not inside[m.start()]]
+    forms = []
+    for m in _FORM_OPEN.finditer(markup):
+        end = _tag_end(markup, m.end())
+        if end < 0 or inside[m.start()]:
+            continue
+        tag = markup[m.start():end]
+        if (_attr(tag, b"method")[1] or "").upper() != "POST":
+            continue
+        written, action = _attr(tag, b"action")
+        forms.append({"line": where(m.start())[0], "action": action if written else ""})
+    for m in _FORMACTION.finditer(markup):
+        if not inside[m.start()]:
+            forms.append({"line": where(m.start())[0],
+                          "action": (m.group(1) if m.group(1) is not None else m.group(2)).decode("utf-8", "replace")})
+    forms.sort(key=lambda f: f["line"])
+    return {"exprs": bytes(ex), "attrs": attrs, "tags": tags, "forms": forms, "names": names}
+
+
+def read_svelte(w: "Walker", tree, script: bytes, markup: bytes, own: list[tuple[int, int]], parser) -> list:
+    """One `.svelte` file into its module. The component is a function named after the file (`+page`, `Card`),
+    as long as the file: what its `<script>` declares is written inside it (`+page.save`), what its markup draws,
+    shows and hands to events are its calls. A `<script module>` is the file's own code, outside the component.
+    Returns the statements read from the markup (for the count of calls nobody read)."""
+    m = w.m
+    comp = re.sub(r"[^\w$+@-]", "_", Path(m.rel).stem) or "component"
+    m.defs[comp] = JSDef(local=comp, name=comp, kind="function", start=1, end=m.lines, parent_local="", in_class=None,
+                         params="", fingerprint=hashlib.sha256(script + b"\x00" + markup).hexdigest()[:16], jsx=True)
+    m.params[comp] = []
+    m.component = m.default = comp
+    w.top = comp
+    kids = tree.root_node.children
+    mine = [c for c in kids if any(a <= c.start_byte < b for a, b in own)]
+    w.top = ""
+    w.each(mine, "")
+    w.top = comp
+    w.each([c for c in kids if c not in mine], comp)
+    m.default = comp
+    got = svelte_markup(markup)
+    m.forms = got["forms"]
+    if got["names"]:
+        m.anon_params.setdefault(comp, set()).update(got["names"])
+    for line, col, name in got["tags"]:
+        m.refs.append(JSRef(comp, name.split("."), line, "jsx", None, (line, col), name))
+    read = []
+    for st in parser.parse(got["exprs"]).root_node.children:
+        if st.type != "expression_statement" or st.has_error or not st.named_child_count:
+            continue
+        e = st.named_children[0]
+        ui = got["attrs"].get(st.start_byte, False)
+        if e.type in ("identifier", "member_expression"):   # a value shown, or a function handed to an attribute
+            ch = _chain(e)
+            if ch and ui is not False:
+                m.refs.append(JSRef(comp, ch, e.start_point[0] + 1, "callback", ui, _site_pos(e), _text(e)))
+            continue
+        w.each([e], comp, None, ui or None)
+        read.append(st)
+    return read
+
+
+def kit_path(folder: str) -> str:
+    """`(app)/items/[id=integer]/` under `src/routes` -> `/items/[id]`: a folder in round brackets is no part of
+    the address, and a part's matcher (`=integer`) is a rule for it, not a name."""
+    segs = [re.sub(r"=\w+(?=\])", "", s) for s in folder.split("/") if s and not (s.startswith("(") and s.endswith(")"))]
+    return "/" + "/".join(segs)
+
+
+def kit_same(route: str, written: str) -> bool:
+    """Is the address a form writes (`/notes/{note.id}`) the address of this page (`/notes/[id]`)?"""
+    a = [s for s in route.split("/") if s]
+    b = [s for s in written.split("?")[0].split("#")[0].split("/") if s]
+    return len(a) == len(b) and all(x == y or x.startswith("[") or "{" in y for x, y in zip(a, b))
 
 
 def _nearest_package(path: Path, repo: Path, cache: dict) -> dict:
@@ -2903,7 +3210,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
     files = {}
     for p in paths:
         rel = p.relative_to(repo).as_posix()
-        files[rel] = rel if p.suffix.lower() in HTML_EXTS else re.sub(r"\.[cm]?[jt]sx?$", "", rel)
+        files[rel] = rel if p.suffix.lower() in HTML_EXTS or p.suffix == SVELTE_EXT \
+            else re.sub(r"\.[cm]?[jt]sx?$", "", rel)
     spec = SpecResolver(repo, files)
     parsers = {ext: Parser(lang) for ext, lang in LANGS.items()}
     mods: dict[str, JSModule] = {}
@@ -2917,22 +3225,34 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             continue
         if len(src) > 1_500_000:
             continue
-        html = p.suffix.lower() in HTML_EXTS
+        html, svelte = p.suffix.lower() in HTML_EXTS, p.suffix == SVELTE_EXT
+        markup = own = None
+        ext = ".js" if html else p.suffix
         if html:
             src = inline_script(src)
             if src is None:
                 continue
+        elif svelte:
+            src, markup, ts, own = svelte_parts(src)
+            ext = ".ts" if ts else ".js"
         total += src.count(b"\n") + 1
-        tree = parsers[".js" if html else p.suffix].parse(src)
+        tree = parsers[ext].parse(src)
         m = JSModule(name=files[rel], rel=rel, path=p, lines=src.count(b"\n") + 1, is_test=bool(TEST_RE.search(rel)),
-                     html=html)
-        w = Walker(m, lambda s, _p=p: spec.resolve(s, _p),
-                   trpc=not m.is_test and TRPC_SERVER in _nearest_package(p, repo, pkg_cache)["deps"])
-        w.each(tree.root_node.children, "")
-        if not html:
+                     html=html, svelte=svelte)
+        pkg = _nearest_package(p, repo, pkg_cache)
+        km = KIT_FILE.match(p.relative_to(pkg["dir"]).as_posix()) \
+            if KIT in pkg["deps"] and not m.is_test and pkg["dir"] in p.parents else None
+        w = Walker(m, lambda s, _p=p: spec.resolve(s, _p), trpc=not m.is_test and TRPC_SERVER in pkg["deps"],
+                   kit=km.group("kind") if km is not None and not svelte else None)
+        shown = []
+        if svelte:
+            shown = read_svelte(w, tree, src, markup, own, parsers[ext])
+        else:
+            w.each(tree.root_node.children, "")
+        if not html and not svelte:
             m.directives = _directives(tree.root_node)
         covered = {ref.at for ref in m.refs if ref.at}
-        for cn in _call_nodes(tree.root_node):
+        for cn in [x for top in (tree.root_node, *shown) for x in _call_nodes(top)]:
             pos = _site_pos(cn)
             if pos in covered:
                 continue
@@ -3420,6 +3740,55 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         val, _ = r._eval(m, scope, list(recv), 0, {"value": False})
         return val is not None and val[0] == "ext" and val[1] == "express"
 
+    # SvelteKit: what each file with a fixed name is, gathered while the entries are set and joined after them
+    kit: dict = {"routes": [], "pages": [], "loads": {}, "layouts": {}, "frames": {}, "actions": [], "handle": {},
+                 "files": []}
+
+    def kit_route(tid: str | None, detail: str, role: str, base: Path) -> str | None:
+        node = g.nodes.get(tid) if tid else None
+        if node is None or node.kind != CALLABLE or node.entry:
+            return None
+        node.entry = {"kind": "route", "detail": detail, "sveltekit": role}
+        kit["routes"].append((node, base))
+        return node.id
+
+    def kit_file(m: JSModule, base: Path, km) -> None:
+        folder, kind = km.group("dir"), km.group("kind")
+        path = kit_path(folder)
+        own = lambda name: nid(m.name, m.exports[name]) if m.exports.get(name) in m.defs else None   # noqa: E731
+        if m.svelte:
+            node = g.nodes.get(nid(m.name, m.component)) if m.component else None
+            if kind == "page" and node is not None and not node.entry:
+                node.entry = {"kind": "page", "detail": path}
+                kit["pages"].append((m, base, folder))
+            elif kind == "layout" and node is not None:
+                kit["frames"][(base, folder)] = node.id
+        elif kind == "server":
+            for verb in (*KIT_VERBS, "fallback"):     # `fallback` answers every verb that has no function of its own
+                kit_route(own(verb), f"{'ANY' if verb == 'fallback' else verb} {path}", "endpoint", base)
+        elif kind == "layout.server":
+            tid = kit_route(own("load"), f"GET {path.rstrip('/')}/*", "layout load", base)
+            if tid:
+                kit["layouts"][(base, folder)] = tid
+        elif kind == "page.server":
+            tid = kit_route(own("load"), f"GET {path}", "load", base)
+            if tid:
+                kit["loads"][(base, folder)] = tid
+            for a in m.kit_actions if "actions" in m.exports else ():
+                tid = nid(m.name, a["local"]) if "local" in a else \
+                    handed(m, "", a["handler"], a["at"], nid(m.name), "route-handler")
+                tid = kit_route(tid, f"POST {path}" + ("" if a["key"] == "default" else f"?/{a['key']}"), "action", base)
+                if tid is None:
+                    continue
+                kit["actions"].append({"base": base, "folder": folder, "path": path, "key": a["key"], "tid": tid})
+                hit = r.resolve_parts(m, "", a["wrap"]) if a.get("wrap") else None
+                mid = target_id(hit) if hit and hit[0] == "def" else \
+                    f"ext:{_ext_js(hit[1])}" if hit and hit[0] == "ext" and not r.unread(hit[1]) else None
+                if mid:     # save: guarded(async (event) => …): the helper around it runs first
+                    if mid.startswith("ext:"):
+                        g.external(mid[4:])
+                    g.nodes[tid].entry["middleware"] = [mid]
+
     # entries
     for m in mods.values():
         pkg = _nearest_package(m.path, repo, pkg_cache)
@@ -3456,6 +3825,19 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 node = g.nodes.get(nid(m.name, local))
                 if node is not None and not node.entry:
                     node.entry = {"kind": "route", "detail": f"ACTION {name}"}
+        if KIT in pkg["deps"]:
+            km = KIT_FILE.match(rel_pkg)
+            if km is not None:
+                kit_file(m, pkg["dir"], km)
+            elif KIT_HOOKS.match(rel_pkg) and m.exports.get("handle") in m.defs:
+                # the one function every request passes: marked, as tRPC's handler is, so that the rules which ask
+                # routes ask the routes behind it
+                tid = kit_route(nid(m.name, m.exports["handle"]), "ANY /*", "handle", pkg["dir"])
+                if tid:
+                    g.nodes[tid].entry["serves"] = "sveltekit"
+                    kit["handle"][pkg["dir"]] = tid
+            if m.svelte:
+                kit["files"].append((m, pkg["dir"], km))
         for reg in m.page_regs:
             res = r.resolve_parts(m, "", reg["component"])
             tid = target_id(res)
@@ -3572,6 +3954,55 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         if made or trpc["calls"]:
             g.meta["trpc"] = {"procedures": made, "routers": trpc["routers"], "client_calls": trpc["calls"],
                               "linked": trpc["linked"]}
+
+    if kit["routes"] or kit["pages"]:
+        def kit_link(src: str, tid: str, line: int, conf: str = RESOLVED) -> None:
+            g.add_edge(src, tid, kind=CALLS, confidence=conf, line=line, via="http-sveltekit",
+                       detail=g.nodes[tid].entry["detail"])
+
+        for node, base in kit["routes"]:
+            hook = kit["handle"].get(base)
+            if hook and hook != node.id:     # `handle` of hooks.server runs before every route of the app
+                node.entry["middleware"] = [hook, *(node.entry.get("middleware") or ())]
+        for m, base, folder in kit["pages"]:
+            # the framework's own wiring: a page gets its data from the `load` beside it and from the layouts
+            # above it, and is drawn inside those layouts
+            src = nid(m.name, m.component)
+            if (base, folder) in kit["loads"]:
+                kit_link(src, kit["loads"][(base, folder)], 1)
+            parts = [x for x in folder.split("/") if x]
+            for i in range(len(parts), -1, -1):
+                above = "".join(x + "/" for x in parts[:i])
+                if (base, above) in kit["layouts"]:
+                    kit_link(src, kit["layouts"][(base, above)], 1)
+                if (base, above) in kit["frames"]:
+                    g.add_edge(src, kit["frames"][(base, above)], kind=CALLS, confidence=RESOLVED, line=1,
+                               via="sveltekit-layout")
+        posted = linked = 0
+        for m, base, km in kit["files"]:
+            # a form with method="POST" posts to an action: of the page it stands on (`?/name`, or `default` when
+            # none is named), or of the page whose address it writes (`/login?/register`)
+            src = nid(m.name, m.component)
+            for form in m.forms:
+                posted += 1
+                if form["action"] is None:
+                    continue
+                at, named, key = form["action"].partition("?/")
+                at, key = at.split("?")[0].strip(), key.split("&")[0].strip() if named else "default"
+                hits = []
+                if not at and km is not None and km.group("kind") == "page":
+                    hits = [a for a in kit["actions"] if (a["base"], a["folder"], a["key"]) == (base, km.group("dir"), key)]
+                elif at.startswith("/"):
+                    hits = [a for a in kit["actions"] if a["base"] == base and a["key"] == key and kit_same(a["path"], at)]
+                    if not hits and not named:   # no page's action: a `+server.ts`, matched like any request
+                        call = _normalize_http(at, "POST", m.component, form["line"], "onSubmit")
+                        if call is not None:
+                            m.http.append(call)
+                for a in hits:
+                    kit_link(src, a["tid"], form["line"], RESOLVED if len(hits) == 1 else POSSIBLE)
+                linked += bool(hits)
+        g.meta["sveltekit"] = {"routes": sum(1 for n, _ in kit["routes"] if n.entry.get("sveltekit") != "handle"),
+                               "pages": len(kit["pages"]), "forms": posted, "linked": linked}
 
     http_calls = []
     for m in mods.values():

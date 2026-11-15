@@ -126,10 +126,11 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     web = shape in ("full-stack web app", "web API", "frontend web app")
     # Routes in test code (a test's own server, the sample apps under tests/fixtures) are not the app's routes
     # ... and neither is the handler every tRPC procedure stands behind (`POST /api/trpc/[trpc]`): each procedure
-    # is a route of its own (`entry["serves"]`, set by the JS/TS reader where it read the procedures)
+    # is a route of its own (`entry["serves"]`, set by the JS/TS reader where it read the procedures), nor
+    # SvelteKit's `handle`, which runs before every route (`ANY /*`)
     routes = [(n, (n.entry or {}).get("detail") or "") for n in g.entry_points()
               if (n.entry or {}).get("kind") == "route" and not (n.file and repo.is_test(n.file))
-              and (n.entry or {}).get("serves") != "trpc"]
+              and not (n.entry or {}).get("serves")]
     deps = _deps_text(repo)
     # In code, or on an import line (a JS import names its package in a string); not a word in a pattern list
     managed = MANAGED_AUTH.search(deps) or _code_grep(repo, MANAGED_AUTH, limit=1) or [
@@ -316,6 +317,9 @@ def _global_auth_signs(repo) -> list[tuple[str, int, str]]:
     for f in repo.project_files:   # Next.js middleware file
         if re.fullmatch(r"(?:src/)?middleware\.[tj]sx?", f) and mentions_auth(code_only(repo.text(f), js=True), js=True):
             out.append((f, 1, "middleware file"))
+        elif re.search(r"(?:^|/)src/hooks\.server\.[tj]s$", f) and \
+                mentions_auth(code_only(repo.text(f), js=True), js=True):
+            out.append((f, 1, "SvelteKit hook"))     # `handle` runs before every route of the app
     return out
 
 

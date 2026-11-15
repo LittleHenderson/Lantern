@@ -36,7 +36,9 @@ def _routes(g: Graph) -> list[dict]:
             continue
         detail = n.entry.get("detail") or ""
         verb, _, path = detail.partition(" ")
-        if not path.startswith("/"):
+        if not path.startswith("/") or "?" in path:
+            # `POST /notes?/remove`, a SvelteKit form action: a request's address is compared without what follows
+            # its `?`, so it would say nothing of which action is meant (the JS reader links the form itself)
             continue
         verbs = {v.upper() for v in verb.split("/")} if verb else {"ANY"}
         if verbs & {"ROUTE", "API_ROUTE", "WEBSOCKET"}:

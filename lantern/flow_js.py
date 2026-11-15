@@ -36,7 +36,7 @@ def build_all(repo, max_file: int, stats: dict):
     """Every JavaScript/TypeScript file of the project (and each page's own script) as a `Mod`."""
     from tree_sitter import Parser
 
-    from .js_frontend import HTML_EXTS, LANGS, TEST_RE, discover, inline_script
+    from .js_frontend import HTML_EXTS, LANGS, SVELTE_EXT, TEST_RE, discover, inline_script, svelte_parts
     from .python_frontend import project_bytes
     parsers: dict = {}
     root = repo.resolve()
@@ -60,6 +60,9 @@ def build_all(repo, max_file: int, stats: dict):
             if src is None:
                 continue
         ext = ".js" if html else p.suffix
+        if ext == SVELTE_EXT:     # a Svelte component: its script, with the file's own line numbers
+            src, _markup, ts, _own = svelte_parts(src)
+            ext = ".ts" if ts else ".js"
         if ext not in parsers:
             parsers[ext] = Parser(LANGS[ext])
         try:
@@ -292,6 +295,8 @@ class _Reader:
     def spec(s: str) -> str:
         if s.startswith("node:"):
             s = s[5:]
+        if s.startswith("$lib/"):       # SvelteKit's name for the project's own `src/lib`
+            return "./lib/" + s[5:]
         return s if not s.startswith(("/", "@/", "~/", "#")) else "./" + s.lstrip("/@~#")
 
     def imports(self, s) -> None:
