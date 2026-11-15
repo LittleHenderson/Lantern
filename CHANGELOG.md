@@ -9,11 +9,11 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
-- **Modern stack, first part: Supabase tables read with their row rules; Next.js Server Actions and tRPC
-  procedures as routes** (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14, steps 1 to 3. Tests first
-  for each rule, each dangerous example beside twins that must stay clean. The new kinds of link and the new
-  login rule are not yet measured on public projects: until they are, they are provisional, and the documents
-  say so).
+- **Modern stack, first part: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and
+  SvelteKit's files as routes** (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14, steps 1 to 3 and the
+  SvelteKit half of step 4. Tests first for each rule, each dangerous example beside twins that must stay clean. The
+  new kinds of link and the new login rule are not yet measured on public projects: until they are, they are
+  provisional, and the documents say so).
   - **A Supabase table is on the map.** A call written `<client>.from("<table>")` followed by `select`,
     `insert`, `update`, `upsert` or `delete` is a link from the function to the table (`db:<table>`, Data lane),
     with what the function does there. The link is "likely" (`supabase-from`) where the client's value was
@@ -106,13 +106,83 @@ file. New entries go under `## Unreleased`, on top.
     *Measured* on the projects already on the benchmark machine, none of which uses tRPC, so nothing should
     move: 0 of 31,168 call sites changed on seven, no finding changed on nine.
     Tests: `tests/test_trpc.py` (15; the first 9 failed on the code before them).
+  - **A SvelteKit app's files are its routes.** A SvelteKit app has no router in its code: files with fixed names
+    under `src/routes` are its doors. None of them was an entry point, `$lib/…` was read as a library, and a `.svelte`
+    file was not read at all. Now, where the nearest `package.json` depends on `@sveltejs/kit`: a `+server.ts` gives
+    one route per verb it exports (`GET /api/notes/[id]`; `fallback` answers every verb); a `+page.server.ts` gives
+    `load` (`GET /notes`) and one route per form action (`POST /notes` for `default`, `POST /notes?/remove` for a
+    named one; written in place, as a method, by name, or inside a helper such as `save: withAuth(fn)`, whose name is
+    then read as a middleware's is); a `+layout.server.ts` gives `load` for the pages below it (`GET /*`, and `GET
+    /(app)/*` for a group of pages); `src/hooks.server.ts` gives `handle`, or each named part of `sequence(a, b)`, as
+    the one door every request passes (`ANY /*`, marked `serves: "sveltekit"`: the routes behind it are asked, not
+    it). A folder in round brackets is no part of an address and a matcher (`[id=integer]`) is `[id]`. *A `.svelte`
+    file is read*, in every project: its script with the file's own line numbers, and its markup for three things: an
+    event on a tag (`on:click={save}`, `onclick={save}`) is a click path, a tag with a capital draws that component,
+    and `<form method="POST">` posts. Text that only looks like one of them is none (an attribute's look-alike outside
+    a tag, a `<Form>` component). *The framework's own wiring is on the map*, as confirmed links, since it is the
+    framework's rule and not a reading of names: a page reaches the `load` beside it and of the layouts above it and
+    each action its forms post to (`http-sveltekit`: `action="?/remove"`, the page's own `default`, another page's
+    address `/login?/register`; a form that posts to a `+server.ts` is matched like any request), the `load` of a
+    `+page.ts` or `+layout.ts`, which also runs in the browser and which nobody can ask for from outside, so it is no
+    route (`sveltekit-load`), and the layouts it is drawn in (`sveltekit-layout`). `$lib/x` is the project's own
+    `src/lib/x`. An import written `./util.js` where only `util.ts` is there means that file, as TypeScript reads it
+    (in every project). Svelte's own words (`$state`, `$derived`, `$props`, `$effect` …) in a `.svelte` or
+    `.svelte.ts` file are the language's, no longer calls "not followed". *The login check* reads what the server
+    knows of the caller: `locals.user` or `locals.session` asked in a route's own lines or in a helper it calls is a
+    sign. A hook's name is no sign (`sequence(populate, authGuard)` usually turns away only some addresses). *The hook
+    is read from its code, with the addresses it names.* It is a function every request passes through, and
+    `resolve(event)` is the way on. A part that turns away every request with nobody signed in is a login for every
+    route behind it. A part that names addresses is a login for the routes whose own address is certainly among those
+    asked, and for no other: `event.url.pathname.startsWith("/app") && !event.locals.user`, the same in a branch of
+    its own or after the other addresses were sent on with `return resolve(event)`, "every address but `/login`", a
+    list of open pages, `event.route.id`, the path kept under a name; a part of a route's address that changes
+    (`[id]`) counts for neither side. Who is signed in is read as the sign-in libraries' guides write it:
+    `locals.user`, `locals.session`, what `await locals.auth()` or `locals.safeGetSession()` hands back. A request
+    that was handed on was not asked what comes after; a check after `await resolve(event)` counts for nothing (the
+    route has run), and neither does one whose refusal is caught and only logged (`error(401)` throws by itself; so
+    does Next.js's `redirect("/login")`, read the same way on a Next.js route). This was found by trying what a
+    current SvelteKit app does on the first writing of this change, before this entry was written. Of the 49 hook
+    shapes now in the tests, that first writing read 24 as no login at all where the hook has one (the guards of the
+    Auth.js and Supabase guides among them: every route behind them would have been reported as open) and five as a
+    login where there is none: one area guarded and every route taken as guarded (three shapes), a check after the
+    route had already run, a refusal that was caught. The code before the SvelteKit work read 29 of the 49 wrong, all
+    as no login. *What the caller sends* is followed from the event a route is handed, whole or taken apart
+    (`request`, `url`, `params`, `cookies`), also through a helper handed the event; `locals` is what the server's own
+    hook put there. *Seven wrong sentences* were found by reading every sentence of a whole analysis of a tiny app, in
+    the result files and in the report in a browser, and each was fixed with a test first: a story said "click the
+    svelte::+page button" (a page file has no name of its own: "click a button on it", under the heading "A button on
+    the /ask page can run shell commands on your server"); a risky line in a page's markup was said to be reached by
+    nothing (it is on the page); every form was taken for a file upload (`request.formData()` is how the fields of
+    every SvelteKit, Remix and Next.js form arrive: the readiness page speaks of uploads only where the file takes a
+    file out of the form); a word of the address read with `searchParams.get("id")` was called `searchParams`; the
+    report said "It runs when the page /notes." (it runs when someone opens it: true of every kind of app) and "It
+    runs when +page call it" (every SvelteKit page file is called `+page`: such a page is called by its address); and
+    a shared load of one group of pages was listed for every address. *Two gains beyond SvelteKit* came from giving
+    that word of the address its name: read with `searchParams.get("id")` on SvelteKit's `url`, Next.js's
+    `request.nextUrl` or `new URL(request.url)`, it is `id`, as `req.query.id` is on Express. So a record picked by it
+    is seen by the "another person's record" rule (`LT-AUTHZ-OWNER`), and a route that turns everyone away unless the
+    address says `admin=1` by the rule for the caller's own word (`LT-AUTHZ-CLIENT-ROLE`). Neither was seen before, on
+    Next.js either; the twins stay clean (a search word, the role the server keeps, a word nobody is turned away on).
+    *Measured* on the projects already on the benchmark machine, none of which is a SvelteKit app, so nothing should
+    move: 0 of 31,168 call sites changed on seven, and on 22 (those seven and the 15 sample apps of the tests) every
+    finding, story, protection line, entry point and login shown reads the same. Tests: `tests/test_sveltekit.py` (74,
+    49 of them on the hook), six more in `tests/test_flow_js.py` and one more in `tests/test_js_values.py` (7 now). On
+    the code before the SvelteKit work 58 of these 81 fail; the 23 that pass there are cases in which nothing is to be
+    found: 20 hook shapes that show no login (look-alikes of a guard, and three shapes that are not read) and the
+    three twins of the caught refusal on a Next.js route. Of the 49 hook tests, the first 11 and the 4 added last were
+    written before the change they are for, the other 34 after it and then run on the code before it; the four Next.js
+    cases of the caught refusal were written after it too (one of them fails on the code before it).
   *Not covered:* a client handed in as a parameter; a table reached through `rpc()` or a view; row-level
   security switched on in the dashboard (Lantern reads the files, and says so); an action exported through a
   wrapper Lantern does not look through; a value the map cannot place (an object written out, what a function
   of the project hands back), where the login rule reads a call by its name alone; a tRPC procedure kept under
   a name of its own and put into a router later, a call from the server's own code (`createCaller`), a router
-  loaded lazily, and a request limit or a login check put on the one handler in place of the procedures.
-  `docs/audit/CLAIMS.md` A20 to A23 and S34 to S36 have the full lists.
+  loaded lazily, and a request limit or a login check put on the one handler in place of the procedures; in a
+  SvelteKit app, what `svelte.config.js` moves or renames (`kit.files`, `kit.alias`: the config is code and is never
+  run), a hook a library made or an unnamed function inside `sequence(…)`, a verb exported by a name (`export const
+  GET = handler`), a form in a component that is no page, a named action called with `fetch`, and a hook's guard that
+  names its addresses by a pattern, by a list of areas or with `base` (those routes are reported as open).
+  `docs/audit/CLAIMS.md` A20 to A24 and S34 to S37 have the full lists.
 
 - Fix this for me (optional): pick a coding agent you already use (Claude Code, Codex or Aider) in Advanced
   Settings, and a finding's Fix screen offers "Fix this for me with …". The agent works on a copy of your project;

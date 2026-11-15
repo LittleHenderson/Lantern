@@ -248,6 +248,31 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   `{"procedures", "routers", "client_calls", "linked"}` (absent where the project has none). The data flow reads
   `input` (and `rawInput`) of the handler's one argument as request data and `ctx` as the server's own
   (`ctx.session`, `ctx.user`: who is signed in). The client links are provisional: not measured on public projects.
+* SvelteKit (since 2026-11-15, roadmap stage 1). Where the nearest `package.json` depends on `@sveltejs/kit`, the
+  files with fixed names are entry points: `{"kind": "route", "detail": "POST /notes?/remove", "sveltekit":
+  "action"}`. `sveltekit` says which door it is: `"endpoint"` (a verb a `+server.ts` exports: `GET /api/notes/[id]`;
+  `fallback` is `ANY`), `"load"` (`load` of a `+page.server.ts`: `GET <the page's address>`), `"action"` (each of its
+  `actions`: `POST <address>` for `default`, `POST <address>?/<name>` for a named one), `"layout load"` (`load` of a
+  `+layout.server.ts`: `GET <folder>/*`, where a group's folder keeps its round brackets, `GET /(app)/*`: it runs for
+  that group's pages) and `"handle"` (`handle` of `src/hooks.server.ts`, or each named part of `sequence(a, b)`: `ANY
+  /*`, with `"serves": "sveltekit"`; the login rule and the readiness page ask the routes behind it, not it). In a
+  page's or an action's address a folder in round brackets is left out and `[id=integer]` is `[id]`. Every route's
+  `middleware` list (node ids) begins with the hook's parts in their order, followed by a helper the action or verb is
+  wrapped in (`save: withAuth(fn)`). A `+page.svelte` is `{"kind": "page", "detail": "/notes/[id]"}` on its component.
+  A `.svelte` file's module keeps its ending (`js:src/routes/notes/+page.svelte`), the component is a node named after
+  the file (`js:src/routes/notes/+page.svelte::+page`, `js:src/lib/Card.svelte::Card`; lines 1 to the file's end) and
+  a function of its script is `…::+page.wipe`; a `.svelte.ts` file keeps its whole name too. Edges the framework's
+  wiring gives, `resolved`: `http-sveltekit` from a page to the `load` beside it, to the `load` of each layout above
+  it and to the action a form on it posts to (detail = the route; `possible` where several actions fit; in the report
+  "sends it to POST /notes?/remove"); `sveltekit-load` from a page to the `load` of its `+page.ts` and of the
+  `+layout.ts` files above it (they also run in the browser and are no entries); `sveltekit-layout` from a page to the
+  layout components it is drawn in. An event on a tag of the markup (`on:click={save}`, `onclick={save}`) is a
+  `callback` edge with `detail` `onClick`, as in JSX. `graph.json` `meta.sveltekit` counts them: `{"routes", "pages",
+  "forms", "linked"}` (absent where the project has none; `routes` leaves the hook out, `forms` are the forms that
+  post, `linked` those that found their action). In `calls.json` Svelte's own words (`$state`, `$derived`, `$effect`,
+  `$props`, `$bindable`, `$inspect`, `$host`) are `builtin` with `via` `svelte-rune`. The data flow reads what a route
+  is handed (`request`, `url`, `params`, `cookies`, whole as `event` or taken apart) as request data and `locals` as
+  the server's own (`locals.user`, `locals.session`: who is signed in). Not measured on public SvelteKit projects yet.
 * JavaScript `via` values added in stage 3 (2026-11-09): `require-call` (`require('./x')(...)`), `route-handler` and
   `middleware` (a function handed to an Express router by name: resolved when it is named straight from a module,
   inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),
@@ -391,7 +416,9 @@ as checked (found: "the code on the way to this route turns away whoever is not 
 changes data (read as for the finding, below) counts among the "routes that change data" of `route-auth` and
 `rate-limit`, and their `evidence` and `found` name it `the Server Action <name> (<file>:<line>)`. A tRPC
 procedure is counted under its own address (a mutation changes data); the one route that serves them all
-(`serves: "trpc"`) is not counted.
+(`serves: "trpc"`) is not counted, and neither is SvelteKit's `handle` (`serves: "sveltekit"`): its routes are. The
+upload line (`upload-checks`) is given for a form read with `formData()` only where the same file takes a file out
+of it (`File`, `Blob`, `arrayBuffer()`, `stream()`; since 2026-11-15): reading a form's fields is no upload.
 
 `not_read` (`lantern/unread.py`, since 2026-11-12; `{}` when the project holds neither kind, absent from older
 results): what the project holds that Lantern takes for code or software and did not read. `renamed`: code kept under
@@ -507,7 +534,15 @@ own lines do: `new TRPCError({ code: "UNAUTHORIZED" })` or `FORBIDDEN` written a
 caller away (TRPCError FORBIDDEN, server/api/trpc.ts:17)", "it turns a caller away itself (TRPCError
 UNAUTHORIZED, line 22)"). A comment, a text and another code (`TOO_MANY_REQUESTS`) are none. `more_info` of the
 finding names what the procedure is built on. On a finding in a procedure, `input.via` names the handler's
-`input` ("parameter `input`"), never the `.input(…)` step that says what the procedure accepts.
+`input` ("parameter `input`"), never the `.input(…)` step that says what the procedure accepts. On a SvelteKit
+route (since 2026-11-15) `locals.user` and `locals.session` asked in the route's lines or in a helper's are signs.
+The hook that runs before every route is not read by its name; the flow step reads its code. A part of it that
+turns away every request with nobody signed in puts every route behind it in `logins_shown`; a part that names
+the addresses it guards (`event.url.pathname.startsWith("/app")`, "every address but `/login`", `event.route.id`)
+puts there the routes whose own address is certainly among them, and no other. A word of the address read by
+its name (`url.searchParams.get("id")`, `request.nextUrl.searchParams.get("id")`, also off `new URL(request.url)`)
+has `input.via` "`id` in `url.searchParams` is what the request sent", and the rules that ask who may reach what
+read it as they read `req.query.id` on Express (before, it carried no name and they did not see it).
 
 Two rules of `lantern-web` rest on the same step. `LW-XSS-RAW` (79, `tool_confidence: LOW`): a place in a page
 template that prints a value without escaping it (EJS `<%- x %>`, Handlebars and Mustache `{{{x}}}` / `{{& x}}`, Pug
