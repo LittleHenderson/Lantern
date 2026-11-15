@@ -303,3 +303,67 @@ def test_the_twin_where_nothing_runs_server_actions_an_argument_is_no_request_va
     """The same file where the words do nothing: these are plain functions, called by the app's own code, and
     what they are handed is not said to come from a request."""
     assert _flows(tmp_path, {"src/actions.ts": HANDED}, SPA_PG) == []
+
+
+# ------------------------------------------------------------------ an action that changes data and asks nobody
+PRISMA = json.dumps({"dependencies": {"next": "14.2.0", "react": "18.3.0", "@prisma/client": "5.14.0"}})
+PRISMA_DB = '''import { PrismaClient } from "@prisma/client";
+export const db = new PrismaClient();
+'''
+LOGIN = '''import { cookies } from "next/headers";
+export async function requireUser() {
+  const token = cookies().get("session");
+  if (!token) throw new Error("Sign in first");
+  return token.value;
+}
+'''
+NOTE_ROW = '''"use client";
+import { NAME } from "../app/actions";
+
+export function Row({ id }: { id: string }) {
+  return <button onClick={() => NAME(id)}>Go</button>;
+}
+'''
+NOTE_PAGE = '''import { Row } from "../components/Row";
+export default function Page() {
+  return <Row id="1" />;
+}
+'''
+
+
+def _action_file(name, body, head=""):
+    return ('"use server";\nimport { db } from "../lib/db";\n' + head +
+            f"\nexport async function {name}(id: string) {{\n{body}}}\n")
+
+
+def _asked(root, name, body, head="", used=True):
+    from lantern import websec
+    files = {"app/actions.ts": _action_file(name, body, head), "lib/db.ts": PRISMA_DB, "lib/session.ts": LOGIN,
+             "app/page.tsx": NOTE_PAGE if used else "export default function Page() { return <p>Hi</p>; }\n"}
+    if used:
+        files["components/Row.tsx"] = NOTE_ROW.replace("NAME", name)
+    g = _build(root, files, PRISMA)
+    return [f["title"] for f in websec.missing_auth(g)]
+
+
+REMOVES = "  await db.note.delete({ where: { id } });\n"
+
+
+def test_an_action_that_changes_data_and_checks_nobody_is_found(tmp_path):
+    assert _asked(tmp_path, "removeNote", REMOVES) == [
+        "The Server Action removeNote changes data, the app uses it, and no login check was found"]
+    sql = "  await db.$executeRawUnsafe(\"delete from notes where id = '\" + id + \"'\");\n"
+    assert len(_asked(tmp_path / "sql", "purgeNote", sql)) == 1
+
+
+def test_the_twins_an_action_the_login_rule_leaves_alone(tmp_path):
+    """One that checks who is asking, one that only reads, one that is public by its name, one the app does not
+    use, and the same function where nothing runs Server Actions."""
+    guarded = '  await requireUser();\n' + REMOVES
+    assert _asked(tmp_path / "guarded", "removeNote", guarded, 'import { requireUser } from "../lib/session";\n') == []
+    reads = "  return db.note.findMany({ where: { id } });\n"
+    assert _asked(tmp_path / "reads", "findNotes", reads) == []
+    assert _asked(tmp_path / "public", "subscribe", "  await db.reader.create({ data: { id } });\n") == []
+    assert _asked(tmp_path / "unused", "removeNote", REMOVES, used=False) == []
+    hashes = '  return createHash("sha256").update(id).digest("hex");\n'
+    assert _asked(tmp_path / "hash", "fingerprint", hashes, 'import { createHash } from "crypto";\n') == []
