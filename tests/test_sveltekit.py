@@ -1156,6 +1156,11 @@ GUIDE_CASES = {
     # whole hooks: the guard as one part of `sequence(...)`; an area handed on with its answer kept under a name
     "the guard as a part of sequence()": (None, GUIDE_SEQUENCE, APP_ONLY),
     "an area handed on with its answer kept": (None, GUIDE_ANSWER_KEPT, APP_ONLY),
+    # `error(401)` throws by itself: caught and logged, the request goes on; thrown again, it does not
+    "the refusal caught and logged": (
+        "", 'try {\n    if (!event.locals.user) error(401, "no");\n  } catch (e) {\n    console.log(e);\n  }', []),
+    "the refusal caught and thrown again": (
+        "", 'try {\n    if (!event.locals.user) error(401, "no");\n  } catch (e) {\n    throw e;\n  }', BOTH),
     # the route has run by the time the check is made; and the hook's one parameter not taken apart
     "a check after the request was handed on": (None, GUIDE_ASKED_LATE, []),
     "the hook's one parameter kept whole": (None, GUIDE_KEPT_WHOLE, APP_ONLY),
@@ -1170,7 +1175,8 @@ def test_a_hook_as_the_sign_in_guides_write_it(tmp_path, case):
     whole address: `event.url.pathname` or `event.route.id`, also kept under a name as it is, against fixed text
     (`startsWith`, `===`, a list's `includes`). A request that is handed on (`return resolve(event)`, also with the
     answer kept under a name first) was not asked what comes after, and a check that stands after
-    `await resolve(event)` is made when the route has run: it counts for nothing. A route takes the login only
+    `await resolve(event)` is made when the route has run: it counts for nothing, and neither does one whose
+    refusal (`error(401)` throws by itself) is caught and the request goes on. A route takes the login only
     when its own address is certainly among those asked: a part that changes (`[id]`) counts for neither side. The
     path changed before it is asked, a pattern, a list of areas: not read, so those routes are reported as open."""
     from lantern.security import scan
