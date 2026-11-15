@@ -22,6 +22,7 @@ import re
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -819,6 +820,128 @@ def test_a_checker_starts_in_a_folder_of_lanterns_own_with_none_of_the_shells_va
         shutil.rmtree(work, ignore_errors=True)
 
 
+PY_SERVER = r'''"""A stand-in for pyright's language server: it answers every question with the one place written beside it."""
+import json
+import sys
+from pathlib import Path
+
+plan = json.loads((Path(__file__).resolve().parent / "plan.json").read_text(encoding="utf-8"))
+out = sys.stdout.buffer
+
+
+def read():
+    length = 0
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            break
+        if line.lower().startswith(b"content-length:"):
+            length = int(line.split(b":", 1)[1])
+    return json.loads(sys.stdin.buffer.read(length))
+
+
+def send(msg):
+    body = json.dumps(msg).encode("utf-8")
+    out.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    out.flush()
+
+
+root, watched, asked = None, None, 0
+while True:
+    m = read()
+    if m is None or m.get("method") == "exit":
+        break
+    method, ident = m.get("method"), m.get("id")
+    if method == "initialize":
+        root, watched = m["params"]["rootUri"], m["params"].get("processId")
+        send({"jsonrpc": "2.0", "id": ident, "result": {"capabilities": {}}})
+    elif method == "textDocument/definition":
+        asked += 1
+        # as the real server does every three seconds: it looks whether the process named as its starter is
+        # still there, and where it is not let look at that process it takes it for gone and ends
+        if plan.get("watches") and watched is not None:
+            sys.exit(1)
+        if plan.get("ends_at") == asked:
+            sys.exit(3)
+        if plan.get("writes") and asked == 2:
+            out.write(plan["writes"].encode("utf-8"))
+            out.flush()
+            continue
+        to = plan["to"]
+        send({"jsonrpc": "2.0", "id": ident, "result": [
+            {"uri": root + "/src/" + to["file"], "range": {"start": {"line": to["line"], "character": to["char"]}}}]})
+    elif ident is not None:
+        send({"jsonrpc": "2.0", "id": ident, "result": None})
+'''
+SHOUT_AT = {"file": "app/models.py", "line": 4, "char": 8}      # `    def shout(self) -> str:`, counted from 0
+
+
+def _a_server(folder, **plan):
+    """A stand-in for pyright: `node` is a script that starts the stand-in server whatever it is handed."""
+    _write(folder, {"server.py": PY_SERVER, "plan.json": json.dumps({"to": SHOUT_AT} | plan),
+                    "node": f'#!/bin/sh\nexec "{sys.executable}" -I "{folder}/server.py"\n',
+                    "pyright/langserver.index.js": ""})
+    (folder / "node").chmod(0o755)
+    return {**json.loads(json.dumps(TOOLS)), "node": str(folder / "node"),
+            "pyright": str(folder / "pyright" / "langserver.index.js")}
+
+
+@posix_only
+def test_pyrights_server_is_asked_over_its_pipes_and_what_it_wrote_is_read(tmp_path):
+    repo = _write(tmp_path / "p", PY_APP)
+    g = build_graph(repo)
+    sites = _open(g, ".py")
+    got = typecheck.ask_python(_a_server(tmp_path / "bin"), repo, g, sites, 60)
+    assert got["version"] == "8.8.8" and got["stopped"] is None and len(got["answers"]) == len(sites) > 3
+    for s, a in zip(sites, got["answers"]):
+        assert a == {"where": "project", "file": "app/models.py", "line": 5, "name": "shout", "what": "function",
+                     "direct": "." not in s["callee"]}, (s["callee"], a)
+
+
+@posix_only
+def test_a_server_that_looks_for_the_process_that_started_it_is_named_none(tmp_path, monkeypatch):
+    """pyright's server looks every three seconds whether the process named to it as its starter is still there,
+    and ends when it cannot see it. Behind the launcher's walls it is not let look at a process outside them: on a
+    real project it ended three seconds in, with most calls not asked. So it is named no process. Its pipes end
+    with Lantern, and the launcher ends what Lantern leaves."""
+    repo = _write(tmp_path / "p", PY_APP)
+    g = build_graph(repo)
+    sites = _open(g, ".py")
+    monkeypatch.setattr(typecheck, "ONE_ANSWER", 3)
+    got = typecheck.ask_python(_a_server(tmp_path / "bin", watches=True), repo, g, sites, 60)
+    assert got["stopped"] is None and all(a and a["where"] == "project" for a in got["answers"])
+
+
+@posix_only
+@pytest.mark.parametrize("plan, why", [
+    ({"ends_at": 2}, "pyright ended before it had answered every call"),
+    ({"writes": "Content-Length: 99999999999\r\n\r\n"}, "pyright's answer could not be read"),
+    ({"writes": "Content-Length: 5\r\n\r\nhello"}, "pyright's answer could not be read"),
+    ({"writes": "Content-Length: 2\r\n\r\n[]" * 3 + "Content-Length: x\r\n\r\n"}, "pyright's answer could not be read"),
+], ids=["ends", "too-long", "no-json", "no-number"])
+def test_a_server_that_ends_or_writes_something_else_is_no_answer_and_is_not_waited_for(tmp_path, monkeypatch, plan, why):
+    repo = _write(tmp_path / "p", PY_APP)
+    g = build_graph(repo)
+    sites = _open(g, ".py")
+    tools = _a_server(tmp_path / "bin", **plan)
+    monkeypatch.setattr(typecheck, "ONE_ANSWER", 40)
+    began = time.monotonic()
+    with pytest.raises(typecheck.Failed) as e:
+        typecheck.ask_python(tools, repo, g, sites, 120)
+    assert str(e.value) == why
+    assert time.monotonic() - began < 30        # nobody waits out an answer's time for a program that is gone
+    if sys.platform.startswith("linux"):
+        assert _going(tmp_path / "bin" / "server.py") == []
+    # through the pass: no call is placed by the answers it did give, and the run says why
+    monkeypatch.setattr(typecheck, "find", lambda root: tools)
+    after = build_graph(repo, typecheck=True)
+    assert _shape(after) == _shape(g) and not _by_checker(after)
+    assert after.meta["typecheck"]["python"] == {"ran": False, "why": why, "asked": 0, "unresolved": len(sites)}
+
+
 # ---- the third part: the real checkers, where the run names them ----
 
 @pytest.fixture
@@ -1040,3 +1163,67 @@ def test_a_checker_has_no_network(tmp_path, real):
         assert out.decode("utf-8").strip().startswith("refused "), (out, said)
     finally:
         listener.close()
+
+
+@needs_checkers
+def test_pyright_still_answers_after_its_look_for_the_process_that_started_it(tmp_path, monkeypatch, real):
+    """The real server's look comes three seconds after its start (see the stand-in's test above): a run that is
+    still asking then gets its answers."""
+    real("python")
+    repo = _write(tmp_path / "p", PY_APP)
+    took, waited = typecheck._py_answer, []
+
+    def slow(*a, **k):
+        if not waited:
+            waited.append(1)
+            time.sleep(3.6)
+        return took(*a, **k)
+    monkeypatch.setattr(typecheck, "_py_answer", slow)
+    monkeypatch.setattr(typecheck, "ONE_ANSWER", 3)
+    g = build_graph(repo, typecheck=True)
+    assert waited and g.meta["typecheck"]["python"]["ran"] is True and _by_checker(g) == PY_SAYS
+
+
+# A library with written types, installed in the project (`node_modules`), and a hook of it: what the hook hands back
+# is typed by the library, so the compiler knows what a part taken out of it is.
+HOOK_LIB = {
+    "package.json": '{"dependencies": {"tinyquery": "1.0.0"}}',
+    "node_modules/tinyquery/package.json": '{"name": "tinyquery", "version": "1.0.0", "types": "index.d.ts"}',
+    "node_modules/tinyquery/index.d.ts": (
+        "export interface QueryResult<T> { data: T; refetch(): void }\n"
+        "export function useQuery<T>(load: () => T): QueryResult<T>\n"),
+    "app/note.ts": (
+        "export class Note { shout() { return 'x' } }\n"
+        "export class Draft { shout() { return 'y' } }\n"
+        "export function loadNote(): Note { return new Note() }\n"),
+    "app/view.ts": (
+        "import { useQuery } from 'tinyquery'\n"
+        "import { loadNote } from './note'\n"
+        "\n"
+        "export function view() {\n"
+        "  const { data, refetch } = useQuery(loadNote)\n"
+        "  data.shout()\n"
+        "  refetch()\n"
+        "}\n"),
+}
+
+
+@needs_checkers
+def test_what_a_typed_librarys_hook_hands_back_is_followed_into_the_project_and_into_the_library(tmp_path, real):
+    """`const { data, refetch } = useQuery(loadNote)`: Lantern's own reading leaves `data.shout()` and `refetch()`
+    unresolved (a part taken out of what a library call returned). The library's written types say what they are:
+    `data` is what `loadNote` returns, a Note of the project, and `refetch` is the library's own. The twin: the same
+    project with the library not installed, where the compiler knows neither and both calls stay as they were."""
+    real("typescript")
+    repo = _write(tmp_path / "p", HOOK_LIB)
+    before = build_graph(repo)
+    for callee in ("data.shout", "refetch"):
+        assert _site(before, callee)["outcome"] == "unresolved"
+    g = build_graph(repo, typecheck=True)
+    assert _by_checker(g) == {"data.shout": ("likely", ["js:app/note::Note.shout"]),
+                              "refetch": ("external", ["ext:tinyquery.QueryResult.refetch"])}
+    assert [(e.via, e.confidence) for e in g.edges if e.dst == "ext:tinyquery.QueryResult.refetch"] == [("typecheck", INFERRED)]
+    _same_counts(before, g)
+    twin = build_graph(_write(tmp_path / "twin", {k: v for k, v in HOOK_LIB.items() if not k.startswith("node_modules/")}),
+                       typecheck=True)
+    assert _by_checker(twin) == {} and twin.meta["typecheck"]["typescript"]["left"] == 2

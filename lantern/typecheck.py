@@ -395,7 +395,8 @@ def _import_roots(names) -> list[str]:
 
 class _Server:
     """pyright's language server, spoken to over its pipes."""
-    NO_ANSWER = object()
+    NO_ANSWER = object()      # it is there and did not answer in the time it had
+    GONE = object()           # it ended, or what it writes can no longer be read: nothing more is asked of it
 
     def __init__(self, tools: dict, work: Path, ws: Path, limit: int, err):
         self.p = _start([tools["node"], f"--max-old-space-size={MEMORY_MB - 512}", tools["pyright"], "--stdio"],
@@ -403,36 +404,68 @@ class _Server:
         self.n = 0
         self.waiting: dict = {}
         self.lock = threading.Lock()
+        self.gone = threading.Event()
         threading.Thread(target=self._read, daemon=True).start()
+        # No process is named as the one that started the server (`processId`). The server looks every three
+        # seconds whether that process is still there and ends when it cannot see it, and behind the launcher's
+        # walls it is not let look at a process outside them: named Lantern, it ended three seconds in. Its pipes
+        # end with Lantern, which it ends at too, and the launcher ends what Lantern leaves.
         got = self.ask("initialize", {
-            "processId": os.getpid(), "rootUri": ws.as_uri(),
+            "processId": None, "rootUri": ws.as_uri(),
             "workspaceFolders": [{"uri": ws.as_uri(), "name": "project"}],
             "capabilities": {"workspace": {"configuration": True, "workspaceFolders": True},
                              "textDocument": {"definition": {"linkSupport": False}}}}, min(limit, 120))
         if got is self.NO_ANSWER:
             raise Failed("pyright did not start in time")
+        if got is self.GONE:
+            raise Failed("pyright could not be started")
         self.tell("initialized", {})
 
-    def _send(self, msg: dict) -> None:
+    def _send(self, msg: dict) -> bool:
         body = json.dumps(msg).encode("utf-8")
-        with self.lock:
-            self.p.stdin.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
-            self.p.stdin.flush()
+        try:
+            with self.lock:
+                self.p.stdin.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+                self.p.stdin.flush()
+        except (OSError, ValueError):      # its end of the pipe is closed: it is gone
+            self.gone.set()
+            return False
+        return True
 
     def tell(self, method: str, params: dict) -> None:
         self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
     def ask(self, method: str, params: dict, timeout: float):
+        """What the server answered, NO_ANSWER when it did not in `timeout` seconds, GONE when it is not there to
+        answer: nobody waits out an answer's time for a program that has ended."""
         self.n += 1
         done, box = threading.Event(), {}
         self.waiting[self.n] = (done, box)
-        self._send({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params})
+        if not self._send({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params}) or \
+                (self.gone.is_set() and not done.is_set()):
+            self.waiting.pop(self.n, None)
+            return self.GONE
         if not done.wait(timeout):
             self.waiting.pop(self.n, None)
             return self.NO_ANSWER
-        return box.get("result")
+        return box["result"] if "result" in box else self.GONE
+
+    def why_gone(self) -> str:
+        try:
+            self.p.wait(2)
+        except subprocess.TimeoutExpired:
+            return "pyright's answer could not be read"
+        return "pyright ended before it had answered every call"
 
     def _read(self) -> None:
+        try:
+            self._read_on()
+        finally:                 # nothing more will be read: whoever waits for an answer is told at once
+            self.gone.set()
+            for done, _box in list(self.waiting.values()):
+                done.set()
+
+    def _read_on(self) -> None:
         out = self.p.stdout
         try:
             while True:
@@ -464,11 +497,8 @@ class _Server:
             return
 
     def close(self) -> None:
-        try:
-            if self.p.poll() is None and self.ask("shutdown", {}, 5) is not self.NO_ANSWER:
-                self.tell("exit", {})
-        except (OSError, ValueError):
-            pass
+        if self.p.poll() is None and self.ask("shutdown", {}, 5) not in (self.NO_ANSWER, self.GONE):
+            self.tell("exit", {})
         _end(self.p)
 
 
@@ -566,6 +596,8 @@ def ask_python(tools: dict, root: Path, g, sites: list[dict], limit: int) -> dic
                     got = srv.ask("textDocument/definition", {
                         "textDocument": {"uri": uri}, "position": {"line": s["line"] - 1, "character": _units(before) - 1}},
                         min(ONE_ANSWER, left))
+                    if got is srv.GONE:
+                        raise Failed(srv.why_gone())
                     if got is srv.NO_ANSWER:
                         silent += 1
                         continue
