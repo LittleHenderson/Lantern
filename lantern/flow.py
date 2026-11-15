@@ -266,6 +266,26 @@ def refuses(stmts) -> bool:
     return False
 
 
+def whole_name(canon: str, e: N) -> str:
+    """The map names a call on what a library's call handed back by the first member used on it: `stripe().webhooks`
+    for `stripe.webhooks.constructEvent(…)`, where `stripe` is `require("stripe")(key)` in another file. The members
+    written after that one are put back, where the callee is written as plain names: the rules here go by the
+    whole name. (Until the map followed a value another file exports, such a call had no name from it.)"""
+    last = canon.rsplit(".", 1)[-1]
+    if "()" not in canon or last.endswith("()"):
+        return canon
+    names, f = [], e.a
+    while f is not None and f.k == "attr":
+        names.append(f.name or "")
+        f = f.a
+    if f is None or f.k != "name":
+        return canon
+    names.reverse()
+    if last not in names[:-1]:
+        return canon
+    return ".".join([canon, *names[names.index(last) + 1:]])
+
+
 def sends_on(stmts) -> bool:
     """Whether what `refuses` read as turning a request away only sends the visitor to another page: a call named
     `redirect` with the address written out, which is not a sign-in page and holds no word or number that says no.
@@ -3016,7 +3036,7 @@ class Engine:
         if callee.kind == "ext" and isinstance(callee.data, str) and not callee.data.startswith("."):
             canon = callee.data
         elif site and site["to"] and all(t.startswith(("ext:", "builtin:")) for t in site["to"]):
-            canon = site["to"][0].split(":", 1)[1]
+            canon = whole_name(site["to"][0].split(":", 1)[1], e)
         if e.name == "new" and canon:
             canon = canon if canon.startswith("new ") or canon != "URL" else "new URL"
         return canon

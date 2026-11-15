@@ -165,10 +165,8 @@ def test_the_check_counts_wherever_the_librarys_client_is_made(tmp_path, case):
     if lib is None:
         del files["lib/stripe.ts"]
     found, sec = _drain(tmp_path, files)
-    if case == "under another name":
-        # Lantern does not follow a client through a second name of the route's own file: listed as before
-        assert len(found) == 1, found
-        return
+    # "under another name": until 2026-11-15 Lantern did not follow a client through a second name of the route's
+    # own file, and the route was listed. The map now follows a value another file exports, also under a second name
     assert found == [], [(f["title"], f["rank"]) for f in found]
     assert next(t for t in sec["tools"] if t["tool"] == "lantern-flow")["scope"]["sender_checked"] == 1
 
