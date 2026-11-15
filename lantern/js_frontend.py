@@ -494,6 +494,8 @@ class JSModule:
     imports: dict[str, tuple[str | None, str, str]] = field(default_factory=dict)  # local -> (mod, name, spec)
     exports: dict[str, str] = field(default_factory=dict)       # exported -> local
     reexports: list[tuple[str | None, dict | None]] = field(default_factory=list)  # (mod, {exp: imp} | None=*)
+    # the same, for what is handed on from a source that found no file: (specifier, {exp: imp} | None=*)
+    handed_on: list[tuple[str, dict | None]] = field(default_factory=list)
     default: str | None = None
     consts: dict[str, str] = field(default_factory=dict)         # module-level string constants
     local_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)
@@ -1263,8 +1265,12 @@ class Walker:
         if src is not None:
             target = self.resolve_spec(_string_value(src) or "")
             clause = next((c for c in n.named_children if c.type == "export_clause"), None)
+            written = _string_value(src) or ""
+            under = any(c.type == "namespace_export" for c in n.named_children)     # `export * as ns from "x"`
             if clause is None:
                 self.m.reexports.append((target, None))
+                if target is None and written and not under:
+                    self.m.handed_on.append((written, None))
             else:
                 mp = {}
                 for s in clause.named_children:
@@ -1272,6 +1278,8 @@ class Walker:
                         nm, al = s.child_by_field_name("name"), s.child_by_field_name("alias")
                         mp[_text(al or nm)] = _text(nm)
                 self.m.reexports.append((target, mp))
+                if target is None and written:
+                    self.m.handed_on.append((written, mp))
             return
         if decl is not None:
             before = set(self.m.defs)
@@ -1969,12 +1977,179 @@ def _whole(base: Path, rel: str) -> Path | None:
         return None
 
 
+# A package of the project itself, imported by the name its manifest carries (a monorepo's `packages/store`, named
+# `@team/store`). The conditions of an `exports` entry in the order they are tried: what was written before what a
+# build makes of it. Folders a build writes into, whose files are seldom committed: the source is looked for beside.
+EXPORT_CONDITIONS = ("source", "development", "import", "module", "default", "require", "node", "browser", "types")
+BUILT_DIRS = ("dist", "build", "lib", "out", "esm", "cjs")
+WORKSPACE_FILES = ("pnpm-workspace.yaml", "lerna.json", "rush.json")
+LOCAL_SPEC = ("workspace:", "file:", "link:", "portal:")
+_VERSION = re.compile(r"(\d+)(?:\.(\d+))?")
+
+
+def _export_targets(exports, sub: str) -> list[str]:
+    """What a package's `exports` names for a path inside it (`""` for the package itself), as Node reads the
+    field: the files to try, in order. Empty when the path is not listed: Node refuses such an import."""
+    def leaves(v, depth: int = 0) -> list[str]:
+        if isinstance(v, str):
+            return [v]
+        if depth > 6:
+            return []
+        if isinstance(v, list):
+            return [x for item in v for x in leaves(item, depth + 1)]
+        if isinstance(v, dict):
+            keys = sorted((k for k in v if isinstance(k, str) and not k.startswith(".")),
+                          key=lambda k: EXPORT_CONDITIONS.index(k) if k in EXPORT_CONDITIONS else len(EXPORT_CONDITIONS))
+            return [x for k in keys for x in leaves(v[k], depth + 1)]
+        return []
+    if not (isinstance(exports, dict) and any(isinstance(k, str) and k.startswith(".") for k in exports)):
+        return [] if sub else leaves(exports)       # a path, or conditions, for the package itself and nothing else
+    key = "./" + sub if sub else "."
+    if key in exports:
+        return leaves(exports[key])
+    best: tuple[int, list[str]] = (-1, [])
+    for pat, v in exports.items():
+        if not isinstance(pat, str):
+            continue
+        if pat.endswith("/") and pat != "./":       # the older way to name a whole folder: `"./parts/": "./src/parts/"`
+            pat, v = pat + "*", [t + "*" for t in leaves(v) if t.endswith("/")]
+        if pat.count("*") != 1:
+            continue
+        head, tail = pat.split("*")
+        if len(key) >= len(head) + len(tail) and key.startswith(head) and key.endswith(tail) and len(head) > best[0]:
+            star = key[len(head):len(key) - len(tail)]
+            best = (len(head), [t.replace("*", star) for t in leaves(v)])
+    return best[1]
+
+
+def _version_fits(spec: str, version) -> bool:
+    """Whether a dependency written with a version (`^1.2.0`, `1.x`, `*`) can mean the package of the project that
+    carries `version`: any version, or the same first number (and the same second one below 1.0)."""
+    spec = spec.strip()
+    if spec in ("", "*", "x", "latest"):
+        return True
+    want, has = _VERSION.search(spec), _VERSION.search(version) if isinstance(version, str) else None
+    if want is None or has is None or want.group(1) != has.group(1):
+        return False
+    return want.group(1) != "0" or want.group(2) is None or want.group(2) == has.group(2)
+
+
 class SpecResolver:
     def __init__(self, repo: Path, files: dict[str, str]):
         self.repo = repo
         self.files = files            # rel path -> module name
         self._alias_cache: dict[Path, list[tuple[str, list[Path]]]] = {}
         self._pkgs: dict = {}
+        self._own: dict | None = None             # the project's own packages by name (`_own_packages`)
+        self._ws: dict[Path, bool] = {}           # folder -> is it inside a workspace (`_in_workspace`)
+
+    # ---- the project's own packages
+    def _own_packages(self) -> dict:
+        """Every folder that holds files Lantern reads and a `package.json` with a name: name -> (folder, what the
+        manifest says). A name two folders carry is nobody's (None): which of them an import means is not written."""
+        if self._own is None:
+            dirs: set[str] = set()
+            for rel in self.files:
+                d = rel.rpartition("/")[0]
+                while d not in dirs:
+                    dirs.add(d)
+                    d = d.rpartition("/")[0]
+            found: dict = {}
+            for d in sorted(dirs):
+                pj = (self.repo / d if d else self.repo) / "package.json"
+                if not inside_repo(pj, self.repo):
+                    continue
+                try:
+                    data = manifest.table(manifest.parse_json(project_text(pj, self.repo)))
+                except OSError:
+                    continue
+                name = data.get("name")
+                if isinstance(name, str) and name and not name.startswith((".", "/")):
+                    found[name] = None if name in found else (pj.parent, data)
+            self._own = found
+        return self._own
+
+    def _in_workspace(self, folder: Path) -> bool:
+        """Whether a folder above this one says the project is a workspace: its `package.json` has `workspaces`, or
+        a `pnpm-workspace.yaml`, `lerna.json` or `rush.json` stands there. Which folders that list names is not
+        read."""
+        if folder in self._ws:
+            return self._ws[folder]
+        cur, found = folder, False
+        while cur != cur.parent and (cur == self.repo or self.repo in cur.parents):
+            cur = cur.parent if cur != self.repo else cur
+            if any(inside_repo(cur / n, self.repo) for n in WORKSPACE_FILES):
+                found = True
+            elif inside_repo(cur / "package.json", self.repo):
+                try:
+                    data = manifest.table(manifest.parse_json(project_text(cur / "package.json", self.repo)))
+                except OSError:
+                    data = {}
+                found = bool(data.get("workspaces"))
+            if found or cur == self.repo:
+                break
+        self._ws[folder] = found
+        return found
+
+    def _own_parts(self, spec: str, from_file: Path) -> tuple[Path, dict, str] | None:
+        """(folder, manifest, the path inside it) when `spec` begins with the name of a package of the project and
+        that package is what the import means: the importing package says so itself (`workspace:*`, `file:../x`),
+        or the package stands in a workspace and the version asked for, if one is, can be its own. Else None."""
+        if not spec or spec.startswith((".", "/", "#")):
+            return None
+        name = _package_name(spec)
+        own = self._own_packages().get(name)
+        if own is None:
+            return None
+        folder, data = own
+        asked = _nearest_package(from_file, self.repo, self._pkgs)["specs"].get(name)
+        asked = asked if isinstance(asked, str) else None
+        if asked is not None and asked.startswith(LOCAL_SPEC):
+            return folder, data, spec[len(name):].strip("/")
+        if not self._in_workspace(folder) or (asked is not None and not _version_fits(asked, data.get("version"))):
+            return None
+        return folder, data, spec[len(name):].strip("/")
+
+    def own_path(self, spec: str, from_file: Path) -> str | None:
+        """For the flow step, which tells a file of the project from a library by how the import is written: the
+        path, from the project's top, of the file an import of one of the project's own packages means
+        (`packages/store/src/index`); where the package's manifest leads to no file, the path as it is written
+        under the package's folder. None when the specifier names no package of the project."""
+        own = self._own_parts(spec, from_file)
+        if own is None:
+            return None
+        hit = self._own_file(*own)
+        if hit is None:
+            try:
+                hit = (own[0].relative_to(self.repo) / own[2]).as_posix()
+            except ValueError:
+                return None
+        return hit
+
+    def _own_file(self, folder: Path, data: dict, sub: str) -> str | None:
+        """The file of a package of the project an import means: what `exports` names for the path; without that
+        field the path itself, or for the package `source`, `module`, `main`, `types`, then its `index`. A target
+        in a folder a build writes (`./dist/index.js`) that is not there means the source beside it."""
+        if data.get("exports") is not None:
+            targets = _export_targets(data["exports"], sub)
+        elif sub:
+            targets = [sub]
+        else:
+            targets = [t for t in (data.get(k) for k in ("source", "module", "main", "types", "typings"))
+                       if isinstance(t, str)] + ["index", "src/index"]
+        plain, beside = [], []
+        for t in targets:
+            t = re.sub(r"\.d\.[cm]?ts$", "", t[2:] if t.startswith("./") else t)
+            plain.append(t)
+            head, _, rest = t.partition("/")
+            if rest and head in BUILT_DIRS:
+                beside += ["src/" + rest, rest]
+        for t in plain + beside:
+            base = _whole(folder, t)
+            hit = self._try(base) if base is not None and t else None
+            if hit:
+                return hit
+        return None
 
     def _kit(self, d: Path) -> bool:
         """Is this folder the root of a SvelteKit project: its config stands here, or its package.json names the kit."""
@@ -2050,15 +2225,21 @@ class SpecResolver:
                     hit = self._try(t)
                     if hit:
                         return hit
+        own = self._own_parts(spec, from_file)
+        if own is not None:     # a package of the project itself: the file its manifest names
+            return self._own_file(*own)
         return None   # bare specifier: a package
 
     def lost(self, spec: str, from_file: Path) -> str | None:
         """A specifier that finds no file, but which the tsconfig/jsconfig `paths` says is a path of this project
         (`"contentlayer/generated": ["./.contentlayer/generated"]`: a generated folder that is not committed):
         "exact" when an alias names this very specifier, "pattern" when a `prefix/*` alias covers it, else None.
-        A catch-all `*` pattern and a target inside node_modules say nothing of the kind."""
+        A catch-all `*` pattern and a target inside node_modules say nothing of the kind. "own" when it names a
+        package of the project itself (`_own_parts`) and that package's manifest leads to no file Lantern read."""
         if not spec or spec.startswith(".") or self.resolve(spec, from_file) is not None:
             return None
+        if self._own_parts(spec, from_file) is not None:
+            return "own"
         how = None
         for pat, targets in self._aliases(from_file.parent):
             if not targets or any("node_modules" in t.parts for t in targets):
@@ -2366,11 +2547,11 @@ def _nearest_package(path: Path, repo: Path, cache: dict) -> dict:
             except OSError:
                 data = {}
             deps = {**manifest.table(data.get("dependencies")), **manifest.table(data.get("devDependencies"))}
-            info = {"dir": cur, "deps": set(deps)}
+            info = {"dir": cur, "deps": set(deps), "specs": deps}
             cache[cur] = info
             return info
         if cur == repo or cur == cur.parent:
-            info = {"dir": repo, "deps": set()}
+            info = {"dir": repo, "deps": set(), "specs": {}}
             cache[cur] = info
             return info
         cur = cur.parent
@@ -2456,9 +2637,27 @@ class JSResolver:
                 hit = self.lookup_export(tmod, name, depth + 1)
                 if hit:
                     return hit
-            elif name in mp:
+            elif name in mp and tmod is not None:
                 return self.lookup_export(tmod, mp[name], depth + 1)
-        return None
+        return self.handed_from(m, name)
+
+    def handed_from(self, m: JSModule, name: str):
+        """A name a file hands on from a library: `export { alias } from "lib"` says which; `export * from "lib"`
+        holds every name the project's own files did not answer for, where it is the one source of that kind.
+        None where a source is a file of the project that is not there (the name may be that file's), or where two
+        libraries are handed on whole (which of them holds the name is not written)."""
+        if not m.handed_on:
+            return None
+
+        def own(spec: str) -> bool:
+            return spec.startswith(FILE_SPEC) or (self.lost_for is not None and self.lost_for(m, spec))
+        for spec, mp in m.handed_on:
+            if mp is not None and name in mp:
+                return None if own(spec) else ("ext", f"{spec}.{mp[name]}")
+        whole = [spec for spec, mp in m.handed_on if mp is None]
+        if len(whole) != 1 or own(whole[0]) or name in ("default", "*"):
+            return None
+        return ("ext", f"{whole[0]}.{name}")
 
     @staticmethod
     def _up(m: JSModule, s: str) -> str:
@@ -3302,18 +3501,23 @@ def _trpc_plan(mods: dict[str, JSModule], r: "JSResolver", repo: Path, pkg_cache
     return {"procs": procs, "paths": paths, "routers": len(good), "calls": 0, "linked": 0}
 
 
+def module_names(rels) -> dict[str, str]:
+    """Each file's path from the project's top -> the name its module is known by."""
+    files = {}
+    for rel in rels:
+        # a page, a Svelte component and a `.svelte.ts` file keep their whole name: `Toast.svelte` and
+        # `Toast.svelte.ts` may stand side by side
+        files[rel] = rel if rel.lower().endswith(tuple(HTML_EXTS)) or rel.endswith(SVELTE_EXT) or \
+            RUNE_FILE.search(rel) else re.sub(r"\.[cm]?[jt]sx?$", "", rel)
+    return files
+
+
 def add_js(g: Graph, repo: str | Path) -> dict:
     repo = Path(repo).resolve()
     paths = discover(repo)
     if not paths:
         return {"files": 0, "lines": 0}
-    files = {}
-    for p in paths:
-        rel = p.relative_to(repo).as_posix()
-        # a page, a Svelte component and a `.svelte.ts` file keep their whole name: `Toast.svelte` and
-        # `Toast.svelte.ts` may stand side by side
-        files[rel] = rel if p.suffix.lower() in HTML_EXTS or p.suffix == SVELTE_EXT or RUNE_FILE.search(rel) \
-            else re.sub(r"\.[cm]?[jt]sx?$", "", rel)
+    files = module_names(p.relative_to(repo).as_posix() for p in paths)
     spec = SpecResolver(repo, files)
     parsers = {ext: Parser(lang) for ext, lang in LANGS.items()}
     mods: dict[str, JSModule] = {}
@@ -3381,6 +3585,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         how = spec.lost(sp, mod.path)
         if how is None:
             return False
+        if how == "own":        # a package of the project itself, whatever the manifest beside the import lists
+            return True
         deps = _nearest_package(mod.path, repo, pkg_cache)["deps"]
         return sp not in deps if how == "exact" else _package_name(sp) not in deps
 

@@ -3529,3 +3529,47 @@ def test_a_login_that_looks_the_user_up_with_a_condition_function(tmp_path, case
     sec = scan(g, offline=True)
     shown = [g.nodes[i].entry["detail"] for i in sec["logins_shown"]]
     assert shown == (["DELETE /api/invoices"] if want else []), shown
+
+
+# ------------------------------------------------------------------ the database handle kept in a package of the project
+SHARED_PROJECT = {
+    "package.json": '{"name": "mono", "private": true, "workspaces": ["apps/*", "packages/*"]}',
+    "packages/data/package.json": ('{"name": "@team/data", "exports": {".": "./src/index.ts", '
+                                   '"./tables": "./src/tables.ts"}, '
+                                   '"dependencies": {"drizzle-orm": "0.36.0", "postgres": "3.4.0"}}'),
+    "packages/data/src/index.ts": ('import { drizzle } from "drizzle-orm/postgres-js";\nimport postgres from "postgres";\n'
+                                   'export * from "drizzle-orm/sql";\n'
+                                   'export const db = drizzle(postgres(process.env.POSTGRES_URL));\n'),
+    "packages/data/src/tables.ts": BUILDER_SCHEMA,
+    "apps/web/package.json": ('{"name": "web", "dependencies": {"next": "15.0.0", "react": "19.0.0", '
+                              '"next-auth": "4.24.7", "@team/data": "workspace:*"}}'),
+    "apps/web/lib/auth.ts": "export const authOptions = {};\n",
+}
+SHARED_HEAD = ('import { getServerSession } from "next-auth";\nimport { and, db, eq } from "@team/data";\n'
+               'import { invoices } from "@team/data/tables";\n'
+               'import { authOptions } from "../../../../lib/auth";\n\n')
+SHARED_CASES = {
+    "caught: a row removed by the id alone":
+        ("export async function DELETE(req, { params }) {\n" + BUILDER_ASK +
+         "  await db.delete(invoices).where(eq(invoices.id, params.id));\n"
+         "  return new Response(null, { status: 204 });\n}\n", ["LT-AUTHZ-OWNER"]),
+    "clean: a row removed by the id and the signed-in person":
+        ("export async function DELETE(req, { params }) {\n" + BUILDER_ASK +
+         "  await db.delete(invoices).where(" + BUILDER_MINE + ");\n"
+         "  return new Response(null, { status: 204 });\n}\n", []),
+    "caught: one row found by the id alone":
+        ("export async function GET(req, { params }) {\n" + BUILDER_ASK +
+         "  return Response.json(await db.query.invoices.findFirst({ where: eq(invoices.id, params.id) }));\n"
+         "}\n", ["LT-AUTHZ-OWNER"]),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SHARED_CASES))
+def test_a_database_handle_kept_in_a_package_of_the_project(tmp_path, case):
+    """A monorepo keeps its database handle in a package of its own (`@team/data`), which also hands the query
+    builder's condition functions on (`export * from "drizzle-orm/sql"`), and an app of the same project imports
+    both by the package's name. That is the project's own file, as `../lib/db` is. Until 2026-11-15 the handle was
+    read as some library that is no database, and no record reached through it was looked at."""
+    body, want = SHARED_CASES[case]
+    fs = _scan(tmp_path, {"apps/web/app/api/invoices/[id]/route.ts": SHARED_HEAD + body}, project=SHARED_PROJECT)
+    assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]

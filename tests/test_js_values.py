@@ -190,3 +190,147 @@ def test_an_import_written_with_js_means_the_ts_file(tmp_path):
     assert _said(g, "b") == ("resolved", ["js:app/view::b"], "name")
     assert _said(g, "c") == ("resolved", ["js:app/tool::c"], "name")
     assert _said(g, "d") == ("unresolved", [], "missing-module")
+
+
+# ------------------------------------------------------------------ the project's own packages
+OWN_ROOT = json.dumps({"name": "mono", "private": True, "workspaces": ["apps/*", "packages/*"]})
+OWN_FILES = {
+    "package.json": OWN_ROOT,
+    # conditions: the built file is not committed, the source is
+    "packages/store/package.json": json.dumps({
+        "name": "@team/store", "dependencies": {"@prisma/client": "5.14.0"},
+        "exports": {".": {"types": "./dist/index.d.ts", "default": "./src/index.ts"},
+                    "./tables": {"types": "./dist/tables.d.ts", "default": "./src/tables.ts"}}}),
+    "packages/store/src/index.ts": ('import { PrismaClient } from "@prisma/client";\n'
+                                    'export const db = new PrismaClient();\n'
+                                    'export function countNotes() {\n  return db.note.count();\n}\n'),
+    "packages/store/src/tables.ts": 'export function tableName() {\n  return "notes";\n}\n',
+    "packages/store/src/inner.ts": 'export function inner() {\n  return 1;\n}\n',
+    # a pattern: every file of `src` under its own name
+    "packages/parts/package.json": json.dumps({"name": "@team/parts", "exports": {"./*": "./src/*.tsx"}}),
+    "packages/parts/src/button.tsx": "export function Button() {\n  return <button />;\n}\n",
+    # `main` names the built file, which is not committed: the source beside it is what was written
+    "packages/built/package.json": json.dumps({"name": "@team/built", "main": "./dist/index.js",
+                                               "types": "./dist/index.d.ts"}),
+    "packages/built/src/index.ts": "export function helper() {\n  return 2;\n}\n",
+    # nothing but a name: the folder's `index`
+    "packages/plain/package.json": json.dumps({"name": "plain-kit"}),
+    "packages/plain/index.js": "export function go() {\n  return 3;\n}\n",
+    "packages/plain/extra/more.js": "export function more() {\n  return 4;\n}\n",
+    # what it names is made by a build step and is not in the project
+    "packages/gen/package.json": json.dumps({"name": "@team/gen", "exports": {".": "./generated/index.js"}}),
+    "packages/gen/src/make.ts": "export function make() {\n  return 5;\n}\n",
+    "apps/web/package.json": json.dumps({"name": "web", "dependencies": {
+        "@team/store": "workspace:*", "@team/parts": "workspace:*", "@team/built": "workspace:*",
+        "plain-kit": "workspace:*", "@team/gen": "workspace:*", "left-pad": "1.3.0", "react": "19.0.0"}}),
+    "apps/web/src/notes.ts": ('import { countNotes, db } from "@team/store";\n'
+                              'import { tableName } from "@team/store/tables";\n'
+                              'import { inner } from "@team/store/src/inner";\n'
+                              'import { helper } from "@team/built";\nimport { go } from "plain-kit";\n'
+                              'import { more } from "plain-kit/extra/more";\n'
+                              'import { made } from "@team/gen";\nimport pad from "left-pad";\n\n'
+                              'export async function run() {\n  await countNotes();\n  await db.note.count();\n'
+                              '  tableName();\n  inner();\n  helper();\n  go();\n  more();\n  made();\n'
+                              '  return pad("a", 2);\n}\n'),
+    "apps/web/src/page.tsx": ('import { Button } from "@team/parts/button";\n\n'
+                              'export function Page() {\n  return <Button />;\n}\n'),
+}
+
+
+def test_a_package_of_the_project_is_followed_to_its_file(tmp_path):
+    """A monorepo: `packages/store/package.json` is named `@team/store`, and an app of the same project imports
+    `@team/store`. That is the project's own code, found through what the package's manifest says: `exports` (a
+    path, conditions, a `./*` pattern), `main` (the source beside a built file that is not committed), or the
+    folder's `index`. Until 2026-11-15 every such import was read as a library: on one sample project 86 calls,
+    among them every shared page part and the database handle."""
+    g = _g(tmp_path, OWN_FILES)
+    at = "apps/web/src/notes.ts"
+    assert _said(g, "countNotes", at) == ("resolved", ["js:packages/store/src/index::countNotes"], "name")
+    assert _said(g, "tableName", at) == ("resolved", ["js:packages/store/src/tables::tableName"], "name")
+    assert _said(g, "helper", at) == ("resolved", ["js:packages/built/src/index::helper"], "name")
+    assert _said(g, "go", at) == ("resolved", ["js:packages/plain/index::go"], "name")
+    assert _said(g, "more", at) == ("resolved", ["js:packages/plain/extra/more::more"], "name")
+    assert _said(g, "Button", "apps/web/src/page.tsx")[:2] == ("resolved", ["js:packages/parts/src/button::Button"])
+    # a value the package exports is followed as one from a file beside the caller is
+    assert _said(g, "db.note.count", at) == ("external", ["ext:@prisma/client.PrismaClient.note.count"],
+                                             "library-value")
+    # what the package names is not in the project: a file of the project that is not there, never a library
+    assert _said(g, "made", at) == ("unresolved", [], "missing-module")
+    # a path the package's `exports` does not list is refused by Node, and no file is taken for it
+    assert _said(g, "inner", at) == ("unresolved", [], "missing-module")
+    # the twin: a package that is not in the project
+    assert _said(g, "pad", at)[0] == "external"
+    # (for a file that is not there the map keeps its older `ext:` link, as it does for every such import)
+    assert sorted(n for n in g.nodes if n.startswith(("ext:@team/", "ext:plain-kit"))) == [
+        "ext:@team/gen.made", "ext:@team/store/src/inner.inner"]
+
+
+def test_a_name_two_folders_of_the_project_carry_is_nobodys(tmp_path):
+    """The twin: two folders whose manifests carry the same name (a copy kept as an example, a fixture). Which of
+    them an import means is not written anywhere, so it is read as before."""
+    files = {**OWN_FILES, "examples/plain/package.json": json.dumps({"name": "plain-kit"}),
+             "examples/plain/index.js": "export function go() {\n  return 6;\n}\n"}
+    g = _g(tmp_path, files)
+    assert _said(g, "go", "apps/web/src/notes.ts") == ("external", ["ext:plain-kit.go"], "import")
+    assert _said(g, "countNotes", "apps/web/src/notes.ts")[0] == "resolved"
+
+
+OWN_ASKED = {
+    # no workspace, and the manifest beside the import asks for a version: what runs is the copy npm installs
+    "outside a workspace, by a version": ({"name": "site", "dependencies": {"plain-kit": "2.1.0"}}, "2.1.0", False),
+    # no workspace, and the manifest says where the package lies
+    "outside a workspace, by its folder": ({"name": "site", "dependencies": {"plain-kit": "file:./kit"}}, "2.1.0", True),
+    # no workspace and nothing asked for: nothing says the folder is what the import means
+    "outside a workspace, not asked for": ({"name": "site"}, "2.1.0", False),
+    "in a workspace, any version": ({"name": "site", "workspaces": ["kit"], "dependencies": {"plain-kit": "*"}},
+                                    "2.1.0", True),
+    "in a workspace, a version it can be": ({"name": "site", "workspaces": ["kit"],
+                                             "dependencies": {"plain-kit": "^2.0.4"}}, "2.1.0", True),
+    "in a workspace, another version": ({"name": "site", "workspaces": ["kit"],
+                                         "dependencies": {"plain-kit": "^1.4.0"}}, "2.1.0", False),
+    "in a workspace, below 1.0 the second number counts": ({"name": "site", "workspaces": ["kit"],
+                                                            "dependencies": {"plain-kit": "~0.3.1"}}, "0.4.0", False),
+    "in a workspace, not asked for (kept at the top)": ({"name": "site", "workspaces": ["kit"]}, "2.1.0", True),
+}
+
+
+def test_when_a_folder_of_the_project_is_what_an_import_means(tmp_path):
+    """A folder whose manifest carries the imported name is what the import means where the importing package
+    says so itself (`file:`, `workspace:`), or where the project is a workspace and the version asked for, if one
+    is, can be the folder's own. Otherwise what runs is the package npm installs, and the call is a library's."""
+    for i, (case, (root, version, own)) in enumerate(sorted(OWN_ASKED.items())):
+        g = _g(tmp_path / str(i), {
+            "package.json": json.dumps(root),
+            "kit/package.json": json.dumps({"name": "plain-kit", "version": version}),
+            "kit/index.js": "export function go() {\n  return 3;\n}\n",
+            "src/notes.ts": 'import { go } from "plain-kit";\nexport function run() {\n  return go();\n}\n'})
+        want = ("resolved", ["js:kit/index::go"], "name") if own else ("external", ["ext:plain-kit.go"], "import")
+        assert _said(g, "go", "src/notes.ts") == want, case
+    # a workspace said the way pnpm says it, and the package taken in with `require`
+    g = _g(tmp_path / "pnpm", {
+        "package.json": json.dumps({"name": "site"}), "pnpm-workspace.yaml": "packages:\n  - kit\n",
+        "kit/package.json": json.dumps({"name": "plain-kit", "version": "2.1.0"}),
+        "kit/index.js": "exports.go = function go() {\n  return 3;\n};\n",
+        "src/notes.js": 'const kit = require("plain-kit");\nexports.run = function run() {\n  return kit.go();\n};\n'})
+    assert _said(g, "kit.go", "src/notes.js")[:2] == ("resolved", ["js:kit/index::go"])
+
+
+def test_a_librarys_name_a_file_of_the_project_hands_on(tmp_path):
+    """`export * from "drizzle-orm/sql"` in the project's own `lib/data.ts`, and `import { eq } from "../lib/data"`
+    elsewhere: `eq` is that library's function, as if it were imported from the library. So is a name the file
+    hands on by itself (`export { alias as named } from …`). Until 2026-11-15 both were "a name that file does not
+    export". The twins: two libraries handed on whole (which of them holds the name is not written), and a file
+    of the project that is not there among the sources (the name may be that file's)."""
+    g = _g(tmp_path, {
+        "lib/data.ts": ('export * from "drizzle-orm/sql";\nexport { alias as named } from "drizzle-orm/pg-core";\n'
+                        'export * as zod from "zod";\nexport function own() {\n  return 1;\n}\n'),
+        "lib/two.ts": 'export * from "pg";\nexport * from "stripe";\n',
+        "lib/part.ts": 'export * from "./gone";\nexport * from "pg";\n',
+        "app/notes.ts": ('import { eq, named, own } from "../lib/data";\nimport { x } from "../lib/two";\n'
+                         'import { y } from "../lib/part";\n'
+                         'export function run() {\n  eq(1, 2);\n  named();\n  own();\n  x();\n  y();\n}\n')})
+    assert _said(g, "eq") == ("external", ["ext:drizzle-orm/sql.eq"], "import")
+    assert _said(g, "named") == ("external", ["ext:drizzle-orm/pg-core.alias"], "import")
+    assert _said(g, "own") == ("resolved", ["js:lib/data::own"], "name")
+    assert _said(g, "x") == ("unresolved", [], "missing-export")
+    assert _said(g, "y") == ("unresolved", [], "missing-export")
