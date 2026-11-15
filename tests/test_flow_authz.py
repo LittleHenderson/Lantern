@@ -3573,3 +3573,57 @@ def test_a_database_handle_kept_in_a_package_of_the_project(tmp_path, case):
     body, want = SHARED_CASES[case]
     fs = _scan(tmp_path, {"apps/web/app/api/invoices/[id]/route.ts": SHARED_HEAD + body}, project=SHARED_PROJECT)
     assert _authz(fs) == want, [(f["rule"], f["file"], f["line"]) for f in fs]
+
+
+# ------------------------------------------------------------------ sent on to another page is not turned away
+SENT_ON_PAY = ('import { redirect } from "next/navigation";\nimport { whoIsIt } from "./who";\n\n'
+               'export async function openCheckout(plan) {\n  const who = await whoIsIt();\n'
+               '  if (!who) {\n    redirect("/enter");\n  }\n  return { plan, by: who.id };\n}\n')
+SENT_ON_HEAD = ('"use server";\nimport { redirect } from "next/navigation";\nimport { db } from "../lib/db";\n'
+                'import { invoices } from "../lib/schema";\nimport { openCheckout } from "../lib/pay";\n'
+                'import { whoIsIt } from "../lib/who";\n\nexport async function enter(form) {\n')
+SENT_ON_BRANCH = ('  if (form.get("then") === "pay") {\n    return openCheckout(form.get("plan"));\n  }\n')
+SENT_ON_CASES = {
+    "not shown: done for everybody, some go on to a step that asks, the rest are sent to their page":
+        ('  await db.insert(invoices).values({ note: "seen" });\n' + SENT_ON_BRANCH + '  redirect("/home");\n}\n',
+         False),
+    "not shown: the same with nothing done before":
+        (SENT_ON_BRANCH + '  redirect("/home");\n}\n', False),
+    "not shown: the same, sent on for good":
+        (SENT_ON_BRANCH + '  permanentRedirect("/home");\n}\n', False),
+    "shown: the rest is sent to the sign-in page":
+        (SENT_ON_BRANCH + '  redirect("/login");\n}\n', True),
+    "shown: the rest is refused":
+        (SENT_ON_BRANCH + '  throw new Error("Not allowed");\n}\n', True),
+    "shown: the rest is sent away with words that say no":
+        (SENT_ON_BRANCH + '  redirect("/home?error=unauthorized");\n}\n', True),
+    "shown: the condition itself asks who is signed in":
+        ('  const who = await whoIsIt();\n  if (who) {\n    await db.insert(invoices).values({ note: "seen" });\n'
+         '    return { ok: true };\n  }\n  redirect("/home");\n}\n', True),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SENT_ON_CASES))
+def test_a_visitor_sent_on_to_another_page_was_not_turned_away(tmp_path, case):
+    """A sign-in action does its work for everybody, hands those who came to pay to a step that asks who is signed
+    in, and sends the rest to their page (`redirect("/home")`). A redirect after an `if` was read as turning the
+    rest away, so the login the paying step asks counted for every request, and the action "showed a login" (found
+    2026-11-15 on a sample project, on its sign-in and sign-up actions; such a route's "no login check" finding
+    would have been dropped). Where the route answers the request itself, what follows the `if` only sends the
+    visitor to a page that is not the sign-in page, and the condition says nothing about who is calling, those
+    requests were let through, not turned away. The twins stay as they were: sent to the sign-in page, refused
+    with an error or with words that say no, and a condition that asks who is signed in."""
+    from lantern.security import scan
+    body, want = SENT_ON_CASES[case]
+    head = SENT_ON_HEAD.replace("{ redirect }", "{ permanentRedirect, redirect }") if "permanent" in body else SENT_ON_HEAD
+    files = {**BUILDER_PROJECT, "lib/session.ts": BUILDER_SESSION,
+             "lib/who.ts": BUILDER_WHO + BUILDER_LOOKUPS["shown: the user's row, read with the id the token holds"][0],
+             "lib/pay.ts": SENT_ON_PAY, "app/actions.ts": head + body}
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    g = build_graph(tmp_path)
+    sec = scan(g, offline=True)
+    shown = [g.nodes[i].entry["detail"] for i in sec["logins_shown"]]
+    assert shown == (["ACTION enter"] if want else []), shown

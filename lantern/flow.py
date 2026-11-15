@@ -266,6 +266,26 @@ def refuses(stmts) -> bool:
     return False
 
 
+def sends_on(stmts) -> bool:
+    """Whether what `refuses` read as turning a request away only sends the visitor to another page: a call named
+    `redirect` with the address written out, which is not a sign-in page and holds no word or number that says no.
+    Such a line ends a route that has done its work (`redirect("/dashboard")`) as often as it turns anybody away."""
+    for s in (stmts or ())[:8]:
+        if s.k == "raise":
+            return False
+        if s.k in ("expr", "return") and s.a is not None and _says_no(s.a):
+            e = s.a
+            if e.k != "call" or e.a is None or e.a.k not in ("name", "attr") or (e.a.name or "") != "redirect":
+                return False
+            given = (*(e.items or ()), *(e.kw.values() if isinstance(e.kw, dict) else ()))
+            if any(_says_no(x) for x in given):
+                return False
+            written = [n.a for n in every_node(given) if n.k == "const" and isinstance(n.a, str) and n.a.strip()]
+            return bool(written) and not any(
+                R.SIGN_IN_WORD.search(seg) for text in written for seg in _re.split(r"[/?#=&]", text) if seg)
+    return False
+
+
 class KitWay(str):
     """The way on in a SvelteKit hook: `resolve(event)`, also with options, waited for, or kept and handed back
     later (`const response = await resolve(event); ...; return response`). `of`: the name of the hook's one
@@ -2101,7 +2121,15 @@ class Engine:
             out_f = no_f or turned_away(s.c, kind, way)
             away = not s.c and id(s) in self.else_away and (
                 goes_on(s.b, True, way) if kind == "gate" else leaves(s.b) and not answers(s.b) and not no_t)
-            rest_out = not s.c and (id(s) in self.else_refuses or away)
+            told_no = not s.c and id(s) in self.else_refuses
+            if told_no and kind == "route" and sends_on(self.else_refuses[id(s)]) and \
+                    not any(self.signed_gate(s.a, True, env, ctx)):
+                # `if (form.get("then") === "pay") return checkout(); redirect("/home")` in a function that answers
+                # the request itself: the condition says nothing about who is calling and what follows only sends
+                # the visitor to a page. Those requests are done, not turned away, and what this way asks (a login,
+                # in `checkout`) was not asked of them. Until 2026-11-15 a sign-in action of that shape showed one
+                told_no = False
+            rest_out = told_no or away
             # ... or this way holds a place that hands the request on, however deep, and nothing after the `if`
             # does: `if (header) { try { check(); next() } catch { answer 401 } }` and then only an answer
             only_way = kind == "gate" and not s.c and id(s) in self.else_away and hands_on(s.b, way)
