@@ -710,9 +710,13 @@ def mentions_auth(code: str, js: bool = False) -> bool:
 
 
 def _func_name(g: Graph, nid: str) -> str:
-    """Just the function's own name (never its module path, which may contain words like 'auth')."""
+    """Just the function's own name (never its module path, which may contain words like 'auth'). A database table
+    (`db:<table>`) is no function and has none: a route that removes a row of `auth_tokens` has asked nobody who is
+    calling."""
     if nid.startswith("ext:"):
         return nid[4:]
+    if nid.startswith("db:"):
+        return ""
     n = g.nodes.get(nid)
     if n is None:
         return ""

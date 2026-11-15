@@ -3,6 +3,8 @@ is a call into that table, a node `db:<table>` in the Data lane. Every shape tha
 look-alikes that must stay as they were."""
 import json
 
+import pytest
+
 from lantern.engine import build_graph
 from lantern.graph import INFERRED, POSSIBLE
 
@@ -290,3 +292,62 @@ app.listen(3000);
     _write(tmp_path, files)
     g = build_graph(tmp_path)
     assert _tables(g) == [] and "db_calls" not in g.meta
+
+
+ROUTE_OPEN = '''import { db } from "../../../../lib/db";
+
+export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+  await db.from("TABLE").delete().eq("id", params.id);
+  return Response.json({ ok: true });
+}
+'''
+
+ROUTE_CHECKED = '''import { db } from "../../../../lib/db";
+import { getSessionUser } from "../../../../lib/auth";
+
+export async function DELETE(req: Request, { params }: { params: { id: string } }) {
+  const user = await getSessionUser(req);
+  if (!user) return new Response("unauthorized", { status: 401 });
+  await db.from("TABLE").delete().eq("id", params.id);
+  return Response.json({ ok: true });
+}
+'''
+
+SERVER_DB = '''import { createClient } from "@supabase/supabase-js";
+
+export const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!);
+'''
+
+WHO = '''export async function getSessionUser(req: Request) {
+  const token = req.headers.get("authorization");
+  return token ? { id: "u1" } : null;
+}
+'''
+
+BUTTON = '''"use client";
+
+export function Remove({ id }: { id: number }) {
+  async function remove() {
+    await fetch(`/api/things/${id}`, { method: "DELETE" });
+  }
+  return <button onClick={remove}>Remove</button>;
+}
+'''
+
+
+def _open_routes(root, route, table):
+    from lantern.security import scan
+    _write(root, {"package.json": PKG, "lib/db.ts": SERVER_DB, "lib/auth.ts": WHO, "components/Remove.tsx": BUTTON,
+                  "app/api/things/[id]/route.ts": route.replace("TABLE", table)})
+    g = build_graph(root)
+    assert _tables(g) == [f"db:{table}"]
+    return [(f["file"], f["line"]) for f in scan(g)["findings"] if f["rule"] == "LW-AUTH-MISSING"]
+
+
+@pytest.mark.parametrize("table", ["things", "session", "sessions", "auth", "auth_tokens", "permission",
+                                   "current_user", "login"])
+def test_a_table_named_like_a_login_check_is_no_login_check(tmp_path, table):
+    """A table is no function. A route that removes a row of a table called `session` or `auth_tokens` has not
+    asked who is calling, and the same route with a check written in it is still read as checked."""
+    assert _open_routes(tmp_path / "open", ROUTE_OPEN, table) == [("app/api/things/[id]/route.ts", 3)]
+    assert _open_routes(tmp_path / "checked", ROUTE_CHECKED, table) == []
