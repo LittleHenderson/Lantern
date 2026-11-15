@@ -698,3 +698,260 @@ def test_the_story_of_a_paid_action_says_a_login_is_there_where_the_finding_says
     assert open_["paid"] == {"login": False, "limit": False}
     assert open_["scenario"]["steps"][-1] == "They are not signed in, and they run the Server Action translate again and again."
     assert open_["headline"] == "Anyone can make the Server Action translate spend your money on paid calls"
+
+
+# ------------------------------------------------------------------ an action made by a helper
+MADE_PKG = json.dumps({"dependencies": {"next": "15.0.0", "react": "19.0.0", "@prisma/client": "5.14.0",
+                                        "jose": "5.2.0", "zod": "3.23.0", "pg": "8.11.5"}})
+MADE_SESSION = '''import { cookies } from "next/headers";
+import { jwtVerify } from "jose";
+
+const key = new TextEncoder().encode(process.env.AUTH_SECRET);
+
+export async function currentUser() {
+  const token = (await cookies()).get("session")?.value;
+  if (!token) return null;
+  const { payload } = await jwtVerify(token, key, { algorithms: ["HS256"] });
+  return payload.user as { id: number };
+}
+'''
+MADE_HELPERS = '''import { redirect } from "next/navigation";
+import { currentUser } from "./session";
+
+// reads the form against a schema and hands the action what it read: asks nothing about who is calling
+export function checked(schema, action) {
+  return async (prevState, formData) => {
+    const result = schema.safeParse(Object.fromEntries(formData));
+    if (!result.success) {
+      return { error: "not valid" };
+    }
+    return action(result.data, formData);
+  };
+}
+
+// the same, after turning away whoever is not signed in
+export function signedIn(schema, action) {
+  return async (prevState, formData) => {
+    const user = await currentUser();
+    if (!user) {
+      throw new Error("sign in first");
+    }
+    const result = schema.safeParse(Object.fromEntries(formData));
+    if (!result.success) {
+      return { error: "not valid" };
+    }
+    return action(result.data, formData, user);
+  };
+}
+
+export const forMember = (action) => async (formData) => {
+  const user = await currentUser();
+  if (!user) redirect("/sign-in");
+  return action(formData, user);
+};
+
+// asks who is signed in and lets the request on whatever the answer is
+export function greeted(action) {
+  return async (formData) => {
+    const user = await currentUser();
+    if (!user) console.log("a visitor");
+    return action(formData, user);
+  };
+}
+
+// asks after the action has run
+export function late(action) {
+  return async (formData) => {
+    const done = await action(formData);
+    const user = await currentUser();
+    if (!user) throw new Error("sign in first");
+    return done;
+  };
+}
+'''
+MADE_ACTIONS = '''"use server";
+import { z } from "zod";
+import { db } from "../lib/db";
+import { checked, forMember, greeted, late, signedIn } from "../lib/made";
+
+const note = z.object({ id: z.string(), title: z.string() });
+
+export const addNote = signedIn(note, async (data, _, user) => {
+  await db.note.create({ data: { title: data.title, ownerId: user.id } });
+});
+
+export const saveDraft = checked(note, async (data, formData) => {
+  await db.draft.create({ data: { title: data.title } });
+});
+
+export const wipe = forMember(async (formData, user) => {
+  await db.note.deleteMany({ where: { ownerId: user.id } });
+});
+
+export const clear = checked(
+  note,
+  async (data) => {
+    await db.note.deleteMany();
+  },
+);
+
+export const tidy = greeted(async (formData, user) => {
+  await db.draft.deleteMany();
+});
+
+export const sweep = late(async (formData) => {
+  await db.draft.deleteMany();
+});
+
+const spare = checked(note, async (data) => {       // not exported: nobody outside can call it
+  await db.note.deleteMany();
+});
+
+export const LIMITS = Object.freeze({ notes: 20 });  // a call with no function written in it
+export const NAMES = ["a", "b"].map((x) => x + "!"); // a list, not a function around the one written
+'''
+MADE_PAGE = '''import { addNote, clear, saveDraft, sweep, tidy, wipe } from "./actions";
+
+export default function Page() {
+  return (
+    <main>
+      <form action={addNote}><input name="title" /></form>
+      <form action={saveDraft}><input name="title" /></form>
+      <form action={wipe}><button>Wipe</button></form>
+      <form action={clear}><button>Clear</button></form>
+      <form action={tidy}><button>Tidy</button></form>
+      <form action={sweep}><button>Sweep</button></form>
+    </main>
+  );
+}
+'''
+MADE = {"app/actions.ts": MADE_ACTIONS, "lib/db.ts": PRISMA_DB, "lib/session.ts": MADE_SESSION,
+        "lib/made.ts": MADE_HELPERS, "app/page.tsx": MADE_PAGE}
+MADE_NAMES = ["addNote", "clear", "saveDraft", "sweep", "tidy", "wipe"]
+
+
+def test_an_action_made_by_a_helper_is_a_route(tmp_path):
+    """`export const addNote = signedIn(schema, async (data, _, user) => …)` in a file that begins with
+    "use server": every export of such a file is a function the browser can call, so what the helper hands back
+    is one, around the function written in the call. That function is the action from here on, wherever it stands
+    among the arguments and on whichever line; until 2026-11-15 only a function written first was read, and what
+    it did was put down as the file's own. The helper is kept as what runs first (`middleware`, as for a route
+    inside a helper elsewhere) and the action is linked to it. Not an action: a name the file keeps to itself, a
+    call with no function written in it, a list made with `map`."""
+    from lantern.graph import INFERRED
+    g = _build(tmp_path, MADE, MADE_PKG)
+    acts, made = "js:app/actions::", "js:lib/made::"
+    assert _routes(g) == {acts + n: f"ACTION {n}" for n in MADE_NAMES}
+    by = {"addNote": "signedIn", "saveDraft": "checked", "wipe": "forMember", "clear": "checked", "tidy": "greeted",
+          "sweep": "late"}
+    for name, helper in by.items():
+        node = g.nodes[acts + name]
+        assert node.entry["middleware"] == [made + helper], name
+        assert node.lane == "server", name
+        e = _edge(g, acts + name, made + helper)
+        assert e is not None and (e.via, e.confidence) == ("action-helper", INFERRED), name
+        assert _edge(g, "js:app/page::Page", acts + name).detail == "action", name        # <form action={…}>
+    # what the action does is its own: the database call stands on it, not on the file
+    out = {e.dst for e in g.call_edges() if e.src == acts + "addNote"}
+    assert any(d.endswith("note.create") for d in out), sorted(out)
+    assert not any(d.endswith("note.create") for e in g.call_edges() if e.src == "js:app/actions" for d in [e.dst])
+    # written over several lines, it begins where it is named
+    assert g.nodes[acts + "clear"].start_line == MADE_ACTIONS.splitlines().index("export const clear = checked(") + 1
+    assert acts + "spare" not in g.nodes and acts + "LIMITS" not in g.nodes and acts + "NAMES" not in g.nodes
+
+
+def test_the_twin_a_file_with_no_directive_keeps_its_reading(tmp_path):
+    """The same file without "use server" at its top: nothing says the browser can call what it exports, and a
+    function written second in a call is part of the file's own code, as it was."""
+    files = {**MADE, "app/actions.ts": MADE_ACTIONS.replace('"use server";\n', "")}
+    g = _build(tmp_path, files, MADE_PKG)
+    assert _routes(g) == {}
+    assert "js:app/actions::addNote" not in g.nodes and "js:app/actions::clear" not in g.nodes
+    assert "js:app/actions::wipe" in g.nodes and not g.nodes["js:app/actions::wipe"].entry   # written first, as before
+
+
+def test_a_login_the_helper_asks_for_counts_and_a_helper_that_asks_nothing_is_reported(tmp_path):
+    """What the helper hands back runs on every request, before the action: it is read as a gate whose way on is
+    the call of the function it was given. `signedIn` and `forMember` turn away whoever is not signed in, so their
+    actions show a login. `checked` only reads the form; `greeted` asks and lets everybody on; `late` asks after
+    the action has run: their actions change data with no login and are reported."""
+    from lantern.security import scan
+    g = _build(tmp_path, MADE, MADE_PKG)
+    sec = scan(g, offline=True)
+    routes = _routes(g)
+    assert sorted(routes[i] for i in sec["logins_shown"] if i in routes) == ["ACTION addNote", "ACTION wipe"]
+    open_ones = sorted(f["title"].split(" changes data")[0] for f in sec["findings"] if f["rule"] == "LW-AUTH-MISSING")
+    assert open_ones == ["The Server Action clear", "The Server Action saveDraft", "The Server Action sweep",
+                         "The Server Action tidy"]
+
+
+MADE_FLOWS = '''"use server";
+import { z } from "zod";
+import { Pool } from "pg";
+import { checked, signedIn } from "../lib/made";
+
+const pool = new Pool();
+const note = z.object({ id: z.string(), title: z.string() });
+
+export const find = checked(note, async (data) => {
+  return pool.query("select * from notes where title = '" + data.title + "'");
+});
+
+export const mine = signedIn(note, async (data, _, user) => {
+  return pool.query("select * from notes where owner = '" + user.id + "'");
+});
+
+export const byForm = signedIn(note, async (data, formData, user) => {
+  return pool.query("select * from notes where id = '" + formData.get("id") + "'");
+});
+'''
+
+
+def test_what_the_helper_hands_the_action_is_what_the_action_gets(tmp_path):
+    """The helper is handed the form by the browser and hands the action what it made of it (`result.data`,
+    `formData`) and what it found out itself (`user`, from the session). The first two are what the request sent;
+    the third is not, so text built from `user.id` is no finding. Until 2026-11-15 the function was no action, and
+    none of the three was followed."""
+    files = {"app/actions.ts": MADE_FLOWS, "lib/session.ts": MADE_SESSION, "lib/made.ts": MADE_HELPERS}
+    lines = MADE_FLOWS.splitlines()
+    want = [("sql", i + 1) for i, row in enumerate(lines) if "data.title" in row or "formData.get" in row]
+    assert len(want) == 2 and _flows(tmp_path, files, MADE_PKG) == want
+
+
+TOKEN_ACTIONS = '''"use server";
+import { db } from "../lib/db";
+import { currentUser } from "../lib/session";
+
+export async function tidy() {
+  const user = await currentUser();
+  console.log(user);
+  await db.draft.deleteMany();
+}
+
+export async function wipe() {
+  const user = await currentUser();
+  if (!user) throw new Error("sign in first");
+  await db.draft.deleteMany();
+}
+'''
+TOKEN_PAGE = '''import { tidy, wipe } from "./actions";
+
+export default function Page() {
+  return <main><form action={tidy}><button>Tidy</button></form><form action={wipe}><button>Wipe</button></form></main>;
+}
+'''
+
+
+def test_an_action_that_reads_the_token_and_lets_everybody_on_is_asked_again(tmp_path):
+    """An action that asks who is signed in and goes on whatever the answer. By its name `currentUser` reads as a
+    login check; the flow step read that a token library is called on the way and nothing turns anybody away. A
+    route with a verb is asked again then, with that name passed over; until 2026-11-15 an action was not. The
+    twin that turns the visitor away stays quiet."""
+    from lantern.security import scan
+    g = _build(tmp_path, {"app/actions.ts": TOKEN_ACTIONS, "lib/db.ts": PRISMA_DB, "lib/session.ts": MADE_SESSION,
+                          "app/page.tsx": TOKEN_PAGE}, MADE_PKG)
+    sec = scan(g, offline=True)
+    assert [f["title"] for f in sec["findings"] if f["rule"] == "LW-AUTH-MISSING"] == [
+        "The Server Action tidy changes data, the app uses it, and Lantern found nothing that turns away a request "
+        "whose login token does not hold"]
+    assert [g.nodes[i].entry["detail"] for i in sec["logins_shown"]] == ["ACTION wipe"]

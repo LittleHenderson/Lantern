@@ -273,11 +273,20 @@ class KitWay(str):
     of = ""
 
 
+class GivenWay(str):
+    """The way on in the function a helper hands back as a Server Action (`export const save = checked(schema,
+    async (data) => …)`, and in `checked`: `return async (state, form) => { …; return action(data, form) }`): a
+    call of the function the helper was given, with whatever it hands it. `maker`: the helper's key; `derived`:
+    the names in the handed-back function that hold something made from what the browser sent it."""
+    maker = None
+    derived: frozenset = frozenset()
+
+
 def goes_on(stmts, ends: bool, way: str = "next") -> bool:
     """Whether a branch that leaves the function lets the request go on: it hands it to what comes next
     (`return next()`; `way` is the name that function goes by here), or, in a function whose answer is not the
     request's own (`ends` false: a helper, a hook, a dependency), it gives its caller one."""
-    if isinstance(way, KitWay):
+    if isinstance(way, (KitWay, GivenWay)):
         return hands_on(stmts, way)
     for s in (stmts or ())[:8]:
         if s.k in ("expr", "return") and s.a is not None and s.a.k == "call" and s.a.a is not None and \
@@ -313,6 +322,8 @@ def hands(e, way) -> bool:
     not: that ends the request with an error. In a SvelteKit hook: `resolve(event)`."""
     if not (isinstance(e, N) and e.k == "call" and e.a is not None):
         return False
+    if isinstance(way, GivenWay):
+        return e.a.k == "name" and e.a.name == way
     if isinstance(way, KitWay):
         whole = e.a.k == "attr" and e.a.name == way and bool(way.of) and e.a.a is not None and \
             e.a.a.k == "name" and e.a.a.name == way.of
@@ -339,6 +350,22 @@ def ways(x, way) -> int:
 
 def hands_on(x, way) -> bool:
     return ways(x, way) > 0
+
+
+def made_from(f: Fn) -> frozenset:
+    """The names in a function that hold something made from what it was handed: its parameters, and every name
+    set from an expression that mentions one of them (`const result = schema.safeParse(Object.fromEntries(form))`).
+    By mention only: what a library made of a value is still that value's, for this purpose."""
+    names = {y.name for p in f.params for y in all_nodes(p.pattern) if y.k == "name" and y.name}
+    names.update(p.name for p in f.params if p.name)
+    for _ in range(4):
+        size = len(names)
+        for y in all_nodes(f.body):
+            if y.k == "assign" and y.a is not None and any(z.k == "name" and z.name in names for z in all_nodes(y.a)):
+                names.update(z.name for z in all_nodes(y.items) if z.k == "name" and z.name)
+        if len(names) == size:
+            break
+    return frozenset(names)
 
 
 def leaves(stmts) -> bool:
@@ -1306,6 +1333,14 @@ class Engine:
         #                                    place that shows the page hands a raw place of it
         self.routes: dict = {}             # route function key -> (Fn, Az)
         self.gates: dict = {}              # `inline:<file>:<line>` -> Az of a function written in place in `x.use()`
+        # Server Actions made by a helper (`export const save = checked(schema, async (data) => …)`): the map's
+        # nodes of such helpers; id(the function a helper hands back) -> its way on (`GivenWay`); the helper's key
+        # -> that function; the helper's key -> what it hands the action, by position ("req" | "ident" | "own")
+        self.makers = {mid for n in g.nodes.values() if str((n.entry or {}).get("detail") or "").startswith("ACTION ")
+                       for mid in n.entry.get("middleware") or ()}
+        self.given: dict = {}
+        self.hands_back: dict = {}
+        self.handed_on: dict = {}
         self.logins: set = set()           # the map's nodes of the routes whose code turns away who is not signed in
         self.senders: dict = {}            # the map's nodes of the routes of `Result.senders` -> the check's line
         self.stored_at: dict = {}          # (file, line) of a write of request text into a file -> its `place`
@@ -1373,6 +1408,36 @@ class Engine:
             if fn.node and fn is not mod.top:
                 self.by_node.setdefault(fn.node, fn)
         self.stats["functions"] += len(mod.fns)
+        if mod.lang == "js":
+            self.made_actions(mod)
+
+    def made_actions(self, mod: Mod) -> None:
+        """Server Actions made by a helper. The function written in the helper's call is the action on the map,
+        named where it is declared: written on a later line than its name, it is tied to that node here. And a
+        helper of this file that made one (`makers`): the function it hands back (`return async (state, form) =>
+        …`), when that calls the function the helper was given, is what every request to the action runs first."""
+        top = self.module_at.get(mod.file)
+        for name, values in mod.consts.items() if top else ():
+            n = self.g.nodes.get(f"{top}::{name}")
+            if n is None or not str((n.entry or {}).get("detail") or "").startswith("ACTION "):
+                continue
+            for v in values:
+                f = next((a.a for a in v.items or () if a.k == "fn" and isinstance(a.a, Fn)), None) \
+                    if isinstance(v, N) and v.k == "call" else None
+                if f is not None and f.node is None:
+                    f.node = n.id
+                    self.inside.setdefault(n.id, mod.top)
+        for fn in mod.fns:
+            if fn.node not in self.makers:
+                continue
+            back = next((s.a.a for s in fn.body or () if s.k == "return" and s.a is not None and s.a.k == "fn"
+                         and isinstance(s.a.a, Fn)), None)
+            for p in fn.params if back is not None else ():
+                way = GivenWay(p.name) if p.pattern is None and p.name else None
+                if way and hands_on(back.body, way):
+                    way.maker, way.derived = fn.key, made_from(back)
+                    self.given[id(back)], self.hands_back[fn.key] = way, back
+                    break
 
     def node_for(self, file: str, fn: Fn) -> str | None:
         """The map's function that starts where this one does; of several on one line, the one with its name."""
@@ -1525,6 +1590,8 @@ class Engine:
     def unit(self, fn: Fn) -> None:
         ctx = Ctx(fn)
         env = Env(fn)
+        if fn.key in self.hands_back:
+            self.handed_on.pop(fn.key, None)
         for i, p in enumerate(fn.params):
             self.bind_param(env, fn, i, p, None, ctx, True)
         if not self.block(fn.body, env, ctx):
@@ -1609,7 +1676,11 @@ class Engine:
             if (self.entry(fn) or {}).get("serves") == "sveltekit":
                 kit = KitWay("resolve")
                 kit.of = fn.params[0].name if len(fn.params) == 1 else ""
-            if kit is not None and hands_on(fn.body, kit):
+            if id(fn) in self.given:
+                # what a helper hands back as a Server Action: every request to the action passes through it, and
+                # goes on where it calls the function the helper was given
+                got = ("gate", self.given[id(fn)])
+            elif kit is not None and hands_on(fn.body, kit):
                 # SvelteKit's `handle`, or a part of its `sequence(...)`: every request passes through it on its way
                 # to a route, and goes on where it calls `resolve(event)`. Until 2026-11-15 it was read as a route,
                 # and a guard after `if (!path.startsWith("/app")) return resolve(event)` as one for every request
@@ -1658,6 +1729,13 @@ class Engine:
         if not py and i == 0 and (self.entry(fn) or {}).get("trpc"):
             # a tRPC procedure is handed one object, whole (`opts`) or taken apart (`{ ctx, input }`): `member1`
             return Val(kind="req", data="trpc")
+        if not py and id(fn) in self.given:
+            # the function a helper hands back as a Server Action: the browser sends every argument, as to any action
+            maker = self.by_key[self.given[id(fn)].maker].name
+            words = f"`{name}` arrives with the request (handed to the function `{maker}` gives back)"
+            form = name == "formData" or bool(ann and re_search(r"\bFormData\b", ann))
+            t = self.source(fn, fn.line, words)
+            return Val((t,), kind="bag", data="formData") if form else join(base, Val((t,)))
         if not py and i == 0 and (self.entry(fn) or {}).get("sveltekit"):
             # a SvelteKit `load`, action, endpoint or `handle` is handed the event, whole (`event`) or taken apart
             # (`{ request, params, url, cookies, locals }`): `member1`
@@ -1758,6 +1836,13 @@ class Engine:
             words = f"`{name}` arrives with the request (handed to `{fn.name}`)"
             return Val((self.source(fn, fn.line, words),), kind="bag", data=name)
         if str((self.entry(fn) or {}).get("detail") or "").startswith("ACTION "):
+            # One made by a helper of the project gets what the helper hands it: what it made of the request, who
+            # is signed in (`user`, from the session), or something of the server's own
+            handed = self.handed_to(fn, i)
+            if handed == "ident":
+                return Val((Taint("ident", name, R.ALL, (), None, FIXED0),))
+            if handed == "own":
+                return base
             # A Server Action: the visitor's browser sends every argument (a form's data under any name, what a
             # client component calls it with, the state a form hands back, values bound to it). A number is no text.
             words = f"`{name}` arrives with the request (handed to the Server Action `{fn.name}`)"
@@ -1765,6 +1850,34 @@ class Engine:
                 return Val((self.source(fn, fn.line, words),), kind="bag", data="formData")
             return join(base, Val((self.source(fn, fn.line, words, set(R.ALL) if number else ()),)))
         return base
+
+    def handed_to(self, fn: Fn, i: int) -> str | None:
+        """For a Server Action made by a helper of the project: what the function the helper hands back gives it as
+        its argument `i`, as read where that function calls it (`hand_on`): "req" (made from what the browser
+        sent), "ident" (who is signed in), "own" (anything else of the server's). None where the helper's code is
+        not read or hands nothing on at that place: then it is the browser's, as for any action."""
+        for mid in (self.entry(fn) or {}).get("middleware") or ():
+            w = self.by_node.get(mid)
+            rec = self.handed_on.get(w.key) if w is not None else None
+            if rec is not None:
+                return rec.get(i)
+        return None
+
+    def hand_on(self, way: GivenWay, e: N, args: list) -> None:
+        """The function a helper handed back calls the action (`return action(result.data, formData, user)`): what
+        each argument is, kept for the action's own parameters (`handed_to`). Made from what the browser sent, by
+        mention (`GivenWay.derived`); else who is signed in, where the value says so; else the server's own. Two
+        places that differ: the browser's if either says so, else the server's own."""
+        rec = self.handed_on.setdefault(way.maker, {})
+        for j, a in enumerate(args):
+            if any(y.k == "name" and y.name in way.derived for y in all_nodes(e.items[j])):
+                kind = "req"
+            elif a is not None and any(t.kind == "ident" for t in a.taints):
+                kind = "ident"
+            else:
+                kind = "own"
+            old = rec.get(j)
+            rec[j] = kind if old in (None, kind) else "req" if "req" in (old, kind) else "own"
 
     def dependency(self, fn: Fn, text: str) -> Val | None:
         m = re_search(r"Depends\(\s*([A-Za-z_][\w.]*)|Security\(\s*([A-Za-z_][\w.]*)", text or "")
@@ -1891,7 +2004,8 @@ class Engine:
     def block(self, stmts, env: Env, ctx: Ctx) -> bool:
         stmts = stmts or ()
         late = 0
-        kit = self.role(ctx)[1] if stmts and env.fn.lang == "js" and self.g.meta.get("sveltekit") else None
+        kit = self.role(ctx)[1] if stmts and env.fn.lang == "js" and (self.g.meta.get("sveltekit") or self.given) \
+            else None
         for i, s in enumerate(stmts):
             if s.k == "assign" and env.fn.lang == "py" and not s.name and s.a is not None and s.a.k == "call" and \
                     len(s.items or ()) == 1 and s.items[0].k == "name" and \
@@ -1911,9 +2025,10 @@ class Engine:
             if self.stmt(s, env, ctx):
                 ctx.narrow -= late
                 return True
-            if isinstance(kit, KitWay) and s.k in ("expr", "assign") and hands_on([s], kit):
+            if isinstance(kit, (KitWay, GivenWay)) and s.k in ("expr", "assign") and hands_on([s], kit):
                 # SvelteKit: `const response = await resolve(event)` and then a check. The route has run by then:
-                # what is asked from here on, on this way through the hook, is asked of nobody on the way to it
+                # what is asked from here on, on this way through the hook, is asked of nobody on the way to it.
+                # The same in what a helper hands back as a Server Action: `const done = await action(form)`
                 ctx.narrow += 1
                 late += 1
         return False
@@ -2831,6 +2946,10 @@ class Engine:
                 self.passed_on(a.a, env, ctx)
             cb_ret = join(cb_ret, r) if r is not None else cb_ret
             args[i] = Val(kind="fn", data=(a.a, None))
+        if self.given and f.k == "name":
+            way = self.role(ctx)[1]
+            if isinstance(way, GivenWay) and f.name == way:
+                self.hand_on(way, e, args)
         if callee.kind == "fn" and isinstance(callee.data, tuple):
             r = self.closure(callee.data[0], env, ctx, [a if a is not None else UNKNOWN for a in args], e)
             return (r if r is not None else UNKNOWN), ()
@@ -3200,6 +3319,7 @@ class Engine:
             return None
         sub = Ctx(f, ctx)
         route = f.node is not None and (self.entry(f) or {}).get("kind") == "route"
+        gate = gate or id(f) in self.given      # what a helper hands back as a Server Action runs before the action
         if route:
             sub.az = Az()       # a route written inline: its own account of who may reach what
             self.routes[f.key] = (f, sub.az)
@@ -3799,6 +3919,13 @@ class Engine:
             f2 = self.by_node.get(mid) if isinstance(mid, str) else None
             if isinstance(mid, str) and mid.startswith("inline:"):
                 az = self.gates.get(mid)        # written in place in `use`: what its own lines ask
+                if az is not None:
+                    ev.update(az.ev)
+            elif f2 is not None and f2.key in self.hands_back:
+                # a Server Action made by this helper: what the function it hands back asks of every request before
+                # it calls the action. The helper's own lines run once, when the file is loaded, and ask nobody
+                back = self.hands_back[f2.key]
+                az = self.gates.get(f"inline:{back.file}:{back.line}")
                 if az is not None:
                     ev.update(az.ev)
             elif f2 is not None:

@@ -338,6 +338,24 @@ def _directives(root: TSNode) -> set[str]:
     return out
 
 
+def _exported_later(root: TSNode) -> frozenset:
+    """The file's own names it exports apart from where it declares them: `export { a, b as c }` (the names on
+    the left) and `export default a`."""
+    out: set[str] = set()
+    for c in root.named_children:
+        if c.type != "export_statement" or c.child_by_field_name("source") is not None or \
+                c.child_by_field_name("declaration") is not None:
+            continue
+        for clause in c.named_children:
+            if clause.type == "export_clause":
+                out.update(_text(s.child_by_field_name("name")) for s in clause.named_children
+                           if s.type == "export_specifier")
+        val = c.child_by_field_name("value")
+        if val is not None and val.type == "identifier":
+            out.add(_text(val))
+    return frozenset(out)
+
+
 def _or_new(value: TSNode | None) -> TSNode | None:
     """`kept ?? new T()`, `kept || new T()` -> the `new T()`: how an app keeps one client across reloads. Whichever
     side is taken, the code uses the value as the class it would make. `&&` and a `new` on the left are not this."""
@@ -501,6 +519,9 @@ class JSModule:
     cjs_from: str | None = None       # module.exports = require('./other')
     ctors: set[str] = field(default_factory=set)      # functions given methods: this.x = function, X.prototype.y
     wrapped: set[str] = field(default_factory=set)    # defs read from `const f = wrap(function ...)`
+    # "use server" files: a top-level name set to a helper's call with a function written in it -> the helper's
+    # chain (`export const save = checked(schema, async (data) => …)`: `["checked"]`)
+    made: dict[str, list[str]] = field(default_factory=dict)
     param_lists: dict[str, list[list[str]]] = field(default_factory=dict)   # scope -> inline functions' parameters
     cb_params: dict[str, dict[str, tuple | None]] = field(default_factory=dict)  # scope -> name -> (callee, arg, i)
     mounts: list[dict] = field(default_factory=list)  # x.use('/prefix', router...): {recv, scope, prefix, targets}
@@ -632,10 +653,15 @@ def _spine_args(n: TSNode | None) -> list[list[str]]:
 
 
 class Walker:
-    def __init__(self, m: JSModule, resolve_spec, trpc: bool = False, kit: str | None = None):
+    def __init__(self, m: JSModule, resolve_spec, trpc: bool = False, kit: str | None = None,
+                 actions: frozenset | None = None):
         self.m = m
         self.resolve_spec = resolve_spec
         self.trpc = trpc      # the nearest package.json depends on @trpc/server (and this is no test file)
+        # a file that begins with "use server" where something runs Server Actions: the names it exports with
+        # `export { a, b }` or `export default a` (one written `export const a = …` is told as it is read); else None
+        self.actions = actions
+        self.exporting = False    # inside `export const …` / `export function …`
         self.kit = kit        # what a SvelteKit route file is by its name (`page.server`, `server`, …), or None
         self.top = ""         # the scope whose string constants are the file's own: "", or a Svelte component
         self.planned: dict[int, str] = {}   # where an inline function begins -> the name it is a function under
@@ -822,16 +848,26 @@ class Walker:
         fn = _unwrap_func(value)
         if fn is None and name_node.type == "identifier":
             fn = self._wrapped_func(value) or (self._trpc_middleware(value) if self.trpc else None)
+            action = self.actions is not None and not scope and (self.exporting or name in self.actions)
+            first = fn is not None
+            if fn is None and action:
+                # export const save = checked(schema, async (data) => …) in a "use server" file: every export of
+                # such a file is a function the browser can call, so the helper hands one back, around this one
+                fn = self._made_action(value)
             if fn is not None:   # const create = wrap(async (req, res) => ...): the function is a node of its own
                 local = self.add_def(fn, name, scope, "function", cls, outer=n)
                 self.m.wrapped.add(local)
                 self._walk_body(fn, local, None, ui)
                 wfn = value.child_by_field_name("function")
+                if action and wfn is not None and _chain(wfn):
+                    self.m.made[local] = _chain(wfn)
                 self.m.refs.append(JSRef(scope, _chain(wfn), value.start_point[0] + 1, "call", ui, _site_pos(value),
                                          _text(wfn)))
                 self.walk(wfn, scope, cls, ui)
                 args = value.child_by_field_name("arguments")
-                for a in (args.named_children[1:] if args is not None else []):
+                rest = [] if args is None else args.named_children[1:] if first else \
+                    [a for a in args.named_children if not a.start_byte <= fn.start_byte < a.end_byte]
+                for a in rest:
                     self.walk(a, scope, cls, ui)
                 return
         if value is not None and self._require_binding(name_node, value, scope):
@@ -1004,6 +1040,26 @@ class Walker:
         argv = [a for a in (args.named_children if args is not None else []) if a.type != "comment"]
         first = _unparen(argv[0]) if argv else None
         return first if first is not None and first.type in FUNC_TYPES else None
+
+    @staticmethod
+    def _made_action(value: TSNode | None) -> TSNode | None:
+        """`checked(schema, async (data, form) => ...)` -> the first function written among the call's arguments,
+        wherever it stands. Read only for a name a "use server" file exports (`_declarator`): there the call hands
+        back a function, whatever the helper is. None for a call that hands back something else by its name
+        (NOT_WRAPPERS: `list.map(fn)`), and for a call made on what another call gave (`client.input(s).action(fn)`:
+        what runs before the function is not written here)."""
+        v = _unparen(value)
+        if v is None or v.type != "call_expression":
+            return None
+        ch = _chain(v.child_by_field_name("function"))
+        if not ch or ch[-1] in NOT_WRAPPERS or any(x.endswith("()") or x.startswith("require:") for x in ch):
+            return None
+        args = v.child_by_field_name("arguments")
+        for a in (args.named_children if args is not None else []):
+            f = _unparen(a)
+            if f is not None and f.type in FUNC_TYPES:
+                return f
+        return None
 
     def _assign(self, n: TSNode, scope: str, cls, ui) -> bool:
         """Assignments that define things: `module.exports = ...`, `exports.x = ...`, `this.x = function` in a
@@ -1219,7 +1275,9 @@ class Walker:
             return
         if decl is not None:
             before = set(self.m.defs)
+            self.exporting = True
             self.walk(decl, scope, cls, ui)
+            self.exporting = False
             new = [d for d in self.m.defs if d not in before and "." not in d]
             for d in new:
                 self.m.exports[d] = d
@@ -3287,16 +3345,18 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         in_kit = p.relative_to(pkg["dir"]).as_posix() \
             if KIT in pkg["deps"] and not m.is_test and pkg["dir"] in p.parents else None
         km = KIT_FILE.match(in_kit) if in_kit else None
+        if not html and not svelte:
+            m.directives = _directives(tree.root_node)
         w = Walker(m, lambda s, _p=p: spec.resolve(s, _p), trpc=not m.is_test and TRPC_SERVER in pkg["deps"],
                    kit=km.group("kind") if km is not None and not svelte else
-                   "hooks" if in_kit and KIT_HOOKS.match(in_kit) else None)
+                   "hooks" if in_kit and KIT_HOOKS.match(in_kit) else None,
+                   actions=_exported_later(tree.root_node) if "use server" in m.directives and not m.is_test
+                   and pkg["deps"] & SERVER_ACTIONS else None)
         shown = []
         if svelte:
             shown = read_svelte(w, tree, src, markup, own, parsers[ext])
         else:
             w.each(tree.root_node.children, "")
-        if not html and not svelte:
-            m.directives = _directives(tree.root_node)
         covered = {ref.at for ref in m.refs if ref.at}
         for cn in [x for top in (tree.root_node, *shown) for x in _call_nodes(top)]:
             pos = _site_pos(cn)
@@ -3881,6 +3941,19 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 node = g.nodes.get(nid(m.name, local))
                 if node is not None and not node.entry:
                     node.entry = {"kind": "route", "detail": f"ACTION {name}"}
+                    # export const save = checked(schema, async (data) => …): what the helper hands back runs
+                    # first, on every request, and calls this function. The helper is kept as a route's middleware
+                    # is (its name is read as one), and the action is linked to it: what it calls is on the way
+                    hit = r.resolve_parts(m, "", m.made[local]) if local in m.made else None
+                    mid = target_id(hit) if hit and hit[0] == "def" else \
+                        f"ext:{_ext_js(hit[1])}" if hit and hit[0] == "ext" and not r.unread(hit[1]) else None
+                    if mid and mid.startswith("ext:"):
+                        g.external(mid[4:])
+                        node.entry["middleware"] = [mid]
+                    elif mid and mid != node.id and mid in g.nodes and g.nodes[mid].kind == CALLABLE:
+                        g.add_edge(node.id, mid, kind=CALLS, confidence=INFERRED, line=node.start_line,
+                                   via="action-helper")
+                        node.entry["middleware"] = [mid]
         if KIT in pkg["deps"]:
             km = KIT_FILE.match(rel_pkg)
             if km is not None:

@@ -1460,8 +1460,19 @@ def action_change(g: Graph, n, adj: dict[str, list[str]], texts: dict[str, str],
     return None
 
 
-def _actions_unasked(g: Graph, adj: dict[str, list[str]], texts: dict[str, str], doubt=None) -> list[dict]:
-    """Server Actions that change data, that the project's own code uses, and in which no login check is found."""
+# Said on a finding the flow step asks for: the route calls a library that reads a login token, and that is not
+# taken as a login check there. What Lantern found, and the three ways it comes about; never "the token is not
+# checked", which Lantern has not shown.
+TOKEN_LETS_ON = ("The code on the way to this route calls a library that reads a login token, and Lantern found "
+                 "nothing it can follow that turns away a request whose token does not hold, or that carries none: "
+                 "the failure is caught and the request goes on, the token is read without being checked, or the "
+                 "answer is not waited for. So that call was not taken as a login check for this route. ")
+
+
+def _actions_unasked(g: Graph, adj: dict[str, list[str]], texts: dict[str, str], doubt=None,
+                     only=None) -> list[dict]:
+    """Server Actions that change data, that the project's own code uses, and in which no login check is found.
+    With `only` (`missing_auth`): those actions alone, read with `doubt`."""
     used: set[str] = set()
     for e in g.call_edges():
         src = g.nodes.get(e.src)
@@ -1471,6 +1482,8 @@ def _actions_unasked(g: Graph, adj: dict[str, list[str]], texts: dict[str, str],
     for n in g.nodes.values():
         route = str((n.entry or {}).get("detail") or "")
         if (n.entry or {}).get("kind") != "route" or not route.startswith("ACTION ") or n.id not in used:
+            continue
+        if only is not None and n.id not in only:
             continue
         if is_public_route(route) or (n.file and JS_TEST_RE.search(n.file)):
             continue
@@ -1492,20 +1505,16 @@ def _actions_unasked(g: Graph, adj: dict[str, list[str]], texts: dict[str, str],
         more += passed_over_words(n, texts.get(n.file or ""))
         rows = (texts.get(n.file or "") or "").splitlines()
         shown = rows[change[1] - 1].strip() if 0 < change[1] <= len(rows) else ""
+        title = f"The Server Action {name} changes data, the app uses it, and no login check was found"
+        if only is not None:
+            title = (f"The Server Action {name} changes data, the app uses it, and Lantern found nothing that turns "
+                     "away a request whose login token does not hold")
+            more = TOKEN_LETS_ON + more
         out.append(_finding(
-            "LW-AUTH-MISSING", f"The Server Action {name} changes data, the app uses it, and no login check was found",
+            "LW-AUTH-MISSING", title,
             "MEDIUM", n.file, n.start_line, category="code", conf="LOW", cwe=306, fixed_rank="medium",
             more=more + "If this action is meant to be public, ignore it.", snippet=shown))
     return out
-
-
-# Said on a finding the flow step asks for: the route calls a library that reads a login token, and that is not
-# taken as a login check there. What Lantern found, and the three ways it comes about; never "the token is not
-# checked", which Lantern has not shown.
-TOKEN_LETS_ON = ("The code on the way to this route calls a library that reads a login token, and Lantern found "
-                 "nothing it can follow that turns away a request whose token does not hold, or that carries none: "
-                 "the failure is caught and the request goes on, the token is read without being checked, or the "
-                 "answer is not waited for. So that call was not taken as a login check for this route. ")
 
 
 def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
@@ -1557,8 +1566,7 @@ def missing_auth(g: Graph, only=None, doubt=None) -> list[dict]:
         out.append(_finding(
             "LW-AUTH-MISSING", title, "MEDIUM", n.file, n.start_line, category="code", conf="LOW", cwe=306,
             fixed_rank="medium", more=more + "If this route is meant to be public, ignore it.", snippet=detail or ""))
-    if only is None:
-        out += _actions_unasked(g, adj, texts, doubt=doubt)
+    out += _actions_unasked(g, adj, texts, doubt=doubt, only=only)
     return out
 
 
