@@ -250,11 +250,13 @@ def test_this_computer_stays_reachable():
 
 
 @pytest.mark.parametrize("host, local", [
-    ("127.0.0.1", True), ("127.8.9.10", True), ("::1", True), ("localhost", True), ("LOCALHOST.", True),
+    ("127.0.0.1", True), ("127.8.9.10", True), ("::1", True), ("localhost", True), ("LOCALHOST", True),
     ("0.0.0.0", True), ("::", True), ("::ffff:127.0.0.1", True), ("", True), (None, True), (b"localhost", True),
     ("fe80::1%lo", False), ("192.0.2.1", False), ("10.0.0.5", False), ("169.254.169.254", False),
     ("localhost.evil.example", False), ("127.0.0.1.evil.example", False), ("api.anthropic.com", False),
     ("::ffff:192.0.2.1", False), ("2001:db8::1", False), ("0x7f.1", False),
+    # as it is written (2026-11-14): with a dot at its end the system asks a name server for it
+    ("LOCALHOST.", False), ("localhost.", False), ("127.0.0.1.", False), (" 127.0.0.1", False), ("::1%lo", False),
 ])
 def test_what_counts_as_this_computer(host, local):
     assert ng.is_local(host) is local
@@ -598,6 +600,275 @@ def test_a_declared_name_handed_straight_to_a_socket_is_learned_and_let_on():
     seen = _json(_program(DECLARED_NAME))
     assert seen["gave"] == [None] * 6
     assert seen["learned"] == ["api.declared.example"] and seen["tried"] == []
+
+
+# An address as the system reads it (2026-11-14). The system goes by what an address holds: the entries of the
+# pair, the letters of the host and the socket's own family, whatever class each is of and whatever that class says
+# about itself; and a host is a number, or this computer, to it only where it is written the one way that needs
+# nobody asked. The guard reads the same, nothing taken off a host before it is judged, and what it read is what
+# goes down: a pair or a host of a class of its own is handed on as its plain value.
+AS_THE_SYSTEM_READS = """
+    import collections
+    guard = ng.isolate(tempfile.mkdtemp(), allow=["declared.example"])
+    NAME, CRLF = "lantern-probe.example", bytes([13, 10])
+    Pair = collections.namedtuple("Pair", "host port")
+    class Made(tuple):
+        pass
+    class Name(str):
+        pass
+    class First(tuple):                       # asked for its first entry, it says this computer
+        def __getitem__(self, i):
+            return "localhost" if i == 0 else tuple.__getitem__(self, i)
+    class Says(str):                          # asked what it says, it says this computer
+        def __str__(self):
+            return "localhost"
+    class Other(str):                         # asked to write itself out, it writes another name
+        def encode(self, *how):
+            return NAME.encode()
+    class Family(socket.socket):              # asked for its family, it says one that is no network's
+        family = getattr(socket, "AF_UNIX", 1)
+    def tcp(cls=socket.socket):
+        s = cls(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2)
+        return s
+    def udp():
+        return socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    def asked_of_the_proxy(host, port):
+        with socket.create_connection(("127.0.0.1", guard.proxy_port), timeout=10) as c:
+            c.sendall(("CONNECT %s:%d HTTP/1.1" % (host, port)).encode() + CRLF + CRLF)
+            return c.recv(200).split(CRLF, 1)[0].decode()
+    out = []
+    def tried(what, do):
+        mark = guard.mark()
+        try:
+            got = do()
+            said = got if isinstance(got, str) else "went on"
+        except ng.Refused:
+            said = "refused"
+        except (OSError, TypeError) as e:
+            said = "the system's answer: " + type(e).__name__
+        out.append([what, said, [[a["kind"], a["host"]] for a in guard.since(mark)]])
+"""
+ALMOST = ["192.0.2.1%lantern-probe.example", "127.0.0.1%lantern-probe.example", " 127.0.0.1", "127.0.0.1 ", "127.0.0.1.",
+          "192.0.2.1.", "127.0.0.09", "127.0.0.\u0661", "localhost.", " localhost"]
+NOT_AS_IT_LOOKS = AS_THE_SYSTEM_READS + """
+    for host in json.loads(sys.argv[1]):
+        with tcp() as s:
+            tried("connect", lambda: s.connect((host, 80)))
+        with udp() as s:
+            tried("sendto", lambda: s.sendto(b"x", (host, 53)))
+        tried("getaddrinfo", lambda: socket.getaddrinfo(host, 80))
+        tried("gethostbyname", lambda: socket.gethostbyname(host))
+        if host.isascii() and host == host.strip():       # a host that can be written into a request as it is
+            tried("the proxy", lambda: asked_of_the_proxy(host, 80))
+    print(json.dumps(out))
+"""
+OF_ANOTHER_CLASS = AS_THE_SYSTEM_READS + """
+    for what, to in (("a named pair", Pair(NAME, 80)), ("a class made from tuple", Made((NAME, 80))),
+                     ("a pair that says this computer", First((NAME, 80))), ("a text that says this computer", (Says(NAME), 80))):
+        with tcp() as s:
+            tried("connect, " + what, lambda: s.connect(to))
+        with udp() as s:
+            tried("sendto, " + what, lambda: s.sendto(b"x", to))
+    tried("getaddrinfo, a text that says this computer", lambda: socket.getaddrinfo(Says(NAME), 80))
+    tried("gethostbyname, a text that says this computer", lambda: socket.gethostbyname(Says(NAME)))
+    tried("gethostbyname_ex, a text that says this computer", lambda: socket.gethostbyname_ex(Says(NAME)))
+    tried("gethostbyaddr, a text that says this computer", lambda: socket.gethostbyaddr(Says("192.0.2.1")))
+    tried("who 192.0.2.1 is, in a pair that says this computer", lambda: socket.getnameinfo(First(("192.0.2.1", 80)), 0))
+    with tcp() as s:
+        tried("connect, a number that writes itself out as a name", lambda: s.connect((Other("192.0.2.1"), 80)))
+    with tcp(Family) as s:
+        tried("connect, a socket that says another family", lambda: s.connect(("192.0.2.1", 80)))
+    tried("getaddrinfo, a number that writes itself out as a name", lambda: socket.getaddrinfo(Other("127.0.0.1"), 80))
+    tried("gethostbyname, a number that writes itself out as a name", lambda: socket.gethostbyname(Other("127.0.0.1")))
+    print(json.dumps(out))
+"""
+THE_SAME_AT_HOME = AS_THE_SYSTEM_READS + """
+    with tcp() as server, udp() as box:
+        server.bind(Pair("127.0.0.1", 0))
+        server.listen(8)
+        port = server.getsockname()[1]
+        box.bind((Name("localhost"), 0))
+        box.settimeout(5)
+        at = box.getsockname()[1]
+        def call(to):
+            with tcp() as c:
+                c.connect(to)
+                server.accept()[0].close()
+        tried("connect, a named pair", lambda: call(Pair("127.0.0.1", port)))
+        tried("connect, localhost in a text class", lambda: call((Name("localhost"), port)))
+        tried("connect, a number in a bytearray", lambda: call((bytearray(b"127.0.0.1"), port)))
+        class Whole(int):
+            pass
+        class Asked:                          # a number of a library's own kind: asked what whole number it is, it says
+            def __index__(self):
+                return port
+        tried("connect, a port of a class made from int", lambda: call(("127.0.0.1", Whole(port))))
+        tried("connect, a port that is asked what number it is", lambda: call(("127.0.0.1", Asked())))
+        with udp() as s:
+            tried("sendto, a named pair", lambda: s.sendto(b"a", Pair("127.0.0.1", at)))
+            tried("what arrived", lambda: box.recv(10).decode())
+        tried("the proxy, asked for this computer", lambda: asked_of_the_proxy("127.0.0.1", port))
+    tried("getaddrinfo, a number in a text class", lambda: socket.getaddrinfo(Name("127.0.0.1"), 80))
+    tried("gethostbyname, a number in a text class", lambda: socket.gethostbyname(Name("127.0.0.1")))
+    tried("this computer's address written out, in a named pair",
+          lambda: socket.getnameinfo(Pair("127.0.0.1", 80), socket.NI_NUMERICHOST | socket.NI_NUMERICSERV))
+    with tcp() as s:
+        tried("connect to a number outside, in a named pair", lambda: s.connect(Pair("192.0.2.1", 80)))
+    with tcp() as s:
+        tried("connect to a number outside, in a text class", lambda: s.connect((Name("192.0.2.1"), 80)))
+    here = ["127.0.0.1", "127.9.8.7", "0.0.0.0", "::1", "::", "::ffff:127.0.0.1", "localhost", "LOCALHOST", b"localhost",
+            bytearray(b"127.0.0.1"), Name("localhost"), "", None, socket.gethostname()]
+    print(json.dumps({"tried": out, "not here": [ascii(h) for h in here if not ng.is_local(h)],
+                      "declared": [ng.is_declared(h) for h in ("declared.example", "api.declared.example", "API.Declared.Example")]}))
+"""
+READ_STRICTLY = AS_THE_SYSTEM_READS + """
+    hosts = json.loads(sys.argv[1]) + ["127.1", "0x7f.0.0.1", "::1%lo", "192.0.2.1", "localhost.localdomain.", Says("192.0.2.1"), 5]
+    class Declared(str):                      # asked what it says, it says the declared host
+        def __str__(self):
+            return "declared.example"
+    names = [" declared.example", "declared.example ", "declared.example..", "declared.example%x", "notdeclared.example",
+             "declared.example.lantern-probe.example", Declared("lantern-probe.example"), "192.0.2.1"]
+    print(json.dumps({"here": [ascii(h) for h in hosts if ng.is_local(h)], "declared": [ascii(h) for h in names if ng.is_declared(h)]}))
+"""
+
+
+def test_a_host_that_is_not_written_as_this_computer_or_a_number_is_asked_about_first():
+    """A program of its own with this guard and no other. A host with something more than a number or `localhost`
+    in it (a zone after a percent sign, a space, a dot at its end, a zero in front of a part, a digit of another
+    script) may be a name to the system: through a socket, through each lookup and through the guard's own proxy
+    it is refused and written down as it was written, and nothing is asked of anybody."""
+    seen = _json(_program(NOT_AS_IT_LOOKS, json.dumps(ALMOST)))
+    want = []
+    for host in ALMOST:
+        want += [[way, "refused", [["lookup", host]]] for way in ("connect", "sendto", "getaddrinfo", "gethostbyname")]
+        if host.isascii() and host == host.strip():
+            want.append(["the proxy", "HTTP/1.1 403 Forbidden", [["proxy", host]]])
+    assert seen == want
+
+
+def test_a_value_of_another_class_is_read_by_what_it_holds():
+    """A pair, a host and a socket of a class that answers for itself: a name in it is refused as a lookup before
+    the system is asked, who an address is stays a lookup, a number goes down as that number and is refused as the
+    connection it is, and a number that is this computer's is let on."""
+    name = "lantern-probe.example"
+    seen = _json(_program(OF_ANOTHER_CLASS))
+    want = [[f"{way}, {what}", "refused", [["lookup", name]]]
+            for what in ("a named pair", "a class made from tuple", "a pair that says this computer", "a text that says this computer")
+            for way in ("connect", "sendto")]
+    want += [[f"{ask}, a text that says this computer", "refused", [["lookup", name]]]
+             for ask in ("getaddrinfo", "gethostbyname", "gethostbyname_ex")]
+    want += [["gethostbyaddr, a text that says this computer", "refused", [["lookup", "192.0.2.1"]]],
+             ["who 192.0.2.1 is, in a pair that says this computer", "refused", [["lookup", "192.0.2.1"]]],
+             ["connect, a number that writes itself out as a name", "refused", [["connect", "192.0.2.1"]]],
+             ["connect, a socket that says another family", "refused", [["connect", "192.0.2.1"]]],
+             ["getaddrinfo, a number that writes itself out as a name", "went on", []],
+             ["gethostbyname, a number that writes itself out as a name", "127.0.0.1", []]]
+    assert seen == want
+
+
+def test_the_twins_this_computer_and_a_number_in_a_value_of_another_class_go_on_as_their_plain_twins_do():
+    """The same classes holding this computer's number or `localhost`: a listener is made and reached, a datagram
+    arrives, the proxy passes a request for this computer on, a number is looked up with nobody asked, and nothing
+    is written down. A number outside is still refused as a connection, with no lookup."""
+    seen = _json(_program(THE_SAME_AT_HOME))
+    assert seen["tried"] == [
+        ["connect, a named pair", "went on", []], ["connect, localhost in a text class", "went on", []],
+        ["connect, a number in a bytearray", "went on", []],
+        ["connect, a port of a class made from int", "went on", []],
+        ["connect, a port that is asked what number it is", "went on", []], ["sendto, a named pair", "went on", []],
+        ["what arrived", "a", []], ["the proxy, asked for this computer", "HTTP/1.1 200 Connection established", []],
+        ["getaddrinfo, a number in a text class", "went on", []], ["gethostbyname, a number in a text class", "127.0.0.1", []],
+        ["this computer's address written out, in a named pair", "went on", []],
+        ["connect to a number outside, in a named pair", "refused", [["connect", "192.0.2.1"]]],
+        ["connect to a number outside, in a text class", "refused", [["connect", "192.0.2.1"]]]]
+    assert seen["not here"] == [] and seen["declared"] == [True, True, True]
+
+
+def test_this_computer_and_a_declared_host_are_read_with_nothing_taken_off():
+    """`is_local` and `is_declared` on what only looks like this computer, a number or a declared host."""
+    seen = _json(_program(READ_STRICTLY, json.dumps(ALMOST)))
+    assert seen == {"here": [], "declared": []}
+
+
+# A way out on this computer is known by its port, and an address by the host in it: neither is taken at its word
+# (2026-11-14). Through the socket class a port goes down as the plain number it holds, or says once. Where the
+# class was gone round, the guard still hears of the connection before it is made, and one whose host or port it
+# cannot read as the system did is written down and refused.
+A_WAY_OUT_ON_THIS_COMPUTER = """
+    import _socket, time
+    heard = []
+    listener = socket.socket(); listener.bind(("127.0.0.1", 0)); listener.listen(8)
+    port = listener.getsockname()[1]
+    def serve():
+        while True:
+            c, _ = listener.accept()
+            heard.append("a call"); c.close()
+    threading.Thread(target=serve, daemon=True).start()
+    os.environ["HTTPS_PROXY"] = f"http://127.0.0.1:{port}"
+    guard = ng.isolate(tempfile.mkdtemp())
+    class Quiet(int):                         # asked whether it is the same as another number, it says no
+        def __eq__(self, other):
+            return False
+        def __ne__(self, other):
+            return True
+        def __hash__(self):
+            return 7
+    class Once:                               # asked what number it is, it says the port, and after that another
+        def __init__(self):
+            self.asked = 0
+        def __index__(self):
+            self.asked += 1
+            return port if self.asked == 1 else 9
+    class Elsewhere(str):                     # asked to write itself out, it writes an address that is not this computer's
+        def encode(self, *how):
+            return b"192.0.2.1"
+    out = []
+    def tried(what, do):
+        mark = guard.mark()
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2)
+        try:
+            do(s)
+            said = "went on"
+        except ng.Refused:
+            said = "refused"
+        except OSError as e:
+            said = "the system's answer: " + type(e).__name__
+        finally:
+            s.close()
+        out.append([what, said, [[a["kind"], a["host"], a["port"]] for a in guard.since(mark)]])
+    tried("the plain port", lambda s: s.connect(("127.0.0.1", port)))
+    tried("a port that is the same as no number", lambda s: s.connect(("127.0.0.1", Quiet(port))))
+    tried("a port that says another number the second time", lambda s: s.connect(("127.0.0.1", Once())))
+    tried("beneath the socket class, a port that is the same as no number",
+          lambda s: _socket.socket.connect(s, ("127.0.0.1", Quiet(port))))
+    tried("beneath the socket class, a port that says another number the second time",
+          lambda s: _socket.socket.connect(s, ("127.0.0.1", Once())))
+    tried("beneath the socket class, this computer's number that writes itself out as another",
+          lambda s: _socket.socket.connect(s, (Elsewhere("127.0.0.1"), 9)))
+    time.sleep(0.2)
+    print(json.dumps({"port": port, "tried": out, "heard": heard}))
+"""
+
+
+def test_a_port_or_a_host_that_answers_for_itself_does_not_reach_a_way_out_on_this_computer():
+    """A program of its own with a forwarding proxy listening on this computer (a way out, refused by its port).
+    A port of a class that is the same as no number, or that says another number each time it is asked, and a host
+    that writes itself out for the system as another address: each try is refused and written down, through the
+    socket class and beneath it, and the forwarding proxy hears nothing."""
+    seen = _json(_program(A_WAY_OUT_ON_THIS_COMPUTER))
+    at = ["connect", "127.0.0.1", seen["port"]]
+    assert seen["tried"] == [
+        ["the plain port", "refused", [at]],
+        ["a port that is the same as no number", "refused", [at]],
+        ["a port that says another number the second time", "refused", [at]],
+        ["beneath the socket class, a port that is the same as no number", "refused", [at]],
+        ["beneath the socket class, a port that says another number the second time", "refused",
+         [["connect", "<127.0.0.1 at a port that is no plain number: Once>", None]]],
+        ["beneath the socket class, this computer's number that writes itself out as another", "refused",
+         [["connect", "<Elsewhere: 127.0.0.1>", None]]]]
+    assert seen["heard"] == []
 
 
 def _closed_copy_of_the_guard(tmp_path) -> Path:

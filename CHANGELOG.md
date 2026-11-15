@@ -57,10 +57,10 @@ file. New entries go under `## Unreleased`, on top.
     library for a message's id, an HTTP server when it starts) gets its answer, and the system asks nobody. The
     guard of Lantern's own tests does the same (`tools/netguard/lantern_netguard.py`, `_ask_before_names`): a
     declared host is learned and let on, any other name is written down and refused before the system is asked.
-    Tests: `tests/test_sandbox_guards.py` (28; 4 new), `tests/test_netguard.py` (142; 8 new),
-    `tests/test_sandbox_own_network.py` (19; 1 new), one line of `tests/test_sandbox.py`. On the code before, 9 of
-    the 13 new tests fail and the 4 twins pass (the four files: 9 failed, 187 passed, 16 skipped); now 196 pass and
-    16 are skipped. CI has a `macos` job that runs the new tests there; until now no test of the guard ran on macOS.
+    Tests of this first part: 4 in `tests/test_sandbox_guards.py`, 8 in `tests/test_netguard.py`, 1 in
+    `tests/test_sandbox_own_network.py`, one line of `tests/test_sandbox.py`. On the code before, 9 of the 13 new
+    tests fail and the 4 twins pass (the counts of the four files are with the second part, below). CI has a
+    `macos` job that runs the new tests there; until now no test of the guard ran on macOS.
     One of the new tests asked the guard of Lantern's own tests about a declared host inside the tests' own
     program. Run by Lantern in the sandbox it failed, there only: the sandbox around the tests refuses a lookup
     of any name that is not this computer's, a declared one too, and is right to. The test asks in a program of
@@ -69,6 +69,41 @@ file. New entries go under `## Unreleased`, on top.
     beneath Python's module, loads the module anew, or is not Python is held by the kernel's walls only, which
     macOS and Windows do not have. `gethostbyaddr("127.0.0.1")` is still answered by the system where the run has
     no network of its own, while `getnameinfo` for the same address is refused there.
+    **An address is read the way the system reads it** (the same day; an independent review of this change's first
+    version showed three ways in which the guard and the system read one address differently, and looking for more of
+    the same two kinds showed further ones; each was confirmed on Python 3.13.18 before it was touched).
+    *What was wrong.* (1) The guard went by what a value says of itself: its exact type, its entries, its letters,
+    whether it is the same as another value, the socket's `family`. The system goes by the value underneath: a pair,
+    a text or bytes of a class of its own (a named pair is one) is read by what it holds, a text of such a class is
+    written out for the system by the class's own means, and a socket's family is the socket's. (2) The guard read
+    "this computer" and "a number" more generously than the system does: a part with a zero in front or a digit of
+    another script, and in the guard of Lantern's own tests a space, a dot at the end or a zone after a percent sign,
+    were read as the number or the name without them, while the system took the host for a name and asked for it. In
+    that guard the same reading decided what its own proxy passes on, and the port of a forwarding proxy on this
+    computer, which is a way out, was told by a comparison the port's own class answers.
+    *Now.* Both guards read an address by what it holds, through a plain copy made by the plain type's own means
+    (`_held`, `_pair`), the socket's family from the socket, and a host as it is written: nothing is taken off it
+    first, and it is a number only where it is written the one way every system reads a number (`_number`). What the
+    guard read is what goes down: the five socket calls, `getnameinfo`, `gethostbyaddr` and the lookups
+    `getaddrinfo`, `gethostbyname` and `gethostbyname_ex` (`_plainly`) hand the plain copy on. A connection or a
+    lookup that reaches the hook with a host that is not plain text or bytes, or in the guard of Lantern's own tests
+    with a port that is no plain number, came round the socket class: it is refused and written down (`_as_handed`,
+    `_as_read`). In the guard of Lantern's own tests `is_local` and `is_declared` read the host as it is written (one
+    dot at the end of a declared name is the same host), and so does its proxy; a proxy address in the person's own
+    settings is still read loosely (`loosely=True`), where taking one more for this computer's closes one more port.
+    Changed for honest code: a host of this computer written with a dot at its end (`localhost.`), with a zone
+    (`::1%lo`) or with a space around it is asked about as a name and refused where it was let through (an older test
+    expected `LOCALHOST.` to count as this computer; this computer sends that name to its name server, and the test
+    now expects what is so). A text host of a class of its own handed to the socket type beneath Python's module is
+    refused; through `socket.socket` it works as plain text does.
+    Tests: 11 new and 5 new cases of an older one (`tests/test_sandbox_guards.py` 4, `tests/test_netguard.py` 5 and
+    the cases, `tests/test_sandbox_own_network.py` 2). On this change's code before them 7 of the tests and the 5
+    cases fail and the 4 twins pass; now all pass. The four files as they are now (228 tests), in a copy that is no
+    checkout: on the code before the stage 21 failed, 191 passed and 16 were skipped; now 212 pass and the same 16
+    are skipped (15 need Docker, 1 a checkout).
+    Not covered, as before: a name handed to the socket type beneath Python's module is looked up by the system
+    before the guard hears of the call. This computer's own names (`localhost`, the computer's name) are handed to
+    the system, which answers them from its own file on an ordinary computer.
   - **gitleaks, the secrets scanner.** *What was wrong* (the code before, 137ec6f; gitleaks 8.30.1 built from its
     source, 34 ways of starting it tried by hand). gitleaks was started as it comes: on the project's folder, with
     the shell's variables. It takes settings from a file in the folder it scans and from two variables, a list of
