@@ -81,6 +81,7 @@ IMPLEMENTED = ("FunctionDeclaration", "FunctionExpression", "ArrowFunction", "Me
 COUNTS = ("linked", "likely", "possible", "builtin", "library", "declared", "left")
 MOST_REPLACING = 24                     # classes beneath a method's own that write it anew: more are not drawn
 DECLARING = ("abstractmethod", "overload")      # decorators under which a method only declares
+REPLACES = "override"                   # the `via` of a link to a method that replaces the one a checker named
 ON = ("1", "true", "yes", "on")
 
 
@@ -697,8 +698,8 @@ class _Beneath:
     that a class beneath its own writes anew need not be. Measured on five public Python projects (2026-11-15):
     of 60 links through a value's type read by hand, 12 led to a method that only declares and 1 to one that the
     project's default subclass replaces. So such a method is not linked as the likely one: the methods that
-    replace it are each `possible`, as for Lantern's own `self.method()` (`via: "override"`), and with it where it
-    has code of its own. Python only: the map keeps no class's base for JavaScript."""
+    replace it are each `possible` under Lantern's own name for such a link (`REPLACES`, as `self.method()`),
+    and with it where it has code of its own. Python only: the map keeps no class's base for JavaScript."""
 
     def __init__(self, g, root: Path):
         self.g, self.root, self.files, self.subs = g, root, {}, {}
@@ -763,6 +764,7 @@ def _places(g, prefix: str) -> dict:
         if n.id.startswith(prefix) and n.file and n.kind in (CALLABLE, CLASS) and n.start_line:
             index.setdefault((n.file, n.start_line), []).append(n)
             index.setdefault((n.file, "name", re.split(r"[.:]", n.id)[-1]), []).append(n)
+            index[("id", n.id)] = n
     return index
 
 
@@ -775,8 +777,9 @@ def _js_node(index: dict, a: dict) -> str | None:
         hits = [n for n in index.get((file, line), ()) if n.kind == kind] if type(line) is int else []
         if name is not None:
             hits = [n for n in hits if re.split(r"[.:]", n.id)[-1] == name]
-        if len(hits) == 1:
-            return hits[0].id
+        if len(hits) == 1:       # a class that is made: the constructor it writes, else the class, as the reader's own link
+            made = index.get(("id", hits[0].id + ".constructor")) if kind == CLASS else None
+            return made.id if made is not None and made.kind == CALLABLE else hits[0].id
     return None
 
 
@@ -822,8 +825,12 @@ def _use(g, lang: str, index: dict, s: dict, a, beneath=None) -> str:
             if not goes:
                 return "declared"
         for t, c in goes:
-            e = g.add_edge(s["caller"], t, kind=CALLS, confidence=c, line=s["line"], via=VIA)
-            if e.via in calls.NAME_ONLY_VIA:      # the same link was a guess by method name: now a checker says so too
+            # A method that replaces the one the checker named is Lantern's own addition, one of several, and bears
+            # the name such a link has from Lantern's own reading. A test's stand-in is among them, and the tests'
+            # own run sees the app call it: `security.only_the_run_shows` knows a guess by that name, so the
+            # stand-in's file stays test code. Under the checker's name it would count as the app's own code.
+            e = g.add_edge(s["caller"], t, kind=CALLS, confidence=c, line=s["line"], via=VIA if t == target else REPLACES)
+            if t == target and e.via in calls.NAME_ONLY_VIA:      # a guess by method name: now a checker says so too
                 e.via = VIA
         outcome = _settle(g, s, *goes)
         return "linked" if outcome == "resolved" else "possible" if outcome == "possible" else "likely"

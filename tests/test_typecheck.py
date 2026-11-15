@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from lantern import typecheck
+from lantern import security, typecheck
 from lantern.cli import main
 from lantern.engine import build_graph
 from lantern.graph import INFERRED, RESOLVED
@@ -305,6 +305,34 @@ def test_a_class_that_is_called_is_its_own_init_and_nothing_where_it_writes_none
     assert _shape(g) == _shape(before) and g.meta["typecheck"]["python"]["declared"] == 1
 
 
+MADE_TS = {
+    "package.json": '{"name": "made", "private": true}\n',
+    "app/errors.ts": (
+        "export class Refused extends Error {\n"
+        "  constructor(message = 'no') { super(message) }\n"
+        "}\n"
+        "export class Plain {}\n"),
+    "app/use.ts": (
+        "export function use(make: any) {\n"
+        "  make('a')\n"
+        "}\n"),
+}
+
+
+def test_a_class_that_is_made_is_its_own_constructor_where_it_writes_one_typescript(tmp_path, monkeypatch):
+    """As the JS/TS reader links `new Refused()` itself: to the constructor the class writes, else to the class.
+    (Seen on a public project: the checker's answer and Lantern's own link for one `new X()` named two nodes.)"""
+    repo = _write(tmp_path, MADE_TS)
+    before = build_graph(repo)
+    assert _site(before, "make")["outcome"] == "unresolved"
+    refused, plain = "js:app/errors::Refused", "js:app/errors::Plain"
+    assert refused + ".constructor" in before.nodes and plain + ".constructor" not in before.nodes
+    for cls, target in ((refused, refused + ".constructor"), (plain, plain)):
+        _stand_in(monkeypatch, ts={"make": _ts(before, cls, direct=True, what="class")})
+        g = build_graph(repo, typecheck=True)
+        assert _by_checker(g) == {"make": ("resolved", [target])}
+
+
 ODD_TS = {
     "a file outside the project": lambda g, repo: _ts(g, SAVE, file="../outside/store.ts"),
     "a library's file": lambda g, repo: _ts(g, SAVE, file="node_modules/notes/index.js"),
@@ -491,7 +519,7 @@ TYPED_LEFT = ("messages[0].body", "shown[0].show")      # only declared, and no 
 
 
 def _typed_edges(g):
-    return sorted((e.dst, e.confidence) for e in g.edges if e.via == "typecheck" and e.kind == "calls")
+    return sorted((e.dst, e.confidence, e.via) for e in g.edges if e.src == "py:app.use.run" and e.kind == "calls")
 
 
 def test_a_method_that_only_declares_is_never_the_likely_one_and_what_replaces_it_is_possible(tmp_path, monkeypatch):
@@ -508,8 +536,11 @@ def test_a_method_that_only_declares_is_never_the_likely_one_and_what_replaces_i
     g = build_graph(repo, typecheck=True)
     # the name written at the call names the function itself: it is what runs, whatever its body says
     assert _by_checker(g) == TYPED_SAYS | {"cb": ("resolved", [TODO])}
-    assert _typed_edges(g) == sorted([(DARK_PAINT, "possible"), (LIGHT_PAINT, "possible"), (T_NAME, INFERRED),
-                                      (LIGHT_NAME, "possible"), (T_WIDTH, INFERRED), (TODO, RESOLVED)])
+    # the method the checker named is the checker's word; one that replaces it is Lantern's own addition, a guess
+    # among several, under the name such a link has when Lantern's own reading makes it (`self.method()`)
+    assert _typed_edges(g) == sorted([(DARK_PAINT, "possible", "override"), (LIGHT_PAINT, "possible", "override"),
+                                      (T_NAME, INFERRED, "typecheck"), (LIGHT_NAME, "possible", "override"),
+                                      (T_WIDTH, INFERRED, "typecheck"), (TODO, RESOLVED, "typecheck")])
     for callee in TYPED_LEFT:
         was, now = _site(before, callee), _site(g, callee)
         assert (now["outcome"], now["reason"], now["to"], now["via"]) == ("unresolved", was["reason"], [], was["via"])
@@ -527,6 +558,32 @@ def test_a_method_that_only_declares_is_never_the_likely_one_and_what_replaces_i
     assert ("4 were linked into the project on its word (1 confirmed, 1 likely, 2 to each function that may run "
             "where the type's own method only declares or a class beneath it writes it anew)") in \
         typecheck.limits(g.meta["typecheck"])[0]
+
+
+def test_a_stand_in_of_the_tests_that_replaces_a_method_does_not_make_its_file_the_apps_own(tmp_path, monkeypatch):
+    """A test's stand-in has the methods of what it stands in for, and while the tests run the app calls it. A link
+    to it is a guess among several, also once the run saw it: the test file stays test code (`security`,
+    2026-11-13). The twin: the same link under the checker's own name would count as the app running the file."""
+    fake = "py:tests.test_theme.Fake.paint"
+    repo = _write(tmp_path, TYPED_APP | {
+        "app/__main__.py": "from app.use import run\n\nrun([], [], [])\n",
+        "tests/test_theme.py": ("from app.shapes import Theme\n\n\nclass Fake(Theme):\n    def paint(self, text):\n"
+                                "        return text\n\n\ndef test_it():\n    assert Fake().paint('a') == 'a'\n")})
+    before = build_graph(repo)
+    _stand_in(monkeypatch, py={"themes[0].paint": _py(before, T_PAINT)})
+    g = build_graph(repo, typecheck=True)
+    assert _by_checker(g) == {"themes[0].paint": ("possible", [DARK_PAINT, LIGHT_PAINT, fake])}
+    link = [e for e in g.edges if e.src == "py:app.use.run" and e.dst == fake]
+    assert [(e.via, e.confidence) for e in link] == [("override", "possible")]
+
+    def reached(via):
+        link[0].confidence, link[0].via = "observed", via       # as the tests' own run marks a link it saw
+        found = security.reachability(g, where=lambda n: not n.file.startswith("tests/"), worked_out=True,
+                                      leave=lambda e: security.only_the_run_shows(e.via))
+        assert "py:app.use.run" in found
+        return fake in found
+    assert reached("override+observed") is False
+    assert reached("typecheck+observed") is True
 
 
 DECLARES = {
