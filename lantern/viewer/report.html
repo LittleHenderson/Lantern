@@ -924,6 +924,7 @@ const ENTRY_LABEL = {page: 'Pages and screens', route: 'API routes', cli: 'Comma
 // "GET /users/{id}" -> method tag + path; anything else stays one string
 function routeParts(detail) {
   const m = /^([A-Z]+)\s+(.*)$/.exec(String(detail || ''));
+  if (m && m[1] === 'ACTION') return [null, 'Server Action ' + m[2]];   // no verb, no path: the map's own word stays on the map
   return m && METHODS.includes(m[1]) ? [m[1], m[2]] : [null, String(detail || '')];
 }
 function epTitle(n, k) {
@@ -1228,7 +1229,7 @@ function renderGraph() {
   for (const id in xy) {
     const [x, y] = xy[id], k = colOf[id], n = N[id] || null, w = n ? worstRank(id) : null, on = S.sel === id;
     const isHttp = k === 'http';
-    let label = isHttp ? httpNodes[id].label : n.entry && n.entry.kind === 'page' ? n.entry.detail : n.entry && n.entry.kind === 'route' ? n.entry.detail : short(isOut(id) ? outName(id) : n.qualname);
+    let label = isHttp ? httpNodes[id].label : n.entry && n.entry.kind === 'page' ? n.entry.detail : n.entry && n.entry.kind === 'route' ? entryLabel(n.entry) : short(isOut(id) ? outName(id) : n.qualname);
     if (label.length > 24) label = label.slice(0, 23) + '…';
     const f0 = (FIND_BY_NODE[id] || []).find(f => f.rank === w);
     const paths = n && n.entry && n.entry.kind === 'page' ? edges.filter(e => e.src === id).length : 0;
@@ -1446,7 +1447,7 @@ function situation(n) {
   const where = onPhone(n) ? 'Runs on the person’s phone' : layer(n.id) === 'backend' ? 'Runs on your server' : isJS(n.id) ? 'Runs in the visitor’s browser' : isTable(n.id) ? 'A table in your database' : 'A library call';
   if (page && page.entry) return `${where} when someone on <b>${esc(page.entry.detail || short(page.qualname))}</b> ${ui ? esc(ui).replace('on ', '') + 's' : 'uses the page'}.`;
   if (isAction(n.entry)) return `${where}: a Server Action · ${esc(actionName(n.entry))}.`;
-  if (n.entry) return `${where}: ${esc({page: 'a page', route: 'a route', cli: 'a command', main: 'the program start', test: 'a test', script: 'a script'}[n.entry.kind] || n.entry.kind)}${n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}.`;
+  if (n.entry) return `${where}: ${esc({page: 'a page', route: 'a route', cli: 'a command', main: 'the program start', test: 'a test', script: 'a script'}[n.entry.kind] || n.entry.kind)}${n.entry.detail ? ' · ' + esc(entryLabel(n.entry)) : ''}.`;
   const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
   return `${where}, ${isTable(n.id) ? 'used' : 'called'} by ${callers.length ? callers.slice(0, 2).map(x => `<b>${esc(short(N[x].qualname))}</b>`).join(' and ') + (callers.length > 2 ? ` and ${callers.length - 2} more` : '') : 'nothing in the repo'}.`;
 }
@@ -1475,6 +1476,8 @@ const partName = e => String(e.detail || '').replace(/^(INTENT|LINK) /, '').spli
 // Server Actions (js_frontend.py): "ACTION createTodo", a route with a name and no address to show
 const isAction = e => !!e && e.kind === 'route' && /^ACTION /.test(String(e.detail || ''));
 const actionName = e => String(e.detail || '').replace(/^ACTION /, '');
+// what a row, a chip or a path shows for an entry: its detail, and for a Server Action its name ("ACTION x" is the map's word)
+const entryLabel = e => !e ? '' : isAction(e) ? 'Server Action ' + actionName(e) : String(e.detail || '');
 const onPhone = n => !!n && ANDROID_APP && (n.lane === 'browser' || n.lane === 'frontend');
 const entryPhrase = e => !e ? '' : isScreen(e) ? `someone opens the ${String(e.detail).split(' · ')[0]} on their phone` : isIntent(e) ? `another app on the phone, or a link, starts ${partName(e)}` : isAction(e) ? `someone sends a form, or presses a button, that runs the Server Action ${actionName(e)}` : ({page: `the page ${e.detail || ''}`, route: `a request arrives at ${e.detail || 'this route'}`, cli: `someone runs the command${e.detail ? ' ' + e.detail : ''}`,
   main: 'the program starts', test: 'the tests run', script: `the script${e.detail ? ' ' + e.detail : ''} is run`})[e.kind] || `${e.kind}${e.detail ? ' ' + e.detail : ''}`;
@@ -1650,7 +1653,7 @@ function renderExplanations() {
         ${r ? lensTabs([2, 1, 3, 4]) + `<div class="xbody">${S.lens === 3 ? (path ? `<div class="k2" style="margin-top:0">Where it sits</div>${path}` : '') + lensBody(r, n) : lensBody(r, n)}</div>
         ${chips.length ? `<div class="xanchors">Every phrase is anchored to your code: ${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}` : `<div class="unexplained" style="margin-top:14px">Not explained yet.${LIVE && LIVE.model ? '' : ' Choose a model in Settings, then press Explain.'}</div>`}
         <div class="acts" style="margin-top:16px">${fs.length ? `<button class="btn primary" data-atlas="${esc(n.id)}" data-f="1">Show me the problem</button>` : ''}<button class="btn" data-atlas="${esc(n.id)}">Open in Paths</button>${explainBtn}<span class="note" style="margin-left:auto">Facts from Lantern’s tools · words from your model · checked against each other</span></div><div id="explainmsg" class="note"></div></div>`
-    : `<div class="xmain pro"><div class="xhead"><h2>${esc(short(n.qualname))}</h2><span class="note">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}</span><span class="lang">${lang(n.id)}</span></div>
+    : `<div class="xmain pro"><div class="xhead"><h2>${esc(short(n.qualname))}</h2><span class="note">${esc(n.file)}:${esc(n.start_line)}–${esc(n.end_line)}${n.entry && n.entry.detail ? ' · ' + esc(entryLabel(n.entry)) : ''}</span><span class="lang">${lang(n.id)}</span></div>
         ${r ? `<div class="three">${[1, 2, 3].map(l => { const keep = S.lens; S.lens = l; const h = `<div class="col"><div class="k2" style="margin-top:0">${{1: 'Technical', 2: 'Everyday', 3: 'Mapped'}[l]}</div>${l === 3 && path ? path : ''}${lensBody(r).replace(/<div class="byline">.*?<\/div>/s, '')}</div>`; S.lens = keep; return h; }).join('')}</div>
         <div class="k2">Scenario</div>${(() => { const keep = S.lens; S.lens = 4; const h = lensBody(r, n).replace(/<div class="byline">.*?<\/div>/s, ''); S.lens = keep; return h; })()}
         <div class="acts">${explainBtn}<button class="btn" id="xcopy">Copy all four</button><span class="note">${byModel ? 'Rejected drafts are regenerated with the failing phrase quoted back to the model.' : 'These lenses come from the map alone. A model adds the everyday wording and an analogy.'}</span></div><div id="explainmsg" class="note"></div>`
@@ -1844,7 +1847,7 @@ const VIEW_WORD = {lanes: 'Lanes', tree: 'Path', chart: 'Flowchart', graph: 'Gra
 function crumbName(id) {
   const n = N[id];
   if (!n) return short(isOut(id) ? outName(id) : id);
-  if (n.entry && (n.entry.kind === 'route' || n.entry.kind === 'page' || n.entry.kind === 'script') && n.entry.detail) return n.entry.detail.length > 40 ? n.entry.detail.slice(0, 39) + '…' : n.entry.detail;
+  if (n.entry && (n.entry.kind === 'route' || n.entry.kind === 'page' || n.entry.kind === 'script') && n.entry.detail) { const d = entryLabel(n.entry); return d.length > 40 ? d.slice(0, 39) + '…' : d; }
   return short(isOut(id) ? outName(id) : n.qualname);
 }
 function crumbsHtml(n) {
@@ -2187,7 +2190,7 @@ function renderFindings() {
       <span class="note">Showing ${fs.length} · sorted by rank</span></div>
     <div class="ftable"><div class="r h"><span>Severity</span><span>Finding</span><span>Where</span><span>Reach</span><span>Input</span><span>Id</span></div>
     ${fs.map(f => `<div class="r ${S.fsel === f.id ? 'on' : ''}${f.status === 'accepted' ? ' acc' : ''}" data-f="${esc(f.id)}"><span class="sv"><i class="dot ${cls(f.rank, RANKS)}"></i>${esc(f.rank)}</span>
-      <div><div class="t">${esc(f.title)}</div><div class="d">${f.ui_path ? esc((f.ui_path || []).map(p => N[p] && N[p].entry && N[p].entry.detail ? N[p].entry.detail : short((N[p] || {}).qualname || p)).join(' → ')) : f.reachable ? esc(f.reachable.path.map(p => short((N[p] || {}).qualname || p)).join(' → ')) : f.status === 'accepted' ? 'accepted: ' + esc((f.accepted || {}).reason) : 'no path found to it'}</div></div>
+      <div><div class="t">${esc(f.title)}</div><div class="d">${f.ui_path ? esc((f.ui_path || []).map(p => N[p] && N[p].entry && N[p].entry.detail ? entryLabel(N[p].entry) : short((N[p] || {}).qualname || p)).join(' → ')) : f.reachable ? esc(f.reachable.path.map(p => short((N[p] || {}).qualname || p)).join(' → ')) : f.status === 'accepted' ? 'accepted: ' + esc((f.accepted || {}).reason) : 'no path found to it'}</div></div>
       <div><div class="w">${hotLane(f) ? laneGlyph(fLanes(f), hotLane(f), f.rank) : ''}${esc(f.file)}${f.line ? ':' + esc(f.line) : ''} <span class="lang">${esc(f.file.split('.').pop())}</span></div><div class="d">${hotLane(f) ? `on the ${LANE_WORD[hotLane(f)]} · ` : ''}${esc(f.tool)} · ${esc(f.rule)}</div></div>
       <span>${f.ui_path ? `yes · ${esc(entryOf(f))}` : f.reachable ? `yes · ${esc(f.reachable.kind)}` : f.reachable_from_tests_only ? 'tests only' : 'no path found'}</span><span>${f.input ? 'yes' : f.input === false ? 'no' : '–'}</span><span class="fid">${esc(f.id)}</span></div>`).join('')}</div>`;
   wireMode(el); wireFindings(el);
@@ -2517,7 +2520,7 @@ function renderRight() {
   const callees = (OUT[n.id] || []).map(e => e.dst).filter(x => N[x]);
   const fs = FIND_BY_NODE[n.id] || [];
   const worst = worstRank(n.id), reach = fs.map(f => f.reachable).find(r => r && r.entry && N[r.entry]);
-  const reachFrom = reach ? (N[reach.entry].entry && N[reach.entry].entry.detail ? N[reach.entry].entry.detail : short(N[reach.entry].qualname)) : null;
+  const reachFrom = reach ? (N[reach.entry].entry && N[reach.entry].entry.detail ? entryLabel(N[reach.entry].entry) : short(N[reach.entry].qualname)) : null;
   const inputs = fs.map(f => f.input && f.input.via).filter(Boolean);
   const seen = (IN[n.id] || []).some(e => e.confidence === 'observed') || (OUT[n.id] || []).some(e => e.confidence === 'observed');
   const protections = arr((DATA.readiness || {}).protections).filter(p => p.status === 'add' && arr(p.evidence).some(ev => String(ev).includes(n.file + ':' + n.start_line) || (n.entry && n.entry.detail && String(ev).includes(n.entry.detail))));
@@ -2534,7 +2537,7 @@ function renderRight() {
   el.innerHTML = `<div class="detail">${chrome}<button class="closebtn" id="close" aria-label="Close">${icon('close')}</button>
     <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(onPhone(n) ? 'app' : isTable(n.id) ? 'data' : layer(n.id) === 'external' ? 'library' : layer(n.id))} · ${esc(isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord)}${AI_BY_NODE[n.id] ? ' · ' + aiChips(n.id) : ''}</div>
     <h3>${esc(S.simple ? short(n.qualname) : n.qualname)}</h3>
-    <div class="meta">${esc(n.file)}${S.simple ? '' : `:${esc(n.start_line)}–${esc(n.end_line)}`}${n.entry && n.entry.detail ? ` · ${esc(n.entry.detail)}` : ''}</div>
+    <div class="meta">${esc(n.file)}${S.simple ? '' : `:${esc(n.start_line)}–${esc(n.end_line)}`}${n.entry && n.entry.detail ? ` · ${esc(entryLabel(n.entry))}` : ''}</div>
     ${status ? `<div class="statusrow">${status}</div>` : ''}
     ${laneOf(n.id) ? laneStrip(laneOf(n.id), (() => { const f = fs.find(x => x.ui_path || x.reachable); const lit = f ? fLanes(f) : laneSet([S.entry, n.id]); lit.add(laneOf(n.id)); for (const e of OUT[n.id] || []) if (laneOf(e.dst) === 'data') lit.add('data'); return lit; })()) : ''}
     ${lw ? `<div class="langline"><span class="lang">${lw[0]}</span>Written in ${lw[1]}</div>` : ''}

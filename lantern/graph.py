@@ -26,6 +26,26 @@ def outside(node_id: str) -> bool:
     return node_id.startswith(OUTSIDE)
 
 
+# A Server Action's entry: `{"kind": "route", "detail": "ACTION <name>"}`. It has no verb and no path, so the map
+# writes it down with a word of its own, and that word is for the map: a sentence says "the Server Action <name>".
+ACTION = "ACTION "
+
+
+def action_name(detail) -> str | None:
+    """The name of the Server Action a route's detail names (`ACTION save` → `save`); None for any other detail."""
+    text = str(detail or "")
+    return text[len(ACTION):] or None if text.startswith(ACTION) else None
+
+
+def route_words(detail, first: bool = False) -> str:
+    """A route's detail as a sentence says it: `ACTION save` reads "the Server Action save" ("The …" with `first`,
+    where it begins the sentence); any other detail (`POST /api/notes`, a phone app's words) is itself."""
+    name = action_name(detail)
+    if name is None:
+        return str(detail or "")
+    return f"{'The' if first else 'the'} Server Action {name}"
+
+
 # Confidence levels, strongest first. Order matters: merges keep the strongest.
 OBSERVED, RESOLVED, INFERRED, POSSIBLE = "observed", "resolved", "inferred", "possible"
 CONFIDENCE_RANK = {OBSERVED: 0, RESOLVED: 1, INFERRED: 2, POSSIBLE: 3}

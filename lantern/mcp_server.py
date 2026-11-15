@@ -27,7 +27,7 @@ import traceback
 from pathlib import Path
 
 from . import __version__, pipeline, programs, release, results, usage
-from .graph import Graph
+from .graph import Graph, action_name, route_words
 from .python_frontend import project_text
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -116,6 +116,12 @@ def _node_name(g: Graph, nid: str) -> str:
     if n.entry and n.entry.get("kind") == "page":
         return f"{n.entry.get('detail')} page"
     return n.qualname
+
+
+def _entry_said(entry: dict) -> str:
+    """An entry point in a line of text: its kind and detail (`route POST /api/notes`); a Server Action in words."""
+    detail = entry.get("detail") or ""
+    return route_words(detail) if action_name(detail) else f"{entry.get('kind')} {detail}"
 
 
 def _chain(g: Graph, ids: list[str]) -> str:
@@ -299,7 +305,7 @@ def tool_paths(P: Projects, args: dict) -> dict:
     lines = []
     for r in rows:
         lines.append(f"{r['name']}  ({r['file']}:{r['lines'][0]}-{r['lines'][1]})" +
-                     (f"  entry point: {r['entry']['kind']} {r['entry'].get('detail') or ''}" if r["entry"] else ""))
+                     (f"  entry point: {_entry_said(r['entry'])}" if r["entry"] else ""))
         lines.append("  from the app: " + r["from_the_app"] if r["from_the_app"] else
                      f"  reachable from {r['reachable_from']['kind']}: {r['reachable_from']['path']}" if r["reachable_from"]
                      else "  not reachable from any detected entry point (a user cannot trigger it, as far as the map shows)")

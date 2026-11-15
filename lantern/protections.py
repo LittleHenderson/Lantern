@@ -16,8 +16,9 @@ from pathlib import Path
 
 from . import headers, ratelimit
 from .context import code_mentions, handles_passwords, password_hash_uses
-from .graph import Graph
-from .websec import call_adjacency, code_only, is_public_route, login_check, mentions_auth, mutating_route
+from .graph import Graph, action_name, route_words
+from .websec import (action_change, call_adjacency, code_only, is_public_route, login_check, mentions_auth,
+                     mutating_route)
 
 SENSITIVE_PATH = re.compile(r"(^|/)(login|log-in|signin|sign-in|signup|sign-up|register|auth|token|session|password|"
                             r"reset|forgot|otp|verify|magic-link|2fa|mfa|invite)(/|$|\b)", re.I)
@@ -92,10 +93,11 @@ def _rate_limit(view, trig: list, what: str) -> tuple[str, str, list[str], list[
     own = [s for s in states if s[2] == "own"]
     maybe = [s for s in states if s[2] == "maybe"]
     rest = [s for s in states if s[2] != "yes"]
-    shown = [f"{d} ({n.file}:{n.start_line})" for n, d, _s, _w in (rest + yes)[:4]]     # the ones without first
+    shown = [f"{route_words(d)} ({n.file}:{n.start_line})" for n, d, _s, _w in (rest + yes)[:4]]   # those without first
     if len(yes) == len(states):
         return ("in place", f"{what} could be called as fast as an attacker likes; the code puts a request limit on "
-                + ("each of them." if len(states) > 1 else "it."), shown, [f"{d}: {w}" for _n, d, _s, w in yes[:4]])
+                + ("each of them." if len(states) > 1 else "it."), shown,
+                [f"{route_words(d)}: {w}" for _n, d, _s, w in yes[:4]])
     open_ = ("can be called as fast as an attacker likes: password guessing, sign-up spam, or running up your bill.")
     if yes or own or maybe:
         parts = []
@@ -107,7 +109,7 @@ def _rate_limit(view, trig: list, what: str) -> tuple[str, str, list[str], list[
             parts.append("A limit is set up for the whole app, but the code does not show that it covers "
                          + ("these routes" if len(states) > 1 else "this route")
                          + " or that it is tight enough for signing in; check the ones listed.")
-        found = list(dict.fromkeys([f"{d}: {w}" for _n, d, _s, w in yes[:2]] + [w for _n, _d, _s, w in maybe[:2]]
+        found = list(dict.fromkeys([f"{route_words(d)}: {w}" for _n, d, _s, w in yes[:2]] + [w for _n, _d, _s, w in maybe[:2]]
                                    + [w for _n, _d, _s, w in own[:2]]))
         return "check", f"{what} {open_} " + " ".join(parts), shown, found[:4]
     notes = list(dict.fromkeys(w for _n, _d, _s, w in states if w))
@@ -137,7 +139,14 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
 
     # 1. Rate limiting on sign-in and other abuse-prone routes
     sensitive = [(n, d) for n, d in routes if SENSITIVE_PATH.search(d.partition(" ")[2] or d)]
-    writes = [(n, d) for n, d in routes if d.split(" ")[0].upper() in ("POST", "PUT", "PATCH", "DELETE")]
+    # A Server Action has no verb to say that it changes data: its code is read for that (`websec.action_change`)
+    acts = [n for n, d in routes if action_name(d)]
+    changing = set()
+    if acts:
+        act_adj, act_texts = call_adjacency(g), {}
+        changing = {n.id for n in acts if action_change(g, n, act_adj, act_texts)}
+    writes = [(n, d) for n, d in routes
+              if d.split(" ")[0].upper() in ("POST", "PUT", "PATCH", "DELETE") or n.id in changing]
     if sensitive or writes:
         # A library that is installed protects nothing (until 2026-11-11 its name in the dependencies read "in
         # place"): the limit has to be on the route, or on the app where the code shows it covers the route.
@@ -215,7 +224,7 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
     # (routes the frontend calls) count too. A user lookup by a request value is a weak sign: at most "check".
     no_auth = [f for f in (sec or {}).get("findings", []) if f.get("rule") == "LW-AUTH-MISSING" and f.get("status") != "accepted"
                and not f.get("in_tests")]
-    need = [(n, d) for n, d in writes if not is_public_route(d) and mutating_route(d)]
+    need = [(n, d) for n, d in writes if not is_public_route(d) and (mutating_route(d) or n.id in changing)]
     if need or no_auth:
         adj = call_adjacency(g)
         signed, weak, bare = [], [], []
@@ -238,8 +247,8 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
                 weak.append((n, d, sign[1]))
             else:
                 signed.append((n, d, sign[1]))
-        where = [f"{d} ({n.file}:{n.start_line})" for n, d, _ in bare]
-        weak_where = [f"{d} ({n.file}:{n.start_line}): {sign}" for n, d, sign in weak]
+        where = [f"{route_words(d)} ({n.file}:{n.start_line})" for n, d, _ in bare]
+        weak_where = [f"{route_words(d)} ({n.file}:{n.start_line}): {sign}" for n, d, sign in weak]
         # a Server Action has no verb and path to show, and its finding's snippet is a line of its code
         actions = {(n.file, n.start_line): f"the Server Action {d[7:]}" for n, d in routes if d.startswith("ACTION ")}
         for f in no_auth:   # routes the app calls that the list above does not already name
@@ -257,7 +266,7 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
         only_lookup = (f"{len(weak)} route(s) that change data only look up a user by a value from the request and "
                        "test the result. That finds the record's owner, not who is calling (the shape behind most "
                        "\"anyone can edit anyone's data\" bugs), so the signed-in user must be checked too.") if weak else ""
-        found_ok = [f"{d}: {sign}" for _, d, sign in signed[:4]]
+        found_ok = [f"{route_words(d)}: {sign}" for _, d, sign in signed[:4]]
         if no_auth or (bare and not app_wide):
             item("route-auth", "Login check on routes that change data", "add",
                  " ".join(x for x in (none_found, only_lookup) if x), (where + weak_where)[:6], how, found_ok)
@@ -275,7 +284,7 @@ def advise(g: Graph, sec: dict | None, repo, shape: str) -> list[dict]:
             item("route-auth", "Login check on routes that change data", "in place",
                  f"All {len(need)} route(s) that change data show a login check in the handler or in what it calls "
                  "(the check looks for common login patterns, not your permission rules).", [],
-                 how, [f"{d}: {sign}" for _, d, sign in signed[:6]])
+                 how, [f"{route_words(d)}: {sign}" for _, d, sign in signed[:6]])
 
     # 6. File uploads
     up = _code_grep(repo, UPLOAD, limit=10)

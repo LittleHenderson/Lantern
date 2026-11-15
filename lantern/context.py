@@ -28,6 +28,7 @@ import ast
 import re
 from pathlib import Path
 
+from .graph import route_words
 from .python_frontend import project_text
 from .unread import PYTHON_AS_TEXT
 from .websec import segments
@@ -560,7 +561,7 @@ def public_secret_trust(g, f: dict, lines_for) -> dict | None:
             continue
         for rid in _routes_above(g, fn):
             r = g.nodes[rid]
-            detail = (r.entry or {}).get("detail") or r.name
+            detail = route_words((r.entry or {}).get("detail")) or r.name
             if detail not in routes:
                 routes.append(detail)
                 adj = adj if adj is not None else call_adjacency(g)

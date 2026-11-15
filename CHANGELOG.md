@@ -9,6 +9,68 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- **Modern stack, first part: Supabase tables read with their row rules, and Next.js Server Actions as routes**
+  (2026-11-14; stage 1 of the roadmap of 2026-11-14, steps 1 and 2. Tests first for each rule, each dangerous
+  example beside twins that must stay clean. The two new kinds of link and the new login rule are not yet
+  measured on public projects: until they are, they are provisional, and the documents say so).
+  - **A Supabase table is on the map.** A call written `<client>.from("<table>")` followed by `select`,
+    `insert`, `update`, `upsert` or `delete` is a link from the function to the table (`db:<table>`, Data lane),
+    with what the function does there. The link is "likely" (`supabase-from`) where the client's value was
+    followed to the library call that made it, and "possible" (`supabase-name`) where the receiver is only named
+    like one. No link for `supabase.storage.from("bucket")`, for a name given another value, or for a table whose
+    name is not written. A table is no called function for a rule that reads those names: a route that deleted
+    from `auth_tokens` had read as one with a login check. Tests: `tests/test_supabase.py` (15).
+  - **The row rules a project's SQL files write down** (`lantern/rowrules.py`). Every `.sql` file is replayed in
+    the order it is applied, so what counts is what stands at the end: row-level security switched on in a later
+    file counts, in a comment or a text it does not, a later `disable` switches it off, a renamed or dropped
+    table is followed. Nothing is run and nothing is connected to. Tests: `tests/test_rowrules.py` (10).
+  - **`LW-NO-RLS` says what is open, for whom, and what reaches it.** *Before:* patterns over the SQL files: a
+    table that is created and that no `enable row level security` names, whatever the order and whatever came
+    after, and any policy with `using (true)`, all at medium. That also flagged a `using (true)` policy for
+    `service_role`, which is the server's own role, and one on a table with row-level security off, where no
+    policy is in force; the new rule flags neither. *Now:* row-level security off is high, and critical where
+    code that runs in the browser or on the phone reaches the table through the map (`lantern/clientside.py`
+    names each such function with the reason it runs there). On, with a policy that is true whatever the row and
+    whoever asks: for everyone, changing or removing any row is high, critical where the visitor's side reaches
+    it; for any signed-in user high; a policy that only lets rows be added, or lets every row be read, medium.
+    None for the server's own roles, a policy that asks who is calling, one a restrictive policy narrows, or a
+    table the files do not create. Where code that runs in the database names row-level security, which Lantern
+    does not run, an off table is medium and a guess. The finding keeps the id the older rule gave the same
+    line, and its heading, story and case say what is open and for whom (before, one story, "answers with every
+    row", was told for every kind, which was false for a policy that only lets rows be added: 9 of the 10 tests
+    of the new words failed on it). Tests: `tests/test_supabase_rules.py` (38).
+  - **A Next.js Server Action is a route.** Where the nearest `package.json` depends on `next` (or `waku`, a
+    `react-server-dom-*` package), every function a `"use server"` file exports, and every function whose own
+    body begins with `"use server"`, is an entry point `ACTION <name>`: the framework gives it an address of its
+    own that anyone can send to, with or without the pages. It runs on the server (an action written inside a
+    page alone; the page stays where it was), `<form action={fn}>` and `formAction={fn}` are links to it
+    ("likely"; a call by name from a client component is a confirmed link, as any call), every argument is
+    followed as request data, and a finding in it is told through its page and form, or as a request sent
+    straight to the action when no page uses it.
+  - **The login check asks Server Actions.** An action that the app uses, that changes data, and in which no
+    login check is found gets `LW-AUTH-MISSING` (medium, a heuristic): "The Server Action removeNote changes
+    data, the app uses it, and no login check was found". An action has no verb to say that it changes data, so
+    its code is read (a Supabase table call, SQL in a string, a call named like a database library's change;
+    its own lines, then the functions it calls, two deep). Left alone: an action that checks who is asking, one
+    that only reads, one open by its name, one the app does not use, a `delete` on a `Set` or on the request's
+    cookies, SQL in a comment, and a call the map followed into a library that keeps none of the app's data.
+    That last twin was found by running the whole analysis on a tiny app and reading every sentence: a call to
+    a model provider (`openai.chat.completions.create`) had been read as "changes data". The readiness page
+    counts such an action among the "routes that change data" of its request-limit and login-check lines
+    (before, an app written with actions alone got neither line).
+  - **The map's word stays on the map.** `ACTION summarize` is how the map writes an action down. The same
+    reading found it in two finding titles ("ACTION summarize spends money …"), two readiness lists and the
+    report's rows. Every sentence a reader gets now says "the Server Action summarize" (`graph.route_words`),
+    and the report's rows and chips "Server Action summarize". The report also said of every JavaScript function
+    that it runs "in the visitor's browser"; one on the Server lane (an Express handler, a Next.js route, an
+    action) is now "a function running on your server".
+    Tests: `tests/test_server_actions.py` (24; the 5 newest failed on the code before them).
+  *Not covered:* a client handed in as a parameter; a table reached through `rpc()` or a view; row-level
+  security switched on in the dashboard (Lantern reads the files, and says so); an action exported through a
+  wrapper Lantern does not look through; a value another file exports (`export const db = new PrismaClient()`)
+  is not followed, so the login rule reads such a call by its name alone. `docs/audit/CLAIMS.md` A20, A21, S34
+  and S35 have the full lists.
+
 - Fix this for me (optional): pick a coding agent you already use (Claude Code, Codex or Aider) in Advanced
   Settings, and a finding's Fix screen offers "Fix this for me with …". The agent works on a copy of your project;
   Lantern then analyzes the copy and tells you, in one line, whether the problem is gone and whether anything new

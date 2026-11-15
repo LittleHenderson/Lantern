@@ -3,8 +3,14 @@ whose own body begins with `"use server"`, is run by the server for a request an
 gives it an address of its own, and a form or a client component calls it. So it is a `route` entry (`ACTION
 <name>`), like a route written in a route file. Every shape stands beside look-alikes that must stay as they were."""
 import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
 
-from lantern import clientside
+import pytest
+
+from lantern import clientside, report
 from lantern.engine import build_graph
 from lantern.security import scan
 
@@ -435,3 +441,184 @@ def test_the_twins_what_is_no_database_is_no_change(tmp_path):
         "The Server Action clear changes data, the app uses it, and no login check was found"]
     said = '  // await db.$executeRawUnsafe("delete from notes")\n  return id;\n'
     assert _asked(tmp_path / "said", "clear", said) == []
+
+
+# ------------------------------------------------------------------ a library that keeps none of the app's data
+AI_HEAD = ('import OpenAI from "openai";\nimport Stripe from "stripe";\n'
+           'const openai = new OpenAI();\nconst stripe = new Stripe("k");\n')
+
+
+def test_a_call_into_a_library_that_keeps_none_of_the_apps_data_is_no_change(tmp_path):
+    """`create` is how a database library adds a row, and how a model provider is asked for an answer and a payment
+    provider for a customer. Where the map shows which library a call goes into, one that keeps none of the app's
+    data is no change (the paid-call rule asks about those); the twin goes into a database library."""
+    asks = '  return openai.chat.completions.create({ model: "m", messages: [{ role: "user", content: id }] });\n'
+    assert _asked(tmp_path, "summarize", asks, AI_HEAD) == []
+    assert _asked(tmp_path / "pays", "enrol", "  return stripe.customers.create({ email: id });\n", AI_HEAD) == []
+    own = 'import { PrismaClient } from "@prisma/client";\nconst prisma = new PrismaClient();\n'
+    assert _asked(tmp_path / "twin", "addNote", "  return prisma.note.create({ data: { id } });\n", own) == [
+        "The Server Action addNote changes data, the app uses it, and no login check was found"]
+
+
+# ------------------------------------------------------------------ the map's word for an action stays on the map
+WORDS_PKG = json.dumps({"dependencies": {"next": "14.2.0", "react": "18.3.0", "@prisma/client": "5.14.0",
+                                         "openai": "4.52.0"}})
+WORDS_ACTIONS = '''"use server";
+import OpenAI from "openai";
+import { db } from "../lib/db";
+import { auth } from "../lib/session";
+
+const openai = new OpenAI();
+
+export async function signIn(formData: FormData) {
+  const user = await db.user.findUnique({ where: { email: String(formData.get("email")) } });
+  return user ? "ok" : "no";
+}
+
+export async function renameNote(id: string, title: string) {
+  const session = await auth();
+  if (!session) throw new Error("sign in");
+  await db.note.update({ where: { id }, data: { title } });
+}
+
+export async function summarize(text: string) {
+  const r = await openai.chat.completions.create({ model: "m", messages: [{ role: "user", content: text }] });
+  return r.choices[0].message.content;
+}
+'''
+WORDS_SESSION = '''import { cookies } from "next/headers";
+export async function auth() {
+  const jar = await cookies();
+  return jar.get("session")?.value ? { user: 1 } : null;
+}
+'''
+WORDS_PAGE = '''import { Row } from "../components/Row";
+import { signIn } from "./actions";
+export default function Page() {
+  return (
+    <main>
+      <form action={signIn}><input name="email" /><button>Sign in</button></form>
+      <Row id="1" />
+    </main>
+  );
+}
+'''
+WORDS_ROW = '''"use client";
+import { renameNote, summarize } from "../app/actions";
+export function Row({ id }: { id: string }) {
+  return <p><button onClick={() => renameNote(id, "x")}>Rename</button><button onClick={() => summarize(id)}>Sum</button></p>;
+}
+'''
+SUM_ROUTE = '''import OpenAI from "openai";
+const openai = new OpenAI();
+export async function POST(request: Request) {
+  const r = await openai.chat.completions.create({ model: "m", messages: [{ role: "user", content: await request.text() }] });
+  return Response.json(r);
+}
+'''
+
+
+def _strings(x, path=""):
+    if isinstance(x, dict):
+        for k, v in x.items():
+            yield from _strings(v, f"{path}.{k}")
+    elif isinstance(x, (list, tuple)):
+        for i, v in enumerate(x):
+            yield from _strings(v, f"{path}[{i}]")
+    elif isinstance(x, str):
+        yield path, x
+
+
+def test_route_words_say_an_action_in_plain_words_and_leave_every_other_route_as_it_is():
+    from lantern.graph import action_name, route_words
+    assert action_name("ACTION saveNote") == "saveNote"
+    assert route_words("ACTION saveNote") == "the Server Action saveNote"
+    assert route_words("ACTION saveNote", first=True) == "The Server Action saveNote"
+    for other in ("POST /api/notes", "ANY /api/run", "INTENT NotesProvider provider (other apps can start it) · query",
+                  "LINK DeepLink handles links (other apps and web pages can open it) · handle", "ACTION", "", None):
+        assert action_name(other) is None
+        assert route_words(other, first=True) == (other or "")
+
+
+def test_no_sentence_a_reader_gets_holds_the_maps_word_for_an_action(tmp_path):
+    """`ACTION summarize` is how the map writes an action down (it has no verb and no path). A finding's heading,
+    story and case, and the lists of the readiness page, say "the Server Action summarize". The list of routes a
+    finding keeps as data (`routes`) holds the map's word, as it holds `POST /api/notes` for a route file."""
+    from lantern.readiness import assess
+    files = {"app/actions.ts": WORDS_ACTIONS, "lib/db.ts": PRISMA_DB, "lib/session.ts": WORDS_SESSION,
+             "app/page.tsx": WORDS_PAGE, "components/Row.tsx": WORDS_ROW}
+    g = _build(tmp_path, files, WORDS_PKG)
+    sec = scan(g)
+    found = {f["rule"]: f for f in sec["findings"]}
+    assert found["LA-WALLET-DRAIN"]["title"] == ("The Server Action summarize spends money (model call) and anyone can "
+                                                 "call it as often as they like")
+    assert found["LA-WALLET-DRAIN"]["snippet"] == "export async function summarize(text: string) {"
+    assert found["LT-AUTHZ-OWNER"]["title"] == ("The Server Action renameNote reaches a record by an id from the "
+                                                "request, and nothing compares the record's owner with who is signed in")
+    assert found["LT-AUTHZ-OWNER"]["routes"] == ["ACTION renameNote"]
+    ready = assess(g, sec, {})
+    held = [(p, s) for p, s in [*_strings(sec["findings"]), *_strings(ready)]
+            if "ACTION " in s and not re.search(r"\.routes\[\d+\]$", p)]
+    assert held == []
+    line = WORDS_ACTIONS.splitlines().index("export async function signIn(formData: FormData) {") + 1
+    limit = {p["id"]: p for p in ready["protections"]}["rate-limit"]
+    assert limit["evidence"] == [f"the Server Action signIn (app/actions.ts:{line})"]
+    tests = next(c for cat in ready["categories"] for c in cat["checks"] if c["id"] == "tests-entries")
+    assert "not reached: the Server Action signIn, the Server Action renameNote, the Server Action summarize" in tests["evidence"]
+    # the twin: a route file is named by its verb and path, as before
+    twin = scan(_build(tmp_path / "twin", {"app/api/sum/route.ts": SUM_ROUTE}, WORDS_PKG))
+    drain = next(f for f in twin["findings"] if f["rule"] == "LA-WALLET-DRAIN")
+    assert drain["title"] == "POST /api/sum spends money (model call) and anyone can call it as often as they like"
+    assert drain["snippet"] == "POST /api/sum"
+
+
+def test_an_action_that_changes_data_is_counted_among_the_routes_that_do(tmp_path):
+    """The readiness page asks for a request limit and a login check on "routes that change data". An action that
+    changes data is one, named as an action (before, an app written with actions alone got neither line); the twin
+    only reads and is not counted."""
+    from lantern.readiness import assess
+    head = 'import { requireUser } from "../lib/session";\n'
+    files = {"app/actions.ts": _action_file("removeNote", "  await requireUser();\n" + REMOVES, head),
+             "lib/db.ts": PRISMA_DB, "lib/session.ts": LOGIN, "app/page.tsx": NOTE_PAGE,
+             "components/Row.tsx": NOTE_ROW.replace("NAME", "removeNote")}
+    g = _build(tmp_path, files, PRISMA)
+    prot = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}
+    assert prot["route-auth"]["status"] == "in place"
+    assert [x.split(":")[0] for x in prot["route-auth"]["found"]] == ["the Server Action removeNote"]
+    assert prot["rate-limit"]["status"] == "add"
+    assert prot["rate-limit"]["evidence"] == ["the Server Action removeNote (app/actions.ts:5)"]
+    assert prot["rate-limit"]["why"].startswith("1 route(s) that change data ")
+    reads = dict(files, **{"app/actions.ts": _action_file("findNotes", "  return db.note.findMany({ where: { id } });\n"),
+                           "components/Row.tsx": NOTE_ROW.replace("NAME", "findNotes")})
+    g = _build(tmp_path / "reads", reads, PRISMA)
+    prot = {p["id"]: p for p in assess(g, scan(g), {})["protections"]}
+    assert "route-auth" not in prot and "rate-limit" not in prot
+
+
+# ------------------------------------------------------------------ in the report page
+def test_the_report_page_shows_an_action_by_its_name(tmp_path):
+    """The page's own functions, run by Node on their text: what a row, a chip or a path shows for an entry. And the
+    places that printed a route's detail as the map writes it print the label."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    html = (Path(report.__file__).parent / "viewer" / "report.html").read_text(encoding="utf-8")
+    parts = [re.search(pattern, html, re.S | re.M) for pattern in (
+        r"^const METHODS = [^\n]*\n", r"^function routeParts\(detail\) \{.*?^\}\n", r"^const isAction = [^\n]*\n",
+        r"^const actionName = [^\n]*\n", r"^const entryLabel = [^\n]*\n")]
+    assert all(parts), "the page has no entryLabel"
+    asked = [{"kind": "route", "detail": "ACTION saveNote"}, {"kind": "route", "detail": "POST /api/notes"},
+             {"kind": "page", "detail": "/todos"}, {"kind": "page", "detail": "ACTION figures"}, None]
+    (tmp_path / "run.js").write_text(
+        "".join(p.group(0) for p in parts) + f"const asked = {json.dumps(asked)};\n"
+        "console.log(JSON.stringify([asked.map(entryLabel), asked.map(e => routeParts(e && e.detail))]));\n",
+        encoding="utf-8")
+    r = subprocess.run([node, str(tmp_path / "run.js")], capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert r.returncode == 0, r.stderr
+    labels, split = json.loads(r.stdout)
+    assert labels == ["Server Action saveNote", "POST /api/notes", "/todos", "ACTION figures", ""]
+    assert split[:2] == [[None, "Server Action saveNote"], ["POST", "/api/notes"]]
+    for raw in ("' · ' + esc(n.entry.detail)", "N[p].entry.detail ? N[p].entry.detail :",
+                "n.entry.kind === 'route' ? n.entry.detail :", "N[reach.entry].entry.detail ? N[reach.entry].entry.detail :",
+                "` · ${esc(n.entry.detail)}`"):
+        assert raw not in html, raw

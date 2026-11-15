@@ -1280,6 +1280,19 @@ ACTION_NOT_DATA = frozenset(
 ACTION_OWN = re.compile(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]*)?=\s*(?:await\s+)?(?:new\s+(?:Set|Map|"
                         r"WeakSet|WeakMap|URLSearchParams|FormData|Headers|URL|AbortController)\b|"
                         r"(?:cookies|headers|draftMode)\s*\()")
+# The libraries that keep an app's data, by the name they are installed under. `create`, `update` and `delete` are
+# also what a model provider, a payment provider and a mail service call their requests: where the map followed a
+# call into a library, only one of these makes it a change of the app's data.
+ACTION_DATA_LIBS = frozenset(
+    "@prisma/client prisma drizzle-orm mongoose mongodb sequelize sequelize-typescript typeorm knex kysely objection "
+    "bookshelf pg pg-promise postgres mysql mysql2 mariadb better-sqlite3 sqlite sqlite3 mssql oracledb "
+    "@vercel/postgres @vercel/kv @neondatabase/serverless @libsql/client @planetscale/database @electric-sql/pglite "
+    "@supabase/supabase-js @supabase/ssr @supabase/auth-helpers-nextjs firebase firebase-admin "
+    "@google-cloud/firestore @google-cloud/datastore @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb dynamoose redis "
+    "ioredis @upstash/redis convex @mikro-orm/core @mikro-orm/postgresql @mikro-orm/mysql @mikro-orm/sqlite "
+    "@mikro-orm/mongodb neo4j-driver cassandra-driver @clickhouse/client faunadb fauna pocketbase nedb lowdb pouchdb "
+    "dexie payload".split())
+PACKAGE_NAME = re.compile(r"(@[a-z0-9][\w.-]*/)?[a-z0-9][\w.-]*")
 DB_CHANGES = {"insert": "adds rows to", "update": "changes rows of", "upsert": "adds or changes rows of",
               "delete": "deletes rows of"}
 
@@ -1316,6 +1329,22 @@ def _chain_root(code: str, dot: int) -> str | None:
         return root
 
 
+def _library_called(g: Graph, n, line: int, name: str) -> str | None:
+    """The package a member call named `name`, written on this line of `n` (or begun up to five lines above it, for
+    a chain broken over lines), goes into, where the map followed the call into a library; None where it did not,
+    and for an import that names a file of the project (`@/lib/db`, `../db`)."""
+    best = None
+    for e in g.callees(n.id):
+        if not e.dst.startswith("ext:") or e.dst.startswith("ext:HTTP ") or not e.dst.rstrip("()").endswith("." + name):
+            continue
+        at = max((ln for ln in e.lines or () if line - 5 <= ln <= line), default=None)
+        if at is not None and (best is None or at > best[0]):
+            spec = e.dst[4:].split(".", 1)[0]
+            parts = spec.split("/")
+            best = (at, "/".join(parts[:2]) if spec.startswith("@") else parts[0])
+    return best[1] if best and PACKAGE_NAME.fullmatch(best[1]) else None
+
+
 def _change_in(g: Graph, n, text: str | None) -> tuple[str, int] | None:
     """What shows that this function changes data, in words, and the line it is on; None when nothing does."""
     for c in g.meta.get("db_calls") or ():
@@ -1336,9 +1365,13 @@ def _change_in(g: Graph, n, text: str | None) -> tuple[str, int] | None:
         root = _chain_root(code, m.start("dot"))
         if root is not None and (root in ACTION_NOT_DATA or root in own):
             continue
+        line = first + raw.count("\n", 0, m.start())
+        into = _library_called(g, n, line, m.group("name"))
+        if into is not None and into not in ACTION_DATA_LIBS:
+            continue    # a model provider's `create`, a payment provider's `update`: none of the app's own data
         said = " ".join(raw[max(m.start() - 40, 0):m.end()].split())
         said = re.search(r"[\w$.?()\[\]]*$", said).group(0)[-60:] or m.group("name")
-        return f"it calls `{said.lstrip('.?)]')}`", first + raw.count("\n", 0, m.start())
+        return f"it calls `{said.lstrip('.?)]')}`", line
     m = ACTION_CHANGE_BARE.search(code)
     if m:
         return f"it calls `{m.group('name')}`", first + raw.count("\n", 0, m.start())

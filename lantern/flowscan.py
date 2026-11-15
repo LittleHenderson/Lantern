@@ -15,6 +15,7 @@ import time
 
 from . import flow, scanresult
 from . import flow_rules as R
+from .graph import route_words
 
 VERSION = "1"
 NEAR = 2            # lines: a tool names the line a statement starts on, the engine the line of the call
@@ -231,7 +232,8 @@ def run(g, findings: list[dict], lines_for=None, paid_calls=None,
                     place["routes"].append(a["detail"])
             continue
         line = a["line"]        # an admin route that asks for no admin: about the route, and on it
-        f = _finding(R.RULE["role"], f"{a['detail']} {R.TITLE['role']}", R.SEVERITY["role"], a["file"], line,
+        f = _finding(R.RULE["role"], f"{route_words(a['detail'], first=True)} {R.TITLE['role']}", R.SEVERITY["role"],
+                     a["file"], line,
                      conf="LOW", cwe=R.CWE["role"], snippet=src[line - 1].strip() if 0 < line <= len(src) else "",
                      fixed_rank=R.FIXED_RANK["role"])
         f["tool"] = "lantern-flow"
@@ -279,9 +281,9 @@ def _client_role(c: dict, src: list[str]) -> dict:
     place = R.CLAIM_PLACE.get(c["part"], "the address")
     name, line = c["name"], c["line"]
     more_routes = len(routes) - 1
-    who = routes[0] + (f" and {more_routes} more route{'s' if more_routes > 1 else ''} decide" if more_routes
-                       else " decides")
-    listed = ", ".join(routes[:8]) + (f" and {len(routes) - 8} more" if len(routes) > 8 else "")
+    who = route_words(routes[0], first=True) + (
+        f" and {more_routes} more route{'s' if more_routes > 1 else ''} decide" if more_routes else " decides")
+    listed = ", ".join(map(route_words, routes[:8])) + (f" and {len(routes) - 8} more" if len(routes) > 8 else "")
     more = (f"Heuristic, read from names. `{name}` arrives in {place}, and whoever sends the request writes it: a "
             "browser's own tools or one line of curl set it to any value. "
             f"{'These routes decide' if more_routes else 'This route decides'} on it ({listed}), and Lantern found "
@@ -305,10 +307,11 @@ def _owner(file: str, line: int, place: dict, src: list[str]) -> dict:
     from .websec import _finding
     recs, routes = place["records"], sorted(place["routes"])
     many = len(routes) > 1
-    who = routes[0] + (f" and {len(routes) - 1} more route{'s' if len(routes) > 2 else ''}" if many else "")
+    who = route_words(routes[0], first=True) + (
+        f" and {len(routes) - 1} more route{'s' if len(routes) > 2 else ''}" if many else "")
     late = next((r.get("act") or "change" for r in recs), None) if all(r.get("late") for r in recs) else None
     title = f"{who} {R.LATE_DOES[late][many]} {R.LATE_TAIL[many]}" if late else f"{who} {R.OWNER_TITLE[many]}"
-    listed = ", ".join(routes[:8]) + (f" and {len(routes) - 8} more" if len(routes) > 8 else "")
+    listed = ", ".join(map(route_words, routes[:8])) + (f" and {len(routes) - 8} more" if len(routes) > 8 else "")
     more = "Heuristic. " + (
         "The route asks whose the record is (or for a role) only after this line: whoever is turned away has "
         "already had it done. " if late else
@@ -353,7 +356,8 @@ def _open_route(a: dict, n, sign, findings: list[dict], src: list[str], let_on: 
     if let_on:      # a token library is called on the way, and a request whose token does not hold goes on
         found = "Lantern found nothing that turns away a request whose login token does not hold"
         more = TOKEN_LETS_ON + more
-    f = _finding("LW-AUTH-MISSING", f"{a['detail']} changes or removes a record picked by an id from the request, "
+    f = _finding("LW-AUTH-MISSING",
+                 f"{route_words(a['detail'], first=True)} changes or removes a record picked by an id from the request, "
                  f"and {found}", "MEDIUM", n.file, line, conf="LOW", cwe=306, fixed_rank="medium",
                  more=more, snippet=src[line - 1].strip() if 0 < line <= len(src) else "")
     f["tool"] = "lantern-flow"

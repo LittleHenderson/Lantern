@@ -212,6 +212,21 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   with `"use client"`, it is part of a phone app, the project has no framework that renders pages on a server, it
   is a page of Next.js's `pages/` folder, or such code calls it; never a route, a file in a server folder or a
   file that begins with `"use server"`). It is worked out when a rule asks and is in no result file.
+* Server Actions (since 2026-11-14, roadmap stage 1). Where the nearest `package.json` depends on a framework that
+  runs them (`next`, `waku`, a `react-server-dom-*` package), every function a file that begins with `"use server"`
+  exports, and every function whose own body begins with `"use server"`, is an entry point `{"kind": "route",
+  "detail": "ACTION <name>"}`. It has no verb and no path: the framework gives it an address of its own, and
+  anyone who has that address can send to it, with or without the project's pages. A class, a method and a
+  function the file does not export are none, and with no such framework the words do nothing. Its `lane` is
+  `server`: a `"use server"` file is the server's as a whole; an action written inside a page puts itself there,
+  and the page stays where it was. `<form action={fn}>` and `<button formAction={fn}>` make an edge from the
+  component to the action with `via` `callback`, `confidence` `inferred` and `detail` `action` or `formAction` (in
+  the report: "on submit"); a client component that calls the action by name is linked as any call (`resolved`).
+  The data flow reads every argument of an action as request data (a `FormData` as its fields; a `number` carries
+  no text). `ACTION <name>` is the map's own word: a sentence a reader gets says "the Server Action <name>"
+  (`graph.route_words`), in a finding's title, story (through a page: "send the form on it"; with no page that
+  uses it, a request sent straight to the action) and case, and in the lists of `readiness.json`; the report's
+  rows and chips show `Server Action <name>`. A finding's `routes` list keeps the detail as the map writes it.
 * JavaScript `via` values added in stage 3 (2026-11-09): `require-call` (`require('./x')(...)`), `route-handler` and
   `middleware` (a function handed to an Express router by name: resolved when it is named straight from a module,
   inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),
@@ -349,7 +364,9 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 it (a check under any name, one written in place, a hook, a dependency); `null` when that step did not run, and
 absent from results written before 2026-11-11. The protection `route-auth` in `readiness.json` counts such a route
 as checked (found: "the code on the way to this route turns away whoever is not signed in"), and names a route an
-`LW-AUTH-MISSING` finding calls open among the open ones, whatever the names around it say.
+`LW-AUTH-MISSING` finding calls open among the open ones, whatever the names around it say. A Server Action that
+changes data (read as for the finding, below) counts among the "routes that change data" of `route-auth` and
+`rate-limit`, and their `evidence` and `found` name it `the Server Action <name> (<file>:<line>)`.
 
 `not_read` (`lantern/unread.py`, since 2026-11-12; `{}` when the project holds neither kind, absent from older
 results): what the project holds that Lantern takes for code or software and did not read. `renamed`: code kept under
@@ -443,7 +460,22 @@ answer is not waited for), the name of that check is no sign, and a route that c
 the title "... changes data, and Lantern found nothing that turns away a request whose login token does not hold".
 `more_info` names what looked like a login on the route and was not taken for one, in sentences that begin "Not
 taken for a login check:" (a library's login made optional with `optional=True`; a FastAPI security scheme whose
-token the handler never looks at).
+token the handler never looks at). A Server Action has no verb and no request to read, so it is asked in a way of
+its own (since 2026-11-14, `websec._actions_unasked`): an action that code of the project outside its tests uses,
+that is not open by its name (sign-in, a webhook), that changes data and in which no strong sign of a login is
+found gets `LW-AUTH-MISSING` with the title "The Server Action <name> changes data, the app uses it, and no login
+check was found" (`MEDIUM`, `tool_confidence: LOW`; `line` is the action's first line, `snippet` the line read as
+the change, and `more_info` says what was read as the change). "Changes data" is, in this order: a table call of
+the map that adds, changes or removes rows (`meta.db_calls`); an SQL text inside a string of its lines that
+changes rows (`insert into`, `update … set`, `delete from`, …; not in a comment); a member call named like a
+database library's change (`create`, `update`, `delete`, `upsert`, `save`, `$executeRaw`, …), unless its chain
+begins at something that is no database (the form's data, cookies, headers, a `Set` or `Map` of the function's
+own, `crypto`) or the map followed the call into a library that keeps none of the app's data (a model provider's
+`create`, a payment provider's `update`; `websec.ACTION_DATA_LIBS` names the libraries that do); Firestore's
+`setDoc`, `addDoc`, `updateDoc`, `deleteDoc`. The action's own lines are read first, then the project's JS/TS
+functions it calls, two calls deep. The rule is provisional: it has not been measured on public projects yet.
+`LA-WALLET-DRAIN` on an action is titled "The Server Action <name> spends money …", and its `snippet` is the
+action's first line (a route's is its verb and path).
 
 Two rules of `lantern-web` rest on the same step. `LW-XSS-RAW` (79, `tool_confidence: LOW`): a place in a page
 template that prints a value without escaping it (EJS `<%- x %>`, Handlebars and Mustache `{{{x}}}` / `{{& x}}`, Pug

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult
 from .depaudit import AUDIT_TOOLS
-from .graph import Graph
+from .graph import Graph, route_words
 from .lanes import LANE_WORDS, LANES
 from .python_frontend import inside_repo, project_text
 from .security import ID_VERSION
@@ -956,7 +956,7 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     cats = "".join(f"<tr><td>{E(c['title'])}</td><td class='num'>{'n/a' if c['score'] is None else E(c['score'])}"
                    f"<span class='muted'>/{E(c['weight'])}</span></td><td><span class='bar'><i style='width:{_pct(c.get('percent'))}%'></i>"
                    f"</span></td></tr>" for c in (rd or {}).get("categories", []))
-    entries = "".join(f"<li><span class='tag'>{E(e['kind'])}</span> <code>{E(e['detail'] or e['name'])}</code> "
+    entries = "".join(f"<li><span class='tag'>{E(e['kind'])}</span> <code>{E(route_words(e['detail']) or e['name'])}</code> "
                       f"<span class='muted'>{E(e['file'] or '')}</span></li>" for e in ar["entries"][:40])
     if len(ar["entries"]) > 40:
         entries += f"<li class='muted'>and {len(ar['entries']) - 40} more</li>"
