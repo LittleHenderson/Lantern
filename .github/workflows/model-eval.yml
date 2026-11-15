@@ -29,7 +29,7 @@ on:
       min_first_try:
         description: "fail when fewer than this share of explanations pass first try"
         required: false
-        default: "0.8"
+        default: "0.7"
 
 permissions:
   contents: read

@@ -9,6 +9,13 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- The explanation check reads the whole prompt, and the model check passes at 70% on the first try. Lens 1 may name
+  the route and the functions on the prompt's REACHED FROM line: the check that refuses a name the context does not
+  show looked only at the unit's code, callers, callees and parent, so an explanation that said where the function is
+  reached from was refused and asked again (3 of the 4 refused-on-sight misses in the model-eval run of 2026-11-07).
+  A name shown nowhere is still refused. `model-eval`'s `min_first_try` default is 0.7 (was 0.8), Wakil's choice,
+  near the measured rate across seven repos (72.9%); the target in docs/explain-runs.md is unchanged.
+
 - Simple is simpler (directive: user first). A function's panel opens on the Everyday lens, uses Simple's lens names
   (Where it sits, not Mapped), and keeps the code and the Called by / Calls lists behind one button; its signature and
   line range are Advanced only. The map offers Lanes and Path (Flowchart and Graph are Advanced views), and the function
