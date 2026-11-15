@@ -297,7 +297,7 @@ def main(argv: list) -> int:
     if not sys.platform.startswith("linux"):
         sys.stderr.write("netless: only Linux can give a command a network of its own\n")
         return 3
-    forwarder_ports = {a[2] for a in netguard.proxy_variables().values() if netguard.is_local(a[1])}
+    forwarder_ports = {a[2] for a in netguard.proxy_variables().values() if netguard.is_local(a[1], loosely=True)}
     try:
         own_network()
         back_to_the_caller()

@@ -29,6 +29,151 @@ file. New entries go under `## Unreleased`, on top.
   notes only there. New `/v1/runs/{id}/notes` and `DELETE /v1/notes/{id}` (docs/api.md) (directive: user first,
   step 5).
 
+- **A test of the website's service is on one day** (2026-11-14; found by a red check on the change below, which
+  it is no part of). The service counts a person's runs by the day (UTC) and asks what day it is at every request.
+  `tests/test_cloud_runs.py::test_limits_answer_429_with_a_sentence` makes three requests with two whole runs
+  between them, and on CI it ran either side of midnight UTC: the count had started again, the request that had to
+  be refused was let in, and one job of the eight that run the test failed (1 failed, 5206 passed, 47 skipped)
+  about a limit that had held. Nothing of the service changes. The day a test starts on is now the service's day
+  until the test ends (`tests/conftest.py`, `_one_day`), and a test about the turn of the day sets the day itself.
+  Tests (2, written first): with the service's clock a day on between a test's runs and its last request, the
+  request is still refused (on the code before it was let in, the failure CI showed); with the service's day set
+  by hand, the runs of a day are used up and a run is taken again the next day. *Not covered:* the gateway and the
+  app's opt-in counts read the day in places of their own, and a test of theirs that counts by the day makes its
+  requests one after the other with no run between them; such a test can still meet midnight.
+
+- **The guard asks about a name before the system looks it up, and gitleaks is started on Lantern's terms**
+  (2026-11-14; stage 0 of the roadmap of 2026-11-14: two places where a guard that was there did not cover all it
+  stands for. Each was checked against Python itself and against the real program before it was touched, each
+  fixed after tests that failed, each dangerous case beside twins that must keep working).
+  - **The Python guard of the test sandbox, and the guard of Lantern's own tests.** *What was wrong* (measured on
+    Python 3.13.18). The guard refuses a question about a name (`getaddrinfo`, `gethostbyname` and its like) through
+    Python's audit events. For an address handed straight to a socket (`connect`, `connect_ex`, `bind`, `sendto`,
+    `sendmsg`) Python raises its event only once the address is a number: a host name written there had been asked
+    of the system by the time the guard was told, and the guard then refused the connection. `socket.getnameinfo`,
+    which asks who an address is, was not read by the guard, and who this computer is under its own name
+    (`socket.getfqdn`) was asked of the system. On Linux, in a network of the run's own or behind the run's
+    doorman, such a question could not leave the computer; on macOS and Windows, and in Lantern's own tests run
+    without the no-network runner, the Python guard was all that stood there.
+    *Now.* The five methods are replaced in place on `socket.socket` (`sandbox.SITECUSTOMIZE`: `_name_first`,
+    `_asks_first`). A name in an address raises Python's own event for a lookup first, so a project's own hooks
+    hear of it as of any lookup, and is refused and reported as `network lookup '<name>'`; a number, this
+    computer's own names and `<broadcast>` go down as before. `getnameinfo` is read (`_who`): an address that is
+    only written out (`NI_NUMERICHOST`) goes down, who an address belongs to goes down only for this computer's own
+    address in a network of the run's own, anything else is a lookup. Who this computer is under its own name is
+    answered by the guard itself where the run has no network of its own (`_whose`): honest code that asks (a mail
+    library for a message's id, an HTTP server when it starts) gets its answer, and the system asks nobody. The
+    guard of Lantern's own tests does the same (`tools/netguard/lantern_netguard.py`, `_ask_before_names`): a
+    declared host is learned and let on, any other name is written down and refused before the system is asked.
+    Tests of this first part: 4 in `tests/test_sandbox_guards.py`, 8 in `tests/test_netguard.py`, 1 in
+    `tests/test_sandbox_own_network.py`, one line of `tests/test_sandbox.py`. On the code before, 9 of the 13 new
+    tests fail and the 4 twins pass (the counts of the four files are with the second part, below). CI has a
+    `macos` job that runs the new tests there; until now no test of the guard ran on macOS.
+    One of the new tests asked the guard of Lantern's own tests about a declared host inside the tests' own
+    program. Run by Lantern in the sandbox it failed, there only: the sandbox around the tests refuses a lookup
+    of any name that is not this computer's, a declared one too, and is right to. The test asks in a program of
+    its own now, as the tests of a benchmark's declared hosts beside it do.
+    Not covered: the asking is on `socket.socket` and on classes made from it. Code that takes the socket type
+    beneath Python's module, loads the module anew, or is not Python is held by the kernel's walls only, which
+    macOS and Windows do not have. `gethostbyaddr("127.0.0.1")` is still answered by the system where the run has
+    no network of its own, while `getnameinfo` for the same address is refused there.
+    **An address is read the way the system reads it** (the same day; an independent review of this change's first
+    version showed three ways in which the guard and the system read one address differently, and looking for more of
+    the same two kinds showed further ones; each was confirmed on Python 3.13.18 before it was touched).
+    *What was wrong.* (1) The guard went by what a value says of itself: its exact type, its entries, its letters,
+    whether it is the same as another value, the socket's `family`. The system goes by the value underneath: a pair,
+    a text or bytes of a class of its own (a named pair is one) is read by what it holds, a text of such a class is
+    written out for the system by the class's own means, and a socket's family is the socket's. (2) The guard read
+    "this computer" and "a number" more generously than the system does: a part with a zero in front or a digit of
+    another script, and in the guard of Lantern's own tests a space, a dot at the end or a zone after a percent sign,
+    were read as the number or the name without them, while the system took the host for a name and asked for it. In
+    that guard the same reading decided what its own proxy passes on, and the port of a forwarding proxy on this
+    computer, which is a way out, was told by a comparison the port's own class answers.
+    *Now.* Both guards read an address by what it holds, through a plain copy made by the plain type's own means
+    (`_held`, `_pair`), the socket's family from the socket, and a host as it is written: nothing is taken off it
+    first, and it is a number only where it is written the one way every system reads a number (`_number`). What the
+    guard read is what goes down: the five socket calls, `getnameinfo`, `gethostbyaddr` and the lookups
+    `getaddrinfo`, `gethostbyname` and `gethostbyname_ex` (`_plainly`) hand the plain copy on. A connection or a
+    lookup that reaches the hook with a host that is not plain text or bytes, or in the guard of Lantern's own tests
+    with a port that is no plain number, came round the socket class: it is refused and written down (`_as_handed`,
+    `_as_read`). In the guard of Lantern's own tests `is_local` and `is_declared` read the host as it is written (one
+    dot at the end of a declared name is the same host), and so does its proxy; a proxy address in the person's own
+    settings is still read loosely (`loosely=True`), where taking one more for this computer's closes one more port.
+    Changed for honest code: a host of this computer written with a dot at its end (`localhost.`), with a zone
+    (`::1%lo`) or with a space around it is asked about as a name and refused where it was let through (an older test
+    expected `LOCALHOST.` to count as this computer; this computer sends that name to its name server, and the test
+    now expects what is so). A text host of a class of its own handed to the socket type beneath Python's module is
+    refused; through `socket.socket` it works as plain text does.
+    Tests: 11 new and 5 new cases of an older one (`tests/test_sandbox_guards.py` 4, `tests/test_netguard.py` 5 and
+    the cases, `tests/test_sandbox_own_network.py` 2). On this change's code before them 7 of the tests and the 5
+    cases fail and the 4 twins pass; now all pass. The four files as they were then (228 tests), in a copy that is
+    no checkout: on the code before the stage 21 failed, 191 passed and 16 were skipped; with it 212 passed and the
+    same 16 were skipped (15 need Docker, 1 a checkout).
+    **A number is read the same on every system** (the same evening). The version above asked the system it runs
+    on what an IPv6 number is, and systems differ: Windows reads an IPv6 address whose IPv4 number at the end has
+    a zero in front of a part as a number, Linux and macOS take the same host for a name. One of the new tests asks
+    about such a host: it passed on Linux and macOS and failed in both of CI's Windows jobs (1 test of 4,628 run),
+    where the guard let the host go down unasked. Both guards now read an IPv6 number by a rule of their own
+    (`_six`: eight groups of one to four hex digits, one `::` for groups of zeros left out, at most a strictly
+    read IPv4 number in the last place) and count it as a number only where this system reads it as one too.
+    Tests: 4 new (2 in each of `tests/test_sandbox_guards.py` and `tests/test_netguard.py`), in which the system's
+    reading is replaced by one that takes anything, so they ask the same of every system: on the code before, 2
+    fail and the 2 twins pass; now all pass. The rule and this computer's own reading agreed on each of 400,000
+    hosts made at random. The four files as they are now (232 tests), in a copy that is no checkout: on the code
+    before the stage 24 failed, 192 passed and 16 were skipped; now 216 pass and the same 16 are skipped.
+    Not covered, as before: a name handed to the socket type beneath Python's module is looked up by the system
+    before the guard hears of the call. This computer's own names (`localhost`, the computer's name) are handed to
+    the system, which answers them from its own file on an ordinary computer.
+  - **gitleaks, the secrets scanner.** *What was wrong* (the code before, 137ec6f; gitleaks 8.30.1 built from its
+    source, 34 ways of starting it tried by hand). gitleaks was started as it comes: on the project's folder, with
+    the shell's variables. It takes settings from a file in the folder it scans and from two variables, a list of
+    findings to leave out from that folder, and comments in the code that switch a line off. With any of them a
+    scan could find nothing where there is a key, and Lantern's record of it said `ok`: what a `.bandit` file did
+    for Bandit and a `.npmrc` for npm until 2026-11-10, whose notes said that gitleaks had not been measured.
+    *Now* (`security._run_gitleaks`, `_GitleaksOwn`). gitleaks is started in a folder Lantern made for the run
+    (`programs.folder()`), with a settings file Lantern wrote (`--config`: gitleaks' own whole rule set), an empty
+    list of findings to leave out (`--gitleaks-ignore-path`), `--ignore-gitleaks-allow`, and without any
+    `GITLEAKS_…` variable. Measured: that is not enough by itself, because gitleaks 8.30.1 reads a leave-out list at
+    the top of the folder it is handed whatever it is told. So the project is handed over under a name of Lantern's
+    own: a link in Lantern's folder with a new random name each run (`_gitleaks_link`; on Windows a junction where
+    no symlink can be made). The files gitleaks reports are mapped back by name (`_gitleaks_beneath`), and a
+    finding's id is what it was. The link is written with a separator at its end: without one gitleaks 8.30.1
+    walks nothing, finds nothing and ends with 0.
+    **A first question before the project** (`_gitleaks_first`; every run, about 0.05 s). gitleaks is asked the same
+    way about a folder of Lantern's own: a key made for this run on a line with an allow comment, beside a settings
+    file with no rules and a leave-out list that names the finding. A gitleaks that does not find that key (one too
+    old to know an option, one that names files by where a link leads) is not believed about the project. Then: the
+    linked way (`way: "linked"` in the record); where that cannot be had, the project by its own path if it has no
+    leave-out list at its top, after a first question asked that way (`way: "plain"`); otherwise gitleaks is not
+    started on the project, the record says `failed` with the reason and the built-in patterns run in its place
+    (`fallback_for`), so the release decision's scanners criterion reads missing, never passed. A file gitleaks
+    names is a finding only inside the project (`inside_repo`); one it names outside what it was handed fails the
+    run.
+    Changed for the person: a `.gitleaks.toml`, a `.gitleaksignore` and `gitleaks:allow` comments of their own no
+    longer change what Lantern's scan reports (to set a finding aside, `lantern accept` keeps it listed with its
+    reason), and a gitleaks that does not pass the first question is said to have failed, with the options Lantern
+    starts it with.
+    The few files of Lantern's own that gitleaks is handed are written by `programs.put`, the same bytes on every
+    system, so the scanner's module still writes no file in the plain way (the rule of 2026-11-10 for the modules
+    that write result files; this change's first run on GitHub failed that rule's test, on Linux and on Windows).
+    Tests: `tests/test_scanners.py` (66; 18 new cases, 4 changed; 16 of the new with a stand-in program on every
+    system, 2 with the real program), `tests/test_programs.py` (1 new), `tests/test_project_files.py`. On the code
+    before, 19 of the 279 tests of the three files fail (257 pass, 3 skipped); now 276 pass and 3 are skipped. The
+    real program is named to the tests by `LANTERN_TESTS_GITLEAKS=<full path>`. CI builds gitleaks 8.30.1 from its
+    source with Go, which checks what it downloads against its public record, in the Linux, Windows and macOS
+    jobs, and keeps it off PATH, so that Lantern's check of itself runs as on a computer without it; the Linux job
+    fails unless its log says the tests started "gitleaks 8.30.1 (linked)". `cloud/Dockerfile` builds the same
+    version into the website's image: from the next deploy the website's checks use gitleaks' rules where they
+    used the built-in patterns.
+    Measured: on the 15 sample apps the built-in patterns find 0 secrets and gitleaks, started this way, 1 (a key
+    in a notebook of the AI sample); under the website step's memory limit a large project (Django, 41.58 MB read)
+    took 8.9 s at 2 GB and 8.06 s at 1 GB; the starter apps' planted problems are still found and their fixes still
+    clear with gitleaks on PATH (`tests/test_learn.py`: 11 passed).
+    Not covered: measured against gitleaks 8.30.1 only, by hand on Linux only; no older gitleaks was tried (one that
+    does not pass the first question is not used); an allow comment is not read as an accepted risk the way
+    `# nosec` is; a project far larger than the one measured could take gitleaks past the website step's memory
+    limit (the record then says `failed`).
+
 - Per-layer permissions in team workspaces: the owner chooses, per person, which layers of the app (Browser,
   Frontend, Server, Data) they can see in the workspace's reports, from a "Sees everything" button on the Team
   page. That person's report is built on the server without the other layers, so nothing about them reaches their

@@ -349,7 +349,9 @@ maven-audit, composer-audit, gem-audit, copied-audit, lantern-web, lantern-ai, l
 patterns ran), and when known `version`, `exit_code`, `scope` (`{files, packages}`), `exclusions` (folders a tool was
 told to skip, and for bandit the Python files it was told to leave out because they are not files of the project: a
 link that leads out of it, a pipe), `errors` (one line per file or package left out of a `partial` run), `findings`, `duration_ms`, `role`,
-`fallback_for` (the built-in secret scan when gitleaks did not finish). `partial` keeps the findings the tool did
+`fallback_for` (the built-in secret scan when gitleaks did not finish), and for gitleaks `way` when it was started on
+the project: `linked` (the project was handed over under a name of Lantern's own) or `plain` (by its own path).
+`partial` keeps the findings the tool did
 produce. Bandit's `scope` has `under_another_name` when Python kept as text was handed to it (how many such files, a
 part of `files`), and the record then names them in `read_as_text`. `copied-audit` (`depaudit.run_copied_audit`: the
 copies under `vendor` that say what they are, asked of OSV as npm packages by the name and version their own

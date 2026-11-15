@@ -6,6 +6,7 @@ covered by tests/test_remote.py); everything after it is the real worker: the ja
 the clean-up.
 """
 
+import datetime as dt
 import json
 import os
 import shutil
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ sys.path.insert(0, str(ROOT / "cloud"))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lantern import remote  # noqa: E402
+from lantern_cloud import store as store_mod  # noqa: E402
 from lantern_cloud import worker as worker_mod  # noqa: E402
 from lantern_cloud.app import create_app  # noqa: E402
 from lantern_cloud.cleanup import MARK  # noqa: E402
@@ -244,6 +247,60 @@ def test_global_daily_limit(tmp_path, clone_from):
     wait(cloud, a, cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(a)).json()["id"])
     r = cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(b))
     assert r.status_code == 429 and "everyone" in r.json()["error"]["message"]
+
+
+def _no_clone(link, dest, log):
+    """A run that ends at its first step. It has been counted by then: a run is counted when it is taken."""
+    raise RuntimeError("nothing is cloned in this test")
+
+
+def _a_day_later() -> types.SimpleNamespace:
+    """The `datetime` module as the service's store finds it a day from now."""
+    day = dt.timedelta(days=1)
+
+    class DateTime(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return dt.datetime.now(tz) + day
+
+    return types.SimpleNamespace(datetime=DateTime, timedelta=dt.timedelta, UTC=dt.UTC)
+
+
+def _two_runs_of_two(tmp_path, monkeypatch):
+    monkeypatch.setattr(worker_mod, "clone_repo", _no_clone)
+    cloud, gw, s = make(tmp_path, runs_per_day=2)
+    tok = gw.sign_in("github:1", "github:octo")
+    for _ in range(2):
+        r = cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok))
+        assert r.status_code == 202
+        assert wait(cloud, tok, r.json()["id"])["status"] == "error"
+    return cloud, tok
+
+
+def test_a_tests_requests_are_counted_on_one_day_whatever_the_clock_says(tmp_path, monkeypatch):
+    """The service counts a person's runs by the day (UTC) and asks what day it is at every request. On CI
+    (2026-11-14) `test_limits_answer_429_with_a_sentence` ran either side of midnight UTC: the count started again
+    between its two runs and its last request, and the request that had to be refused was let in. 1 failed test of
+    5,254 in one job of the eight that ran it, a red check about a limit that had held. A test means its requests
+    to be made on one day, so the day a test starts on is the service's day until the test ends
+    (`conftest._one_day`): here the clock the service reads is a day on after the second run, and the third request
+    is refused all the same."""
+    cloud, tok = _two_runs_of_two(tmp_path, monkeypatch)
+    monkeypatch.setattr(store_mod, "dt", _a_day_later())
+    r = cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok))
+    assert r.status_code == 429 and "today's 2 runs" in r.json()["error"]["message"]
+
+
+def test_the_count_of_a_day_starts_again_with_the_next_day(tmp_path, monkeypatch):
+    """The twin: what the service does at the turn of the day is unchanged, and a test about it says which day it
+    is. With the service's day set by hand, the two runs of one day are used up, and on the next day a run is taken
+    again, as the refusal's own sentence promises ("More are available in ... (00:00 UTC)")."""
+    monkeypatch.setattr(store_mod, "today", lambda: "2026-11-14")
+    cloud, tok = _two_runs_of_two(tmp_path, monkeypatch)
+    r = cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok))
+    assert r.status_code == 429 and "today's 2 runs" in r.json()["error"]["message"] and "(00:00 UTC)" in r.json()["error"]["message"]
+    monkeypatch.setattr(store_mod, "today", lambda: "2026-11-15")
+    assert cloud.post("/v1/repos", json={"link": LINK}, headers=bearer(tok)).status_code == 202
 
 
 def test_a_failed_clone_leaves_nothing_behind(tmp_path, monkeypatch):
