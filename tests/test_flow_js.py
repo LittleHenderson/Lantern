@@ -1059,6 +1059,31 @@ def test_react(tmp_path, case):
     assert _kinds(flows) == want, flows
 
 
+SAID_SO = {
+    "lib/db.ts": "import { Pool } from 'pg'\n\nexport const db = new Pool()\n",
+    "app/api/people/route.ts": (
+        "import { NextRequest, NextResponse } from 'next/server'\nimport { getServerSession } from 'next-auth'\n"   # 1, 2
+        "import { db } from '../../../lib/db'\n\n"                                                                # 3
+        "export async function GET (request: NextRequest) {\n"                                                    # 5
+        "  if (!(await getServerSession())) return new NextResponse(null, { status: 401 })\n"                     # 6
+        "  if (request.nextUrl.searchParams.get('admin') !== '1') return new NextResponse(null, { status: 403 })\n"  # 7
+        "  return NextResponse.json(await db.query('SELECT * FROM people'))\n}\n\n"
+        "export async function POST (request: NextRequest) {\n"                                                   # 11
+        "  if (!(await getServerSession())) return new NextResponse(null, { status: 401 })\n"                     # 12
+        "  if (request.nextUrl.searchParams.get('admin')) console.log('asked for admins')\n"                      # 13
+        "  return NextResponse.json(await db.query('SELECT * FROM people'))\n}\n"),
+}
+
+
+def test_the_callers_own_word_in_the_address_is_no_proof(tmp_path):
+    """`?admin=1` read with `searchParams.get('admin')` is the caller's own word, as `req.query.admin` is on
+    Express: a route that turns everyone else away on it is caught. The twin: the same word where nobody is turned
+    away on it."""
+    found = _scan(tmp_path, {**SAID_SO, "package.json": PACKAGE.replace('"pg": "8.11.5"', '"pg": "8.11.5", "next-auth": "4.24.7"')})
+    assert [(f["line"], f["title"].split(" decides")[0]) for f in found if f["rule"] == "LT-AUTHZ-CLIENT-ROLE"] == [
+        (7, "GET /api/people")]
+
+
 # ------------------------------------------------------------- in the findings (security.scan)
 
 def _scan(root, files):

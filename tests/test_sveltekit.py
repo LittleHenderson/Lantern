@@ -8,7 +8,14 @@ A SvelteKit app's doors are files with fixed names under `src/routes`: `+server.
 Each shape sits beside twins that must stay as they were."""
 
 import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
 
+import pytest
+
+from lantern import report
 from lantern.engine import build_graph
 
 PKG = json.dumps({"devDependencies": {"@sveltejs/kit": "2.5.0", "svelte": "5.0.0", "vite": "5.0.0", "typescript": "5.4.0"},
@@ -157,7 +164,7 @@ def test_each_door_of_a_sveltekit_app_is_a_route(tmp_path):
     """`+server.ts`: one route per verb it exports. `+page.server.ts`: `load` answers the page's own address with
     its data, each of `actions` a form's POST (`?/name`; `default` is the address itself). `+layout.server.ts`:
     `load` runs for every page below it. `hooks.server.ts`: `handle` runs before all of them. A folder in round
-    brackets is no part of the address."""
+    brackets is no part of the address (a layout's `load` keeps it: it runs for the pages of that group only)."""
     g = _build(tmp_path, APP)
     assert _entries(g, "route") == {
         "js:src/routes/api/notes/+server::GET": "GET /api/notes",
@@ -169,7 +176,7 @@ def test_each_door_of_a_sveltekit_app_is_a_route(tmp_path):
         NOTES + "actions.rename": "POST /notes?/rename",
         "js:src/routes/(app)/settings/+page.server::load": "GET /settings",
         "js:src/routes/(app)/settings/+page.server::save": "POST /settings?/save",
-        "js:src/routes/(app)/+layout.server::load": "GET /*",
+        "js:src/routes/(app)/+layout.server::load": "GET /(app)/*",
         "js:src/hooks.server::handle": "ANY /*"}
     remove = g.nodes[NOTES + "actions.remove"]
     assert remove.entry["sveltekit"] == "action" and remove.lane == "server"
@@ -838,3 +845,98 @@ def test_a_form_with_text_fields_is_no_file_upload(tmp_path):
         prot = {p["id"]: p for p in assess(g, scan(g, offline=True), {})["protections"]}
         said[name] = (prot.get("upload-checks") or {}).get("status")
     assert said == {"text": None, "file": "add"}
+
+
+# ------------------------------------------------------------------ a group's shared load
+def test_a_groups_shared_load_is_said_to_run_for_that_group(tmp_path):
+    """`(app)/+layout.server.ts` runs for the pages inside the `(app)` folder, not for every address: what it is
+    listed as keeps the group's name, which no address has. The twins: the layout at the top does run for every
+    address, and a page inside the group keeps its address without the group."""
+    g = _build(tmp_path, {**APP, "src/routes/+layout.server.ts": LAYOUT_SERVER,
+                          "src/routes/(app)/admin/+layout.server.ts": LAYOUT_SERVER})
+    assert {i: d for i, d in _entries(g, "route").items() if "+layout" in i} == {
+        "js:src/routes/+layout.server::load": "GET /*",
+        "js:src/routes/(app)/+layout.server::load": "GET /(app)/*",
+        "js:src/routes/(app)/admin/+layout.server::load": "GET /(app)/admin/*"}
+    assert _entries(g, "page")["js:src/routes/(app)/settings/+page.svelte::+page"] == "/settings"
+    assert _entries(g, "route")["js:src/routes/(app)/settings/+page.server::save"] == "POST /settings?/save"
+
+
+# ------------------------------------------------------------------ "I am an admin", written in the address
+PEOPLE = '''import { error, json } from "@sveltejs/kit";
+import { Pool } from "pg";
+const pool = new Pool();
+export async function GET({ url, locals }) {
+  if (!locals.user) throw error(401, "sign in");
+  CHECK
+  return json(await pool.query("select * from people"));
+}
+'''
+SAYS_SO = {
+    "a word of the address compared": ('if (url.searchParams.get("admin") !== "1") throw error(403, "admins only");', 6),
+    "a word of the address asked for": ('const isAdmin = url.searchParams.get("isAdmin");\n  if (!isAdmin) throw error(403, "no");', 6),
+}
+SAYS_NOTHING = {
+    "the role the server keeps": 'if (locals.user.role !== "admin") throw error(403, "admins only");',
+    "a word of the address nobody is turned away on":
+        'const admin = url.searchParams.get("admin");\n  if (admin) console.log("asked for admins");',
+}
+
+
+def test_the_callers_own_word_in_the_address_is_no_proof(tmp_path):
+    """`?admin=1` is written by whoever sends the request. A route that turns everyone else away on it lets anyone
+    in: read with `url.searchParams.get("admin")` it is the same claim as `req.query.admin` on Express. The twins:
+    the role the server itself keeps for the signed-in user, and the same word of the address where nobody is
+    turned away on it."""
+    pkg = PKG.replace('"@prisma/client": "5.14.0"', '"pg": "8.11.5"')
+    for name, (check, line) in SAYS_SO.items():
+        found = _scan(tmp_path / name.replace(" ", "-"),
+                      {"svelte.config.js": CONFIG, "src/routes/api/people/+server.ts": PEOPLE.replace("CHECK", check)}, pkg)
+        got = [(f["line"], f["title"]) for f in found if f["rule"] == "LT-AUTHZ-CLIENT-ROLE"]
+        assert [x[0] for x in got] == [line], (name, got)
+        assert got[0][1].startswith("GET /api/people decides what the caller may do from the address the caller sends"), got
+    for name, check in SAYS_NOTHING.items():
+        found = _scan(tmp_path / name.replace(" ", "-"),
+                      {"svelte.config.js": CONFIG, "src/routes/api/people/+server.ts": PEOPLE.replace("CHECK", check)}, pkg)
+        assert [f["rule"] for f in found if f["rule"].startswith("LT-AUTHZ")] == [], (name, found)
+
+
+# ------------------------------------------------------------------ in the report page
+def test_the_report_says_who_opens_a_page_and_which_page_calls(tmp_path):
+    """The report page's own functions, run by Node on their text. "It runs when the page /notes." said nothing
+    happened: a page runs when someone opens it (true of every page, not only SvelteKit's). And every SvelteKit
+    page's component is called `+page`, so "It runs when +page call it" named nobody: a page whose only name is
+    its file's is called by its address, and the verb goes with the names that are shown. The twins: a route, a
+    phone screen, a page with a name of its own and a function inside a page read as they did."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    html = (Path(report.__file__).parent / "viewer" / "report.html").read_text(encoding="utf-8")
+    parts = [re.search(pattern, html, re.S | re.M) for pattern in (
+        r"^const short = q => \{.*?^\};\n", r"^const isScreen = [^\n]*\n", r"^const isIntent = [^\n]*\n",
+        r"^const partName = [^\n]*\n", r"^const isAction = [^\n]*\n", r"^const actionName = [^\n]*\n",
+        r"^const entryPhrase = [^\n]*\n[^\n]*\n", r"^const sayName = [^\n]*\n", r"^const calledBy = [^\n]*\n")]
+    assert all(parts), "the page has no sayName or calledBy"
+    nodes = {"home": {"qualname": "src/routes/+page.svelte::+page", "entry": {"kind": "page", "detail": "/"}},
+             "feed": {"qualname": "src/routes/feed/+page.svelte::+page", "entry": {"kind": "page", "detail": "/feed"}},
+             "app": {"qualname": "web/src/App::App", "entry": {"kind": "page", "detail": "/"}},
+             "card": {"qualname": "src/lib/Card.svelte::Card"}, "card2": {"qualname": "src/lib/old/Card.svelte::Card"},
+             "wipe": {"qualname": "src/routes/+page.svelte::+page.wipe"},
+             "frame": {"qualname": "src/routes/+layout.svelte::+layout"}}
+    asked = [{"kind": "page", "detail": "/notes/[id]"}, {"kind": "route", "detail": "POST /notes?/save"},
+             {"kind": "page", "detail": "Home screen (Compose) · HomeScreen"}, {"kind": "route", "detail": "ACTION saveNote"}]
+    calls = [["home", "feed"], ["home"], ["app"], ["card", "card2"], ["wipe", "frame", "card", "app"]]
+    (tmp_path / "run.js").write_text(
+        f"const N = {json.dumps(nodes)};\n" + "".join(p.group(0) for p in parts)
+        + f"console.log(JSON.stringify([{json.dumps(asked)}.map(entryPhrase), {json.dumps(calls)}.map(calledBy)]));\n",
+        encoding="utf-8")
+    r = subprocess.run([node, str(tmp_path / "run.js")], capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert r.returncode == 0, r.stderr
+    phrases, said = json.loads(r.stdout)
+    assert phrases == ["someone opens the page /notes/[id]", "a request arrives at POST /notes?/save",
+                       "someone opens the Home screen (Compose) on their phone",
+                       "someone sends a form, or presses a button, that runs the Server Action saveNote"]
+    assert said == ["It runs when the page / and the page /feed call it.", "It runs when the page / calls it.",
+                    "It runs when App calls it.", "It runs when Card calls it.",
+                    "It runs when +page.wipe, +layout and Card call it."]
+    assert "${andList(names(callers).slice(0, 3))} call${callers.length === 1 ? 's' : ''} it." not in html
