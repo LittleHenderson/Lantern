@@ -1461,3 +1461,36 @@ def test_a_word_of_the_addresss_question_is_called_by_its_name(tmp_path):
         "LJ-SQL-CONCAT", "`id` in `request.nextUrl.searchParams` is what the request sent")
     assert sorted((f["line"], f["title"].split(" reaches")[0]) for f in found if f["rule"] == "LT-AUTHZ-OWNER") == [
         (8, "GET /api/notes"), (14, "DELETE /api/notes")]
+
+
+# ------------------------------------------------------------- a refusal a call throws can be caught (Next.js)
+THROWN_ROUTE = (
+    "import { redirect } from 'next/navigation'\nimport { getServerSession } from 'next-auth'\n"
+    "import { db } from '../../../lib/db'\n\nexport async function DELETE () {\nCHECK"
+    "  await db.query('DELETE FROM notes')\n  return new Response(null, { status: 204 })\n}\n")
+THROWN_CHECK = "if (!(await getServerSession())) redirect('/login')"
+THROWN_CASES = {
+    "thrown, and nothing catches it": (f"  {THROWN_CHECK}\n", True),
+    "caught and thrown again": (
+        f"  try {{\n    {THROWN_CHECK}\n  }} catch (e) {{\n    console.error(e)\n    throw e\n  }}\n", True),
+    "handed back inside the try": (
+        "  try {\n    if (!(await getServerSession())) return new Response(null, { status: 401 })\n"
+        "  } catch (e) {\n    console.error(e)\n  }\n", True),
+    "caught and only logged": (
+        f"  try {{\n    {THROWN_CHECK}\n  }} catch (e) {{\n    console.error(e)\n  }}\n", False),
+}
+
+
+@pytest.mark.parametrize("case", sorted(THROWN_CASES))
+def test_a_refusal_that_redirect_throws_can_be_caught(tmp_path, case):
+    """Next.js's `redirect('/login')` turns a caller away by throwing. Inside a `try` whose handler only logs, the
+    request goes on, so the flow step shows no login for that route (`logins_shown`). The twins keep theirs: nothing
+    catches it, the handler throws it again, the refusal is handed back (a `catch` never sees an answer)."""
+    from lantern.security import scan
+    body, shown = THROWN_CASES[case]
+    _write(tmp_path, {"lib/db.ts": "import { Pool } from 'pg'\n\nexport const db = new Pool()\n",
+                      "app/api/notes/route.ts": THROWN_ROUTE.replace("CHECK", body),
+                      "package.json": PACKAGE.replace('"pg": "8.11.5"', '"pg": "8.11.5", "next-auth": "4.24.7"')})
+    g = build_graph(tmp_path)
+    route = next(n.id for n in g.nodes.values() if n.entry and n.entry.get("detail") == "DELETE /api/notes")
+    assert (route in scan(g, offline=True)["logins_shown"]) is shown
