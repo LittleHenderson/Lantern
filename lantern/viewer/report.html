@@ -816,6 +816,11 @@ const short = q => {
 };
 const isJS = id => (id || '').startsWith('js:');
 const layer = id => isJS(id) ? 'frontend' : /^(py|go|rs|jv|kt|sw|dt|cs|php|rb|cc):/.test(id || '') ? 'backend' : 'external';
+// What is not the project's own code: a library or a server elsewhere (`ext:`), a database table the code reads or
+// changes (`db:`). A table is drawn where a library call is, and is called a table wherever it is named.
+const isTable = id => (id || '').startsWith('db:');
+const isOut = id => isTable(id) || (id || '').startsWith('ext:');
+const outName = id => isTable(id) ? `${id.slice(3)} table` : (id || '').slice(4);
 const UI_WORDS = {onClick: 'on click', onSubmit: 'on submit', onChange: 'on change', mutationFn: 'on submit', queryFn: 'on load', action: 'on submit'};
 const S = {tab: 'map', entry: null, sel: null, lens: 1, view: 'tree', mode: 'risk', cams: {}, open: new Set(), q: '', pair: null, fsev: 'all', lrail: false, rrail: false, simple: true, fsel: null, freach: false, finput: false, ftool: '', xsel: null, xq: '', xf: 'all'};
 try { S.simple = localStorage.getItem('lantern.simple') !== '0'; } catch (e) {}
@@ -969,8 +974,8 @@ function renderTree() {
   const rows = [];
   const walk = (id, depth, edge, path) => {
     const n = N[id]; if (!n) return;
-    const kids = (OUT[id] || []).filter(e => !e.dst.startsWith('ext:')).sort((a, b) => (a.lines[0] || 0) - (b.lines[0] || 0));
-    const exts = (OUT[id] || []).filter(e => e.dst.startsWith('ext:'));
+    const kids = (OUT[id] || []).filter(e => !isOut(e.dst)).sort((a, b) => (a.lines[0] || 0) - (b.lines[0] || 0));
+    const exts = (OUT[id] || []).filter(e => isOut(e.dst));
     const loop = path.has(id);
     rows.push({id, depth, edge, kids: kids.length, loop, exts});
     if (loop || !S.open.has(id)) return;
@@ -986,7 +991,7 @@ function renderTree() {
     const hop = r.edge && (r.edge.via || '').startsWith('http-') ? `<span class="hop">HTTP ${esc(r.edge.detail || '')}</span>`
       : r.edge && r.edge.detail ? `<span class="hop ui">${esc(UI_WORDS[r.edge.detail] || r.edge.detail)}</span>` : '';
     const sum = summaryOf(r.id);
-    const ext = r.exts.length ? `<span class="ext">→ ${r.exts.slice(0, 4).map(e => esc(e.dst.slice(4))).join(', ')}${r.exts.length > 4 ? '…' : ''}</span>` : '';
+    const ext = r.exts.length ? `<span class="ext">→ ${r.exts.slice(0, 4).map(e => esc(outName(e.dst))).join(', ')}${r.exts.length > 4 ? '…' : ''}</span>` : '';
     return `${hop ? `<div class="row hoprow">${indent}<span class="tog"></span>${hop}</div>` : ''}<div class="row">${indent}${tog}${conf}<button class="node ${S.sel === r.id ? 'on' : ''}" data-id="${esc(r.id)}">
       <span class="h"><span class="layer ${layer(r.id)}"></span><span class="nm">${esc(short(n.qualname))}</span>${n.entry ? `<span class="badge entry">${esc(n.entry.kind)}</span>` : ''}${aiChips(r.id)}${w ? sevChip(w) : ''}
       ${r.loop ? '<span class="again">↻ already on this path</span>' : ''}
@@ -1003,7 +1008,7 @@ function renderChart() {
     const id = order[i];
     if (depth[id] >= MAXD) continue;
     for (const e of (OUT[id] || [])) {
-      if (e.dst.startsWith('ext:')) continue;
+      if (isOut(e.dst)) continue;
       edges.push(e);
       if (!(e.dst in depth) && order.length < LIMIT) { depth[e.dst] = depth[id] + 1; order.push(e.dst); }
     }
@@ -1029,7 +1034,7 @@ function renderChart() {
      every other line steps back so they stand out. With reduced motion the glow stays lit and nothing moves. */
   const touches = e => S.sel && (e.src === S.sel || e.dst === S.sel) && e.src in xy && e.dst in xy;
   const lit = edges.some(touches);
-  const name = id => httpNodes[id] ? httpNodes[id].label : N[id] ? short(id.startsWith('ext:') ? id.slice(4) : N[id].qualname) : id;
+  const name = id => httpNodes[id] ? httpNodes[id].label : N[id] ? short(isOut(id) ? outName(id) : N[id].qualname) : id;
   let top = '';
   for (const e of edges) {
     if (!(e.src in xy) || !(e.dst in xy)) continue;
@@ -1068,7 +1073,7 @@ function renderLanes() {
     const id = order[i];
     if (depth[id] >= MAXD) continue;
     for (const e of (OUT[id] || [])) {
-      const isExt = e.dst.startsWith('ext:');
+      const isExt = isOut(e.dst);
       if (isExt && laneOf(e.dst) !== 'data') continue;
       if (!(e.dst in depth)) { if (order.length >= LIMIT) continue; depth[e.dst] = depth[id] + 1; order.push(e.dst); }
       edges.push(e);
@@ -1118,9 +1123,9 @@ function renderLanes() {
     svg += `<path d="${d}" fill="none" stroke="${bad ? 'var(--critical)' : e.confidence === 'observed' ? 'var(--accent)' : 'var(--ink-2)'}" stroke-width="2" stroke-linejoin="round" ${dash ? `stroke-dasharray="${dash}"` : ''}><title>${esc(e.confidence)}${e.via ? ` (${esc(e.via)})` : ''}${e.detail ? ` · ${esc(e.detail)}` : ''}</title></path>`;
   }
   for (const id of placed) {
-    const [x, y] = xy(id), n = N[id], w = worstRank(id), on = S.sel === id, ext = id.startsWith('ext:');
+    const [x, y] = xy(id), n = N[id], w = worstRank(id), on = S.sel === id, ext = isOut(id);
     const stroke = on ? 'var(--accent)' : w === 'critical' || (ext && hot(S.sel)) ? 'var(--critical)' : w === 'high' ? 'var(--serious)' : 'var(--line-2)';
-    const label = ext ? id.slice(4) : n.entry && n.entry.kind === 'page' ? `${n.entry.detail} · ${short(n.qualname)}` : `${(n.file || '').split('/').pop()} :: ${short(n.qualname)}`;
+    const label = ext ? outName(id) : n.entry && n.entry.kind === 'page' ? `${n.entry.detail} · ${short(n.qualname)}` : `${(n.file || '').split('/').pop()} :: ${short(n.qualname)}`;
     const t = label.length > 27 ? label.slice(0, 26) + '…' : label;
     const sub0 = ext ? 'runs with what arrived' : (summaryOf(id) || (n.entry ? (n.entry.kind === 'page' ? 'a page the visitor opens' : n.entry.kind === 'route' ? `answers ${n.entry.detail}` : n.entry.detail) : (w ? `${w} finding here` : '')) || '');
     const sub = sub0.length > 32 ? sub0.slice(0, 31) + '…' : sub0;
@@ -1162,7 +1167,7 @@ function graphModel() {
     const n = N[id]; if (!n) continue;
     if (n.entry && n.entry.kind === 'page') cols.pages.push(id);
     else if (n.entry && n.entry.kind === 'route') cols.routes.push(id);
-    else if (id.startsWith('ext:')) cols.data.push(id);
+    else if (isOut(id)) cols.data.push(id);
     else if (isJS(id)) cols.comps.push(id);
     else if (n.entry) cols.routes.push(id);
     else cols.server.push(id);
@@ -1197,7 +1202,7 @@ function renderGraph() {
      every other line steps back so they stand out. With reduced motion the glow stays lit and nothing moves. */
   const touches = e => S.sel && (e.src === S.sel || e.dst === S.sel) && e.src in xy && e.dst in xy;
   const lit = edges.some(touches);
-  const name = id => httpNodes[id] ? httpNodes[id].label : N[id] ? short(id.startsWith('ext:') ? id.slice(4) : N[id].qualname) : id;
+  const name = id => httpNodes[id] ? httpNodes[id].label : N[id] ? short(isOut(id) ? outName(id) : N[id].qualname) : id;
   let top = '';
   for (const e of edges) {
     if (!(e.src in xy) || !(e.dst in xy)) continue;
@@ -1222,7 +1227,7 @@ function renderGraph() {
   for (const id in xy) {
     const [x, y] = xy[id], k = colOf[id], n = N[id] || null, w = n ? worstRank(id) : null, on = S.sel === id;
     const isHttp = k === 'http';
-    let label = isHttp ? httpNodes[id].label : n.entry && n.entry.kind === 'page' ? n.entry.detail : n.entry && n.entry.kind === 'route' ? n.entry.detail : short(id.startsWith('ext:') ? id.slice(4) : n.qualname);
+    let label = isHttp ? httpNodes[id].label : n.entry && n.entry.kind === 'page' ? n.entry.detail : n.entry && n.entry.kind === 'route' ? n.entry.detail : short(isOut(id) ? outName(id) : n.qualname);
     if (label.length > 24) label = label.slice(0, 23) + '…';
     const f0 = (FIND_BY_NODE[id] || []).find(f => f.rank === w);
     const paths = n && n.entry && n.entry.kind === 'page' ? edges.filter(e => e.src === id).length : 0;
@@ -1437,11 +1442,11 @@ function situation(n) {
   let page = null, ui = null;
   if (ids) { page = N[ids[0]]; for (let i = 1; i < ids.length; i++) { const e = (OUT[ids[i - 1]] || []).find(x => x.dst === ids[i]); if (e && e.detail && UI_WORDS[e.detail]) { ui = UI_WORDS[e.detail]; break; } } }
   else { for (const nid of Object.keys(N)) { const v = ((window._uiReach || {})[nid]); if (v) break; } }
-  const where = onPhone(n) ? 'Runs on the person’s phone' : isJS(n.id) ? 'Runs in the visitor’s browser' : layer(n.id) === 'backend' ? 'Runs on your server' : 'A library call';
+  const where = onPhone(n) ? 'Runs on the person’s phone' : isJS(n.id) ? 'Runs in the visitor’s browser' : layer(n.id) === 'backend' ? 'Runs on your server' : isTable(n.id) ? 'A table in your database' : 'A library call';
   if (page && page.entry) return `${where} when someone on <b>${esc(page.entry.detail || short(page.qualname))}</b> ${ui ? esc(ui).replace('on ', '') + 's' : 'uses the page'}.`;
   if (n.entry) return `${where}: ${esc({page: 'a page', route: 'a route', cli: 'a command', main: 'the program start', test: 'a test', script: 'a script'}[n.entry.kind] || n.entry.kind)}${n.entry.detail ? ' · ' + esc(n.entry.detail) : ''}.`;
   const callers = (IN[n.id] || []).map(e => e.src).filter(x => N[x]);
-  return `${where}, called by ${callers.length ? callers.slice(0, 2).map(x => `<b>${esc(short(N[x].qualname))}</b>`).join(' and ') + (callers.length > 2 ? ` and ${callers.length - 2} more` : '') : 'nothing in the repo'}.`;
+  return `${where}, ${isTable(n.id) ? 'used' : 'called'} by ${callers.length ? callers.slice(0, 2).map(x => `<b>${esc(short(N[x].qualname))}</b>`).join(' and ') + (callers.length > 2 ? ` and ${callers.length - 2} more` : '') : 'nothing in the repo'}.`;
 }
 // ---------- Lenses from the map alone. Every function has three lenses from the moment the check ends; a model's
 // explanation, when one is written, replaces them. Facts only: file, lines, signature, entry, call edges, HTTP
@@ -1524,10 +1529,11 @@ function mapRecord(n) {
   const where = onPhone(n) ? 'on the person’s phone, inside your app' : isJS(n.id) ? 'in the visitor’s browser' : layer(n.id) === 'backend' ? 'on your server' : 'in a library';
   const lines = n.start_line && n.end_line ? n.end_line - n.start_line + 1 : 0;
   const kindWord = n.kind === 'module' ? 'file' : n.kind === 'external' ? 'library call' : isJS(n.id) ? 'component or function' : 'function';
-  const callers = (IN[n.id] || []).filter(e => N[e.src] && !e.src.startsWith('ext:') && !(e.via || '').startsWith('http-')).map(e => e.src);
+  const callers = (IN[n.id] || []).filter(e => N[e.src] && !isOut(e.src) && !(e.via || '').startsWith('http-')).map(e => e.src);
   const served = (IN[n.id] || []).filter(e => N[e.src] && (e.via || '').startsWith('http-'));
   const outs = OUT[n.id] || [];
-  const callees = outs.filter(e => N[e.dst] && !e.dst.startsWith('ext:') && !(e.via || '').startsWith('http-')).map(e => e.dst);
+  const callees = outs.filter(e => N[e.dst] && !isOut(e.dst) && !(e.via || '').startsWith('http-')).map(e => e.dst);
+  const tables = outs.filter(e => isTable(e.dst) && N[e.dst]);
   const http = outs.filter(e => (e.via || '').startsWith('http-') || e.dst.startsWith('ext:HTTP '));
   const exts = [...new Set(outs.filter(e => e.dst.startsWith('ext:') && !e.dst.startsWith('ext:HTTP ')).map(e => e.dst))];
   const fs = FIND_BY_NODE[n.id] || [];
@@ -1535,6 +1541,20 @@ function mapRecord(n) {
   const names = ids => uniq(ids.map(x => short(N[x].qualname)));
   const list = (a, k = 3) => a.slice(0, k).join(', ') + (a.length > k ? ` and ${a.length - k} more` : '');
   const andList = a => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+  // What a link into a table says it does there: `select, update cards` -> `select, update`.
+  const doesIn = e => { const d = String(e.detail || ''), k = d.lastIndexOf(' '); return k > 0 ? d.slice(0, k) : ''; };
+  const tableWords = e => `the ${N[e.dst].qualname} table${doesIn(e) ? ` (${doesIn(e)})` : ''}`;
+  if (isTable(n.id)) {
+    const touch = (IN[n.id] || []).filter(e => N[e.src]);
+    const reads = names(touch.filter(e => /\bselect\b/.test(doesIn(e))).map(e => e.src));
+    const changes = names(touch.filter(e => /\b(insert|update|upsert|delete)\b/.test(doesIn(e))).map(e => e.src));
+    const who = names(touch.map(e => e.src));
+    const s = `${n.qualname} is a table of the project’s database, named in the code’s own calls to it. Lantern maps which functions read or change it but does not look into the database itself.`;
+    const said = [reads.length ? `Your ${andList(reads.slice(0, 3))} read${reads.length === 1 ? 's' : ''} it.` : '', changes.length ? `Your ${andList(changes.slice(0, 3))} change${changes.length === 1 ? 's' : ''} it.` : ''].filter(Boolean).join(' ');
+    return {from_map: true, validated: true, lens1: {summary: s, inputs: [], outputs: '', side_effects: touch.slice(0, 6).map(e => `${short(N[e.src].qualname)}: ${doesIn(e) || 'uses it'}`), errors: [], role: who.length ? `Read or changed by ${list(who)}.` : 'Nothing in the repo was seen using it.'},
+      lens2: {text: `This is the “${n.qualname}” table in your database, where your app keeps its records. ${said}`.trim(), example: '', analogy: ''},
+      lens3: {text: `The ${n.qualname} table is used by ${andList(who.slice(0, 5)) || 'nothing the map found'}.`, pairs: touch.slice(0, 5).map(e => ({plain: short(N[e.src].qualname), technical: N[e.src].qualname, anchor: {type: 'symbol', id: e.src}}))}};
+  }
   if (n.kind === 'external') {
     const who = names(callers);
     const s = `${n.qualname} is outside your repository: a library or framework your code calls. Lantern maps the calls to it but does not read the library’s own code.`;
@@ -1547,17 +1567,18 @@ function mapRecord(n) {
     : callers.length ? `It runs when ${andList(names(callers).slice(0, 3))} call${callers.length === 1 ? 's' : ''} it.` : 'Nothing in your code calls it directly: a framework may call it, or it may be unused.';
   const uses = callees.length ? `Along the way it uses ${andList(names(callees).slice(0, 4))}${callees.length > 4 ? ` and ${callees.length - 4} more of your functions` : ''}.` : '';
   const talks = http.length ? `It calls your backend: ${list(uniq(http.map(e => e.detail || e.dst.replace(/^ext:/, ''))), 3)}.` : exts.length ? `It relies on ${andList(uniq(exts.map(extWords)).slice(0, 3))}.` : '';
+  const keeps = tables.length ? ` In your database it reads or changes ${andList(uniq(tables.map(tableWords)).slice(0, 3))}${tables.length > 3 ? ` and ${tables.length - 3} more` : ''}.` : '';
   const found = fs.length ? ` Scanners found ${fs.length === 1 ? 'a problem' : fs.length + ' problems'} inside it: ${list(uniq(fs.map(f => String(f.title).replace(/[.\s]+$/, ''))), 2)}.` : '';
   const lens1 = {
     summary: `${short(n.qualname)} is a ${kindWord} in ${n.file || 'an unknown file'}${lines ? `, lines ${n.start_line}–${n.end_line} (${lines} lines)` : ''}, running ${where}.${n.entry ? ` Entry point: ${n.entry.kind === 'test' ? 'a test' : n.entry.kind + (n.entry.detail ? ' ' + n.entry.detail : '')}.` : ''}${n.docstring ? ` Its own docstring: “${String(n.docstring).split('\n')[0].slice(0, 160)}”` : ''}`,
     inputs: params.length ? params.map(p => `${p}`) : [],
     outputs: '',
-    side_effects: [...http.map(e => `HTTP ${e.detail || e.dst.replace(/^ext:HTTP /, '')}${N[e.dst] ? ` → ${short(N[e.dst].qualname)}` : ''}`), ...exts.slice(0, 6).map(x => `calls ${x.replace(/^ext:/, '')}`)],
+    side_effects: [...http.map(e => `HTTP ${e.detail || e.dst.replace(/^ext:HTTP /, '')}${N[e.dst] ? ` → ${short(N[e.dst].qualname)}` : ''}`), ...tables.slice(0, 6).map(e => `database: ${e.detail || N[e.dst].qualname}`), ...exts.slice(0, 6).map(x => `calls ${x.replace(/^ext:/, '')}`)],
     errors: [],
-    role: `Called by ${callers.length}${served.length ? ` (and over HTTP by ${served.length})` : ''} · calls ${callees.length} of your functions${exts.length ? ` and ${exts.length} librar${exts.length === 1 ? 'y' : 'ies'}` : ''}.${fs.length ? ` ${fs.length} finding${fs.length === 1 ? '' : 's'} inside.` : ''}`,
+    role: `Called by ${callers.length}${served.length ? ` (and over HTTP by ${served.length})` : ''} · calls ${callees.length} of your functions${exts.length ? ` and ${exts.length} librar${exts.length === 1 ? 'y' : 'ies'}` : ''}${tables.length ? ` · uses ${tables.length} database table${tables.length === 1 ? '' : 's'}` : ''}.${fs.length ? ` ${fs.length} finding${fs.length === 1 ? '' : 's'} inside.` : ''}`,
   };
   const lens2 = {
-    text: `This is “${plainWords(n.qualname)}”, a ${kindWord} running ${where}. ${runs} ${uses} ${talks}${found}`.replace(/\s+/g, ' ').trim(),
+    text: `This is “${plainWords(n.qualname)}”, a ${kindWord} running ${where}. ${runs} ${uses} ${talks}${keeps}${found}`.replace(/\s+/g, ' ').trim(),
     example: isScreen(n.entry) ? `Someone opens the ${String(n.entry.detail).split(' · ')[0]} on their phone, and ${PHONE_OS} runs this code.` : isIntent(n.entry) ? `Another app on the same phone (or a link) starts ${partName(n.entry)}, and this code runs with whatever data it passed in.`
       : n.entry && n.entry.kind === 'page' ? `Someone opens ${n.entry.detail || 'this page'} and this is what builds it.` : n.entry && n.entry.kind === 'route' ? `A request to ${n.entry.detail || 'this route'} lands here, and this code decides what to answer.`
       : served.length ? `Someone in the browser uses ${short(N[served[0].src].qualname)}, which sends a request this code answers.` : callers.length ? `${short(N[callers[0]].qualname)} needs “${plainWords(n.qualname)}” done and hands the job to this code.` : 'No example from the map: nothing in your code was seen calling it.',
@@ -1793,7 +1814,7 @@ function renderMap() {
   if (S.view === 'chart') wireCanvas(el.querySelector('#chart.canvas'), 'chart:' + S.entry);
   wireHelp(el);
   wireCrumbs(el);
-  const ex = document.getElementById('expand'); if (ex) ex.onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!e.dst.startsWith('ext:')) st.push(e.dst); } S.open = seen; renderMap(); };
+  const ex = document.getElementById('expand'); if (ex) ex.onclick = () => { const st = [S.entry], seen = new Set(); while (st.length && seen.size < 400) { const id = st.pop(); if (seen.has(id)) continue; seen.add(id); for (const e of OUT[id] || []) if (!isOut(e.dst)) st.push(e.dst); } S.open = seen; renderMap(); };
   el.querySelectorAll('[data-tog]').forEach(b => b.onclick = ev => { ev.stopPropagation(); const id = b.dataset.tog; S.open.has(id) ? S.open.delete(id) : S.open.add(id); renderMap(); });
   el.querySelectorAll('.node, g[data-id]').forEach(b => b.onclick = () => { const id = b.dataset.id; if (!S.open.has(id)) S.open.add(id); select(id); renderMap(); });
 }
@@ -1817,9 +1838,9 @@ function trailTo(from, to) {
 const VIEW_WORD = {lanes: 'Lanes', tree: 'Path', chart: 'Flowchart', graph: 'Graph'};
 function crumbName(id) {
   const n = N[id];
-  if (!n) return short(id.startsWith('ext:') ? id.slice(4) : id);
+  if (!n) return short(isOut(id) ? outName(id) : id);
   if (n.entry && (n.entry.kind === 'route' || n.entry.kind === 'page' || n.entry.kind === 'script') && n.entry.detail) return n.entry.detail.length > 40 ? n.entry.detail.slice(0, 39) + '…' : n.entry.detail;
-  return short(id.startsWith('ext:') ? id.slice(4) : n.qualname);
+  return short(isOut(id) ? outName(id) : n.qualname);
 }
 function crumbsHtml(n) {
   const trail = trailTo(n.id, S.sel && S.sel !== n.id ? S.sel : null);
@@ -1949,7 +1970,7 @@ function laneWalk(f) {
   return `<div class="lanewalk">${LANES.map(l => `<div class="lw ${lit.has(l) ? 'lit' : 'off'} ${l === hotLane(f) ? 'here' : ''} ${l === 'data' && by.data.length && f.rank === 'critical' ? 'bad' : ''}" title="${esc(LANE_DEF[l])}"><div class="k"><i></i>${LANE_WORD[l]}${l === hotLane(f) ? ' · here' : ''}</div>${text(l)}</div>`).join('')}</div>`;
 }
 // Lanes crossed from an entry point: every function it can reach (bounded), plus its findings' lanes.
-const entryLanes = (() => { const memo = {}; return id => { if (memo[id]) return memo[id]; const seen = new Set([id]), st = [id]; const lit = new Set(); while (st.length && seen.size < 400) { const x = st.pop(); const l = laneOf(x); if (l) lit.add(l); for (const e of OUT[x] || []) if (!seen.has(e.dst)) { seen.add(e.dst); if (!e.dst.startsWith('ext:')) st.push(e.dst); else if (laneOf(e.dst)) lit.add('data'); } } for (const f of FIND_BY_ENTRY[id] || []) for (const l of fLanes(f)) lit.add(l); return memo[id] = lit; }; })();
+const entryLanes = (() => { const memo = {}; return id => { if (memo[id]) return memo[id]; const seen = new Set([id]), st = [id]; const lit = new Set(); while (st.length && seen.size < 400) { const x = st.pop(); const l = laneOf(x); if (l) lit.add(l); for (const e of OUT[x] || []) if (!seen.has(e.dst)) { seen.add(e.dst); if (!isOut(e.dst)) st.push(e.dst); else if (laneOf(e.dst)) lit.add('data'); } } for (const f of FIND_BY_ENTRY[id] || []) for (const l of fLanes(f)) lit.add(l); return memo[id] = lit; }; })();
 function entryGlyph(id) {
   const fs = SEC.findings.filter(f => f.status !== 'accepted' && ((f.reachable && f.reachable.entry === id) || (f.ui_path && f.ui_path[0] === id))); let w = null; for (const f of fs) if (!w || RANK[f.rank] < RANK[w.rank]) w = f;
   return laneGlyph(entryLanes(id), w ? hotLane(w) : null, w ? w.rank : null);
@@ -2475,8 +2496,8 @@ function srcBlock(n) {
 function renderRight() {
   const el = document.getElementById('right');
   const n = N[S.sel];
-  const kindWord = n ? (n.entry ? ({page: 'page', route: 'route', cli: 'command', main: 'program start', test: 'test', script: 'script'}[n.entry.kind] || n.entry.kind) : layer(n.id) === 'external' ? 'library' : (isJS(n.id) ? 'component' : 'function')) : '';
-  const railLabel = n ? `${onPhone(n) ? 'App' : layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : 'Library'} · ${isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord}` : 'Details';
+  const kindWord = n ? (n.entry ? ({page: 'page', route: 'route', cli: 'command', main: 'program start', test: 'test', script: 'script'}[n.entry.kind] || n.entry.kind) : isTable(n.id) ? 'database table' : layer(n.id) === 'external' ? 'library' : (isJS(n.id) ? 'component' : 'function')) : '';
+  const railLabel = n ? `${onPhone(n) ? 'App' : layer(n.id) === 'frontend' ? 'Frontend' : layer(n.id) === 'backend' ? 'Backend' : isTable(n.id) ? 'Data' : 'Library'} · ${isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord}` : 'Details';
   const chrome = railChrome(railLabel, 'r');
   // The Simple findings memo and the Readiness/About pages use the full width unless a function is open.
   document.getElementById('main').classList.toggle('noright', !n && ((S.tab === 'map' && S.simple) || (S.tab === 'findings' && (S.simple || !S.fsel)) || S.tab === 'ready' || S.tab === 'prot' || S.tab === 'xp' || S.tab === 'fix' || S.tab === 'about'));
@@ -2506,7 +2527,7 @@ function renderRight() {
   const phoneLang = f => /\.dart$/.test(f || '') ? ['dart', 'Dart'] : /\.[cm]?[jt]sx?$/.test(f || '') ? ['ts', 'TypeScript or JavaScript'] : /\.swift$/.test(f || '') ? ['swift', 'Swift'] : /\.kt$/.test(f || '') ? ['kt', 'Kotlin'] : /\.cs$/.test(f || '') ? ['cs', 'C#'] : ['java', 'Java'];
   const lw = onPhone(n) ? [phoneLang(n.file)[0], `${phoneLang(n.file)[1]} · runs on the person’s phone, inside your app`] : LANGW[(n.id.split(':')[0])];
   el.innerHTML = `<div class="detail">${chrome}<button class="closebtn" id="close" aria-label="Close">${icon('close')}</button>
-    <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(onPhone(n) ? 'app' : layer(n.id) === 'external' ? 'library' : layer(n.id))} · ${esc(isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord)}${AI_BY_NODE[n.id] ? ' · ' + aiChips(n.id) : ''}</div>
+    <div class="eyebrow"><span class="layer ${layer(n.id)}"></span>${esc(onPhone(n) ? 'app' : isTable(n.id) ? 'data' : layer(n.id) === 'external' ? 'library' : layer(n.id))} · ${esc(isScreen(n.entry) ? 'screen' : isIntent(n.entry) ? 'open to other apps' : kindWord)}${AI_BY_NODE[n.id] ? ' · ' + aiChips(n.id) : ''}</div>
     <h3>${esc(S.simple ? short(n.qualname) : n.qualname)}</h3>
     <div class="meta">${esc(n.file)}${S.simple ? '' : `:${esc(n.start_line)}–${esc(n.end_line)}`}${n.entry && n.entry.detail ? ` · ${esc(n.entry.detail)}` : ''}</div>
     ${status ? `<div class="statusrow">${status}</div>` : ''}
