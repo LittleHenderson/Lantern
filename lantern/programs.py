@@ -18,7 +18,8 @@ obeys when a `.cmd` (npm) starts `node` by its bare name. Nothing else of the pe
 `settings(name, text)` is a settings file of Lantern's own for a tool that would otherwise look for one in the
 folder it scans (Bandit and a project's `.bandit`). `folder()` is a folder of Lantern's own for a tool that takes
 settings from the folder it is started in (npm and a project's `.npmrc`): the tool is started there, on copies
-of the files it is to read.
+of the files it is to read. `put(folder, name, text)` writes a file of Lantern's own into such a folder (gitleaks'
+settings, its empty list, the sample it is asked about first), the same bytes on every system.
 
 Not covered: a folder PATH names in full is the person's own setting and is used as written, also when it lies inside
 a project (a project's own virtual environment that the person switched on); and Lantern itself is started by Python
@@ -120,3 +121,17 @@ def folder():
     afterwards is left where it is, without a word."""
     with tempfile.TemporaryDirectory(prefix="lantern-own-", ignore_cleanup_errors=True) as own:
         yield Path(own)
+
+
+def put(folder: Path, name: str, text: str) -> Path:
+    """A file of Lantern's own in a folder of Lantern's own (`folder()`): `text` under the bare name `name`, handed
+    back as its path. For what a tool is told to read in place of a project's file: its settings, a list, a sample
+    it is asked about. Every line ends the same way on every system, so the tool is handed the same bytes.
+    ValueError for a name that is not a bare name (nothing is written outside the folder); OSError when the file
+    cannot be written: the caller then does not start the tool."""
+    if not isinstance(name, str) or not name or name in (".", "..") or "\0" in name \
+            or any(sep and sep in name for sep in (os.sep, os.altsep, "/", "\\")):
+        raise ValueError("not a bare name")
+    path = Path(folder) / name
+    path.write_text(text, encoding="utf-8", newline="\n")
+    return path

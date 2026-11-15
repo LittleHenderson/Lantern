@@ -440,8 +440,7 @@ def test_the_guard_refuses_a_question_about_a_name_asked_the_older_ways_too(tmp_
         refused("gethostbyname_ex", lambda: socket.gethostbyname_ex("lantern-test.invalid"))
         refused("gethostbyaddr", lambda: socket.gethostbyaddr("192.0.2.1"))
         print(socket.gethostbyname("localhost"), socket.gethostbyname("127.0.0.1"))
-        import sys
-        sys.audit("socket.gethostbyaddr", socket.gethostname())   # what socket.getfqdn() asks, without the resolver
+        socket.getfqdn()          # who this computer is under its own name: the guard answers, no resolver is asked
         print(bool(socket.getaddrinfo("localhost", 80)), True)
     ''')
     assert r.stdout.splitlines() == ["refused: getaddrinfo", "refused: gethostbyname", "refused: gethostbyname_ex",

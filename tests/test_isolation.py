@@ -398,7 +398,10 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     the ordinary user, with the machine's rule against user namespaces for ordinary users taken away for that one
     command and put back after it, and no test may be skipped there either: GitHub's Linux machines refuse an
     ordinary user a network of its own, so in the first pass the launcher's own network was made nowhere (only
-    Docker's container had one) and the one test that needs it was skipped with that reason."""
+    Docker's container had one) and the one test that needs it was skipped with that reason. Since 2026-11-14 a
+    macOS job runs the tests whose answer the system itself gives (it ran none before), chosen by name, and the test
+    jobs build one version of gitleaks for the tests of how Lantern starts it: it is named on the first pass's sudo
+    line like a rule, and that step looks in the run's own words for the program its tests started."""
     import tomllib
     runs = []
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
@@ -408,11 +411,12 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
         assert all(" -rs" in line for line in mine), (path.name, mine)
         assert not mine or "LANTERN_TESTS_COMPLETE: required" in text, path.name
         runs += [(path.name, line) for line in mine]
-    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 5, runs
+    assert sorted({name for name, _ in runs}) == ["ci.yml", "release.yml"] and len(runs) == 6, runs
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "LANTERN_TESTS_COMPLETE: required" in ci[: ci.index("\njobs:")]        # for every job of the workflow
     first = next(line for name, line in runs if name == "ci.yml" and "--cov" in line)     # the pass without a network
-    again = [line for name, line in runs if name == "ci.yml" and "tests/test_netguard.py" in line]
+    again = [line for name, line in runs                           # not the macOS job's line, which chooses by name
+             if name == "ci.yml" and "tests/test_netguard.py" in line and " -k " not in line]
     assert again == ['python -m pytest -q -rs -p no:cacheprovider tests/test_netguard.py | tee '
                      '"$RUNNER_TEMP/second-pass.log"'], again
     between = ci[ci.index(first): ci.index(again[0])]              # after the first pass, in the second pass's own step
@@ -446,6 +450,16 @@ def test_where_the_tests_give_a_verdict_every_test_must_run_and_every_skip_is_na
     assert all('"LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE"' in words for words in handed), handed
     assert '"LANTERN_TESTS_NETLESS=$LANTERN_TESTS_NETLESS"' in handed[0] and "netless.py" in through_sudo[0], through_sudo
     assert "LANTERN_TESTS_NETLESS" not in handed[1] and "netless.py" not in through_sudo[1], through_sudo
+    # The gitleaks built for the scanner's tests reaches the first pass the same way, and the step then looks for
+    # it in the run's own words; every job that builds it checks the version it built before it names it.
+    assert '"LANTERN_TESTS_GITLEAKS=$LANTERN_TESTS_GITLEAKS"' in handed[0] and "LANTERN_TESTS_GITLEAKS" not in handed[1]
+    assert "grep -q '^programs these tests started: .*gitleaks 8\\.30\\.1 (linked)' pytest.log ||" in ci
+    built = ci.count('echo "LANTERN_TESTS_GITLEAKS=$program" >> "$GITHUB_ENV"')
+    assert built == 3 and ci.count('test "$("$program" version)" = "8.30.1"') == built
+    assert ci.count("github.com/zricethezav/gitleaks/v8@v8.30.1") == built
+    mac = ci[ci.index("\n  macos:"): ci.index("\n  browser:")]
+    its = [line.strip() for line in mac.splitlines() if re.search(r"\bpython -m pytest\b", line)]
+    assert "runs-on: macos-latest" in mac and len(its) == 1 and ("ci.yml", its[0]) in runs and " -k " in its[0], mac
     assert [what for what, _ in _rules_gates()] == [
         "^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required",
         "^rules of this run: LANTERN_TESTS_COMPLETE=no-skips",
@@ -524,6 +538,11 @@ def test_each_test_gets_its_own_empty_home_again():
 EXPECTED_TO_TRY = {
     "tests/test_netguard.py::test_a_refusal_is_an_ordinary_connection_error_with_a_plain_reason",
     "tests/test_netguard.py::test_every_way_to_name_an_outside_address_is_refused",
+    "tests/test_netguard.py::test_a_name_handed_straight_to_a_socket_is_refused_as_a_lookup[text]",
+    "tests/test_netguard.py::test_a_name_handed_straight_to_a_socket_is_refused_as_a_lookup[bytes]",
+    "tests/test_netguard.py::test_a_name_handed_straight_to_a_socket_is_refused_as_a_lookup[bytearray]",
+    "tests/test_netguard.py::test_a_socket_class_of_the_tests_own_is_asked_too",
+    "tests/test_netguard.py::test_a_number_outside_is_still_a_connection_or_a_datagram_and_no_lookup",
 }
 
 

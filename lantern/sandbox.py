@@ -996,41 +996,96 @@ def _own_network():
     except Exception:
         return False
 _OWN = _own_network()
+# An address is read here the way the system reads it: by what it holds. A pair, a text or bytes of a class of its
+# own can answer anything for itself (its entries, its letters, whether it is the same as another value); the
+# system goes by the value underneath, and so does the guard, through a plain copy made by the plain type's own
+# means. Where the guard hands a value on, the copy is what goes down: what was judged is what is used.
+def _held(x):
+    for kind in (str, bytes, bytearray, tuple):
+        if isinstance(x, kind):
+            if type(x) is kind:
+                return x
+            try:
+                return kind.__getitem__(x, slice(None))
+            except TypeError:
+                return x
+    return x
+def _pair(a):
+    # An address and the host in it as plain values; a bytearray host as bytes, a copy nobody else can change.
+    a = _held(a)
+    if type(a) is tuple and a:
+        host = _held(a[0])
+        if type(host) is bytearray:
+            host = bytes(host)
+        if host is not a[0]:
+            a = (host,) + a[1:]
+    return a
+def _as_handed(a):
+    # Whether the host in an address, as it came, is one the system reads as the guard does. A text of a class
+    # of its own writes itself out for the system by its own means, and bytes that can be changed may have been
+    # changed since. The socket calls hand plain copies down (`_asks_first`), so such a host came another way.
+    if isinstance(a, tuple) and tuple.__len__(a):
+        h = tuple.__getitem__(a, 0)
+        return not ((isinstance(h, str) and type(h) is not str) or isinstance(h, bytearray))
+    return True
 def _here(addr):
-    # An address of this computer itself, as it is written: nothing is looked up to decide it.
-    host = addr[0] if isinstance(addr, tuple) and addr else addr
-    if isinstance(host, (bytes, bytearray)):
+    # An address of this computer itself, as it is written: nothing is looked up to decide it. Its number counts
+    # only where it is written the one way every system reads a number (`_number`): a part with a zero in front or
+    # a digit of another script may be a name to the system, which then asks for it.
+    addr = _pair(addr)
+    host = addr[0] if type(addr) is tuple and addr else addr
+    if type(host) in (bytes, bytearray):
         host = bytes(host).decode("ascii", "replace")
-    if not isinstance(host, str):
+    if type(host) is not str:
         return False
-    h = host.lower()
+    h = host.lower() if host.isascii() else host
     if h in ("", "localhost", "::1", "::", "0.0.0.0") or host in _SELF:
         return True
     if h.startswith("::ffff:"):
         h = h[7:]
     p = h.split(".")
-    return len(p) == 4 and p[0] == "127" and all(x.isdigit() and int(x) < 256 for x in p)
+    return len(p) == 4 and p[0] == "127" and _number(h)
 def _number(host):
     # An address written out as a number: asking where it is asks nothing of any name server, the answer is the
     # number itself. Read strictly, so that what is not surely a number is still a name: four plain decimal parts
-    # up to 255 with no zero in front, or what this system reads as an IPv6 address, and nothing around it.
-    if isinstance(host, (bytes, bytearray)):
+    # up to 255 with no zero in front (`_four`), or an IPv6 address written the one way every system reads one
+    # (`_six`) that this system reads as one too, and nothing around it.
+    host = _held(host)
+    if type(host) in (bytes, bytearray):
         try:
             host = bytes(host).decode("ascii")
         except ValueError:
             return False
-    if not isinstance(host, str) or not host.isascii():
+    if type(host) is not str or not host.isascii():
         return False
-    p = host.split(".")
-    if len(p) == 4 and all(x.isdigit() and len(x) < 4 and int(x) < 256 and (x == "0" or x[0] != "0") for x in p):
+    if _four(host):
         return True
-    if ":" in host and all(c in "0123456789abcdefABCDEF:." for c in host):
+    if _six(host):
         try:
             _socket.inet_pton(_socket.AF_INET6, host)
             return True
         except (OSError, ValueError, AttributeError):
             return False
     return False
+def _four(h):
+    p = h.split(".")
+    return len(p) == 4 and all(x.isdigit() and len(x) < 4 and int(x) < 256 and (x == "0" or x[0] != "0") for x in p)
+def _six(h):
+    # An IPv6 address as every system reads one: eight groups of one to four hex digits with a colon between
+    # them, where one "::" may stand for the groups of zeros left out and the last two groups may be written as
+    # an IPv4 number, read as strictly as any other. What this system reads as one is not enough: one system reads
+    # more as a number than another (Windows takes a zero in front of a part of that IPv4 number, which Linux and
+    # macOS take for a name), and what any of them may take for a name is a name here.
+    head, gap, tail = h.partition("::")
+    groups = (head.split(":") if head else []) + (tail.split(":") if tail else [])
+    n = len(groups)
+    if groups and "." in groups[-1]:
+        if (gap and not tail) or not _four(groups[-1]):
+            return False
+        groups, n = groups[:-1], n + 1
+    if not all(0 < len(g) < 5 and all(c in "0123456789abcdefABCDEF" for c in g) for g in groups):
+        return False
+    return n < 8 if gap else n == 8
 _WFLAGS = _os.O_WRONLY | _os.O_RDWR | _os.O_CREAT | _os.O_APPEND | getattr(_os, "O_TRUNC", 0)
 for _p in _os.environ.get("LANTERN_SANDBOX_SITE", "").split(_os.pathsep):
     # Folders of libraries, behind Python's own library as installed libraries are at home: the fetched ones and
@@ -1290,13 +1345,18 @@ def _judge(ev, args):
                 _block("write to " + p)
     elif ev in ("socket.connect", "socket.bind", "socket.sendto", "socket.sendmsg"):
         s = args[0]
-        fam = getattr(s, "family", None)
-        to = args[1] if len(args) > 1 else None
+        try:
+            fam = _family(s)       # the socket's own family, whatever a class made from it says of itself
+        except (TypeError, AttributeError):
+            fam = getattr(s, "family", None)
+        came = args[1] if len(args) > 1 else None
+        to = _pair(came)
         if fam in _NET:
             # In a network of the run's own: listening anywhere (there is only this computer in it), and calling
             # or sending to this computer's own address. Any other address is refused before it is tried, so
-            # the run's log says what the tests reached for.
-            if not (_OWN and (ev == "socket.bind" or to is None or _here(to))):
+            # the run's log says what the tests reached for. So is an address whose host the system may have
+            # read as another than the guard reads here (`_as_handed`).
+            if not (_OWN and (ev == "socket.bind" or to is None or _here(to))) or not _as_handed(came):
                 _block("network " + ev.split(".")[1] + " " + repr("" if to is None else to)[:80])
         elif fam == _UNIX and fam is not None and isinstance(to, (str, bytes, bytearray)) and to:
             # A socket file is how the programs of one computer talk to each other (a desktop's message bus,
@@ -1310,10 +1370,23 @@ def _judge(ev, args):
                 _block("network " + ev.split(".")[1] + " to the socket file " + name[:200])
     elif ev in ("socket.getaddrinfo", "socket.gethostbyname", "socket.gethostbyaddr"):
         # This computer under its own names is no question to the network, and neither is where an address written
-        # as a number is. Who a number belongs to (gethostbyaddr) is one.
+        # as a number is. Who a number belongs to (gethostbyaddr) is one, and so is who this computer's own name
+        # belongs to, except in a network of the run's own, which nothing leaves (elsewhere `_whose` answers it).
         host = args[0] if args else None
-        if host not in (None, "", "localhost", "127.0.0.1", "::1", b"localhost") and host not in _SELF \
+        if type(host) not in (str, bytes, type(None)):
+            # A text of a class of its own, or one that can still be changed: the system may be asked for another
+            # host than is read here. The lookups hand a plain copy down (`_plainly`), so this one came another way.
+            _block("network lookup " + repr(_held(host))[:80])
+        if host not in (None, "", "localhost", "127.0.0.1", "::1", b"localhost") \
+                and not (host in _SELF and (ev != "socket.gethostbyaddr" or _OWN)) \
                 and not (ev != "socket.gethostbyaddr" and _number(host)):
+            _block("network lookup " + repr(host)[:80])
+    elif ev == "socket.getnameinfo":
+        # Python's event does not say whether the number or its owner is asked for; `_who` has read the call and
+        # refused the second. A name in the address is no address to ask about, whoever asks.
+        to = _pair(args[0]) if args else None
+        host = to[0] if type(to) is tuple and to else None
+        if type(host) in (str, bytes) and not _here(to) and not _number(host):
             _block("network lookup " + repr(host)[:80])
 # A guard the project brings itself (an audit hook of its own) has its say first. Python calls hooks in the order
 # they were added and this guard is the first, so a hook added later never saw what is refused here: a project's
@@ -1343,6 +1416,108 @@ def _add(hook):
     _THEIRS.append(hook)
 _add.__name__ = _add.__qualname__ = "addaudithook"
 _add.__module__, _add.__doc__ = "sys", _sys.addaudithook.__doc__
+# A name in an address. A socket hands an address to the system in five calls, and where the address holds a host
+# name Python has it looked up on the way down and tells its hooks of the call afterwards. So the five calls ask
+# here first: for a name that is not this computer's and not a number, Python's own event for a lookup is raised,
+# which is refused above like any lookup once the project's own hooks have seen it, and the system is not asked.
+# A number, this computer's names and the two words that are no names go down as they did. This holds for
+# `socket.socket` and every class made from it (a TLS socket, a test's own), and for an address or a host of a
+# class of its own: the address is read by what it holds, and its plain copy is what goes down (`_pair`). A
+# program that takes the type beneath `socket.socket`, loads the socket module anew or calls the system's library
+# itself is held by the kernel's walls only.
+import _socket as _below
+_family, _kind, _proto = (getattr(_below.socket, n).__get__ for n in ("family", "type", "proto"))
+def _name_first(sock, address):
+    # `address` as `_pair` gives it
+    if type(address) is not tuple or not address:
+        return
+    host = address[0]
+    if type(host) not in (str, bytes) or _number(host) or _here(address) \
+            or host in ("<broadcast>", b"<broadcast>"):
+        return
+    try:
+        family, kind, proto = _family(sock), _kind(sock), _proto(sock)
+    except (TypeError, AttributeError):
+        return                     # no socket at all: what is wrong with the call is the system's to say
+    if family in _NET:
+        _sys.audit("socket.getaddrinfo", host, address[1] if len(address) > 1 else None, family, kind, proto)
+        _block("network lookup " + repr(host)[:80])
+def _asks_first(name, at):
+    down = getattr(_socket.socket, name, None)
+    if down is None:               # sendmsg: not on every system
+        return
+    def call(self, *args, **more):
+        i = at(args)               # where the address stands among what the call was given
+        if i is not None:
+            to = _pair(args[i])
+            if to is not args[i]:
+                args = args[:i] + (to,) + args[i + 1:]
+            _name_first(self, to)
+        return down(self, *args, **more)
+    call.__name__, call.__qualname__, call.__doc__ = name, "socket." + name, down.__doc__
+    setattr(_socket.socket, name, call)
+for _n in ("connect", "connect_ex", "bind"):
+    _asks_first(_n, lambda a: 0 if a else None)
+_asks_first("sendto", lambda a: len(a) - 1 if len(a) > 1 else None)
+_asks_first("sendmsg", lambda a: 3 if len(a) > 3 else None)
+# Who an address is. `getnameinfo` asks that, as `gethostbyaddr` does, unless it is told to answer with the number
+# itself, and Python's event for it does not say which. So the call is read here. An address that is only written
+# out (a number, or this computer's own, with NI_NUMERICHOST) goes down: nothing is asked of anybody. Who an address
+# belongs to goes down only for this computer's own address in a network of the run's own, which nothing leaves.
+# Everything else, a name in the address and a number whose owner is asked for, is refused as the lookup it is.
+_NUMERIC = getattr(_socket, "NI_NUMERICHOST", 1)
+def _who(down):
+    def getnameinfo(sockaddr, flags, /):
+        sockaddr = _pair(sockaddr)
+        host = sockaddr[0] if type(sockaddr) is tuple and sockaddr else None
+        if type(host) in (str, bytes):
+            here = _here(sockaddr)
+            written = isinstance(flags, int) and int.__and__(flags, _NUMERIC) and (here or _number(host))
+            if not written and not (_OWN and here):
+                _sys.audit("socket.gethostbyaddr", host)
+                _block("network lookup " + repr(host)[:80])
+        return down(sockaddr, flags)
+    return getnameinfo
+# Who this computer is under its own name (`socket.getfqdn` asks: a mail library for a message's id, an HTTP
+# server when it starts). In a network of the run's own nothing leaves, and the system is asked. Anywhere else
+# the system may ask the network around it, so the guard answers itself, with the name at this computer's own
+# address, and the system is not asked at all. Nothing is refused, so no honest test is held up.
+def _whose(down):
+    def gethostbyaddr(host, /):
+        host = _held(host)
+        if type(host) is bytearray:
+            host = bytes(host)
+        if not _OWN and type(host) is str and host in _SELF:
+            return (host, [], ["127.0.0.1"])
+        return down(host)
+    return gethostbyaddr
+for _n, _f in (("getnameinfo", _who), ("gethostbyaddr", _whose)):
+    _f = _f(getattr(_below, _n))
+    _f.__qualname__, _f.__doc__ = _n, getattr(_below, _n).__doc__
+    setattr(_socket, _n, _f)
+    setattr(_below, _n, _f)
+# The lookups themselves. Python has a text host written out for the system by a codec, which asks a class made
+# from `str` to do the writing, and tells its hooks of the value as it came. So the host goes down as its plain
+# copy: what the hooks are told of is what the system is asked for.
+def _plainly(name, word):
+    down = getattr(_below, name)
+    def lookup(*args, **more):
+        if args:
+            host = _held(args[0])
+            if word is None and type(host) is bytearray:
+                host = bytes(host)
+            if host is not args[0]:
+                args = (host,) + args[1:]
+        elif word in more:
+            more[word] = _held(more[word])
+        return down(*args, **more)
+    lookup.__name__, lookup.__qualname__, lookup.__doc__ = name, name, down.__doc__
+    setattr(_below, name, lookup)
+    if getattr(_socket, name, None) is down:     # `socket.getaddrinfo` is Python's own and calls the one beneath
+        setattr(_socket, name, lookup)
+_plainly("getaddrinfo", "host")
+_plainly("gethostbyname", None)
+_plainly("gethostbyname_ex", None)
 _sys.addaudithook(_hook)
 _sys.addaudithook = _add
 _sys.lantern_sandbox_guard = "on"   # lantern.tracehook looks for this before it runs a test (LANTERN_SANDBOX_GUARD)

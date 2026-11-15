@@ -42,6 +42,8 @@ import threading
 import time
 import urllib.parse
 
+import _socket
+
 LOG_ENV = "LANTERN_NETGUARD_LOG"       # every refused attempt, one JSON object per line, from every process
 ALLOW_ENV = "LANTERN_NETGUARD_ALLOW"   # host names a benchmark has declared (comma-separated); tests leave it empty
 DENY_ENV = "LANTERN_NETGUARD_DENY"     # ports on this computer where a forwarding proxy listens (comma-separated)
@@ -88,19 +90,110 @@ _lock = threading.Lock()
 
 
 # ------------------------------------------------------------------------------------------------ what counts as local
+# A host is read here the way the system reads it (2026-11-14): by what it holds, and as it is written. A text, bytes
+# or a pair of a class of its own can answer anything for itself (its entries, its letters, what it says when asked);
+# the system goes by the value underneath, and so does the guard, through a plain copy made by the plain type's own
+# means (`_held`). And a host is this computer, or a number that needs nobody asked, only where it is written the
+# one way every system reads it so: with a space around it, a dot at its end, something after a percent sign, a
+# zero in front of a part or a digit of another script it may be a name to the system, which then asks for it. So
+# nothing is taken off a host before it is judged.
+def _held(x):
+    for kind in (str, bytes, bytearray, tuple):
+        if isinstance(x, kind):
+            if type(x) is kind:
+                return x
+            try:
+                return kind.__getitem__(x, slice(None))
+            except TypeError:
+                return x
+    return x
+
+
+def _exact(host):
+    """The text of a host exactly as the system is handed it; None for what is no text."""
+    host = _held(host)
+    if type(host) in (bytes, bytearray):
+        return bytes(host).decode("ascii", "replace")
+    return host if type(host) is str else None
+
+
+def _number(host) -> bool:
+    """An address written out as a number, read strictly: four plain decimal parts up to 255 with no zero in front
+    (`_four`), or an IPv6 address written the one way every system reads one (`_six`) that this system reads as one
+    too, and nothing around it. Anything else may be a name."""
+    h = _exact(host)
+    if h is None or not h.isascii():
+        return False
+    if _four(h):
+        return True
+    if _six(h):
+        try:
+            socket.inet_pton(socket.AF_INET6, h)
+            return True
+        except (OSError, ValueError, AttributeError):
+            return False
+    return False
+
+
+def _four(h: str) -> bool:
+    parts = h.split(".")
+    return len(parts) == 4 and all(x.isdigit() and len(x) < 4 and int(x) < 256 and (x == "0" or x[0] != "0") for x in parts)
+
+
+def _six(h: str) -> bool:
+    """An IPv6 address as every system reads one: eight groups of one to four hex digits with a colon between them,
+    where one "::" may stand for the groups of zeros left out and the last two groups may be written as an IPv4
+    number, read as strictly as any other. What this system reads as one is not enough: one system reads more as a
+    number than another (Windows takes a zero in front of a part of that IPv4 number, which Linux and macOS take
+    for a name), and what any of them may take for a name is a name here."""
+    head, gap, tail = h.partition("::")
+    groups = (head.split(":") if head else []) + (tail.split(":") if tail else [])
+    n = len(groups)
+    if groups and "." in groups[-1]:
+        if (gap and not tail) or not _four(groups[-1]):
+            return False
+        groups, n = groups[:-1], n + 1
+    if not all(0 < len(g) < 5 and all(c in "0123456789abcdefABCDEF" for c in g) for g in groups):
+        return False
+    return n < 8 if gap else n == 8
+
+
+def _shown(host) -> str:
+    """A host for the record and for the words of a refusal: as it was written, capitals made small."""
+    h = _exact(host)
+    if h is None:
+        return f"<{type(host).__name__}>"
+    return h.lower() if h.isascii() and not h.startswith("<") else h
+
+
+def _odd(value) -> str:
+    """Words in angle brackets for a value the guard cannot read as the system did. They are nobody's address."""
+    return f"<{type(value).__name__}: {_shown(value)}>"[:120]
+
+
 def _text(host) -> str:
+    """The loose reading, with spaces, a dot at the end and a zone taken off: for the list of declared hosts as a
+    person wrote it, for an address the system gave back, and for `is_local(..., loosely=True)`."""
     if isinstance(host, (bytes, bytearray)):
         host = bytes(host).decode("ascii", "replace")
     return str(host).strip().lower().rstrip(".").split("%")[0]
 
 
-def is_local(host) -> bool:
-    """This computer: no host at all, `localhost`, its own name, a loopback or unspecified address."""
+def is_local(host, loosely: bool = False) -> bool:
+    """This computer: no host at all, `localhost`, its own name, a loopback or unspecified address, as it is written.
+    `loosely` is for an address in the person's own proxy settings, where taking one more for this computer's is
+    the safe side (its port is then closed like a way out)."""
     if host is None:
         return True
-    h = _text(host)
+    h = _text(host) if loosely else _exact(host)
+    if h is None:
+        return False
+    if h.isascii():
+        h = h.lower()
     if h in LOCAL_NAMES or (_S.hostname and h == _S.hostname):
         return True
+    if not (loosely or _number(h)):
+        return False
     try:
         ip = ipaddress.ip_address(h)
     except ValueError:
@@ -111,27 +204,28 @@ def is_local(host) -> bool:
     return ip.is_loopback or ip.is_unspecified
 
 
+_HOST_NAME = re.compile(r"[a-z0-9_-]+(?:\.[a-z0-9_-]+)*")
+
+
 def is_declared(host) -> bool:
-    """A host a benchmark declared with `allow=`: the name itself, a subdomain of it, or an address it resolved to."""
-    h = _text(host)
-    if h in _S.allow_ips:
-        return True
-    return any(h == a or h.endswith("." + a) for a in _S.allow)
-
-
-def _is_address(h: str) -> bool:
-    try:
-        ipaddress.ip_address(h)
-        return True
-    except ValueError:
+    """A host a benchmark declared with `allow=`: the name itself, a subdomain of it, or an address it resolved to,
+    as it is written. One dot at the end is the same host written in full; anything else around it is another."""
+    h = _exact(host)
+    if h is None or not h.isascii():
         return False
+    h = h.lower()
+    if h in _S.allow_ips or h in _S.allow:
+        return True
+    if h.endswith("."):
+        h = h[:-1]
+    return bool(_HOST_NAME.fullmatch(h)) and any(h == a or h.endswith("." + a) for a in _S.allow)
 
 
 def _learn(host) -> None:
     """A declared name is being looked up: remember its addresses, because the connection that follows names only
     the address."""
-    h = _text(host)
-    if _is_address(h):
+    h = _exact(host)
+    if h is None or _number(h):
         return
     try:
         for info in socket.getaddrinfo(h, None):
@@ -145,30 +239,61 @@ _IP_FAMILIES = {int(socket.AF_INET), int(socket.AF_INET6)}
 _LOCAL_FAMILIES = {int(getattr(socket, "AF_UNIX", -1)), int(getattr(socket, "AF_NETLINK", -2))}
 
 
+# The socket's own family, kind and protocol, read from the socket itself: a class made from `socket.socket` can
+# say anything of its own.
+_FAMILY, _KIND, _PROTO = (getattr(_socket.socket, n).__get__ for n in ("family", "type", "proto"))
+
+
+def _as_read(address: tuple):
+    """(host, port) of an address pair as the system read them. Where that cannot be known from here the host is
+    words in angle brackets, which are nobody's address, so the try is written down and refused: a text of a class
+    of its own writes itself out for the system by its own means, bytes that can be changed may have been changed
+    since, and a port that is no whole number says what it likes each time it is asked. The socket calls hand plain
+    copies down (`_asks_first`), so a value like that came to the system another way."""
+    host = tuple.__getitem__(address, 0)
+    port = tuple.__getitem__(address, 1) if tuple.__len__(address) > 1 else None
+    if isinstance(port, int):
+        port = int.__index__(port)               # the number it holds, whatever its class says of it
+    if (isinstance(host, str) and type(host) is not str) or isinstance(host, bytearray):
+        return _odd(host), None
+    if port is not None and type(port) is not int:
+        return f"<{_shown(host)} at a port that is no plain number: {type(port).__name__}>"[:120], None
+    return _held(host), port
+
+
 def _target(event: str, args: tuple):
     """(kind, host, port) for a socket event that names a destination, else None."""
     if event in ("socket.connect", "socket.sendto", "socket.sendmsg"):
         sock, address = args[0], args[1]
         if address is None:
             return None
-        family = int(getattr(sock, "family", socket.AF_INET))
+        try:
+            family = int(_FAMILY(sock))
+        except (TypeError, AttributeError):
+            family = int(getattr(sock, "family", socket.AF_INET))
         if family in _LOCAL_FAMILIES:
             return None
         kind = "connect" if event == "socket.connect" else "send"
-        if family in _IP_FAMILIES and isinstance(address, tuple) and address:
-            return kind, address[0], address[1] if len(address) > 1 else None
+        if family in _IP_FAMILIES and isinstance(address, tuple) and tuple.__len__(address):
+            return (kind,) + _as_read(address)
         return kind, f"<{getattr(family, 'name', family)} {address!r}>"[:120], None   # raw packets, Bluetooth, ...
     if event in ("socket.getaddrinfo", "socket.gethostbyname"):
         host = args[0]
-        if host is None or _is_address(_text(host)):
+        if host is None:
+            return None
+        if type(host) not in (str, bytes):
+            return "lookup", _odd(host), None      # the lookups hand a plain copy down (`_plainly`): not this one
+        if _number(host):
             return None            # an address written out is not looked up anywhere; the connection is judged
         return "lookup", host, args[1] if len(args) > 1 else None
     if event == "socket.gethostbyaddr":
-        return "lookup", args[0], None      # a reverse lookup asks a name server about the address
+        host = args[0]             # a reverse lookup asks a name server about the address
+        return "lookup", host if type(host) in (str, bytes) or host is None else _odd(host), None
     if event == "socket.getnameinfo":
-        addr = args[0]
-        return ("lookup", addr[0], None) if isinstance(addr, tuple) and addr else None
+        addr = args[0]             # the system reads the letters of this host itself, whatever class they are of
+        return ("lookup", _held(tuple.__getitem__(addr, 0)), None) if isinstance(addr, tuple) and tuple.__len__(addr) else None
     return None
+
 
 
 def _argv() -> list:
@@ -190,7 +315,7 @@ def _append(path: str, rec: dict) -> bool:
 
 def record(kind: str, host, port=None, note: str = "", argv=None) -> dict:
     """Write a refused attempt down, here and in the log every process of the run shares."""
-    rec = {"kind": kind, "host": _text(host) if not str(host).startswith("<") else str(host), "port": port,
+    rec = {"kind": kind, "host": _shown(host), "port": port,
            "pid": os.getpid(), "argv": _argv() if argv is None else argv, "time": round(time.time(), 3)}
     if note:
         rec["note"] = note[:200]
@@ -213,7 +338,7 @@ def record(kind: str, host, port=None, note: str = "", argv=None) -> dict:
 def _let_through(host, port, how: str) -> None:
     """A declared host was reached: kept beside the log (`<log>.allowed`), so a benchmark can say what it contacted."""
     if _S.log:
-        _append(_S.log + ".allowed", {"host": _text(host), "port": port, "how": how, "pid": os.getpid(),
+        _append(_S.log + ".allowed", {"host": _shown(host), "port": port, "how": how, "pid": os.getpid(),
                                       "time": round(time.time(), 3)})
 
 
@@ -238,8 +363,112 @@ def _hook(event: str, args: tuple) -> None:
         record(kind, host, port, note="a forwarding proxy on this computer" if forwarder else "")
     finally:
         _busy.on = False
-    where = f"{_text(host)}:{port}" if port not in (None, 0, "") else _text(host)
+    where = f"{_shown(host)}:{port}" if port not in (None, 0, "") else _shown(host)
     raise Refused(errno.ENETUNREACH, f"{MARK}: {kind} {where} (tests and benchmarks may not reach the network)")
+
+
+# ------------------------------------------------------------------------------------------------ a name in an address
+# Python raises its events for `connect`, `connect_ex`, `bind`, `sendto` and `sendmsg` once the address is a number: a
+# name written into the address has been looked up by then. So each of these calls first asks about the name as the
+# lookup it is, with Python's own event for one (`socket.getaddrinfo`), and the hook judges it like any other lookup:
+# a declared host is learned and goes on, anything else is written down and refused. The five methods are replaced in
+# place on Python's socket class, so the class stays the one every program knows and a class made from it is asked
+# too. What the guard read is what goes down (2026-11-14): the address is handed on as a plain pair with a plain
+# host and a plain port (`_pair`), and the lookups (`getaddrinfo`, `gethostbyname`, `gethostbyname_ex`,
+# `gethostbyaddr`) hand a plain host down the same way (`_plainly`), so a value of a class of its own cannot be one
+# thing to the guard and another to the system. Not asked: code that takes the C type underneath (`_socket.socket`)
+# or loads the `socket` module anew, and whatever reaches the system without Python's `socket` module; a name such
+# code hands the system is looked up before any event, its connections are still judged by the hook, which refuses
+# a host or a port there that is not plain, and tools/netless.py holds the rest where it runs.
+def _pair(address):
+    """An address with its host and its port as plain values. Bytes that can be changed become bytes, a copy nobody
+    else can change; a port that is no plain whole number is asked once what number it is."""
+    a = _held(address)
+    if type(a) is not tuple or not a:
+        return a
+    host, port = _held(a[0]), a[1] if len(a) > 1 else None
+    if type(host) is bytearray:
+        host = bytes(host)
+    if len(a) > 1 and type(port) is not int:
+        if not isinstance(port, int):
+            try:
+                port = type(port).__index__(port)
+            except (AttributeError, TypeError):
+                pass                             # no number at all: what is wrong with the call is the system's to say
+        if isinstance(port, int):
+            port = int.__index__(port)
+    if host is a[0] and (len(a) < 2 or port is a[1]):
+        return a
+    return (host,) + ((port,) + a[2:] if len(a) > 1 else ())
+
+
+def _name_first(sock, address) -> None:
+    """Ask about the name in `address` (as `_pair` gives it) before the call that carries it goes down to the system."""
+    if type(address) is not tuple or not address:
+        return
+    host = address[0]
+    if type(host) not in (str, bytes):
+        return
+    if _exact(host) == "<broadcast>" or _number(host) or is_local(host):
+        return
+    try:
+        family, kind, proto = _FAMILY(sock), _KIND(sock), _PROTO(sock)
+    except (TypeError, AttributeError):
+        return                               # no socket at all: what is wrong with the call is the system's to say
+    if family in _IP_FAMILIES:
+        sys.audit("socket.getaddrinfo", host, address[1] if len(address) > 1 else None, family, kind, proto)
+
+
+def _asks_first(name: str, at) -> None:
+    down = getattr(socket.socket, name, None)
+    if down is None:                         # sendmsg: not on every system
+        return
+
+    def call(self, *args, **more):
+        i = at(args)                         # where the address stands among what the call was given
+        if i is not None:
+            to = _pair(args[i])
+            if to is not args[i]:
+                args = args[:i] + (to,) + args[i + 1:]
+            _name_first(self, to)
+        return down(self, *args, **more)
+
+    call.__name__, call.__qualname__, call.__doc__ = name, "socket." + name, down.__doc__
+    setattr(socket.socket, name, call)
+
+
+def _plainly(name: str, word) -> None:
+    """A lookup hands its host down as a plain value (`word`: the name the host may be given under, if any)."""
+    down = getattr(_socket, name, None)
+    if down is None:
+        return
+
+    def lookup(*args, **more):
+        if args:
+            host = _held(args[0])
+            if word is None and type(host) is bytearray:
+                host = bytes(host)
+            if host is not args[0]:
+                args = (host,) + args[1:]
+        elif word in more:
+            more[word] = _held(more[word])
+        return down(*args, **more)
+
+    lookup.__name__, lookup.__qualname__, lookup.__doc__ = name, name, down.__doc__
+    setattr(_socket, name, lookup)
+    if getattr(socket, name, None) is down:  # `socket.getaddrinfo` is Python's own and calls the one beneath
+        setattr(socket, name, lookup)
+
+
+def _ask_before_names() -> None:
+    for name in ("connect", "connect_ex", "bind"):
+        _asks_first(name, lambda a: 0 if a else None)
+    _asks_first("sendto", lambda a: len(a) - 1 if len(a) > 1 else None)
+    _asks_first("sendmsg", lambda a: 3 if len(a) > 3 else None)
+    _plainly("getaddrinfo", "host")
+    for name in ("gethostbyname", "gethostbyname_ex", "gethostbyaddr"):
+        _plainly(name, None)
+
 
 
 def install(log: str | None = None, allow=None, deny_ports=None) -> None:
@@ -260,6 +489,7 @@ def install(log: str | None = None, allow=None, deny_ports=None) -> None:
         except OSError:
             _S.hostname = ""
         sys.addaudithook(_hook)
+        _ask_before_names()
         _S.installed = True
 
 
@@ -756,7 +986,7 @@ def activate(log: str, allow=(), environ=None, forwarders=None) -> Guard:
                 if userinfo else ""
             upstream = (host, port, auth)
             break
-    deny = sorted({address[2] for address in found.values() if is_local(address[1])})
+    deny = sorted({address[2] for address in found.values() if is_local(address[1], loosely=True)})
     try:
         os.close(os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600))    # the owner's alone, like its folder
     except OSError:
