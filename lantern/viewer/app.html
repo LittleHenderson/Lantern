@@ -288,7 +288,7 @@ pre.cli{margin:10px 0 0;padding:14px 16px;border-radius:12px;background:var(--co
 /* Re-check to apply (packs changed) */
 .stale{font-size:12px;color:var(--warn, #9a6200)}
 /* Watch my tests run: sheet + toast */
-.sbx{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:12px 0;background:var(--surface)} .sbx .sbxh{display:flex;align-items:center;gap:8px} .sbx .sbxh svg{width:16px;height:16px;color:var(--good, #1f8a5a)} .sbx ul{margin:6px 0 4px 22px;padding:0;font-size:13.5px;color:var(--ink-2, inherit)} .sbx .sbxl{font-size:13px;color:var(--muted)} .sbx.open .sbxh svg{color:var(--warn-ink)} .sbx.open .sbxl{color:var(--ink)} .sbx .check[hidden]{display:none}
+.sbx{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin:12px 0;background:var(--surface)} .sbx .sbxh{display:flex;align-items:center;gap:8px} .sbx .sbxh svg{width:16px;height:16px;color:var(--good, #1f8a5a)} .sbx ul{margin:6px 0 4px 22px;padding:0;font-size:13.5px;color:var(--ink-2, inherit)} .sbx .sbxl{font-size:13px;color:var(--muted)} .sbx.open .sbxh svg{color:var(--warn-ink)} .sbx.open .sbxl{color:var(--ink)} .sbx .check[hidden]{display:none} .sbx .check.ask{outline:2px solid var(--warn-ink);outline-offset:4px;border-radius:6px}
 .sheetwrap{position:fixed;inset:0;z-index:30;background:rgba(14,14,16,.45);display:grid;place-items:center;padding:20px}
 /* a sheet is never taller than the window (less the wrap's 20px above and below) and scrolls by itself. One with a row
    of buttons (.split) scrolls only what is above the row (.shbody), so "Confirm and run" is in view whatever it holds */
@@ -929,8 +929,10 @@ async function watchTestsSheet(p) {
   let d = {command: 'python -m pytest -q', how: '', supported: true, note: '', sandbox: null, leaves: '', reach: null, confirmed: false};
   try { d = await api(`/api/projects/${p.id}/testcmd`); } catch (e) {}
   // d.leaves and d.reach are the server's (sandbox.reach): what this run keeps the tests from on this computer. Where
-  // it does not hold every program of theirs (d.reach.ask), they start only after the person ticked the box under it.
-  const open = !!(d.reach && d.reach.ask), need = () => !!(d.reach && d.reach.ask && !d.reach.accepted);
+  // it does not hold every program of theirs (d.reach.ask), they start only after the person ticked the box under it:
+  // once for each command, so a command typed over the one the sheet opened with is asked about as a new one.
+  const open = !!(d.reach && d.reach.ask);
+  const need = cmd => !!(d.reach && d.reach.ask && !(d.reach.accepted && (cmd === undefined || cmd === d.command)));
   const el = document.createElement('div'); el.className = 'sheetwrap top'; el.id = 'sheet';
   el.innerHTML = `<div class="sheet split" role="dialog" aria-label="Watch my tests run"><div class="shbody"><div class="sh"><h2>Lantern will run your tests, not your app.</h2><button class="x" id="shx" aria-label="Close">×</button></div>
     <label for="testcmd">The exact command${d.how ? ` <span class="muted">(from ${esc(d.how)}; change it if yours is different)</span>` : ''}</label>
@@ -943,7 +945,7 @@ async function watchTestsSheet(p) {
     ${d.sandbox ? `<div class="sbx${open ? ' open' : ''}"><div class="sbxh">${icon(open ? 'warn' : 'check')}<b>Where it runs: ${esc(d.sandbox.label)}</b>${d.sandbox.image ? ` <span class="muted">${esc(String(d.sandbox.image).split('@')[0])}</span>` : ''}</div><ul>${(d.sandbox.details || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul><div class="sbxl" id="shleaves">${esc(d.leaves)}</div><label class="check" id="shreachrow"${need() ? '' : ' hidden'}><input type="checkbox" id="shreach"><span>I have read this. Run the tests anyway.</span></label></div>` : ''}
     ${note('info', `Only a test command is accepted (pytest, unittest, npm/pnpm/yarn test, Jest, Vitest, Mocha, go test, cargo test, Maven, Gradle); nothing else is run. Your app itself never runs outside its tests.`)}
     <div class="rewards"><div>${icon('check')}<span>Dashed “likely” lines that your tests go through turn solid: <b>seen running</b>.</span></div><div>${icon('check')}<span>Functions and routes your tests reach get the <b>seen running</b> mark.</span></div><div>${icon('check')}<span>Readiness can only go up: the tests check earns its points.</span></div></div></div>
-    <div class="row acts"><button class="btn" id="shskip">Skip</button><button class="btn primary" id="shrun" ${d.supported && !(need() && d.sandbox) ? '' : 'disabled'}>${icon('play')}${d.confirmed ? 'Run the tests' : 'Confirm and run'}</button></div></div>`;
+    <div class="row acts"><button class="btn" id="shskip">Skip</button><button class="btn primary" id="shrun" ${d.supported ? '' : 'disabled'}>${icon('play')}${d.confirmed ? 'Run the tests' : 'Confirm and run'}</button></div></div>`;
   document.body.appendChild(el);
   const close = () => el.remove();
   el.querySelector('#shx').onclick = close; el.querySelector('#shskip').onclick = close; el.addEventListener('click', e => { if (e.target === el) close(); });
@@ -961,9 +963,14 @@ async function watchTestsSheet(p) {
   el.querySelector('#testmin').addEventListener('input', follow);
   el.querySelector('#testmem').addEventListener('input', follow);
   const box = el.querySelector('#shreach');
-  if (box) box.onchange = () => { el.querySelector('#shrun').disabled = !d.supported || (need() && !box.checked); };
+  // The button is never greyed out for the missing word (a dead button says nothing, and the box is at the end of a
+  // long list): pressed without it, nothing is sent and the row that asks is brought into view. The server asks too.
+  const asks = () => { const row = el.querySelector('#shreachrow'); row.hidden = false; row.classList.add('ask'); row.scrollIntoView({block: 'center'}); box.focus({preventScroll: true}); };
+  if (box) box.onchange = () => el.querySelector('#shreachrow').classList.remove('ask');
+  if (box) el.querySelector('#testcmd').addEventListener('input', () => { el.querySelector('#shreachrow').hidden = !need(el.querySelector('#testcmd').value.trim()); });
   el.querySelector('#shrun').onclick = async () => {
     const command = el.querySelector('#testcmd').value.trim();
+    if (box && need(command) && !box.checked) return asks();
     const typed = el.querySelector('#testmin').value.trim();
     const minutes = /^\d{1,3}$/.test(typed) ? Number(typed) : typed;   // anything else goes as written: the server says what it takes
     const room = el.querySelector('#testmem').value.trim();
@@ -978,8 +985,9 @@ async function watchTestsSheet(p) {
       if (e.data && e.data.reach && box) {   // the command is of another kind of tests than the sheet was made for
         d.reach = {ask: String(e.data.reach.ask || ''), accepted: false};
         el.querySelector('#shleaves').textContent = String(e.data.reach.words || d.reach.ask);
-        el.querySelector('#shreachrow').hidden = false; box.checked = false; el.querySelector('#shrun').disabled = true;
+        el.querySelector('#shreachrow').hidden = false; box.checked = false;
         el.querySelector('.sbx').classList.add('open');
+        return asks();   // the sentence and its box say what the server said; no second note under them
       }
       const body = el.querySelector('.shbody');
       body.insertAdjacentHTML('beforeend', note('err', esc(e.message)));

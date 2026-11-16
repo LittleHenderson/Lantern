@@ -148,7 +148,17 @@ async function appSmoke(url, out, image, expectText, slowTests) {
         await a11y.axe(p, `${name} test sheet`, errs);
         await sheetFits(p, name, errs, step, [[vp.width, vp.height], [1280, 600]], vp);
         // where this system's sandbox does not hold every program of the tests, the sheet asks first
-        if (await p.isVisible('#shreach')) { await p.check('#shreach'); step(name, 'sheet: agreed to what the sandbox cannot hold'); }
+        if (await p.isVisible('#shreach')) {
+          await p.click('#shrun');   // without the word: nothing starts, and the row that asks is brought into view
+          const shown = await p.evaluate(() => {
+            const row = document.querySelector('#shreachrow'), body = document.querySelector('.shbody');
+            if (!row || !body || !row.classList.contains('ask') || document.querySelector('.toastin')) return false;
+            const r = row.getBoundingClientRect(), b = body.getBoundingClientRect();
+            return r.top >= b.top - 1 && r.bottom <= b.bottom + 1;
+          });
+          if (!shown) errs.push(`${name}: Run pressed without the tick did not bring the box that asks into view`);
+          await p.check('#shreach'); step(name, 'sheet: asked first, then agreed to what the sandbox cannot hold');
+        }
         await p.click('#shrun');
         await p.waitForSelector('.toastin.ok, .toastin.bad', { timeout: 300000 });
         const toast = (await p.$eval('#toast', el => el.innerText)).replace(/\s+/g, ' ').trim();
@@ -160,6 +170,11 @@ async function appSmoke(url, out, image, expectText, slowTests) {
           await p.click('#watchtests'); await p.waitForSelector('#shrun');
           await p.fill('#testcmd', slowTests);
           await p.click('#shrun');
+          // another command: where the sandbox does not hold every program, the sheet asks for this one too
+          const again = await Promise.race([
+            p.waitForSelector('[data-stop]', { timeout: 30000 }).then(() => false, () => false),
+            p.waitForSelector('#shreachrow.ask', { timeout: 30000 }).then(() => true, () => false)]);
+          if (again) { await p.check('#shreach'); await p.click('#shrun'); step(name, 'sheet: asked again for another command'); }
           await p.waitForSelector('[data-stop]', { timeout: 30000 });
           await a11y.axe(p, `${name} tests running`, errs);
           await p.screenshot({ path: `${out}-${name}-tests-running.png` });
