@@ -74,6 +74,7 @@ lantern analyze PATH --trace --sandbox [--test-minutes N] [--test-memory MB] -- 
                                                       # then run on exactly those, with the network off where the sandbox holds them: not tests that are
                                                       # not Python on macOS and Windows, and the sheet says so (--offline: nothing fetched; lantern/libraries.py)
 lantern behave PATH                                   # start the project's app in the test sandbox and run PATH/lantern-behaviour.json (docs/behaviour.md); 0 only when every case held
+lantern behave PATH --init [--force]                  # run nothing: write a first PATH/lantern-behaviour.json from the code (a FastAPI app; lantern/behave_init.py)
 python bench/behaviour/run_behaviour.py /tmp/behave [--own-checks]   # that plan against a throw-away app, safe and with each of 32 planted problems (~4.5 min; bench/behaviour/results.md)
 python bench/links.py --jobs 4 [--engine CHECKOUT] [--states pipe,loop]  # every file of the samples as a link out, a pipe, a link to itself: read through, held up, stopped? (POSIX, ~10 min; bench/links_results.md; run it under Python 3.11 too: looking for a file by name differs before 3.12)
 lantern diff [PATH] [BASE..HEAD]                      # what a change does: two versions checked and compared (docs/diff.md); with no

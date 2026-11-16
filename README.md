@@ -140,6 +140,16 @@ lantern fix brief path/to/repo FINDING_ID                          # where it is
 lantern fix check path/to/repo FINDING_ID -- python -m pytest -q   # 0 only when the fix passed, tests included
 ```
 
+Test what the running app really does (`docs/behaviour.md`): Lantern starts the app in its sandbox, asks it things
+as the people who must be refused and as the people who may, and then looks at the database: a refused request that
+changed something all the same is a failure. What to ask is a file in your project, and for a FastAPI app Lantern
+writes a first one from the code (no model is asked, nothing of the project is run to write it):
+
+```bash
+lantern behave path/to/repo --init             # writes lantern-behaviour.json: read it, correct it, commit it
+lantern behave path/to/repo                    # starts the app in the sandbox and tries each case
+```
+
 Attach your own walkthroughs of key flows by writing `lantern-narratives.md` at the repo root.
 `.lantern/badge.svg` is a README badge with the commit, the open critical findings and the date. It is green only
 for a release that Passed; otherwise it ends in "blocked" or "incomplete".
