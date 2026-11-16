@@ -89,22 +89,39 @@ def return_origins(named: str = "") -> frozenset[str]:
     return frozenset(out)
 
 
+def _plain(path: str) -> bool:
+    """No `.`, `..` or empty step in a path (one slash at its end may stand)."""
+    steps = path.split("/")[1:]
+    return not (any(x in (".", "..") for x in steps) or "" in steps[:-1])
+
+
 def valid_return(address: str | None, origins: frozenset[str]) -> str:
-    """The address as given when a finished sign-in may be sent there, else "". No query, no fragment, no name and
-    password, no `.` or `..` or empty step in the path: the gateway adds `?code=…&state=…` and nothing else."""
+    """Where a finished sign-in may be sent, else "". No query, no fragment, no name and password, no `.` or `..` or
+    empty step in the path: the gateway adds `?code=…&state=…` and nothing else. The answer is written out again from
+    the checked parts (the computer's own address as fixed text, the port as a number, a website from the gateway's
+    own list), so that which computer it names is never text a request wrote."""
     a = address or ""
     if len(a) > 200:
         return ""
-    m = LOOPBACK_RE.fullmatch(a)
-    if m:
-        ok = 1024 <= int(m.group(1)) <= 65535
-    else:
-        m = WEBSITE_RE.fullmatch(a)
-        ok = bool(m) and m.group(1) in origins
-    steps = m.group(2).split("/")[1:] if ok else []
-    if not ok or any(x in (".", "..") for x in steps) or "" in steps[:-1]:
-        return ""
-    return a
+    here = LOOPBACK_RE.fullmatch(a)
+    if here:
+        port = int(here.group(1))
+        if not (1024 <= port <= 65535 and _plain(here.group(2))):
+            return ""
+        host = "[::1]" if a.startswith("http://[") else "127.0.0.1"
+        return "http://" + host + ":" + str(port) + "/" + here.group(2)[1:]
+    site = WEBSITE_RE.fullmatch(a)
+    if site and _plain(site.group(2)):
+        for own in origins:
+            if own == site.group(1):
+                return own + "/" + site.group(2)[1:]
+    return ""
+
+
+def mark_of(value) -> str:
+    """An app's own mark in the form it may be written into an address, else ""."""
+    mark = str(value or "")
+    return mark if NONCE_RE.fullmatch(mark) else ""
 
 
 def asked(challenge: str | None, back: str | None, nonce: str | None, origins: frozenset[str]) -> dict | None:

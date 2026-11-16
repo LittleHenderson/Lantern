@@ -293,6 +293,20 @@ class Jobs:
         return job
 
 
+def own_address(bound: str) -> str:
+    """This computer's own address, as a browser on it writes it, when a server bound to `bound` answers there: the
+    address itself, or every address of this computer. "" for any other (the server is then reached from elsewhere
+    only)."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(bound)
+    except ValueError:
+        return ""
+    if ip.version == 4:
+        return "127.0.0.1" if bound == "127.0.0.1" or ip.is_unspecified else ""
+    return "[::1]" if ip == ipaddress.ip_address("::1") or ip.is_unspecified else ""
+
+
 class App:
     def __init__(self, store: Store, token: str, port: int, own_address: str = "127.0.0.1"):
         self.store, self.token, self.port = store, token, port
@@ -306,9 +320,11 @@ class App:
 
     SIGNIN_MINUTES = 10
 
-    def sign_in_begin(self, provider: str) -> dict:
+    def sign_in_begin(self, provider: str, here: bool = True) -> dict:
+        """Start a sign-in this app will collect. `here`: the browser that asks reached the app under this computer's
+        own name, so it is on this computer and the gateway can send it back. Otherwise the person pastes the token."""
         from .providers import sign_in_page, sign_in_start
-        if not self.own_address:
+        if not (here and self.own_address):
             return {"url": sign_in_page(provider), "id": "", "provider": provider}
         st = sign_in_start(provider, f"http://{self.own_address}:{self.port}/api/login/return")
         now = time.time()
@@ -1134,7 +1150,9 @@ class Handler(BaseHTTPRequestHandler):
             provider = str(b.get("provider") or "")
             if provider not in ("github", "google"):
                 raise ValueError("provider is github or google")
-            return self._json(app.sign_in_begin(provider))
+            name = (self.headers.get("Host") or "").lower()
+            here = name in (f"127.0.0.1:{app.port}", f"localhost:{app.port}", f"[::1]:{app.port}")
+            return self._json(app.sign_in_begin(provider, here))
         if path == "/api/packs":
             # Settings → Analysis packs: turn one pack on or off for every project. Reports made before the change
             # are marked stale ("Re-check to apply"); nothing is re-analyzed by itself.
@@ -1420,9 +1438,7 @@ def serve(paths: list[str], host: str = "127.0.0.1", port: int = 8765, open_brow
     token = secrets.token_urlsafe(24)
     # Where the gateway can send this computer's browser back to after a sign-in: the address Lantern listens on, when
     # it is this computer's own, written as a number.
-    bound = str(httpd.server_address[0])
-    own = "127.0.0.1" if bound in ("127.0.0.1", "0.0.0.0") else "[::1]" if bound in ("::1", "::") else ""  # nosec B104
-    app = App(store, token, port, own)
+    app = App(store, token, port, own_address(str(httpd.server_address[0])))
     Handler.app = app
     if host not in ("127.0.0.1", "localhost", "::1"):
         print("WARNING: listening beyond this computer. Anyone who has the link below can use Lantern as you.")

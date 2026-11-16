@@ -787,9 +787,13 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             # does not use the link up either, so the browser that did start it can still finish.
             return HTMLResponse(oauth.error_page("This sign-in was not started in this browser. Go back to Lantern and start again."),
                                 status_code=400, headers=page_headers)
-        back = oauth.valid_return(st.get("r"), oauth.return_origins(s.return_origins)) if st.get("h") else ""
-        if st.get("h") and not (back and oauth.CHALLENGE_RE.fullmatch(str(st["h"]))):
-            return HTMLResponse(oauth.error_page(HALF), status_code=400, headers=page_headers)
+        back = mark = ""
+        if st.get("h"):
+            # What the signed link says about the app that will collect, read again as strictly as at the start.
+            back = oauth.valid_return(st.get("r"), oauth.return_origins(s.return_origins))
+            mark = oauth.mark_of(st.get("s"))
+            if not (back and mark and oauth.CHALLENGE_RE.fullmatch(str(st["h"]))):
+                return HTMLResponse(oauth.error_page(HALF), status_code=400, headers=page_headers)
         sender = who(request)
         if limiter.full("signin", sender, s.sender_signins_per_minute, 60) or \
                 limiter.full("signin-all", "", s.signins_per_minute_all, 60):
@@ -818,7 +822,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             if store.signups_full(account, s.signups_per_day):
                 return paused()
             once = store.hand_over(account, label, str(st["h"]))
-            resp = RedirectResponse(back + "?" + urlencode({"code": once, "state": str(st.get("s") or "")}), status_code=303,
+            resp = RedirectResponse(back + "?" + urlencode({"code": once, "state": mark}), status_code=303,
                                     headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
         else:
             try:

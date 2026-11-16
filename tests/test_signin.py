@@ -721,3 +721,31 @@ def test_an_app_that_does_not_listen_on_this_computers_own_address_asks_for_a_pa
     assert st == {"url": "http://127.0.0.1:9/v1/login?provider=google", "id": "", "provider": "google"}
     st = App(store, "t", 8765, own_address="[::1]").sign_in_begin("google")
     assert "return=http%3A%2F%2F%5B%3A%3A1%5D%3A8765%2Fapi%2Flogin%2Freturn" in st["url"] and st["id"]
+    # a browser that reached the app under another name is on another computer: the gateway cannot send it back here
+    assert App(store, "t", 8765).sign_in_begin("google", here=False)["id"] == ""
+
+
+def test_this_computers_own_address_is_worked_out_from_where_the_app_listens():
+    from lantern.server import own_address
+    every = ".".join(["0"] * 4)                               # every address of this computer, IPv4
+    assert [own_address(x) for x in ("127.0.0.1", every, "::1", "::")] == ["127.0.0.1", "127.0.0.1", "[::1]", "[::1]"]
+    assert [own_address(x) for x in ("192.168.1.5", "127.0.0.2", "fe80::1", "my-laptop", "")] == [""] * 5
+
+
+def test_the_app_offers_the_hand_over_only_to_a_browser_on_this_computer(app_here, monkeypatch):
+    app, port = app_here
+    monkeypatch.setenv("LANTERN_ALLOWED_HOST", f"laptop.lan:{port}")
+    far = httpx.post(app + "/api/login/start", json={"provider": "github"},
+                     headers={"X-Lantern-Token": "tok-123", "Host": f"laptop.lan:{port}"}).json()
+    assert far["id"] == "" and "challenge=" not in far["url"] and far["url"].endswith("/login?provider=github")
+    near = _app_asks(app, "/api/login/start", provider="github").json()
+    assert near["id"] and "challenge=" in near["url"]
+
+
+def test_the_address_a_sign_in_is_sent_to_is_written_out_from_its_checked_parts():
+    own = auth.return_origins("https://lantern.example")
+    assert auth.valid_return("http://127.0.0.1:08765/api/login/return", own) == "http://127.0.0.1:8765/api/login/return"
+    assert auth.valid_return("http://[::1]:8765/signin", own) == "http://[::1]:8765/signin"
+    assert auth.valid_return("https://lantern.example/v1/signin/return", own) == "https://lantern.example/v1/signin/return"
+    assert auth.valid_return("https://lantern.example.evil.test/v1/signin/return", own) == ""
+    assert [auth.mark_of(x) for x in ("n" * 24, "n" * 15, "n" * 24 + "&x=1", None, 5)] == ["n" * 24, "", "", "", ""]
