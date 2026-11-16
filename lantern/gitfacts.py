@@ -57,6 +57,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -528,12 +529,13 @@ def head_commit(folder: Path | str, alone: bool = False) -> str | None:
 
 
 @contextlib.contextmanager
-def _shadow(repo: Repo, commit: str | None):
+def _shadow(repo: Repo, commit: str | None, attributes: str | None = None):
     """A git folder of Lantern's own for questions about `repo`: yields a function that starts git with the given
     arguments and returns what it printed (None when git is not installed, did not end well or took too long).
     git reads the project's files, index and objects there, with settings written here. The index and the objects
     folder must be the git folder's own (no link on the way), or nothing is asked. Removed afterwards; it holds two
-    small text files written here and nothing of the project."""
+    small text files written here and nothing of the project. `attributes`: the text of an attributes file of
+    Lantern's own, put where git reads it before the project's (`copy`)."""
     cfg = settings(repo.common)
     git = programs.find("git")
     index, objects = repo.gitdir / "index", repo.common / "objects"
@@ -550,6 +552,14 @@ def _shadow(repo: Repo, commit: str | None):
             lines += ["[extensions]", "\tobjectformat = sha256"]
         # None when there is no place to make it: every question is then left unanswered
         made = _own_folder(lines, commit or "ref: refs/heads/none")
+        if made is not None and attributes is not None:
+            # git reads this file before any `.gitattributes` of the project (`copy`)
+            try:
+                (made / "info").mkdir()
+                (made / "info" / "attributes").write_text(attributes, encoding="utf-8", newline="\n")
+            except OSError:
+                shutil.rmtree(made, ignore_errors=True)
+                made = None
     env = {k: v for k, v in os.environ.items() if k not in _PLACES}
     env.update({"GIT_DIR": str(made), "GIT_WORK_TREE": str(repo.top), "GIT_OBJECT_DIRECTORY": str(objects),
                 "GIT_INDEX_FILE": str(index), "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
@@ -682,3 +692,189 @@ def links(folder: Path | str, timeout: float = 120) -> list[str] | None:
         if tab and path and said.startswith("120000 "):
             found.append(path)
     return sorted(found)
+
+
+# ------------------------------------------------------------------------- another commit of the repository
+# Roadmap of 2026-11-14, stage 2: `lantern diff` checks two commits of a project and compares what it found.
+# A commit's files are copied out by git, in the git folder of Lantern's own, and nothing of the project decides how.
+NAMED = re.compile(r"([A-Za-z0-9][A-Za-z0-9._/+-]{0,200})((?:[~^][0-9]{0,4}){0,20})")   # a name, then git's steps back
+# What a project's `.gitattributes` could ask of `git archive`, each switched off for every path. Without this file a
+# line `app/keys.py export-ignore` in the commit leaves that file out of the copy, so out of the check; `eol`,
+# `ident`, `export-subst` and `working-tree-encoding` rewrite a file's bytes on the way out.
+OWN_ATTRIBUTES = "* -text -eol -filter -ident -working-tree-encoding -export-ignore -export-subst\n"
+COPY_SECONDS = 600
+MOST_FILES, MOST_FILE_BYTES, MOST_BYTES = 200_000, 256 << 20, 4 << 30
+NOT_COPIED = {"git": "a name git keeps for itself", "name": "a name this computer cannot write",
+              "large": "larger than 256 MB", "link-out": "a link that leads out of the project",
+              "kind": "neither a file nor a link"}
+
+
+class NoCommit(ValueError):
+    """A commit that cannot be named or copied. The text is a sentence for the person."""
+
+
+def _repo_for(folder: Path | str) -> Repo:
+    if not programs.find("git"):
+        raise NoCommit("git is not installed on this computer, so Lantern cannot read another commit of the project.")
+    repo, why = _locate(folder)
+    if repo is None:
+        raise NoCommit(f"This folder is in no git repository Lantern reads ({why or NOT_ONE}), so there is no other "
+                       "commit of it to compare with.")
+    return repo
+
+
+def _shown(name) -> str:
+    return "".join(c if c.isprintable() else "?" for c in str(name))[:80]
+
+
+def resolve(folder: Path | str, name: str) -> str:
+    """The commit `name` stands for in the repository `folder` is in: `HEAD`, a tag, a branch, a remote's branch
+    (`origin/main`), a commit's number or the start of one, each with git's steps back after it (`main~2`,
+    `HEAD^`). The name is read by hand from the repository's own files, as `head` reads them; git is asked, in a
+    git folder of Lantern's own, to take the steps back, to complete a shortened number and to say that the commit
+    is there. `NoCommit` with a sentence for anything else."""
+    repo = _repo_for(folder)
+    m = NAMED.fullmatch(name) if isinstance(name, str) else None
+    if not m or ".." in name or "//" in name or name.endswith((".lock", "/", ".")):
+        raise NoCommit(f"'{_shown(name)}' is not a name Lantern takes for a commit. Write a branch, a tag, HEAD or a "
+                       "commit's number, with ~1 or ^ after it for the commit before.")
+    base, steps = m.group(1), m.group(2)
+    start = None
+    if base == "HEAD":
+        start = head(repo)[0]
+    elif HEX.fullmatch(base):
+        start = base
+    else:
+        for ref in ((base,) if base.startswith("refs/") else
+                    (f"refs/tags/{base}", f"refs/heads/{base}", f"refs/remotes/{base}")):
+            start = _ref(repo, ref)
+            if start:
+                break
+        if start is None and re.fullmatch(r"[0-9a-f]{7,64}", base):
+            start = base            # the start of a commit's number: git completes it
+    if start is None:
+        raise NoCommit(f"This repository has no branch, tag or commit named '{_shown(base)}'.")
+    with _shadow(repo, None) as ask:
+        said = ask(["rev-parse", "--verify", "--quiet", f"{start}{steps}^{{commit}}"], timeout=30)
+    commit = (said or "").strip()
+    if not HEX.fullmatch(commit):
+        raise NoCommit(f"git did not find the commit '{_shown(name)}' stands for in this folder's repository. A copy of "
+                       "a repository made without its whole history (as GitHub's checkout makes it) holds the newest "
+                       "commits only: `git fetch --depth=1 origin <commit>` brings one more.")
+    return commit
+
+
+def merge_base(folder: Path | str, one: str, other: str) -> str:
+    """The newest commit the two commits both come from (`git merge-base`), for `A...B`. `NoCommit` when git names
+    none (a copy without the whole history may not hold it)."""
+    repo = _repo_for(folder)
+    if not (HEX.fullmatch(one or "") and HEX.fullmatch(other or "")):
+        raise NoCommit("Lantern asks git for the commit two commits share only by their full numbers.")
+    with _shadow(repo, None) as ask:
+        said = ask(["merge-base", one, other], timeout=60)
+    commit = (said or "").strip().split("\n")[0]
+    if not HEX.fullmatch(commit):
+        raise NoCommit("git named no commit that both sides come from. A copy of a repository made without its whole "
+                       "history may not hold it: write the two commits with two dots between them (A..B).")
+    return commit
+
+
+def _listed(listing: str) -> tuple[int, int, int]:
+    """(files, links, submodules) of a `git ls-tree -r -z` listing."""
+    files = links = modules = 0
+    for entry in listing.split("\0"):
+        said, tab, _ = entry.partition("\t")
+        if not tab:
+            continue
+        mode = said.split(" ", 1)[0]
+        if mode == "120000":
+            links += 1
+        elif mode == "160000":
+            modules += 1
+        else:
+            files += 1
+    return files, links, modules
+
+
+def copy(folder: Path | str, commit: str, into: Path | str) -> dict:
+    """The files of `commit` (a full number, `resolve`) as the repository holds them, written into `into`, an empty
+    folder of the caller's: what a checkout would put there, byte for byte, and nothing of the project run or
+    obeyed. git writes the commit out as one archive in a folder of Lantern's own, in the git folder of Lantern's
+    own, under an attributes file of Lantern's own (`OWN_ATTRIBUTES`), and Lantern unpacks it itself: a file
+    under the names it has in the commit (`programs.put_copy`), a link only when it stays inside the folder
+    (`programs.put_link`), nothing under a name git keeps for itself (`.git`), nothing that is neither. Then the
+    count is checked against git's own list of the commit (`ls-tree`): a copy that holds fewer files than the
+    commit is not handed back (`NoCommit`), so no check is made of part of a commit as if it were the whole.
+    A submodule's code is not in a commit and is not copied. When `folder` is a folder inside the repository, only
+    that part is copied. Returns `{"root": the place in `into` that stands for `folder`, "files", "links",
+    "submodules", "left_out": {reason: count}}` (reasons: `NOT_COPIED`)."""
+    repo = _repo_for(folder)
+    if not HEX.fullmatch(commit or ""):
+        raise NoCommit("Lantern copies a commit only by its full number.")
+    try:
+        rel = Path(os.path.realpath(folder)).relative_to(Path(os.path.realpath(repo.top))).as_posix()
+    except ValueError:
+        raise NoCommit("This folder is not inside the repository that was found for it.") from None
+    part = [] if rel == "." else [rel]
+    into = Path(into)
+    left: dict[str, int] = {}
+
+    def leave(why: str) -> None:
+        left[why] = left.get(why, 0) + 1
+
+    with programs.folder() as own, _shadow(repo, commit, attributes=OWN_ATTRIBUTES) as ask:
+        listing = ask(["ls-tree", "-r", "-z", commit, *(["--", *part] if part else [])], timeout=120)
+        if listing is None:
+            raise NoCommit(f"git could not list the files of commit {commit[:12]} in this folder's repository.")
+        want_files, want_links, modules = _listed(listing)
+        if not want_files and not want_links:
+            raise NoCommit(f"Commit {commit[:12]} holds no file{' in this folder' if part else ''}.")
+        tar = own / "commit.tar"
+        if ask(["archive", "--format=tar", "-o", str(tar), commit, *(["--", f":(literal){rel}"] if part else [])],
+               timeout=COPY_SECONDS) is None or not tar.is_file():
+            raise NoCommit(f"git could not write out the files of commit {commit[:12]}.")
+        files = links = total = 0
+        later: list[tuple[list[str], str]] = []
+        try:
+            with tarfile.open(tar, "r:") as archive:        # a plain archive, as asked for: never an unpacker's own rules
+                for member in archive:
+                    if member.isdir():
+                        continue
+                    parts = [p for p in member.name.split("/") if p not in ("", ".")]
+                    if not parts or any(p.lower() == ".git" for p in parts):
+                        leave("git")
+                    elif member.issym():
+                        later.append((parts, member.linkname))
+                    elif not member.isreg():
+                        leave("kind")
+                    elif member.size > MOST_FILE_BYTES:
+                        leave("large")
+                    else:
+                        if files + len(later) >= MOST_FILES or total + member.size > MOST_BYTES:
+                            raise NoCommit(f"Commit {commit[:12]} is larger than Lantern copies (more than "
+                                           f"{MOST_FILES:,} files or {MOST_BYTES >> 30} GB).")
+                        data = archive.extractfile(member)
+                        try:
+                            programs.put_copy(into, parts, data.read() if data is not None else b"")
+                        except (ValueError, OSError):
+                            leave("name")
+                            continue
+                        files += 1
+                        total += member.size
+        except (tarfile.TarError, EOFError, OSError):
+            raise NoCommit(f"Lantern could not read what git wrote out for commit {commit[:12]}.") from None
+        for parts, target in later:         # links last, so no file is ever written through one
+            try:
+                programs.put_link(into, parts, target)
+                links += 1
+            except ValueError:
+                leave("link-out")
+            except OSError:
+                leave("name")
+    got_files = files + sum(left.get(k, 0) for k in ("git", "name", "large", "kind"))
+    if got_files < want_files or len(later) < want_links:
+        raise NoCommit(f"git wrote out {got_files + len(later):,} of the {want_files + want_links:,} files of commit "
+                       f"{commit[:12]}, so Lantern did not check it: a check of part of a commit would read as a check "
+                       "of all of it.")
+    return {"root": into.joinpath(*([] if rel == "." else rel.split("/"))), "files": files, "links": links,
+            "submodules": modules, "left_out": left}
