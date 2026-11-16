@@ -1135,8 +1135,7 @@ def write(repo, force: bool = False, g: Graph | None = None) -> dict:
     exists = os.path.lexists(target)
     if exists and not force:
         return {"plan": None, "review": [], "left_out": [], "notes": [], "cases": 0, "written": None, "exists": True,
-                "why_not": f"the project has a {PLAN_NAME} already, and it was left as it is (--force writes the new "
-                           "one over it)"}
+                "why_not": f"the project has a {PLAN_NAME} already, and it was left as it is"}
     made = draft(repo, g)
     made["written"], made["exists"] = None, exists
     if made["plan"] is None:

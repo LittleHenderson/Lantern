@@ -666,6 +666,44 @@ def change_job(app, p: dict, repo: Path, out: Path, spec: str | None = None, off
     return app.jobs.start(p["id"], "change", work)
 
 
+MOST_PLAN_SAID = 12     # lines of a kind the app is handed about a written behaviour plan; the file holds all of them
+
+
+def plan_job(app, p: dict, repo: Path, force: bool = False) -> dict:
+    """Start "Behaviour plan" for a project (the button, `POST /api/projects/<id>/behaviourplan`): a first
+    `lantern-behaviour.json` is written from the code (`behave_init.write`, as `lantern behave --init` does).
+    Nothing of the project is run, and a plan that is there is left alone unless `force`. The job's result:
+    `{"written": True, "file", "line", "next", "checks", "requests", "read_first", "look_at", "left_out"}` (the
+    three lists cut at `MOST_PLAN_SAID`, with the whole counts in `counts`), or `{"written": False, "exists",
+    "why"}` with Lantern's sentence. Every sentence is made here, so the page prints none of its own."""
+    from . import behave, behave_init
+
+    def work(log):
+        log("plan    reading the code; nothing of the project is run")
+        try:
+            made = behave_init.write(repo, force=force)
+        except results.Refused as e:
+            log(f"plan    not written: {e}")
+            return {"written": False, "exists": False, "why": str(e)}
+        if not made["written"]:
+            log(f"plan    not written: {made['why_not']}")
+            return {"written": False, "exists": bool(made["exists"]), "why": made["why_not"]}
+        plan = made["plan"]
+        counts = {"read_first": len(made["notes"]), "look_at": len(made["review"]), "left_out": len(made["left_out"])}
+        line = (f"{behave.PLAN_NAME} holds {len(plan['checks'])} checks ({made['cases']} requests) for "
+                f"{plan['app']['asgi']}. {counts['look_at']} of them are marked to look at first, and "
+                f"{counts['left_out']} routes were left out, each with the reason.")
+        log(f"plan    wrote {line}")
+        return {"written": True, "exists": bool(made["exists"]), "file": behave.PLAN_NAME, "line": line,
+                "next": "Read the file and change what does not fit your app. The command lantern behave, run on this "
+                        "folder in a terminal, then starts your app in the sandbox and tries each case.",
+                "checks": len(plan["checks"]), "requests": made["cases"], "counts": counts,
+                "read_first": made["notes"][:MOST_PLAN_SAID],
+                "look_at": [f"{r['check']}: {r['why']}" for r in made["review"][:MOST_PLAN_SAID]],
+                "left_out": [f"{r['route']}: {r['why']}" for r in made["left_out"][:MOST_PLAN_SAID]]}
+    return app.jobs.start(p["id"], "plan", work)
+
+
 def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
     """One drawer command, as an argv list (never a shell string). Allow-list only (`TERMINAL_ALLOWED`); `--out` is
     always the project's `.lantern/`; path arguments must resolve inside the project. Returns a job: its log is
@@ -1402,6 +1440,12 @@ class Handler(BaseHTTPRequestHandler):
             # "What changed": the last commit compared with the files as they are now, or the two versions named
             spec = change_range(b.get("range"))         # ValueError: answered with 400 and the sentence
             return self._json(change_job(app, p, repo, out, spec), 202)
+        if action == "behaviourplan":
+            # "Behaviour plan": a first lantern-behaviour.json written from the code; nothing of the project is run
+            force = b.get("force")
+            if not (force is None or force is True or force is False):
+                raise ValueError("force is true or false")
+            return self._json(plan_job(app, p, repo, force is True), 202)
         if action == "cmd":
             # The terminal drawer: Lantern commands only, run through the same code paths as the buttons.
             try:

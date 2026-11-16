@@ -10,7 +10,9 @@ import os
 from pathlib import Path
 
 import pytest
+from test_server import call, srv, wait  # noqa: F401  (srv: the app on 127.0.0.1 with its token)
 
+import lantern
 from lantern import behave, behave_init, cli, learn, sandbox
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -602,7 +604,8 @@ def test_the_command_writes_the_plan_says_what_to_look_at_and_ends_with_0(tmp_pa
     # a second time nothing is written, and the command says so with 2; --force writes it again
     before = (repo / behave.PLAN_NAME).read_text(encoding="utf-8")
     assert cli.main(["behave", str(repo), "--init"]) == 2
-    assert "not written   the project has a lantern-behaviour.json already" in capsys.readouterr().out
+    assert capsys.readouterr().out == ("not written   the project has a lantern-behaviour.json already, and it was left as "
+                                       "it is (--force writes a new one over it)\n")
     assert cli.main(["behave", str(repo), "--init", "--force"]) == 0
     assert (repo / behave.PLAN_NAME).read_text(encoding="utf-8") == before
 
@@ -633,6 +636,68 @@ def test_text_from_the_code_reaches_the_terminal_printable(tmp_path, capsys):
     assert cli.main(["behave", str(repo), "--init"]) == 0
     said = capsys.readouterr().out
     assert "\x1b" not in said and "left out      GET /a?[31mb: " in said
+
+
+# ------------------------------------------------------------------------------------------- the same from the app
+def _in_the_app(base, repo) -> str:
+    code, p = call(base, "/api/projects", "POST", {"path": str(repo)})
+    assert code == 200, p
+    return (p.get("project") or p)["id"]
+
+
+def _pressed(base, pid, body=None) -> dict:
+    code, job = call(base, f"/api/projects/{pid}/behaviourplan", "POST", body or {})
+    assert code == 202 and job["kind"] == "plan", job
+    done = wait(base, job["id"])
+    assert done["status"] == "done", done
+    return done["result"]
+
+
+def test_the_apps_button_writes_the_plan_the_command_writes_and_leaves_one_that_is_there_alone(srv, tmp_path):  # noqa: F811
+    base, _ = srv
+    repo = _project(tmp_path / "project", {"main.py": HEAD + ROUTES})
+    twin = _project(tmp_path / "twin", {"main.py": HEAD + ROUTES})
+    assert behave_init.write(twin)["written"]
+    as_the_command_wrote_it = (twin / behave.PLAN_NAME).read_text(encoding="utf-8")
+    pid = _in_the_app(base, repo)
+    r = _pressed(base, pid)
+    assert r["written"] is True and r["file"] == behave.PLAN_NAME and r["exists"] is False
+    assert (r["checks"], r["requests"]) == (11, 26) and r["counts"] == {"read_first": 0, "look_at": 6, "left_out": 7}
+    assert r["line"] == ("lantern-behaviour.json holds 11 checks (26 requests) for main:app. 6 of them are marked to look at "
+                         "first, and 7 routes were left out, each with the reason.")
+    assert "lantern behave" in r["next"] and len(r["look_at"]) == 6 and r["left_out"][0].startswith("GET /health: ")
+    assert (repo / behave.PLAN_NAME).read_text(encoding="utf-8") == as_the_command_wrote_it
+    # the plan is the one thing written: the results folder the app made when the project was added stays empty
+    assert sorted(p.name for p in repo.iterdir()) == [".lantern", behave.PLAN_NAME, "main.py"]
+    assert not list((repo / ".lantern").iterdir())
+    # pressed again, nothing is written and the answer says a plan is there; with the person's word it is written over
+    (repo / behave.PLAN_NAME).write_text('{"mine": true}\n', encoding="utf-8")
+    assert _pressed(base, pid) == {"written": False, "exists": True,
+                                   "why": "the project has a lantern-behaviour.json already, and it was left as it is"}
+    assert (repo / behave.PLAN_NAME).read_text(encoding="utf-8") == '{"mine": true}\n'
+    for odd in ("yes", 1, 0, ["true"]):
+        assert call(base, f"/api/projects/{pid}/behaviourplan", "POST", {"force": odd})[0] == 400, odd
+    assert (repo / behave.PLAN_NAME).read_text(encoding="utf-8") == '{"mine": true}\n'
+    assert _pressed(base, pid, {"force": True})["written"] is True
+    assert (repo / behave.PLAN_NAME).read_text(encoding="utf-8") == as_the_command_wrote_it
+
+
+def test_the_app_says_in_lanterns_sentence_why_no_plan_was_written(srv, tmp_path):  # noqa: F811
+    base, _ = srv
+    bare = _project(tmp_path / "bare", {"tool.py": "print('hello')\n"})
+    r = _pressed(base, _in_the_app(base, bare))
+    assert r["written"] is False and r["exists"] is False and "Lantern writes a first plan for a FastAPI app" in r["why"]
+    assert sorted(p.name for p in bare.iterdir()) == [".lantern", "tool.py"] and not list((bare / ".lantern").iterdir())
+
+
+def test_the_page_has_one_button_for_it_and_the_sentences_about_the_plan_are_the_servers():
+    page = (Path(lantern.__file__).parent / "viewer" / "app.html").read_text(encoding="utf-8")
+    assert page.count('id="behaviourplan"') == 1                    # one button on a project's screen, in both views
+    assert "/behaviourplan`, {method: 'POST', body: force ? {force: true} : {}}" in page
+    assert "esc(r.line || '')" in page and "esc(r.next || '')" in page and "String(r.why" in page
+    assert page.count("data-planover") == 2                         # the button in the message, and the place that hears it
+    assert "r.exists === true" in page                              # offered only where a plan is there already
+    assert page.count(".sub #behaviourplan span") == 2              # an icon where the screen is narrow, as its neighbours
 
 
 # ------------------------------------------------------------------------------------------- the plan, run as written

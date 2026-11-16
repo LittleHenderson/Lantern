@@ -451,7 +451,8 @@ def _behave_init(repo: Path, a) -> int:
         return 2
     plan = made["plan"]
     if plan is None or not made["written"]:
-        print(_printable(f"not written   {made['why_not']}"))
+        print(_printable(f"not written   {made['why_not']}")
+              + (" (--force writes a new one over it)" if made["exists"] and not a.force else ""))
         return 2
     app = plan["app"]
     say("app", app["asgi"] + (f" (started in {app['cwd']})" if app.get("cwd") else "")
