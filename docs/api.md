@@ -686,6 +686,21 @@ bare `close()`, in a function the file only calls from such places, and where ev
 `async def` functions or in functions only they call (the event loop's one thread). One finding for each
 connection, on the first such line; `more_info` names the line that opens the connection, the other functions
 with their lines, and how many uses stand under a lock. Its `scenario` is the story kind `shared-connection`.
+`LW-CLIENT-ENV-SECRET` (200; `lantern/publicvalues.py`, roadmap stage 5): a setting whose name starts with
+`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `EXPO_PUBLIC_`, `NUXT_PUBLIC_`, `GATSBY_`, `PUBLIC_` or `VUE_APP_` is copied
+into what every visitor downloads, and `LW-PUBLIC-SECRET` reads its name. This rule reads what the setting is
+given, where the name says nothing, on one line of a settings file (`.env*`, a shell file), a compose file or a
+workflow, a `.toml` or `.json` settings file, a Dockerfile, or JavaScript (an entry `NAME: value`, a bundler's
+`define`, `process.env.NAME = value`). Three reasons, on the finding as `public.why`: `address-with-password` (an
+address `scheme://user:password@host` that is not this computer's and whose password is no placeholder; with
+`public.from` when the password is another setting) and `key` (a key of a shape only servers hold, `public.kind`),
+both rank `high`; `from-secret` (the value is exactly another setting whose name is a secret's, `public.from`),
+rank `medium`. `tool_confidence` `LOW`: whether the file feeds the build people get, and whether the value is a
+secret after all, cannot be read from a line. The value is never repeated; `snippet` is the setting's name. Quiet
+for an address with no password, a password that is the user name or a placeholder, a key made for pages, a
+type, a comparison, a comment, a build argument with no value, and a name `LW-PUBLIC-SECRET` already names in that
+file. A key the secret scan lists on the same line is one finding, the secret scan's, which then carries `public`
+and one more sentence in `more_info`. Its `scenario` is the story kind `secret`.
 
 `mobile` is null unless the project is an Android app: `{"platform": "android", "modules": [{"root", "manifest",
 "package", "min_sdk", "target_sdk", "permissions": [{"name", "line", "sensitive", "words", "used"}], "components":
@@ -757,6 +772,9 @@ non-security hash or SQL splicing only fixed text → `low`, a hash of unknown p
 (`server-checks-it`|`server-reads-it`|`not-seen-on-server`|`no-server-code`), `server_checks`, `server_reads`, `routes`,
 `other_controls` `[{route, login_check, why}]`, `conditions` (settings the checking code branches on), `stranger_access`
 (always `not determined`), `unknown` [plain sentences]; never changes the rank),
+`public` (`LW-CLIENT-ENV-SECRET`, and a secret-scan finding on a line that gives its key to a public setting:
+`{"name"` (the setting), `"why"`: `address-with-password`|`key`|`from-secret`, `"from"` (the other setting, where
+there is one), `"kind"` (which key, for `key`)`}`; never the value),
 `row_rules` (`LW-NO-RLS` only, since 2026-11-14, `websec.row_rules`: what the project's SQL files, replayed in the
 order they are applied (`lantern/rowrules.py`), leave open on one table: `{"table"` (`<schema>.<name>`), `"state"`:
 `off` (the files create the table and never switch row-level security on), `off-in-the-files` (the same, and code

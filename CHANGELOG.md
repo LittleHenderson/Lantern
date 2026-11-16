@@ -9,6 +9,17 @@ file. New entries go under `## Unreleased`, on top.
 
 ## Unreleased
 
+- New heuristic `LW-CLIENT-ENV-SECRET` (roadmap stage 5; labelled heuristic; `lantern/publicvalues.py`): a setting
+  that every visitor's browser gets (`NEXT_PUBLIC_`, `VITE_`, `EXPO_PUBLIC_`, `PUBLIC_` and the like) whose value
+  is a secret, where the name says nothing: an address that carries a password or a key of a shape only servers
+  hold (high), or the value of another setting whose name is a secret's (medium). Read from one line of the
+  files that give settings their values (settings files, compose files, workflows, a host's settings file,
+  Dockerfiles, JavaScript); nothing is run and the value is never repeated. Quiet for an address with no
+  password or on this computer, a placeholder, a key made for pages, a type, a comparison, a comment. A key the
+  secret scan lists on the same line stays one finding, which then says the name is a public one (`public` on
+  the finding). Measured on 30 folders (benchmark projects, sample apps, Lantern itself): 805 files read, 24
+  places that give such a setting a value, no finding. So no false alarm and no true case there, and no
+  precision is claimed. Tests: `tests/test_public_values.py` (6).
 - A first behaviour plan written from the code (roadmap stage 4; `lantern/behave_init.py`, `docs/behaviour.md`).
   New: `lantern behave PATH --init` reads a FastAPI app and writes `PATH/lantern-behaviour.json`; it runs nothing of
   the project, asks no model, and the same code gives the same plan. A plan that is there is left as it is

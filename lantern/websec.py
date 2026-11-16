@@ -15,6 +15,9 @@ which rule fired and why. Heuristic checks are marked tool_confidence LOW so the
                      what the flow step knows of the value)
   LW-SECRET-INLINE   a signing secret, its fallback for a missing setting, an account's password or a database
                      address with its password, written in JS/TS, Python or a JSON settings file
+  LW-CLIENT-ENV-SECRET  a setting with a browser-exposed prefix whose value is a secret where the name says
+                     nothing: an address with a password, a server key, a secret setting passed on
+                     (publicvalues.py; heuristic)
   LJ-*               JavaScript/TypeScript code patterns (eval, XSS sinks, shell, SQL, TLS)
   LG-*               Go code patterns (SQL and shell built from variables, TLS off, weak hashes, unsafe)
   LR-*               Rust code patterns (format! into SQL or a shell command, TLS off, weak hashes, unsafe blocks)
