@@ -229,9 +229,10 @@ def test_a_member_can_be_shown_only_some_layers(team):
     assert "shop.app.backup" in cloud.get(mine["report"].replace("http://testserver", "")).text
     assert cloud.get(links["evidence"].replace("http://testserver", "")).status_code == 403
     # the link can't be edited to open more layers
-    exp, _, sig = k.split(".")
+    exp, _, who, sig = k.split(".")
     cloud.cookies.clear()          # ana's link above left her browser's cookie in this shared test client
-    for forged in (f"{exp}.{sig}", f"{exp}.bfsd.{sig}", f"{exp}.bfs.{sig}", f"{exp}.all.{sig}"):
+    for forged in (f"{exp}.{sig}", f"{exp}.bfsd.{who}.{sig}", f"{exp}.bfs.{who}.{sig}", f"{exp}.all.{who}.{sig}",
+                   f"{exp}.all.{sig}", f"{exp}.bfsd.{sig}"):
         assert cloud.get(f"/r/{rid}/report.html?k={forged}").status_code == 401
     # Ask Lantern reads the whole app: refused for ben, with a sentence
     cloud.post("/v1/ai/consent", json={"agree": True}, headers=bearer(ben))

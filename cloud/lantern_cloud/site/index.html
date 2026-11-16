@@ -372,7 +372,25 @@ async function accountSheet() {
   el.querySelector('#signout').onclick = signOut;
   el.querySelector('#signoutall').onclick = signOutAllSheet;
 }
-async function signOut() { try { await api('/v1/signout', {method: 'POST'}); } catch (e) {} S.me = null; S.runs = null; S.teams = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render(); }
+// The website says whether its sign-in service heard of the sign-out (`confirmed`). Where it did not, this browser is
+// signed out all the same and the page says what is left to do. No answer at all means nothing was signed out, and
+// the page says that instead of showing the home page as if it had worked.
+async function signOut() {
+  let said;
+  try { said = await api('/v1/signout', {method: 'POST'}); }
+  catch (e) {
+    sheet(`<div class="sh"><h2>Not signed out</h2><button class="x" data-close aria-label="Close">×</button></div>
+      ${note('err', esc(e.message))}<p class="muted small">You are still signed in on this browser. Try again in a minute.</p>
+      <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn primary" data-close>OK</button></div>`);
+    return;
+  }
+  S.me = null; S.runs = null; S.teams = null; S.links = {}; AI.state = null; closeSheet(); go('home'); render();
+  if (said && said.confirmed === false) {
+    sheet(`<div class="sh"><h2>Signed out on this browser</h2><button class="x" data-close aria-label="Close">×</button></div>
+      ${note('warn', esc(said.message || 'Lantern could not reach its sign-in service to end this sign-in there as well.'))}
+      <div class="row" style="margin-top:18px"><span class="spacer"></span><button class="btn primary" data-close>OK</button></div>`);
+  }
+}
 // Every place this account is signed in (other computers and phones, the Lantern app, the terminal) is signed out.
 // Results and the allowance stay; each place signs in again when it is next used.
 function signOutAllSheet() {

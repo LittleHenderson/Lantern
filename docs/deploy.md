@@ -227,7 +227,8 @@ Limits (environment variables; the values in `cloud/fly.toml` are the owner's ch
 | `LANTERN_CLOUD_JOB_SECONDS` | 1200 | Wall clock per run; the analysis is stopped after it |
 | `LANTERN_CLOUD_IDLE_MINUTES` | 0 (10 in `cloud/fly.toml`) | Minutes with no visitor and no run before the service stops itself; 0 = never |
 | `LANTERN_CLOUD_RETENTION_DAYS` | 0 | 0 = results kept until the person deletes them (Delete on a run, or Delete my account); a number N deletes finished runs older than N days, checked every hour by the clean-up pass ("Clean-up" below; a pass that failed is tried again five minutes later and shown in the owner's statistics) |
-| `LANTERN_CLOUD_VIEW_MINUTES` | 60 | How long a "open my report" link works |
+| `LANTERN_CLOUD_VIEW_MINUTES` | 60 | How long a "open my report" link works at most: it opens only what the person it was made for may read at that moment, and ends when they sign out on the website |
+| `LANTERN_CLOUD_IDENTITY_TTL` | 0 | Seconds an answer of the gateway about a sign-in may be used again for a read. 0: the gateway is asked on every request, so a sign-in ended anywhere is refused at the next one (before 2026-11-15 the default was 300). A request that changes something or makes a link always asks |
 | `LANTERN_CLOUD_VIEW_SECRET` | derived from the admin secret | Signs those links; set it only to make all open links stop working at once (`fly secrets set`) |
 | `LANTERN_CLOUD_HOSTS` | (empty) | Comma-separated clone hosts; empty = every public forge Lantern knows |
 | `LANTERN_GATEWAY_URL` | `https://lantern-gateway.fly.dev/v1` | Where sign-ins are checked |

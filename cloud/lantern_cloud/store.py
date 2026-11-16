@@ -20,7 +20,8 @@ SCHEMA = """
 create table if not exists users (
   account text primary key,          -- github:<id>, google:<sub>, token:<hash prefix> (from the gateway)
   label text, created text, last_seen text,
-  ai_consent text);                  -- when the person agreed to send code to the model (null: not yet)
+  ai_consent text,                   -- when the person agreed to send code to the model (null: not yet)
+  views integer);                    -- counted up when the links to results made for this account are ended
 create table if not exists runs (
   id text primary key,               -- random, unguessable
   account text not null,
@@ -106,6 +107,8 @@ class Store:
                 self.db.execute(f"alter table runs add column {col} text")
         if "ai_consent" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
             self.db.execute("alter table users add column ai_consent text")
+        if "views" not in {r[1] for r in self.db.execute("pragma table_info(users)")}:
+            self.db.execute("alter table users add column views integer")
         if "lanes" not in {r[1] for r in self.db.execute("pragma table_info(members)")}:
             self.db.execute("alter table members add column lanes text")
         self.db.commit()
@@ -133,6 +136,17 @@ class Store:
     def consent(self, account: str) -> str | None:
         row = self._one("select ai_consent from users where account = ?", (account,))
         return row[0] if row else None
+
+    def views(self, account: str) -> int:
+        """Which round of links to results this account is in: a link opens only in the round it was made in."""
+        row = self._one("select views from users where account = ?", (account,))
+        return int(row[0] or 0) if row else 0
+
+    def end_views(self, account: str) -> None:
+        """Every link to results made for this account so far opens nothing from now on (the account signed out)."""
+        with self.lock:
+            self.db.execute("update users set views = coalesce(views, 0) + 1 where account = ?", (account,))
+            self.db.commit()
 
     def set_consent(self, account: str, on: bool) -> None:
         with self.lock:

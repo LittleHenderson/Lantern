@@ -92,6 +92,17 @@ file. New entries go under `## Unreleased`, on top.
   request away that way, 5 of them wait for work and count, and there is no finding, after one false alarm of the
   first measurement was fixed (a limiter that takes one in the look). No precision is claimed.
   Tests: `tests/test_countlater.py` (3).
+- The website follows a sign-in and a link to results to their end (tests written first, each beside twins that
+  work as before). A sign-in: the website asks its sign-in service on every request. **Changed:**
+  `LANTERN_CLOUD_IDENTITY_TTL` is 0 by default (before: 300); above 0 an answer is used again for a read only,
+  never for a request that changes something or makes a link. `POST /v1/signout` answers `confirmed`: where the
+  sign-in service could not be reached, the browser is signed out, the website takes that sign-in no more and
+  tries for a few minutes to end it there too, and the page says so (`confirmed: false` with a `message`).
+  A link to results (`POST /v1/runs/{id}/view`): it is made for the person who asked, opens what that person may
+  read at the moment it is used, and ends when they sign out on the website. **Changed:** the link's `k` has four
+  parts (`<expiry>.<layers>.<who>.<HMAC>`), and links made before the update stop opening: open the run again
+  from My runs. An open stream of a run's progress is looked at again while it is open.
+  Tests: `tests/test_cloud_signin_ended.py` (12), `tests/test_cloud_view_rights.py` (11).
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside
