@@ -106,6 +106,12 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                   "Merging that into an object changes the pattern every object in your app is made from, so every "
                   "object now seems to have that field. Checks elsewhere in the app start to pass for everyone.",
                   "Keys named __proto__, constructor and prototype are refused before anything is merged."),
+    "pickup": (None,
+               "The server hands the login to whoever sends the value it is kept under, and asks for nothing else. "
+               "Someone who started a sign-in and had another person finish it, or who read the value off a link or a "
+               "screen, is now signed in as that person.",
+               "The login is handed only to the one who also shows something nobody else holds: a secret whose "
+               "fingerprint was given when the sign-in started, or their own signed-in session."),
     "owner": (None,
               "The server finds the record with that id and hands it over (or changes it), because nothing compares "
               "the record's owner with who is asking. Going through the numbers one by one, they reach everyone's "
@@ -313,6 +319,7 @@ RULE_KIND = {
     "LV-EXEC-CONCAT": "shell", "LV-TLS-OFF": "tls-off", "LV-WEAK-HASH": "weak-hash", "LV-DESERIALIZE": "deserialize",
     "LV-CORS-ALL": "cors", "LW-PUBLIC-SECRET": "secret", "LW-SERVICE-ROLE": "service-role", "LW-JWT": "secret",
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
+    "LW-TOKEN-PICKUP": "pickup",
     "LA-WALLET-DRAIN": "wallet", "LA-MODEL-OUTPUT-TO-TOOL": "model-to-tool", "LA-PROMPT-FROM-INPUT": "prompt",
     "LA-NOTEBOOK-SECRET": "secret", "LP-DJANGO-DEBUG": "debug",
     "LT-SQL": "sql", "LT-SHELL": "shell", "LT-EVAL": "eval", "LT-XSS": "xss", "LT-DESERIALIZE": "deserialize",
@@ -724,6 +731,9 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
             steps.append(f"They are not signed in when they run the Server Action {_action(route, rkind)}.")
         elif kind == "auth" and route:
             steps.append(f"They are not signed in when they send {route}.")
+        elif kind == "pickup" and route:
+            steps.append(f"They send {route} with a value they chose or were shown, before the person it belongs to "
+                         "does, or in their place.")
         if kind in ("owner", "owner-late"):
             steps.append("They are signed in with their own account. In the request they change the record's id to "
                          "another one, which is not theirs.")
@@ -839,6 +849,7 @@ FIXED_HEADLINES = {
     "unsafe": "This code switches off the language's memory safety",
     "assert": "A safety check uses assert, which can be switched off",
     "subprocess-note": "This file starts other programs (a note, not a problem)",
+    "pickup": "A login may be handed to whoever sends one value",
     "owner": "A signed-in person may be able to reach other people's records",
     "owner-late": "Something is done for a record before the app asks whose it is",
     "role": "An admin route may not ask for an admin",
