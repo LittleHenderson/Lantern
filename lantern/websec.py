@@ -2157,7 +2157,7 @@ def _pickup_call(body: str, callee: str, open_at: int, held: set[str]) -> str | 
         flat = flat.replace(re.sub(r"\s+", "", h), "\x00")
     if "\x00" not in flat:
         return None
-    rest = re.sub(r"""(["'])(?:\\.|(?!\1).)*\1""", "", flat)              # written text among the arguments
+    rest = strings.sub("'\"", "", flat)                                  # without the written text among the arguments
     names = [x for x in re.findall(r"(?<![\w$.])[A-Za-z_$][\w$]*(?!\s*\()", rest) if x not in PICKUP_LITERAL]
     return callee if not names else None
 
