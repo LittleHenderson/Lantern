@@ -120,6 +120,17 @@ file. New entries go under `## Unreleased`, on top.
   for such a reader, as the evidence report and the raw files already did. The report's Readiness and
   Protections pages say why, and the website leaves those tabs out for them. With every layer nothing changes.
   Tests written first: `tests/test_scope.py` (34), `tests/test_cloud_teams.py`.
+- The sheet before "Watch my tests run" ends with what this run keeps the tests from on this computer, worked
+  out by the server for the system and the kind of tests (`sandbox.reach`), in place of one sentence for every
+  system. **Changed:** where the sandbox holds every program of the tests (Docker, most Linux systems) the line
+  reads as before and nothing more is asked. Where it holds Python code only (Windows, Mac, a Linux system
+  that gives the run neither a network of its own nor a doorman), the sheet says what a program of the tests
+  that is not Python can reach, and the tests start only after the person ticked "I have read this. Run the
+  tests anyway." under it, once per project, command and sentence (`POST /api/projects/<id>/trace` takes the
+  sentence as `reach` and answers 409 without it; in the terminal the word is `trace --anyway -- COMMAND`).
+  The app's answer to "Does Lantern run my app or my tests?" and the help of `--sandbox` say the same. The
+  command line asks nothing: the first lines of its log say what the sandbox holds. No wall changed.
+  Tests written first: `tests/test_sheet_promise.py` (48).
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside

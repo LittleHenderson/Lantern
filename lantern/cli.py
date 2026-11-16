@@ -593,7 +593,8 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--trace", action="store_true", help="also run the command after -- and record real calls")
     sp.add_argument("--sandbox", action="store_true",
                     help="with --trace: run the tests in Lantern's sandbox, the way the app does (on a copy of the "
-                         "project that is thrown away afterwards, with no way out to the internet and nothing "
+                         "project that is thrown away afterwards, kept from the internet and your network where "
+                         "this system's sandbox holds them, which the run's first lines say, and with nothing "
                          "they start left running). Only a test command runs there. Without it the command runs "
                          "in the project's folder, as you")
     sp.add_argument("--test-minutes", type=_minutes, metavar="N",

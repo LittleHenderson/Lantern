@@ -210,6 +210,23 @@ class Store:
                 d[pid] = (have + [command])[-20:]
                 self._write("test-confirmations.json", d)
 
+    def accepted_reach(self, pid: str) -> list[str]:
+        """The marks of what the person agreed to about tests this system's sandbox does not hold (`reach_asked`).
+        Kept beside the confirmed commands, under a key no project id can be (`reach:<id>`)."""
+        d = self._read("test-confirmations.json", {})
+        v = d.get("reach:" + pid) if isinstance(d, dict) else None
+        return [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+
+    def accept_reach(self, pid: str, mark: str) -> None:
+        with self.lock:
+            d = self._read("test-confirmations.json", {})
+            d = d if isinstance(d, dict) else {}
+            v = d.get("reach:" + pid)
+            have = [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+            if mark not in have:
+                d["reach:" + pid] = (have + [mark])[-40:]
+                self._write("test-confirmations.json", d)
+
     def key_for(self, provider: str) -> str | None:
         env = (PRESETS.get(provider) or (None, None, "LANTERN_API_KEY"))[2]
         return (self.session_keys.get(provider) or self._read("keys.json", {}).get(provider)
@@ -541,7 +558,8 @@ def write_starter_file(repo: Path, out: Path, name: str) -> str:
 TERMINAL_ALLOWED = ["analyze", "trace", "explain", "report", "verify", "accept", "packs", "export", "learn"]
 TERMINAL_HELP = """Lantern commands only. The app runs each one the way its buttons do; results go to this project's .lantern/.
   analyze [--offline] [--no-scan] [--privacy full|structure]   read the project again and rebuild every result
-  trace [--] TEST COMMAND                       run your tests in the sandbox (e.g. trace python -m pytest -q)
+  trace [--anyway] [--] TEST COMMAND            run your tests in the sandbox (e.g. trace python -m pytest -q);
+                                                --anyway: also where it told you what it cannot keep them from
   explain [--node ID ...] [--depth N] [--max-nodes N]   explain functions with the model in Settings
   report [--privacy full|structure]             rebuild report.html from the saved results
   verify [--report FILE]                        re-run the analysis and compare it with the Evidence Report
@@ -618,11 +636,16 @@ def run_terminal_command(app, p: dict, repo: Path, out: Path, argv) -> dict:
     privacy_default = app.store.settings().get("privacy", "full")
     if verb == "trace":
         from . import sandbox
+        anyway = args[:1] == ["--anyway"]   # the person's word for tests this system's sandbox does not hold
+        args = args[1:] if anyway else args
         cmd = args[1:] if args[:1] == ["--"] else args
         try:
             language = sandbox.check_command(cmd)
         except ValueError as e:
             raise TerminalRefused(f"trace: {e}") from None
+        ask = reach_asked(app.store, p["id"], " ".join(cmd), language, True if anyway else None)
+        if ask:
+            raise TerminalRefused(f"trace: {ask} To run them anyway, type: trace --anyway -- {' '.join(cmd)}")
         app.store.confirm_test(p["id"], " ".join(cmd))   # typed in full by the user: that is the confirmation
         det = sandbox.detect(repo)
         test_cwd = det.get("cwd", "") if det.get("language") == language else ""
@@ -794,18 +817,54 @@ def test_memory(store) -> int:
         return sandbox.memory_limit()
 
 
+def reach_mark(command: str, ask: str) -> str:
+    """One mark for "this command, with this said about it": what the person agreed to is these words."""
+    return hashlib.sha256(f"{command}\n{ask}".encode()).hexdigest()[:32]
+
+
+def reach_asked(store, pid: str, command: str, language: str, said=None) -> str:
+    """"" when a run of `command` may start as far as the person's word goes, else the sentence they have to agree
+    to first. Where this run's walls do not hold every program of the tests (`sandbox.reach`), the person has to
+    have said so for this project, this command and these words: `said` is the sentence the sheet showed them, or
+    True for `--anyway` typed in the terminal, and what was said once is kept (`Store.accept_reach`). A
+    confirmation of the command alone is no such word (review stage, 2026-11-15: until then the sheet's last line
+    promised the same on every system, so a confirmation given under it says nothing about this)."""
+    from . import sandbox
+    ask = sandbox.reach(language)["ask"]
+    if not ask:
+        return ""
+    mark = reach_mark(command, ask)
+    if said is True or (isinstance(said, str) and said == ask) or mark in store.accepted_reach(pid):
+        store.accept_reach(pid, mark)
+        return ""
+    return ask
+
+
+def reach_accepted(store, pid: str, command: str, ask: str) -> bool:
+    """Has the person agreed to `ask` for this project's `command` already (the sheet then asks nothing)?"""
+    from . import sandbox
+    try:
+        return not ask or reach_mark(" ".join(sandbox.split(command)), ask) in store.accepted_reach(pid)
+    except ValueError:
+        return False
+
+
 def detect_test_command(repo: Path, minutes: int | None = None, memory: int | None = None) -> dict:
     """The command the sheet shows first (see `sandbox.detect`), plus which sandbox will run it, for how long
     (`minutes`: the limit the run would have; `minutes_range`: what the person may set instead) and with how much
-    memory (`memory_mb`, `memory_range`, in megabytes)."""
-    from . import sandbox
+    memory (`memory_mb`, `memory_range`, in megabytes). `leaves` is the sheet's last line and `reach` what stands
+    behind it (`sandbox.reach`: what this run keeps the tests from, and the sentence to agree to where it does
+    not hold every program of theirs)."""
+    from . import libraries, sandbox
     d = sandbox.detect(repo)
     d["sandbox"] = sandbox.describe(repo, d["language"], minutes=minutes, memory=memory)
     d["minutes"] = sandbox.time_limit(minutes) // 60
     d["minutes_range"] = list(sandbox.MINUTES)
     d["memory_mb"] = sandbox.memory_limit(memory)
     d["memory_range"] = list(sandbox.MEGABYTES)
-    d["leaves"] = "Nothing leaves this computer: the tests have no way out to the internet or to your network."
+    said = sandbox.reach(d["language"], fetched=bool(libraries.described(Path(repo), d["language"])))
+    d["leaves"] = said["words"]
+    d["reach"] = {k: said[k] for k in ("network", "files", "ask")}
     return d
 
 
@@ -1114,6 +1173,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(404, "unknown project")
             d = detect_test_command(Path(p["path"]), test_minutes(app.store), test_memory(app.store))
             d["confirmed"] = d["command"] in app.store.confirmed_tests(p["id"])
+            d["reach"]["accepted"] = reach_accepted(app.store, p["id"], d["command"], d["reach"]["ask"])
             return self._json(d)
         m = re.fullmatch(r"/api/projects/(\w+)/plan", path)
         if m:
@@ -1281,6 +1341,12 @@ class Handler(BaseHTTPRequestHandler):
             canon = " ".join(words)
             if not b.get("confirm") and canon not in app.store.confirmed_tests(p["id"]):
                 return self._err(409, "confirm this command first: the sheet shows what will run and where")
+            # Tests this system's sandbox does not hold start only after the person agreed to exactly that sentence
+            # (`reach`: the sentence the sheet showed); the answer carries it, for a sheet made for other tests.
+            ask = reach_asked(app.store, p["id"], canon, language, b.get("reach") if isinstance(b.get("reach"), str) else None)
+            if ask:
+                return self._json({"error": f"{ask} Say on the sheet that you have read this, and the tests are run.",
+                                   "reach": {"ask": ask, "words": sandbox.reach(language)["words"]}}, 409)
             app.store.confirm_test(p["id"], canon)
             if b.get("minutes") is not None and app.store.settings().get("test_minutes") != minutes:
                 app.store.save_settings({**app.store.settings(), "test_minutes": minutes})   # remembered for the next run

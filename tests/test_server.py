@@ -331,6 +331,7 @@ def test_the_command_for_an_assistant_is_lantern_by_its_full_path(srv, monkeypat
 
 def test_watch_tests_accepts_only_test_runners(tmp_path):
     """'Watch my tests run' runs the command the user confirmed, so it must never become 'run anything'."""
+    from lantern import sandbox
     from lantern.sandbox import check_command
     from lantern.server import detect_test_command
     ok = {"python -m pytest -q": "python", "pytest": "python", "py.test tests/": "python", "python3 -m unittest": "python",
@@ -346,7 +347,9 @@ def test_watch_tests_accepts_only_test_runners(tmp_path):
             check_command(c.split())
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     d = detect_test_command(tmp_path)
-    assert d["supported"] and d["traced"] and d["sandbox"]["name"] in ("docker", "subprocess") and "Nothing leaves" in d["leaves"]
+    assert d["supported"] and d["traced"] and d["sandbox"]["name"] in ("docker", "subprocess")
+    # the sheet's last line is what this system's sandbox keeps the tests from, and nothing more
+    assert d["leaves"] == sandbox.reach("python")["words"] and ("Nothing leaves" in d["leaves"]) == (not d["reach"]["ask"])
     js = tmp_path / "js"
     js.mkdir()
     (js / "package.json").write_text('{"scripts": {"test": "vitest"}}', encoding="utf-8")
@@ -369,8 +372,12 @@ def test_watch_tests_accepts_only_test_runners(tmp_path):
     assert not detect_test_command(tmp_path / "nowhere")["supported"]
 
 
-def test_terminal_drawer_runs_lantern_commands_only(tmp_path):
+def test_terminal_drawer_runs_lantern_commands_only(tmp_path, monkeypatch):
+    from lantern import sandbox
     from lantern.server import TerminalRefused, run_terminal_command
+    # which commands the drawer takes; what it asks first on a system that does not hold the tests has its own
+    # test (tests/test_sheet_promise.py)
+    monkeypatch.setattr(sandbox, "reach", lambda language, fetched=False: {"network": "all", "files": "all", "words": "", "ask": ""})
     class Jobs:
         def start(self, pid, kind, fn, stop=None):
             return {"id": "j1", "kind": kind, "status": "running"}

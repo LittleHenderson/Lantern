@@ -147,6 +147,8 @@ async function appSmoke(url, out, image, expectText, slowTests) {
         await p.screenshot({ path: `${out}-${name}-sheet.png` });
         await a11y.axe(p, `${name} test sheet`, errs);
         await sheetFits(p, name, errs, step, [[vp.width, vp.height], [1280, 600]], vp);
+        // where this system's sandbox does not hold every program of the tests, the sheet asks first
+        if (await p.isVisible('#shreach')) { await p.check('#shreach'); step(name, 'sheet: agreed to what the sandbox cannot hold'); }
         await p.click('#shrun');
         await p.waitForSelector('.toastin.ok, .toastin.bad', { timeout: 300000 });
         const toast = (await p.$eval('#toast', el => el.innerText)).replace(/\s+/g, ' ').trim();
