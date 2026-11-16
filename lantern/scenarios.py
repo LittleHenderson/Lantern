@@ -130,6 +130,14 @@ STORIES: dict[str, tuple[str | None, str, str]] = {
                       "The request is counted in the same step that looks at the limit, before the work starts, "
                       "and the count is put right when the work is done. Requests sent together are let through "
                       "only as far as the limit goes."),
+    "shared-connection": (None,
+                          "Both requests are on the one database connection together. One of them gets an "
+                          "error from the database library, or an answer that is empty or that belongs to "
+                          "the other request: a person who is signed in is told nobody knows them, or a "
+                          "page fails for a reason nobody can find afterwards.",
+                          "Every use of the connection waits its turn under one lock (or each thread has a "
+                          "connection of its own), so requests of the same moment are answered as they "
+                          "would be one after the other."),
     "owner": (None,
               "The server finds the record with that id and hands it over (or changes it), because nothing compares "
               "the record's owner with who is asking. Going through the numbers one by one, they reach everyone's "
@@ -338,7 +346,7 @@ RULE_KIND = {
     "LV-CORS-ALL": "cors", "LW-PUBLIC-SECRET": "secret", "LW-SERVICE-ROLE": "service-role", "LW-JWT": "secret",
     "LW-CORS-ANY": "cors", "LW-DB-OPEN": "open-db", "LW-NO-RLS": "open-db", "LW-AUTH-MISSING": "auth",
     "LW-TOKEN-PICKUP": "pickup", "LW-LOOPBACK-COOKIE": "local-cookie", "LW-SW-KEEPS-PAGES": "kept-pages",
-    "LW-LIMIT-COUNTED-LATER": "counted-later",
+    "LW-LIMIT-COUNTED-LATER": "counted-later", "LW-SHARED-CONNECTION": "shared-connection",
     "LA-WALLET-DRAIN": "wallet", "LA-MODEL-OUTPUT-TO-TOOL": "model-to-tool", "LA-PROMPT-FROM-INPUT": "prompt",
     "LA-NOTEBOOK-SECRET": "secret", "LP-DJANGO-DEBUG": "debug",
     "LT-SQL": "sql", "LT-SHELL": "shell", "LT-EVAL": "eval", "LT-XSS": "xss", "LT-DESERIALIZE": "deserialize",
@@ -678,6 +686,10 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
     elif kind == "counted-later":
         steps.append(f"{who} sends the same request many times at the same moment, not one after another.")
         basis.append("the look at the limit, the work and the count come from the function's own lines")
+    elif kind == "shared-connection":
+        steps.append(f"{who} uses the app while somebody else does, or sends several requests at the same "
+                     "moment.")
+        basis.append("where the connection is opened and where it is used come from the file's own text")
     elif kind in LEAKS:
         if f.get("category") == "exposure" or str(f.get("rule")) == "LW-PUBLIC-SECRET":
             steps.append(f"{who} opens your site and looks at the files their browser downloaded (anyone can, with "
@@ -885,6 +897,7 @@ FIXED_HEADLINES = {
     "local-cookie": "Another program on this computer may be sent this app's login",
     "kept-pages": "The browser may keep a signed-in person's pages after they have left",
     "counted-later": "A limit may be passed by requests sent at the same moment",
+    "shared-connection": "Requests of the same moment may meet on one database connection",
     "owner": "A signed-in person may be able to reach other people's records",
     "owner-late": "Something is done for a record before the app asks whose it is",
     "role": "An admin route may not ask for an admin",
