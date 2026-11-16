@@ -132,6 +132,11 @@ health check that fetches an address built from a request header: true, and now 
 `LW-AUTH-MISSING` on any of the five. D's grade fell from C 76 to F 46: Lantern now reads it as an app with routes,
 where it read a library before, holds it to an app's checks and counts the new findings. Nothing in D changed.
 
+### The stage's final code, with the type-aware pass switched off
+
+The pass is off unless asked for. With it in the code and off, all twelve projects read as they did after the last fix
+above: no call site, link, entry point, finding, protection or shown login differs.
+
 ### Still wrong after this stage, and said
 
 - The paid-call rule decides that a login is there by names. On B a function that makes a token is read as a login
