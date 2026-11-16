@@ -29,6 +29,7 @@ NAMES = ["Maria", "Sam", "Priya", "Leo", "Aisha", "Tom"]
 # What people do on a page, by the event the map recorded on the hop (Edge.detail on a `ui-event` edge).
 EVENT_VERBS = {"onClick": "click", "onSubmit": "submit", "onChange": "change", "mutationFn": "submit",
                "queryFn": "load", "action": "submit", "onPress": "tap"}
+FORM_SENDS = ("action", "formAction")   # <form action={fn}>, <button formAction={fn}>: sending the form runs `fn`
 
 # kind -> (what they type, or None; what goes wrong; what the fix changes)
 STORIES: dict[str, tuple[str | None, str, str]] = {
@@ -424,10 +425,19 @@ def name_for(fid: str) -> str:
 
 
 def _words(qualname: str) -> str:
-    """`BackupButton.start` -> "backup button": the component a click lands in, in plain words."""
-    last = [p for p in re.split(r"[.:/]+", qualname or "") if p and p[0].isupper()]
-    base = last[-1] if last else (qualname or "").split(".")[-1]
+    """`BackupButton.start` -> "backup button": the component a click lands in, in plain words. "" for a page file
+    that has no name of its own (SvelteKit's `+page`); never a piece of a file's name (`index.html::load`)."""
+    parts = [p for p in re.split(r"[.:/]+", qualname or "") if p]
+    last = [p for p in parts if p[0].isupper()]
+    base = last[-1] if last else parts[-1] if parts else ""
+    if base.startswith("+"):
+        return ""
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", base).replace("_", " ").strip().lower()
+
+
+# what a tester does on a page whose own file has no name to call the thing by
+NAMELESS = {"click": "click a button on it", "tap": "tap a button on it", "submit": "send the form on it",
+            "change": "change a field on it", "load": "wait for it to load"}
 
 
 def _page(g: Graph | None, nid: str) -> str | None:
@@ -444,13 +454,122 @@ def _clicks(g: Graph | None, path: list[str]) -> list[str]:
         return out
     for a, b in zip(path, path[1:]):
         for e in g.callees(a):
-            if e.dst == b and (e.via or "") == "ui-event" and e.detail in EVENT_VERBS:
+            if e.dst == b and (e.via or "") == "callback" and e.detail in FORM_SENDS:
+                src = g.nodes.get(a)
+                thing = _words(src.qualname) if src else ""
+                if not thing or (src is not None and (src.entry or {}).get("kind") == "page"):
+                    out.append("send the form on it")
+                else:
+                    out.append(f"send the {thing}" if "form" in thing else f"send the {thing} form")
+            elif e.dst == b and (e.via or "") == "ui-event" and e.detail in EVENT_VERBS:
                 verb, src = EVENT_VERBS[e.detail], g.nodes.get(a)
                 thing = _words(src.qualname) if src else "something"
+                if not thing:
+                    out.append(NAMELESS[verb])
+                    continue
                 if verb in ("click", "tap") and "button" not in thing:
                     thing += " button"
                 out.append(f"{verb} the {thing}" if verb != "load" else f"waits for the {thing} to load")
     return out
+
+
+# An open Supabase table (`LW-NO-RLS` with `row_rules`, roadmap stage 1). One story was told for every open table
+# ("the database answers with every row, because the table has no rules"), which is not what happens where a rule
+# lets rows be added and nothing else, or lets any signed-in user change them. The words follow what the project's
+# SQL files leave open and for whom; a finding without `row_rules` (Firebase's rules, results an older Lantern wrote)
+# is told as before.
+ROW_VERBS = {"insert": "add", "update": "change", "delete": "remove"}
+ROW_STATES = ("off", "off-in-the-files", "open-write", "open-read")
+PUBLIC_KEY = " The key they used is the public one every visitor already has."
+
+
+def row_words(f: dict) -> dict | None:
+    """What an open table's finding says in plain words, read from its `row_rules`: `head` (the heading), `first`
+    and `ask` (the two steps, with `{who}` for the tester's name), `harm`, `after`, `basis`, and for the case
+    `need` (what has to be true), `fact` (what the files show), `known` (whether Lantern saw it), `why`,
+    `client` (the first function on the visitor's side that reaches the table, or None) and `unknown`."""
+    rr = f.get("row_rules")
+    if not isinstance(rr, dict) or rr.get("state") not in ROW_STATES:
+        return None
+    state = rr["state"]
+    signed = rr.get("for") == "signed-in"
+    lets = [w for w in (rr.get("lets") or ()) if w in ROW_VERBS]
+    changes = " and ".join(ROW_VERBS[w] for w in ("update", "delete") if w in lets)
+    table = str(rr.get("table") or "the table")[:130]
+    rows = [c for c in (rr.get("client") or ()) if isinstance(c, dict)]
+    client = rows[0] if rows else None
+    phone = bool(client) and client.get("on") == "the phone"
+    anyone, lower = ("Any signed-in user", "any signed-in user") if signed else ("Anyone", "anyone")
+    unknown = ["whether the database was changed outside these files (in the dashboard, or by a file that is not "
+               "in the project)"]
+    known, why = True, "its condition is true whatever the row and whoever asks"
+    if state in ("off", "off-in-the-files"):
+        head = "Anyone can read and change every row of this database table"
+        ask = ("From their own computer they ask the database for every row of this table, and then change or "
+               "remove rows as they like.")
+        harm = ("The database answers with every row and makes every change, because the table has no rules saying "
+                "who may read or change which rows." + PUBLIC_KEY)
+        after = "Row rules are turned on, so each person only gets their own rows."
+        need = "Row-level security is off for this table"
+        fact = f"create {table} and never switch row-level security on for it"
+        why = "the project's SQL files create the table and never switch it on"
+        if state == "off-in-the-files":
+            head = "This database table may have no row rules"
+            ask = "If row rules are off for this table, as the files that create it leave them: " + ask[0].lower() + ask[1:]
+            fact += "; code that runs in the database names row-level security, and Lantern does not run that code"
+            known, why = None, ("the files that create the table never switch it on, but code that runs in the "
+                                "database names row-level security, and Lantern does not run that code")
+    elif state == "open-read":
+        head = f"{anyone} can read every row of this database table"
+        ask = "From their own computer they ask the database for every row of this table."
+        harm = ("The database answers with every row, because a rule on the table lets any signed-in user read all "
+                "of it, not only their own rows." if signed else
+                "The database answers with every row, because a rule on the table lets everyone read all of it."
+                + PUBLIC_KEY)
+        after = "The rule lets a row be read only by its owner, so each person gets only their own rows."
+        need = f"A policy lets {lower} read every row"
+        fact = f"leave a policy on {table} that lets {lower} read every row"
+        unknown.append("whether these rows are meant for everybody")
+    elif changes:
+        head = f"{anyone} can {changes} any row of this database table"
+        ask = f"From their own computer they ask the database to {changes} rows of this table that are not theirs."
+        harm = ("The database does it, because a rule on the table only asks that somebody is signed in, not whose "
+                "row it is." if signed else
+                f"The database does it, because a rule on the table lets everyone {changes} rows without asking "
+                "whose they are." + PUBLIC_KEY)
+        after = "The rule compares each row's owner with who is asking, so each person reaches only their own rows."
+        need = f"A policy lets {lower} {changes} any row"
+        fact = f"leave a policy on {table} that lets {lower} {changes} any row"
+    else:
+        head = f"{anyone} can add rows to this database table"
+        ask = ("From their own computer they ask the database to add rows to this table, as many as they like and "
+               "under any name.")
+        harm = ("The database takes every row they send, because a rule on the table lets "
+                f"{'any signed-in user' if signed else 'everyone'} add rows and checks nothing about them."
+                + ("" if signed else PUBLIC_KEY))
+        after = "The rule checks that a new row belongs to who is adding it, so nobody adds rows in another person's name."
+        need = f"A policy lets {lower} add rows"
+        fact = f"leave a policy on {table} that lets {lower} add rows"
+        unknown.append("whether adding rows freely is meant here (a sign-up, a feedback form)")
+    if signed and phone:
+        first = ("{who} installs your app, signs up, as anyone can, and reads the public database address, the key "
+                 "and their own sign-in out of it.")
+    elif signed:
+        first = ("{who} signs up on your site, as anyone can, signs in, and copies the public database address, the "
+                 "key and their own sign-in from the page.")
+    elif phone:
+        first = ("{who} installs your app and reads the public database address and key out of it (they are meant "
+                 "to be public).")
+    else:
+        first = ("{who} opens your site and copies the public database address and key from the page (they are "
+                 "meant to be public).")
+    side = (client.get("on") if client else None) or "the visitor's side"
+    basis = ["what is open comes from the project's SQL files, replayed in the order they are applied",
+             f"the code that talks to this table from {side} comes from the map of your app" if client else
+             "Lantern found no code on the visitor's side that reaches this table, which is not proof that none does"]
+    return {"head": head, "first": first, "ask": ask, "harm": harm, "after": after, "basis": basis, "need": need,
+            "fact": "Replayed in the order they are applied, the project's SQL files " + fact, "known": known,
+            "why": why, "client": client, "unknown": unknown}
 
 
 def _route_word(g: Graph | None, f: dict) -> tuple[str | None, str | None]:
@@ -461,6 +580,26 @@ def _route_word(g: Graph | None, f: dict) -> tuple[str | None, str | None]:
     n = g.nodes.get(r.get("entry"))
     detail = str((n.entry or {}).get("detail") or "") if n else ""
     return detail or None, r.get("kind")
+
+
+def _action(route: str | None, rkind: str | None) -> str | None:
+    """The name of a Server Action (`ACTION createTodo`): a route with a name and no address to show."""
+    return str(route)[len("ACTION "):] if route and rkind == "route" and str(route).startswith("ACTION ") else None
+
+
+PAID_LIMITED = ("Each call goes to the paid service, which bills you. A limit on how often slows a script down, but "
+                "nothing asks who is calling, so anyone on the internet can keep spending up to that limit.")
+
+
+def _paid(f: dict) -> tuple[bool, bool]:
+    """What a paid-call finding itself says is there: (a login, a limit on how often). From the record the rule
+    keeps beside its sentence (`paid`), else from the fixed ending of the title (results written before the record
+    existed). A finding that says neither is read as neither, which is the older story."""
+    p = f.get("paid")
+    if isinstance(p, dict):
+        return bool(p.get("login")), bool(p.get("limit"))
+    title = str(f.get("title") or "")
+    return title.endswith(" with no rate limit"), title.endswith(" without a login check")
 
 
 def _from_another_app(route: str | None, rkind: str | None) -> bool:
@@ -524,6 +663,11 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
         if f.get("line") and f.get("file"):
             steps.append(f"What lets them is in {f['file']}, line {f['line']}.")
         basis.append("the setting comes from your app's manifest, build file or code")
+    elif kind == "open-db" and row_words(f):
+        told = row_words(f)
+        steps += [told["first"].format(who=who), told["ask"]]
+        harm, after = told["harm"], told["after"]
+        basis += told["basis"]
     elif kind == "open-db":
         steps.append(f"{who} opens your site and copies the public database address and key from the page (they "
                      "are meant to be public).")
@@ -545,6 +689,11 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
             steps.append(f"{who}, who is testing your app, opens the {page} page.")
             steps += [f"They {c}." for c in _clicks(g, ui)]
             basis.append("the page and clicks come from the map of your app")
+        elif _action(route, rkind):
+            steps.append(f"{who} skips your pages and sends a request straight to the Server Action "
+                         f"{_action(route, rkind)}. An action has an address of its own on your server, the pages "
+                         "that use it carry it, and anyone who has it can send to it.")
+            basis.append("the Server Action comes from the map of your app")
         elif route and rkind == "route":
             steps.append(f"{who} skips your pages and sends a request straight to {route}. Anyone who knows the "
                          "address can.")
@@ -558,9 +707,23 @@ def for_finding(f: dict, g: Graph | None = None) -> dict:
                          "prove nobody can get here: something Lantern does not see may run it. Here is what happens "
                          f"when something does: {who} reaches it that way.")
             basis.append("Lantern found no path to this code, which is not proof that nothing runs it")
-        if kind in ("auth", "wallet") and route:
-            steps.append(f"They are not signed in, and they send {route} again and again."
-                         if kind == "wallet" else f"They are not signed in when they send {route}.")
+        if kind == "wallet":
+            login, limit = _paid(f)
+            does = (f"run the Server Action {_action(route, rkind)}" if _action(route, rkind)
+                    else f"send {route}" if route else None)
+            if does and login:
+                steps.append(f"They sign in with an account of their own, and they {does} again and again.")
+            elif does:
+                steps.append(f"They are not signed in, and they {does} "
+                             + ("as often as the limit lets them." if limit else "again and again."))
+            if login and not limit:
+                after = "The route has a limit on how often one person can call it."
+            elif limit and not login:
+                harm, after = PAID_LIMITED, "The route needs a signed-in user."
+        elif kind == "auth" and _action(route, rkind):
+            steps.append(f"They are not signed in when they run the Server Action {_action(route, rkind)}.")
+        elif kind == "auth" and route:
+            steps.append(f"They are not signed in when they send {route}.")
         if kind in ("owner", "owner-late"):
             steps.append("They are signed in with their own account. In the request they change the record's id to "
                          "another one, which is not theirs.")
@@ -691,14 +854,21 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
         pkg = f.get("package")
         return f"{pkg} has a published weakness at the version you use" if pkg else None
     if kind == "auth":
-        route, _ = _route_word(g, f)
+        route, rkind = _route_word(g, f)
+        if _action(route, rkind):
+            return f"The Server Action {_action(route, rkind)} works without checking who is signed in"
         return f"{route} works without checking who is signed in" if route else "A route works without checking who is signed in"
     if kind == "wallet":
-        route, _ = _route_word(g, f)
-        return (f"Anyone can make {route} spend your money on paid calls" if route
-                else "Anyone can make your app spend money on paid calls")
+        route, rkind = _route_word(g, f)
+        who = "Anyone with an account" if _paid(f)[0] else "Anyone"      # a login is there: not just anyone
+        if _action(route, rkind):
+            return f"{who} can make the Server Action {_action(route, rkind)} spend your money on paid calls"
+        return (f"{who} can make {route} spend your money on paid calls" if route
+                else f"{who} can make your app spend money on paid calls")
     if kind == "secret" and (f.get("category") == "exposure" or str(f.get("rule")) == "LW-PUBLIC-SECRET"):
         return "A secret setting is sent to every visitor's browser"
+    if kind == "open-db" and row_words(f):
+        return row_words(f)["head"]
     if kind in FIXED_HEADLINES:
         return FIXED_HEADLINES[kind]
     if kind not in HEADLINES:
@@ -713,7 +883,11 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
         return reached.format(who="Another app or a link").replace("your database", "your app's database")
     if ui:
         clicks = _clicks(g, ui)
-        if clicks:   # "click the backup button" -> "The backup button"
+        if clicks and clicks[-1].endswith(" on it"):   # "click a button on it" -> "A button on the /ask page"
+            what, pg = clicks[-1].split(" ", 1)[1][:-len(" on it")], _page(g, ui[0])
+            where = "the page" if not pg else f"the {pg.split(' · ')[0]}" if " screen" in pg else f"the {pg} page"
+            who = f"{what[0].upper()}{what[1:]} on {where}"
+        elif clicks:   # "click the backup button" -> "The backup button"
             who = "The " + clicks[-1].split(" the ", 1)[-1]
         elif _page(g, ui[0]):
             pg = _page(g, ui[0])
@@ -721,7 +895,8 @@ def headline(f: dict, g: Graph | None = None) -> str | None:
     if not who:
         if rkind in ("cli", "script", "main"):   # a command the owner runs by hand: no visitor reaches it
             return otherwise
-        who = f"A request to {route}" if route and rkind == "route" else "What a visitor types"
+        who = f"A request to the Server Action {_action(route, rkind)}" if _action(route, rkind) else \
+            f"A request to {route}" if route and rkind == "route" else "What a visitor types"
     return reached.format(who=who)
 
 

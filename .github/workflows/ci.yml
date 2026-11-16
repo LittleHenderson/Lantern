@@ -41,6 +41,22 @@ jobs:
           program="$RUNNER_TEMP/gitleaks/gitleaks$(go env GOEXE)"
           test "$("$program" version)" = "8.30.1"
           echo "LANTERN_TESTS_GITLEAKS=$program" >> "$GITHUB_ENV"
+      - name: TypeScript 6.0.2 and pyright 1.1.414 for the tests of the type-aware pass, from npm, fixed versions, install scripts off
+        # tests/test_typecheck.py starts the real checkers where LANTERN_TESTS_TYPECHECK is set, and under `required`
+        # a checker that is not found fails its tests. They are installed outside the checkout and kept off PATH,
+        # and named by the variables Lantern itself reads, so that Lantern's check of itself runs as on a computer
+        # without them. Each version is read back from what was installed before it is named. Nothing comes with
+        # them: neither package needs another, and the one pyright would take if it could (a file watcher for macOS,
+        # asked for by a range of versions) is left out, so the two fixed versions are all that is installed.
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --omit=optional --no-audit --no-fund typescript@6.0.2 pyright@1.1.414
+          at="$RUNNER_TEMP/checkers/node_modules"
+          test "$(node -p "require(process.argv[1]).version" "$at/typescript/package.json")" = "6.0.2"
+          test "$(node -p "require(process.argv[1]).version" "$at/pyright/package.json")" = "1.1.414"
+          echo "LANTERN_TYPESCRIPT=$at/typescript" >> "$GITHUB_ENV"
+          echo "LANTERN_PYRIGHT=$at/pyright/langserver.index.js" >> "$GITHUB_ENV"
+          echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"
       - name: Tests, measuring how much of the code they run (coverage; the build fails under 85%)
         # The tests run without a network: tools/netless.py gives the run one that holds nothing but this computer's
         # own address, and has the operating system write down every address any program of the run tries. Anything
@@ -51,17 +67,21 @@ jobs:
         # says so, and until 2026-11-10 neither rule reached the tests of this step wherever that sudo ran. So both
         # rules are written on that line, and the last line looks for them in the run's own words: a rule that did
         # not arrive fails the step. The gitleaks built above is named on that line too, and the run's own words
-        # must say that its tests started it, with its version and the way it was handed a project.
+        # must say that its tests started it, with its version and the way it was handed a project. The same for
+        # the two type checkers installed above: their rule and the two places Lantern is told to find them are on
+        # that line, the rule is looked for among the run's rules, and the run's own words must name both versions.
         env:
           LANTERN_TESTS_NETLESS: required
         run: |
           set -o pipefail   # the run is piped into tee: without this the step would pass whatever the tests did
           sudo env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" "LANTERN_TESTS_COMPLETE=$LANTERN_TESTS_COMPLETE" "LANTERN_TESTS_NETLESS=$LANTERN_TESTS_NETLESS" "LANTERN_TESTS_GITLEAKS=$LANTERN_TESTS_GITLEAKS" \
+            "LANTERN_TESTS_TYPECHECK=$LANTERN_TESTS_TYPECHECK" "LANTERN_TYPESCRIPT=$LANTERN_TYPESCRIPT" "LANTERN_PYRIGHT=$LANTERN_PYRIGHT" \
             python tools/netless.py --watch "$RUNNER_TEMP/network.json" -- \
             python -m pytest -q -rs --cov=lantern --cov=gateway --cov=cloud --cov-report=term --cov-report=xml:coverage.xml --cov-fail-under=85 | tee pytest.log
-          grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required' pytest.log || { echo "::error::The rules this step sets did not reach the tests: the last lines of the run do not name both"; exit 1; }
+          grep -q '^rules of this run: LANTERN_TESTS_COMPLETE=required.*LANTERN_TESTS_NETLESS=required.*LANTERN_TESTS_TYPECHECK=required' pytest.log || { echo "::error::The rules this step sets did not reach the tests: the last lines of the run do not name all three"; exit 1; }
           grep '^programs these tests started' pytest.log || true   # which npm the tests met: what npm asks differs by version, and this line is far up in the log
           grep -q '^programs these tests started: .*gitleaks 8\.30\.1 (linked)' pytest.log || { echo "::error::The tests of how Lantern starts gitleaks did not run against the gitleaks built for them"; exit 1; }
+          grep -q '^programs these tests started: .*pyright 1\.1\.414 (node at .*typescript 6\.0\.2 (node at ' pytest.log || { echo "::error::The tests of the type-aware pass did not start the two type checkers installed for them"; exit 1; }
       - name: Coverage and the network record, for the summary
         if: always()
         run: |
@@ -212,6 +232,22 @@ jobs:
           program="$RUNNER_TEMP/gitleaks/gitleaks$(go env GOEXE)"
           test "$("$program" version)" = "8.30.1"
           echo "LANTERN_TESTS_GITLEAKS=$program" >> "$GITHUB_ENV"
+      - name: TypeScript 6.0.2 and pyright 1.1.414 for the tests of the type-aware pass, from npm, fixed versions, install scripts off
+        # tests/test_typecheck.py starts the real checkers where LANTERN_TESTS_TYPECHECK is set, and under `required`
+        # a checker that is not found fails its tests. They are installed outside the checkout and kept off PATH,
+        # and named by the variables Lantern itself reads, so that Lantern's check of itself runs as on a computer
+        # without them. Each version is read back from what was installed before it is named. Nothing comes with
+        # them: neither package needs another, and the one pyright would take if it could (a file watcher for macOS,
+        # asked for by a range of versions) is left out, so the two fixed versions are all that is installed.
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --omit=optional --no-audit --no-fund typescript@6.0.2 pyright@1.1.414
+          at="$RUNNER_TEMP/checkers/node_modules"
+          test "$(node -p "require(process.argv[1]).version" "$at/typescript/package.json")" = "6.0.2"
+          test "$(node -p "require(process.argv[1]).version" "$at/pyright/package.json")" = "1.1.414"
+          echo "LANTERN_TYPESCRIPT=$at/typescript" >> "$GITHUB_ENV"
+          echo "LANTERN_PYRIGHT=$at/pyright/langserver.index.js" >> "$GITHUB_ENV"
+          echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"
       - run: python -m pytest -q -rs
       - name: Lantern audits itself (no critical, high, or medium findings)
         # isolated (tools/netguard): only the three addresses the dependency audit asks can be reached
@@ -230,7 +266,8 @@ jobs:
   macos:
     # macOS runs no other test of Lantern's. These are the ones whose answer the system itself gives: a name handed
     # straight to a socket and the question who an address is, under the sandbox's guard and under the guard of
-    # Lantern's own tests, each beside its twins; and how gitleaks is started, with the real program.
+    # Lantern's own tests, each beside its twins; how gitleaks is started, with the real program; and the type-aware
+    # pass, with the two real type checkers (tests/test_typecheck.py, the whole file: `-k` takes it by its name).
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
@@ -260,9 +297,25 @@ jobs:
           program="$RUNNER_TEMP/gitleaks/gitleaks$(go env GOEXE)"
           test "$("$program" version)" = "8.30.1"
           echo "LANTERN_TESTS_GITLEAKS=$program" >> "$GITHUB_ENV"
-      - name: The guards' tests of a name in an address, and the tests of how gitleaks is started
+      - name: TypeScript 6.0.2 and pyright 1.1.414 for the tests of the type-aware pass, from npm, fixed versions, install scripts off
+        # tests/test_typecheck.py starts the real checkers where LANTERN_TESTS_TYPECHECK is set, and under `required`
+        # a checker that is not found fails its tests. They are installed outside the checkout and kept off PATH,
+        # and named by the variables Lantern itself reads, so that Lantern's check of itself runs as on a computer
+        # without them. Each version is read back from what was installed before it is named. Nothing comes with
+        # them: neither package needs another, and the one pyright would take if it could (a file watcher for macOS,
+        # asked for by a range of versions) is left out, so the two fixed versions are all that is installed.
+        shell: bash
         run: |
-          python -m pytest -q -rs tests/test_sandbox_guards.py tests/test_sandbox.py tests/test_netguard.py tests/test_scanners.py -k "name_in_an_address or twins_a_number_this_computer or who_an_address_is or who_this_computer_is or asked_the_older_ways or handed_straight_to_a_socket or socket_class_of_the_tests_own or twins_this_computer_by_name or number_outside_is_still or gitleaks"
+          npm install --prefix "$RUNNER_TEMP/checkers" --no-save --ignore-scripts --omit=optional --no-audit --no-fund typescript@6.0.2 pyright@1.1.414
+          at="$RUNNER_TEMP/checkers/node_modules"
+          test "$(node -p "require(process.argv[1]).version" "$at/typescript/package.json")" = "6.0.2"
+          test "$(node -p "require(process.argv[1]).version" "$at/pyright/package.json")" = "1.1.414"
+          echo "LANTERN_TYPESCRIPT=$at/typescript" >> "$GITHUB_ENV"
+          echo "LANTERN_PYRIGHT=$at/pyright/langserver.index.js" >> "$GITHUB_ENV"
+          echo "LANTERN_TESTS_TYPECHECK=required" >> "$GITHUB_ENV"
+      - name: The guards' tests of a name in an address, the tests of how gitleaks is started, and the tests of the type-aware pass
+        run: |
+          python -m pytest -q -rs tests/test_sandbox_guards.py tests/test_sandbox.py tests/test_netguard.py tests/test_scanners.py tests/test_typecheck.py -k "name_in_an_address or twins_a_number_this_computer or who_an_address_is or who_this_computer_is or asked_the_older_ways or handed_straight_to_a_socket or socket_class_of_the_tests_own or twins_this_computer_by_name or number_outside_is_still or gitleaks or test_typecheck"
 
   browser:
     # The viewer in a real browser: no JS errors, and hostile text can't break or hijack the page.

@@ -16,9 +16,9 @@ import re
 import subprocess
 from pathlib import Path
 
-from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult
+from . import SCHEMA_VERSION, __version__, deep, gitfacts, programs, release, results, scanresult, typecheck
 from .depaudit import AUDIT_TOOLS
-from .graph import Graph
+from .graph import Graph, route_words
 from .lanes import LANE_WORDS, LANES
 from .python_frontend import inside_repo, project_text
 from .security import ID_VERSION
@@ -82,8 +82,12 @@ def run_options(sec: dict | None, run_meta: dict | None) -> dict:
     """How the results were made, so `lantern verify` can make them the same way."""
     tr = (run_meta or {}).get("trace")
     # tests that were asked for and not run left nothing in the results: no trace to repeat
-    return {"scan": sec is not None, "trace": tr.get("command") if counted(tr) else None,
-            "offline": bool((run_meta or {}).get("offline"))}
+    out = {"scan": sec is not None, "trace": tr.get("command") if counted(tr) else None,
+           "offline": bool((run_meta or {}).get("offline"))}
+    types = (run_meta or {}).get("typecheck")
+    if isinstance(types, dict) and types.get("asked"):   # only when asked for: every other run's options stay as they were
+        out["typecheck"] = typecheck.versions(types)
+    return out
 
 
 def digest_payload(g: Graph, sec: dict | None, rd: dict | None, commit: str | None, dirty: bool = False,
@@ -153,6 +157,26 @@ def _whole(x) -> int:
 
 def _names(x, most: int = 3) -> list[str]:
     return [str(v)[:120] for v in (x if isinstance(x, list) else []) if isinstance(v, str)][:most]
+
+
+ROUTES_NOT_READ = {      # `graph.json` `meta.remix.not_read` (the JS/TS reader's words) -> the sentence for the Limits
+    "Remix 1 route folders": (
+        "This is a Remix 1 app, which keeps its routes in folders. Lantern does not read that layout, so the app's "
+        "pages and routes are not on the map, and no finding says who can reach its code."),
+    "React Router routes listed in app/routes.ts": (
+        "This React Router app lists its routes in app/routes.ts by hand, or names a folder of its own for them. "
+        "Lantern does not read that list, so the app's pages and routes are not on the map, and no finding says "
+        "who can reach its code."),
+}
+
+
+def routes_not_read(meta: dict) -> list[str]:
+    """The Limits lines for an app whose routes the JS/TS reader did not read. The map's own words only pick the
+    sentence: a results file is taken by its shape, and nothing of its text is repeated."""
+    remix = meta.get("remix") if isinstance(meta, dict) else None
+    words = remix.get("not_read") if isinstance(remix, dict) else None
+    named = words.split("; ") if isinstance(words, str) else []
+    return [sentence for word, sentence in ROUTES_NOT_READ.items() if word in named]
 
 
 def not_read_lines(sec: dict | None) -> list[str]:
@@ -394,6 +418,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "type was unknown. They are marked likely or possible, never confirmed, and can point at the "
                    "wrong function.")
     out += deep.words(g.meta)    # code nested deeper than a reader follows: left where the reading stopped, and named
+    out += routes_not_read(g.meta)
     tr = run_meta.get("trace")
     if counted(tr):
         out.append(f"Runtime behavior beyond what `{' '.join(tr.get('command', []))}` exercised. Python calls seen "
@@ -411,6 +436,7 @@ def limits(g: Graph, sec: dict | None, rd: dict | None, run_meta: dict, privacy:
                    "tests were not executed.")
     if "typescript/javascript" in (g.meta.get("languages") or {}):
         out.append("Frontend call edges are static only (no JavaScript runtime tracing yet).")
+    out += typecheck.limits(run_meta.get("typecheck"))     # only for a run that asked for the type-aware pass
     if sec is None:
         out.append("Security scanners were not run for this report (--no-scan): no findings does not mean no problems.")
     tools = [t for t in (sec or {}).get("tools", []) if isinstance(t, dict)]
@@ -558,7 +584,7 @@ def build(g: Graph, sec: dict | None, rd: dict | None, exp: dict | None, run_met
         # older Lantern wrote
         "release": (rd or {}).get("release") if isinstance((rd or {}).get("release"), dict) else None,
         "understanding": narratives,
-        "provenance": {"tools": tool_versions(sec), "models": models,
+        "provenance": {"tools": tool_versions(sec) + typecheck.rows(run_meta.get("typecheck")), "models": models,
                        # the libraries the project's tests ran on, each with its fingerprint (None: no tests, or
                        # tests that ran on no library of anyone's)
                        "libraries": libraries_shown(run_meta.get("trace")),
@@ -592,8 +618,12 @@ def read_digest(report: Path) -> tuple[str | None, dict | None]:
 
 
 def verify(repo: Path, want: str, old: dict | None, trace_cmd: list[str] | None = None, no_scan: bool = False,
-           offline: bool = False, beside: Path | None = None) -> dict:
+           offline: bool = False, beside: Path | None = None, typecheck: bool = False) -> dict:
     """Re-run the analysis on `repo` the way the report was made and compare digests.
+
+    `typecheck`: the caller's word that this computer's type checkers may be asked again. A report made with the
+    type-aware pass is verified only with it (`refused` otherwise, like a trace: a report starts no program), and a
+    report made without it is never verified with it.
 
     Scanning on/off and offline are copied from the report's recorded options; a trace command never is, because a
     trace runs the project's code. The caller types it, and it must match what the report recorded, or the result
@@ -615,10 +645,18 @@ def verify(repo: Path, want: str, old: dict | None, trace_cmd: list[str] | None 
                 "Lantern won't run a command taken from a report; check it and pass it yourself.",
                 "trace_command": want_trace, "report": want}
     offline = bool(run.get("offline")) or offline
+    with_types = isinstance(run.get("typecheck"), dict)
+    if with_types and not typecheck:
+        return {"match": False, "typecheck": True, "report": want,
+                "refused": "This report was made with the type-aware pass (--typecheck), which asks the type checkers "
+                           "installed on this computer where calls go. Lantern does not start them because a report "
+                           "says so: add --typecheck to check it the same way."}
     from . import kept
     with kept.without():        # a verification does the work again: nothing kept from an earlier run is used
-        g = build_graph(repo)
+        g = build_graph(repo, typecheck=with_types)
         run_meta: dict = {"offline": offline}
+        if g.meta.get("typecheck"):
+            run_meta["typecheck"] = g.meta["typecheck"]
         if trace_cmd:
             tm = merge_trace(g, run_trace(repo, trace_cmd))
             run_meta["trace"] = {"command": trace_cmd, "returncode": tm["returncode"]}
@@ -956,7 +994,7 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     cats = "".join(f"<tr><td>{E(c['title'])}</td><td class='num'>{'n/a' if c['score'] is None else E(c['score'])}"
                    f"<span class='muted'>/{E(c['weight'])}</span></td><td><span class='bar'><i style='width:{_pct(c.get('percent'))}%'></i>"
                    f"</span></td></tr>" for c in (rd or {}).get("categories", []))
-    entries = "".join(f"<li><span class='tag'>{E(e['kind'])}</span> <code>{E(e['detail'] or e['name'])}</code> "
+    entries = "".join(f"<li><span class='tag'>{E(e['kind'])}</span> <code>{E(route_words(e['detail']) or e['name'])}</code> "
                       f"<span class='muted'>{E(e['file'] or '')}</span></li>" for e in ar["entries"][:40])
     if len(ar["entries"]) > 40:
         entries += f"<li class='muted'>and {len(ar['entries']) - 40} more</li>"

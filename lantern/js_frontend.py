@@ -15,6 +15,7 @@ calls that can't be traced are counted, not guessed.
 from __future__ import annotations
 
 import base64
+import bisect
 import hashlib
 import json
 import os
@@ -27,7 +28,7 @@ import tree_sitter_typescript as tst
 from tree_sitter import Language, Node as TSNode, Parser
 
 from . import calls, deep, manifest
-from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, RESOLVED, Graph, Node
+from .graph import CALLABLE, CALLS, CLASS, CONTAINS, INFERRED, MODULE, POSSIBLE, RESOLVED, Graph, Node
 from .python_frontend import inside_repo, project_bytes, project_text, skipped_dir
 
 LANGS = {
@@ -86,6 +87,99 @@ JS_BUILTINS = JS_GLOBALS | {
     "FileReader", "Notification", "ReadableStream", "WritableStream", "TransformStream", "AbortSignal",
     "DOMException", "self", "global", "__dirname", "__filename",
 }
+# Supabase (roadmap stage 1): `<client>.from("<table>").<one of these>(…)` is a call into that table. A value is a
+# client by where it came from: what one of the libraries' own makers handed back, or a value of the written type
+DB_OPS = ("select", "insert", "update", "upsert", "delete")
+# What a file says of itself in its first statements, before any code. `"use client"`: the file and what it loads
+# run in the browser. `"use server"`: what it exports runs on the server, also when a client file calls it.
+DIRECTIVES = ("use client", "use server")
+# The frameworks that run Server Actions: with one of them among the nearest package.json's libraries, a function
+# marked "use server" gets an address of its own on the server. With none, the words do nothing.
+SERVER_ACTIONS = {"next", "waku", "react-server-dom-webpack", "react-server-dom-turbopack", "react-server-dom-parcel"}
+# tRPC (roadmap of 2026-11-14, stage 1). A tRPC app has no route files: `createTRPCRouter({ create:
+# protectedProcedure.input(…).mutation(fn) })` makes `post.create` an address. Read only where the nearest
+# package.json depends on `@trpc/server`; a router is told by its shape here and by what made it in `_trpc_plan`.
+TRPC_SERVER = "@trpc/server"
+TRPC_ROUTER = re.compile(r"^\w*[Rr]outers?$")     # the last name of what is called: router, createTRPCRouter, mergeRouters
+TRPC_MERGE = re.compile(r"^\w*[Mm]erge\w*Routers?$")
+TRPC_KINDS = {"query": "GET", "mutation": "POST", "subscription": "GET"}    # how tRPC's client sends each kind
+TRPC_STEPS = {"use", "input", "output", "meta", "concat", "unstable_concat"}   # what a procedure is built up with
+TRPC_ADAPTERS = {"fetchRequestHandler", "createNextApiHandler", "createExpressMiddleware", "createHTTPServer",
+                 "createHTTPHandler", "awsLambdaRequestHandler", "createKoaMiddleware", "nodeHTTPRequestHandler"}
+TRPC_AT_ROOT = {"createHTTPServer", "createHTTPHandler"}    # served at the address itself when no path is written
+# What a call through tRPC's client ends in. The hooks and option makers are tRPC's own names: a call that ends in
+# one, on a path that is a procedure, is a link even where the client is not followed ("likely"). `query` and
+# `mutate` are everyday names: a link only on a client that tRPC's own function made.
+TRPC_HOOKS = {"useQuery", "useMutation", "useSuspenseQuery", "useInfiniteQuery", "useSuspenseInfiniteQuery",
+              "useSubscription", "usePrefetchQuery", "queryOptions", "mutationOptions", "infiniteQueryOptions",
+              "subscriptionOptions"}
+TRPC_CALLS = {"query", "mutate", "mutateAsync", "subscribe"}
+# SvelteKit (roadmap of 2026-11-14, stage 1). The doors of a SvelteKit app are files with fixed names under
+# `src/routes`: `+server.ts` (a function per verb), `+page.server.ts` (`load` hands the page its data, each of
+# `actions` is what a form posts to), `+layout.server.ts` (`load` for every page below it); `src/hooks.server.ts`
+# (`handle`) runs before all of them. Read only where the nearest package.json depends on `@sveltejs/kit`. A
+# `.svelte` file is read wherever it is: its `<script>` as code, its markup for the components it draws, the
+# functions it hands to events, the expressions it shows and the forms that post.
+SVELTE_EXT = ".svelte"
+KIT = "@sveltejs/kit"
+SVELTE_CONFIGS = ("svelte.config.js", "svelte.config.ts", "svelte.config.mjs")
+KIT_VERBS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+KIT_FILE = re.compile(r"^src/routes/(?P<dir>(?:[^/]+/)*)\+(?P<kind>page\.server|layout\.server|server|page|layout)"
+                      r"(?:@[^./]*)?\.(?P<ext>[jt]s|svelte)$")
+KIT_HOOKS = re.compile(r"^src/hooks\.server(?:/index)?\.[jt]s$")
+# Remix, and React Router's framework mode that took its place (the same stage). The doors of such an app are its
+# route files: `app/root` and what lies directly in `app/routes`, a file or a folder with a `route` file in it (or,
+# where there is none, an `index` file: the name Remix first gave a folder's own file, and still reads). A file's
+# name is its address (`remix_address`); its `loader` answers a GET there, its `action` every other verb, and what
+# it exports by default is the page. Read only where the nearest package.json says the app is one (`remix_way`),
+# and never by running the app's settings.
+REMIX_PACKAGES = re.compile(r"^@remix-run/(dev|node|react|serve|express|cloudflare|deno|architect|netlify|vercel|"
+                            r"server-runtime)$")
+ROUTER_FRAMEWORK = "@react-router/dev"
+REMIX_FILE = re.compile(r"^app/(?:root|routes/(?P<name>[^/]+?)(?:/(?P<own>route|index))?)\.[cm]?[jt]sx?$")
+REMIX_DOORS = ("loader", "action")
+REMIX_CONFIGS = ("remix.config.js", "remix.config.mjs", "remix.config.cjs")
+ROUTER_ROUTES = ("routes.ts", "routes.js", "routes.mts", "routes.mjs", "routes.tsx", "routes.jsx")
+REMIX_SENDS = {"post", "put", "patch", "delete"}     # the verbs of a form that go to a route's `action`
+REMIX_OLD = "Remix 1 route folders"
+ROUTER_LISTED = "React Router routes listed in app/routes.ts"   # by hand, or a folder of its own: not read, and said
+_SVELTE_TS = re.compile(rb"\blang\s*=\s*[\"']?(?:ts|typescript)\b", re.I)
+_SVELTE_MODULE = re.compile(rb"\bmodule\b", re.I)     # <script module>, <script context="module">: the file's own
+_STYLE_RE = re.compile(rb"<style\b[^>]*>.*?</style\s*>", re.I | re.S)
+_COMMENT_RE = re.compile(rb"<!--.*?-->", re.S)
+_SVELTE_BLOCK = re.compile(rb"\s*(#if|:else\s+if|#key|@html|@render|#await|#each)\s+")
+_SVELTE_NAMES = re.compile(rb"\s*(?::then|:catch|#snippet)\s+([^}]*)")
+_SVELTE_EACH_AS, _SVELTE_AWAIT_THEN = re.compile(rb"\s+as\s"), re.compile(rb"\s+(?:then|catch)\b")
+_SVELTE_ATTR = re.compile(rb"([\w:|.$-]+)\s*=\s*[\"']?$")
+_SVELTE_TAG = re.compile(rb"<([A-Z][\w$]*(?:\.[\w$]+)*)(?=[\s/>])")
+_SVELTE_NOT_PLAIN = re.compile(rb"\{|(?:async\s+)?function\b|class\b")
+_SVELTE_OPEN = re.compile(rb"<[A-Za-z][\w:.-]*")     # where a tag opens: an attribute is one only inside a tag
+_FORM_OPEN = re.compile(rb"<form(?=[\s>])")          # `<Form …>` with a capital is a component, not the page's form
+# Svelte's own words, which its compiler turns into code (`let n = $state(0)`): in a `.svelte` file and in a
+# `.svelte.js` / `.svelte.ts` file, nowhere else
+SVELTE_RUNES = frozenset(("$state", "$derived", "$effect", "$props", "$bindable", "$inspect", "$host"))
+RUNE_FILE = re.compile(r"\.svelte\.[jt]s$")
+# `import { a } from "./util.js"` where the file is `util.ts`: how TypeScript itself reads an import in a project
+# that ships modules. Only where no file of the written name is there.
+TS_FOR = {".js": (".ts", ".tsx"), ".jsx": (".tsx",), ".mjs": (".mts",), ".cjs": (".cts",)}
+_FORMACTION = re.compile(rb"(?<![\w:.$-])formaction\s*=\s*(?:\"([^\"{}]*)\"|'([^'{}]*)')", re.I)
+# `action={sendTo}`: a form's address is one name; `sendTo="/account?/rename"`: an attribute whose text is written out
+_ACTION_NAME = re.compile(rb"(?<![\w:.$-])action\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}|(?<![\w$.{])\{\s*(action)\s*\}")
+_TEXT_ATTR = re.compile(rb"(?<![\w:.$-])([A-Za-z_$][\w$-]*)\s*=\s*(?:\"([^\"{}]*)\"|'([^'{}]*)')")
+_JS_NAME = re.compile(rb"[A-Za-z_$][\w$]*")
+# `onclick={…}` (Svelte 5) is an event only under a name the browser has; `on:click={…}` (Svelte 4) under any
+DOM_EVENTS = frozenset("""click dblclick submit change input keydown keyup keypress focus blur mouseenter mouseleave
+    mouseover mouseout mousedown mouseup mousemove pointerdown pointerup pointermove touchstart touchend touchmove
+    scroll wheel drag drop dragstart dragend dragover load error reset select contextmenu paste copy cut resize
+    toggle close""".split())
+SUPABASE_CLIENT = re.compile(r"^@supabase/[\w.-]+\.(create\w*Client\(\)|useSupabaseClient\(\)|SupabaseClient)$")
+# By its name alone: a possible link, no more. `supabase`, `supabaseClient`, `supabase_admin` in any case, and a
+# longer name that begins with the library's and goes on as a new word (`supabaseServiceRole`, `supabase_server`);
+# not the word inside or at the end of a name, and not a handle named as the library's file store.
+SUPABASE_NAME = re.compile(r"(?i:^_?supabase(_?(client|admin))?$)|"
+                           r"^_?[sS]upabase(?=[A-Z_0-9])(?!(?i:\w*(storage|bucket)))\w+$")
+TABLE_NAME = re.compile(r"^[A-Za-z_][\w$]{0,62}$")
+
 JS_LANG = "typescript/javascript"   # the name engine.build_graph gives the language in g.meta["languages"]
 # An import of one of these is a file (relative, absolute, a path alias or a package.json "imports" entry), never a
 # library: when it does not resolve, the file is missing, and a call through it is not a library call.
@@ -247,10 +341,97 @@ def _site_pos(n: TSNode) -> tuple[int, int]:
     return n.start_point[0] + 1, n.start_point[1] + 1
 
 
+def _directives(root: TSNode) -> set[str]:
+    """The directives a file begins with (`DIRECTIVES`): statements that are one text and nothing else, before the
+    first statement that is anything else. A text further down is a text."""
+    out: set[str] = set()
+    for c in root.named_children:
+        if c.type == "comment":
+            continue
+        inner = c.named_children[0] if c.type == "expression_statement" and c.named_child_count == 1 else None
+        if inner is None or inner.type != "string":
+            break
+        said = _text(inner)[1:-1]
+        if said in DIRECTIVES:
+            out.add(said)
+    return out
+
+
+def _exported_later(root: TSNode) -> frozenset:
+    """The file's own names it exports apart from where it declares them: `export { a, b as c }` (the names on
+    the left) and `export default a`."""
+    out: set[str] = set()
+    for c in root.named_children:
+        if c.type != "export_statement" or c.child_by_field_name("source") is not None or \
+                c.child_by_field_name("declaration") is not None:
+            continue
+        for clause in c.named_children:
+            if clause.type == "export_clause":
+                out.update(_text(s.child_by_field_name("name")) for s in clause.named_children
+                           if s.type == "export_specifier")
+        val = c.child_by_field_name("value")
+        if val is not None and val.type == "identifier":
+            out.add(_text(val))
+    return frozenset(out)
+
+
+def _or_new(value: TSNode | None) -> TSNode | None:
+    """`kept ?? new T()`, `kept || new T()` -> the `new T()`: how an app keeps one client across reloads. Whichever
+    side is taken, the code uses the value as the class it would make. `&&` and a `new` on the left are not this."""
+    v = _unparen(value)
+    if v is None or v.type != "binary_expression":
+        return None
+    op = v.child_by_field_name("operator")
+    right = _unparen(v.child_by_field_name("right"))
+    if op is None or _text(op) not in ("??", "||") or right is None or right.type != "new_expression":
+        return None
+    return right
+
+
 def _unparen(n: TSNode | None) -> TSNode | None:
     while n is not None and n.type == "parenthesized_expression" and n.named_child_count:
         n = n.named_children[0]
     return n
+
+
+def _either(a):
+    """An argument, or the two sides of a choice written in its place (`first ? save : remove`, in brackets or
+    not). One level: a choice inside a choice is left alone."""
+    x = _unparen(a)
+    if x is not None and x.type == "ternary_expression":
+        sides = (_unparen(x.child_by_field_name("consequence")), _unparen(x.child_by_field_name("alternative")))
+        return [y for y in sides if y is not None]
+    return [a]
+
+
+def _bare(n: TSNode | None) -> TSNode | None:
+    """The expression inside brackets, `as T`, `satisfies T` and `!`."""
+    for _ in range(8):
+        n = _unparen(n)
+        if n is None or n.type not in ("as_expression", "satisfies_expression", "non_null_expression") or \
+                not n.named_child_count:
+            break
+        n = n.named_children[0]
+    return n
+
+
+def _trpc_spine(call: TSNode | None):
+    """`base.input(x).use(mw).mutation(fn)` -> (["base"], [("input", [x]), ("use", [mw]), ("mutation", [fn])]): what a
+    chain of calls is built on, and each call hung on it, in the order written."""
+    steps: list[tuple[str, list]] = []
+    cur = _bare(call)
+    for _ in range(24):
+        if cur is None or cur.type != "call_expression":
+            break
+        fnn = _bare(cur.child_by_field_name("function"))
+        if fnn is None or fnn.type != "member_expression":
+            break
+        args = cur.child_by_field_name("arguments")
+        steps.append((_text(fnn.child_by_field_name("property")),
+                      [a for a in (args.named_children if args is not None else []) if a.type != "comment"]))
+        cur = _bare(fnn.child_by_field_name("object"))
+    steps.reverse()
+    return (_chain(cur) if cur is not None else None), steps
 
 
 def _call_nodes(root: TSNode):
@@ -294,6 +475,7 @@ class JSDef:
     entry: dict | None = None
     member: bool = False       # stored as a property (`X.y = function`, `this.x = …`, `X.prototype.y = …`): no name in scope
     lexical: str | None = None  # where the function is written, when that differs from parent_local (names it can see)
+    server: bool = False       # its own body begins with "use server": a Server Action written inside another function
 
 
 @dataclass
@@ -306,6 +488,7 @@ class JSRef:
     at: tuple[int, int] | None = None   # (line, column from 1) of the call's "(": the call site's identity
     text: str = ""             # the callee as written
     args: list[list[str]] | None = None   # names handed to the calls inside the callee: getRepository(User).find
+    db: dict | None = None     # `<recv>.from("<table>").<op>(…)`: {recv, schema, table | const, op} (Walker._db_shape)
 
 
 @dataclass
@@ -329,13 +512,25 @@ class JSModule:
     lines: int
     is_test: bool
     html: bool = False         # script taken from inside an HTML page (module name keeps the .html)
+    svelte: bool = False       # a Svelte component file (module name keeps the .svelte)
+    runes: bool = False        # ... or a `.svelte.ts` file: Svelte's own words (`$state`) are the language's here
+    kit_handles: list[tuple] = field(default_factory=list)   # `handle = sequence(a, b)` of hooks.server: (name, at)
+    component: str | None = None   # ... and the function that stands for the component: named after the file
+    forms: list[dict] = field(default_factory=list)   # the forms of its markup that post: {line, action[, prop]}
+    # an address written out on a part it draws (`<Panel sendTo="/account?/rename">`): {line, tag, name, value}
+    part_attrs: list[dict] = field(default_factory=list)
+    # `actions` of a SvelteKit `+page.server` file: {key, line, local | handler + at, wrap} (Walker._kit_actions)
+    kit_actions: list[dict] = field(default_factory=list)
     defs: dict[str, JSDef] = field(default_factory=dict)
     imports: dict[str, tuple[str | None, str, str]] = field(default_factory=dict)  # local -> (mod, name, spec)
     exports: dict[str, str] = field(default_factory=dict)       # exported -> local
     reexports: list[tuple[str | None, dict | None]] = field(default_factory=list)  # (mod, {exp: imp} | None=*)
+    # the same, for what is handed on from a source that found no file: (specifier, {exp: imp} | None=*)
+    handed_on: list[tuple[str, dict | None]] = field(default_factory=list)
     default: str | None = None
     consts: dict[str, str] = field(default_factory=dict)         # module-level string constants
     local_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    var_types: dict[str, dict[str, list[str]]] = field(default_factory=dict)   # scope -> name -> written type
     class_bases: dict[str, list[str]] = field(default_factory=dict)
     refs: list[JSRef] = field(default_factory=list)
     http: list[HttpCall] = field(default_factory=list)
@@ -357,6 +552,9 @@ class JSModule:
     cjs_from: str | None = None       # module.exports = require('./other')
     ctors: set[str] = field(default_factory=set)      # functions given methods: this.x = function, X.prototype.y
     wrapped: set[str] = field(default_factory=set)    # defs read from `const f = wrap(function ...)`
+    # "use server" files: a top-level name set to a helper's call with a function written in it -> the helper's
+    # chain (`export const save = checked(schema, async (data) => …)`: `["checked"]`)
+    made: dict[str, list[str]] = field(default_factory=dict)
     param_lists: dict[str, list[list[str]]] = field(default_factory=dict)   # scope -> inline functions' parameters
     cb_params: dict[str, dict[str, tuple | None]] = field(default_factory=dict)  # scope -> name -> (callee, arg, i)
     mounts: list[dict] = field(default_factory=list)  # x.use('/prefix', router...): {recv, scope, prefix, targets}
@@ -365,6 +563,8 @@ class JSModule:
     required: dict[str, set[str]] = field(default_factory=dict)  # scope -> names bound there by `x = require('…')`
     returns: dict[str, set[str]] = field(default_factory=dict)   # function -> what its own `return` statements give:
     #                                                              a variable's name, or "" for anything else
+    returned: dict[str, list] = field(default_factory=dict)      # function -> each own `return`'s value as a chain
+    #                                                              (a name, a member, a call, `await` of one), or None
     # functions the code puts on an object that is not this file's own function or class (JSResolver.own_names).
     # `put`: by assignment, (scope, owner chain, name, right-hand chain or None for a function written there):
     # `schema.statics.x = function`, `res.x = helper`. `given`: in an object or by name, (scope, name, chain or
@@ -378,6 +578,15 @@ class JSModule:
     #                                                         handed to the calls the variable was set from
     mounts_app: bool = False
     listens: bool = False
+    # tRPC (roadmap of 2026-11-14, stage 1), read only where the package depends on @trpc/server (Walker._trpc_*):
+    # `trpc_routers`: {name, scope, line, callee (None for an object written out), items}, an item being
+    # {key, kind "procedure", type, base, uses, line, local | handler + at}, {key, kind "router", chain | inline}
+    # or {kind "spread", chain | inline}; `trpc_bases`: (scope, name) -> {base, uses} for `const x = base.use(fn)`;
+    # `trpc_mounts`: {scope, line, endpoint, router | inline, adapter}, where the whole is served
+    trpc_routers: list[dict] = field(default_factory=list)
+    trpc_bases: dict[tuple[str, str], dict] = field(default_factory=dict)
+    trpc_mounts: list[dict] = field(default_factory=list)
+    directives: set[str] = field(default_factory=set)   # of DIRECTIVES, the ones the file begins with
 
 
 # --------------------------------------------------------------------------------------------
@@ -477,11 +686,25 @@ def _spine_args(n: TSNode | None) -> list[list[str]]:
 
 
 class Walker:
-    def __init__(self, m: JSModule, resolve_spec):
+    def __init__(self, m: JSModule, resolve_spec, trpc: bool = False, kit: str | None = None,
+                 actions: frozenset | None = None, remix: bool = False):
         self.m = m
         self.resolve_spec = resolve_spec
+        self.trpc = trpc      # the nearest package.json depends on @trpc/server (and this is no test file)
+        # a file that begins with "use server" where something runs Server Actions: the names it exports with
+        # `export { a, b }` or `export default a` (one written `export const a = …` is told as it is read); else None
+        self.actions = actions
+        self.exporting = False    # inside `export const …` / `export function …`
+        self.kit = kit        # what a SvelteKit route file is by its name (`page.server`, `server`, …), or None
+        self.remix = remix    # the nearest package.json says Remix or React Router's framework mode: forms are kept
+        self.top = ""         # the scope whose string constants are the file's own: "", or a Svelte component
+        self.planned: dict[int, str] = {}   # where an inline function begins -> the name it is a function under
+        self.routed: set[int] = set()       # router calls already read (one written inside another, or in a mount)
+        self.owner: tuple[int, str] | None = None   # (where a router call begins, the name it is kept under)
+        self.under: dict[int, str] = {}     # where a call begins -> the path of the `x.use("/path", …)` around it
         self.anon = 0
         self.inline = 0       # how many inline functions deep the walk is inside the current named function
+        self.nested = 0       # and how many methods written in an object (`{ getAll() {…} }`)
 
     # -- defs
     def add_def(self, node: TSNode, name: str, scope: str, kind: str, in_class: str | None,
@@ -498,12 +721,22 @@ class Walker:
         self.m.defs[local] = JSDef(
             local=local, name=name, kind=kind, start=o.start_point[0] + 1, end=o.end_point[0] + 1,
             parent_local=scope, in_class=in_class, params=_text(params)[:200],
-            fingerprint=_fingerprint(node), jsx=kind != "class" and body is not None and _contains_jsx(body))
+            fingerprint=_fingerprint(node), jsx=kind != "class" and body is not None and _contains_jsx(body),
+            server=(kind != "class" and body is not None and body.type == "statement_block"
+                    and "use server" in _directives(body)))
         return local
 
     def walk(self, n: TSNode, scope: str, cls: str | None = None, ui: str | None = None):
         t = n.type
+        if t == "method_definition" and self.planned and n.start_byte in self.planned:
+            # `actions = { async remove({ request }) {…} }` of a SvelteKit page: a function of its own, named there
+            self._walk_body(n, self.add_def(n, self.planned.pop(n.start_byte), scope, "function", None), None, None)
+            return
         if t in FUNC_TYPES:   # an inline function, read as part of the function around it
+            plan = self.planned.pop(n.start_byte, None) if self.planned else None
+            if plan is not None:   # a tRPC procedure's handler or middleware: a function of its own, named there
+                self._walk_body(n, self.add_def(n, plan, scope, "function", None), None, None)
+                return
             ps = _params(n.child_by_field_name("parameters") or n.child_by_field_name("parameter"))
             if ps:
                 self.m.anon_params.setdefault(scope, set()).update(x for x, _ in ps)
@@ -517,6 +750,12 @@ class Walker:
         elif t == "return_statement" and scope and not self.inline:   # the function's own return, not a callback's
             v = _unparen(n.named_children[0]) if n.named_child_count else None
             self.m.returns.setdefault(scope, set()).add(_text(v) if v is not None and v.type == "identifier" else "")
+            if not self.nested:
+                if v is not None and v.type == "await_expression" and v.named_child_count:
+                    v = _unparen(v.named_children[0])
+                self.m.returned.setdefault(scope, []).append(
+                    _chain(v) if v is not None and v.type in ("call_expression", "member_expression", "identifier")
+                    else None)
         if t in ("import_statement",):
             self._import(n)
             return
@@ -566,11 +805,13 @@ class Walker:
         if t in STATEMENT_LISTS:
             self.each(n.children, scope, cls, ui)
             return
-        inline = t in FUNC_TYPES
+        inline, nested = t in FUNC_TYPES, t == "method_definition"
         self.inline += inline
+        self.nested += nested
         for c in n.children:
             self.walk(c, scope, cls, ui)
         self.inline -= inline
+        self.nested -= nested
 
     def each(self, nodes, scope: str, cls: str | None = None, ui: str | None = None):
         """The statements of a block, one by one. One that is nested deeper than Python lets `walk` call itself is
@@ -578,11 +819,11 @@ class Walker:
         written in it is forgotten: the part that was not read may have declared any of them or given it a new value,
         so each counts as a name of this scope that was assigned again."""
         for c in nodes:
-            held = self.inline
+            held, held_nested = self.inline, self.nested
             try:
                 self.walk(c, scope, cls, ui)
             except RecursionError:
-                self.inline = held
+                self.inline, self.nested = held, held_nested
                 self.m.too_deep.append(c.start_point[0] + 1)
                 written = deep.names(c, ("identifier", "shorthand_property_identifier_pattern"))
                 self.m.declared.setdefault(scope, set()).update(written)
@@ -592,11 +833,12 @@ class Walker:
 
     def _walk_body(self, fn: TSNode, local: str, cls: str | None, ui: str | None):
         outer, self.inline = self.inline, 0     # a named function: its body is its own, however deep it is written
+        outer_nested, self.nested = self.nested, 0
         for fld in ("parameters", "parameter", "body"):
             c = fn.child_by_field_name(fld)
             if c is not None:
                 self.walk(c, local, cls, ui)
-        self.inline = outer
+        self.inline, self.nested = outer, outer_nested
 
     def _class(self, n: TSNode, name: str, scope: str, ui):
         local = self.add_def(n, name, scope, "class", None)
@@ -634,19 +876,34 @@ class Walker:
             return
         self.m.declared.setdefault(scope, set()).update(_pattern_names(name_node))
         name = _text(name_node)
+        written = _type_chain(n.child_by_field_name("type")) if name_node.type == "identifier" else None
+        if written:   # let prisma: PrismaClient
+            self.m.var_types.setdefault(scope, {})[name] = written
         fn = _unwrap_func(value)
         if fn is None and name_node.type == "identifier":
-            fn = self._wrapped_func(value)
+            fn = self._wrapped_func(value) or (self._trpc_middleware(value) if self.trpc else None)
+            action = not scope and (self.exporting or name in self.actions if self.actions is not None else
+                                    self.remix and self.exporting and name in REMIX_DOORS)
+            first = fn is not None
+            if fn is None and action:
+                # export const save = checked(schema, async (data) => …) in a "use server" file: every export of
+                # such a file is a function the browser can call, so the helper hands one back, around this one
+                # (and so does the helper that makes a Remix route's `loader` or `action`)
+                fn = self._made_action(value)
             if fn is not None:   # const create = wrap(async (req, res) => ...): the function is a node of its own
                 local = self.add_def(fn, name, scope, "function", cls, outer=n)
                 self.m.wrapped.add(local)
                 self._walk_body(fn, local, None, ui)
                 wfn = value.child_by_field_name("function")
+                if action and wfn is not None and _chain(wfn):
+                    self.m.made[local] = _chain(wfn)
                 self.m.refs.append(JSRef(scope, _chain(wfn), value.start_point[0] + 1, "call", ui, _site_pos(value),
                                          _text(wfn)))
                 self.walk(wfn, scope, cls, ui)
                 args = value.child_by_field_name("arguments")
-                for a in (args.named_children[1:] if args is not None else []):
+                rest = [] if args is None else args.named_children[1:] if first else \
+                    [a for a in args.named_children if not a.start_byte <= fn.start_byte < a.end_byte]
+                for a in rest:
                     self.walk(a, scope, cls, ui)
                 return
         if value is not None and self._require_binding(name_node, value, scope):
@@ -667,13 +924,20 @@ class Walker:
             self._class(value, name, scope, ui)
             return
         if value is not None and name_node.type == "identifier":
+            if self.trpc:
+                self._trpc_declared(name, value, scope, n)
+            if self.kit == "page.server" and not scope and name == "actions":
+                self._kit_actions(_bare(value))
+            if self.kit == "hooks" and not scope and name == "handle":
+                self._kit_handle(_bare(value))
             if value.type == "call_expression" and OPTIONAL_LOGIN.search(_text(value)):
                 self.m.optional.add(name)   # const maybe = expressjwt({ ..., credentialsRequired: false })
             sv = self._url_of(value)
-            if sv is not None and not scope:
+            if sv is not None and scope == self.top:
                 self.m.consts[name] = sv
-            if value.type == "new_expression":
-                ch = _chain(value.child_by_field_name("constructor"))
+            made = value if value.type == "new_expression" else _or_new(value)
+            if made is not None:   # new T(), and `kept ?? new T()`: the kept one or a new one
+                ch = _chain(made.child_by_field_name("constructor"))
                 if ch:
                     self.m.local_types.setdefault(scope, {})[name] = ch
             if value.type == "call_expression":
@@ -690,6 +954,54 @@ class Walker:
                 self.m.plain.setdefault(scope, set()).add(name)
         if value is not None:
             self.walk(value, scope, cls, ui)
+
+    def _kit_actions(self, obj: TSNode | None) -> None:
+        """`export const actions = { default: async ({ request }) => …, remove, save: saveNote }` in a SvelteKit
+        `+page.server` file: each key is what a form of the page posts to. A function written there is a function
+        of its own from here on (`actions.<key>`), also inside a helper that hands back a function around it
+        (`save: guarded(async (event) => …)`, the helper kept as `wrap`); one handed by name keeps the node it has."""
+        if obj is None or obj.type != "object":
+            return
+        for c in obj.named_children:
+            item: dict = {"line": c.start_point[0] + 1}
+            if c.type == "pair":
+                item["key"] = _text(c.child_by_field_name("key")).strip("'\"`")
+                val = _bare(c.child_by_field_name("value"))
+                inner = self._wrapped_func(val)
+                if inner is not None:
+                    item["wrap"] = _chain(val.child_by_field_name("function"))
+                    val = inner
+                if val is not None and val.type in FUNC_TYPES:
+                    self.planned[val.start_byte] = item["local"] = f"actions.{item['key']}"
+                elif val is not None and val.type in ("identifier", "member_expression") and _chain(val):
+                    item["handler"], item["at"] = _chain(val), _site_pos(val)
+                else:
+                    continue
+            elif c.type == "method_definition":
+                item["key"] = _text(c.child_by_field_name("name")).strip("'\"`")
+                self.planned[c.start_byte] = item["local"] = f"actions.{item['key']}"
+            elif c.type == "shorthand_property_identifier":
+                item["key"] = _text(c)
+                item["handler"], item["at"] = [item["key"]], _site_pos(c)
+            else:
+                continue
+            if item["key"]:
+                self.m.kit_actions.append(item)
+
+    def _kit_handle(self, call: TSNode | None) -> None:
+        """`export const handle = sequence(first, second)` in SvelteKit's `src/hooks.server`: each function named
+        there is a hook of its own, run in that order before every route. `sequence` is the kit's own."""
+        if call is None or call.type != "call_expression":
+            return
+        fn = _chain(call.child_by_field_name("function")) or []
+        imp = self.m.imports.get(fn[0]) if len(fn) == 1 else None
+        if imp is None or (imp[1], imp[2]) != ("sequence", "@sveltejs/kit/hooks"):
+            return
+        args = call.child_by_field_name("arguments")
+        for a in args.named_children if args is not None else ():
+            a = _bare(a)
+            if a is not None and a.type in ("identifier", "member_expression") and _chain(a):
+                self.m.kit_handles.append((_chain(a), _site_pos(a)))
 
     # -- CommonJS, values, wrappers (stage 3)
     def _require_binding(self, name_node: TSNode, value: TSNode, scope: str) -> bool:
@@ -764,6 +1076,26 @@ class Walker:
         argv = [a for a in (args.named_children if args is not None else []) if a.type != "comment"]
         first = _unparen(argv[0]) if argv else None
         return first if first is not None and first.type in FUNC_TYPES else None
+
+    @staticmethod
+    def _made_action(value: TSNode | None) -> TSNode | None:
+        """`checked(schema, async (data, form) => ...)` -> the first function written among the call's arguments,
+        wherever it stands. Read only for a name a "use server" file exports (`_declarator`): there the call hands
+        back a function, whatever the helper is. None for a call that hands back something else by its name
+        (NOT_WRAPPERS: `list.map(fn)`), and for a call made on what another call gave (`client.input(s).action(fn)`:
+        what runs before the function is not written here)."""
+        v = _unparen(value)
+        if v is None or v.type != "call_expression":
+            return None
+        ch = _chain(v.child_by_field_name("function"))
+        if not ch or ch[-1] in NOT_WRAPPERS or any(x.endswith("()") or x.startswith("require:") for x in ch):
+            return None
+        args = v.child_by_field_name("arguments")
+        for a in (args.named_children if args is not None else []):
+            f = _unparen(a)
+            if f is not None and f.type in FUNC_TYPES:
+                return f
+        return None
 
     def _assign(self, n: TSNode, scope: str, cls, ui) -> bool:
         """Assignments that define things: `module.exports = ...`, `exports.x = ...`, `this.x = function` in a
@@ -967,8 +1299,12 @@ class Walker:
         if src is not None:
             target = self.resolve_spec(_string_value(src) or "")
             clause = next((c for c in n.named_children if c.type == "export_clause"), None)
+            written = _string_value(src) or ""
+            under = any(c.type == "namespace_export" for c in n.named_children)     # `export * as ns from "x"`
             if clause is None:
                 self.m.reexports.append((target, None))
+                if target is None and written and not under:
+                    self.m.handed_on.append((written, None))
             else:
                 mp = {}
                 for s in clause.named_children:
@@ -976,10 +1312,14 @@ class Walker:
                         nm, al = s.child_by_field_name("name"), s.child_by_field_name("alias")
                         mp[_text(al or nm)] = _text(nm)
                 self.m.reexports.append((target, mp))
+                if target is None and written:
+                    self.m.handed_on.append((written, mp))
             return
         if decl is not None:
             before = set(self.m.defs)
+            self.exporting = True
             self.walk(decl, scope, cls, ui)
+            self.exporting = False
             new = [d for d in self.m.defs if d not in before and "." not in d]
             for d in new:
                 self.m.exports[d] = d
@@ -1022,6 +1362,8 @@ class Walker:
                 first = args.named_children[0] if args is not None and args.named_child_count else None
                 if first is not None and first.type == "identifier":   # export default connect(X)
                     self.m.default = _text(first)
+                if self.trpc:
+                    self.owner = (val.start_byte, "default")
             self.walk(val, scope, cls, ui)
 
     # -- calls
@@ -1036,6 +1378,8 @@ class Walker:
             inner = _unparen(fn)
             self.m.refs.append(JSRef(scope, ["<inline>"] if inner is not None and inner.type in FUNC_TYPES else [],
                                      line, "computed", ui, at, text))
+        elif self.trpc:
+            self._trpc_call(n, ch, argv, scope, line)
 
         # createFileRoute("/path")({ component: X })  (TanStack Router)
         if fn is not None and fn.type == "call_expression":
@@ -1142,7 +1486,8 @@ class Walker:
             http.recv = hch[:-1] if hch[0] != "<expr>" else None
             self.m.http.append(http)
         if ch:
-            self.m.refs.append(JSRef(scope, ch, line, "call", ui, at, text, _spine_args(fn) or None))
+            self.m.refs.append(JSRef(scope, ch, line, "call", ui, at, text, _spine_args(fn) or None,
+                                     self._db_shape(fn, ch)))
             # parameters of inline functions handed to this call: what the callee passes them can be known
             # (forEach on a DOM list passes elements, addEventListener an event, fetch().then a response)
             cbp = self.m.cb_params.setdefault(scope, {})
@@ -1153,14 +1498,261 @@ class Walker:
                                                             fa.child_by_field_name("parameter"))):
                         key = (tuple(ch), ai, pi)
                         cbp[pname] = key if cbp.get(pname, key) == key else None
-        # functions passed as arguments are likely to be called: useEffect(load), map(render)
+        # functions passed as arguments are likely to be called: useEffect(load), map(render). One of two written
+        # in an argument's place too (`useActionState(first ? signIn : signUp, null)`): each is handed in some run
         for a in argv:
-            if a.type == "identifier":
-                self.m.refs.append(JSRef(scope, [_text(a)], line, "callback", ui, _site_pos(a), _text(a)))
+            for x in _either(a):
+                if x.type == "identifier":
+                    self.m.refs.append(JSRef(scope, [_text(x)], line, "callback", ui, _site_pos(x), _text(x)))
         if fn is not None:
             self.walk(fn, scope, cls, ui)
         for a in argv:
             self.walk(a, scope, cls, ui)
+
+    # -- tRPC: routers, the procedures in them, what each is built on, where the whole is served. Shapes only: what
+    # made a router, and so whether it is one, is read where the files are known (`_trpc_plan`)
+    @staticmethod
+    def _trpc_middleware(value: TSNode | None) -> TSNode | None:
+        """`t.middleware(async ({ ctx, next }) => …)` -> the function tRPC runs before a procedure, to be named by
+        the variable it is kept in."""
+        if value is None or value.type != "call_expression":
+            return None
+        ch = _chain(value.child_by_field_name("function"))
+        if not ch or len(ch) < 2 or ch[-1] != "middleware" or any(x.endswith("()") for x in ch):
+            return None
+        args = value.child_by_field_name("arguments")
+        first = _unparen(args.named_children[0]) if args is not None and args.named_child_count else None
+        return first if first is not None and first.type in FUNC_TYPES else None
+
+    def _trpc_declared(self, name: str, value: TSNode, scope: str, decl: TSNode) -> None:
+        """`const postRouter = createTRPCRouter({…})`: the name the router is kept under, for when the walk reaches
+        the call. `const protectedProcedure = t.procedure.use(fn)`: what a procedure of that name is built on.
+        `const postRouter = { all: publicProcedure.query(…) } satisfies TRPCRouterRecord`: a router written out."""
+        v = _bare(value)
+        if v is None:
+            return
+        if v.type == "call_expression":
+            ch = _chain(v.child_by_field_name("function"))
+            if ch and TRPC_ROUTER.match(ch[-1]):
+                self.owner = (v.start_byte, name)
+                return
+            base, steps = _trpc_spine(v)
+            if base and steps and any(x == "use" for x, _ in steps) and all(x in TRPC_STEPS for x, _ in steps):
+                # a function written in `.use()` is made a function of its own only on a name that says procedure:
+                # `app.use(fn)`, `unified().use(plugin)` and the like are written the same way
+                self.m.trpc_bases[(scope, name)] = {
+                    "base": base, "uses": self._trpc_uses(steps, scope, name, "procedure" in base[-1].lower())}
+        elif v.type == "object":
+            said = _text(value)[v.end_byte - value.start_byte:] + _text(decl.child_by_field_name("type"))
+            items = self._trpc_items(v, scope, name, strict=True)
+            if any(i["kind"] == "procedure" or i.get("inline") is not None for i in items) or \
+                    (items and "Router" in said):
+                self.routed.add(v.start_byte)
+                self.m.trpc_routers.append({"name": name, "scope": scope, "line": v.start_point[0] + 1,
+                                            "callee": None, "items": items})
+
+    def _trpc_call(self, n: TSNode, ch: list[str], argv: list, scope: str, line: int) -> None:
+        last = ch[-1]
+        if TRPC_ROUTER.match(last) and n.start_byte not in self.routed:
+            owner, self.owner = self.owner, None
+            self._trpc_router(n, ch, argv, scope, owner[1] if owner and owner[0] == n.start_byte
+                              else f"router@{line}")
+        if last == "use" and len(argv) > 1:     # app.use("/trpc", createExpressMiddleware({ router }))
+            prefix = self._url_of(argv[0])
+            for a in argv[1:] if prefix is not None else ():
+                a = _bare(a)
+                if a is not None and a.type == "call_expression":
+                    self.under[a.start_byte] = prefix
+        if last in TRPC_ADAPTERS and argv:
+            self._trpc_mount(n, _bare(argv[0]), None, scope, line, last)
+        elif last == "register" and len(argv) > 1 and "trpc" in _text(argv[0]).lower():
+            # fastify.register(fastifyTRPCPlugin, { prefix: "/trpc", trpcOptions: { router } })
+            outer = _bare(argv[1])
+            if outer is not None and outer.type == "object":
+                self._trpc_mount(n, _bare(self._obj_prop(outer, ("trpcOptions",))), outer, scope, line, last)
+
+    def _trpc_mount(self, call: TSNode, opts: TSNode | None, around: TSNode | None, scope: str, line: int,
+                    adapter: str) -> None:
+        if opts is None or opts.type != "object":
+            return
+        rv = _bare(self._obj_prop(opts, ("router",)))
+        if rv is None:
+            return
+        rec = {"scope": scope, "line": line, "endpoint": None, "router": None, "inline": None, "adapter": adapter}
+        if rv.type == "call_expression":
+            rch = _chain(rv.child_by_field_name("function"))
+            if rch and TRPC_ROUTER.match(rch[-1]) and rv.start_byte not in self.routed:
+                rargs = rv.child_by_field_name("arguments")
+                rec["inline"] = self._trpc_router(
+                    rv, rch, [a for a in (rargs.named_children if rargs is not None else []) if a.type != "comment"],
+                    scope, f"router@{rv.start_point[0] + 1}")
+        elif rv.type in ("identifier", "member_expression", "shorthand_property_identifier"):
+            rec["router"] = _chain(rv)
+        if rec["router"] is None and rec["inline"] is None:
+            return
+        for obj in (opts, around):
+            for key in ("endpoint", "basePath", "prefix"):
+                v = self._obj_prop(obj, (key,)) if obj is not None else None
+                if v is not None and rec["endpoint"] is None:
+                    rec["endpoint"] = self._url_of(v)
+        if rec["endpoint"] is None:
+            rec["endpoint"] = self.under.get(call.start_byte)
+        self.m.trpc_mounts.append(rec)
+
+    def _trpc_router(self, call: TSNode, ch: list[str], argv: list, scope: str, owner: str) -> int | None:
+        """`createTRPCRouter({ … })` / `mergeRouters(a, b)` -> its place in `trpc_routers`, or None when what it is
+        handed holds nothing a router is made of (`express.Router({ mergeParams: true })`)."""
+        items: list[dict] = []
+        if TRPC_MERGE.match(ch[-1]):
+            for a in argv:
+                items += self._trpc_part(_bare(a), scope, f"{owner}.{len(items)}", None)
+        else:
+            obj = _bare(argv[0]) if argv else None
+            if obj is None or obj.type != "object":
+                return None
+            items = self._trpc_items(obj, scope, owner)
+        if not items:
+            return None
+        self.routed.add(call.start_byte)
+        self.m.trpc_routers.append({"name": owner, "scope": scope, "line": call.start_point[0] + 1, "callee": ch,
+                                    "items": items})
+        return len(self.m.trpc_routers) - 1
+
+    def _trpc_part(self, val: TSNode | None, scope: str, name: str, key: str | None, strict: bool = False) -> list:
+        """One value in a router: another router (by name, made in place, or an object written out), or with a key
+        a procedure. `key` None: a router spread or merged into this one."""
+        kind = "router" if key is not None else "spread"
+        head = {"key": key} if key is not None else {}
+        if val is None:
+            return []
+        if val.type in ("identifier", "member_expression", "shorthand_property_identifier"):
+            ch = _chain(val)
+            return [{**head, "kind": kind, "chain": ch}] if ch and not any(x.endswith("()") for x in ch) else []
+        if val.type == "object":
+            sub = self._trpc_items(val, scope, name, strict)
+            if not sub or (strict and not any(i["kind"] == "procedure" or i.get("inline") is not None for i in sub)):
+                return []
+            self.m.trpc_routers.append({"name": name, "scope": scope, "line": val.start_point[0] + 1,
+                                        "callee": None, "items": sub})
+            return [{**head, "kind": kind, "inline": len(self.m.trpc_routers) - 1}]
+        if val.type != "call_expression":
+            return []
+        vch = _chain(val.child_by_field_name("function"))
+        if vch and TRPC_ROUTER.match(vch[-1]):
+            vargs = val.child_by_field_name("arguments")
+            idx = self._trpc_router(val, vch, [a for a in (vargs.named_children if vargs is not None else [])
+                                               if a.type != "comment"], scope, name)
+            return [{**head, "kind": kind, "inline": idx}] if idx is not None else []
+        item = self._trpc_procedure(val, scope, name, strict) if key is not None else None
+        return [{**head, **item}] if item else []
+
+    def _trpc_items(self, obj: TSNode, scope: str, owner: str, strict: bool = False) -> list[dict]:
+        """What an object handed to a router holds. `strict`: the object stands by itself (no router call around
+        it), so only a procedure built on a name that says procedure counts."""
+        items: list[dict] = []
+        for c in obj.named_children:
+            if c.type == "pair":
+                key = _string_value(c.child_by_field_name("key")) if c.child_by_field_name("key") is not None and \
+                    c.child_by_field_name("key").type == "string" else _text(c.child_by_field_name("key"))
+                if key and re.fullmatch(r"[\w$-]+", key):
+                    items += self._trpc_part(_bare(c.child_by_field_name("value")), scope, f"{owner}.{key}", key,
+                                             strict)
+            elif c.type == "shorthand_property_identifier":
+                items.append({"key": _text(c), "kind": "router", "chain": [_text(c)]})
+            elif c.type == "spread_element" and c.named_child_count:
+                items += self._trpc_part(_bare(c.named_children[0]), scope, f"{owner}.{len(items)}", None, strict)
+        return items
+
+    def _trpc_procedure(self, call: TSNode, scope: str, name: str, strict: bool) -> dict | None:
+        """`protectedProcedure.input(schema).mutation(async ({ ctx, input }) => …)`: the kind, what it is built on,
+        the functions put before it with `.use()`, and its handler: written there (a function of its own from here
+        on, named `<router>.<key>`) or handed by name."""
+        base, steps = _trpc_spine(call)
+        if not base or not steps or steps[-1][0] not in TRPC_KINDS:
+            return None
+        if strict and "procedure" not in base[-1].lower():
+            return None
+        h = _unparen(steps[-1][1][0]) if steps[-1][1] else None
+        item = {"kind": "procedure", "type": steps[-1][0], "base": base, "line": call.start_point[0] + 1}
+        if h is not None and h.type in FUNC_TYPES:
+            self.planned[h.start_byte] = name
+            item["local"] = f"{scope}.{name}" if scope else name
+        elif h is not None and h.type in ("identifier", "member_expression") and _chain(h):
+            item["handler"], item["at"] = _chain(h), _site_pos(h)
+        else:
+            return None
+        item["uses"] = self._trpc_uses(steps[:-1], scope, name, True)
+        return item
+
+    def _trpc_uses(self, steps: list, scope: str, name: str, plan: bool) -> list[dict]:
+        """The functions `.use()` puts before a procedure, in the order written: one written there (`plan`: made a
+        function of its own, `<name>.use`), one by name, or the call that makes one (`.use(limit({ max: 5 }))`)."""
+        out: list[dict] = []
+        k = 0
+        for step, args in steps:
+            a = _bare(args[0]) if step == "use" and args else None
+            if a is None:
+                continue
+            if a.type in FUNC_TYPES:
+                if plan:
+                    k += 1
+                    local = f"{name}.use" + (str(k) if k > 1 else "")
+                    self.planned[a.start_byte] = local
+                    out.append({"local": f"{scope}.{local}" if scope else local})
+            elif a.type in ("identifier", "member_expression"):
+                ch = _chain(a)
+                if ch:
+                    out.append({"chain": ch, "at": _site_pos(a)})
+            elif a.type == "call_expression":
+                ch = _chain(a.child_by_field_name("function"))
+                if ch:
+                    out.append({"chain": ch, "called": True})
+        return out
+
+    @staticmethod
+    def _written(call: TSNode | None):
+        """The first argument of a call as a name the code wrote: ("text", it) for a plain string, ("const", name)
+        for a bare name (which may be a constant of the file; the resolver says), None for anything else."""
+        args = call.child_by_field_name("arguments") if call is not None and call.type == "call_expression" else None
+        argv = [a for a in (args.named_children if args is not None else []) if a.type != "comment"]
+        if not argv:
+            return None
+        if argv[0].type == "identifier":
+            return ("const", _text(argv[0]))
+        if argv[0].type == "template_string" and argv[0].named_child_count:
+            return None   # a name built at run time
+        text = _string_value(argv[0])
+        return ("text", text) if text is not None and TABLE_NAME.match(text) else None
+
+    def _db_shape(self, fn: TSNode | None, ch: list[str]) -> dict | None:
+        """`<recv>.from("<table>").<select|insert|update|upsert|delete>`, also behind `.schema("<name>")`: what was
+        written, for the resolver to say whether `<recv>` is a Supabase client. None for a storage bucket
+        (`<recv>.storage.from("avatars")`) and where the table or the schema is not written as a name."""
+        if len(ch) < 3 or ch[-1] not in DB_OPS or ch[-2] != "from()" or fn is None or fn.type != "member_expression":
+            return None
+
+        def under(n):   # the call a member is used on, through `!`, `as X` and brackets
+            n = _unparen(n)
+            while n is not None and n.type in ("non_null_expression", "as_expression", "satisfies_expression") \
+                    and n.named_child_count:
+                n = _unparen(n.named_children[0])
+            return n
+
+        frm = under(fn.child_by_field_name("object"))
+        table = self._written(frm)
+        recv, schema = ch[:-2], None
+        if table is None:
+            return None
+        if recv[-1] == "schema()":
+            inner = frm.child_by_field_name("function")
+            schema = self._written(under(inner.child_by_field_name("object")) if inner is not None else None)
+            if schema is None or schema[0] != "text":
+                return None
+            recv = recv[:-1]
+        if not recv or recv[-1] == "storage":
+            return None
+        return {"recv": recv, "schema": schema[1] if schema else None, "op": ch[-1],
+                "table": table[1] if table[0] == "text" else None, "const": table[1] if table[0] == "const" else None}
 
     def _route_call(self, fn: TSNode):
         """`router.route('/x').get(...).post(...)`: for a verb hung on a `.route('<path>')` call (straight on it or
@@ -1270,7 +1862,7 @@ class Walker:
             aname = _text(kids[0])
             val = kids[1] if len(kids) > 1 else None
             attrs[aname] = val
-            sub_ui = aname if re.match(r"^on[A-Z]", aname) or aname == "action" else ui
+            sub_ui = aname if re.match(r"^on[A-Z]", aname) or aname in ("action", "formAction") else ui
             if val is not None and val.type == "jsx_expression" and val.named_child_count:
                 inner = val.named_children[0]
                 if inner.type in ("identifier", "member_expression"):
@@ -1280,6 +1872,13 @@ class Walker:
                 self.walk(inner, scope, cls, sub_ui)
             elif val is not None:
                 self.walk(val, scope, cls, sub_ui)
+        if self.remix and attrs.get("method") is not None and \
+                _text(n.child_by_field_name("name")).rpartition(".")[2] in ("Form", "form"):
+            # <Form method="post">, <fetcher.Form method="post" action="/x">, a plain <form method="post">: a form
+            # that posts goes to a route's `action`: of the route it stands in, or of the address it writes
+            if (self._attr_text(attrs["method"]) or "").lower() in REMIX_SENDS:
+                self.m.forms.append({"line": line, "scope": scope,
+                                     "action": self._attr_text(attrs["action"]) if "action" in attrs else ""})
         # <Route path="/x" element={<X/>} /> or component={X}
         if parts and parts[-1] == "Route" and "path" in attrs:
             p = _string_value(attrs["path"]) if attrs["path"] is not None else None
@@ -1294,6 +1893,13 @@ class Walker:
                     comp = _chain(inner)
             if p is not None and comp:
                 self.m.page_regs.append({"path": p, "component": comp, "line": line})
+
+    def _attr_text(self, val: TSNode | None) -> str | None:
+        """The text an attribute is given: `"post"`, `{"post"}`, `{`/notes/${id}`}` (-> `/notes/{}`); None when it
+        is not written out."""
+        if val is not None and val.type == "jsx_expression":
+            val = val.named_children[0] if val.named_child_count else None
+        return self._url_of(val)
 
     # -- HTTP
     def _url_of(self, n: TSNode | None) -> str | None:
@@ -1421,11 +2027,185 @@ def _whole(base: Path, rel: str) -> Path | None:
         return None
 
 
+# A package of the project itself, imported by the name its manifest carries (a monorepo's `packages/store`, named
+# `@team/store`). The conditions of an `exports` entry in the order they are tried: what was written before what a
+# build makes of it. Folders a build writes into, whose files are seldom committed: the source is looked for beside.
+EXPORT_CONDITIONS = ("source", "development", "import", "module", "default", "require", "node", "browser", "types")
+BUILT_DIRS = ("dist", "build", "lib", "out", "esm", "cjs")
+WORKSPACE_FILES = ("pnpm-workspace.yaml", "lerna.json", "rush.json")
+LOCAL_SPEC = ("workspace:", "file:", "link:", "portal:")
+_VERSION = re.compile(r"(\d+)(?:\.(\d+))?")
+
+
+def _export_targets(exports, sub: str) -> list[str]:
+    """What a package's `exports` names for a path inside it (`""` for the package itself), as Node reads the
+    field: the files to try, in order. Empty when the path is not listed: Node refuses such an import."""
+    def leaves(v, depth: int = 0) -> list[str]:
+        if isinstance(v, str):
+            return [v]
+        if depth > 6:
+            return []
+        if isinstance(v, list):
+            return [x for item in v for x in leaves(item, depth + 1)]
+        if isinstance(v, dict):
+            keys = sorted((k for k in v if isinstance(k, str) and not k.startswith(".")),
+                          key=lambda k: EXPORT_CONDITIONS.index(k) if k in EXPORT_CONDITIONS else len(EXPORT_CONDITIONS))
+            return [x for k in keys for x in leaves(v[k], depth + 1)]
+        return []
+    if not (isinstance(exports, dict) and any(isinstance(k, str) and k.startswith(".") for k in exports)):
+        return [] if sub else leaves(exports)       # a path, or conditions, for the package itself and nothing else
+    key = "./" + sub if sub else "."
+    if key in exports:
+        return leaves(exports[key])
+    best: tuple[int, list[str]] = (-1, [])
+    for pat, v in exports.items():
+        if not isinstance(pat, str):
+            continue
+        if pat.endswith("/") and pat != "./":       # the older way to name a whole folder: `"./parts/": "./src/parts/"`
+            pat, v = pat + "*", [t + "*" for t in leaves(v) if t.endswith("/")]
+        if pat.count("*") != 1:
+            continue
+        head, tail = pat.split("*")
+        if len(key) >= len(head) + len(tail) and key.startswith(head) and key.endswith(tail) and len(head) > best[0]:
+            star = key[len(head):len(key) - len(tail)]
+            best = (len(head), [t.replace("*", star) for t in leaves(v)])
+    return best[1]
+
+
+def _version_fits(spec: str, version) -> bool:
+    """Whether a dependency written with a version (`^1.2.0`, `1.x`, `*`) can mean the package of the project that
+    carries `version`: any version, or the same first number (and the same second one below 1.0)."""
+    spec = spec.strip()
+    if spec in ("", "*", "x", "latest"):
+        return True
+    want, has = _VERSION.search(spec), _VERSION.search(version) if isinstance(version, str) else None
+    if want is None or has is None or want.group(1) != has.group(1):
+        return False
+    return want.group(1) != "0" or want.group(2) is None or want.group(2) == has.group(2)
+
+
 class SpecResolver:
     def __init__(self, repo: Path, files: dict[str, str]):
         self.repo = repo
         self.files = files            # rel path -> module name
         self._alias_cache: dict[Path, list[tuple[str, list[Path]]]] = {}
+        self._pkgs: dict = {}
+        self._own: dict | None = None             # the project's own packages by name (`_own_packages`)
+        self._ws: dict[Path, bool] = {}           # folder -> is it inside a workspace (`_in_workspace`)
+
+    # ---- the project's own packages
+    def _own_packages(self) -> dict:
+        """Every folder that holds files Lantern reads and a `package.json` with a name: name -> (folder, what the
+        manifest says). A name two folders carry is nobody's (None): which of them an import means is not written."""
+        if self._own is None:
+            dirs: set[str] = set()
+            for rel in self.files:
+                d = rel.rpartition("/")[0]
+                while d not in dirs:
+                    dirs.add(d)
+                    d = d.rpartition("/")[0]
+            found: dict = {}
+            for d in sorted(dirs):
+                pj = (self.repo / d if d else self.repo) / "package.json"
+                if not inside_repo(pj, self.repo):
+                    continue
+                try:
+                    data = manifest.table(manifest.parse_json(project_text(pj, self.repo)))
+                except OSError:
+                    continue
+                name = data.get("name")
+                if isinstance(name, str) and name and not name.startswith((".", "/")):
+                    found[name] = None if name in found else (pj.parent, data)
+            self._own = found
+        return self._own
+
+    def _in_workspace(self, folder: Path) -> bool:
+        """Whether a folder above this one says the project is a workspace: its `package.json` has `workspaces`, or
+        a `pnpm-workspace.yaml`, `lerna.json` or `rush.json` stands there. Which folders that list names is not
+        read."""
+        if folder in self._ws:
+            return self._ws[folder]
+        cur, found = folder, False
+        while cur != cur.parent and (cur == self.repo or self.repo in cur.parents):
+            cur = cur.parent if cur != self.repo else cur
+            if any(inside_repo(cur / n, self.repo) for n in WORKSPACE_FILES):
+                found = True
+            elif inside_repo(cur / "package.json", self.repo):
+                try:
+                    data = manifest.table(manifest.parse_json(project_text(cur / "package.json", self.repo)))
+                except OSError:
+                    data = {}
+                found = bool(data.get("workspaces"))
+            if found or cur == self.repo:
+                break
+        self._ws[folder] = found
+        return found
+
+    def _own_parts(self, spec: str, from_file: Path) -> tuple[Path, dict, str] | None:
+        """(folder, manifest, the path inside it) when `spec` begins with the name of a package of the project and
+        that package is what the import means: the importing package says so itself (`workspace:*`, `file:../x`),
+        or the package stands in a workspace and the version asked for, if one is, can be its own. Else None."""
+        if not spec or spec.startswith((".", "/", "#")):
+            return None
+        name = _package_name(spec)
+        own = self._own_packages().get(name)
+        if own is None:
+            return None
+        folder, data = own
+        asked = _nearest_package(from_file, self.repo, self._pkgs)["specs"].get(name)
+        asked = asked if isinstance(asked, str) else None
+        if asked is not None and asked.startswith(LOCAL_SPEC):
+            return folder, data, spec[len(name):].strip("/")
+        if not self._in_workspace(folder) or (asked is not None and not _version_fits(asked, data.get("version"))):
+            return None
+        return folder, data, spec[len(name):].strip("/")
+
+    def own_path(self, spec: str, from_file: Path) -> str | None:
+        """For the flow step, which tells a file of the project from a library by how the import is written: the
+        path, from the project's top, of the file an import of one of the project's own packages means
+        (`packages/store/src/index`); where the package's manifest leads to no file, the path as it is written
+        under the package's folder. None when the specifier names no package of the project."""
+        own = self._own_parts(spec, from_file)
+        if own is None:
+            return None
+        hit = self._own_file(*own)
+        if hit is None:
+            try:
+                hit = (own[0].relative_to(self.repo) / own[2]).as_posix()
+            except ValueError:
+                return None
+        return hit
+
+    def _own_file(self, folder: Path, data: dict, sub: str) -> str | None:
+        """The file of a package of the project an import means: what `exports` names for the path; without that
+        field the path itself, or for the package `source`, `module`, `main`, `types`, then its `index`. A target
+        in a folder a build writes (`./dist/index.js`) that is not there means the source beside it."""
+        if data.get("exports") is not None:
+            targets = _export_targets(data["exports"], sub)
+        elif sub:
+            targets = [sub]
+        else:
+            targets = [t for t in (data.get(k) for k in ("source", "module", "main", "types", "typings"))
+                       if isinstance(t, str)] + ["index", "src/index"]
+        plain, beside = [], []
+        for t in targets:
+            t = re.sub(r"\.d\.[cm]?ts$", "", t[2:] if t.startswith("./") else t)
+            plain.append(t)
+            head, _, rest = t.partition("/")
+            if rest and head in BUILT_DIRS:
+                beside += ["src/" + rest, rest]
+        for t in plain + beside:
+            base = _whole(folder, t)
+            hit = self._try(base) if base is not None and t else None
+            if hit:
+                return hit
+        return None
+
+    def _kit(self, d: Path) -> bool:
+        """Is this folder the root of a SvelteKit project: its config stands here, or its package.json names the kit."""
+        return any(inside_repo(d / n, self.repo) for n in SVELTE_CONFIGS) or \
+            (inside_repo(d / "package.json", self.repo)
+             and KIT in _nearest_package(d / "package.json", self.repo, self._pkgs)["deps"])
 
     def _aliases(self, d: Path) -> list[tuple[str, list[Path]]]:
         """Path aliases from the nearest tsconfig/jsconfig (and its tsconfig.*.json siblings). A written `baseUrl`
@@ -1454,6 +2234,9 @@ class SpecResolver:
                 if not found and (cur / "package.json").exists():
                     root = cur / "src" if (cur / "src").is_dir() else cur
                     found = [("@/*", [root.resolve() / "*"]), ("~/*", [root.resolve() / "*"])]
+                if self._kit(cur):   # SvelteKit's own alias, which no tsconfig of the project writes down
+                    lib = (cur / "src" / "lib").resolve()
+                    found = found + [("$lib", [lib]), ("$lib/*", [lib / "*"])]
                 self._alias_cache[cur] = found + bases
                 return self._alias_cache[cur]
             cur = cur.parent
@@ -1461,7 +2244,8 @@ class SpecResolver:
     def _try(self, base: Path) -> str | None:
         # an alias may name the root folder (`"@/*": ["/"]`), which has no name to put an ending on
         named = [base.with_name(base.name + e) for e in RESOLVE_EXTS] if base.name else []
-        cands = [base] + named + [base / ("index" + e) for e in RESOLVE_EXTS]
+        typed = [base.with_suffix(e) for e in TS_FOR.get(base.suffix, ())] if base.name else []
+        cands = [base] + typed + named + [base / ("index" + e) for e in RESOLVE_EXTS]
         for c in cands:
             # as the file is reached, then as its path is written: a file that is a link kept inside the project
             # is read under the name it has there (`inside_repo`), and an import of that name means that file
@@ -1491,15 +2275,21 @@ class SpecResolver:
                     hit = self._try(t)
                     if hit:
                         return hit
+        own = self._own_parts(spec, from_file)
+        if own is not None:     # a package of the project itself: the file its manifest names
+            return self._own_file(*own)
         return None   # bare specifier: a package
 
     def lost(self, spec: str, from_file: Path) -> str | None:
         """A specifier that finds no file, but which the tsconfig/jsconfig `paths` says is a path of this project
         (`"contentlayer/generated": ["./.contentlayer/generated"]`: a generated folder that is not committed):
         "exact" when an alias names this very specifier, "pattern" when a `prefix/*` alias covers it, else None.
-        A catch-all `*` pattern and a target inside node_modules say nothing of the kind."""
+        A catch-all `*` pattern and a target inside node_modules say nothing of the kind. "own" when it names a
+        package of the project itself (`_own_parts`) and that package's manifest leads to no file Lantern read."""
         if not spec or spec.startswith(".") or self.resolve(spec, from_file) is not None:
             return None
+        if self._own_parts(spec, from_file) is not None:
+            return "own"
         how = None
         for pat, targets in self._aliases(from_file.parent):
             if not targets or any("node_modules" in t.parts for t in targets):
@@ -1525,8 +2315,10 @@ def discover(repo: Path) -> list[Path]:
                 continue
             if p.suffix.lower() in HTML_EXTS and not fn.endswith(".min.html"):
                 out.append(p)
+            elif p.suffix == SVELTE_EXT:
+                out.append(p)
             elif p.suffix in LANGS and not fn.endswith((".d.ts", ".min.js", ".bundle.js")) \
-                    and not fn.startswith(("vite.config", "next.config", "tailwind.config", "postcss.config",
+                    and not fn.startswith(("vite.config", "next.config", "tailwind.config", "postcss.config", "svelte.config",
                                            "eslint.config", "jest.config", "vitest.config", "playwright.config",
                                            "webpack.config", "babel.config", "rollup.config")) \
                     and not built_bundle(p, repo):
@@ -1568,6 +2360,361 @@ def inline_script(src: bytes) -> bytes | None:
     return bytes(out) if found else None
 
 
+def svelte_parts(src: bytes) -> tuple[bytes, bytes, bool, list[tuple[int, int]]]:
+    """A `.svelte` file taken apart: its script (every `<script>` body at its own offset, as `inline_script` does
+    for a page), its markup (the rest, with scripts, styles and comments blanked), whether the script is TypeScript
+    (`<script lang="ts">`), and where the script of the file itself lies (`<script module>`: it runs once, not with
+    each component). Newlines stay where they are, so every line number is the file's own."""
+    script = bytearray(re.sub(rb"[^\n]", b" ", src))
+    markup = bytearray(src)
+    ts, own = False, []
+    for m in _SCRIPT_RE.finditer(src):
+        attrs = m.group(1)
+        markup[m.start():m.end()] = script[m.start():m.end()]
+        t = re.search(rb"\btype\s*=\s*[\"']?\s*([^\"'\s>]*)", attrs, re.I)
+        if re.search(rb"\bsrc\s*=", attrs, re.I) or (t.group(1).strip().lower() if t else b"") not in _JS_TYPES:
+            continue
+        script[m.start(2):m.end(2)] = m.group(2)
+        ts = ts or bool(_SVELTE_TS.search(attrs))
+        if _SVELTE_MODULE.search(attrs):
+            own.append((m.start(2), m.end(2)))
+    for rx in (_STYLE_RE, _COMMENT_RE):
+        for m in rx.finditer(bytes(markup)):
+            markup[m.start():m.end()] = re.sub(rb"[^\n]", b" ", m.group(0))
+    return bytes(script), bytes(markup), ts, own
+
+
+def _braces(mk: bytes) -> list[tuple[int, int]]:
+    """Where each `{…}` of a Svelte file's markup opens and closes, braces inside it and its strings passed over.
+    One that does not close within 4,000 bytes is not read."""
+    out, i = [], 0
+    while True:
+        i = mk.find(b"{", i)
+        if i < 0:
+            return out
+        depth, quote, j, end = 0, 0, i, min(len(mk), i + 4000)
+        while j < end:
+            c = mk[j]
+            if quote:
+                if c == 0x5C:
+                    j += 1
+                elif c == quote:
+                    quote = 0
+            elif c in (0x22, 0x27, 0x60):
+                quote = c
+            elif c == 0x7B:
+                depth += 1
+            elif c == 0x7D:
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if j >= end:
+            i += 1
+            continue
+        out.append((i, j))
+        i = j + 1
+
+
+def _tag_end(mk: bytes, i: int) -> int:
+    """Where the tag that is open at `i` closes (its `>`), with strings and `{…}` passed over; -1 when it does not
+    within 4,000 bytes."""
+    quote, depth, j, end = 0, 0, i, min(len(mk), i + 4000)
+    while j < end:
+        c = mk[j]
+        if quote:
+            if c == quote:
+                quote = 0
+        elif c in (0x22, 0x27) or (c == 0x60 and depth):
+            quote = c
+        elif c == 0x7B:
+            depth += 1
+        elif c == 0x7D:
+            depth = max(0, depth - 1)
+        elif c == 0x3E and not depth:
+            return j
+        j += 1
+    return -1
+
+
+def _attr(tag: bytes, name: bytes) -> tuple[bool, str | None]:
+    """An attribute of a tag: (is it written, its text when that is written out). `action={x}` is (True, None)."""
+    m = re.search(rb"(?<![\w:.$-])" + name + rb"\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s\"'>{}]+))?", tag, re.I)
+    if m is None:
+        return False, None
+    val = next((x for x in m.groups() if x is not None), None)
+    return True, val.decode("utf-8", "replace") if val is not None else None
+
+
+def svelte_markup(markup: bytes) -> dict:
+    """What a Svelte file's markup holds for the map.
+    `exprs`: the expressions written in `{…}`, each at its own offset as a statement of its own (`{` becomes `;`),
+    so the JS grammar reads them with the file's line numbers: a value shown, an attribute's value, and what
+    `{#if …}`, `{#each … as x}`, `{#await …}`, `{#key …}`, `{@html …}` and `{@render …}` ask for. An object or a
+    function written out there is left alone (it would not stand as a statement).
+    `attrs`: where an attribute's expression starts -> the event it is handed to (`onclick={…}`, `on:click={…}`:
+    "onClick") or None for any other attribute.
+    `tags`: (line, column, name) of each component drawn (`<Card …>`).
+    `forms`: each place a form posts from, {line, action}: the text of its `action` ("" when none is written, None
+    when it is worked out as the page runs), and a button's `formaction`. `prop` where the address is one name
+    (`action={sendTo}`, or `{action}` for short): a page that draws this file as a part may hand it the address
+    under that name.
+    `part_attrs`: each attribute of a part drawn here whose text is written out and begins like an address
+    (`<Panel sendTo="/account?/rename">`), {line, tag, name, value}.
+    `names`: what the blocks name (`as note`, `then value`, a snippet and its parameters): no names of the script."""
+    ex = bytearray(re.sub(rb"[^\n]", b" ", markup))
+    starts = [0] + [m.end() for m in re.finditer(rb"\n", markup)]
+
+    def where(pos: int) -> tuple[int, int]:
+        row = bisect.bisect_right(starts, pos) - 1
+        return row + 1, pos - starts[row] + 1
+
+    attrs: dict[int, str | None] = {}
+    names: set[str] = set()
+    inside, intag = bytearray(len(markup)), bytearray(len(markup))
+    spans = _braces(markup)
+    for i, j in spans:
+        inside[i:j + 1] = b"\x01" * (j + 1 - i)
+    for m in _SVELTE_OPEN.finditer(markup):      # `<p>onclick={wipe}</p>` is text: no attribute outside a tag
+        end = _tag_end(markup, m.end()) if not inside[m.start()] else -1
+        if end > 0:
+            intag[m.start():end] = b"\x01" * (end - m.start())
+    for i, j in spans:
+        a, b = i + 1, j
+        blk = None
+        if markup[a:b].lstrip()[:1] in (b"#", b":", b"/", b"@"):
+            blk = _SVELTE_BLOCK.match(markup, a, b)
+            if blk is None:
+                named = _SVELTE_NAMES.match(markup, a, b)
+                if named is not None:
+                    names.update(x.decode("utf-8", "replace") for x in _JS_NAME.findall(named.group(1)))
+                continue
+            a = blk.end()
+            tail = _SVELTE_EACH_AS if blk.group(1) == b"#each" else _SVELTE_AWAIT_THEN if blk.group(1) == b"#await" \
+                else None
+            cut = tail.search(markup, a, b) if tail is not None else None
+            if cut is not None:
+                names.update(x.decode("utf-8", "replace") for x in _JS_NAME.findall(markup[cut.end():b].split(b"(")[0]))
+                b = cut.start()
+        while a < b and markup[a:a + 1].isspace():
+            a += 1
+        if markup.startswith(b"...", a):
+            a += 3
+        while b > a and markup[b - 1:b].isspace():
+            b -= 1
+        if a >= b or _SVELTE_NOT_PLAIN.match(markup, a, b):
+            continue
+        ex[i:i + 1] = b";"
+        ex[a:b] = markup[a:b]
+        at = _SVELTE_ATTR.search(markup, max(0, i - 80), i) if blk is None and intag[i] else None
+        if at is not None:
+            name = at.group(1).decode("utf-8", "replace").split("|")[0]
+            event = name[3:] if name.startswith("on:") else name[2:] if name.startswith("on") and \
+                name[2:] in DOM_EVENTS else ""
+            attrs[a] = "on" + event[:1].upper() + event[1:] if event else None
+    tags = [(*where(m.start(1)), m.group(1).decode("utf-8", "replace")) for m in _SVELTE_TAG.finditer(markup)
+            if not inside[m.start()]]
+    forms = []
+    for m in _FORM_OPEN.finditer(markup):
+        end = _tag_end(markup, m.end())
+        if end < 0 or inside[m.start()]:
+            continue
+        tag = markup[m.start():end]
+        if (_attr(tag, b"method")[1] or "").upper() != "POST":
+            continue
+        written, action = _attr(tag, b"action")
+        form = {"line": where(m.start())[0], "action": action if written else ""}
+        one = _ACTION_NAME.search(tag) if action is None else None     # `action={sendTo}`, and `{action}` for short
+        if one is not None:
+            form["action"], form["prop"] = None, (one.group(1) or one.group(2)).decode("utf-8", "replace")
+        forms.append(form)
+    for m in _FORMACTION.finditer(markup):
+        if not inside[m.start()]:
+            forms.append({"line": where(m.start())[0],
+                          "action": (m.group(1) if m.group(1) is not None else m.group(2)).decode("utf-8", "replace")})
+    forms.sort(key=lambda f: f["line"])
+    part_attrs = []
+    for m in _SVELTE_TAG.finditer(markup):
+        end = _tag_end(markup, m.end()) if not inside[m.start()] else -1
+        for a in (_TEXT_ATTR.finditer(markup, m.end(), end) if end > 0 else ()):
+            value = (a.group(2) if a.group(2) is not None else a.group(3)).decode("utf-8", "replace")
+            if not inside[a.start()] and value.startswith(("/", "?/")):
+                part_attrs.append({"line": where(a.start())[0], "tag": m.group(1).decode("utf-8", "replace"),
+                                   "name": a.group(1).decode("utf-8", "replace"), "value": value})
+    return {"exprs": bytes(ex), "attrs": attrs, "tags": tags, "forms": forms, "names": names,
+            "part_attrs": part_attrs}
+
+
+def read_svelte(w: "Walker", tree, script: bytes, markup: bytes, own: list[tuple[int, int]], parser) -> list:
+    """One `.svelte` file into its module. The component is a function named after the file (`+page`, `Card`),
+    as long as the file: what its `<script>` declares is written inside it (`+page.save`), what its markup draws,
+    shows and hands to events are its calls. A `<script module>` is the file's own code, outside the component.
+    Returns the statements read from the markup (for the count of calls nobody read)."""
+    m = w.m
+    comp = re.sub(r"[^\w$+@-]", "_", Path(m.rel).stem) or "component"
+    m.defs[comp] = JSDef(local=comp, name=comp, kind="function", start=1, end=m.lines, parent_local="", in_class=None,
+                         params="", fingerprint=hashlib.sha256(script + b"\x00" + markup).hexdigest()[:16], jsx=True)
+    m.params[comp] = []
+    m.component = m.default = comp
+    w.top = comp
+    kids = tree.root_node.children
+    mine = [c for c in kids if any(a <= c.start_byte < b for a, b in own)]
+    w.top = ""
+    w.each(mine, "")
+    w.top = comp
+    w.each([c for c in kids if c not in mine], comp)
+    m.default = comp
+    got = svelte_markup(markup)
+    m.forms = got["forms"]
+    m.part_attrs = got["part_attrs"]
+    if got["names"]:
+        m.anon_params.setdefault(comp, set()).update(got["names"])
+    for line, col, name in got["tags"]:
+        m.refs.append(JSRef(comp, name.split("."), line, "jsx", None, (line, col), name))
+    read = []
+    for st in parser.parse(got["exprs"]).root_node.children:
+        if st.type != "expression_statement" or st.has_error or not st.named_child_count:
+            continue
+        e = st.named_children[0]
+        ui = got["attrs"].get(st.start_byte, False)
+        if e.type in ("identifier", "member_expression"):   # a value shown, or a function handed to an attribute
+            ch = _chain(e)
+            if ch and ui is not False:
+                m.refs.append(JSRef(comp, ch, e.start_point[0] + 1, "callback", ui, _site_pos(e), _text(e)))
+            continue
+        w.each([e], comp, None, ui or None)
+        read.append(st)
+    return read
+
+
+def kit_path(folder: str, groups: bool = False) -> str:
+    """`(app)/items/[id=integer]/` under `src/routes` -> `/items/[id]`: a folder in round brackets is no part of
+    the address, and a part's matcher (`=integer`) is a rule for it, not a name. With `groups` the folder in round
+    brackets stays (`/(app)/items/[id]`), for what belongs to that group of pages and to no address."""
+    segs = [re.sub(r"=\w+(?=\])", "", s) for s in folder.split("/")
+            if s and (groups or not (s.startswith("(") and s.endswith(")")))]
+    return "/" + "/".join(segs)
+
+
+def kit_same(route: str, written: str) -> bool:
+    """Is the address a form writes (`/notes/{note.id}`) the address of this page (`/notes/[id]`)?"""
+    a = [s for s in route.split("/") if s]
+    b = [s for s in written.split("?")[0].split("#")[0].split("/") if s]
+    return len(a) == len(b) and all(x == y or x.startswith("[") or "{" in y for x, y in zip(a, b))
+
+
+def remix_parts(name: str) -> list[str]:
+    """A route file's name, part by part as written: cut at each dot that does not stand in square brackets."""
+    out, cur, kept = [], "", False
+    for ch in name:
+        if ch == "[" and not kept:
+            kept = True
+        elif ch == "]" and kept:
+            kept = False
+        elif ch == "." and not kept:
+            out.append(cur)
+            cur = ""
+            continue
+        cur += ch
+    return [*out, cur]
+
+
+def remix_shown(part: str) -> str | None:
+    """What one part of a route file's name adds to the address, or None for nothing: `$id` -> `:id`, a bare `$`
+    -> `*` (every part that is left), `(x)` -> `x?` (it may be missing), `x_` -> `x` (the address stays, the layout
+    is left), `_x` and a last `_index` -> nothing (a layout's name; its folder's own page). What stands in square
+    brackets is meant as written, so none of these signs counts there."""
+    chars, kept = [], False       # (the character, whether it stood in square brackets)
+    for ch in part:
+        if ch == "[" and not kept:
+            kept = True
+        elif ch == "]" and kept:
+            kept = False
+        else:
+            chars.append((ch, kept))
+    may_miss = len(chars) > 2 and chars[0] == ("(", False) and chars[-1] == (")", False)
+    if may_miss:
+        chars = chars[1:-1]
+    if not chars or chars[0] == ("_", False):
+        return None       # `_index` too: it begins with the same sign
+    if len(chars) > 1 and chars[-1] == ("_", False):
+        chars = chars[:-1]
+    text = "".join(c for c, _ in chars)
+    if chars[0] == ("$", False):
+        text = "*" if len(chars) == 1 else ":" + text[1:]
+    return text + "?" if may_miss else text
+
+
+def remix_address(name: str) -> str:
+    """`notes.$noteId` -> `/notes/:noteId`, `_auth.login` -> `/login`, `notes._index` -> `/notes`."""
+    parts = remix_parts(name) if name else []
+    shown = [s for s in map(remix_shown, parts) if s is not None]
+    return "/" + "/".join(shown)
+
+
+def remix_same(route: str, written: str) -> bool:
+    """Is the address a form writes (`/notes/{}`, `/notes/12`) one this route answers (`/notes/:noteId`)?"""
+    want = [s for s in written.split("?")[0].split("#")[0].split("/") if s]
+
+    def fits(parts: list[str], i: int) -> bool:
+        if not parts:
+            return i == len(want)
+        head, rest = parts[0], parts[1:]
+        if head == "*":
+            return True
+        if head.endswith("?") and fits(rest, i):
+            return True
+        if i >= len(want):
+            return False
+        text = head[:-1] if head.endswith("?") else head
+        return (text.startswith(":") or want[i] == text) and fits(rest, i + 1)
+
+    return fits([s for s in route.split("/") if s], 0)
+
+
+def remix_way(pkg: dict, repo: Path, mods: dict, cache: dict) -> str | None:
+    """How the routes of the app this package.json is of are found: `files` (by the names of the files in
+    `app/routes`), `old` (Remix 1 kept them in folders, where the same names mean other addresses: not read),
+    `listed` (React Router's `app/routes.ts` lists them by hand or names a folder of its own for them: not read,
+    and the files of `app/routes` are then not taken for the routes), or None (no such app). Read from the
+    package.json and from the text of the settings; nothing of the app is run."""
+    base = pkg["dir"]
+    if base in cache:
+        return cache[base]
+    way = None
+    mine = [d for d in pkg["deps"] if REMIX_PACKAGES.match(d)]
+    if mine:
+        firsts = {v.group() for v in (re.search(r"\d+", manifest.text(pkg["specs"].get(d))) for d in mine) if v}
+        way = "files"
+        if firsts == {"1"}:        # every version written is a 1.x: folders, unless the newer names are switched on
+            way = "old"
+            for name in REMIX_CONFIGS:
+                if inside_repo(base / name, repo):
+                    try:
+                        text = project_text(base / name, repo)
+                    except OSError:
+                        continue
+                    if re.search(r"\bv2_routeConvention\s*:\s*true\b", _no_comments(text)):
+                        way = "files"
+    elif ROUTER_FRAMEWORK in pkg["deps"]:
+        # React Router's framework mode: `app/routes.ts` says which files are routes. `flatRoutes()` says "the
+        # files of app/routes, by their names"; a folder of its own choosing is not followed
+        for name in ROUTER_ROUTES:
+            listed = base / "app" / name
+            if listed in mods:
+                text = _no_comments(mods[listed])
+                way = "listed"
+                if re.search(r"(?<![\w$.])flatRoutes\s*\(", text) and "rootDirectory" not in text:
+                    way = "files"
+                break
+    cache[base] = way
+    return way
+
+
+def _no_comments(text: str) -> str:
+    return re.sub(r"/\*.*?\*/|(?<![:\w\"'])//[^\n]*", "", text, flags=re.S)
+
+
 def _nearest_package(path: Path, repo: Path, cache: dict) -> dict:
     cur = path.parent
     while True:
@@ -1580,11 +2727,11 @@ def _nearest_package(path: Path, repo: Path, cache: dict) -> dict:
             except OSError:
                 data = {}
             deps = {**manifest.table(data.get("dependencies")), **manifest.table(data.get("devDependencies"))}
-            info = {"dir": cur, "deps": set(deps)}
+            info = {"dir": cur, "deps": set(deps), "specs": deps}
             cache[cur] = info
             return info
         if cur == repo or cur == cur.parent:
-            info = {"dir": repo, "deps": set()}
+            info = {"dir": repo, "deps": set(), "specs": {}}
             cache[cur] = info
             return info
         cur = cur.parent
@@ -1670,9 +2817,27 @@ class JSResolver:
                 hit = self.lookup_export(tmod, name, depth + 1)
                 if hit:
                     return hit
-            elif name in mp:
+            elif name in mp and tmod is not None:
                 return self.lookup_export(tmod, mp[name], depth + 1)
-        return None
+        return self.handed_from(m, name)
+
+    def handed_from(self, m: JSModule, name: str):
+        """A name a file hands on from a library: `export { alias } from "lib"` says which; `export * from "lib"`
+        holds every name the project's own files did not answer for, where it is the one source of that kind.
+        None where a source is a file of the project that is not there (the name may be that file's), or where two
+        libraries are handed on whole (which of them holds the name is not written)."""
+        if not m.handed_on:
+            return None
+
+        def own(spec: str) -> bool:
+            return spec.startswith(FILE_SPEC) or (self.lost_for is not None and self.lost_for(m, spec))
+        for spec, mp in m.handed_on:
+            if mp is not None and name in mp:
+                return None if own(spec) else ("ext", f"{spec}.{mp[name]}")
+        whole = [spec for spec, mp in m.handed_on if mp is None]
+        if len(whole) != 1 or own(whole[0]) or name in ("default", "*"):
+            return None
+        return ("ext", f"{whole[0]}.{name}")
 
     @staticmethod
     def _up(m: JSModule, s: str) -> str:
@@ -1939,21 +3104,67 @@ class JSResolver:
                 return self._param(m, s, name, depth, st)
             vals = m.values.get(s, {})
             if name in vals and name not in m.reassigned.get(s, ()) and name not in m.dynamic.get(s, ()):
+                was = st["value"]
                 st["value"] = True
                 st.setdefault("args", []).extend((m, s, c) for c in m.value_args.get(s, {}).get(name, ()))
                 v, inner = self._eval(m, s, vals[name], depth + 1, st)
-                return v, (inner if v is not None and v[0] == "builtin" else "library-value")
+                typed = self._written(m, s, name) if v is None else None
+                if typed is None:
+                    return v, (inner if v is not None and v[0] == "builtin" else "library-value")
+                st["value"] = was
+                return typed, "local-type"
             lt = m.local_types.get(s, {}).get(name)
             if lt and lt != ["<server>"]:
                 return self._type(m, s, lt), "local-type"
+            typed = self._written(m, s, name)
+            if typed is not None:
+                return typed, "local-type"
             if name in m.declared.get(s, ()) or name in m.dynamic.get(s, ()):
                 return None, None
             if not s:
                 break
             s = self._up(m, s)
+        imp = m.imports.get(name)
+        if imp is not None and imp[0] in self.mods and imp[1] not in ("cjs", "*"):
+            v = self._exported_value(imp[0], imp[1], depth + 1, st)
+            if v is not None:   # import { db } from "./db", where db is a value that file exports
+                st["value"] = True
+                return v, "import"
         if name in JS_BUILTINS:
             return ("builtin", name), "global"
         return None, None
+
+    def _written(self, m: JSModule, s: str, name: str):
+        """The value a variable's written TypeScript type names (`let prisma: PrismaClient`): a library's class or
+        a class of the repo. None for no type, one of several, or a type that is no class Lantern can look in."""
+        t = m.var_types.get(s, {}).get(name)
+        return self._type(m, s, t) if t else None
+
+    def _exported_value(self, mod: str, name: str, depth: int, st: dict):
+        """What a file of the project exports under `name`, when that is a value and not a function or a class:
+        `export const db = new PrismaClient()`, `export default pool`, `export { db } from "./db"`, `exports.db = …`.
+        The value as _eval gives it; None when the name is set again with no written type to hold it, or is built in
+        a way Lantern does not follow (a condition, an object written out, a call of a function of the project)."""
+        if depth > 6:
+            return None
+        tm = self.mods[mod]
+        local = tm.default if name == "default" else tm.exports.get(name)
+        if local is not None and local not in tm.defs:
+            if local in tm.reassigned.get("", ()) and local not in tm.var_types.get("", {}):
+                return None
+            v = self._eval(tm, "", [local], depth + 1, st)[0]
+            if v is not None:
+                return v
+        if name in tm.export_values:   # CommonJS: exports.db = mysql.createPool()
+            return self._eval(tm, "", tm.export_values[name], depth + 1, st)[0]
+        if name in tm.export_new:
+            return self._type(tm, "", tm.export_new[name])
+        for tmod, mp in tm.reexports:
+            if tmod in self.mods and (mp is None or name in mp):
+                hit = self._exported_value(tmod, name if mp is None else mp[name], depth + 1, st)
+                if hit is not None:
+                    return hit
+        return None
 
     def _param(self, m: JSModule, s: str, name: str, depth: int, st: dict):
         """A parameter: its written TypeScript type, its place in an Express handler, or what a built-in passes
@@ -2026,6 +3237,10 @@ class JSResolver:
             if name in mm.export_new:
                 st["value"] = True
                 return self._type(mm, "", mm.export_new[name])
+            v = self._exported_value(val[1], name, depth + 1, st)
+            if v is not None:   # import * as lib from "./lib"; lib.db: a value the file exports
+                st["value"] = True
+                return v
             whole = None   # module.exports = <a value>: its members
             if "default" in mm.export_values:
                 st["value"] = True
@@ -2034,6 +3249,124 @@ class JSResolver:
                 st["value"] = True
                 whole = self._type(mm, "", mm.export_new["default"])
             return self._member(whole, name, depth + 1, st) if whole is not None and depth < 6 else None
+        return None
+
+    # ---- Supabase (roadmap stage 1): is a value a client, and which table does a call go into
+    def client(self, m: JSModule, scope: str, chain: list[str], depth: int = 0):
+        """Is the value a chain names a Supabase client? -> the library call or type it came from
+        (`@supabase/supabase-js.createClient()`), False when it is a known other thing, None when it is not known.
+        Followed here and nowhere else: what a function of the project hands back when every `return` of it is a
+        client. (A value another file of the project exports, `export const supabase = createClient(…)`, is followed
+        for every library since _exported_value.)"""
+        if depth > 6 or not chain:
+            return None
+        val, _ = self._eval(m, scope, chain, depth, {"value": False})
+        if val is not None:
+            name = ".".join([val[1]] + val[2]) if val[0] == "ext" else ""
+            return name if SUPABASE_CLIENT.match(name) else False
+        if len(chain) != 1:
+            return None
+        name = chain[0]
+        if name.endswith("()"):
+            b = self.bind(m, scope, name[:-2])
+            if b is None or b[0] != "def":
+                return None
+            tm = self.mods[b[1]]
+            found = [self.client(tm, b[2], c, depth + 1) if c else None for c in tm.returned.get(b[2], ())]
+            return sorted(found)[0] if found and all(isinstance(x, str) for x in found) else None
+        s, seen = scope, []
+        while True:
+            seen.append(s)
+            if name in m.params.get(s, ()) or name in m.anon_params.get(s, ()):
+                return None
+            if name in m.values.get(s, {}):
+                if name in m.dynamic.get(s, ()) or any(name in m.reassigned.get(x, ()) for x in seen):
+                    return None
+                return self.client(m, s, m.values[s][name], depth + 1)
+            if name in m.declared.get(s, ()) or name in m.dynamic.get(s, ()):
+                return None
+            if not s:
+                break
+            s = self._up(m, s)
+        imp = m.imports.get(name)
+        if imp is not None and imp[0] in self.mods and imp[1] not in ("cjs", "*"):
+            return self._exported_client(imp[0], imp[1], depth + 1)
+        return None
+
+    def _exported_client(self, mod: str, name: str, depth: int):
+        if depth > 6:
+            return None
+        tm = self.mods[mod]
+        local = tm.default if name == "default" else tm.exports.get(name)
+        if local is not None and local not in tm.defs:
+            if local in tm.values.get("", {}):
+                if local in tm.reassigned.get("", ()) or local in tm.dynamic.get("", ()):
+                    return None
+                return self.client(tm, "", tm.values[""][local], depth + 1)
+            imp = tm.imports.get(local)
+            if imp is not None and imp[0] in self.mods and imp[1] not in ("cjs", "*"):
+                return self._exported_client(imp[0], imp[1], depth + 1)
+        if name in tm.export_values:   # CommonJS: exports.supabase = createClient(…)
+            return self.client(tm, "", tm.export_values[name], depth + 1)
+        for tmod, mp in tm.reexports:
+            if tmod in self.mods and (mp is None or name in mp):
+                hit = self._exported_client(tmod, name if mp is None else mp[name], depth + 1)
+                if hit is not None:
+                    return hit
+        return None
+
+    def _const(self, m: JSModule, scope: str, name: str) -> str | None:
+        """The text of a constant of the file, when `name` in this scope is that constant and nothing nearer."""
+        s = scope
+        while s:
+            if name in m.params.get(s, ()) or name in m.anon_params.get(s, ()) or name in m.declared.get(s, ()):
+                return None
+            s = self._up(m, s)
+        if name in m.reassigned.get("", ()) or name in m.anon_params.get("", ()):
+            return None
+        text = m.consts.get(name)
+        return text if text is not None and TABLE_NAME.match(text) else None
+
+    def table_call(self, m: JSModule, scope: str, db: dict):
+        """A call written `<recv>.from("<table>").<op>(…)` -> (table id, confidence, via), or None when `<recv>` is
+        not a Supabase client as far as the code shows, or the table's name is not written. A client by where the
+        value came from is a likely link (`supabase-from`); a value Lantern cannot follow that is only named like
+        one (`supabase`, `this.supabase`) a possible one (`supabase-name`)."""
+        table = db["table"] if db["table"] is not None else self._const(m, scope, db["const"])
+        if table is None:
+            return None
+        schema = None if db["schema"] == "public" else db["schema"]   # `public` is where a table is unless said
+        tid = "db:" + (f"{schema}.{table}" if schema else table)
+        recv = db["recv"]
+        known = self.client(m, scope, recv)
+        if known:
+            return tid, table, INFERRED, "supabase-from"
+        if known is None and SUPABASE_NAME.match(recv[-1]) and (recv[0] == "this" or len(recv) == 1):
+            if len(recv) == 1:   # a name that was given another value, or that is a function or an import, is none
+                s = scope
+                while True:
+                    if recv[0] in m.reassigned.get(s, ()) or recv[0] in m.dynamic.get(s, ()):
+                        return None
+                    if not s:
+                        break
+                    s = self._up(m, s)
+                if self.bind(m, scope, recv[0]) is not None:
+                    return None
+            return tid, table, POSSIBLE, "supabase-name"
+        return None
+
+    def on_client(self, m: JSModule, scope: str, parts: list[str], args=()) -> str | None:
+        """A call on a Supabase client that came from another file or from a function of the project
+        (`supabase.from`, `supabase.from().select().order`, `supabase.auth.getUser`) -> the library name it is a
+        call of, as resolve_more names the same call on a client made in this file."""
+        for k in (1, 2):
+            if len(parts) > k and not (k == 2 and parts[0] != "this"):
+                base = self.client(m, scope, parts[:k])
+                if base:
+                    if self.may_be_own(m, scope, parts, ("ext", base, parts[k:-1]), "library-value",
+                                       {"value": True}, args):
+                        return None
+                    return _ext_name([base] + parts[k:])
         return None
 
     @staticmethod
@@ -2087,6 +3420,8 @@ class JSResolver:
             doubt = self.global_doubt(m, parts)
             if doubt:
                 return doubt
+        if m.svelte and len(head) > 1 and head.startswith("$") and self.bind(m, scope, head) is None:
+            return "local-unknown"     # `$page.url…` in a Svelte file: what the store `page` holds right now
         if head == "this":
             d = m.defs.get(scope)
             if not (d and d.in_class):
@@ -2165,15 +3500,204 @@ def _clean_page_path(p: str) -> str:
     return "/" + "/".join(segs)
 
 
+def _trpc_served(m: JSModule, mt: dict, repo: Path, pkg_cache: dict) -> str | None:
+    """The address a tRPC handler serves under: the `endpoint` it is given, the path of the `use("/path", …)` it is
+    written in, the Next.js route file it stands in (`app/api/trpc/[trpc]/route.ts` -> /api/trpc), "/" for a server
+    of its own; None where the code does not say."""
+    ep = mt["endpoint"]
+    if ep is None:
+        pkg = _nearest_package(m.path, repo, pkg_cache)
+        rel = m.path.relative_to(pkg["dir"]).as_posix() if pkg["dir"] in m.path.parents else m.rel
+        at = _route_path_from_file(rel, "route") if "next" in pkg["deps"] else None
+        if at and re.search(r"/\[[^/]+\]$", at):
+            ep = at.rsplit("/", 1)[0]
+        elif mt["adapter"] in TRPC_AT_ROOT:
+            ep = "/"
+    return None if ep is None else "/" + ep.strip("/")
+
+
+def _trpc_plan(mods: dict[str, JSModule], r: "JSResolver", repo: Path, pkg_cache: dict, target_id) -> dict | None:
+    """Which function answers which tRPC procedure, and at which address (roadmap of 2026-11-14, stage 1).
+
+    The Walker wrote down everything shaped like a router. One counts where what made it is tRPC's own
+    (`initTRPC.create().router`, followed through the files: `made_by_trpc`), where a procedure in it is built on
+    tRPC's `procedure` (or, where that is not followed, on a name that says procedure), where it is handed to one
+    of tRPC's handlers, or where such a router holds it. A router nobody holds is a root; a procedure's path is the
+    keys on the way to it, and its address the root's mount, where the code says one, and that path."""
+    keys = [(m.name, i) for m in mods.values() for i in range(len(m.trpc_routers))]
+    if not keys:
+        return None
+    by_name: dict[tuple, tuple] = {}
+    for k in keys:
+        rec = mods[k[0]].trpc_routers[k[1]]
+        by_name.setdefault((k[0], rec["scope"], rec["name"]), k)
+
+    def home(m: JSModule, scope: str, name: str, depth: int = 0):
+        """Where a name is declared: (module, scope, name), in this file or in the one it is imported from."""
+        if depth > 8:
+            return None
+        s = scope
+        while True:
+            if name in m.declared.get(s, ()) or (m.name, s, name) in by_name:
+                return m, s, name
+            if not s:
+                break
+            s = r._up(m, s)
+        imp = m.imports.get(name)
+        if imp is None or imp[0] not in mods or imp[1] in ("cjs", "*"):
+            return None
+        return exported(mods[imp[0]], imp[1], depth + 1)
+
+    def exported(tm: JSModule, name: str, depth: int = 0):
+        if depth > 8:
+            return None
+        if name == "default" and (tm.name, "", "default") in by_name:
+            return tm, "", "default"
+        local = tm.default if name == "default" else tm.exports.get(name)
+        if local is not None:
+            if local in tm.imports and local not in tm.declared.get("", ()):
+                return home(tm, "", local, depth + 1)
+            return tm, "", local
+        for tmod, mp in tm.reexports:
+            if tmod in mods and (mp is None or name in mp):
+                hit = exported(mods[tmod], name if mp is None else mp[name], depth + 1)
+                if hit is not None:
+                    return hit
+        return None
+
+    def router_at(m: JSModule, scope: str, chain: list[str] | None):
+        """The router a name written in `scope` stands for (also `routers.post` of `import * as routers`)."""
+        at = None
+        if chain and len(chain) == 1:
+            at = home(m, scope, chain[0])
+        elif chain and len(chain) == 2:
+            imp = m.imports.get(chain[0])
+            if imp is not None and imp[0] in mods and imp[1] == "*":
+                at = exported(mods[imp[0]], chain[1])
+        return by_name.get((at[0].name, at[1], at[2])) if at else None
+
+    def made_by_trpc(m: JSModule, scope: str, chain: list[str]) -> bool | None:
+        """True where the chain is followed to something of @trpc/server, False where to another library or to
+        the language's own, None where it is not followed."""
+        val = r._eval(m, scope, list(chain), 0, {"value": False})[0] if chain else None
+        if val is None or val[0] not in ("ext", "builtin"):
+            return None
+        return val[0] == "ext" and val[1].startswith(TRPC_SERVER)
+
+    def built_on(m: JSModule, scope: str, chain: list[str], depth: int = 0):
+        """What a procedure is built on, through the names it is given: -> (the names on the way, nearest first;
+        the `.use()` steps in the order they run, each as (module, scope, step); made by tRPC or not, as above)."""
+        if depth > 8 or not chain:
+            return [], [], None
+        if len(chain) == 1 and not chain[0].endswith("()"):
+            at = home(m, scope, chain[0])
+            if at is not None:
+                tm, ts, local = at
+                rec = tm.trpc_bases.get((ts, local))
+                if rec is not None:
+                    names, uses, ok = built_on(tm, ts, rec["base"], depth + 1)
+                    return [local, *names], [*uses, *((tm, ts, u) for u in rec["uses"])], ok
+                v = tm.values.get(ts, {}).get(local)
+                if v and local not in tm.reassigned.get(ts, ()):
+                    names, uses, ok = built_on(tm, ts, v, depth + 1)
+                    return [local, *names], uses, ok
+                return [local], [], None
+        return [], [], made_by_trpc(m, scope, chain)
+
+    info: dict[tuple, tuple] = {}
+    for k in keys:
+        m = mods[k[0]]
+        rec = m.trpc_routers[k[1]]
+        items = []
+        for it in rec["items"]:
+            if it["kind"] == "procedure":
+                items.append((it, *built_on(m, rec["scope"], it["base"])))
+            else:
+                items.append((it, (m.name, it["inline"]) if it.get("inline") is not None
+                              else router_at(m, rec["scope"], it.get("chain"))))
+        info[k] = (m, rec, items)
+    mounts: dict[tuple, str | None] = {}
+    loose: list[str | None] = []
+    for m in mods.values():
+        for mt in m.trpc_mounts:
+            k = (m.name, mt["inline"]) if mt["inline"] is not None else router_at(m, mt["scope"], mt["router"])
+            if k in info:
+                mounts.setdefault(k, _trpc_served(m, mt, repo, pkg_cache))
+            else:
+                loose.append(_trpc_served(m, mt, repo, pkg_cache))
+    good = set(mounts) | {
+        k for k, (m, rec, items) in info.items()
+        if (rec["callee"] and made_by_trpc(m, rec["scope"], rec["callee"]))
+        or any(x[0]["kind"] == "procedure" and (x[3] or (x[3] is None and "procedure" in x[0]["base"][-1].lower()))
+               for x in items)}
+    todo = list(good)
+    while todo:
+        for x in info[todo.pop()][2]:
+            if x[0]["kind"] != "procedure" and x[1] in info and x[1] not in good:
+                good.add(x[1])
+                todo.append(x[1])
+    held = {x[1] for k in good for x in info[k][2] if x[0]["kind"] != "procedure" and x[1] in good}
+    roots = [k for k in keys if k in good and k not in held]
+    bare = [k for k in roots if k not in mounts]
+    if len(loose) == 1 and len(bare) == 1:      # one handler whose router is not followed, one router nobody mounts
+        mounts[bare[0]] = loose[0]
+    procs: list[dict] = []
+    seen: set[str] = set()
+
+    def walk(k: tuple, prefix: list[str], mount: str | None, trail: tuple) -> None:
+        if k in trail or len(trail) > 12:
+            return
+        m, rec, items = info[k]
+        for x in items:
+            it = x[0]
+            if it["kind"] != "procedure":
+                if x[1] in good:
+                    walk(x[1], prefix + ([it["key"]] if it["kind"] == "router" else []), mount, (*trail, k))
+                continue
+            if x[3] is False:       # built on another library's value: `queue.query(fn)` in a router is no procedure
+                continue
+            if "local" in it:
+                tid = nid(m.name, it["local"])
+            else:
+                res = r.resolve_parts(m, rec["scope"], it["handler"])
+                if res is None:
+                    more = r.resolve_more(m, rec["scope"], it["handler"])
+                    res = ("def", *more[1]) if more is not None and more[0] == "def" else None
+                tid = target_id(res) if res is not None and res[0] == "def" else None
+            node = r.g.nodes.get(tid) if tid else None
+            if node is None or node.kind != CALLABLE or tid in seen:
+                continue
+            seen.add(tid)
+            path = ".".join([*prefix, it["key"]])
+            procs.append({"m": m, "scope": rec["scope"], "item": it, "tid": tid, "path": path, "mount": mount,
+                          "detail": f"{TRPC_KINDS[it['type']]} {(mount or '').rstrip('/')}/{path}",
+                          "names": x[1], "uses": x[2]})
+
+    for k in [*(k for k in keys if k in mounts), *roots]:
+        walk(k, [], mounts.get(k), ())
+    paths: dict[str, list[dict]] = {}
+    for proc in procs:
+        paths.setdefault(proc["path"], []).append(proc)
+    return {"procs": procs, "paths": paths, "routers": len(good), "calls": 0, "linked": 0}
+
+
+def module_names(rels) -> dict[str, str]:
+    """Each file's path from the project's top -> the name its module is known by."""
+    files = {}
+    for rel in rels:
+        # a page, a Svelte component and a `.svelte.ts` file keep their whole name: `Toast.svelte` and
+        # `Toast.svelte.ts` may stand side by side
+        files[rel] = rel if rel.lower().endswith(tuple(HTML_EXTS)) or rel.endswith(SVELTE_EXT) or \
+            RUNE_FILE.search(rel) else re.sub(r"\.[cm]?[jt]sx?$", "", rel)
+    return files
+
+
 def add_js(g: Graph, repo: str | Path) -> dict:
     repo = Path(repo).resolve()
     paths = discover(repo)
     if not paths:
         return {"files": 0, "lines": 0}
-    files = {}
-    for p in paths:
-        rel = p.relative_to(repo).as_posix()
-        files[rel] = rel if p.suffix.lower() in HTML_EXTS else re.sub(r"\.[cm]?[jt]sx?$", "", rel)
+    files = module_names(p.relative_to(repo).as_posix() for p in paths)
     spec = SpecResolver(repo, files)
     parsers = {ext: Parser(lang) for ext, lang in LANGS.items()}
     mods: dict[str, JSModule] = {}
@@ -2187,19 +3711,40 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             continue
         if len(src) > 1_500_000:
             continue
-        html = p.suffix.lower() in HTML_EXTS
+        html, svelte = p.suffix.lower() in HTML_EXTS, p.suffix == SVELTE_EXT
+        markup = own = None
+        ext = ".js" if html else p.suffix
         if html:
             src = inline_script(src)
             if src is None:
                 continue
+        elif svelte:
+            src, markup, ts, own = svelte_parts(src)
+            ext = ".ts" if ts else ".js"
         total += src.count(b"\n") + 1
-        tree = parsers[".js" if html else p.suffix].parse(src)
+        tree = parsers[ext].parse(src)
         m = JSModule(name=files[rel], rel=rel, path=p, lines=src.count(b"\n") + 1, is_test=bool(TEST_RE.search(rel)),
-                     html=html)
-        w = Walker(m, lambda s, _p=p: spec.resolve(s, _p))
-        w.each(tree.root_node.children, "")
+                     html=html, svelte=svelte, runes=svelte or bool(RUNE_FILE.search(rel)))
+        pkg = _nearest_package(p, repo, pkg_cache)
+        in_kit = p.relative_to(pkg["dir"]).as_posix() \
+            if KIT in pkg["deps"] and not m.is_test and pkg["dir"] in p.parents else None
+        km = KIT_FILE.match(in_kit) if in_kit else None
+        if not html and not svelte:
+            m.directives = _directives(tree.root_node)
+        w = Walker(m, lambda s, _p=p: spec.resolve(s, _p), trpc=not m.is_test and TRPC_SERVER in pkg["deps"],
+                   kit=km.group("kind") if km is not None and not svelte else
+                   "hooks" if in_kit and KIT_HOOKS.match(in_kit) else None,
+                   actions=_exported_later(tree.root_node) if "use server" in m.directives and not m.is_test
+                   and pkg["deps"] & SERVER_ACTIONS else None,
+                   remix=not m.is_test and not svelte and not html and
+                   (ROUTER_FRAMEWORK in pkg["deps"] or any(REMIX_PACKAGES.match(d) for d in pkg["deps"])))
+        shown = []
+        if svelte:
+            shown = read_svelte(w, tree, src, markup, own, parsers[ext])
+        else:
+            w.each(tree.root_node.children, "")
         covered = {ref.at for ref in m.refs if ref.at}
-        for cn in _call_nodes(tree.root_node):
+        for cn in [x for top in (tree.root_node, *shown) for x in _call_nodes(top)]:
             pos = _site_pos(cn)
             if pos in covered:
                 continue
@@ -2222,6 +3767,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         how = spec.lost(sp, mod.path)
         if how is None:
             return False
+        if how == "own":        # a package of the project itself, whatever the manifest beside the import lists
+            return True
         deps = _nearest_package(mod.path, repo, pkg_cache)["deps"]
         return sp not in deps if how == "exact" else _package_name(sp) not in deps
 
@@ -2256,10 +3803,54 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         calls.record(g.sites, file=m.rel, line=at[0], col=at[1], callee=ref.text or ".".join(ref.parts), caller=src_id,
                      lang=JS_LANG, group=group, test=m.is_test, targets=targets, reason=reason)
 
+    # tRPC: which function answers which procedure. Worked out here, before the calls are read, so that a call
+    # through tRPC's client can be linked to its procedure; the entries are set below, with the other routes
+    trpc = _trpc_plan(mods, r, repo, pkg_cache, target_id)
+    trpc_users = {m.name for m in mods.values() if trpc is not None and not m.is_test and any(
+        d.startswith("@trpc/") for d in _nearest_package(m.path, repo, pkg_cache)["deps"])}
+
+    def trpc_call(m: JSModule, ref: JSRef):
+        """`api.post.create.useMutation()`: a request to the procedure `post.create` -> (the procedures of that
+        path, confidence), or None for a call that is none. Confirmed on a client that one of tRPC's own functions
+        made (`createTRPCReact()`, `createTRPCClient()`); likely where the client is not followed (it comes out of a
+        hook, a parameter), the path is a procedure and the last name is one of tRPC's hooks or option makers. No
+        link on an object of the project's own, on another library's value, or for `mutate` and `query` on a name
+        Lantern cannot place."""
+        parts = ref.parts
+        if len(parts) < 3 or parts[-1] not in TRPC_HOOKS | TRPC_CALLS or parts[0] == "this" or \
+                any(x.endswith("()") for x in parts):
+            return None
+        val = r._eval(m, ref.scope, parts[:1], 0, {"value": False})[0]
+        hits = trpc["paths"].get(".".join(parts[1:-1])) or []
+        if val is not None:
+            client = val[0] == "ext" and val[1].startswith("@trpc/") and not val[1].startswith(TRPC_SERVER)
+            return (hits, RESOLVED) if client else None
+        if not hits or parts[-1] not in TRPC_HOOKS or r.bind(m, ref.scope, parts[0]) is not None:
+            return None
+        s = ref.scope
+        while True:
+            if parts[0] in m.plain.get(s, ()):      # const store = { post: { create: { useMutation () {} } } }
+                return None
+            if not s:
+                break
+            s = r._up(m, s)
+        return hits, INFERRED
+
     unresolved = 0
+    db_calls: list[dict] = []
     for m in mods.values():
         for ref in m.refs:
             src_id = nid(m.name, ref.scope) if ref.scope and ref.scope in m.defs else nid(m.name)
+            if ref.kind == "call" and m.name in trpc_users:
+                # a request, as `fetch("/api/notes")` is one: the link is added beside whatever the call itself
+                # resolves to below (a call into tRPC's library), and the inventory keeps that reading
+                link = trpc_call(m, ref)
+                if link is not None:
+                    trpc["calls"] += 1
+                    trpc["linked"] += bool(link[0])
+                    for proc in link[0]:
+                        g.add_edge(src_id, proc["tid"], kind=CALLS, confidence=link[1] if len(link[0]) == 1
+                                   else POSSIBLE, line=ref.line, via="http-trpc", detail=proc["detail"])
             if ref.kind == "computed":   # inventory only, as are "registration" and "wrapper" below
                 if ref.parts == ["<inline>"]:   # (function () {...})(): its body is read as part of this function
                     site(m, ref, src_id, [(src_id, RESOLVED, "inline-function")])
@@ -2267,6 +3858,10 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                     site(m, ref, src_id, reason="computed")
                 continue
             inv = ref.kind in ("registration", "wrapper")
+            if m.runes and ref.parts[0].removesuffix("()") in SVELTE_RUNES and ref.kind != "jsx":
+                if ref.kind != "callback":     # `$state(0)`, `$derived.by(…)`: Svelte's compiler reads these
+                    site(m, ref, src_id, [("builtin:" + ".".join(ref.parts), RESOLVED, "svelte-rune")])
+                continue
             if ref.parts[0] in JS_GLOBALS and ref.kind != "jsx":
                 if ref.kind != "callback":   # (the map never counted these; only the inventory says what they are)
                     doubt = r.global_doubt(m, ref.parts)
@@ -2276,9 +3871,23 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                         site(m, ref, src_id, [("builtin:" + ".".join(ref.parts), RESOLVED,
                                                "require" if ref.parts == ["require"] else "global")])
                 continue
+            hit = r.table_call(m, ref.scope, ref.db) if ref.db is not None and ref.kind == "call" else None
+            if hit is not None:   # a call into a table: the link itself is made by the bridge, from meta["db_calls"]
+                tid, table, conf, via = hit
+                site(m, ref, src_id, [(tid, conf, via)])
+                db_calls.append({"src": src_id, "table": table,
+                                 "schema": None if ref.db["schema"] == "public" else ref.db["schema"], "op": ref.db["op"],
+                                 "id": tid, "confidence": conf, "via": via, "file": m.rel, "line": ref.line,
+                                 "ui": ref.ui})
+                continue
             res = r.resolve_parts(m, ref.scope, ref.parts)
             more = r.resolve_more(m, ref.scope, ref.parts, args=ref.args or ()) \
                 if res is None and ref.kind != "callback" else None
+            if res is None and more is None and ref.kind == "call":
+                lib = r.on_client(m, ref.scope, ref.parts, ref.args or ())
+                if lib is not None:
+                    more = ("ext", lib, "library-result" if any(x.endswith("()") for x in ref.parts)
+                            else "library-value", INFERRED)
             if more is not None:
                 kind, target, via, conf = more
                 counted = not inv and ref.kind == "call" and not m.is_test
@@ -2306,6 +3915,8 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                 if not inv and ref.kind == "call" and ref.parts[0] not in ("this",) and not m.is_test:
                     unresolved += 1
                     g.unresolved[".".join(ref.parts)[:120]] = g.unresolved.get(".".join(ref.parts)[:120], 0) + 1
+                    spot = ref.at or (ref.line, 0)
+                    g.unresolved_at[f"{m.rel}:{spot[0]}:{spot[1]}"] = (".".join(ref.parts)[:120], False)
                 continue
             if res[0] == "ext":
                 if ref.kind == "callback":
@@ -2629,6 +4240,176 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         val, _ = r._eval(m, scope, list(recv), 0, {"value": False})
         return val is not None and val[0] == "ext" and val[1] == "express"
 
+    # SvelteKit: what each file with a fixed name is, gathered while the entries are set and joined after them
+    kit: dict = {"routes": [], "pages": [], "loads": {}, "layouts": {}, "frames": {}, "actions": [], "handle": {},
+                 "files": [], "shared": {}}
+
+    def kit_route(tid: str | None, detail: str, role: str, base: Path) -> str | None:
+        node = g.nodes.get(tid) if tid else None
+        if node is None or node.kind != CALLABLE or node.entry:
+            return None
+        node.entry = {"kind": "route", "detail": detail, "sveltekit": role}
+        kit["routes"].append((node, base))
+        return node.id
+
+    def kit_file(m: JSModule, base: Path, km) -> None:
+        folder, kind = km.group("dir"), km.group("kind")
+        path = kit_path(folder)
+        own = lambda name: nid(m.name, m.exports[name]) if m.exports.get(name) in m.defs else None   # noqa: E731
+        if m.svelte:
+            node = g.nodes.get(nid(m.name, m.component)) if m.component else None
+            if kind == "page" and node is not None and not node.entry:
+                node.entry = {"kind": "page", "detail": path}
+                kit["pages"].append((m, base, folder))
+            elif kind == "layout" and node is not None:
+                kit["frames"][(base, folder)] = node.id
+        elif kind in ("page", "layout"):
+            # `+page.ts`, `+layout.ts`: a `load` that runs on the server for the first view and in the browser after
+            # it. Nobody can ask for it from outside, so it is no route: a function its page calls
+            if own("load") in g.nodes:
+                kit["shared"][(base, folder, kind)] = own("load")
+        elif kind == "server":
+            for verb in (*KIT_VERBS, "fallback"):     # `fallback` answers every verb that has no function of its own
+                kit_route(own(verb), f"{'ANY' if verb == 'fallback' else verb} {path}", "endpoint", base)
+        elif kind == "layout.server":
+            # it runs for the pages below its folder: of a group `(app)` those inside the group, not every address
+            tid = kit_route(own("load"), f"GET {kit_path(folder, groups=True).rstrip('/')}/*", "layout load", base)
+            if tid:
+                kit["layouts"][(base, folder)] = tid
+        elif kind == "page.server":
+            tid = kit_route(own("load"), f"GET {path}", "load", base)
+            if tid:
+                kit["loads"][(base, folder)] = tid
+            for a in m.kit_actions if "actions" in m.exports else ():
+                tid = nid(m.name, a["local"]) if "local" in a else \
+                    handed(m, "", a["handler"], a["at"], nid(m.name), "route-handler")
+                tid = kit_route(tid, f"POST {path}" + ("" if a["key"] == "default" else f"?/{a['key']}"), "action", base)
+                if tid is None:
+                    continue
+                kit["actions"].append({"base": base, "folder": folder, "path": path, "key": a["key"], "tid": tid})
+                hit = r.resolve_parts(m, "", a["wrap"]) if a.get("wrap") else None
+                mid = target_id(hit) if hit and hit[0] == "def" else \
+                    f"ext:{_ext_js(hit[1])}" if hit and hit[0] == "ext" and not r.unread(hit[1]) else None
+                if mid:     # save: guarded(async (event) => …): the helper around it runs first
+                    if mid.startswith("ext:"):
+                        g.external(mid[4:])
+                    g.nodes[tid].entry["middleware"] = [mid]
+
+    # Remix: the route files of each app by the name that is their address, then what each of them is. Set before
+    # the other entries, so that a route file's own functions are what the framework makes of them
+    remix: dict = {"apps": {}, "old": set(), "listed": set(), "routes": [], "recs": [], "by_mod": {}}
+    remix_ways: dict = {}
+    remix_texts: dict = {}
+
+    def made_by(m: JSModule, local: str, node) -> None:
+        """export const save = checked(schema, async (data) => …): what the helper hands back runs first, on every
+        request, and calls this function. The helper is kept as a route's middleware is (its name is read as one),
+        and the function is linked to it: what it calls is on the way."""
+        hit = r.resolve_parts(m, "", m.made[local]) if local in m.made else None
+        mid = target_id(hit) if hit and hit[0] == "def" else \
+            f"ext:{_ext_js(hit[1])}" if hit and hit[0] == "ext" and not r.unread(hit[1]) else None
+        if mid and mid.startswith("ext:"):
+            g.external(mid[4:])
+            node.entry["middleware"] = [mid]
+        elif mid and mid != node.id and mid in g.nodes and g.nodes[mid].kind == CALLABLE:
+            g.add_edge(node.id, mid, kind=CALLS, confidence=INFERRED, line=node.start_line, via="action-helper")
+            node.entry["middleware"] = [mid]
+
+    def remix_own(m: JSModule, name: str) -> tuple[str, str] | None:
+        """The function a route file exports under `name`: its own, or one it hands on from another file of the
+        project (`export { loader } from "~/x.server"`, or taken in and exported), which is then the door."""
+        local = m.exports.get(name)
+        if local in m.defs:
+            return m.name, local
+        hit = None
+        if local is not None and local in m.imports:
+            tmod, tname, _spec = m.imports[local]
+            hit = r.lookup_export(tmod, tname) if tmod and tname != "cjs" else None
+        elif local is None:
+            for tmod, mp in m.reexports:
+                if tmod is not None and (mp is None or name in mp):
+                    hit = r.lookup_export(tmod, name if mp is None else mp[name])
+                    if hit:
+                        break
+        return (hit[1], hit[2]) if hit and hit[0] == "def" else None
+
+    def remix_door(m: JSModule, name: str, detail: str, role: str) -> str | None:
+        own = remix_own(m, name)
+        node = g.nodes.get(nid(*own)) if own else None
+        if node is None or node.kind != CALLABLE or node.entry:
+            return None
+        node.entry = {"kind": "route", "detail": detail, "remix": role}
+        made_by(mods[own[0]], own[1], node)
+        remix["routes"].append(node)
+        return node.id
+
+    for m in mods.values():
+        if m.path.parent.name == "app" and m.path.name in ROUTER_ROUTES and not m.is_test:
+            try:
+                remix_texts[m.path] = project_text(m.path, repo)
+            except OSError:
+                pass
+    for m in mods.values():
+        if m.is_test or m.html or m.svelte:
+            continue
+        pkg = _nearest_package(m.path, repo, pkg_cache)
+        rm = REMIX_FILE.match(m.path.relative_to(pkg["dir"]).as_posix()) if pkg["dir"] in m.path.parents else None
+        if rm is None:
+            continue
+        way = remix_way(pkg, repo, remix_texts, remix_ways)
+        if way in ("old", "listed"):
+            remix[way].add(pkg["dir"])
+        elif way == "files":
+            # a folder's `route` file is its route; its `index` file only where no route of that name is there
+            names = remix["apps"].setdefault(pkg["dir"], {})
+            if rm.group("own") != "index" or (rm.group("name") or "") not in names:
+                names[rm.group("name") or ""] = m
+    for base, names in remix["apps"].items():
+        recs = {}
+        for name, m in names.items():
+            parts = remix_parts(name) if name else []
+            # the layout a route is drawn in: the route file whose whole name this one's begins with (the longest
+            # such), and at last the root; `admin_.reports` begins with `admin_`, which is no file's name
+            above = next((".".join(parts[:i]) for i in range(len(parts) - 1, 0, -1) if ".".join(parts[:i]) in names),
+                         "" if name and "" in names else None)
+            recs[name] = {"m": m, "name": name, "base": base, "path": remix_address(name), "above": above,
+                          "index": bool(parts) and parts[-1] == "_index", "below": [],
+                          "own": bool(name) and remix_shown(parts[-1]) is not None,
+                          "loader": None, "action": None, "page": None, "frame": None}
+        for rec in recs.values():
+            if rec["above"] is not None:
+                recs[rec["above"]]["below"].append(rec)
+        for name, rec in recs.items():
+            m, path = rec["m"], rec["path"]
+            layout = not name or bool(rec["below"])
+            if layout:
+                # a layout's loader runs for every page drawn in it; one with no address of its own (`_auth`) is
+                # named by its file, as nothing else tells it from the layout it stands in
+                under = path.rstrip("/") + ("" if rec["own"] or not name else "/" + remix_parts(name)[-1])
+                rec["loader"] = remix_door(m, "loader", f"GET {under}/*", "layout loader")
+            else:
+                rec["loader"] = remix_door(m, "loader", f"GET {path}", "loader")
+            # a POST to an address goes to the route there that is no index; `?index` says the index is meant
+            rec["action"] = remix_door(m, "action", f"POST {path}" + ("?index" if rec["index"] else ""), "action")
+            shows = nid(m.name, m.default) if m.default in m.defs else None
+            node = g.nodes.get(shows) if shows else None
+            if node is not None and node.kind == CALLABLE:
+                if layout:
+                    rec["frame"] = node.id
+                # the page of an address: what the route there shows, unless an index below it is that page
+                if name and (rec["own"] or rec["index"]) and not node.entry and \
+                        not any(x["index"] for x in rec["below"]):
+                    node.entry = {"kind": "page", "detail": path}
+                    rec["page"] = node.id
+                # a file that shows something holds both sides: its doors say what the browser's part is (`lanes`).
+                # A door handed on from another file stands in a file that shows nothing
+                for door in (rec["loader"], rec["action"]):
+                    if door and door.startswith(nid(m.name) + "::"):
+                        g.nodes[door].entry["component"] = node.id
+            remix["recs"].append(rec)
+            remix["by_mod"][m.name] = rec
+        remix["apps"][base] = recs
+
     # entries
     for m in mods.values():
         pkg = _nearest_package(m.path, repo, pkg_cache)
@@ -2652,6 +4433,36 @@ def add_js(g: Graph, repo: str | Path) -> dict:
             elif re.search(r"(^|/)(src/)?pages/", rel_pkg) and m.default in m.defs \
                     and not re.match(r"_(app|document|error)\.", fn):
                 g.nodes[nid(m.name, m.default)].entry = {"kind": "page", "detail": _route_path_from_file(rel_pkg, "page")}
+        if pkg["deps"] & SERVER_ACTIONS:
+            # Server Actions: the framework gives each one an address of its own, which any visitor can send a request
+            # to, whatever page shows the form. So each is a route, named by the function (it has no path to show).
+            acts = {local: d.name for local, d in m.defs.items() if d.server}
+            if "use server" in m.directives:
+                for local in [*m.exports.values(), m.default]:
+                    d = m.defs.get(local) if isinstance(local, str) else None
+                    if d is not None and d.kind == "function" and not d.in_class:
+                        acts.setdefault(local, d.name)
+            for local, name in acts.items():
+                node = g.nodes.get(nid(m.name, local))
+                if node is not None and not node.entry:
+                    node.entry = {"kind": "route", "detail": f"ACTION {name}"}
+                    made_by(m, local, node)
+        if KIT in pkg["deps"]:
+            km = KIT_FILE.match(rel_pkg)
+            if km is not None:
+                kit_file(m, pkg["dir"], km)
+            elif KIT_HOOKS.match(rel_pkg) and "handle" in m.exports:
+                # the function every request passes (or the functions, in the order `sequence(a, b)` names them):
+                # marked, as tRPC's handler is, so that the rules which ask routes ask the routes behind it
+                hooks = [nid(m.name, m.exports["handle"])] if m.exports["handle"] in m.defs else \
+                    [handed(m, "", chain, at, nid(m.name), "route-handler") for chain, at in m.kit_handles]
+                for tid in hooks:
+                    tid = kit_route(tid, "ANY /*", "handle", pkg["dir"])
+                    if tid:
+                        g.nodes[tid].entry["serves"] = "sveltekit"
+                        kit["handle"].setdefault(pkg["dir"], []).append(tid)
+            if m.svelte:
+                kit["files"].append((m, pkg["dir"], km))
         for reg in m.page_regs:
             res = r.resolve_parts(m, "", reg["component"])
             tid = target_id(res)
@@ -2709,6 +4520,206 @@ def add_js(g: Graph, repo: str | Path) -> dict:
         elif m.listens and m.route_regs:
             g.nodes[nid(m.name)].entry = {"kind": "main", "detail": f"server start ({m.rel})"}
 
+    if trpc is not None:
+        # tRPC procedures: each is a route of its own, named by where it is served and its path through the routers
+        used: dict = {}
+
+        def use_node(tm: JSModule, ts: str, u: dict) -> str | None:
+            """The function a `.use()` step runs before a procedure: its node, or a library's name."""
+            key = (tm.name, ts, u.get("local") or tuple(u["chain"]), u.get("at"))
+            if key in used:
+                return used[key]
+            if "local" in u:
+                mid = nid(tm.name, u["local"])
+            elif u.get("called"):     # .use(limit({ max: 5 })): the call is a call site of its own; the name only
+                hit = r.resolve_parts(tm, ts, u["chain"])
+                if hit is None:
+                    more = r.resolve_more(tm, ts, u["chain"], guard=False)
+                    hit = ("def", *more[1]) if more and more[0] == "def" else \
+                        ("ext", more[1]) if more and more[0] == "ext" else None
+                if hit and hit[0] == "ext":
+                    mid = None if r.unread(hit[1]) else f"ext:{_ext_js(hit[1]) if '()' not in hit[1] else hit[1]}"
+                    if mid:
+                        g.external(mid[4:])
+                else:
+                    mid = target_id(hit) if hit and hit[0] == "def" else None
+            else:
+                mid = handed(tm, ts, u["chain"], u.get("at"), nid(tm.name, ts) if ts and ts in tm.defs
+                             else nid(tm.name), "middleware")
+            used[key] = mid if mid and (mid in g.nodes or mid.startswith("ext:")) else None
+            return used[key]
+
+        made = 0
+        for proc in trpc["procs"]:
+            m, it, node = proc["m"], proc["item"], g.nodes[proc["tid"]]
+            if node.entry:      # a function that is already a route of another kind stays that
+                continue
+            if "handler" in it:
+                handed(m, proc["scope"], it["handler"], it.get("at"),
+                       nid(m.name, proc["scope"]) if proc["scope"] and proc["scope"] in m.defs else nid(m.name),
+                       "route-handler")
+            mw: list[str] = []
+            for tm, ts, u in [*proc["uses"], *((m, proc["scope"], u) for u in it["uses"])]:
+                mid = use_node(tm, ts, u)
+                if mid and mid not in mw:
+                    mw.append(mid)
+            node.entry = {"kind": "route", "detail": proc["detail"],
+                          "trpc": {"path": proc["path"], "type": it["type"], "procedures": proc["names"],
+                                   "mount": proc["mount"]}}
+            if mw:
+                node.entry["middleware"] = mw
+            made += 1
+        for m in mods.values():
+            for mt in m.trpc_mounts if made else ():
+                # the handler every procedure stands behind (`app/api/trpc/[trpc]/route.ts`) is their door, not a
+                # route that changes data by itself: the rules that ask routes ask the procedures (`serves`)
+                node = g.nodes.get(nid(m.name, mt["scope"])) if mt["scope"] in m.defs else None
+                if node is not None and (node.entry or {}).get("kind") == "route":
+                    node.entry["serves"] = "trpc"
+        if made or trpc["calls"]:
+            g.meta["trpc"] = {"procedures": made, "routers": trpc["routers"], "client_calls": trpc["calls"],
+                              "linked": trpc["linked"]}
+
+    if kit["routes"] or kit["pages"]:
+        def kit_link(src: str, tid: str, line: int, conf: str = RESOLVED) -> None:
+            g.add_edge(src, tid, kind=CALLS, confidence=conf, line=line, via="http-sveltekit",
+                       detail=g.nodes[tid].entry["detail"])
+
+        def kit_calls(src: str, tid: str | None, via: str) -> None:
+            if tid:
+                g.add_edge(src, tid, kind=CALLS, confidence=RESOLVED, line=1, via=via)
+
+        for node, base in kit["routes"]:
+            hooks = kit["handle"].get(base)
+            if hooks and node.entry.get("sveltekit") != "handle":   # hooks.server runs before every route of the app
+                node.entry["middleware"] = [*hooks, *(node.entry.get("middleware") or ())]
+        for m, base, folder in kit["pages"]:
+            # the framework's own wiring: a page gets its data from the `load` beside it and from the layouts
+            # above it, and is drawn inside those layouts
+            src = nid(m.name, m.component)
+            if (base, folder) in kit["loads"]:
+                kit_link(src, kit["loads"][(base, folder)], 1)
+            kit_calls(src, kit["shared"].get((base, folder, "page")), "sveltekit-load")
+            parts = [x for x in folder.split("/") if x]
+            for i in range(len(parts), -1, -1):
+                above = "".join(x + "/" for x in parts[:i])
+                if (base, above) in kit["layouts"]:
+                    kit_link(src, kit["layouts"][(base, above)], 1)
+                kit_calls(src, kit["shared"].get((base, above, "layout")), "sveltekit-load")
+                kit_calls(src, kit["frames"].get((base, above)), "sveltekit-layout")
+        def posts_to(written: str, base, km) -> tuple[list, str, bool]:
+            """The actions a form with this address posts to: of the page it stands on (`?/name`, or `default` when
+            none is named), or of the page whose address it writes (`/login?/register`). With them: the address
+            without its question, and whether an action is named."""
+            at, named, key = written.partition("?/")
+            at, key = at.split("?")[0].strip(), key.split("&")[0].strip() if named else "default"
+            hits = []
+            if not at and km is not None and km.group("kind") == "page":
+                hits = [a for a in kit["actions"] if (a["base"], a["folder"], a["key"]) == (base, km.group("dir"), key)]
+            elif at.startswith("/"):
+                hits = [a for a in kit["actions"] if a["base"] == base and a["key"] == key and kit_same(a["path"], at)]
+                # the page with that very address, before one with a part that changes (`/inbox/new`, `[id]`)
+                hits = [a for a in hits if a["path"].rstrip("/") == at.rstrip("/")] or hits
+            return hits, at, bool(named)
+
+        posted = linked = through = 0
+        # a part's form whose address is one name (`<form method="POST" action={sendTo}>`): file -> those names
+        takes = {m.name: {f["prop"] for f in m.forms if f.get("prop")} for m, _, _ in kit["files"]}
+        for m, base, km in kit["files"]:
+            # a form with method="POST" posts to an action
+            src = nid(m.name, m.component)
+            for form in m.forms:
+                posted += 1
+                if form["action"] is None:
+                    continue
+                hits, at, named = posts_to(form["action"], base, km)
+                if not hits and at.startswith("/") and not named:   # no page's action: a `+server.ts`, matched like any request
+                    call = _normalize_http(at, "POST", m.component, form["line"], "onSubmit")
+                    if call is not None:
+                        m.http.append(call)
+                for a in hits:
+                    kit_link(src, a["tid"], form["line"], RESOLVED if len(hits) == 1 else POSSIBLE)
+                linked += bool(hits)
+            # ... and a form that stands in a part this file draws gets its address from here: the part takes it
+            # under a name (`takes`) and this file writes it out (`<Panel sendTo="/account?/rename">`). Likely:
+            # the name is all that ties the two
+            for h in m.part_attrs:
+                res = r.resolve_parts(m, m.component, h["tag"].split("."))
+                part = mods.get(res[1]) if res and res[0] == "def" else None
+                if part is None or res[2] != part.component or h["name"] not in takes.get(part.name, ()):
+                    continue
+                hits = posts_to(h["value"], base, km)[0]
+                for a in hits:
+                    g.add_edge(src, a["tid"], kind=CALLS, confidence=INFERRED if len(hits) == 1 else POSSIBLE,
+                               line=h["line"], via="http-sveltekit-prop", detail=g.nodes[a["tid"]].entry["detail"])
+                through += bool(hits)
+        g.meta["sveltekit"] = {"routes": sum(1 for n, _ in kit["routes"] if n.entry.get("sveltekit") != "handle"),
+                               "pages": len(kit["pages"]), "forms": posted, "linked": linked, "handed": through}
+
+    if remix["apps"] or remix["old"] or remix["listed"]:
+        def remix_link(src: str, tid: str, line: int, conf: str = RESOLVED) -> None:
+            g.add_edge(src, tid, kind=CALLS, confidence=conf, line=line, via="http-remix",
+                       detail=g.nodes[tid].entry["detail"])
+
+        for rec in remix["recs"]:
+            # the framework's own wiring: a page gets its data from its own loader and from the loaders of the
+            # layouts it is drawn in, the root's last
+            if not rec["page"]:
+                continue
+            if rec["loader"]:
+                remix_link(rec["page"], rec["loader"], 1)
+            up, recs = rec["above"], remix["apps"][rec["base"]]
+            while up is not None:
+                if recs[up]["loader"]:
+                    remix_link(rec["page"], recs[up]["loader"], 1)
+                if recs[up]["frame"]:
+                    g.add_edge(rec["page"], recs[up]["frame"], kind=CALLS, confidence=RESOLVED, line=1,
+                               via="remix-layout")
+                up = recs[up]["above"]
+
+        def remix_posts(written: str | None, rec: dict | None, base: Path) -> list[str]:
+            """The actions a form posts to: of the route it stands in when it writes no address, of the route
+            whose address it writes otherwise (the very address before one with a part that changes)."""
+            if written is None:
+                return []
+            if written in ("", "."):
+                return [rec["action"]] if rec and rec["action"] else []
+            if not written.startswith("/"):
+                # read from where the form stands: below the address of the route it stands in (`new`, `./new`),
+                # or that route asked for its index (`?index`). One that climbs (`..`) is not followed (which
+                # route is one step up is the framework's to say), nor one in a part that is no route file
+                rest = written.removeprefix("./")
+                if rec is None or ".." in rest.partition("?")[0].split("/"):
+                    return []
+                own = rec["path"].rstrip("/")
+                written = (own or "/") + rest if rest.startswith("?") else f"{own}/{rest}"
+            at, _, asks = written.partition("?")
+            index = "index" in re.split(r"[&=#]", asks)
+            hits = [x for x in remix["apps"][base].values()
+                    if x["action"] and x["index"] == index and remix_same(x["path"], at)]
+            hits = [x for x in hits if x["path"].rstrip("/") == at.split("#")[0].rstrip("/")] or hits
+            return [x["action"] for x in hits]
+
+        posted = linked = 0
+        for m in mods.values():
+            if m.svelte or not m.forms:
+                continue
+            base = _nearest_package(m.path, repo, pkg_cache)["dir"]
+            if base not in remix["apps"]:
+                continue
+            for form in m.forms:
+                posted += 1
+                hits = remix_posts(form["action"], remix["by_mod"].get(m.name), base)
+                src = nid(m.name, form["scope"]) if form.get("scope") in m.defs else nid(m.name)
+                for tid in hits:
+                    remix_link(src, tid, form["line"], RESOLVED if len(hits) == 1 else POSSIBLE)
+                linked += bool(hits)
+        g.meta["remix"] = {"routes": len(remix["routes"]), "pages": sum(1 for x in remix["recs"] if x["page"]),
+                           "forms": posted, "linked": linked}
+        unread = [word for kind, word in (("old", REMIX_OLD), ("listed", ROUTER_LISTED)) if remix[kind]]
+        if unread:
+            g.meta["remix"]["not_read"] = "; ".join(unread)
+
     http_calls = []
     for m in mods.values():
         for h in m.http:
@@ -2719,6 +4730,14 @@ def add_js(g: Graph, repo: str | Path) -> dict:
                                "prefix_unknown": h.prefix_unknown, "host": h.host, "line": h.line,
                                "ui": h.ui, "file": m.rel})
     g.meta.setdefault("http_calls", []).extend(http_calls)
+    if db_calls:
+        g.meta.setdefault("db_calls", []).extend(db_calls)
+    said = {m.rel: sorted(m.directives) for m in mods.values() if m.directives}
+    if said:
+        g.meta.setdefault("js_directives", {}).update(said)
+    # where each import that found a file of the project led, for the opt-in type-aware pass (typecheck.py)
+    g.js_imports = {m.rel: {spec: mods[tmod].rel for tmod, _name, spec in m.imports.values() if spec and tmod in mods}
+                    for m in mods.values() if not m.html}
     return {"files": len(mods), "lines": total, "unresolved": unresolved,
             "components": sum(1 for m in mods.values() for d in m.defs.values() if d.jsx),
             "http_calls": len(http_calls)}

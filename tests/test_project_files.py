@@ -167,6 +167,8 @@ OWN_FILES = {
     ("_builder.py", "how"): "the pyproject.toml of that source, in the build's own folder: opened as itself, never through a link",
     ("_builder.py", "_say"): "writes: what a step of a build says, a new file in the build's own folder",
     ("_builder.py", "_source"): "writes: the source package the store handed out, a new file in the build's own folder",
+    ("typecheck.py", "_version"): "the version file of a type checker of this computer, only after its real place was found to lie outside the project",
+    ("typecheck.py", "_stub_name"): "a stub file pyright itself brings, beneath pyright's own folder by its real place, outside the project",
     ("_jail.py", "_holds"): "/proc: the memory a process of the run holds",
     ("_jail.py", "_share"): "/proc: a process's own share of the memory it holds",
     ("removal.py", "_by_folder"): "a folder handle", ("removal.py", "_empty"): "a folder handle",

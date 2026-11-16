@@ -50,6 +50,11 @@ wherever that sudo ran, neither LANTERN_TESTS_NETLESS=required nor LANTERN_TESTS
 of those jobs: it printed its line in both runs whose logs were read (commits 1a2bc59 and eaf4045). The runs were
 inside the no-network runner all the same (its own last line says so), but a test skipped there for a missing library
 would not have failed that pass. CI now writes each rule on the sudo line itself.
+
+LANTERN_TESTS_TYPECHECK=required (2026-11-15) is a rule of the same kind: tests/test_typecheck.py starts the real
+type checkers (TypeScript, pyright) where the variable is set, and under `required` a checker that is not found fails
+its tests instead of skipping them. CI installs one fixed version of each for its test jobs and sets the rule; `1`,
+a developer's word for "start them where they are", is no rule and is not named.
 """
 import functools
 import json
@@ -178,6 +183,11 @@ def _netless_required() -> bool:
     return os.environ.get("LANTERN_TESTS_NETLESS", "").strip().lower() == "required"
 
 
+def _checkers_required() -> bool:
+    """LANTERN_TESTS_TYPECHECK=required: a real type checker that is not found fails its tests (tests/test_typecheck.py)."""
+    return os.environ.get("LANTERN_TESTS_TYPECHECK", "").strip().lower() == "required"
+
+
 def _rules() -> list:
     """The rules this run was started under, as its last lines name them. CI looks for these words in the run's own
     output (.github/workflows/ci.yml): a rule that was set where the run was started and did not reach it is a rule
@@ -189,6 +199,8 @@ def _rules() -> list:
         rules.append("LANTERN_TESTS_COMPLETE=no-skips (a test skipped for any reason fails the run)")
     if _netless_required():
         rules.append("LANTERN_TESTS_NETLESS=required (the run starts only where there is no route to the outside)")
+    if _checkers_required():
+        rules.append("LANTERN_TESTS_TYPECHECK=required (a type checker that is not found fails its tests)")
     return rules
 
 

@@ -266,10 +266,68 @@ def refuses(stmts) -> bool:
     return False
 
 
+def whole_name(canon: str, e: N) -> str:
+    """The map names a call on what a library's call handed back by the first member used on it: `stripe().webhooks`
+    for `stripe.webhooks.constructEvent(…)`, where `stripe` is `require("stripe")(key)` in another file. The members
+    written after that one are put back, where the callee is written as plain names: the rules here go by the
+    whole name. (Until the map followed a value another file exports, such a call had no name from it.)"""
+    last = canon.rsplit(".", 1)[-1]
+    if "()" not in canon or last.endswith("()"):
+        return canon
+    names, f = [], e.a
+    while f is not None and f.k == "attr":
+        names.append(f.name or "")
+        f = f.a
+    if f is None or f.k != "name":
+        return canon
+    names.reverse()
+    if last not in names[:-1]:
+        return canon
+    return ".".join([canon, *names[names.index(last) + 1:]])
+
+
+def sends_on(stmts) -> bool:
+    """Whether what `refuses` read as turning a request away only sends the visitor to another page: a call named
+    `redirect` with the address written out, which is not a sign-in page and holds no word or number that says no.
+    Such a line ends a route that has done its work (`redirect("/dashboard")`) as often as it turns anybody away."""
+    for s in (stmts or ())[:8]:
+        if s.k == "raise":
+            return False
+        if s.k in ("expr", "return") and s.a is not None and _says_no(s.a):
+            e = s.a
+            if e.k != "call" or e.a is None or e.a.k not in ("name", "attr") or (e.a.name or "") != "redirect":
+                return False
+            given = (*(e.items or ()), *(e.kw.values() if isinstance(e.kw, dict) else ()))
+            if any(_says_no(x) for x in given):
+                return False
+            written = [n.a for n in every_node(given) if n.k == "const" and isinstance(n.a, str) and n.a.strip()]
+            return bool(written) and not any(
+                R.SIGN_IN_WORD.search(seg) for text in written for seg in _re.split(r"[/?#=&]", text) if seg)
+    return False
+
+
+class KitWay(str):
+    """The way on in a SvelteKit hook: `resolve(event)`, also with options, waited for, or kept and handed back
+    later (`const response = await resolve(event); ...; return response`). `of`: the name of the hook's one
+    parameter where it is kept whole (`input.resolve(input.event)`), else nothing."""
+    of = ""
+
+
+class GivenWay(str):
+    """The way on in the function a helper hands back as a Server Action (`export const save = checked(schema,
+    async (data) => …)`, and in `checked`: `return async (state, form) => { …; return action(data, form) }`): a
+    call of the function the helper was given, with whatever it hands it. `maker`: the helper's key; `derived`:
+    the names in the handed-back function that hold something made from what the browser sent it."""
+    maker = None
+    derived: frozenset = frozenset()
+
+
 def goes_on(stmts, ends: bool, way: str = "next") -> bool:
     """Whether a branch that leaves the function lets the request go on: it hands it to what comes next
     (`return next()`; `way` is the name that function goes by here), or, in a function whose answer is not the
     request's own (`ends` false: a helper, a hook, a dependency), it gives its caller one."""
+    if isinstance(way, (KitWay, GivenWay)):
+        return hands_on(stmts, way)
     for s in (stmts or ())[:8]:
         if s.k in ("expr", "return") and s.a is not None and s.a.k == "call" and s.a.a is not None and \
                 s.a.a.k == "name" and s.a.a.name == way and not s.a.items:
@@ -301,8 +359,16 @@ def all_nodes(x, depth: int = 0):
 
 def hands(e, way) -> bool:
     """Whether this expression hands the request to what comes next: `next()`, `next('route')`. `next(err)` does
-    not: that ends the request with an error."""
-    return isinstance(e, N) and e.k == "call" and e.a is not None and e.a.k == "name" and e.a.name == way and \
+    not: that ends the request with an error. In a SvelteKit hook: `resolve(event)`."""
+    if not (isinstance(e, N) and e.k == "call" and e.a is not None):
+        return False
+    if isinstance(way, GivenWay):
+        return e.a.k == "name" and e.a.name == way
+    if isinstance(way, KitWay):
+        whole = e.a.k == "attr" and e.a.name == way and bool(way.of) and e.a.a is not None and \
+            e.a.a.k == "name" and e.a.a.name == way.of
+        return bool(e.items) and (whole or (e.a.k == "name" and e.a.name == way))
+    return e.a.k == "name" and e.a.name == way and \
         (not e.items or (e.items[0].k == "const" and e.items[0].a in ("route", "router")))
 
 
@@ -324,6 +390,22 @@ def ways(x, way) -> int:
 
 def hands_on(x, way) -> bool:
     return ways(x, way) > 0
+
+
+def made_from(f: Fn) -> frozenset:
+    """The names in a function that hold something made from what it was handed: its parameters, and every name
+    set from an expression that mentions one of them (`const result = schema.safeParse(Object.fromEntries(form))`).
+    By mention only: what a library made of a value is still that value's, for this purpose."""
+    names = {y.name for p in f.params for y in all_nodes(p.pattern) if y.k == "name" and y.name}
+    names.update(p.name for p in f.params if p.name)
+    for _ in range(4):
+        size = len(names)
+        for y in all_nodes(f.body):
+            if y.k == "assign" and y.a is not None and any(z.k == "name" and z.name in names for z in all_nodes(y.a)):
+                names.update(z.name for z in all_nodes(y.items) if z.k == "name" and z.name)
+        if len(names) == size:
+            break
+    return frozenset(names)
 
 
 def leaves(stmts) -> bool:
@@ -351,13 +433,18 @@ def answers(stmts) -> bool:
 
 
 def thrown(stmts, lang: str) -> bool:
-    """Whether the request is turned away here by an error that code further out may catch: a `raise` or `throw`, and
-    in Python a call that refuses by raising (`abort(401)`). An answer that is returned cannot be caught."""
+    """Whether the request is turned away here by an error that code further out may catch: a `raise` or `throw`, in
+    Python a call that refuses by raising (`abort(401)`), and in JavaScript a call of a function that throws by
+    itself (SvelteKit's `error(401, ...)` and `redirect(303, ...)`, Next.js's `redirect("/login")`:
+    `flow_rules.JS_THROWS`). An answer that is returned cannot be caught."""
     for s in (stmts or ())[:8]:
         if s.k == "raise":
             return True
         if s.k in ("expr", "return") and s.a is not None and _says_no(s.a):
-            return lang == "py" and (s.k == "expr" or (s.a.k == "call" and text_of(s.a.a).rsplit(".", 1)[-1] == "abort"))
+            if lang != "py":
+                return s.k == "expr" and s.a.k == "call" and s.a.a is not None and s.a.a.k == "name" and \
+                    s.a.a.name in R.JS_THROWS
+            return s.k == "expr" or (s.a.k == "call" and text_of(s.a.a).rsplit(".", 1)[-1] == "abort")
     return False
 
 
@@ -398,7 +485,42 @@ def lets_on(hbody, rest, top: bool, kind: str, way) -> bool:
 
 
 def is_login(k) -> bool:
-    return k == "login" or (isinstance(k, tuple) and k[:1] == ("login",))
+    return k == "login" or (isinstance(k, tuple) and k[:1] in (("login",), ("login-at",)))
+
+
+# ---- the addresses a check is for (2026-11-15): a login asked of the requests for some addresses only. A set of
+# addresses is (inc, exc): those that meet one of the tests in `inc` (None: every address), but for those that meet
+# one in `exc`. A test is (what, how, text): the path asked for ("path") or the route's id ("id"); "begins" with the
+# text or "is" the text. Read only where the code names the request's whole address (`Engine.page_read`).
+def narrower(t: tuple, u: tuple) -> bool:
+    """Whether every address that meets the test `t` meets `u`."""
+    return t == u or (t[0] == u[0] and u[1] == "begins" and t[2].startswith(u[2]))
+
+
+def both_pages(a, b):
+    """The addresses that are in both sets (None: every address). False where that cannot be said as one set: two
+    areas neither of which lies inside the other."""
+    if a is None or b is None:
+        return a if b is None else b
+    if a is False or b is False:
+        return False
+    (ai, ax), (bi, bx) = a, b
+    if ai is None or bi is None:
+        inc = bi if ai is None else ai
+    elif all(any(narrower(t, u) for u in bi) for t in ai):
+        inc = ai
+    elif all(any(narrower(t, u) for u in ai) for t in bi):
+        inc = bi
+    else:
+        return False
+    return (inc, ax | bx)
+
+
+def either_pages(parts):
+    """The addresses that are in one of the sets, where each is told by what it holds and nothing else."""
+    if not parts or any(p is None or p is False or p[0] is None or p[1] for p in parts):
+        return None
+    return (frozenset().union(*(p[0] for p in parts)), FIXED0)
 
 
 def _says_no(e, depth: int = 0) -> bool:
@@ -461,6 +583,40 @@ def given(n: N | None) -> bool:
     if n.k == "call":
         return not any(x is not None and x.k == "const" and x.a == "" for x in [*(n.items or ()), *(n.kw or {}).values()])
     return True
+
+
+def secrets_given(opts: N | None) -> bool:
+    """Whether a cookie's options are written with secrets to sign it with (`{ secrets: [process.env.SESSION_SECRET] }`):
+    at least one, and none that is fixed nothing or may be empty text. A cookie with none is the visitor's to write."""
+    if opts is None or opts.k != "map":
+        return False
+    for key, x in opts.items or ():
+        if key is not None and key.k == "const" and key.a == "secrets":
+            if x is not None and x.k == "seq":
+                return bool(x.items) and all(given(i) for i in x.items)
+            return given(x)
+    return False
+
+
+def signed_cookie(e: N, args: list) -> bool:
+    """`createCookieSessionStorage({ cookie })`: whether the cookie the session is kept in is one the server signs,
+    written in the call or made before it with `createCookie(name, { secrets })`."""
+    opts = e.items[0] if e.items else None
+    if opts is None or opts.k != "map":
+        return False
+    for key, x in opts.items or ():
+        if key is not None and key.k == "const" and key.a == "cookie":
+            if x is not None and x.k == "map":
+                return secrets_given(x)
+            held = args[0].data.get("cookie") if args and args[0] is not None and args[0].kind == "obj" else None
+            return held is not None and held.kind == "ext" and isinstance(held.data, str) and \
+                bool(R.SESSION_COOKIE_SIGNED.match(held.data))
+    return False
+
+
+def session_held(v: Val | None) -> bool:
+    """Whether `v` is the session a Remix or React Router storage handed back for the request's cookie."""
+    return v is not None and v.kind == "ext" and isinstance(v.data, str) and bool(R.SESSION_HELD.match(v.data))
 
 
 def own_file(x: N | None) -> bool:
@@ -991,6 +1147,12 @@ class Ctx:
         # A login asked here is asked of the other verbs, and counts for their routes (`login_for`, `Engine.settled`)
         self.only: frozenset | None = parent.only if parent else None
         self.round: frozenset = parent.round if parent else FIXED0
+        # the same for a condition that only asks which address the request is for, where the code names it exactly
+        # (SvelteKit's `event.url.pathname.startsWith("/app")`): the addresses of the requests that get here (None:
+        # any), and how many of the counts in `narrow` they stand for. A login asked where every count is one of
+        # these is asked of the requests for those addresses, and counts for the routes there (`Engine.settled`)
+        self.at: tuple | None = parent.at if parent else None
+        self.paged: int = parent.paged if parent else 0
         # above 0 inside code whose failure is caught and the request goes on (`lets_on`): a check that turns the
         # request away by failing was not made of the requests that failed it
         self.soft: int = parent.soft if parent else 0
@@ -1245,6 +1407,14 @@ class Engine:
         #                                    place that shows the page hands a raw place of it
         self.routes: dict = {}             # route function key -> (Fn, Az)
         self.gates: dict = {}              # `inline:<file>:<line>` -> Az of a function written in place in `x.use()`
+        # Server Actions made by a helper (`export const save = checked(schema, async (data) => …)`): the map's
+        # nodes of such helpers; id(the function a helper hands back) -> its way on (`GivenWay`); the helper's key
+        # -> that function; the helper's key -> what it hands the action, by position ("req" | "ident" | "own")
+        self.makers = {mid for n in g.nodes.values() if str((n.entry or {}).get("detail") or "").startswith("ACTION ")
+                       for mid in n.entry.get("middleware") or ()}
+        self.given: dict = {}
+        self.hands_back: dict = {}
+        self.handed_on: dict = {}
         self.logins: set = set()           # the map's nodes of the routes whose code turns away who is not signed in
         self.senders: dict = {}            # the map's nodes of the routes of `Result.senders` -> the check's line
         self.stored_at: dict = {}          # (file, line) of a write of request text into a file -> its `place`
@@ -1312,6 +1482,36 @@ class Engine:
             if fn.node and fn is not mod.top:
                 self.by_node.setdefault(fn.node, fn)
         self.stats["functions"] += len(mod.fns)
+        if mod.lang == "js":
+            self.made_actions(mod)
+
+    def made_actions(self, mod: Mod) -> None:
+        """Server Actions made by a helper. The function written in the helper's call is the action on the map,
+        named where it is declared: written on a later line than its name, it is tied to that node here. And a
+        helper of this file that made one (`makers`): the function it hands back (`return async (state, form) =>
+        …`), when that calls the function the helper was given, is what every request to the action runs first."""
+        top = self.module_at.get(mod.file)
+        for name, values in mod.consts.items() if top else ():
+            n = self.g.nodes.get(f"{top}::{name}")
+            if n is None or not str((n.entry or {}).get("detail") or "").startswith("ACTION "):
+                continue
+            for v in values:
+                f = next((a.a for a in v.items or () if a.k == "fn" and isinstance(a.a, Fn)), None) \
+                    if isinstance(v, N) and v.k == "call" else None
+                if f is not None and f.node is None:
+                    f.node = n.id
+                    self.inside.setdefault(n.id, mod.top)
+        for fn in mod.fns:
+            if fn.node not in self.makers:
+                continue
+            back = next((s.a.a for s in fn.body or () if s.k == "return" and s.a is not None and s.a.k == "fn"
+                         and isinstance(s.a.a, Fn)), None)
+            for p in fn.params if back is not None else ():
+                way = GivenWay(p.name) if p.pattern is None and p.name else None
+                if way and hands_on(back.body, way):
+                    way.maker, way.derived = fn.key, made_from(back)
+                    self.given[id(back)], self.hands_back[fn.key] = way, back
+                    break
 
     def node_for(self, file: str, fn: Fn) -> str | None:
         """The map's function that starts where this one does; of several on one line, the one with its name."""
@@ -1464,6 +1664,8 @@ class Engine:
     def unit(self, fn: Fn) -> None:
         ctx = Ctx(fn)
         env = Env(fn)
+        if fn.key in self.hands_back:
+            self.handed_on.pop(fn.key, None)
         for i, p in enumerate(fn.params):
             self.bind_param(env, fn, i, p, None, ctx, True)
         if not self.block(fn.body, env, ctx):
@@ -1539,11 +1741,25 @@ class Engine:
         calling `way` (Express middleware: the parameter called `next`, else the third of three after the request
         and the answer, the fourth of an error handler's four) and does hand one on somewhere; ("hook", None) for
         one that runs before every request and lets it on by answering nothing (Flask's `before_request`);
-        ("helper", None) for any other: what it answers goes to the code that called it."""
+        ("helper", None) for any other: what it answers goes to the code that called it. A SvelteKit hook is a
+        gate whose way on is `resolve(event)` (`KitWay`)."""
         got = self._passage.get(id(fn))
         if got is None:
             got = ("helper", None)
-            if self.is_route(fn):
+            kit = None
+            if (self.entry(fn) or {}).get("serves") == "sveltekit":
+                kit = KitWay("resolve")
+                kit.of = fn.params[0].name if len(fn.params) == 1 else ""
+            if id(fn) in self.given:
+                # what a helper hands back as a Server Action: every request to the action passes through it, and
+                # goes on where it calls the function the helper was given
+                got = ("gate", self.given[id(fn)])
+            elif kit is not None and hands_on(fn.body, kit):
+                # SvelteKit's `handle`, or a part of its `sequence(...)`: every request passes through it on its way
+                # to a route, and goes on where it calls `resolve(event)`. Until 2026-11-15 it was read as a route,
+                # and a guard after `if (!path.startsWith("/app")) return resolve(event)` as one for every request
+                got = ("gate", kit)
+            elif self.is_route(fn):
                 got = ("route", None)
             elif fn.lang == "js":
                 names = [p.name for p in fn.params]
@@ -1584,6 +1800,31 @@ class Engine:
         py = fn.lang == "py"
         if py and i == 0 and fn.cls and name in ("self", "cls"):
             return Val(kind="self", data=fn.cls)
+        if not py and i == 0 and (self.entry(fn) or {}).get("trpc"):
+            # a tRPC procedure is handed one object, whole (`opts`) or taken apart (`{ ctx, input }`): `member1`
+            return Val(kind="req", data="trpc")
+        if not py and id(fn) in self.given:
+            # the function a helper hands back as a Server Action: the browser sends every argument, as to any action
+            maker = self.by_key[self.given[id(fn)].maker].name
+            words = f"`{name}` arrives with the request (handed to the function `{maker}` gives back)"
+            form = name == "formData" or bool(ann and re_search(r"\bFormData\b", ann))
+            t = self.source(fn, fn.line, words)
+            return Val((t,), kind="bag", data="formData") if form else join(base, Val((t,)))
+        if not py and i == 0 and (self.entry(fn) or {}).get("sveltekit"):
+            # a SvelteKit `load`, action, endpoint or `handle` is handed the event, whole (`event`) or taken apart
+            # (`{ request, params, url, cookies, locals }`): `member1`
+            return Val(kind="req", data="kit")
+        if not py and i == 0 and (self.entry(fn) or {}).get("remix"):
+            # a Remix `loader` or `action` is handed one object, whole (`args`) or taken apart
+            # (`{ request, params, context }`): `member1`
+            return Val(kind="req", data="remix")
+        if not py:
+            # a helper of a SvelteKit project that is handed the event, or what the server's hook put on it
+            kit = bool(self.g.meta.get("sveltekit")) and bool(R.KIT_SERVER_FILE.search(fn.file or ""))
+            if R.KIT_LOCALS_TYPES.search(ann) or (kit and name == "locals"):
+                return Val(kind="req", data="trpc-ctx")
+            if R.KIT_EVENT_TYPES.search(ann) or (kit and name == "event"):
+                return Val(kind="req", data="kit")
         # a body described by a class of the project is that, also under the name `req` or `request`
         body = py and bool(ann) and self.body_class(fn.mod, ann)
         if not body and (name in R.REQUEST_NAMES or (ann and R.REQUEST_TYPES.search(ann)) or
@@ -1672,7 +1913,49 @@ class Engine:
         if name in ("formData", "searchParams", "params") and (is_next_file(fn.file) or name == "formData"):
             words = f"`{name}` arrives with the request (handed to `{fn.name}`)"
             return Val((self.source(fn, fn.line, words),), kind="bag", data=name)
+        if str((self.entry(fn) or {}).get("detail") or "").startswith("ACTION "):
+            # One made by a helper of the project gets what the helper hands it: what it made of the request, who
+            # is signed in (`user`, from the session), or something of the server's own
+            handed = self.handed_to(fn, i)
+            if handed == "ident":
+                return Val((Taint("ident", name, R.ALL, (), None, FIXED0),))
+            if handed == "own":
+                return base
+            # A Server Action: the visitor's browser sends every argument (a form's data under any name, what a
+            # client component calls it with, the state a form hands back, values bound to it). A number is no text.
+            words = f"`{name}` arrives with the request (handed to the Server Action `{fn.name}`)"
+            if ann and re_search(r"\bFormData\b", ann):
+                return Val((self.source(fn, fn.line, words),), kind="bag", data="formData")
+            return join(base, Val((self.source(fn, fn.line, words, set(R.ALL) if number else ()),)))
         return base
+
+    def handed_to(self, fn: Fn, i: int) -> str | None:
+        """For a Server Action made by a helper of the project: what the function the helper hands back gives it as
+        its argument `i`, as read where that function calls it (`hand_on`): "req" (made from what the browser
+        sent), "ident" (who is signed in), "own" (anything else of the server's). None where the helper's code is
+        not read or hands nothing on at that place: then it is the browser's, as for any action."""
+        for mid in (self.entry(fn) or {}).get("middleware") or ():
+            w = self.by_node.get(mid)
+            rec = self.handed_on.get(w.key) if w is not None else None
+            if rec is not None:
+                return rec.get(i)
+        return None
+
+    def hand_on(self, way: GivenWay, e: N, args: list) -> None:
+        """The function a helper handed back calls the action (`return action(result.data, formData, user)`): what
+        each argument is, kept for the action's own parameters (`handed_to`). Made from what the browser sent, by
+        mention (`GivenWay.derived`); else who is signed in, where the value says so; else the server's own. Two
+        places that differ: the browser's if either says so, else the server's own."""
+        rec = self.handed_on.setdefault(way.maker, {})
+        for j, a in enumerate(args):
+            if any(y.k == "name" and y.name in way.derived for y in all_nodes(e.items[j])):
+                kind = "req"
+            elif a is not None and any(t.kind == "ident" for t in a.taints):
+                kind = "ident"
+            else:
+                kind = "own"
+            old = rec.get(j)
+            rec[j] = kind if old in (None, kind) else "req" if "req" in (old, kind) else "own"
 
     def dependency(self, fn: Fn, text: str) -> Val | None:
         m = re_search(r"Depends\(\s*([A-Za-z_][\w.]*)|Security\(\s*([A-Za-z_][\w.]*)", text or "")
@@ -1704,7 +1987,10 @@ class Engine:
     def bind_param(self, env: Env, fn: Fn, i: int, p: P, given: Val | None, ctx: Ctx, summary: bool) -> None:
         val = given if given is not None else self.param_val(fn, i, p, summary)
         if p.pattern is not None:
-            if given is None and not summary and fn.lang == "js" and is_next_file(fn.file):
+            if val.kind == "req" and val.data in ("trpc", "kit", "remix"):
+                pass      # `({ ctx, input })` of a tRPC procedure, `({ request, locals })` of a SvelteKit route,
+                #           `({ request, params })` of a Remix one
+            elif given is None and not summary and fn.lang == "js" and is_next_file(fn.file):
                 val = Val(kind="req", data="js")      # `({ params, searchParams })` of a Next.js page or route
             elif given is None and is_next_file(fn.file) and p.pattern.k == "map":
                 val = Val(kind="req", data="js")
@@ -1796,6 +2082,9 @@ class Engine:
     # ---- statements
     def block(self, stmts, env: Env, ctx: Ctx) -> bool:
         stmts = stmts or ()
+        late = 0
+        kit = self.role(ctx)[1] if stmts and env.fn.lang == "js" and (self.g.meta.get("sveltekit") or self.given) \
+            else None
         for i, s in enumerate(stmts):
             if s.k == "assign" and env.fn.lang == "py" and not s.name and s.a is not None and s.a.k == "call" and \
                     len(s.items or ()) == 1 and s.items[0].k == "name" and \
@@ -1813,7 +2102,14 @@ class Engine:
             elif s.k == "try":
                 self.after_try[id(s)] = (stmts[i + 1:], stmts is env.fn.body)
             if self.stmt(s, env, ctx):
+                ctx.narrow -= late
                 return True
+            if isinstance(kit, (KitWay, GivenWay)) and s.k in ("expr", "assign") and hands_on([s], kit):
+                # SvelteKit: `const response = await resolve(event)` and then a check. The route has run by then:
+                # what is asked from here on, on this way through the hook, is asked of nobody on the way to it.
+                # The same in what a helper hands back as a Server Action: `const done = await action(form)`
+                ctx.narrow += 1
+                late += 1
         return False
 
     @staticmethod
@@ -1878,27 +2174,43 @@ class Engine:
             # a request that takes a way which leaves without handing it on never reaches its route, whatever it is
             # answered with there (the sign-in page, a 200 with words): read from what the function is to a request
             kind, way = self.role(ctx)
+            # the addresses it holds for, and those it does not hold for, where it names them exactly (SvelteKit)
+            pred_t, pred_f = self.page_of(s.a, True, env, ctx), self.page_of(s.a, False, env, ctx)
             out_t = no_t or turned_away(s.b, kind, way)
             out_f = no_f or turned_away(s.c, kind, way)
             away = not s.c and id(s) in self.else_away and (
                 goes_on(s.b, True, way) if kind == "gate" else leaves(s.b) and not answers(s.b) and not no_t)
-            rest_out = not s.c and (id(s) in self.else_refuses or away)
+            told_no = not s.c and id(s) in self.else_refuses
+            if told_no and kind == "route" and sends_on(self.else_refuses[id(s)]) and \
+                    not any(self.signed_gate(s.a, True, env, ctx)):
+                # `if (form.get("then") === "pay") return checkout(); redirect("/home")` in a function that answers
+                # the request itself: the condition says nothing about who is calling and what follows only sends
+                # the visitor to a page. Those requests are done, not turned away, and what this way asks (a login,
+                # in `checkout`) was not asked of them. Until 2026-11-15 a sign-in action of that shape showed one
+                told_no = False
+            rest_out = told_no or away
             # ... or this way holds a place that hands the request on, however deep, and nothing after the `if`
             # does: `if (header) { try { check(); next() } catch { answer 401 } }` and then only an answer
             only_way = kind == "gate" and not s.c and id(s) in self.else_away and hands_on(s.b, way)
             t_all = out_f or rest_out or only_way       # every request that goes on took this way
             part_t = verbs is None and not (t_all or page == "all but")
             part_f = verbs is None and not (out_t or page == "only")
-            only = ctx.only
+            only, at0, paged0 = ctx.only, ctx.at, ctx.paged
             if verbs is not None and not t_all:
                 ctx.only = verbs if only is None else only & verbs
             ctx.narrow += part_t
+            if part_t:
+                paged_in(ctx, pred_t)
             xt = self.block(s.b, et, ctx)
+            ctx.at, ctx.paged = at0, paged0
             ctx.narrow += part_f - part_t
             ctx.only = only
             if verbs is not None and not out_t:
                 ctx.only = other_verbs(verbs) if only is None else only & other_verbs(verbs)
+            if part_f:
+                paged_in(ctx, pred_f)
             xf = self.block(s.c, ef, ctx)
+            ctx.at, ctx.paged = at0, paged0
             ctx.narrow -= part_f
             ctx.only = only
             # one way on turns the request away: what the other way knows about who is signed in holds from here
@@ -1918,6 +2230,9 @@ class Engine:
                         ctx.round |= verbs if want else other_verbs(verbs)
                     elif not self.signed_gate(s.a, want, env, ctx, 0, left)[0]:
                         ctx.narrow += 1
+                        # `if (!path.startsWith("/app")) return resolve(event)`: the requests for the other
+                        # addresses are the ones still here
+                        paged_in(ctx, pred_f if want else pred_t)
                     else:                       # `if (req.method === 'GET' || req.user) return next()`
                         ctx.round |= left
             if xt and xf:
@@ -2103,6 +2418,9 @@ class Engine:
                 yes, no = self.facts(s.a, env, ctx)
                 if (yes or no) and not any(p == name or p.startswith(name + ".") for p, _c, _f, _r in yes + no):
                     env.flags[name] = (yes, no)
+        if not s.name and s.a is not None and env.fn.lang == "js" and self.g.meta.get("sveltekit"):
+            for t in s.items:       # const { pathname } = event.url / const path = event.url.pathname
+                self.page_kept(t, s.a, env)
         if not s.name and s.a is not None:
             ab = self.about(s.a, env)            # ip = socket.gethostbyname(host) / { address } = await dns.lookup(h)
             if ab:
@@ -2110,6 +2428,112 @@ class Engine:
                     for name in names_in(t):
                         if name != ab[1]:
                             env.derived[name] = ab
+
+    def page_read(self, e: N | None, env: Env, depth: int = 0) -> str | None:
+        """What of the request's own address `e` reads, in a SvelteKit project: the "event", its "url", its "route",
+        the "path" asked for (`event.url.pathname`) or the route's "id" (`event.route.id`), under whatever name it
+        was kept as it is. None for anything else, also for text made from one of them."""
+        if e is None or depth > 6 or env.fn.lang != "js" or not self.g.meta.get("sveltekit"):
+            return None
+        if e.k == "name":
+            d = env.derived.get(e.name)
+            if d and d[0] == "page":
+                return d[1]
+            v = env.vars.get(e.name)
+            return "event" if v is not None and v.kind == "req" and v.data == "kit" else None
+        if e.k == "attr" and e.a is not None:
+            return {("event", "url"): "url", ("event", "route"): "route", ("url", "pathname"): "path",
+                    ("route", "id"): "id", ("event", "event"): "event"}.get(
+                        (self.page_read(e.a, env, depth + 1), e.name))
+        return None
+
+    def page_kept(self, t: N | None, src: N, env: Env, depth: int = 0) -> None:
+        """`const { pathname } = event.url`, `const path = event.url.pathname`, `const { url, route } = event`: the
+        name is that part of the request's own address until it is set again (`Env.forget`)."""
+        if t is None or depth > 4:
+            return
+        if t.k == "name":
+            what = self.page_read(src, env)
+            if what and what != "event":
+                env.derived[t.name] = ("page", what)
+        elif t.k == "map":
+            for key, x in t.items or ():
+                if key is not None and key.k == "const" and isinstance(key.a, str):
+                    self.page_kept(x, N("attr", src.line, a=src, name=key.a), env, depth + 1)
+
+    def fixed_texts(self, e: N | None, env: Env, ctx: Ctx) -> tuple:
+        """The addresses a list holds, written out where it is asked or kept under a name: `["/login", "/signup"]`.
+        Nothing for a list with anything else in it."""
+        if e is None:
+            return ()
+        if e.k == "seq":
+            items = [x.a if x is not None and x.k == "const" else None for x in e.items or ()]
+        elif e.k == "name":
+            v = self.eval(e, env, ctx)
+            items = [x.data if isinstance(x, Val) and x.kind == "const" else None for x in v.data] \
+                if v.kind == "seq" and isinstance(v.data, (list, tuple)) else [None]
+        else:
+            return ()
+        return tuple(items) if items and all(isinstance(x, str) and x.startswith("/") for x in items) else ()
+
+    def page_of(self, e: N | None, truth: bool, env: Env, ctx: Ctx, depth: int = 0):
+        """The addresses a condition holds for (`truth` false: does not hold for), where it asks nothing but which
+        address the request is for and names it exactly: `event.url.pathname.startsWith("/app")`,
+        `path === "/login"`, `["/login", "/signup"].includes(path)`, `event.route.id.startsWith("/(app)")`, `!` of
+        one, and `&&` / `||` of them. As (inc, exc), see `both_pages`; None for any other condition."""
+        if e is None or depth > 5 or env.fn.lang != "js" or not self.g.meta.get("sveltekit"):
+            return None
+        k = e.k
+        if k == "not":
+            return self.page_of(e.a, not truth, env, ctx, depth + 1)
+        if k == "bool" and e.name in ("&&", "||"):
+            # `a && b` holds for the addresses of both, and fails for those either fails for; `a || b` the other way
+            parts = [self.page_of(x, truth, env, ctx, depth + 1) for x in e.items or ()]
+            if not parts or any(p is None for p in parts):
+                return None
+            if (e.name == "&&") != truth:
+                return either_pages(parts)
+            got = None
+            for p in parts:
+                got = both_pages(got, p)
+            return got or None
+        test = None
+        if k == "cmp" and e.name in ("==", "===", "!=", "!=="):
+            for x, y in ((e.a, e.b), (e.b, e.a)):
+                what = self.page_read(x, env)
+                if what in ("path", "id") and y is not None and y.k == "const" and isinstance(y.a, str) and \
+                        y.a.startswith("/"):
+                    test = frozenset({(what, "is", y.a)})
+                    truth = truth == (e.name in ("==", "==="))
+        elif k == "call" and e.a is not None and e.a.k == "attr" and len(e.items or ()) == 1 and \
+                e.items[0] is not None:
+            arg = e.items[0]
+            if e.a.name == "startsWith":
+                what = self.page_read(e.a.a, env)
+                if what in ("path", "id") and arg.k == "const" and isinstance(arg.a, str) and arg.a.startswith("/"):
+                    test = frozenset({(what, "begins", arg.a)})
+            elif e.a.name == "includes":
+                what = self.page_read(arg, env)
+                if what in ("path", "id"):
+                    test = frozenset((what, "is", x) for x in self.fixed_texts(e.a.a, env, ctx)) or None
+        if test is None:
+            return None
+        return (test, FIXED0) if truth else (None, test)
+
+    def kit_session(self, c: N, v: Val, env: Env, ctx: Ctx) -> bool:
+        """SvelteKit: what the server's own hook keeps for this request under `locals.session`, and what a function it
+        keeps there for asking who is signed in handed back (`await locals.auth()`, `locals.safeGetSession()` and its
+        `session`), under any name. It is there when somebody is signed in: the hook puts nothing there for a
+        visitor, as the sign-in libraries' own guides write it."""
+        if env.fn.lang != "js" or not self.g.meta.get("sveltekit"):
+            return False
+        if v.kind == "ext" and isinstance(v.data, str) and v.data.startswith("locals.") and \
+                v.data.endswith(("()", "().session")):
+            return True
+        if c.k == "attr" and c.name == "session" and c.a is not None:
+            base = self.eval(c.a, env, ctx)
+            return base.kind == "req" and base.data == "trpc-ctx"
+        return False
 
     def assign(self, t: N, val: Val, env: Env, ctx: Ctx, at: N) -> None:
         k = t.k
@@ -2352,6 +2776,14 @@ class Engine:
                 f = self.imported(mod, d)
                 if f is not None:
                     self.escaped.add(f.key)
+            if mod.lang == "js" and d.startswith(".") and name in mod.picked:
+                # a session storage another file of the project made, or a part taken out of it there: that very
+                # value, so that what is known of its cookie comes with it (`flow_rules.SESSION_MADE`)
+                src = self.js_file(mod, d)
+                if src is not None and mod.picked[name] in src.consts:
+                    got = self.modval(src, mod.picked[name])
+                    if got.kind == "ext" and isinstance(got.data, str) and R.SESSION_MADE.match(got.data):
+                        return got
             return Val(kind="ext", data=d)
         if name in ("this", "self") and mod.lang == "js":
             return Val(kind="self", data=env.fn.cls)
@@ -2380,7 +2812,7 @@ class Engine:
                 return narrow(v, c, False, env.fn.lang)
         return v
 
-    def leaf(self, bag: Val, key, e: N, env: Env, attr: bool = False) -> Val:
+    def leaf(self, bag: Val, key, e: N, env: Env, attr: bool = False, fresh: bool = False) -> Val:
         """One value out of what the request sent: `request.args["q"]`. Of the address the request was made to, the
         origin and the host are still that address (`req.nextUrl.origin`); any other part is the caller's text."""
         if bag.data == "files" or bag.data == "FILES" or bag.data == "file":
@@ -2400,7 +2832,7 @@ class Engine:
         for t in bag.taints if keep else disowned(bag.taints):
             safe = t.safe | R.ALL if number else t.safe
             out.append(Taint("src", (env.fn.file, e.line, words), safe, ((env.fn.file, e.line, words),), t.origin,
-                             t.drop) if t.kind == "src" and len(t.steps) <= 1 else t._replace(safe=safe))
+                             t.drop) if t.kind == "src" and (fresh or len(t.steps) <= 1) else t._replace(safe=safe))
         if isinstance(key, str) and key and isinstance(bag.data, str):
             self.sent[(env.fn.file, e.line, words)] = (key, str(bag.data))
         if inner:
@@ -2414,6 +2846,9 @@ class Engine:
         if plain and base.taints and name not in R.OWN_ATTRS:
             base = disown(base)         # `url.searchParams`: a part of the address, no longer the address
         v = self.member1(base, name, e, env, ctx, text)
+        if name == "searchParams" and v.taints and env.fn.lang == "js" and v.kind != "req":
+            # the address's question, read word by word: `url.searchParams.get("id")` is `id`, as `req.query.id` is
+            v = Val(v.taints, kind="bag", data="query")
         if plain and name == "origin" and owned(v):
             v = v.but(prefix=R.OWN_EXACT)
         asked = roled(base, name) if base.kind not in ("req", "bag", "upload") else ()
@@ -2423,7 +2858,30 @@ class Engine:
         k = base.kind
         fn = env.fn
         if k == "req":
-            inputs = R.PY_INPUT if base.data == "py" else R.JS_INPUT
+            if base.data == "trpc" and name == "ctx":
+                return Val(kind="req", data="trpc-ctx")      # made by the server: who is signed in, not request data
+            if base.data == "trpc-ctx" and name in ("req", "request"):
+                return Val(kind="req", data="js")            # the request itself, where the server keeps it there
+            if base.data == "trpc-ctx" and name in R.KIT_ASKS and fn.lang == "js" and self.g.meta.get("sveltekit"):
+                # `({ locals: { safeGetSession } })`, `const { auth } = event.locals`: the function the app's hook
+                # keeps there for asking who is signed in, taken out before it is called (`lib`, rule 0)
+                return Val(kind="kit-ask", data=name)
+            if base.data == "kit":
+                # SvelteKit's event: `locals` is what the server's own hook put there (who is signed in), `event`
+                # the whole again (`handle({ event, resolve })`); the rest is the request and its parts
+                if name == "locals":
+                    return Val(kind="req", data="trpc-ctx")
+                if name == "event":
+                    return base
+                base = Val(kind="req", data="js")
+            if base.data == "remix":
+                # what a Remix route is handed: `context` is what the server itself put there when it started the
+                # app; `request` and `params` are the request and the parts of its address
+                if name == "context":
+                    return Val(kind="req", data="trpc-ctx")
+                base = Val(kind="req", data="js")
+            inputs = R.PY_INPUT if base.data == "py" else R.TRPC_INPUT if base.data == "trpc" else \
+                FIXED0 if base.data == "trpc-ctx" else R.JS_INPUT
             if name in inputs:
                 shown = text_of(e)[:70] if text is not None else name
                 words = f"`{shown}` is what the request sent"
@@ -2589,6 +3047,10 @@ class Engine:
                 self.passed_on(a.a, env, ctx)
             cb_ret = join(cb_ret, r) if r is not None else cb_ret
             args[i] = Val(kind="fn", data=(a.a, None))
+        if self.given and f.k == "name":
+            way = self.role(ctx)[1]
+            if isinstance(way, GivenWay) and f.name == way:
+                self.hand_on(way, e, args)
         if callee.kind == "fn" and isinstance(callee.data, tuple):
             r = self.closure(callee.data[0], env, ctx, [a if a is not None else UNKNOWN for a in args], e)
             return (r if r is not None else UNKNOWN), ()
@@ -2627,7 +3089,7 @@ class Engine:
         if callee.kind == "ext" and isinstance(callee.data, str) and not callee.data.startswith("."):
             canon = callee.data
         elif site and site["to"] and all(t.startswith(("ext:", "builtin:")) for t in site["to"]):
-            canon = site["to"][0].split(":", 1)[1]
+            canon = whole_name(site["to"][0].split(":", 1)[1], e)
         if e.name == "new" and canon:
             canon = canon if canon.startswith("new ") or canon != "URL" else "new URL"
         return canon
@@ -2958,6 +3420,7 @@ class Engine:
             return None
         sub = Ctx(f, ctx)
         route = f.node is not None and (self.entry(f) or {}).get("kind") == "route"
+        gate = gate or id(f) in self.given      # what a helper hands back as a Server Action runs before the action
         if route:
             sub.az = Az()       # a route written inline: its own account of who may reach what
             self.routes[f.key] = (f, sub.az)
@@ -2965,10 +3428,11 @@ class Engine:
             sub.az = self.gates[f"inline:{f.file}:{f.line}"] = Az()
         if route or gate:
             sub.narrow, sub.only, sub.round, sub.soft = 0, None, FIXED0, 0
+            sub.at, sub.paged = None, 0
             sub.owner = True
         # what it is to a request: a route, a function requests pass through, or, written inside one of those and
         # holding every place the request is handed on (the callback of a check), part of it
-        mine = ("route", None) if route else self.passage(f)
+        mine = ("route", None) if route and not (self.entry(f) or {}).get("serves") else self.passage(f)
         if mine[0] == "helper":
             outer = self.role(ctx)
             if outer[0] == "gate" and ways(f.body, outer[1]) == ways(env.fn.body, outer[1]) > 0:
@@ -3558,6 +4022,13 @@ class Engine:
                 az = self.gates.get(mid)        # written in place in `use`: what its own lines ask
                 if az is not None:
                     ev.update(az.ev)
+            elif f2 is not None and f2.key in self.hands_back:
+                # a Server Action made by this helper: what the function it hands back asks of every request before
+                # it calls the action. The helper's own lines run once, when the file is loaded, and ask nobody
+                back = self.hands_back[f2.key]
+                az = self.gates.get(f"inline:{back.file}:{back.line}")
+                if az is not None:
+                    ev.update(az.ev)
             elif f2 is not None:
                 take(f2.name, f2.key)
             elif isinstance(mid, str):
@@ -3569,14 +4040,47 @@ class Engine:
 
     def settled(self, ev: set, fn: Fn) -> set:
         """A login asked of the requests of some verbs only (`("login", verbs)`) is this route's login when the route
-        answers no other verb. A route whose entry names no verb Lantern knows (`ALL`, `ANY`) takes none of them."""
+        answers no other verb. A route whose entry names no verb Lantern knows (`ALL`, `ANY`) takes none of them.
+        A login asked of the requests for some addresses (`("login-at", inc, exc)`) is this route's login when its
+        own address is among them (`at_route`)."""
         some = [k for k in ev if isinstance(k, tuple) and k[:1] == ("login",)]
         if some:
             ev.difference_update(some)
             mine = route_verbs((self.entry(fn) or {}).get("detail") or "")
             if mine and mine <= frozenset().union(*(k[1] for k in some)):
                 ev.add("login")
+        # ... and one asked of the requests for some addresses, when the route's own address is among them
+        some = [k for k in ev if isinstance(k, tuple) and k[:1] == ("login-at",)]
+        if some:
+            ev.difference_update(some)
+            if any(self.at_route(k[1], k[2], fn) for k in some):
+                ev.add("login")
         return ev
+
+    def at_route(self, inc, exc, fn: Fn) -> bool:
+        """Whether a login asked of the requests for some addresses (`both_pages`) is asked of every request for
+        this route: by the route's own address as its entry says it, and by its id (its folder under `src/routes`,
+        as SvelteKit's `event.route.id` gives it). A part of the address that changes (`[id]`) meets a test only by
+        the fixed text before it. Where that leaves it open, the route is taken to be outside what is asked and
+        inside what is let through: no login."""
+        detail = (self.entry(fn) or {}).get("detail") or ""
+        path = detail.partition(" ")[2].split("?")[0]
+        m = _re.search(r"(?:^|/)src/routes/((?:[^/]+/)*)\+[^/]+$", fn.file or "")
+        rid = "/" + m.group(1).rstrip("/") if m else None
+        known = path.startswith("/") and "*" not in path and "(" not in path
+        lead, fixed = path.split("[")[0], "[" not in path
+
+        def meets(t: tuple, sure: bool) -> bool:
+            what, how, text = t
+            if what == "id":
+                if rid is None:
+                    return not sure
+                return rid.startswith(text) if how == "begins" else rid == text
+            if not known:
+                return not sure
+            may = not sure and not fixed and text.startswith(lead)
+            return may or (lead.startswith(text) if how == "begins" else fixed and path == text)
+        return (inc is None or any(meets(t, True) for t in inc)) and not any(meets(t, False) for t in exc)
 
     def authz(self) -> list:
         """Per route: the records it reaches by an id from the request with nothing that compares the record's owner
@@ -3658,7 +4162,10 @@ class Engine:
                                             any(t.safe & R.OWN_MARKS for t in recv.taints)):
                 return Val(recv.taints)     # `req.nextUrl.clone()`, `request.url.replace("http://", "https://")`
             self.page_calls.add(id(e))
-            return self.leaf(recv, key, e, env)
+            # a word asked of the address's question by its name is that word from here on, however the address
+            # came (`new URL(request.url).searchParams.get("id")`)
+            return self.leaf(recv, key, e, env, fresh=fn.lang == "js" and recv.data == "query" and
+                             member in ("get", "getAll") and isinstance(key, str))
         if callee.kind in ("bag", "upload") and recv is not None and recv.kind == "req":
             if fn.lang == "js" and member in ("get", "header") and e.items and e.items[0].k == "const" and \
                     isinstance(e.items[0].a, str):      # Express: `req.get("X-Role")` reads a header by its name
@@ -3705,7 +4212,28 @@ class Engine:
             self.token_lines.add((fn.file, e.line))
         elif self.sender_checked(name, callee, e, env):
             self.sender_held(ctx, e)    # a webhook: nothing about the value changes, only who can get past here
+        # a session kept with Remix's or React Router's own storage. A cookie that is not signed, and a session
+        # kept whole in one, is the visitor's to write: it is named apart and shows nothing
+        if fn.lang == "js" and name:
+            made = R.SESSION_STORE.match(name)
+            if (made and made.group("kind") == "Cookie" and not signed_cookie(e, args)) or \
+                    (R.SESSION_COOKIE.match(name) and not secrets_given(e.items[1] if len(e.items or ()) > 1 else None)):
+                return Val(kind="ext", data=name + R.UNSIGNED)
+            if R.SESSION_ASKS.match(name) and not (callee.kind == "ext" and callee.data == name):
+                # named by the map, not by a value followed here (`import * as sessions`, a file re-exporting it):
+                # which storage it is, and so whether its cookie is signed, is not known
+                return Val(kind="ext", data=name + R.UNSIGNED)
+        if session_held(recv) and member in R.SESSION_READS and a0 is not None and a0.kind == "const" and \
+                isinstance(a0.data, str) and R.SIGNED_IN.search("." + a0.data):
+            # `session.get("userId")`: what the server itself put there when somebody signed in
+            return proven_val("what the server's own session holds", f"session.{member}()")
         # 0. who is signed in, handed back by a call whose code Lantern does not read: taken by its name
+        ask = member if recv is not None and recv.kind == "req" and recv.data == "trpc-ctx" and \
+            member in R.KIT_ASKS else callee.data if recv is None and callee.kind == "kit-ask" else None
+        if ask and fn.lang == "js" and self.g.meta.get("sveltekit"):
+            # `await event.locals.auth()`, `locals.safeGetSession()`: what the app's own hook keeps there for it;
+            # also taken out of `locals` first and called by its bare name (`member1`)
+            return Val((Taint("ident", ask, R.ALL, (), None, FIXED0),), kind="ext", data=f"locals.{ask}()")
         last = (name or text_of(e.a)).rsplit(".", 1)[-1]
         if (name and R.IDENT_CALLS.match(name)) or R.IDENT_FN.match(last):
             return Val((Taint("ident", last, R.ALL, (), None, FIXED0),), kind="ext", data=(name or last) + "()")
@@ -3724,6 +4252,11 @@ class Engine:
             step = (fn.file, e.line, words)
             return Val(tuple(with_step(t._replace(safe=norm(t.safe | got, fn.lang)), step) if t.kind != "ident" else t
                              for t in src.taints), None, src.sql, src.html)
+        if name and fn.lang == "js" and R.CONDITIONS.match(name):
+            # `eq(notes.id, id)`, `and(a, b)`: a condition of the query that holds the values it compares with. The
+            # record the query picks is picked by them: by who is signed in, or by what the request sent
+            held = join_all(vals)
+            return Val(held.taints, kind="ext", data=name + "()", lost=held.lost)
         # 2. sensitive actions
         self.sinks(e, env, ctx, name, member, recv, recv_expr, args, kw, a0, what)
         got = self.reached(e, env, ctx, name, member, recv, recv_expr, args, kw, a0, what)
@@ -4979,22 +5512,30 @@ class Engine:
         """The request goes on only where the condition `c` is `want`: where that shows somebody is signed in, the
         route has a login, whatever the function that asks is called. `by`: the statements that turn the other
         requests away."""
-        if ctx.narrow:
+        if ctx.narrow > ctx.paged:
             return      # asked of some requests only: the others got past it
         if ctx.soft and thrown(by, env.fn.lang):
             return      # turned away by an error that is caught further out, after which the request goes on
         left: set = set()
-        known, params = self.signed_gate(c, want, env, ctx, 0, left)
+        pages: list = []
+        known, params = self.signed_gate(c, want, env, ctx, 0, left, pages)
         got = login_for(ctx, left)
-        if got is None:
+        at = ctx.at     # the addresses of the requests that get here, and those the condition itself names
+        for p in pages:
+            at = both_pages(at, p)
+        if got is None or at is False:
             return
+        if at is not None:
+            if got != "login":
+                return      # of the requests of some verbs and for some addresses at once: not kept
+            got = ("login-at", *at)
         if known:
             ctx.az.ev.add(got)
         for i in params:
             ctx.az.pev.setdefault(i, set()).add(got)
 
     def signed_gate(self, c: N | None, want: bool, env: Env, ctx: Ctx, depth: int = 0,
-                    left: set | None = None) -> tuple[bool, tuple]:
+                    left: set | None = None, pages: list | None = None) -> tuple[bool, tuple]:
         """Whether the condition `c` being `want` shows that somebody is signed in, and the parameters of the function
         it would show it of, were they who is signed in. `req.session.userId` being true does, `!req.user` being false
         does, `user is None` being false does; in `a && b` being true either part may show it, in `a || b` both have
@@ -5005,7 +5546,7 @@ class Engine:
         k = c.k
         soft = bool(ctx.soft)       # a value that says who it is only because a check passed says nothing here
         if k == "not":
-            return self.signed_gate(c.a, not want, env, ctx, depth + 1, left)
+            return self.signed_gate(c.a, not want, env, ctx, depth + 1, left, pages)
         if k == "bool":
             conj = c.name in ("&&", "and")
             if conj == want:
@@ -5015,10 +5556,17 @@ class Engine:
             # `request.endpoint != "login" and "user_id" not in session`, `req.path === '/login' || req.user`.
             # A part that names the only pages the check is for (`path.startswith("/admin") and ...`) shows nothing
             # for the rest. A part that only asks which verb the request is lets the requests of some verbs on
-            # unasked (`req.method !== 'GET' && !req.user`): they are put in `left`, where the caller keeps count
+            # unasked (`req.method !== 'GET' && !req.user`): they are put in `left`, where the caller keeps count.
+            # A part that names the addresses exactly (SvelteKit's `event.url.pathname.startsWith("/app") && ...`)
+            # says which requests the rest is asked of: they are put in `pages`, and the login counts for the
+            # routes there
             open_few = "all but" if conj else "only"
             got = []
             for x in c.items or ():
+                named_at = self.page_of(x, conj, env, ctx) if pages is not None else None
+                if named_at is not None:
+                    pages.append(named_at)
+                    continue
                 if which_page(x) == open_few:
                     continue
                 verbs = which_verbs(x) if left is not None else None
@@ -5058,7 +5606,7 @@ class Engine:
                 v = self.eval(c.a, env, ctx)        # `rows.length`, `rows[0]`: something was found
             if is_proven(v) and not soft:
                 return True, ()                     # who a checked token, or a record found by one, says it is
-            if not R.SIGNED_IN.search(text_of(c)):
+            if not R.SIGNED_IN.search(text_of(c)) and not self.kit_session(c, v, env, ctx):
                 return none
             return shows(v, soft)
         if k == "call" and c.a is not None and c.a.k == "name" and c.a.name == "len" and len(c.items or ()) == 1:
@@ -5066,6 +5614,9 @@ class Engine:
         if k == "call" and c.a is not None and c.a.k == "attr" and plain_chain(c.a.a):
             if c.a.name in R.LOGIN_ASKED and not c.items and text_of(c.a.a) in R.REQUEST_NAMES:
                 return True, ()                                         # req.isAuthenticated()
+            if c.a.name in R.SESSION_READS and len(c.items or ()) == 1 and session_held(self.eval(c.a.a, env, ctx)):
+                # Remix: `session.has("userId")`, asked in the condition itself (`lib` says what it hands back)
+                return (is_proven(self.eval(c, env, ctx)) and not soft), ()
             if c.a.name == "get" and c.items and c.items[0] is not None and c.items[0].k == "const" and \
                     isinstance(c.items[0].a, str) and R.SIGNED_IN.search("." + c.items[0].a):
                 return shows(self.eval(c.a.a, env, ctx), soft)          # session.get("user_id")
@@ -5745,23 +6296,41 @@ def login_for(ctx: Ctx, left=()):
     return "login" if asked >= R.ALL_VERBS else ("login", frozenset(asked)) if asked else None
 
 
+def paged_in(ctx: Ctx, pages) -> None:
+    """The newest count in `Ctx.narrow` stands for a condition on which address the request is for: the requests that
+    get here are those for `pages`, and for the addresses already kept. Nothing is kept where the two cannot be said
+    as one set, or the condition names no address exactly: then a login asked here counts for no route."""
+    at = both_pages(ctx.at, pages) if pages is not None else False
+    if at:
+        ctx.at, ctx.paged = at, ctx.paged + 1
+
+
 def login_here(kinds, ctx: Ctx):
     """What a called function asks, as its caller's: a login it asks is asked of the requests that get to the call,
-    which may be some only (`Ctx.narrow`) or those of some verbs."""
+    which may be some only (`Ctx.narrow`), those of some verbs, or those for some addresses (`Ctx.at`)."""
     if not ctx.narrow and ctx.only is None and not ctx.round:
         return kinds
+    narrow = ctx.narrow > ctx.paged
     out = set()
     for k in kinds:
+        if isinstance(k, tuple) and k[:1] == ("login-at",):
+            # asked in the called function of the requests for some addresses: of those that also get to the call
+            at = both_pages(ctx.at, k[1:]) if not narrow and ctx.only is None and not ctx.round else False
+            if at:
+                out.add(("login-at", *at))
+            continue
         verbs = R.ALL_VERBS if k == "login" else k[1] if isinstance(k, tuple) and k[:1] == ("login",) else None
         if verbs is None:
             if k == "sender":       # counts only where every request that goes on was asked (`Engine.sender_held`)
                 continue
             if k != "own" or not ctx.narrow:
                 out.add(k)
-        elif not ctx.narrow:
+        elif not narrow:
             got = login_for(ctx, R.ALL_VERBS - verbs)
-            if got is not None:
+            if got is not None and ctx.at is None:
                 out.add(got)
+            elif got == "login":
+                out.add(("login-at", *ctx.at))
     return out
 
 

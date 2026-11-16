@@ -88,7 +88,8 @@ def cmd_analyze(a, trace_cmd: list[str]) -> int:
     out = _out(repo, a.out)
     try:
         res = analyze(repo, out, a.privacy, trace_cmd, a.no_scan, offline=a.offline or None, sandbox=a.sandbox,
-                      test_cwd=test_cwd, test_minutes=a.test_minutes, test_memory=a.test_memory)
+                      test_cwd=test_cwd, test_minutes=a.test_minutes, test_memory=a.test_memory,
+                      typecheck=True if a.typecheck else None)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -147,8 +148,15 @@ def cmd_verify(a, trace_cmd: list[str]) -> int:
         print("give --digest sha256:... or --report evidence.html", file=sys.stderr)
         return 2
     repo = Path(a.path).resolve()
+    from . import typecheck as types
+    # the person's word, by the flag or by LANTERN_TYPECHECK in their own shell; never the report's
     r = evidence.verify(repo, want, old, trace_cmd, a.no_scan, a.offline,
-                        beside=Path(a.report).resolve().parent if a.report else None)
+                        beside=Path(a.report).resolve().parent if a.report else None,
+                        typecheck=bool(a.typecheck) or types.asked())
+    if r.get("refused") and r.get("typecheck"):
+        print(r["refused"] + "\n  lantern verify " + (a.path or ".") + f" --report {a.report} --typecheck",
+              file=sys.stderr)
+        return 2
     if r.get("refused"):
         print(r["refused"] + "\n  lantern verify " + (a.path or ".") + f" --report {a.report} -- "
               + " ".join(r["trace_command"]), file=sys.stderr)
@@ -595,6 +603,11 @@ def _main(argv: list[str]) -> int:
                          "use, in megabytes from 128 to 1048576 (default: 2048; LANTERN_TEST_MEMORY_MB sets it for "
                          "every run). Tests stopped for their memory are neither passed nor failed")
     sp.add_argument("--no-scan", action="store_true")
+    sp.add_argument("--typecheck", action="store_true",
+                    help="also ask the type checkers installed on this computer (the TypeScript compiler, pyright) "
+                         "where the calls go that Lantern's own reading left unresolved. They read the project and "
+                         "run nothing of it; a copy of them inside the project is never used. Off unless asked for "
+                         "(LANTERN_TYPECHECK=1 asks for it in every run)")
     sp.add_argument("--offline", action="store_true",
                     help="skip dependency audits (pip-audit, npm audit), the only steps that use the network")
     sp.add_argument("--privacy", choices=["full", "structure"], default="full",
@@ -658,6 +671,9 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--report", help="evidence.html (or .json) to read the digest and run options from")
     sp.add_argument("--no-scan", action="store_true", help="the report was made with --no-scan (read from --report)")
     sp.add_argument("--offline", action="store_true", help="skip the dependency audits (read from --report)")
+    sp.add_argument("--typecheck", action="store_true",
+                    help="the report was made with --typecheck: ask this computer's type checkers again "
+                         "(LANTERN_TYPECHECK=1 says the same). Never read from --report: a report does not start them")
 
     sp = sub.add_parser("mcp", help="serve Lantern to an AI assistant over MCP (stdio); --setup prints config")
 

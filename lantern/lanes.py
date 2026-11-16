@@ -54,10 +54,13 @@ DATA_RE = re.compile(
     r"(\.|\(|$|/)"
 )
 
-# A JS/TS module in one of these places runs on the server.
+# A JS/TS module in one of these places runs on the server, and so does one whose name says so (`+page.server.ts`,
+# `hooks.server.ts`, `db.server.ts`: SvelteKit and Remix keep such a file out of what the browser gets). Not by
+# its place: the route file of a folder of `app/routes` (`app/routes/<name>/route.tsx`), which in a Remix app holds
+# a page beside its `loader`; where it is a server's route (Next.js, Express) the route on it says so.
 SERVER_PATH_RE = re.compile(
-    r"(^|/)(src/)?(app/.*(/|^)route\.[cm]?[jt]sx?$|pages/api/|api/|server/|backend/|functions/|netlify/|"
-    r"supabase/functions/|worker[s]?/|middleware\.[cm]?[jt]s$)"
+    r"(^|/)(src/)?(app/(?!routes/[^/]+/route\.).*(/|^)route\.[cm]?[jt]sx?$|pages/api/|api/|server/|backend/|"
+    r"functions/|netlify/|supabase/functions/|worker[s]?/|middleware\.[cm]?[jt]s$)|\.server\.[cm]?[jt]sx?$"
 )
 
 
@@ -66,16 +69,56 @@ def _module_id(n: Node) -> str:
 
 
 def _server_modules(g: Graph) -> set[str]:
+    """The JS files that are the server's (by module id), and beside them the id of each Server Action written
+    inside another function of a file that is not: there the action alone is the server's, not the page around it."""
     out: set[str] = set()
+    said = g.meta.get("js_directives") or {}
+    both: dict[str, tuple[set[str], str]] = {}
     for n in g.nodes.values():
         if not n.id.startswith("js:"):
             continue
         if n.file and SERVER_PATH_RE.search(n.file):
             out.add(_module_id(n))
         e = n.entry or {}
-        if e.get("kind") == "route" or (e.get("kind") == "main" and str(e.get("detail", "")).startswith("server start")):
+        if e.get("kind") == "route" and str(e.get("detail", "")).startswith("ACTION ") \
+                and "use server" not in (said.get(n.file) or ()):
+            out.add(n.id)
+        elif e.get("kind") == "route" and e.get("remix") and e.get("component"):
+            # a Remix route file that shows something holds both sides: its `loader` and `action` are the server's
+            # and what it shows is the browser's (a route file that shows nothing is the server's as a whole)
+            both.setdefault(_module_id(n), (set(), e["component"]))[0].add(n.id)
+        elif e.get("kind") == "route" or (e.get("kind") == "main" and str(e.get("detail", "")).startswith("server start")):
             out.add(_module_id(n))
+    for mod, (doors, shown) in both.items():
+        if mod not in out:
+            out |= doors | _servers_part(g, doors, shown)
     return out
+
+
+def _servers_part(g: Graph, doors: set[str], shown: str) -> set[str]:
+    """In a Remix route file that shows something: the functions of that file its `loader` and `action` call (and
+    what those call there) which the part that is shown does not call. Only the server runs them: the framework
+    leaves them out of what the browser gets."""
+    mod = shown.split("::", 1)[0]
+
+    def reach(start: set[str]) -> set[str]:
+        seen, todo = set(start), list(start)
+        while todo:
+            for e in g.callees(todo.pop()):
+                if e.dst not in seen and e.dst.startswith(mod + "::") and \
+                        not (e.via or "").startswith(("http-", "remix-")):
+                    seen.add(e.dst)
+                    todo.append(e.dst)
+        return seen
+
+    return reach(doors) - reach({shown})
+
+
+def _in_action(nid: str, server_modules: set[str]) -> bool:
+    """Is this function a Server Action written inside another function, or written inside one?"""
+    mod, sep, local = nid.partition("::")
+    parts = local.split(".") if sep else []
+    return any(f"{mod}::{'.'.join(parts[:i])}" in server_modules for i in range(len(parts), 0, -1))
 
 
 def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> str | None:
@@ -87,13 +130,15 @@ def lane_of(n: Node, server_modules: set[str], android: dict | None = None) -> s
         return "server" if target.startswith("/") else "data"
     if n.id.startswith("ext:"):
         return "data" if DATA_RE.match(n.id[4:]) else None
+    if n.id.startswith("db:"):   # a database table the code reads or writes
+        return "data"
     if android and _in_roots(n.file, android):
         e = n.entry or {}
         screen = e.get("kind") == "page" or (e.get("kind") == "route" and " screen " in str(e.get("detail", "")))
         return "browser" if screen else "frontend"
     if not n.id.startswith("js:"):
         return "server"
-    if _module_id(n) in server_modules:
+    if _module_id(n) in server_modules or _in_action(n.id, server_modules):
         return "server"
     e = n.entry or {}
     if e.get("kind") == "page" or (e.get("kind") == "main" and str(e.get("detail", "")).startswith("app start")):
@@ -148,6 +193,8 @@ def lane_for_file(file: str | None, android: dict | None = None) -> str | None:
         return "server"
     if re.search(r"\.[cm]?[jt]sx?$", file):
         return "server" if SERVER_PATH_RE.search(file) else "frontend"
+    if file.endswith(".svelte"):
+        return "frontend"
     if re.search(r"(^|/)\.env|\.ya?ml$|\.toml$|\.json$|Dockerfile|\.ini$|\.cfg$", file):
         return "server"
     return None

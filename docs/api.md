@@ -168,8 +168,16 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   `lines`, `via` (how it was resolved; `http-*` for a frontend→backend hop), `detail` (`PUT /api/items/{id}` on an
   HTTP edge, `onClick` on a UI edge).
 * Node ids: Python `py:pkg.mod.Class.method`; JS `js:<path-without-ext>::<Local.name>`; external `ext:<pkg.member>`
-  or `ext:HTTP <METHOD> <path>`.
-* `meta`: `files`, `lines`, `languages`, `bridge` (link counts), `http_calls`, `packs` (`{added, ambiguous, unresolved, packs}`),
+  or `ext:HTTP <METHOD> <path>`. A database table is `db:<table>`, or `db:<schema>.<table>` for a schema other than
+  `public` (since 2026-11-14, roadmap stage 1): `kind` `external`, `lane` `data`, `name` the table's name. One edge
+  runs from each function to each table it touches: `kind` `calls`, `detail` what the function does there in a
+  fixed order (`select, update cards`), `lines` every line it does so on, and `via` `supabase-from` (`inferred`:
+  the client is one by where its value came from) or `supabase-name` (`possible`: it is only named like one); a
+  function with a call of each kind gets the likely link. A table is never an entry point, and its name is no
+  called function's name for a rule that reads those (the login check). `graph.outside(id)` is true for `ext:` and
+  `db:` alike.
+* `meta`: `files`, `lines`, `languages`, `bridge` (link counts; with table calls also `db_calls` and `tables`),
+  `http_calls`, `db_calls` and `js_directives` (both below), `packs` (`{added, ambiguous, unresolved, packs}`),
   `lanes` (`{browser, frontend, server, data}` node counts), `calls` (the summary of `calls.json`, below),
   `too_deep` (since 2026-11-13, only when a reader left something: `{pieces: n, files: [path, …],
   where: [{file, line, reader}, …], readers: [reader, …]}`. A reader goes through code by calling itself once per
@@ -185,12 +193,163 @@ they were asked about (`Graph.load(path, repo)`), and a node's `file` is opened 
   seconds it gets for one file (`deep.PARSE_SECONDS`; the first 40 by name). Such a file is on the map as a file and
   nothing written in it is; the log's `deep` line and the Limits say so. Only the Dart reader's parser has such a
   limit so far).
+* `meta.db_calls` (since 2026-11-14, roadmap stage 1; only when the project has one): the calls into database tables
+  the JS/TS reader wrote down, one row per call written `<client>.from("<table>").<op>(…)` with `<op>` one of
+  `select`, `insert`, `update`, `upsert`, `delete`: `{"src"` (the function the call is written in), `"table",
+  "schema"` (null for `public`, also when written `.schema("public")`), `"op", "id"` (`db:<table>`), `"confidence"`
+  (`inferred`|`possible`), `"via"` (`supabase-from`|`supabase-name`), `"file", "line", "ui"}`. The client is one by
+  where its value came from (`supabase-from`: what `createClient` and its like of an `@supabase/…` package gave back,
+  a `useSupabaseClient()` result or a value typed `SupabaseClient`, followed through the names of the file, a value
+  another file of the project exports and a function of the project whose every `return` is a client) or by its name
+  alone (`supabase-name`: a receiver called `supabase`, `supabaseClient` or `supabaseAdmin`, or, since 2026-11-15, a
+  longer name that begins with the library's (`supabaseServiceRole`; none that names its storage or a bucket), also as
+  `this.<name>`, whose value Lantern cannot follow; not a name that is given another value, is a function or is an
+  import of something else, and not a value Lantern knows to be another thing). The table's name is the text written
+  in the call or a constant of the file that holds one; any other name makes no row. `bridge.link_tables` turns the
+  rows into the `db:` nodes and their edges.
+* `meta.js_directives` (the same date; only when a file has one): `{file: ["use client"]}`, `["use server"]` or
+  both, the directives a JS/TS file begins with. `lantern/clientside.py` reads them where it says which functions
+  run on the visitor's side (`where(g)` → `{node id: {"on": "the browser"|"the phone", "why"}}`: the file begins
+  with `"use client"`, it is part of a phone app, the project has no framework that renders pages on a server, it
+  is a page of Next.js's `pages/` folder, or such code calls it; never a route, a file in a server folder or a
+  file that begins with `"use server"`). It is worked out when a rule asks and is in no result file.
+* Server Actions (since 2026-11-14, roadmap stage 1). Where the nearest `package.json` depends on a framework that
+  runs them (`next`, `waku`, a `react-server-dom-*` package), every function a file that begins with `"use server"`
+  exports, and every function whose own body begins with `"use server"`, is an entry point `{"kind": "route",
+  "detail": "ACTION <name>"}`. It has no verb and no path: the framework gives it an address of its own, and anyone
+  who has that address can send to it, with or without the project's pages. A class, a method and a function the file
+  does not export are none, and with no such framework the words do nothing. Its `lane` is `server`: a `"use server"`
+  file is the server's as a whole; an action written inside a page puts itself there, and the page stays where it was.
+  `<form action={fn}>` and `<button formAction={fn}>` make an edge from the component to the action with `via`
+  `callback`, `confidence` `inferred` and `detail` `action` or `formAction` (in the report: "on submit"); a client
+  component that calls the action by name is linked as any call (`resolved`). The data flow reads every argument of an
+  action as request data (a `FormData` as its fields; a `number` carries no text). `ACTION <name>` is the map's own
+  word: a sentence a reader gets says "the Server Action <name>" (`graph.route_words`), in a finding's title, story
+  (through a page: "send the form on it"; with no page that uses it, a request sent straight to the action) and case,
+  and in the lists of `readiness.json`; the report's rows and chips show `Server Action <name>`. A finding's `routes`
+  list keeps the detail as the map writes it. An action made by a helper (since 2026-11-15): `export const save =
+  checked(schema, async (data) => …)` in a `"use server"` file is an entry on the function written in the call,
+  wherever it stands among the arguments; the helper is in the entry's `middleware` list, and the action has an edge
+  to it with `via` `action-helper` (`inferred`). The data flow reads the helper as a step before the action: a login
+  it asks for counts for the action; one it asks after the action has run, or asks and does not enforce, does not;
+  what it hands the action from the form is request data, and a user it read from the session is not. A choice between
+  two actions handed to a call (`useActionState(first ? signIn : signUp, null)`) is a `callback` edge to each. Not
+  looked through: a chain of helpers with a call in it, a named function handed to the helper.
+* tRPC procedures (since 2026-11-15, roadmap stage 1). Where the nearest `package.json` depends on `@trpc/server`,
+  each procedure of a router is an entry point on its handler: `{"kind": "route", "detail": "POST
+  /api/trpc/post.create", "trpc": {"path": "post.create", "type": "mutation"|"query"|"subscription", "procedures":
+  ["protectedProcedure", …], "mount": "/api/trpc"|null}}`. A mutation is `POST`, a query or a subscription `GET`. The
+  path is the keys through the routers (a router inside a router, `mergeRouters(a, b)`, a router spread into another,
+  one written out as an object: `{ … } satisfies TRPCRouterRecord`). `mount` is where the adapter serves them
+  (`endpoint`, `basePath` or `prefix` of the adapter call, the path of the Express `use` it stands in, or the Next.js
+  route file that calls it) and `null` where the code does not say: the detail is then the path alone (`POST
+  /post.create`). `procedures` are the names the procedure is built on, nearest first (`adminProcedure`,
+  `publicProcedure`), and the functions put before it with `.use(fn)` are in the entry's `middleware` list (node ids).
+  A handler written in place is a node of its own, `js:<file>::<router>.<key>` (a `.use(fn)` written in place:
+  `js:<file>::<name>.use`); a handler handed by name keeps its node. The route whose function calls the adapter keeps
+  its entry and gets `"serves": "trpc"`: the login rule and the readiness page ask its procedures, not it. A call
+  through a tRPC client (`api.post.create.useMutation()`, `client.post.hello.query()`,
+  `trpc.post.hello.queryOptions()`) adds an edge from the calling function to the procedure with `via` `http-trpc` and
+  the route's detail, beside the call's own record in `calls.json`: `resolved` where the client is what a function of
+  an `@trpc/…` package returned, `inferred` where the client's value is not followed and the path names one procedure,
+  `possible` where it names several. `graph.json` `meta.trpc` counts them: `{"procedures", "routers", "client_calls",
+  "linked"}` (absent where the project has none). The data flow reads `input` (and `rawInput`) of the handler's one
+  argument as request data and `ctx` as the server's own (`ctx.session`, `ctx.user`: who is signed in). Measured on
+  one public project: procedures 6 of 6, client links 12 of 12 right (`bench/modern_stack_results.md`).
+* SvelteKit (since 2026-11-15, roadmap stage 1). Where the nearest `package.json` depends on `@sveltejs/kit`, the
+  files with fixed names are entry points: `{"kind": "route", "detail": "POST /notes?/remove", "sveltekit":
+  "action"}`. `sveltekit` says which door it is: `"endpoint"` (a verb a `+server.ts` exports: `GET /api/notes/[id]`;
+  `fallback` is `ANY`), `"load"` (`load` of a `+page.server.ts`: `GET <the page's address>`), `"action"` (each of its
+  `actions`: `POST <address>` for `default`, `POST <address>?/<name>` for a named one), `"layout load"` (`load` of a
+  `+layout.server.ts`: `GET <folder>/*`, where a group's folder keeps its round brackets, `GET /(app)/*`: it runs for
+  that group's pages) and `"handle"` (`handle` of `src/hooks.server.ts`, or each named part of `sequence(a, b)`: `ANY
+  /*`, with `"serves": "sveltekit"`; the login rule and the readiness page ask the routes behind it, not it). In a
+  page's or an action's address a folder in round brackets is left out and `[id=integer]` is `[id]`. Every route's
+  `middleware` list (node ids) begins with the hook's parts in their order, followed by a helper the action or verb is
+  wrapped in (`save: withAuth(fn)`). A `+page.svelte` is `{"kind": "page", "detail": "/notes/[id]"}` on its component.
+  A `.svelte` file's module keeps its ending (`js:src/routes/notes/+page.svelte`), the component is a node named after
+  the file (`js:src/routes/notes/+page.svelte::+page`, `js:src/lib/Card.svelte::Card`; lines 1 to the file's end) and
+  a function of its script is `…::+page.wipe`; a `.svelte.ts` file keeps its whole name too. Edges the framework's
+  wiring gives, `resolved`: `http-sveltekit` from a page to the `load` beside it, to the `load` of each layout above
+  it and to the action a form on it posts to (detail = the route; `possible` where several actions fit; in the report
+  "sends it to POST /notes?/remove"); `sveltekit-load` from a page to the `load` of its `+page.ts` and of the
+  `+layout.ts` files above it (they also run in the browser and are no entries); `sveltekit-layout` from a page to the
+  layout components it is drawn in. An event on a tag of the markup (`on:click={save}`, `onclick={save}`) is a
+  `callback` edge with `detail` `onClick`, as in JSX. `graph.json` `meta.sveltekit` counts them: `{"routes", "pages",
+  "forms", "linked", "handed"}` (absent where the project has none; `routes` leaves the hook out, `forms` are the
+  forms that post, `linked` those that found their action, and `handed`, since 2026-11-15, the links a page makes
+  through a form in a shared part: the part's `<form method="POST" action={sendTo}>` posts where the page that draws
+  it writes the address, `<Panel sendTo="/account?/rename">`, an edge from the page on that line with `via`
+  `http-sveltekit-prop`, `inferred`, `possible` where several actions fit). In `calls.json` Svelte's own words
+  (`$state`, `$derived`, `$effect`, `$props`, `$bindable`, `$inspect`, `$host`) are `builtin` with `via`
+  `svelte-rune`. The data flow reads what a route is handed (`request`, `url`, `params`, `cookies`, whole as `event`
+  or taken apart) as request data and `locals` as the server's own (`locals.user`, `locals.session`: who is signed
+  in). A function taken out of `locals` first (`({ locals: { safeGetSession } })`, `const { auth } = event.locals`) is
+  the same function. Measured on one public SvelteKit project (`bench/modern_stack_results.md`).
+* Remix (since 2026-11-15, roadmap stage 1; also React Router's framework mode where `app/routes.ts` says
+  `flatRoutes()`). Where the nearest `package.json` depends on one of Remix's own packages, a file of `app/routes` is
+  a route by its name: `_index` is `/`, `concerts.trending` is `/concerts/trending`, `concerts.$city` is
+  `/concerts/:city`, `files.$` is `/files/*`, `($lang).categories` is `/:lang?/categories`, `admin_.reports` is
+  `/admin/reports`, `_auth.enter` is `/enter`, `sitemap[.]xml` is `/sitemap.xml`, and a folder's `route` file (its
+  `index` file where no route file is there) is the folder's route. Entries: `{"kind": "route", "detail": "GET
+  /notes/:noteId", "remix": "loader"}` on the `loader` a route file exports; `"remix": "action"` on its `action`
+  (`POST <address>`, with `?index` on an index route; the bridge matches a request of any verb but GET to it);
+  `"remix": "layout loader"` on a layout's loader (`GET <address>/*`); and `{"kind": "page", "detail":
+  "/notes/:noteId"}` on what the file exports by default. A door made by a helper (`export const action =
+  guarded(async (…) => …)`) is an entry too: the helper is in its `middleware` list, with an `action-helper` edge.
+  Edges the framework's wiring gives: `http-remix` (`resolved`, detail = the route) from a page to its own loader, to
+  the loaders of the layouts it is drawn in and to the action a posting form on it names (`<Form method="post">`,
+  `<form>`; the address is read from where the form stands; `possible` where several fit), and `remix-layout` from a
+  page to the layouts' own components. `graph.json` `meta.remix` counts them: `{"routes", "pages", "forms", "linked"}`
+  (absent where the project has no such app), and carries `"not_read"` for an app whose routes Lantern does not read:
+  `"Remix 1 route folders"` (every Remix version the `package.json` names is a 1.x and `v2_routeConvention` is not
+  switched on), `"React Router routes listed in app/routes.ts"` (a list written by hand, or `flatRoutes` with a folder
+  of its own), or both joined by `"; "`. None of that app's files is then an entry by its name, and the Evidence
+  Report's `limits` carry one fixed sentence for each (any other text in `not_read` names no sentence). A route file
+  that shows something holds both sides: its loader and action, and the functions of that file only they call, have
+  lane `server`; what it shows keeps a component's lane. The data flow reads a route's one argument as the request
+  (`request`, `params`; `context` is the server's own), and what `getSession` of the framework's own session storage
+  hands back for the request's cookie shows who is signed in, only when the cookie is signed. Measured on one small
+  public Remix project (`bench/modern_stack_results.md`).
+* The type-aware pass (since 2026-11-15, roadmap stage 1; opt-in). `lantern analyze --typecheck`, or
+  `LANTERN_TYPECHECK=1` (`true`, `yes`, `on`) in the person's own environment, asks the type checkers installed on
+  this computer where the calls go that Lantern's own reading left unresolved: the TypeScript compiler for JavaScript
+  and TypeScript, pyright for Python. Nothing in a project switches it on, and without it every result file is what it
+  was. A checker is found outside the analyzed folder only: `LANTERN_NODE` (the `node` program), `LANTERN_TYPESCRIPT`
+  (the `typescript` package folder), `LANTERN_PYRIGHT` (pyright's `langserver.index.js`), else the folders PATH
+  names in full (never the current folder);
+  `LANTERN_TYPECHECK_SECONDS` is each checker's time (120; at most 1800). The project's own `tsconfig.json`, pyright
+  settings, plug-ins and Python are never used, and nothing of the project is run. What an answer adds: an edge into
+  the project with `via` `typecheck`, `resolved` where the name written at the call names the function itself and
+  `inferred` where it was reached through a value's type; in Python, where that type's method only declares
+  (`@abstractmethod`, `@overload`, a body of `...` or `raise NotImplementedError`) or a class beneath it writes the
+  method anew, an edge with `via` `override` and confidence `possible` to each method that may run (at most 24; a
+  method that only declares gets no edge); a built-in call (counted in `builtin_calls`); a library edge (`ext:…`),
+  never where the site's reason was `library-or-repo`; or nothing. In `calls.json` the site's `outcome` changes with
+  it (`resolved`, `likely`, `possible`, `builtin`, `external`), its `via` is `typecheck`, and no total moves: a call
+  is one call before and after. `graph.json` `meta.typecheck` (the same table is `run.json` `typecheck`): `{"asked":
+  true, "typescript": {…}, "python": {…}, "passed_by"?: [names]}`. Each part is `{"ran": true, "version", "asked",
+  "linked", "likely", "possible", "builtin", "library", "declared", "left", "not_asked", "stopped", "seconds"}`, where
+  the seven counts from `linked` to `left` add up to `asked` (`linked`: confirmed; `declared`: only a declaration with
+  no code was named; `left`: no answer; `not_asked`: calls over the 50,000 asked about per language; `stopped`: the
+  checker's time ran out first), or `{"ran": false, "why", "asked": 0, "unresolved"?}` when the checker is missing,
+  too old (TypeScript before 5) or could not be started, or when no call of its language was unresolved. `passed_by`
+  names a `node`, a compiler or a pyright that lies inside the analyzed folder and was not started. The log has a
+  `types` line. `evidence.json`: the checkers are in `provenance.tools` (`{"tool": "typescript"|"pyright", "version",
+  "role": "type checker, asked for with --typecheck"}`, with `"status": "not asked"` for one that did not run while
+  calls of its language were unresolved), the run's options carry `typecheck` (the versions of the checkers that ran),
+  and `limits` has one line per checker. `lantern verify` on a report made with the pass answers `{"match": false,
+  "typecheck": true, "refused": …}` unless it is given `--typecheck` too; the connector's `lantern_verify` passes the
+  refusal on and starts no checker. Measured on twelve public projects (`bench/modern_stack_results.md`): no link was
+  confirmed by a checker; the links are "likely" or "possible".
 * JavaScript `via` values added in stage 3 (2026-11-09): `require-call` (`require('./x')(...)`), `route-handler` and
   `middleware` (a function handed to an Express router by name: resolved when it is named straight from a module,
   inferred when it is reached through a value or a type Lantern worked out, such as `const notes = new Notes()`),
   `wrapped-function` (`const f = wrap(async ...)`
   handed to a router; inferred), `library-value` (a variable or module export holding what a library call returned:
-  `const app = express()`), `library-result` (a call on a library call's result: `Joi.string().min()`),
+  `const app = express()`; since 2026-11-14 also a value an ES module exports and another file imports,
+  `export const db = new PrismaClient()` and `db.note.delete()` elsewhere; `local-type` now also stands for a
+  variable's written type, `let prisma: PrismaClient`, and for `kept ?? new T()`), `library-result` (a call on a library call's result: `Joi.string().min()`),
   `express-param` (`req`/`res`/`next` by position in a handler of a package that depends on express; inferred),
   `param-type` (a written TypeScript parameter type), `builtin-value` (DOM lists and elements, events, fetch
   responses), `module-value`, `member`. Python: `inherited-library` / `inherited-builtin` (a method or attribute the
@@ -322,7 +481,13 @@ entries, a lambda handler being its own node `cc:<file>::GET /path`; gtest/Catch
 it (a check under any name, one written in place, a hook, a dependency); `null` when that step did not run, and
 absent from results written before 2026-11-11. The protection `route-auth` in `readiness.json` counts such a route
 as checked (found: "the code on the way to this route turns away whoever is not signed in"), and names a route an
-`LW-AUTH-MISSING` finding calls open among the open ones, whatever the names around it say.
+`LW-AUTH-MISSING` finding calls open among the open ones, whatever the names around it say. A Server Action that
+changes data (read as for the finding, below) counts among the "routes that change data" of `route-auth` and
+`rate-limit`, and their `evidence` and `found` name it `the Server Action <name> (<file>:<line>)`. A tRPC
+procedure is counted under its own address (a mutation changes data); the one route that serves them all
+(`serves: "trpc"`) is not counted, and neither is SvelteKit's `handle` (`serves: "sveltekit"`): its routes are. The
+upload line (`upload-checks`) is given for a form read with `formData()` only where the same file takes a file out
+of it (`File`, `Blob`, `arrayBuffer()`, `stream()`; since 2026-11-15): reading a form's fields is no upload.
 
 `not_read` (`lantern/unread.py`, since 2026-11-12; `{}` when the project holds neither kind, absent from older
 results): what the project holds that Lantern takes for code or software and did not read. `renamed`: code kept under
@@ -416,7 +581,41 @@ answer is not waited for), the name of that check is no sign, and a route that c
 the title "... changes data, and Lantern found nothing that turns away a request whose login token does not hold".
 `more_info` names what looked like a login on the route and was not taken for one, in sentences that begin "Not
 taken for a login check:" (a library's login made optional with `optional=True`; a FastAPI security scheme whose
-token the handler never looks at).
+token the handler never looks at). A Server Action has no verb and no request to read, so it is asked in a way of
+its own (since 2026-11-14, `websec._actions_unasked`): an action that code of the project outside its tests uses,
+that is not open by its name (sign-in, a webhook), that changes data and in which no strong sign of a login is
+found gets `LW-AUTH-MISSING` with the title "The Server Action <name> changes data, the app uses it, and no login
+check was found" (`MEDIUM`, `tool_confidence: LOW`; `line` is the action's first line, `snippet` the line read as
+the change, and `more_info` says what was read as the change). "Changes data" is, in this order: a table call of
+the map that adds, changes or removes rows (`meta.db_calls`); an SQL text inside a string of its lines that
+changes rows (`insert into`, `update … set`, `delete from`, …; not in a comment); a member call named like a
+database library's change (`create`, `update`, `delete`, `upsert`, `save`, `$executeRaw`, …), unless its chain
+begins at something that is no database (the form's data, cookies, headers, a `Set` or `Map` of the function's
+own, `crypto`) or the map followed the call into a library that keeps none of the app's data (a model provider's
+`create`, a payment provider's `update`; `websec.ACTION_DATA_LIBS` names the libraries that do); Firestore's
+`setDoc`, `addDoc`, `updateDoc`, `deleteDoc`. The action's own lines are read first, then the project's JS/TS
+functions it calls, two calls deep. On the two public sample projects that have Server Actions the rule raised no
+finding, so its precision is not known: it stays a heuristic (`tool_confidence: LOW`). `LA-WALLET-DRAIN` on an action
+is titled "The Server Action <name> spends money …", and its `snippet` is the action's first line (a route's is its
+verb and path). Since 2026-11-15 every `LA-WALLET-DRAIN` finding carries `paid`: `{"login": true|false, "limit":
+true|false}`, what the rule found on the way to the paid call; the finding's story and heading are written from it (a
+result written before has none, and its story is read from the title's fixed ending). A tRPC procedure is asked as a
+route (a mutation is a
+`POST`), with two signs of its own (since 2026-11-15): a name it is built on that holds a login word ("the
+procedure `protectedProcedure` it is built on"), and, under any name, what the functions put before it and its
+own lines do: `new TRPCError({ code: "UNAUTHORIZED" })` or `FORBIDDEN` written as code ("`adminProcedure` turns a
+caller away (TRPCError FORBIDDEN, server/api/trpc.ts:17)", "it turns a caller away itself (TRPCError
+UNAUTHORIZED, line 22)"). A comment, a text and another code (`TOO_MANY_REQUESTS`) are none. `more_info` of the
+finding names what the procedure is built on. On a finding in a procedure, `input.via` names the handler's
+`input` ("parameter `input`"), never the `.input(…)` step that says what the procedure accepts. On a SvelteKit
+route (since 2026-11-15) `locals.user` and `locals.session` asked in the route's lines or in a helper's are signs.
+The hook that runs before every route is not read by its name; the flow step reads its code. A part of it that
+turns away every request with nobody signed in puts every route behind it in `logins_shown`; a part that names
+the addresses it guards (`event.url.pathname.startsWith("/app")`, "every address but `/login`", `event.route.id`)
+puts there the routes whose own address is certainly among them, and no other. A word of the address read by
+its name (`url.searchParams.get("id")`, `request.nextUrl.searchParams.get("id")`, also off `new URL(request.url)`)
+has `input.via` "`id` in `url.searchParams` is what the request sent", and the rules that ask who may reach what
+read it as they read `req.query.id` on Express (before, it carried no name and they did not see it).
 
 Two rules of `lantern-web` rest on the same step. `LW-XSS-RAW` (79, `tool_confidence: LOW`): a place in a page
 template that prints a value without escaping it (EJS `<%- x %>`, Handlebars and Mustache `{{{x}}}` / `{{& x}}`, Pug
@@ -500,7 +699,29 @@ non-security hash or SQL splicing only fixed text → `low`, a hash of unknown p
 (`server-checks-it`|`server-reads-it`|`not-seen-on-server`|`no-server-code`), `server_checks`, `server_reads`, `routes`,
 `other_controls` `[{route, login_check, why}]`, `conditions` (settings the checking code branches on), `stranger_access`
 (always `not determined`), `unknown` [plain sentences]; never changes the rank),
-`case` (every finding outside test code, `case.py`, version 1: `where` `{file, line, function, revision, revision_note?}` (revision = the analyzed folder's git commit, `null` outside git; `revision_note` when the folder has uncommitted changes, or the header's `note` when git could not compare the files), `claim` (the tool's words, never stronger than the evidence), `evidence` `[{fact, from}]` (`from`: the tool, `map`, `input check`, `context (names)`/`context (code)`), `conditions` `[{need, met, why}]` (what has to be true for harm; `met` true = Lantern saw it, false = saw it is not, null = cannot check), `impact` (the scenario's harm), `severity` `{rank, tool_severity, why, before_context?, context_note?}`, `confidence` `{level: high|medium|low|unknown, why, about}` (the tool's own confidence, one step lower when the path has a `likely`/`possible` link; about the pattern being there and reached, never about exploitability), `unknown` [plain sentences], `status` `[{word, done, why}]` for `reported`, `reproduced` (the id was in this folder's previous `security.json` or `baseline.json`; null on a first run), `fixed` (false while listed), `tested` and `independently reviewed` (always null: Lantern keeps no such record; an accepted risk is a review by the builder, not an independent one)),
+`row_rules` (`LW-NO-RLS` only, since 2026-11-14, `websec.row_rules`: what the project's SQL files, replayed in the
+order they are applied (`lantern/rowrules.py`), leave open on one table: `{"table"` (`<schema>.<name>`), `"state"`:
+`off` (the files create the table and never switch row-level security on), `off-in-the-files` (the same, and code
+that runs in the database names row-level security, which Lantern does not run: a guess, `tool_confidence: LOW`),
+`open-write` or `open-read` (row-level security is on and a policy lets every one of its roles through with a
+condition that is always true); for the last two `"policy"`, `"lets"` (`insert`, `update`, `delete`, or `select`)
+and `"for"` (`everyone`|`signed-in`); `"client"`: the functions on the visitor's side that reach the table through
+the map's `db:` links, `[{"node", "does": [ops], "file", "line", "on", "why"}]`, empty when Lantern found none,
+which is not proof that none does}`. The rank is the rule's own (`fixed_rank`, with `fixed_why`): a table with
+row-level security off is `high`, and `critical` where `client` is not empty; `off-in-the-files` `medium`; a
+policy that lets everyone change or remove any row `high`, `critical` where `client` is not empty; one that lets
+any signed-in user do so `high`; one that only lets rows be added, or lets every row be read, `medium`. A policy
+for the server's own roles (`service_role` and its like), one that asks who is calling, one a restrictive policy
+narrows, and a table the files do not create make no finding. `pin` is the table's `db:` node when the map has
+it; the finding's id is the one the older rule gave the same line. The heading, the story and the case are worded
+from it (`scenarios.row_words`): what is open (every row to read and change, rows to change or remove, rows to
+add, every row to read) and for whom (anyone, or anyone who signs up), where the key is taken from (the page, or
+the phone app), and in `case` an `evidence` entry `from: "SQL files"` and three conditions: what the files leave
+open (`met` true, or null for `off-in-the-files`), "The database is as the project's SQL files leave it" (always
+null: a change made in the dashboard is in no file), and "A visitor has the table's name and the public key"
+(true where `client` is not empty, else null, never false). A finding without `row_rules` (Firebase's rules,
+results an older Lantern wrote) is told as before),
+`case` (every finding outside test code, `case.py`, version 1: `where` `{file, line, function, revision, revision_note?}` (revision = the analyzed folder's git commit, `null` outside git; `revision_note` when the folder has uncommitted changes, or the header's `note` when git could not compare the files), `claim` (the tool's words, never stronger than the evidence), `evidence` `[{fact, from}]` (`from`: the tool, `map`, `input check`, `context (names)`/`context (code)`, `SQL files`), `conditions` `[{need, met, why}]` (what has to be true for harm; `met` true = Lantern saw it, false = saw it is not, null = cannot check), `impact` (the scenario's harm), `severity` `{rank, tool_severity, why, before_context?, context_note?}`, `confidence` `{level: high|medium|low|unknown, why, about}` (the tool's own confidence, one step lower when the path has a `likely`/`possible` link; about the pattern being there and reached, never about exploitability), `unknown` [plain sentences], `status` `[{word, done, why}]` for `reported`, `reproduced` (the id was in this folder's previous `security.json` or `baseline.json`; null on a first run), `fixed` (false while listed), `tested` and `independently reviewed` (always null: Lantern keeps no such record; an accepted risk is a review by the builder, not an independent one)),
 `status` (`open`|`accepted`), `accepted` (`{"reason", "by", "date"}` when accepted; with `"how": "nosec"`, and `by`
 and `date` null, when the acceptance is a `# nosec` comment with a written reason on the line),
 `nosec` (Bandit findings only, when the line carries a `# nosec` comment about this finding: `{"state", "reason"}`.

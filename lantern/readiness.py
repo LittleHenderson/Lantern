@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import manifest, quick, release, scanresult
 from .depaudit import AUDIT_TOOLS, NOTHING_TO_CHECK
-from .graph import Graph
+from .graph import Graph, route_words
 from .protections import advise as advise_protections
 from .python_frontend import TEST_FILE_RE, project_text
 
@@ -645,7 +645,7 @@ def check_tests(repo: Repo, g: Graph, run_meta: dict) -> list[dict]:
         hit_ids |= called
         hit = [n for n in entries if n.id in hit_ids]
         frac = len(hit) / len(entries)
-        miss = [n.entry.get("detail") or n.qualname for n in entries if n.id not in hit_ids]
+        miss = [route_words(n.entry.get("detail")) or n.qualname for n in entries if n.id not in hit_ids]
         out.append(_check("tests-entries", "Tests touch every entry point", 4,
                           "pass" if frac >= 0.999 else "partial" if frac >= 0.5 else "fail",
                           f"{len(hit)} of {len(entries)} reached from tests"

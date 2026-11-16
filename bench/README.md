@@ -7,9 +7,12 @@ by `lantern behave` in the test sandbox: `behaviour/README.md`, `behaviour/resul
 apps, labelled by engineers), `explain_eval.py` (explanation pass rate with a real model), `ask_eval.py` (Ask Lantern
 answers), `fuzz.py` (random file mutation), `manifests.py` (project files of the wrong shape), `links.py` (every file
 of the samples as a link out of the project, a pipe, a link to itself; `links_results.md` is the last run),
-`large_apps_results.md` (speed and memory on big apps), `mutation_results.md` (do the tests catch deliberate mistakes),
-`scanner_start_results.md` (2026-11-14: this benchmark's seven projects read before and after the way gitleaks is
-started changed, without and with gitleaks: the same map and the same findings).
+`large_apps_results.md` (speed and memory on big apps), `mutation_results.md` (do the tests catch deliberate
+mistakes), `scanner_start_results.md` (2026-11-14: this benchmark's seven projects read before and after the way
+gitleaks is started changed, without and with gitleaks: the same map and the same findings), `modern_stack_results.md`
+(2026-11-15: the readers of roadmap stage 1 and the opt-in type-aware pass on twelve public projects that were read
+and never run; the first numbers, the faults they showed and the numbers after the fixes are kept apart; read by hand,
+not a recorded run).
 
 Every benchmark starts isolated (`tools/netguard/`): a temporary home folder, no keys or saved sign-ins from the
 shell, real model providers off, and the network refused except for the hosts the script names (the repositories it

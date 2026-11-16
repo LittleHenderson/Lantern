@@ -17,6 +17,9 @@ from __future__ import annotations
 from .graph import CALLS, INFERRED, POSSIBLE, RESOLVED, Graph
 
 
+REMIX_ACTION_VERBS = ("POST", "PUT", "PATCH", "DELETE")
+
+
 def _segs(path: str) -> list[str]:
     out = []
     for s in path.split("/"):
@@ -36,11 +39,15 @@ def _routes(g: Graph) -> list[dict]:
             continue
         detail = n.entry.get("detail") or ""
         verb, _, path = detail.partition(" ")
-        if not path.startswith("/"):
+        if not path.startswith("/") or "?" in path:
+            # `POST /notes?/remove`, a SvelteKit form action: a request's address is compared without what follows
+            # its `?`, so it would say nothing of which action is meant (the JS reader links the form itself)
             continue
         verbs = {v.upper() for v in verb.split("/")} if verb else {"ANY"}
         if verbs & {"ROUTE", "API_ROUTE", "WEBSOCKET"}:
             verbs = {"ANY"}
+        if n.entry.get("remix") == "action":
+            verbs = set(REMIX_ACTION_VERBS)     # a Remix route's `action` answers every verb but GET
         out.append({"id": n.id, "verbs": verbs, "segs": _segs(path), "detail": detail})
     return out
 
@@ -123,5 +130,33 @@ def link(g: Graph) -> dict:
         for r in hits:
             g.add_edge(c["src"], r["id"], kind=CALLS, confidence=conf, line=c["line"],
                        via=f"http-{how}", detail=label)
+    tables = link_tables(g)
+    if tables:
+        stats["db_calls"], stats["tables"] = tables["db_calls"], tables["tables"]
     g.meta["bridge"] = stats
     return stats
+
+
+DB_OPS = ("select", "insert", "update", "upsert", "delete")
+
+
+def link_tables(g: Graph) -> dict:
+    """The calls into database tables the readers wrote down (`meta["db_calls"]`: Supabase's
+    `<client>.from("<table>").<op>(…)`) become one link from each function to each table it touches, a node
+    `db:<table>` in the Data lane, whose detail names what the function does there (`select, update cards`)."""
+    calls = g.meta.get("db_calls", [])
+    if not calls:
+        return {}
+    by: dict[tuple[str, str], list[dict]] = {}
+    for c in calls:
+        by.setdefault((c["src"], c["id"]), []).append(c)
+    for (src, tid), cs in by.items():
+        if src not in g.nodes:
+            continue
+        g.table(cs[0]["table"], cs[0]["schema"])
+        ops = sorted({c["op"] for c in cs}, key=lambda o: DB_OPS.index(o) if o in DB_OPS else len(DB_OPS))
+        likely = [c for c in cs if c["confidence"] != POSSIBLE]
+        for c in cs:
+            g.add_edge(src, tid, kind=CALLS, confidence=INFERRED if likely else POSSIBLE, line=c["line"],
+                       via=(likely or cs)[0]["via"], detail=f"{', '.join(ops)} {cs[0]['table']}")
+    return {"db_calls": len(calls), "tables": len({c["id"] for c in calls})}

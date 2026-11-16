@@ -226,7 +226,7 @@ def merge_trace(g: Graph, data: dict) -> dict:
             continue  # module import / class body execution, not a call
         observed.add((a, b))
 
-    static = {(e.src, e.dst): e for e in g.call_edges() if not e.dst.startswith("ext:")}
+    static = {(e.src, e.dst): e for e in g.call_edges() if not e.dst.startswith(("ext:", "db:"))}
 
     # Collapse decorator wrappers: a -> wrapper -> b, where the static graph has a -> b and the
     # wrapper is a function nested inside another function (the usual functools.wraps pattern).
