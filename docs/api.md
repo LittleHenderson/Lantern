@@ -524,7 +524,7 @@ link that leads out of it, a pipe), `errors` (one line per file or package left 
 the project: `linked` (the project was handed over under a name of Lantern's own) or `plain` (by its own path).
 `partial` keeps the findings the tool did
 produce. Bandit's `scope` has `under_another_name` when Python kept as text was handed to it (how many such files, a
-part of `files`), and the record then names them in `read_as_text`. `copied-audit` (`depaudit.run_copied_audit`: the
+part of `files`), and the record then names them in `read_as_text`. Bandit's record has `way: "copies"` when it was started on copies of the project's own Python files, in a folder of Lantern's own, and not on the project's folder: that is done where something in the project that is not the project's own (a link that leads out, a pipe) cannot be written as an exclusion (a comma in its path, or more of them than fit a command line). Findings name the project's files as always; a file that could not be copied is in `errors` and makes the run `partial`; where no folder for the copies can be made the record is `failed` and Bandit is not started; nothing of such a run is kept between runs. `copied-audit` (`depaudit.run_copied_audit`: the
 copies under `vendor` that say what they are, asked of OSV as npm packages by the name and version their own
 `package.json` gives, which nothing proves) adds `copied` and `copied_examples` (the copies with a name and a
 version), `unnamed` and `unnamed_examples` (code files that belong to no such copy: the record is then `partial`),
@@ -864,7 +864,7 @@ the scenario of the function's finding, else a one-line sketch from the map.
 `note?`: a sentence, present when there is no commit (`not a git repository`, `git not installed`, or why the folder's
 git folder was not read: it is a link, it is kept in a place that does not name the folder back, or it lies outside
 the folder and is not the current user's) or when git could not compare the files with the commit, in which case
-`dirty` is `true`: `lantern/gitfacts.py`),
+`dirty` is `true` (also where the git folder takes part of its history from another place, a list of other folders of objects, which `git clone --shared` and `--reference` write too, or a link among its own objects: git is not started on it and `committed_at` is null): `lantern/gitfacts.py`),
 `scorecard` (`readiness` (with `checklist` beside `score`), `now` counts, `before` counts, `baseline_date`,
 `baseline_commit`), `release` (the whole `release` of `readiness.json`, or null for a readiness file an older Lantern
 wrote; the Scorecard section shows the decision, every criterion, the profile and what the decision is tied to; the
@@ -966,7 +966,7 @@ project's own choice (an `==` pin or a lock file, named in `locked`) and `checke
 project names; at the top `exact` is true when every version was, `checked` counts the fingerprints the project
 names, `added` is what Lantern asked for itself (the test runner), `notes` are Lantern's own sentences about what it
 passed over or did not do (an option of pip's it does not take, the libraries the project names as optional and
-whether they were fetched too or left out, install scripts that were not run, a `package.json` with no lock file), `reached` and `refused` are the places the
+whether they were fetched too or left out, install scripts that were not run, a `package.json` with no lock file and the workspaces that were then not handed to npm), `reached` and `refused` are the places the
 fetch reached and how many it was refused, `walls` says what held the fetch to its doorkeeper (`own-network`, `port-rule` or `told`: `lantern/libraries.py`;
 `told` also inside a sandbox whose doorman makes every connection for what runs in it, where no rule of the run's own decides),
 `built` (Python on Linux, since 2026-11-14) is on a package that the store did not have ready-built for this system and that Lantern
@@ -987,6 +987,8 @@ or a folder that the project names itself);
 `lantern.trace.counted` says whether anything of the run is in the results; tests the person stopped leave no record,
 because a stopped run writes no file), `baseline.json` (first-run findings for "fixed since"),
 `cache/` (explanation cache).
+
+With no lock file npm is handed a `package.json` Lantern wrote, never the project's own (`libraries._for_npm`): the four tables of libraries, each library by a package name and by a version, a range, a tag or the store's own name for it (`npm:<name>@<versions>`); the `optional` marks of `peerDependenciesMeta`; `overrides` of the same form. A library or an override that names a folder, a file, a link, a repository or an address means npm is not started and the tests are not run (`trace.unavailable`, `not_run_for: "libraries"`), and so does a package in npm's own record of the fetch that did not come from the store (`libraries.not_from_the_store`). With a lock file nothing changed: a library kept in a folder of the project is fetched as the lock file names it.
 
 What `lantern analyze` reads back from an earlier run of the same folder (`lantern/results.py`, `earlier`):
 `security.json` (which findings were there before), `baseline.json` and `explanations.json` (for the report). Each is

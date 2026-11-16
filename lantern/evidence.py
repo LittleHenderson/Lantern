@@ -865,9 +865,36 @@ def E(v) -> str:
     return html.escape("" if v is None else str(v), quote=True)
 
 
-def _trace_suffix(ev: dict) -> str:
-    cmd = (((ev.get("payload") or {}).get("run") or {}).get("trace"))
-    return " -- " + " ".join(map(str, cmd)) if isinstance(cmd, list) and cmd else ""
+# A line a reader is told to copy and run holds nothing a report wrote but its commit, and that only as what a
+# commit's name can be. A report lies in the project's folder and may be anybody's: until 2026-11-15 the commit went
+# into the line as the report wrote it, and the tests' command of a report made with a test run was joined to it
+# with spaces (`lantern verify … -- <the report's words>`), on the page, in `lantern verify`'s refusal and in the
+# connector's. What a shell does with a line is decided by the line, and escaping for a page changes none of it.
+NO_COMMIT_LINE = "Commit your changes and regenerate the report to make it verifiable."
+WORDS_SHOWN = 600     # characters of a report's test command that are shown
+MOST_WORDS = 40
+
+
+def commit_named(said) -> str | None:
+    """The commit a report names, when it is what a commit's whole name can be (40 or 64 letters of 0-9a-f)."""
+    return said if isinstance(said, str) and gitfacts.HEX.fullmatch(said) else None
+
+
+def words_shown(cmd) -> str:
+    """A report's test command as what the report says: a list of its words, each in quotes, with every character
+    that is not plain text written by its number (so nothing of it does anything in a terminal or reads as a line
+    to run). "" when the report names none. Cut short, and said, past `MOST_WORDS` words or `WORDS_SHOWN` characters."""
+    if not isinstance(cmd, list) or not cmd:
+        return ""
+    text = json.dumps([w if isinstance(w, str) else str(w)[:200] for w in cmd[:MOST_WORDS]])
+    if len(cmd) > MOST_WORDS or len(text) > WORDS_SHOWN:
+        return text[:WORDS_SHOWN] + " (cut short)"
+    return text
+
+
+def _words_of(ev: dict) -> str:
+    run = ev["payload"].get("run") if isinstance(ev.get("payload"), dict) else None
+    return words_shown(run.get("trace") if isinstance(run, dict) else None)
 
 
 def _pct(v) -> float:
@@ -981,7 +1008,7 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     h, sc, ar, se = ev["header"], ev["scorecard"], ev["architecture"], ev["security"]
     rd = sc["readiness"]
     rel = _release(ev)
-    commit = h.get("commit")
+    commit = commit_named(h.get("commit"))
     commit_html = (f"<code>{E(commit[:12])}</code>" + (" <b class='warn'>with uncommitted changes</b>" if h.get("dirty") else "")
                    if commit else "<b class='warn'>not pinned: no git commit</b>")
     note = h.get("note")    # why there is no commit, or why the files count as changed (`gitfacts`)
@@ -1090,7 +1117,12 @@ def render_html(ev: dict, nonce: str | None = None) -> str:
     engine = h.get("engine") if isinstance(h.get("engine"), str) and re.fullmatch(r"[0-9a-f]{40}|v[\w.-]+", h["engine"]) else ""
     verify = (f"git checkout {commit[:12]} && pip install \"lantern[scan] @ git+https://github.com/LittleHenderson/Lantern"
               f"{'@' + engine if engine else ''}\" "
-              f"&& lantern verify . --report evidence.html{_trace_suffix(ev)}") if commit else "Commit your changes and regenerate the report to make it verifiable."
+              f"&& lantern verify . --report evidence.html") if commit else NO_COMMIT_LINE
+    words = _words_of(ev)
+    words_html = ("<p class='muted'>This report was made with a test run, which runs the project's code. Lantern does "
+                  "not write that command into the line above. This is the command as the report names it, word by "
+                  "word; if it is the project's own test command, type it yourself after the line, behind "
+                  f"<code> -- </code>:</p><p><code>{E(words)}</code></p>") if words and commit else ""
     memo = _memo(ev)
     verify_js = json.dumps(verify).replace("<", "\\u003c")   # the verify command inside the page's script
     base_rd = sc.get("baseline_readiness") if isinstance(sc.get("baseline_readiness"), dict) else {}
@@ -1278,7 +1310,7 @@ h2{{font:400 24px/1.25 var(--serif);letter-spacing:-.01em;margin:0 0 16px}} h2 s
 <section><h2>9 · Verify it yourself</h2>
 <p>Results digest: <span class="digest">{E(ev['digest'])}</span></p>
 <p class="muted">This is a SHA-256 hash of the deterministic results above (graph, findings, readiness checks, tool versions) and the commit. Re-running the open-source analyzer on the same commit with the same tool versions gives the same digest. It shows the results match the code; it is not a signature of who made the report.</p>
-<p><code>{E(verify)}</code></p>
+<p><code>{E(verify)}</code></p>{words_html}
 <p style="margin-top:14px"><b>Badge.</b> <code>badge.svg</code> beside this report reads <span class="digest">Lantern · {E(badge_text(ev))}</span>: the commit, the open critical count, and the date. It never says "verified" or "secure", because no tool can promise that. Link it to this report so a reader lands on the Limits section: <code>[![Lantern](.lantern/badge.svg)](.lantern/evidence.html)</code></p></section>
 </main><script{(' nonce="' + E(nonce) + '"') if nonce else ''}>
 (function () {{

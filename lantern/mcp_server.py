@@ -488,8 +488,9 @@ def tool_verify(P: Projects, args: dict) -> dict:
         return {"text": r["refused"] + " From a terminal: lantern verify " + str(repo) + " --report <report> --typecheck",
                 "data": r}
     if r.get("refused"):
-        text = (r["refused"] + " From a terminal: lantern verify " + str(repo) + " --report <report> -- " +
-                " ".join(r["trace_command"]))
+        text = (r["refused"] + " The command the report names, word by word: " + evidence.words_shown(r["trace_command"])
+                + ". If it is the project's own test command, a person types it in a terminal after: lantern verify "
+                + str(repo) + " --report <report> --")
         return {"text": text, "data": r}
     text = (f"{'MATCH' if r['match'] else 'DIFFERENT'}: report {r['report']}\n rerun  {r['rerun']}\n"
             f" commit {r['commit']}{' (uncommitted changes present)' if r['dirty'] else ''}; options {r['options']}")

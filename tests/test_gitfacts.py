@@ -752,6 +752,124 @@ def test_on_windows_itself_a_git_folder_above_with_another_owner_gets_gits_own_a
 
 # ---------------------------------------------------------------------------- what cannot be told is said
 
+# ---------------------------------------------------------------------------- planted: history kept somewhere else
+# git reads a repository's objects from its objects folder and from wherever that folder says more are kept: a list of
+# other object folders (`objects/info/alternates`), or a link among the folder's own parts. Until 2026-11-15 only
+# the objects folder itself was looked at before git was started, so a folder could have git read another
+# repository's objects on this computer and have Lantern report that repository's commit time, and "no uncommitted
+# changes", as facts about the folder.
+
+BORROWS = ["a list that names the other repository's objects", "the same list, written from the folder itself",
+           "a list that names a folder which has such a list", "a list that is a link", "an empty list",
+           "the pack folder as a link", "the info folder as a link", "one of the folders of single objects as a link",
+           "a pack that is a link"]
+
+
+def _borrow(how: str, d: Path, o: Path, tmp_path: Path) -> None:
+    """Plant it: `d` is made to name `o`'s commit as its own and to find `o`'s objects."""
+    theirs = o / ".git" / "objects"
+    mine = d / ".git" / "objects"
+    if "pack" in how:
+        git("gc", "-q", cwd=o)                          # the other repository's history is in one pack now
+    if how == BORROWS[0]:
+        write(mine / "info" / "alternates", theirs.as_posix() + "\n")
+    elif how == BORROWS[1]:
+        write(mine / "info" / "alternates", os.path.relpath(theirs, mine).replace(os.sep, "/") + "\n")
+    elif how == BORROWS[2]:
+        between = tmp_path / "between" / "objects"
+        write(between / "info" / "alternates", theirs.as_posix() + "\n")
+        write(mine / "info" / "alternates", between.as_posix() + "\n")
+    elif how == BORROWS[3]:
+        (mine / "info").mkdir(exist_ok=True)
+        os.symlink(write(tmp_path / "a-list", theirs.as_posix() + "\n"), mine / "info" / "alternates")
+    elif how == BORROWS[4]:
+        write(mine / "info" / "alternates", "")
+    elif how == BORROWS[5]:
+        shutil.rmtree(mine / "pack")
+        os.symlink(theirs / "pack", mine / "pack")
+    elif how == BORROWS[6]:
+        elsewhere = tmp_path / "elsewhere"
+        write(elsewhere / "alternates", theirs.as_posix() + "\n")
+        shutil.rmtree(mine / "info")
+        os.symlink(elsewhere, mine / "info")
+    elif how == BORROWS[7]:
+        commit = git("rev-parse", "HEAD", cwd=o)
+        shutil.rmtree(mine / commit[:2], ignore_errors=True)
+        os.symlink(theirs / commit[:2], mine / commit[:2])
+    else:
+        for pack in (theirs / "pack").iterdir():
+            os.symlink(pack, mine / "pack" / pack.name)
+    write(d / ".git" / "refs" / "heads" / "main", git("rev-parse", "HEAD", cwd=o) + "\n")
+
+
+@only_posix
+@pytest.mark.parametrize("how", BORROWS)
+def test_git_is_not_started_where_the_objects_folder_leads_elsewhere(how, tmp_path, monkeypatch):
+    d = make(tmp_path)
+    o = make(tmp_path, "other", line="print('somebody else')")
+    git("commit", "-q", "--amend", "-m", "theirs", "--date", "2019-03-04T05:06:07+0000", cwd=o,
+        env={"GIT_COMMITTER_DATE": "2019-03-04T05:06:07+0000"})
+    theirs = git("log", "-1", "--format=%cI", cwd=o)
+    assert theirs.startswith("2019-03-04")
+    _borrow(how, d, o, tmp_path)
+    got = evidence.git_info(d)
+    assert got["committed_at"] is None, f"the other repository's commit time, told as this folder's: {got}"
+    assert theirs not in json.dumps(got)
+    assert (got["dirty"], got["note"]) == (True, gitfacts.BORROWED)
+    monkeypatch.setattr(remote, "run_bounded", lambda *a, **k: pytest.fail("git was started"))
+    assert evidence.git_info(d) == got and gitfacts.deleted(d) is None and gitfacts.links(d) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="needs Windows (a junction)")
+def test_a_junction_among_the_objects_is_not_followed_either(tmp_path):
+    import _winapi
+    d = make(tmp_path)
+    o = make(tmp_path, "other", line="print('somebody else')")
+    git("gc", "-q", cwd=o)
+    shutil.rmtree(d / ".git" / "objects" / "pack")
+    _winapi.CreateJunction(str(o / ".git" / "objects" / "pack"), str(d / ".git" / "objects" / "pack"))
+    write(d / ".git" / "refs" / "heads" / "main", git("rev-parse", "HEAD", cwd=o) + "\n")
+    got = evidence.git_info(d)
+    assert (got["committed_at"], got["dirty"], got["note"]) == (None, True, gitfacts.BORROWED)
+
+
+def test_a_repository_that_keeps_its_own_objects_gets_the_answers_git_gives(tmp_path):
+    """The twins: objects in packs, a folder of single objects, the `info` folder git itself writes, a linked
+    worktree. None of them leads anywhere else."""
+    d = make(tmp_path)
+    write(d / "more.py", "y = 2\n")
+    git("add", "-A", cwd=d)
+    git("commit", "-q", "-m", "two", cwd=d)
+    assert evidence.git_info(d) == git_says(d)                              # single objects
+    git("gc", "-q", cwd=d)
+    assert any((d / ".git" / "objects" / "pack").iterdir()) and (d / ".git" / "objects" / "info").is_dir()
+    assert evidence.git_info(d) == git_says(d)                              # packs, and git's own `info` folder
+    write(d / "more.py", "y = 3\n")
+    assert evidence.git_info(d)["dirty"] is True and "note" not in evidence.git_info(d)
+    git("checkout", "-q", "more.py", cwd=d)
+    git("worktree", "add", "-q", str(tmp_path / "linked"), "-b", "side", cwd=d)
+    assert evidence.git_info(tmp_path / "linked") == git_says(tmp_path / "linked")
+
+
+def test_a_clone_that_borrows_its_history_on_purpose_is_said_and_counts_as_changed(tmp_path, capsys):
+    """`git clone --shared` (and `--reference`) keeps no objects of its own: git writes the list itself. Lantern
+    cannot tell that list from a planted one, so it does not have git read through it: the commit is named, the
+    files count as changed, and the report says why."""
+    d = make(tmp_path)
+    write(d / ".gitignore", ".lantern/\n")
+    git("add", "-A", cwd=d)
+    git("commit", "-q", "-m", "two", cwd=d)
+    shared = tmp_path / "shared"
+    git("clone", "-q", "--shared", str(d), str(shared), cwd=tmp_path)
+    assert (shared / ".git" / "objects" / "info" / "alternates").is_file()
+    got = evidence.git_info(shared)
+    assert got["commit"] == git("rev-parse", "HEAD", cwd=shared) and got["branch"] == "main"
+    assert (got["dirty"], got["note"], got["committed_at"]) == (True, gitfacts.BORROWED, None)
+    assert main(["analyze", str(shared), "--no-scan"]) == 0
+    page = (shared / ".lantern" / "evidence.html").read_text(encoding="utf-8")
+    assert "with uncommitted changes" in page and "takes part of its history from another place" in page
+
+
 def test_when_git_cannot_compare_the_files_count_as_changed_and_the_report_says_why(tmp_path, capsys):
     d = make(tmp_path)
     write(d / ".gitignore", ".lantern/\n")

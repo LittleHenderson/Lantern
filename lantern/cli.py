@@ -158,8 +158,10 @@ def cmd_verify(a, trace_cmd: list[str]) -> int:
               file=sys.stderr)
         return 2
     if r.get("refused"):
-        print(r["refused"] + "\n  lantern verify " + (a.path or ".") + f" --report {a.report} -- "
-              + " ".join(r["trace_command"]), file=sys.stderr)
+        # the report's words are shown as what the report says, never as a line to run (`evidence.words_shown`)
+        print(r["refused"] + "\n  the command the report names, word by word: " + evidence.words_shown(r["trace_command"])
+              + "\n  if it is the project's own test command, type it yourself after:  lantern verify "
+              + (a.path or ".") + f" --report {a.report} --", file=sys.stderr)
         return 2
     o = r["options"]
     print(f"commit  {r['commit']}{' (uncommitted changes present)' if r['dirty'] else ''}")

@@ -65,6 +65,18 @@ file. New entries go under `## Unreleased`, on top.
   on 25 folders (benchmark projects, sample apps, Lantern's own two services): no finding, after one false alarm of
   the first measurement was fixed (a session key has to say who is signed in), so no precision is claimed.
   Tests: `tests/test_localweb.py` (6).
+- Guard coverage completed in four places where Lantern starts another program on a project's files (each with
+  tests written first and safe twins that work as before).
+  The Python check: where something that is not the project's own cannot be written as an exclusion, Bandit runs
+  on copies of the project's own Python files in a folder of Lantern's own (`way: "copies"` in its record).
+  The Evidence page: the line to copy holds a commit's own name and Lantern's fixed words; a report's test command
+  is shown as what the report says, word by word, and the person types it (`lantern verify` and the connector too).
+  Git facts: git is not started where a repository's objects folder leads elsewhere; the files then count as
+  changed and the note says why. **Changed:** a clone made with `git clone --shared` or `--reference` reads that way.
+  JavaScript libraries with no lock file: npm is handed a `package.json` Lantern wrote, names and versions for the
+  store and nothing else. **Changed:** a library named there by a folder, a file, a link, a repository or an
+  address means the tests are not run and the reason says so (with npm's lock file it is fetched as before).
+  Tests: `tests/test_links_out.py`, `tests/test_evidence.py`, `tests/test_gitfacts.py`, `tests/test_npm_no_lock.py`.
 - **Modern stack: Supabase tables read with their row rules; Next.js Server Actions, tRPC procedures and the files of
   SvelteKit and Remix as routes; type checkers asked about the calls Lantern could not place, only where asked for**
   (2026-11-14 and 15; stage 1 of the roadmap of 2026-11-14. Tests first for each rule, each dangerous example beside
