@@ -92,6 +92,15 @@ file. New entries go under `## Unreleased`, on top.
   request away that way, 5 of them wait for work and count, and there is no finding, after one false alarm of the
   first measurement was fixed (a limiter that takes one in the look). No precision is claimed.
   Tests: `tests/test_countlater.py` (3).
+- `lantern behave`: a new kind of check, `ended`: a request that works, the request that ends something (a sign-out,
+  an account switched off, an invitation taken back), then the first request again, which must be refused:
+  straight after, after a restart, and on another copy of the app that had answered it before. Broken with the
+  new code `lived-on` when it is accepted again; inconclusive when the request did not work before, when the end
+  did not work, or when the answer is neither a refusal nor accepted. It catches a sign-out that ends nothing, a
+  copy of an app that remembers its own "yes", and a list of what was ended that is kept in memory, each a tiny
+  app in the tests beside a twin that asks its database. Lantern's own gateway holds in all three cases, and so
+  does its website when it is asked about a sign-in that was ended at its gateway.
+  Tests: `tests/test_behave.py` (43). Guide: `docs/behaviour.md`.
 - The website follows a sign-in and a link to results to their end (tests written first, each beside twins that
   work as before). A sign-in: the website asks its sign-in service on every request. **Changed:**
   `LANTERN_CLOUD_IDENTITY_TTL` is 0 by default (before: 300); above 0 an answer is used again for a read only,

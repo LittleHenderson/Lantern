@@ -40,7 +40,7 @@ again when sent again, and one whose half is saved by the next person's request.
 | T3 | A refused request that changed something is its own kind of failure, told from "let in" | `refused-but-changed` on `refused-but-deleted`; `let-in` on `other-user-delete` |
 | T4 | With the whole plan against every version, a planted version breaks only its own cases | 31 of 31: no other case broken |
 | T5 | Nothing outside this computer is tried, and the runner starts no app without the sandbox's guard | 0 attempts (`tools/netguard`: "0 attempt(s) to reach anything else"); result 97 without the guard (`tests/test_behave.py`) |
-| T6 | Apps that were not written for the runner start under it as they are | Lantern's gateway: 12 held, and the 1 case that must break did. The shop sample: its planted command seen as a file written where the request said. Both are tests. Three faults of the runner showed and were fixed (below) |
+| T6 | Apps that were not written for the runner start under it as they are | Lantern's gateway: 12 held, and the 1 case that must break did (15 held since 2026-11-15, when its plan got a check of the kind `ended`: a sign-in that was signed out is refused straight after, after a restart and on another copy). The shop sample: its planted command seen as a file written where the request said. Both are tests. Three faults of the runner showed and were fixed (below) |
 | T7 | The whole plan on the safe app in under 60 seconds | About 25 seconds (58 starts of the app). The first measurement was 66.9 seconds: missed, until the app's copies were let keep compiled Python in their temp folder |
 
 ## What the first pass got wrong
