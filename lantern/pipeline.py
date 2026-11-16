@@ -255,14 +255,16 @@ def _analyze(repo: Path, out: Path, privacy: str, trace_cmd, no_scan: bool, log:
 
 
 def change(repo: Path, spec: str | None = None, out: str | Path | None = None, offline: bool | None = None,
-           log: Log = print, base_results: str | Path | None = None, head_results: str | Path | None = None) -> dict:
+           log: Log = print, base_results: str | Path | None = None, head_results: str | Path | None = None,
+           base_label: str | None = None, head_label: str | None = None) -> dict:
     """What a change does to an app (`lantern diff`, roadmap of 2026-11-14, stage 2): two versions of the project
     are checked and what the checks found is compared (`lantern/diff.py`). `spec` says which two (`diff.sides`):
     with none, the last commit and the files as they are now. A commit is copied out of the repository into a
     folder of Lantern's own (`gitfacts.copy`: nothing of the project decides how, the folder itself is not
     touched) and checked there by `analyze`, tests not run; the files as they are now are checked where they are.
     `base_results` / `head_results`: the results folder of a check already made of that side, which is then not
-    made again. Written into `out` (default: `change` in the project's results folder): the receipt as
+    made again (the commit it is of is the one its own results name). `base_label` / `head_label`: what the receipt
+    calls a side in place of the name written in `spec` ("main", "this pull request"). Written into `out` (default: `change` in the project's results folder): the receipt as
     `change.json`, `change.md` and `change.html` (`diff.write`), and the two checks' own results in `before/` and
     `after/`. The project's results folder itself is left as it is. Returns `{"receipt", "paths", "line"}`.
     `gitfacts.NoCommit` (a sentence) when a commit cannot be named or copied, `diff.NotResults` for a results folder
@@ -273,15 +275,15 @@ def change(repo: Path, spec: str | None = None, out: str | Path | None = None, o
     where = results.folder(repo, out) if out else results.folder(repo, None) / "change"
     where.mkdir(parents=True, exist_ok=True)
 
-    def checked(name: str | None, commit: str | None, given, folder: str, word: str) -> dict:
+    def checked(name: str | None, commit: str | None, given, folder: str, word: str, label: str | None) -> dict:
         if given:
-            return diff.load(given, label=name or diff.AS_THEY_ARE, commit=commit)
+            return diff.load(given, label=label or name or diff.AS_THEY_ARE)
         side_out = results.folder(repo, where / folder)
         say = lambda line: log(f"{word:<7} {line}")      # noqa: E731
         if commit is None:
             log(f"{word:<7} checking {diff.AS_THEY_ARE}")
             analyze(repo, side_out, log=say, offline=offline)
-            return diff.load(side_out, label=diff.AS_THEY_ARE)
+            return diff.load(side_out, label=label or diff.AS_THEY_ARE)
         log(f"{word:<7} checking commit {commit[:12]}" + (f" ({name})" if name and not commit.startswith(name) else ""))
         with programs.folder() as own:
             got = gitfacts.copy(repo, commit, own / (repo.resolve().name or "project"))
@@ -297,7 +299,7 @@ def change(repo: Path, spec: str | None = None, out: str | Path | None = None, o
                              "A submodule's code is not part of a commit and was not checked on that side; where the "
                              "other side is the files as they are now, code in a submodule's folder reads as added.")
             analyze(got["root"], side_out, log=say, offline=offline)
-        return diff.load(side_out, label=name, commit=commit, notes=notes)
+        return diff.load(side_out, label=label or name, commit=commit, notes=notes)
 
     base_commit = None if base_results else gitfacts.resolve(repo, base_name)
     head_commit = None if head_results or head_name is None else gitfacts.resolve(repo, head_name)
@@ -305,8 +307,8 @@ def change(repo: Path, spec: str | None = None, out: str | Path | None = None, o
         other = head_commit or gitfacts.resolve(repo, head_name or "HEAD")
         base_commit = gitfacts.merge_base(repo, base_commit, other)
         base_name = f"where {base_name} and {head_name} parted"
-    base = checked(base_name, base_commit, base_results, "before", "before")
-    head = checked(head_name, head_commit, head_results, "after", "after")
+    base = checked(base_name, base_commit, base_results, "before", "before", base_label)
+    head = checked(head_name, head_commit, head_results, "after", "after", head_label)
     receipt = diff.compare(base, head)
     paths = diff.write(where, receipt)
     line = diff.summary_line(receipt)

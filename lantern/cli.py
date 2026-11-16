@@ -262,7 +262,8 @@ def cmd_diff(a) -> int:
     quiet = a.format != "line"
     try:
         got = change(repo, spec, out=a.out, offline=a.offline or None, base_results=a.base_results,
-                     head_results=a.head_results, log=(lambda line: print(line, file=sys.stderr)) if quiet else print)
+                     head_results=a.head_results, base_label=a.base_label, head_label=a.head_label,
+                     log=(lambda line: print(line, file=sys.stderr)) if quiet else print)
     except (gitfacts.NoCommit, diff.NotResults) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -294,9 +295,16 @@ def cmd_github(a) -> int:
         out = _out(repo, a.out)
         if a.gh == "summary":
             ev = onrepo.read(out)
+            receipt = None
+            if a.change and not a.decision_only:
+                from . import diff
+                try:
+                    receipt = diff.read(a.change)
+                except diff.NotResults:
+                    receipt = {}                    # said in the text; the report itself is still given
             print(onrepo.decision_of(ev) if a.decision_only else
-                  onrepo.summary(ev, short=a.short, run_url=a.run_url, report_url=a.report_url), end="\n" if
-                  a.decision_only else "")
+                  onrepo.summary(ev, short=a.short, run_url=a.run_url, report_url=a.report_url, change=receipt),
+                  end="\n" if a.decision_only else "")
             return 0
         for p in onrepo.save(repo, out, a.to, run_url=a.run_url, report_url=a.report_url):
             print(f"wrote   {p}")
@@ -722,6 +730,8 @@ def _main(argv: list[str]) -> int:
     sp.add_argument("--offline", action="store_true", help="skip the dependency audits in both checks")
     sp.add_argument("--base-results", metavar="DIR", help="results of a check already made of the code before the change")
     sp.add_argument("--head-results", metavar="DIR", help="results of a check already made of the code after the change")
+    sp.add_argument("--base-label", metavar="WORDS", help="what the receipt calls the code before the change (\"main\")")
+    sp.add_argument("--head-label", metavar="WORDS", help="what the receipt calls the code after it (\"this pull request\")")
     sp.add_argument("--format", choices=["line", "md", "json"], default="line",
                     help="what to print: where the files were written (default), the text for a pull request, or the data")
     sp.add_argument("--short", action="store_true", help="with --format md: without the list of changed functions")
@@ -741,6 +751,9 @@ def _main(argv: list[str]) -> int:
         gp.add_argument("--report-url", help="link to the full report's download (https://github.com/... only)")
         if name == "summary":
             gp.add_argument("--short", action="store_true", help="the shorter form for a pull request's comment")
+            gp.add_argument("--change", metavar="FILE", help="the data file of a change receipt (change.json of "
+                                                             "`lantern diff`): what a pull request changes is "
+                                                             "written right after the decision")
             gp.add_argument("--decision-only", action="store_true", help="print only Passed, Blocked, Incomplete "
                                                                          "or none")
         else:

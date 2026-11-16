@@ -40,6 +40,8 @@ from pathlib import Path
 
 from . import results
 from .graph import outside, route_words
+from .onrepo import code as _as_code
+from .onrepo import md as _as_text
 
 SCHEMA = 1
 RANKS = ("critical", "high", "medium", "low")
@@ -61,6 +63,8 @@ SHELL = ("subprocess", "os.system", "os.popen", "child_process", "node:child_pro
 # function says so (`touches.by_text`, a line of `limits`). `tests/test_diff.py` asks every reader which it is.
 BY_TEXT = {"kt": "Kotlin", "sw": "Swift", "dt": "Dart", "cs": "C#", "php": "PHP", "rb": "Ruby", "cc": "C and C++"}
 BY_CODE_WORDS = "by the code itself: a comment or a reformatting changes none"
+ONE_SIDE = {"tests": "the project's tests", "dependencies": "the look-up of its libraries",
+            "behaviour": "the behaviour checks"}       # parts of a release decision that a check may have left out
 
 
 class NotResults(ValueError):
@@ -503,7 +507,7 @@ def _limits(base: dict, head: dict, touches: dict) -> list[str]:
             out.append(f"The check of the code {name} the change was made by a Lantern that does not write down what "
                        "each route shows about a login, so new and removed routes are listed without it and a login "
                        "check that changed is not said.")
-    unfinished = [sorted({str(t.get("tool")) for t in side["security"].get("incomplete") or []
+    unfinished = [sorted({str(t.get("tool"))[:60] for t in side["security"].get("incomplete") or []
                           if isinstance(t, dict) and t.get("tool")}) for side in (base, head)]
     sides = [("both checks", unfinished[0])] if unfinished[0] == unfinished[1] else [
         ("the check of the code before the change", unfinished[0]), ("the check of the code after the change", unfinished[1])]
@@ -515,6 +519,14 @@ def _limits(base: dict, head: dict, touches: dict) -> list[str]:
     tests = [(_decision(s)["criteria"].get("tests")) for s in (base, head)]
     if all(t in (None, "missing") for t in tests):
         out.append("The project's tests were run on neither side: this receipt is made from reading the code.")
+    one_side = []
+    for key, what in ONE_SIDE.items():
+        was, now = (_decision(s)["criteria"].get(key) for s in (base, head))
+        if (was in (None, "missing")) != (now in (None, "missing")) and "not-applicable" not in (was, now):
+            one_side.append(f"{what} (only {'after' if was in (None, 'missing') else 'before'} the change)")
+    if one_side:
+        out.append(f"Not everything was checked on both sides: {', '.join(one_side)}. Where the release decision "
+                   "differs, it may differ for that alone and not for anything in the code.")
     out.append("A door, a link or a way to a finding is what Lantern's map shows. A call Lantern could not follow is "
                "on neither side, so a change behind such a call is not said here.")
     if touches.get("by_text"):
@@ -622,14 +634,16 @@ def _at(row: dict) -> str:
     return f"{row['file']}:{row['line']}" if row.get("line") else str(row["file"])
 
 
-def _md(text) -> str:
-    """Text of a project inside Markdown: no line break, no backtick that ends a code span, no HTML, bounded."""
-    s = "".join(c if c.isprintable() else " " for c in str(text if text is not None else ""))[:300]
-    return s.replace("`", "'").replace("<", "‹").replace(">", "›").replace("|", "¦")
+def _md(text, most: int = 300) -> str:
+    """Text of a project inside GitHub's Markdown, written the way the report's comment writes it (`onrepo.md`):
+    one line, bounded, no HTML, no link, picture, heading or table of its own, and no `@name`, `#12` or address
+    that GitHub would turn into a notice to a person, a link to an issue or a link."""
+    return _as_text(text, most)
 
 
 def _code(text) -> str:
-    return f"`{_md(text)}`" if _md(text) else ""
+    """A route, a name or a commit as a code span, inside which nothing is a link or a mention; nothing for nothing."""
+    return _as_code(text, 300) if str(text if text is not None else "").strip() else ""
 
 
 def _door_line(d: dict) -> str:
@@ -765,7 +779,8 @@ def markdown(receipt: dict, short: bool = False) -> str:
                    + (f" {_plural(touch['in_tests'], 'of them is', 'of them are')} test code." if touch["in_tests"] else ""))
         if touch["doors"]:
             out.append("")
-            out.append(f"{_plural(len(touch['doors']), 'door')} reach the changed code:")
+            out.append(f"{_plural(len(touch['doors']), 'door')} {'reaches' if len(touch['doors']) == 1 else 'reach'} "
+                       "the changed code:")
             _rows(out, touch["doors"], _door_line, more.get("touches.doors", 0))
         reach = touch["reaches"]
         said = []
@@ -790,7 +805,7 @@ def markdown(receipt: dict, short: bool = False) -> str:
             out += ["", "</details>"]
         out.append("")
     out += ["<details><summary>What this receipt does not say</summary>", ""]
-    out += [f"- {_md(x) if len(x) <= 300 else x}" for x in r["limits"]]
+    out += [f"- {_md(x, 1500)}" for x in r["limits"]]
     out += ["", "</details>", "",
             f"<sub>Made by Lantern {_md(r.get('lantern'))} from two checks of the code. Facts from the map and the "
             "scanners; no model wrote or ranked any line.</sub>", ""]
@@ -941,6 +956,20 @@ def page(receipt: dict) -> str:
 
 
 NAMES = {"json": "change.json", "md": "change.md", "html": "change.html"}
+PARTS = ("base", "head", "counts", "release", "doors", "links", "findings", "paid", "touches", "limits")
+
+
+def read(path) -> dict:
+    """A receipt read back from its data file (`change.json`), the strict way a result file is read: never through
+    a link, never a pipe. `NotResults` for a file that is not there or is no receipt this Lantern writes."""
+    path = Path(path)
+    try:
+        got = results.table(path)
+    except results.Refused as e:
+        raise NotResults(str(e)) from None
+    if not isinstance(got, dict) or got.get("schema") != SCHEMA or any(k not in got for k in PARTS):
+        raise NotResults(f"{path} is {'not there' if got is None else 'not a change receipt this Lantern reads'}.")
+    return got
 
 
 def write(out, receipt: dict) -> dict[str, Path]:

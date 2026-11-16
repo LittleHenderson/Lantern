@@ -8,11 +8,13 @@ for a login; page and server were renamed together; the risky helper is called b
 only a comment and the spacing changed), and the twin's receipt has to be quiet about it.
 """
 import json
+import re
+from pathlib import Path
 
 import pytest
 from test_commit_copy import commit, git, held
 
-from lantern import diff, pipeline
+from lantern import diff, onrepo, pipeline
 
 APP = '''\
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -385,12 +387,89 @@ def poisoned(checks) -> dict:
     return soil(r)
 
 
+def outside_code(text: str) -> str:
+    """The text as GitHub reads it outside its code spans: a character with a backslash in front is no mark."""
+    return re.sub(r"`[^`\n]*`", "", re.sub(r"\\.", "", text))
+
+
 def test_text_of_a_project_cannot_write_markdown_of_its_own(checks):
     text = diff.markdown(poisoned(checks))
-    assert "<img" not in text and "<script" not in text and "onerror=alert(1)>" not in text
     for line in text.splitlines():
         assert not line.startswith("## a heading"), line
-        assert line.count("`") % 2 == 0, line        # no code span is left open or closed early
+        assert len(re.findall(r"(?<!\\)`", line)) % 2 == 0, line      # no code span is left open or closed early
+    # inside a code span GitHub shows every character as itself; outside one nothing of the project is HTML or a link
+    outside = outside_code(text)
+    assert "<img" not in outside and "<script" not in outside and "onerror=alert(1)>" not in outside
+    assert "](https://" not in outside and "[a link](" not in outside
+
+
+NAMES_SOMEBODY = "@octocat fixes #12, see https://example.invalid/x and www.example.invalid"
+
+
+def test_text_of_a_project_names_nobody_and_links_nowhere(checks):
+    """On GitHub a plain `@name` sends that person a notice, `#12` becomes a link to an issue and an address a link.
+    Outside a code span the receipt's text breaks each of them, as the report's comment does (`onrepo.md`)."""
+    r = json.loads(json.dumps(poisoned(checks)).replace(json.dumps(HOSTILE)[1:-1], NAMES_SOMEBODY))
+    for text in (diff.markdown(r), diff.markdown(r, short=True)):
+        outside = outside_code(text)
+        assert "octocat" in outside                        # the text is shown, as text
+        assert "@octocat" not in outside and "https://" not in outside and "www.example" not in outside
+        assert not re.search(r"(?<![\\&\w])#12", outside)
+
+
+def test_a_long_sentence_among_the_limits_is_text_too(checks):
+    """A scanner's name comes out of a results file, which may be anybody's: however long it is, it is written as
+    text (until this test a line of more than 300 characters among the limits was written as it came)."""
+    base, head = checks.of(BASE, "x"), dict(checks.of(BASE, "x"))
+    head["security"] = dict(head["security"], incomplete=[{"tool": "<img src=x> [a](https://example.invalid) " * 12}])
+    text = diff.markdown(diff.compare(base, head))
+    assert "<img" not in text and "](https://" not in text
+
+
+def test_a_part_of_the_decision_that_one_side_alone_was_checked_for_is_said(checks):
+    """The Action checks the code before a pull request without running its tests. Where the workflow ran them on the
+    pull request itself, "Incomplete → Passed" is no doing of the pull request, and the receipt has to say so."""
+    def with_tests(side, state):
+        side = json.loads(json.dumps({k: v for k, v in side.items()}))
+        for c in side["readiness"]["release"]["criteria"]:
+            if c["id"] == "tests":
+                c["state"] = state
+        return side
+    base = checks.of(BASE, "x")
+    said = diff.compare(base, with_tests(base, "passed"))
+    line = [x for x in said["limits"] if x.startswith("Not everything was checked on both sides")]
+    assert line and "the project's tests (only after the change)" in line[0], said["limits"]
+    assert "tests: missing → passed" in said["release"]["words"]
+    assert "run on neither side" not in " ".join(said["limits"])
+    back = diff.compare(with_tests(base, "passed"), base)
+    assert "the project's tests (only before the change)" in " ".join(back["limits"])
+    for same in ("passed", "missing"):                 # checked on both sides, or on neither: nothing to say
+        both = diff.compare(with_tests(base, same), with_tests(base, same))
+        assert "Not everything was checked on both sides" not in " ".join(both["limits"])
+
+
+def test_the_comment_on_a_pull_request_holds_the_receipt_and_stays_within_what_github_takes(checks, monkeypatch):
+    after = changed(BASE, app=EXPORT_OPEN)
+    r = checks.receipt(BASE, after)
+    ev = onrepo.read(Path(checks.of(after, "x")["out"]))
+    plain = onrepo.summary(ev, short=True)
+    text = onrepo.summary(ev, short=True, change=r)
+    assert text.startswith(onrepo.MARKER) and len(text) <= onrepo.MOST_COMMENT
+    assert "## Lantern: what this change does" in text and "**Added** `POST /api/admin/export`" in text
+    # what the change does comes first, then the project as a whole, under a heading of its own
+    assert text.index("what this change does") < text.index("## The project as a whole") < text.index("| Critical | High |")
+    assert "what this change does" not in plain and "The project as a whole" not in plain
+    assert "The functions" not in text and "The functions" in onrepo.summary(ev, change=r)     # short: without the list
+    # a receipt longer than its share is cut at a line, says so, and leaves nothing folded open
+    monkeypatch.setattr(onrepo, "MOST_CHANGE", 900)
+    cut = onrepo.summary(ev, change=r)
+    part = cut[cut.index("what this change does"):cut.index("## The project as a whole")]
+    assert len(part) < 1100 and "cut short" in part and part.count("<details>") == part.count("</details>")
+    assert "| Critical | High |" in cut
+    # a file of another shape under the receipt's name is said, and the report is still made
+    for odd in ({}, {"schema": 1}, {"schema": 1, "doors": []}, [1], "x", dict(r, release=7), dict(r, doors={"added": [5]})):
+        said = onrepo.summary(ev, short=True, change=odd)
+        assert "could not be read" in said and "| Critical | High |" in said, odd
 
 
 def test_the_page_runs_no_script_and_escapes_every_value(checks):
@@ -551,6 +630,35 @@ def test_checks_already_made_are_used_and_not_made_again(checks, tmp_path, capsy
     assert words(json.loads(out)["doors"]["added"]) == ["POST /api/admin/export"]
     assert sorted(p.name for p in (tmp_path / "c").iterdir()) == ["change.html", "change.json", "change.md"]
     assert "checking" not in err
+
+
+def test_a_check_already_made_of_the_files_is_compared_with_a_commit_under_the_names_given(tmp_path, capsys):
+    """What Lantern's GitHub Action does on a pull request: the files as they are were checked a moment ago, so only
+    the commit before is checked, and the two sides are called what the person calls them."""
+    repo = tmp_path / "notes"
+    first = commit(repo, BASE)
+    second = commit(repo, changed(BASE, app=EXPORT_OPEN))
+    made = tmp_path / "made"
+    pipeline.analyze(repo, made, offline=True, log=lambda *_: None)
+    code, out, err = run(["diff", str(repo), first, "--head-results", str(made), "--out", str(tmp_path / "c"), "--offline",
+                          "--base-label", "main", "--head-label", "this pull request", "--format", "md", "--short"], capsys)
+    assert code == 0, err
+    assert f"Compared `main ({first[:10]})` (before) with `this pull request ({second[:10]})` (after)." in out
+    assert "**Added** `POST /api/admin/export`" in out
+    assert err.count("checking") == 1 and "before  checking commit" in err         # the files: not a second time
+    assert sorted(p.name for p in (tmp_path / "c").iterdir()) == ["before", "change.html", "change.json", "change.md"]
+    # the comment's text with the receipt in it, as the Action asks for it
+    code, text, err = run(["github", "summary", str(repo), "--out", str(made), "--short",
+                           "--change", str(tmp_path / "c" / "change.json")], capsys)
+    assert code == 0, err
+    assert text.startswith(onrepo.MARKER) and "**Added** `POST /api/admin/export`" in text
+    assert "this pull request" in text and "## The project as a whole" in text
+    # a receipt that is not there, or is no receipt, is said in the text and the command still gives the report
+    (tmp_path / "odd.json").write_text('{"schema": 99}', encoding="utf-8")
+    for name in ("nothing.json", "odd.json"):
+        code, text, err = run(["github", "summary", str(repo), "--out", str(made), "--short",
+                               "--change", str(tmp_path / name)], capsys)
+        assert code == 0 and "could not be read" in text and "| Critical | High |" in text, (name, err)
 
 
 @pytest.mark.parametrize("args, sentence", [
