@@ -68,8 +68,9 @@ lantern fix check PATH FINDING --candidate COPY --suggest fix.patch -- python -m
 Lantern makes a throw-away copy of the project, puts the candidate's change onto it, and analyzes and tests that
 copy. Your project and its results are left exactly as they are. **Only when the fix passed** is the change
 written to `fix.patch`, in the form `git apply fix.patch` and `patch -p1 < fix.patch` take. What was analyzed,
-what the tests ran on and what is written out are one and the same change. Lantern applies nothing and sends
-nothing anywhere: applying the change is yours to do.
+what the tests ran on and what is written out are one and the same change. The file is written byte for byte on
+every system: its lines end as the lines of the files it changes end, also where those end the Windows way.
+Lantern applies nothing and sends nothing anywhere: applying the change is yours to do.
 
 ## For an assistant (the connector)
 

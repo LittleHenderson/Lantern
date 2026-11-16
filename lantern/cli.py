@@ -242,15 +242,18 @@ def cmd_export(a) -> int:
     return 0
 
 
-def _write_named(repo: Path, dest: Path, text: str) -> None:
+def _write_named(repo: Path, dest: Path, text: str, newline: str | None = None) -> None:
     """Write a file the person named on the command line. The name is theirs, so it is written as they wrote it
     (a link of their own is followed, `/dev/stdout` works), with one exception: a link that lies inside the project
-    came with the project, and Lantern puts its own file in that link's place (`results.write`)."""
+    came with the project, and Lantern puts its own file in that link's place (`results.write`). `newline` as for
+    `open`: None writes this system's line ends, as a report is written; "" writes the text as it is, which a patch
+    needs (its lines end as the lines of the files it changes end, and Windows' own line ends on top of those give
+    a file no tool applies)."""
     from . import results
     if results.link_in_project(repo, dest):
-        results.write(dest, text, where="the project folder")
+        results.write(dest, text, newline=newline, where="the project folder")
     else:
-        dest.write_text(text, encoding="utf-8")
+        dest.write_text(text, encoding="utf-8", newline=newline)
 
 
 def cmd_diff(a) -> int:
@@ -326,7 +329,7 @@ def cmd_fix(a, trace_cmd: list[str]) -> int:
     wrote = None
     if sug and sug["text"] is not None:
         dest = Path(a.suggest)
-        _write_named(repo, dest, sug["text"])
+        _write_named(repo, dest, sug["text"], newline="")         # a patch: byte for byte, on every system
         wrote = str(dest)
     if quiet:
         sys.stdout.write(json.dumps({"finding": got["finding"], "verdict": result["verdict"], "contract": result,

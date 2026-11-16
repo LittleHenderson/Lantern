@@ -164,6 +164,7 @@ def test_a_true_fix_with_its_tests_run_passes_and_what_is_written_out_is_that_fi
     assert "tests   " in err and not any(x.startswith("tests   release") for x in err.splitlines())
     assert everything(notes) == before                          # Lantern applied nothing
     assert not kept_notes(tmp_path / "home")
+    assert b"\r" not in patch.read_bytes()                      # as the files are: no line end of this system's own
     text = patch.read_text(encoding="utf-8")
     assert text.startswith("# A suggested change, checked by Lantern: the fix of B602 at api/store.py:")
     assert "diff --git a/api/store.py b/api/store.py\n" in text and "+import re\n" in text
@@ -173,6 +174,36 @@ def test_a_true_fix_with_its_tests_run_passes_and_what_is_written_out_is_that_fi
                           encoding="utf-8")
     assert done.returncode == 0, done.stderr
     assert everything(applied) == {k: v.encode() for k, v in TRUE_FIX.items()}
+
+
+def test_a_fix_of_files_whose_lines_end_the_windows_way_is_written_out_as_those_files_are(tmp_path, monkeypatch,
+                                                                                         capsys):
+    """A patch's lines end as the lines of the files it changes end. Every line of this project ends with CR LF, as
+    an editor on Windows leaves it, and what is written out has to apply to exactly those files: a patch written
+    the way a report is written would end each of those lines with CR CR LF on Windows."""
+    def dos(files: dict) -> dict:
+        return {rel: text.replace("\n", "\r\n") for rel, text in files.items()}
+
+    monkeypatch.setenv("LANTERN_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("LANTERN_OFFLINE", "1")
+    repo = tmp_path / "work" / "notes"
+    write(repo, dos(BASE))
+    pipeline.analyze(repo, pipeline.out_dir(repo), log=lambda m: None, offline=True)
+    there, patch = folder_with(tmp_path, "true", dos(TRUE_FIX)), tmp_path / "fix.patch"
+    code, out, err = run(["fix", "check", repo, finding(repo), "--candidate", there, "--suggest", patch, "--offline",
+                          *TESTS], capsys)
+    assert code == 0, (out, err[-3000:])
+    assert "The fix passed: all 7 parts of the contract held." in out
+    data = patch.read_bytes()
+    said, change = data.split(b"diff --git ", 1)
+    assert said.startswith(b"# A suggested change, checked by Lantern") and b"\r" not in said    # Lantern's own lines
+    assert b"\n+import re\r\n" in change and b"\r\r" not in change                               # the files' lines
+    applied = tmp_path / "applied"
+    write(applied, dos(BASE))
+    done = subprocess.run(["git", *PLAIN, "apply", "--whitespace=nowarn", str(patch)], cwd=applied,
+                          capture_output=True, text=True, encoding="utf-8")
+    assert done.returncode == 0, done.stderr
+    assert everything(applied) == {k: v.encode() for k, v in dos(TRUE_FIX).items()}
 
 
 # ------------------------------------------------------------------------------- a fix made in the project itself
@@ -268,11 +299,11 @@ def two_folders(tmp_path, old=OLD, new=NEW):
 def test_the_copy_is_the_project_with_exactly_the_candidates_change(tmp_path):
     a, b = two_folders(tmp_path)
     (a / "node_modules" / "lib").mkdir(parents=True)
-    (a / "node_modules" / "lib" / "index.js").write_text("module.exports = 1\n", encoding="utf-8")
+    (a / "node_modules" / "lib" / "index.js").write_bytes(b"module.exports = 1\n")
     (b / "node_modules" / "lib").mkdir(parents=True)
-    (b / "node_modules" / "lib" / "index.js").write_text("module.exports = 'changed by the candidate'\n", encoding="utf-8")
+    (b / "node_modules" / "lib" / "index.js").write_bytes(b"module.exports = 'changed by the candidate'\n")
     (b / "build").mkdir()
-    (b / "build" / "hidden.py").write_text("print('only in the candidate')\n", encoding="utf-8")
+    (b / "build" / "hidden.py").write_bytes(b"print('only in the candidate')\n")
     got = suggest.change(a, b)
     assert got["files"] == ["app/empty_new.txt", "app/empty_then_gone.txt", "app/main.py", "app/new.py", "app/old.py",
                             "notes/dos.txt", "notes/no_end.txt", "notes/page.txt", "notes/read me.txt", "tool.sh"]

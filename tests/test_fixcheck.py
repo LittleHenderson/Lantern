@@ -236,10 +236,12 @@ RAN_AND_PASSED = {"ran": True, "returncode": 0}
 
 
 def write(root, files):
+    """The files as they are written here, byte for byte on every system (written as text, each line would end the
+    Windows way on Windows, and a test that compares what is on the disk with these texts would be about that)."""
     for rel, text in files.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
+        p.write_bytes(text.encode("utf-8"))
 
 
 class Checks:
