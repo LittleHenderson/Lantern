@@ -438,16 +438,6 @@ def tool_analyze(P: Projects, args: dict) -> dict:
     return {"text": "\n".join(lines), "data": {"project": repo.name, **res, "log": log, **d}}
 
 
-def _open_finding(side: dict, fid: str, repo: Path) -> dict | None:
-    """The open finding outside test code that `fid` names in one check: by its id, or as the only one whose id
-    begins with it. None when there is none (an accepted finding is a person's decision and no finding to fix)."""
-    opened = {k: f for k, f in diff._open(side).items() if not diff._accepted(f)}
-    if fid in opened:
-        return opened[fid]
-    hits = [f for k, f in opened.items() if fid and k.startswith(fid)]
-    return hits[0] if len(hits) == 1 else None
-
-
 def _not_open(fid: str, repo: Path) -> ValueError:
     return ValueError(f"{fid} is not an open finding in {repo.name} (ids change when the flagged line changes, and a "
                       "finding the project accepted is not open; call lantern_findings to see what is open)")
@@ -467,19 +457,14 @@ def _steps(g: Graph, ids: list[str]) -> list[dict]:
     return rows
 
 
-def tool_fix_brief(P: Projects, args: dict) -> dict:
-    """What a coding assistant needs to fix one finding, from facts only, and the contract the fix is held to. The
-    check as it is now is kept under LANTERN_HOME as the one `lantern_recheck` compares the fix with. Read-only for
-    the project: nothing in its folder is written, and no finding is accepted, closed or re-ranked."""
-    repo = P.resolve(args.get("project"))
-    out = _out(repo)
-    fid = str(args.get("finding") or "").strip()
-    if not fid:
-        raise ValueError("give finding: the id from lantern_findings")
+def fix_brief(repo: Path, out: Path, home, fid: str) -> tuple[list[str], dict] | None:
+    """A fix brief as lines and as data, the same for the connector (`lantern_fix_brief`) and for a terminal
+    (`lantern fix brief`): the finding, how it is reached, how the value gets there, and the contract. The check in
+    `out` is kept under `home` as the one the fix is compared with. None when `fid` names no open finding."""
     side = fixcheck.load(out)
-    target = _open_finding(side, fid, repo)
+    target = fixcheck.opened(side, fid)
     if target is None:
-        raise _not_open(fid, repo)
+        return None
     g = Graph.load(out / "graph.json", repo)
     view = _finding_view(target, g, _load(out, "explanations.json"))
     reach = target.get("reachable") if isinstance(target.get("reachable"), dict) else {}
@@ -487,7 +472,7 @@ def tool_fix_brief(P: Projects, args: dict) -> dict:
     flow = target.get("flow") if isinstance(target.get("flow"), dict) else None
     steps = [{k: st.get(k) for k in ("file", "line", "what")} for st in (flow or {}).get("steps") or []
              if isinstance(st, dict)]
-    note = fixcheck.keep(P.store.root, repo, target["id"], out)
+    note = fixcheck.keep(home, repo, target["id"], out)
     parts = fixcheck.contract()
     lines = [f"Fix brief for {target['id']}: [{view['rank']}] {view['rule']} {view['title']} at "
              f"{view['file']}:{view['line']}" + (f" in {view['function']}" if view.get("function") else "")
@@ -503,16 +488,30 @@ def tool_fix_brief(P: Projects, args: dict) -> dict:
         lines.append(f"Uses outside input: {view['uses_outside_input']}")
     if view.get("fix"):
         lines.append(f"Suggested fix: {view['fix']}")
-    lines += ["", "The contract. lantern_recheck calls the finding fixed only when no part is broken:"]
+    lines += ["", "The contract. The finding counts as fixed only when no part of it is broken:"]
     lines += [f"  {i}. {p['id']}: {p['need']}" for i, p in enumerate(parts, 1)]
     lines += [f"The check as it is now was kept ({note['kept_at']}). The fix is compared with it, whatever is "
-              "analyzed in between; ask for the brief again to start from the code as it is then.",
-              RUN_THE_TESTS, CANNOT_CLOSE]
+              "analyzed in between; ask for the brief again to start from the code as it is then."]
+    return lines, {"project": repo.name, "finding": view, "path": _steps(g, path),
+                   "flow": {"steps": steps, "class": flow.get("class")} if flow else None,
+                   "contract": parts, "kept_at": note["kept_at"]}
+
+
+def tool_fix_brief(P: Projects, args: dict) -> dict:
+    """What a coding assistant needs to fix one finding, from facts only, and the contract the fix is held to. The
+    check as it is now is kept under LANTERN_HOME as the one `lantern_recheck` compares the fix with. Read-only for
+    the project: nothing in its folder is written, and no finding is accepted, closed or re-ranked."""
+    repo = P.resolve(args.get("project"))
+    fid = str(args.get("finding") or "").strip()
+    if not fid:
+        raise ValueError("give finding: the id from lantern_findings")
+    got = fix_brief(repo, _out(repo), P.store.root, fid)
+    if got is None:
+        raise _not_open(fid, repo)
+    lines, data = got
+    lines += ["When the fix is written, call lantern_recheck with this finding's id.", RUN_THE_TESTS, CANNOT_CLOSE]
     return {"text": "\n".join(lines),
-            "data": {"project": repo.name, "finding": view, "path": _steps(g, path),
-                     "flow": {"steps": steps, "class": flow.get("class")} if flow else None,
-                     "contract": parts, "kept_at": note["kept_at"],
-                     "then": {"tool": "lantern_recheck", "finding": target["id"]},
+            "data": {**data, "then": {"tool": "lantern_recheck", "finding": data["finding"]["id"]},
                      "tests": RUN_THE_TESTS, "cannot_close": True}}
 
 
@@ -524,19 +523,11 @@ def tool_recheck(P: Projects, args: dict) -> dict:
     fid = str(args.get("finding") or "").strip()
     if not fid:
         raise ValueError("give finding: the id from lantern_findings")
-    held = fixcheck.kept(P.store.root, repo, fid)
-    if held is None:
-        was, note = fixcheck.load(out), None
-        target = _open_finding(was, fid, repo)
-        if target is None:
-            raise _not_open(fid, repo)
-        fid = target["id"]
-        held = fixcheck.kept(P.store.root, repo, fid)       # the brief was asked for by the whole id
-    if held is not None:
-        was, note = held
-        target = _open_finding(was, fid, repo)
-        if target is None:
-            raise _not_open(fid, repo)
+    got = fixcheck.before(P.store.root, repo, out, fid)     # kept now when none was: a second recheck of a fix
+    if got is None:                                         # that was refused is compared with the same check
+        raise _not_open(fid, repo)
+    was, target, note = got
+    fid = target["id"]
     log: list[str] = []
     pipeline.analyze(repo, out, P.store.settings().get("privacy", "full"), log=log.append, offline=args.get("offline"))
     now = fixcheck.load(out)
@@ -558,10 +549,8 @@ def tool_recheck(P: Projects, args: dict) -> dict:
         d["fixed"] = [x for x in d["fixed"] if x["id"] != fid]
     else:
         verdict, status = "gone: no longer reported on this commit", "fixed"
-    since = (f"the check kept when the fix brief was asked for ({note.get('kept_at')})" if note is not None
-             else "the last analysis")
     lines = [f"{fid} ({target['rule']} at {target['file']}:{target['line']}): {verdict}.",
-             f"Compared with {since}.", "", fixcheck.text(result).rstrip()]
+             f"Compared with {fixcheck.since(note)}.", "", fixcheck.text(result).rstrip()]
     if "tests" in result["not_shown"]:
         lines.append(RUN_THE_TESTS)
     lines += ["", f"Findings of the whole project since then: {len(d['fixed'])} no longer reported, {len(d['new'])} "
@@ -571,8 +560,7 @@ def tool_recheck(P: Projects, args: dict) -> dict:
             "data": {"project": repo.name, "finding": fid, "status": status, "verdict": verdict,
                      "was": {k: target.get(k) for k in ("rule", "title", "file", "line", "rank")},
                      "now": still and _finding_view(still, None, None), "contract": result,
-                     "compared_with": {"what": "brief" if note is not None else "last-check",
-                                       "kept_at": note.get("kept_at") if note is not None else None}, **d}}
+                     "compared_with": {"what": note.get("how") or "brief", "kept_at": note.get("kept_at")}, **d}}
 
 
 def tool_verify(P: Projects, args: dict) -> dict:

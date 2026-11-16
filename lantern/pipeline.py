@@ -320,6 +320,105 @@ def change(repo: Path, spec: str | None = None, out: str | Path | None = None, o
     return {"receipt": receipt, "paths": paths, "line": line}
 
 
+# what the step that only runs the tests says about a map and a score nobody asked it for
+NOT_THE_TESTS = ("graph", "calls", "deep", "types", "ready", "release", "kept", "report", "proof")
+
+
+def fix_check(repo: Path, finding: str, out: str | Path | None = None, candidate: str | Path | None = None,
+              trace_cmd: list[str] | None = None, suggest: bool = False, offline: bool | None = None,
+              log: Log = print, privacy: str = "full", test_minutes=None, test_memory=None, home=None) -> dict:
+    """Hold the fix of one finding to the fix contract (`lantern fix check`, roadmap of 2026-11-14, stage 3;
+    `lantern/fixcheck.py`). The check from before the fix is the one kept for the finding, else the project's last
+    check (`fixcheck.before`). The check after it is made here, the same way and with no tests in it, so the two
+    differ only by the change: of the project's files as they are now (written to `out` like any check), or, with
+    `candidate` (a folder that holds the project with the fix in it), of a copy of Lantern's own that is the
+    project with exactly the candidate's change (`lantern/suggest.py`), thrown away afterwards; the project's
+    folder and its results are then left as they are. `trace_cmd`: the command that runs the project's tests; it
+    runs in the test sandbox on the same code, in a step of its own, and its record is what the contract's `tests`
+    part reads (with none the part is not shown and the fix cannot pass). `suggest`: with `candidate`, the change
+    as text for a person to apply, made only when the verdict is `passed`; Lantern applies nothing itself.
+    A fix made in the project that passed lets go of the kept check. Returns `{"finding", "result", "compared_with",
+    "candidate", "files", "tests", "suggestion"}`. ValueError (a sentence) for a finding that is not open in the
+    check from before, a command that is no test command, or a candidate that cannot be used; `diff.NotResults`
+    when the project was never checked; `results.Refused` for a place Lantern does not write to."""
+    from . import fixcheck, manifest, programs, suggest as sg
+    from . import sandbox as sbx
+    repo = Path(repo)
+    where = results.folder(repo, out)
+    if home is None:
+        from .server import home_dir
+        home = home_dir()
+    language = sbx.check_command(trace_cmd) if trace_cmd else None      # said before anything is read or written
+    if suggest and candidate is None:
+        raise ValueError("A suggested change is written from a candidate: give --candidate, the folder that holds "
+                         "the project with the fix in it.")
+    change_ = sg.change(repo, Path(candidate)) if candidate is not None else None
+    got = fixcheck.before(home, repo, where, finding, keep_first=candidate is None)
+    if got is None:
+        raise ValueError(f"{str(finding)[:80]} is not an open finding of the check made before the fix (ids change "
+                         "when the flagged line changes, and a finding the project accepted is not open). If the "
+                         "fix is already in and the project was analyzed since, no check from before the fix is "
+                         "left to compare it with: `lantern fix brief` keeps one before a fix is made.")
+    was, target, note = got
+    fid = target["id"]
+    log(f"before  {fixcheck.since(note)}")
+
+    def say(word: str, leave=()):
+        def one(line: str) -> None:
+            if line.split(" ", 1)[0] not in leave:      # a line about a file that is thrown away helps nobody
+                log(f"{word:<7} {line}")
+        return one
+
+    def tests_of(folder: Path, own: Path) -> dict | None:
+        if not trace_cmd:
+            return None
+        found = sbx.detect(folder)
+        cwd = found.get("cwd", "") if found.get("language") == language else ""
+        log("tests   running the tests on that code, in the sandbox")
+        analyze(folder, own / "tests", "structure", trace_cmd, True, log=say("tests", NOT_THE_TESTS),
+                offline=offline, sandbox=True,
+                test_cwd=cwd, test_minutes=test_minutes, test_memory=test_memory)
+        run = manifest.table(manifest.parse_json(results.plain(own / "tests" / "run.json")[0] or ""))
+        return manifest.table(run.get("trace")) or None
+
+    with programs.folder() as own:
+        if change_ is None:
+            log("after   checking the project's files as they are now")
+            analyze(repo, where, privacy, log=say("after"), offline=offline)
+            now, code, asked = fixcheck.load(where, "after the fix"), repo, repo
+        else:
+            n = len(change_["files"])
+            log(f"after   checking the project with the candidate's change ({n} file{'s' if n != 1 else ''}) on a "
+                "copy that is thrown away")
+            code, asked = own / (repo.resolve().name or "project"), Path(candidate)
+            sg.lay(repo, asked, code, change_, whole=bool(trace_cmd))
+            analyze(code, own / "check", privacy, log=say("after", ("report", "proof")), offline=offline)
+            now = fixcheck.load(own / "check", "after the fix")
+        tests = tests_of(code, own)
+        # the one question asked of the disk is asked of the folder the fix stands in: a file the candidate hides
+        # in a folder Lantern leaves out is not on Lantern's copy
+        result = fixcheck.judge(was, now, fid, repo=asked, tests=tests)
+    suggestion = None
+    if suggest:
+        if result["verdict"] != fixcheck.PASSED:
+            suggestion = {"text": None, "why": result["words"]}
+        else:
+            said = [f"A suggested change, checked by Lantern: the fix of {target.get('rule')} at "
+                    f"{target.get('file')}:{target.get('line')} passed all {len(fixcheck.ITEMS)} parts of the fix "
+                    "contract.",
+                    f"Compared with {fixcheck.since(note)}. The tests ran on the project with this change in it.",
+                    "Lantern applied nothing. In the project's folder: git apply <this file>, or patch -p1 < <this "
+                    "file>."]
+            text, why = sg.patch(repo, asked, change_, said)
+            suggestion = {"text": text, "why": why}
+    if change_ is None and result["verdict"] == fixcheck.PASSED:
+        fixcheck.forget(home, repo, fid)
+    return {"finding": fid, "result": result, "candidate": change_ is not None,
+            "compared_with": {"what": (note or {}).get("how") or ("brief" if note else "last-check"),
+                              "kept_at": (note or {}).get("kept_at"), "words": fixcheck.since(note)},
+            "files": change_["files"] if change_ else None, "tests": tests, "suggestion": suggestion}
+
+
 def evidence(out: Path, g: Graph, sec, rd, run_meta: dict, privacy: str, log: Log | None = None) -> Path:
     """Write the Evidence Report. The baseline (the first analysis) is made here when there is none, or when finding
     ids changed. One that is there and cannot be used (`results.earlier`) is neither compared with nor replaced: it

@@ -17,10 +17,12 @@ of the disk, and only when the caller names the project's folder: whether a call
 names a file of the project in a folder Lantern leaves out. Nothing of the project is run, and nothing here creates,
 accepts, closes or re-ranks a finding: the contract only refuses to call one fixed.
 
-`keep(home, repo, finding_id, out)` keeps a check as the one a later fix is judged against (the connector's
-`lantern_fix_brief` does, under LANTERN_HOME and so outside the project a coding agent works in), `kept` reads it
-back and `forget` removes it. A fix made in several steps, with a check between them, is then still compared with
-the code as it was when the fix was asked for.
+`keep(home, repo, finding_id, out)` keeps a check as the one a later fix is judged against (under LANTERN_HOME and
+so outside the project a coding agent works in), `kept` reads it back and `forget` removes it. `before(home, repo,
+out, finding)` is the one place that says which check a fix is compared with: the one kept for that finding (when a
+fix brief was asked for, or when the fix was first checked), else the project's last check, which it then keeps. A
+fix made in several steps, with a check after each, is so compared with the code as it was before the first step,
+and a "fix" that was refused cannot be made to pass by checking it a second time.
 """
 from __future__ import annotations
 
@@ -541,11 +543,51 @@ def _kept_dir(home, repo, finding_id) -> Path:
     return Path(home) / BRIEFS / short(os.path.realpath(repo)) / short(str(finding_id))
 
 
-def keep(home, repo, finding_id: str, out) -> dict:
+def opened(side: dict, finding: str) -> dict | None:
+    """The open finding outside test code that `finding` names in one check: by its id, or as the only one whose id
+    begins with it. None when there is none (an accepted finding is a person's decision and no finding to fix)."""
+    rows = {k: f for k, f in diff._open(side).items() if not diff._accepted(f)}
+    if finding in rows:
+        return rows[finding]
+    hits = [f for k, f in rows.items() if finding and k.startswith(finding)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def before(home, repo, out, finding: str, keep_first: bool = True) -> tuple[dict, dict, dict | None] | None:
+    """The check the fix of `finding` is compared with, the finding in it, and the note of the kept check (None when
+    the project's last check is used as it is). A check kept for this finding wins; with none, the last check in
+    `out` is the one, and with `keep_first` it is kept before anything analyzes the project again. None when
+    `finding` names no open finding there. `diff.NotResults` when `out` holds no check."""
+    finding = str(finding or "").strip()
+    held = kept(home, repo, finding)
+    if held is None:
+        was = load(out, "before the fix")
+        target = opened(was, finding)
+        if target is None:
+            return None
+        held = kept(home, repo, target["id"])       # asked for by the beginning of an id, kept under the whole one
+        if held is None:
+            return was, target, keep(home, repo, target["id"], out, how="first-check") if keep_first else None
+    was, note = held
+    target = opened(was, note["finding"])
+    return (was, target, note) if target is not None else None
+
+
+def since(note: dict | None) -> str:
+    """Which check a fix was compared with, in words."""
+    if note is None:
+        return "the project's last check"
+    when = _short(note.get("kept_at"), 40)
+    if note.get("how") == "first-check":
+        return f"the check from before the fix, kept when the fix was first checked ({when})"
+    return f"the check kept when the fix brief was asked for ({when})"
+
+
+def keep(home, repo, finding_id: str, out, how: str = "brief") -> dict:
     """Keep the check in `out` as the one the fix of this finding is judged against: copies of its result files in
     a folder of Lantern's own under `home`, read and written the way every result file is (`results.plain`,
-    `results.write`). A check kept earlier for the same finding is replaced. `diff.NotResults` when `out` holds no
-    whole check."""
+    `results.write`). A check kept earlier for the same finding is replaced. `how`: `brief` (a fix brief was asked
+    for) or `first-check` (a fix was checked with none kept). `diff.NotResults` when `out` holds no whole check."""
     from . import removal
     d = _kept_dir(home, repo, finding_id)
     texts = {}
@@ -562,7 +604,7 @@ def keep(home, repo, finding_id: str, out) -> dict:
             removal.remove(d / name)        # an older check's file must not stand in for one this check has not
         else:
             results.write(d / name, got, where=OWN)
-    note = {"schema": SCHEMA, "finding": finding_id, "kept_at": time.strftime("%Y-%m-%d %H:%M"),
+    note = {"schema": SCHEMA, "finding": finding_id, "kept_at": time.strftime("%Y-%m-%d %H:%M"), "how": how,
             "files": [n for n, got in texts.items() if got is not None]}
     results.write(d / "brief.json", json.dumps(note), where=OWN)
     _cap(d.parent, d)
